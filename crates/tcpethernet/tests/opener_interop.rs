@@ -215,6 +215,18 @@ mod class1 {
     const LEN: u16 = 32;
     const RPI: Duration = Duration::from_millis(50);
 
+    /// `OpENer`'s sample app has one exclusive-owner connection point on
+    /// assembly 150. Two tests opening it at once make the second fail
+    /// with 0x0106 (ownership conflict) instead of what it is testing, so
+    /// every test here that sends a `Forward_Open` holds this lock.
+    static OPENER_CONNECTIONS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serialize() -> std::sync::MutexGuard<'static, ()> {
+        OPENER_CONNECTIONS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn io_target() -> Option<Ipv4Addr> {
         let ip = super::target()?;
         if std::env::var_os("TCPETHERNET_OPENER_IO").is_none() {
@@ -227,6 +239,7 @@ mod class1 {
     #[test]
     fn wrong_o_to_t_size_is_refused_with_0x0127_and_the_size_opener_wants() {
         let Some(ip) = super::target() else { return };
+        let _one_at_a_time = serialize();
         let mut s = Session::connect((ip, encap::PORT), super::TIMEOUT).unwrap();
         let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
         let mut cfg = IoConfig::exclusive_owner(CFG, OUT, IN, LEN, LEN, RPI);
@@ -245,6 +258,7 @@ mod class1 {
     #[test]
     fn exclusive_owner_and_input_only_against_opener() {
         let Some(ip) = io_target() else { return };
+        let _one_at_a_time = serialize();
         let mut s = Session::connect((ip, encap::PORT), super::TIMEOUT).unwrap();
         let sock = bind_io_socket(Ipv4Addr::UNSPECIFIED).expect("UDP 2222 must be free for the originator");
         let target = SocketAddrV4::new(ip, encap::IO_PORT);
