@@ -4,7 +4,9 @@ An open-source originator (explicit-message client and I/O scanner) for CIP
 over TCP/UDP on Ethernet, so an open device can discover, configure, and
 exchange I/O with industrial devices that run a conformant adapter stack.
 
-Status: research. See `docs/SOURCES.md` for the review of the reference
+Status: early. Rust cargo workspace; `crates/tcpethernet` has the encapsulation
+header codec, `ListIdentity` discovery over UDP, and property tests. `make help`
+lists the dev targets. See `docs/SOURCES.md` for the review of the reference
 stacks and ODVA documents this project draws on, and `TODO.md` for the open
 decisions.
 

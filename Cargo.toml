@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["crates/tcpethernet"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/JimothyJohn/tcpethernet"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
