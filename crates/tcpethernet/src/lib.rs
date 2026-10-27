@@ -19,6 +19,8 @@ pub mod discover;
 pub mod encap;
 pub mod explicit;
 pub mod identity;
+pub mod io;
+pub mod scanner;
 pub mod session;
 
 pub use codec::DecodeError;

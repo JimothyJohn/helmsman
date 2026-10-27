@@ -1,4 +1,6 @@
 # Interop targets. `make opener-up` then `make test-interop`.
+# UDP 2222 is not published: the originator binds 2222 itself to receive
+# T->O, so the Class 1 tests address the container IP directly (Linux only).
 services:
   opener:
     build: ./docker/opener
@@ -6,4 +8,3 @@ services:
     ports:
       - "44818:44818/tcp"
       - "44818:44818/udp"
-      - "2222:2222/udp"

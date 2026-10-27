@@ -156,3 +156,64 @@ mod explicit_props {
         }
     }
 }
+
+mod io_props {
+    use proptest::prelude::*;
+    use tcpethernet::codec::Reader;
+    use tcpethernet::io::{
+        Class1Body, ConnectionPath, ForwardClose, ForwardCloseReply, ForwardOpen, ForwardOpenReply, IoPacket,
+        NetworkParams, Transport,
+    };
+
+    proptest! {
+        #[test]
+        fn forward_open_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..120)) {
+            let _ = ForwardOpen::decode(&bytes);
+        }
+
+        #[test]
+        fn forward_close_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let _ = ForwardClose::decode(&bytes);
+        }
+
+        #[test]
+        fn replies_decode_never_panic(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let _ = ForwardOpenReply::decode(&bytes);
+            let _ = ForwardCloseReply::decode(&bytes);
+        }
+
+        #[test]
+        fn io_packet_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..200), header in any::<bool>()) {
+            if let Ok(p) = IoPacket::decode(&bytes) {
+                let _ = Class1Body::decode(p.body, header);
+            }
+        }
+
+        #[test]
+        fn connection_path_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64), words in any::<u8>()) {
+            let _ = ConnectionPath::decode(&mut Reader::new(&bytes), words);
+        }
+
+        #[test]
+        fn network_params_round_trip(v in any::<u16>()) {
+            // Bit 12 is reserved: dropped on decode, written as zero.
+            if let Ok(p) = NetworkParams::decode(v) {
+                prop_assert_eq!(p.encode(), v & !0x1000);
+            }
+        }
+
+        #[test]
+        fn transport_round_trip(v in any::<u8>()) {
+            if let Ok(t) = Transport::decode(v) {
+                prop_assert_eq!(t.encode(), v);
+            }
+        }
+
+        #[test]
+        fn io_packet_round_trip(id in any::<u32>(), seq in proptest::option::of(any::<u32>()), body in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let p = IoPacket { connection_id: id, encapsulation_sequence: seq, body: &body };
+            let bytes = p.encode();
+            prop_assert_eq!(IoPacket::decode(&bytes).unwrap(), p);
+        }
+    }
+}
