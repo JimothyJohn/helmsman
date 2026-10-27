@@ -41,3 +41,14 @@
   est: 15m
   difficulty: low
   id: interop-targets
+
+- [ ] **Create the GitHub remote now?** The repo has no `origin`. The repo-baseline wiring (CI gate, Dependabot, auto-merge, `dev` protection) needs one, and the Cargo manifest already points at `github.com/JimothyJohn/tcpethernet`. Public from day one, or private until the ODVA email is filed?
+  asked: 2026-10-26
+  by: claude-session
+  needs: your call on visibility and owner (JimothyJohn vs an org)
+  result: `gh repo create`, push master + dev, repo-baseline draft PR into dev
+  options: public now | private until ODVA email | wait
+  est: 30m
+  difficulty: low
+  depends: odva-written-ok
+  id: github-remote
