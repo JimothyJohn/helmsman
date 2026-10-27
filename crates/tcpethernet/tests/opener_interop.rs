@@ -81,7 +81,7 @@ fn identity_attributes_match_list_identity() {
     assert_eq!(name[0] as usize, NAME.len());
     assert_eq!(&name[1..], NAME);
 
-    // Get_Attributes_All returns the same fields packed in attribute order.
+    // `Get_Attributes_All` returns the same fields packed in attribute order.
     let all = s
         .request(&cip::Request::get_attributes_all(class::IDENTITY, 1))
         .unwrap();
@@ -185,4 +185,96 @@ fn service_bit_round_trips_through_a_real_target() {
     assert!(resp.status.is_success(), "{resp:?}");
     assert_eq!(resp.additional_status, Vec::<u16>::new());
     s.close();
+}
+
+mod class1 {
+    //! Class 1 I/O against `OpENer`'s sample application: output assembly
+    //! 150 (32 bytes, consumed with a run/idle header), input assembly 100
+    //! (32 bytes, produced without one), configuration 151, heartbeat
+    //! instance 152 for `Input Only` (`sampleapplication.c`). The sample
+    //! copies the output assembly into the input assembly whenever output
+    //! data arrives, so what we send comes straight back.
+    //!
+    //! The data-plane tests need T->O datagrams to reach this host on UDP
+    //! 2222, which Docker on Linux delivers and Docker Desktop on macOS
+    //! does not. They run when `TCPETHERNET_OPENER_IO` is set (CI sets it);
+    //! the refusal test needs only the TCP side.
+
+    use std::net::{Ipv4Addr, SocketAddrV4};
+    use std::time::Duration;
+
+    use tcpethernet::encap;
+    use tcpethernet::io;
+    use tcpethernet::scanner::{Error, IoConfig, IoConnection, bind_io_socket};
+    use tcpethernet::session::Session;
+
+    const CFG: u16 = 151;
+    const OUT: u16 = 150;
+    const IN: u16 = 100;
+    const HEARTBEAT: u16 = 152;
+    const LEN: u16 = 32;
+    const RPI: Duration = Duration::from_millis(50);
+
+    fn io_target() -> Option<Ipv4Addr> {
+        let ip = super::target()?;
+        if std::env::var_os("TCPETHERNET_OPENER_IO").is_none() {
+            eprintln!("TCPETHERNET_OPENER_IO not set; data-plane interop test skipped");
+            return None;
+        }
+        Some(ip)
+    }
+
+    #[test]
+    fn wrong_o_to_t_size_is_refused_with_0x0127_and_the_size_opener_wants() {
+        let Some(ip) = super::target() else { return };
+        let mut s = Session::connect((ip, encap::PORT), super::TIMEOUT).unwrap();
+        let sock = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let mut cfg = IoConfig::exclusive_owner(CFG, OUT, IN, LEN, LEN, RPI);
+        cfg.o_to_t_run_idle = false; // claims 34 bytes; OpENer wants 38
+        let err = IoConnection::open(&mut s, &sock, SocketAddrV4::new(ip, encap::IO_PORT), cfg).unwrap_err();
+        match err {
+            Error::Refused(r) => {
+                assert_eq!(r.extended_code(), Some(io::extended::INVALID_O_TO_T_SIZE), "{r}");
+                assert_eq!(r.extended, vec![0x0127, 38], "{r}");
+            }
+            other => panic!("expected Refused, got {other}"),
+        }
+        s.close();
+    }
+
+    #[test]
+    fn exclusive_owner_and_input_only_against_opener() {
+        let Some(ip) = io_target() else { return };
+        let mut s = Session::connect((ip, encap::PORT), super::TIMEOUT).unwrap();
+        let sock = bind_io_socket(Ipv4Addr::UNSPECIFIED).expect("UDP 2222 must be free for the originator");
+        let target = SocketAddrV4::new(ip, encap::IO_PORT);
+
+        let cfg = IoConfig::exclusive_owner(CFG, OUT, IN, LEN, LEN, RPI);
+        let conn = IoConnection::open(&mut s, &sock, target, cfg).unwrap();
+        assert_eq!(conn.reply().o_to_t_api_us, 50_000);
+        assert_ne!(conn.reply().o_to_t_connection_id, 0);
+
+        let pattern: Vec<u8> = (0..LEN).map(|i| u8::try_from(i * 3 % 251).unwrap()).collect();
+        conn.set_output(&pattern).unwrap();
+        let input = conn
+            .wait_for_input_eq(&pattern, Duration::from_secs(3))
+            .expect("no T->O data from OpENer within 3s");
+        assert_eq!(input.data, pattern, "OpENer did not echo the output assembly");
+        assert_eq!(input.run_idle, None);
+        assert!(conn.is_alive());
+        assert_eq!(conn.packets_ignored(), 0);
+        let close = conn.close(&mut s).unwrap();
+        assert_eq!(close.originator_vendor_id, 0xFFFF);
+
+        let cfg = IoConfig::input_only(CFG, HEARTBEAT, IN, LEN, RPI);
+        let conn = IoConnection::open(&mut s, &sock, target, cfg).unwrap();
+        let input = conn
+            .wait_for_input(Duration::from_secs(3))
+            .expect("no T->O on input-only");
+        assert_eq!(input.data.len(), usize::from(LEN));
+        // The input assembly still holds what the exclusive-owner connection wrote.
+        assert_eq!(input.data, pattern);
+        conn.close(&mut s).unwrap();
+        s.close();
+    }
 }

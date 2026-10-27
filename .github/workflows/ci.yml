@@ -61,6 +61,8 @@ jobs:
           exit 1
       - name: Interop suite
         run: ./scripts/test-interop.sh
+        env:
+          TCPETHERNET_OPENER_IO: '1'
       - name: OpENer logs
         if: always()
         run: docker compose logs opener
