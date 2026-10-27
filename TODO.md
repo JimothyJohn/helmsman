@@ -88,7 +88,7 @@
   status: blocked
   id: bench-sweep
 
-- [ ] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
+- [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
   needs: nothing
   result: `tcpethernet::explicit` module with a loopback test server, same no-mock pattern as discovery
   est: 1d
