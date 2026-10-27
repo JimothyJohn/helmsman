@@ -1,0 +1,40 @@
+# Baseline CI for Rust (cargo workspace) repos — copy to .github/workflows/ci.yml.
+# The `gate` job name is the required status check that branch protection on
+# `dev` and the automerge workflow rely on: if you rename the job or add jobs
+# (e.g. an embedded/cross build), update the protection rule's contexts to
+# match (see README.md).
+# SHA-pinned actions only (house rule). For exotic targets, add a second job
+# that generates throwaway fixtures (certs, keys) on the runner — see
+# supervictor's ci.yml `embedded` job for a worked example.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, dev]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test workspace
+        run: cargo test --workspace --locked
