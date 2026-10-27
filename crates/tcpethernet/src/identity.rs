@@ -15,18 +15,7 @@ use std::net::Ipv4Addr;
 
 use crate::codec::{DecodeError, Reader, Writer};
 
-/// CPF item type IDs (`OpENer` `cpf.h`).
-pub mod item {
-    pub const NULL_ADDRESS: u16 = 0x0000;
-    pub const LIST_IDENTITY_RESPONSE: u16 = 0x000C;
-    pub const CONNECTION_ADDRESS: u16 = 0x00A1;
-    pub const CONNECTED_DATA: u16 = 0x00B1;
-    pub const UNCONNECTED_DATA: u16 = 0x00B2;
-    pub const LIST_SERVICES_RESPONSE: u16 = 0x0100;
-    pub const SOCKADDR_O_TO_T: u16 = 0x8000;
-    pub const SOCKADDR_T_TO_O: u16 = 0x8001;
-    pub const SEQUENCED_ADDRESS: u16 = 0x8002;
-}
+pub use crate::cpf::item;
 
 /// BSD `sockaddr_in` as carried on the wire: 16 bytes, network byte order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,22 +129,17 @@ impl IdentityItem {
 }
 
 /// Parse the payload of a `ListIdentity` reply: item count, then items.
-/// Items other than 0x000C are skipped by their declared length. Returns
-/// every identity item found; a device answers with exactly one, but a
-/// tolerant parser costs nothing.
+/// Items other than 0x000C are skipped. Returns every identity item found;
+/// a device answers with exactly one, but a tolerant parser costs nothing.
 ///
 /// # Errors
-/// `Truncated` if the count or any item's declared length overruns the payload.
+/// `Truncated` if the count or any item's declared length overruns the
+/// payload; `Invalid` if bytes trail the last item.
 pub fn decode_list_identity(payload: &[u8]) -> Result<Vec<IdentityItem>, DecodeError> {
-    let mut r = Reader::new(payload);
-    let count = r.u16_le()?;
     let mut out = Vec::new();
-    for _ in 0..count {
-        let type_id = r.u16_le()?;
-        let len = usize::from(r.u16_le()?);
-        let mut body = r.sub(len)?;
-        if type_id == item::LIST_IDENTITY_RESPONSE {
-            out.push(IdentityItem::decode(&mut body)?);
+    for it in crate::cpf::decode(payload)? {
+        if it.type_id == item::LIST_IDENTITY_RESPONSE {
+            out.push(IdentityItem::decode(&mut Reader::new(it.data))?);
         }
     }
     Ok(out)
@@ -239,17 +223,20 @@ mod tests {
 
     #[test]
     fn item_length_cannot_borrow_from_next_item() {
-        // Declared item length shorter than the body: name length field now
-        // points past the sub-reader, must be Truncated, never a read into
-        // the following bytes.
+        // Item 1 declares 4 bytes fewer than its body; the leftover 4 bytes
+        // are a valid second item. Decoding item 1 must be Truncated, never
+        // a read into item 2.
         let mut body = Writer::default();
         sample().encode(&mut body);
         let body = body.into_inner();
+        let cut = body.len() - 4;
         let mut w = Writer::default();
-        w.u16_le(1)
+        w.u16_le(2)
             .u16_le(item::LIST_IDENTITY_RESPONSE)
-            .u16_le(u16::try_from(body.len() - 4).unwrap())
-            .bytes(&body);
+            .u16_le(u16::try_from(cut).unwrap())
+            .bytes(&body[..cut])
+            .u16_le(item::NULL_ADDRESS)
+            .u16_le(0);
         assert!(matches!(
             decode_list_identity(&w.into_inner()),
             Err(DecodeError::Truncated { .. })
