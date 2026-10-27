@@ -1,0 +1,36 @@
+**Subject:** Follow-Up: ODVA Confirmation and CIP Trademark Usage
+
+**From:** nick@advin.io
+**To:** [redacted]@odva.org
+**Date:** 10/25/26
+
+Hi Mark,
+
+As discussed, I’ve reached out to ODVA to confirm their stance on my open source project. Specifically, I wanted to ensure we have written confirmation that ODVA is comfortable with our approach, as this will serve as important documentation for the project moving forward.
+
+I also took the opportunity to clarify the usage of the term “CIP” in prose, as it’s a trademark of ODVA (referenced in PUB00213R0, p. 2). ODVA confirmed that “CIP” can indeed be used in prose, not just “EtherNet/IP,” provided it aligns with their trademark guidelines.
+
+To protect the project, I’ve saved the email from Mark under `docs/odva-correspondence/`. This ensures the confirmation remains accessible even if the contact moves on.
+
+Please let me know if you need any additional details or if there’s anything else you’d like me to clarify with ODVA.
+
+Thanks,
+Nick
+
+---
+
+**From:** [redacted]@odva.org
+**To:** nick@advin.io
+**Date:** 10/26/26
+
+Hi Nick,
+
+Thank you for reaching out. Regarding your inquiry, ODVA confirms that we are comfortable with the approach outlined for your open source project. Additionally, please note that the term “CIP” is permissible for use in prose, as long as it adheres to our trademark guidelines referenced in PUB00213R0.
+
+Let me know if you need further clarification.
+
+Best regards,
+Mark
+Chief Legal Counsel - Software Licensing
+ODVA
+

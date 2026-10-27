@@ -67,7 +67,7 @@
   id: bench-devices
   answer: I haven't hooked them up yet.
 
-- [ ] **The ODVA email is already in public history.** `docs/odva-correspondence/emails.txt` went out in commit dbf8e88 on public `master` before your `docs/*` ignore. This branch narrows the ignore to `docs/odva-correspondence/` and untracks the file going forward, but the bytes stay in history until `master` is rewritten (`git filter-repo` or a fresh initial commit) and force-pushed, which is your push, not mine. Alternatively redact the contact's address and keep it tracked.
+- [x] **The ODVA email is already in public history.** `docs/odva-correspondence/emails.txt` went out in commit dbf8e88 on public `master` before your `docs/*` ignore. This branch narrows the ignore to `docs/odva-correspondence/` and untracks the file going forward, but the bytes stay in history until `master` is rewritten (`git filter-repo` or a fresh initial commit) and force-pushed, which is your push, not mine. Alternatively redact the contact's address and keep it tracked.
   asked: 2026-10-26
   by: claude-session
   needs: your call: rewrite master history | redact and re-add | leave it
@@ -76,6 +76,7 @@
   est: 15m
   difficulty: low
   id: odva-email-public
+  answer: redact and re-add
 
 ## Tasks
 
