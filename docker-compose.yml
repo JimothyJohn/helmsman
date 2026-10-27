@@ -1,0 +1,9 @@
+# Interop targets. `make opener-up` then `make test-interop`.
+services:
+  opener:
+    build: ./docker/opener
+    image: tcpethernet/opener:0e1ab7e
+    ports:
+      - "44818:44818/tcp"
+      - "44818:44818/udp"
+      - "2222:2222/udp"

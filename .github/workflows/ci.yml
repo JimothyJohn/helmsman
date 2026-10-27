@@ -38,3 +38,32 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test workspace
         run: cargo test --workspace --locked
+
+  # Interop against the OpENer adapter built from docker/opener/. Separate
+  # job so a Docker hiccup is distinguishable from a code failure. Added to
+  # the required checks on dev alongside `gate` (see repo-baseline README).
+  interop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: stable
+      - name: Start OpENer
+        run: docker compose up -d --build opener
+      - name: Wait for OpENer to listen
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/44818) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker compose logs opener
+          exit 1
+      - name: Interop suite
+        run: ./scripts/test-interop.sh
+      - name: OpENer logs
+        if: always()
+        run: docker compose logs opener
+      - name: Stop OpENer
+        if: always()
+        run: docker compose down

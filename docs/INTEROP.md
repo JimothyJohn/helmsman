@@ -6,7 +6,7 @@ test in this repo, nothing less.
 
 | Target | Role for us | Status |
 |---|---|---|
-| OpENer POSIX sample in Docker | Adapter under CI | Planned (Docker target not wired yet) |
+| OpENer POSIX sample in Docker | Adapter under CI | **Verified 2026-10-27**: `make opener-up && make test-interop`, 5/5 (ListIdentity, Identity attributes 1–7 and Get_Attributes_All, error codes 0x14/0x08/0x05, encapsulation 0x64). Pinned to OpENer 0e1ab7e. |
 | Rockwell CompactLogix (model TBD) | Explicit-message server; Logix tag services; Class 1 target via produced tags | Not reachable from the Studio on 2026-10-26 |
 | Panasonic FP0H AFP0HC32ET/EP | Explicit UCMM client; Class 1 originator and target | Not reachable from the Studio on 2026-10-26 |
 
@@ -78,8 +78,8 @@ Source: Panasonic *FP0H User's Manual (EtherNet/IP)*, WUME-FP0HEIP-07
 
 | Milestone | OpENer | CompactLogix | FP0H |
 |---|---|---|---|
-| ListIdentity discovery | CI | bench | bench |
-| RegisterSession + UCMM Get_Attribute_Single(Identity) | CI | bench | bench, if it serves UCMM |
+| ListIdentity discovery | **passes** | bench | bench |
+| RegisterSession + UCMM Get_Attribute_Single(Identity) | **passes** | bench | bench, if it serves UCMM |
 | Forward_Open Class 1, Input Only | CI | produced tag | PLC-to-PLC Input Only |
 | Forward_Open Class 1, Exclusive Owner | CI | n/a | n/a (FP0H as target is Input Only) |
 | Electronic key mismatch handling | CI | bench | error 0x0114/0x0115 |

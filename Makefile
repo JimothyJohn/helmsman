@@ -2,7 +2,7 @@
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
-.PHONY: help install-dev lint fmt test-unit test-integration test-all
+.PHONY: help install-dev lint fmt test-unit test-integration test-all test-interop opener-up opener-down opener-logs
 
 help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -24,3 +24,17 @@ test-integration:  ## Integration tests (property tests, loopback UDP).
 
 test-all:  ## Everything, locked to Cargo.lock.
 	./scripts/test-all.sh
+
+# ---- Interop targets --------------------------------------------------------
+
+opener-up:  ## Build and start the OpENer adapter container (ports 44818 tcp/udp, 2222 udp).
+	docker compose up -d --build opener
+
+opener-down:  ## Stop and remove the OpENer container.
+	docker compose down
+
+opener-logs:  ## Tail the OpENer container.
+	docker compose logs -f opener
+
+test-interop:  ## Interop suite against TCPETHERNET_OPENER_ADDR (default 127.0.0.1, i.e. the container).
+	./scripts/test-interop.sh
