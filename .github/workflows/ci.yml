@@ -60,7 +60,12 @@ jobs:
           docker compose logs opener
           exit 1
       - name: Interop suite
-        run: ./scripts/test-interop.sh
+        # Address the container directly so both TCP and UDP come from the
+        # bridge gateway, which is where OpENer sends T->O (port 2222).
+        run: |
+          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose ps -q opener)")
+          echo "OpENer at $ip"
+          TCPETHERNET_OPENER_ADDR="$ip" ./scripts/test-interop.sh
         env:
           TCPETHERNET_OPENER_IO: '1'
       - name: OpENer logs
