@@ -252,8 +252,8 @@ mod tests {
         assert_eq!(fa.header.command, Command::Nop as u16);
         let (fb, rest) = Frame::decode(rest).unwrap();
         assert_eq!(fb.header.session_handle, 7);
-        assert!(fb.payload.is_empty());
-        assert!(rest.is_empty());
+        assert_eq!(fb.payload, []);
+        assert_eq!(rest, []);
     }
 
     #[test]
