@@ -1,3 +1,5 @@
 scratch/
 .claude/handoff.md
 target/
+# ODVA correspondence stays local; see TODO.md (odva-email-public)
+docs/odva-correspondence/
