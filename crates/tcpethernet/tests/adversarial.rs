@@ -75,7 +75,7 @@ proptest! {
             prop_assert!(matches!(r, Err(tcpethernet::DecodeError::Truncated { .. })), "cut={cut} gave {r:?}");
         }
         let (frame, rest) = Frame::decode(&msg).unwrap();
-        prop_assert!(rest.is_empty());
+        prop_assert_eq!(rest, []);
         prop_assert_eq!(decode_list_identity(frame.payload).unwrap(), items);
     }
 
@@ -100,5 +100,59 @@ proptest! {
         prop_assume!(ours != theirs);
         let msg = Frame::encode(Command::ListIdentity, 0, theirs, &encode_list_identity(&[item]));
         prop_assert_eq!(classify(&msg, ours), Err(tcpethernet::discover::Rejected::NotOurs));
+    }
+}
+
+mod explicit_props {
+    use proptest::prelude::*;
+    use tcpethernet::cip::{Path, Request, Response};
+    use tcpethernet::codec::{Reader, Writer};
+    use tcpethernet::cpf;
+
+    proptest! {
+        #[test]
+        fn cpf_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..300)) {
+            let _ = cpf::decode(&bytes);
+        }
+
+        #[test]
+        fn request_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let _ = Request::decode(&bytes);
+        }
+
+        #[test]
+        fn response_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let _ = Response::decode(&bytes);
+        }
+
+        #[test]
+        fn path_decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..32), words in any::<u8>()) {
+            let _ = Path::decode(&mut Reader::new(&bytes), words);
+        }
+
+        #[test]
+        fn path_round_trip(class in any::<u16>(), instance in any::<u16>(), attribute in proptest::option::of(any::<u16>())) {
+            let p = Path { class, instance, attribute };
+            let bytes = p.encode();
+            prop_assert_eq!(bytes.len() % 2, 0);
+            let back = Path::decode(&mut Reader::new(&bytes), p.size_words()).unwrap();
+            prop_assert_eq!(back, p);
+        }
+
+        #[test]
+        fn request_round_trip(service in 0u8..0x80, class in any::<u16>(), instance in any::<u16>(), data in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let req = Request::new(service, Path::new(class, instance)).with_data(data);
+            let mut w = Writer::default();
+            req.encode(&mut w);
+            prop_assert_eq!(Request::decode(&w.into_inner()).unwrap(), req);
+        }
+
+        #[test]
+        fn response_round_trip(service in 0x80u8..=0xFF, status in any::<u8>(), add in proptest::collection::vec(any::<u16>(), 0..4), data in proptest::collection::vec(any::<u8>(), 0..64)) {
+            let resp = Response { service, status: tcpethernet::cip::GeneralStatus(status), additional_status: add, data };
+            let mut w = Writer::default();
+            resp.encode(&mut w);
+            prop_assert_eq!(Response::decode(&w.into_inner()).unwrap(), resp);
+        }
     }
 }

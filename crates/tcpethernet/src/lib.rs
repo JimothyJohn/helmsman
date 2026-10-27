@@ -12,9 +12,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod cip;
 pub mod codec;
+pub mod cpf;
 pub mod discover;
 pub mod encap;
+pub mod explicit;
 pub mod identity;
+pub mod session;
 
 pub use codec::DecodeError;
