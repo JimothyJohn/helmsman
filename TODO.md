@@ -95,7 +95,7 @@
   difficulty: med
   id: explicit-messaging
 
-- [ ] **OpENer POSIX sample in Docker as the CI integration target** — build from EIPStackGroup/OpENer master, run in `docker compose`, point the discovery and explicit tests at it.
+- [x] **OpENer POSIX sample in Docker as the CI integration target** — build from EIPStackGroup/OpENer master, run in `docker compose`, point the discovery and explicit tests at it.
   needs: Docker on the CI runner (ubuntu-latest has it)
   result: `docker-compose.yml` + an integration test gated on `TCPETHERNET_OPENER_ADDR`
   est: 4h
