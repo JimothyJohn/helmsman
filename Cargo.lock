@@ -354,11 +354,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tcpethernet-adapter"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "tcpethernet",
+]
+
+[[package]]
 name = "tcpethernet-cli"
 version = "0.1.0"
 dependencies = [
  "tcpethernet",
 ]
+
+[[package]]
+name = "tcpethernet-plc"
+version = "0.1.0"
 
 [[package]]
 name = "tempfile"

@@ -1,0 +1,17 @@
+[package]
+name = "tcpethernet-adapter"
+version = "0.1.0"
+description = "Target (adapter) side of CIP over TCP/UDP: sessions, explicit messaging, Forward_Open, Class 1 I/O"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tcpethernet = { path = "../tcpethernet" }
+
+[dev-dependencies]
+proptest = "1.12"
+
+[lints]
+workspace = true
