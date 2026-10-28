@@ -118,3 +118,36 @@
   difficulty: med
   depends: cli-crate
   id: daemon
+
+- [ ] **Flash the Pi 5 for CODESYS** — reflashes the card that was the perceptronics pick PC with Raspberry Pi OS Lite 64-bit, SSH on. Run in the native terminal (sudo + dd), not through `!`.
+  needs: the Pi's SD card in a reader on the Mac; `diskutil list` to find /dev/diskN
+  result: a headless Pi with user nick and a printed first-boot password
+  notes: scripts/pi-flash.sh /dev/diskN
+  est: 20m
+  difficulty: low
+  id: pi-flash
+
+- [ ] **Cable the Pi to the office LAN** — USB-C on a Pi 5 is power only; the 2026-10-27 sweep found no Pi on either subnet, over mDNS, or on USB.
+  needs: an Ethernet cable from the Pi to the 10.0.0.0/24 switch
+  result: Pi answers at raspberrypi.local
+  est: 5m
+  difficulty: low
+  depends: pi-flash
+  id: pi-cable
+
+- [ ] **Prep the Pi** — key-only SSH, hostname codesys-pi, packages current, checks 44818/2222 free. Runs here.
+  needs: the first-boot password pi-flash printed
+  result: Pi ready for Deploy Control SL
+  notes: ! scripts/pi-prep.sh nick@raspberrypi.local
+  est: 10m
+  difficulty: low
+  depends: pi-cable
+  id: pi-prep
+
+- [ ] **Install CODESYS Control for Raspberry Pi 64 SL and an EtherNet/IP Adapter project** — Windows-only IDE, so this is yours. Steps 4–5 in docs/interop/codesys-pi.md; record the assembly numbers and sizes it assigns.
+  needs: a Windows machine with the CODESYS Development System
+  result: Pi runs an EtherNet/IP adapter (2-hour demo without a licence)
+  est: 1h
+  difficulty: med
+  depends: pi-prep
+  id: codesys-runtime
