@@ -78,6 +78,26 @@
   id: odva-email-public
   answer: redact and re-add
 
+- [ ] **Keep the ruSTy oracle as a CI job?** `make test-oracle` runs the ST interpreter against ruSTy (LGPL-3.0) in a pinned, hash-checked Docker image; ruSTy is executed, never linked or shipped, so the licence never touches what we distribute. The draft PR adds a non-required `oracle` job (~1 min, downloads ~32 MB of .deb per run).
+  asked: 2026-10-28
+  by: claude-session
+  needs: your call
+  result: oracle job stays (and can become required) or is dropped to local-only
+  options: keep, not required | keep, required | local only
+  est: 5m
+  difficulty: low
+  id: oracle-in-ci
+
+- [ ] **Report ruSTy's unsigned-compare bug upstream?** ruSTy 1.0.7 compares UDINT/ULINT as signed (`ULINT_max > 1` is FALSE; minimal repro in tests/oracle.rs `rusty_unsigned_compare_bug`). Filing an issue on PLC-lang/rusty is a public post under your account.
+  asked: 2026-10-28
+  by: claude-session
+  needs: your call
+  result: an issue on PLC-lang/rusty with the repro, or nothing
+  options: file it | leave it
+  est: 10m
+  difficulty: low
+  id: rusty-unsigned-bug
+
 ## Tasks
 
 - [ ] **Bench sweep against the CompactLogix and FP0H** — `cargo run --example discover <subnet broadcast>`; fill the rows in `docs/INTEROP.md`, keep the first capture.
@@ -161,14 +181,14 @@
   depends: pi-prep
   id: pi-deploy-plc
 
-- [ ] **IEC 61131-3 runtime, Structured Text first** — our own MIT runtime in this workspace: ST lexer/parser, type checker (elementary types, arrays, structs, enums), interpreter, POUs (PROGRAM, FUNCTION, FUNCTION_BLOCK with instance state), cyclic task with a fixed scan, located variables (%I/%Q/%M) mapped onto the adapter's assemblies. Programs are .st files deployed from the CLI; no web editor.
+- [x] **IEC 61131-3 runtime, Structured Text first** — our own MIT runtime in this workspace: ST lexer/parser, type checker (elementary types, arrays, structs, enums), interpreter, POUs (PROGRAM, FUNCTION, FUNCTION_BLOCK with instance state), cyclic task with a fixed scan, located variables (%I/%Q/%M) mapped onto the adapter's assemblies. Programs are .st files deployed from the CLI; no web editor.
   needs: nothing to start; the IEC text is paywalled, so behaviour is pinned by the differential oracle (iec-oracle), not by quoting the standard
   result: crates/tcpethernet-iec (library) + a runtime binary; a .st program on the Pi drives Class 1 I/O a scanner sees
   est: 2w
   difficulty: high
   id: iec-st-runtime
 
-- [ ] **Standard function blocks and functions** — TON/TOF/TP, CTU/CTD/CTUD, R_TRIG/F_TRIG, SR/RS, numeric/bit-string/selection/comparison functions, type conversions. Each one property-tested against the oracle.
+- [x] **Standard function blocks and functions** — TON/TOF/TP, CTU/CTD/CTUD, R_TRIG/F_TRIG, SR/RS, numeric/bit-string/selection/comparison functions, type conversions. Each one property-tested against the oracle.
   needs: iec-st-runtime parsing and evaluating FB calls
   result: a library that real ST programs written for other runtimes compile against
   est: 1w
@@ -183,6 +203,7 @@
   difficulty: med
   depends: iec-st-runtime
   id: iec-oracle
+  notes: harness done 2026-10-28 (tests/oracle.rs, make test-oracle, CI job `oracle` not required); 6000 random programs + corpus agree; open question oracle-in-ci decides whether the CI job stays
 
 - [ ] **EtherCAT master via ethercrab** — ethercrab (MIT/Apache-2.0, pure Rust) as the driver; EtherCAT slaves' PDOs mapped into the runtime's %I/%Q. Master only: a Pi cannot be an EtherCAT slave (needs an ESC chip).
   needs: a USB 3 gigabit NIC for the Pi (its one port is the Studio link) and one EtherCAT I/O slave to test against (e.g. a bus coupler + digital I/O terminal)
