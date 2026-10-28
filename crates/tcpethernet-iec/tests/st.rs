@@ -151,8 +151,8 @@ fn precedence_and_integer_division() {
     assert_eq!(get(&p, "e"), Value::Int(14));
     assert_eq!(
         get(&p, "r"),
-        Value::Real(-4.0),
-        "** binds tighter than unary minus"
+        Value::Real(4.0),
+        "unary minus binds tighter than ** (as ruSTy)"
     );
 }
 
@@ -163,11 +163,11 @@ fn implicit_widening_and_literals() {
         "i := s + u; d := i * 1000; r := i + 0.5; l := d; w := w AND 16#FF00;",
     );
     assert_eq!(get(&p, "i"), Value::Int(100), "SINT + USINT is computed in INT");
-    // The product is an INT (both operands are), so it wraps before the
-    // assignment widens it: 100_000 mod 2^16 as signed.
-    assert_eq!(get(&p, "d"), Value::Int(-31_072));
+    // INT arithmetic is carried out DINT-wide (as ruSTy, CODESYS and
+    // TwinCAT do), so the product survives the assignment to DINT.
+    assert_eq!(get(&p, "d"), Value::Int(100_000));
     assert_eq!(get(&p, "r"), Value::Real(100.5));
-    assert_eq!(get(&p, "l"), Value::Real(-31_072.0));
+    assert_eq!(get(&p, "l"), Value::Real(100_000.0));
     assert_eq!(get(&p, "w"), Value::Int(0xF000));
 }
 
@@ -181,12 +181,8 @@ fn conversions() {
     );
     assert_eq!(get(&p, "a"), Value::Int(3), "rounds half away from zero");
     assert_eq!(get(&p, "b"), Value::Int(-3));
-    // 1e9 = 0x3B9A_CA00; the low 16 bits 0xCA00 as INT are -13_824.
-    assert_eq!(
-        get(&p, "c"),
-        Value::Int(-13_824),
-        "out-of-range keeps the low bits"
-    );
+    // REAL -> INT saturates at the range (as ruSTy) instead of wrapping.
+    assert_eq!(get(&p, "c"), Value::Int(32_767), "out-of-range saturates");
     assert_eq!(get(&p, "d"), Value::Int(44));
     assert_eq!(get(&p, "e"), Value::Int(65535));
     assert_eq!(get(&p, "f"), Value::Bool(true));

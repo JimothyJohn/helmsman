@@ -1,0 +1,11 @@
+(* C printf, declared as ruSTy's own lit tests declare it
+   (tests/lit/util/printf.pli in PLC-lang/rusty). *)
+{external}
+FUNCTION printf : DINT
+VAR_INPUT {ref}
+    str : STRING;
+END_VAR
+VAR_INPUT
+    args : ...;
+END_VAR
+END_FUNCTION

@@ -1,11 +1,19 @@
 //! Executes checked code against the slot array and a process image.
 //!
-//! Semantics the standard leaves to the implementation, chosen here and
-//! pinned by tests (the differential oracle is the arbiter):
-//! - integer arithmetic wraps at the type's width;
+//! Semantics the standard leaves to the implementation, chosen here, pinned
+//! by tests and cross-checked against ruSTy (tests/oracle.rs):
+//! - binary integer arithmetic is carried out at least 32 bits wide: SINT
+//!   and INT as DINT, USINT and UINT as UDINT (unsigned stays unsigned, so
+//!   `/` and `MOD` of a wrapped UINT difference are unsigned), wrapping at
+//!   that width; a value is truncated to its variable's type when stored,
+//!   so `d := i * 1000` with INT `i` and DINT `d` gives 100000. Unary minus
+//!   works at its operand's width. Generic standard functions take their
+//!   arguments as computed. Bit strings are not promoted. All of this
+//!   matches ruSTy on 6000 random programs (tests/oracle.rs);
 //! - integer `/` and `MOD` by zero fault; REAL division follows IEEE 754;
-//! - REAL -> integer rounds half away from zero, then wraps; integer
-//!   narrowing keeps the low bits; TRUNC truncates toward zero;
+//! - REAL -> integer rounds half away from zero and saturates at the
+//!   target's range (NaN gives 0); integer narrowing keeps the low bits;
+//!   TRUNC truncates toward zero, also saturating;
 //! - TIME <-> number conversions count milliseconds;
 //! - `AND`/`OR` evaluate both operands (no short-circuit);
 //! - FOR evaluates its bounds once and stops, rather than wrapping, when the
@@ -116,6 +124,15 @@ enum Flow {
 
 const NS_PER_MS: i128 = 1_000_000;
 
+/// REAL -> integer: round half away from zero, saturate, NaN -> 0.
+#[allow(clippy::cast_possible_truncation)]
+fn real_to_int(r: f64, to: Ty, round: bool) -> i128 {
+    let (lo, hi) = to.range();
+    // `as` saturates at the i128 range and maps NaN to 0.
+    let v = (if round { r.round() } else { r.trunc() }) as i128;
+    v.clamp(lo, hi)
+}
+
 /// Value -> raw image bits for a store of type `ty`.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn to_raw(ty: Ty, v: Value) -> u64 {
@@ -166,8 +183,7 @@ pub fn convert(v: Value, from: Ty, to: Ty) -> Value {
         (Value::Int(i), t) => Value::Int(t.wrap(i)),
         (Value::Real(r), Ty::Bool) => Value::Bool(r != 0.0),
         (Value::Real(r), t) if t.is_real() => Value::Real(round_real(t, r)),
-        // `as` saturates and maps NaN to 0; then wrap into the target.
-        (Value::Real(r), t) => Value::Int(t.wrap(r.round() as i128)),
+        (Value::Real(r), t) => Value::Int(real_to_int(r, t, true)),
     }
 }
 
@@ -250,7 +266,7 @@ fn binop(op: BinOp, a: Value, b: Value, ty: Ty) -> Result<Value, FaultKind> {
                 BinOp::Mod => x % y,
                 _ => unreachable!("** on integers is rejected by the checker"),
             };
-            Value::Int(ty.wrap(out))
+            Value::Int(ty.arith().wrap(out))
         }
     };
     Ok(v)
@@ -269,7 +285,7 @@ fn builtin(b: Builtin, args: &[Value], ty: Ty, now: i128) -> Result<Value, Fault
         Builtin::Now => Value::Int(now),
         Builtin::Abs => match args[0] {
             Value::Real(x) => Value::Real(x.abs()),
-            v => Value::Int(ty.wrap(int(v).abs())),
+            v => Value::Int(ty.arith().wrap(int(v).abs())),
         },
         Builtin::Sqrt => r(f64::sqrt),
         Builtin::Ln => r(f64::ln),
@@ -281,7 +297,7 @@ fn builtin(b: Builtin, args: &[Value], ty: Ty, now: i128) -> Result<Value, Fault
         Builtin::Asin => r(f64::asin),
         Builtin::Acos => r(f64::acos),
         Builtin::Atan => r(f64::atan),
-        Builtin::Trunc => Value::Int(Ty::DInt.wrap(real(args[0]).trunc() as i128)),
+        Builtin::Trunc => Value::Int(real_to_int(real(args[0]), Ty::DInt, false)),
         Builtin::Min => pick(std::cmp::Ordering::Less),
         Builtin::Max => pick(std::cmp::Ordering::Greater),
         Builtin::Limit => {
@@ -404,6 +420,11 @@ impl Machine<'_> {
             v
         };
         let raw_ty = p.bit.map_or(ty, |(_, cty)| cty);
+        // Promoted arithmetic may leave a value wider than its variable.
+        let v = match v {
+            Value::Int(x) if raw_ty.is_integral() || raw_ty == Ty::Time => Value::Int(raw_ty.wrap(x)),
+            v => v,
+        };
         match t {
             Target::Mem(i) => self.mem[i] = v,
             Target::Image(loc) => self.image.write(loc, to_raw(raw_ty, v)),
@@ -426,6 +447,7 @@ impl Machine<'_> {
             Ex::Conv(a, from, to) => convert(self.eval(a, line)?, *from, *to),
             Ex::Un(UnOp::Neg, a, ty) => match self.eval(a, line)? {
                 Value::Real(r) => Value::Real(-r),
+                // `.2` is the negation's width, chosen by the checker.
                 v => Value::Int(ty.wrap(-int(v))),
             },
             Ex::Un(UnOp::Not, a, ty) => match self.eval(a, line)? {
@@ -449,6 +471,8 @@ impl Machine<'_> {
                 Value::Int(Ty::Time.wrap(out))
             }
             Ex::Builtin(b, args, ty) => {
+                // Generic standard functions see their arguments as computed
+                // (possibly widened), like ruSTy's generic resolution.
                 let mut vals = Vec::with_capacity(args.len());
                 for a in args {
                     vals.push(self.eval(a, line)?);
@@ -468,7 +492,13 @@ impl Machine<'_> {
         let mut staged: Vec<(usize, Vec<Value>)> = Vec::with_capacity(c.moves.len());
         for m in &c.moves {
             match m {
-                Move::Value { off, ex } => staged.push((*off, vec![self.eval(ex, line)?])),
+                Move::Value { off, ex, ty } => {
+                    let v = match self.eval(ex, line)? {
+                        Value::Int(x) => Value::Int(ty.wrap(x)),
+                        v => v,
+                    };
+                    staged.push((*off, vec![v]));
+                }
                 Move::Copy { off, src, len } => {
                     let i = self.mem_index(src, line)?;
                     staged.push((*off, self.mem[i..i + len].to_vec()));

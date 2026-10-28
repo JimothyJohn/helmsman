@@ -160,6 +160,17 @@ impl Ty {
         }
     }
 
+    /// The width binary integer arithmetic on this type is carried out in:
+    /// SINT and INT as DINT, USINT and UINT as UDINT, others as themselves.
+    #[must_use]
+    pub const fn arith(self) -> Self {
+        match self {
+            Self::SInt | Self::Int => Self::DInt,
+            Self::USInt | Self::UInt => Self::UDInt,
+            t => t,
+        }
+    }
+
     /// Implicit conversion `self` -> `to` without loss (reflexive).
     #[must_use]
     pub fn widens_to(self, to: Self) -> bool {

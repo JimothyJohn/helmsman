@@ -294,8 +294,17 @@ pub enum Ex {
 /// A value moved into a callee's frame before the call.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Move {
-    Value { off: usize, ex: Ex },
-    Copy { off: usize, src: Place, len: usize },
+    /// `ty` is the slot's runtime type; integers are truncated to it.
+    Value {
+        off: usize,
+        ex: Ex,
+        ty: Ty,
+    },
+    Copy {
+        off: usize,
+        src: Place,
+        len: usize,
+    },
 }
 
 /// A callee output copied out after the call (`Q => x`).
@@ -992,6 +1001,18 @@ impl<'a> Ck<'a> {
         }
     }
 
+    /// Whether an integer expression's value is carried wider than its
+    /// type (a binary arithmetic result, or a negation of one).
+    fn widened(ex: &Ex) -> bool {
+        match ex {
+            Ex::Bin(BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod, _, _, t) => {
+                t.arith() != *t
+            }
+            Ex::Un(UnOp::Neg, inner, _) => Self::widened(inner),
+            _ => false,
+        }
+    }
+
     fn is_const(ex: &Ex) -> bool {
         match ex {
             Ex::Const(_) => true,
@@ -1589,7 +1610,10 @@ impl<'a> Ck<'a> {
             (UnOp::Neg, T::IntLit(v)) => Some((Ex::Const(Value::Int(-v)), T::IntLit(-v))),
             (UnOp::Neg, T::RealLit(v)) => Some((Ex::Const(Value::Real(-v)), T::RealLit(-v))),
             (UnOp::Neg, T::Known(Type::Elem(ty))) if ty.is_signed_int() || ty.is_real() || ty == Ty::Time => {
-                Some((Ex::Un(op, Box::new(x), ty), t))
+                // Negation works at its operand's width: a variable's own,
+                // or the widened width of an arithmetic result (as ruSTy).
+                let width = if Self::widened(&x) { ty.arith() } else { ty };
+                Some((Ex::Un(op, Box::new(x), width), t))
             }
             (UnOp::Not, T::Known(Type::Elem(ty))) if ty.is_bit() => Some((Ex::Un(op, Box::new(x), ty), t)),
             (UnOp::Not, T::IntLit(_)) if want.and_then(Self::rt).is_some_and(Ty::is_bitstring) => {
@@ -1939,6 +1963,7 @@ impl<'a> Ck<'a> {
         Some(Move::Value {
             off,
             ex: self.coerced(value, ty, sc)?,
+            ty: Self::rt(ty)?,
         })
     }
 

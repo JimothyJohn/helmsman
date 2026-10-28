@@ -2,9 +2,10 @@
 //! `PROGRAM`, `FUNCTION` and `FUNCTION_BLOCK` units in any order.
 //!
 //! Operator precedence, tightest first: `( )`, calls, `[ ]` and `.`, then
-//! `**`, unary `-` `+` `NOT`, `* / MOD`, `+ -`, `< > <= >=`, `= <>`,
+//! unary `-` `+` `NOT`, `**`, `* / MOD`, `+ -`, `< > <= >=`, `= <>`,
 //! `AND &`, `XOR`, `OR`. Binary operators of equal precedence associate
-//! left to right.
+//! left to right. Unary minus binding tighter than `**` (`-2.0 ** 2` is 4)
+//! follows ruSTy; see tests/oracle.rs.
 
 use crate::lexer::{LexError, Pos, Tok, lex};
 
@@ -934,7 +935,7 @@ impl Parser {
 
     fn binary(&mut self, level: usize) -> R<Expr> {
         if level > 6 {
-            return self.unary();
+            return self.power();
         }
         let mut lhs = self.binary(level + 1)?;
         while let Some(op) = self.binop(level) {
@@ -952,32 +953,29 @@ impl Parser {
     fn unary(&mut self) -> R<Expr> {
         let pos = self.pos();
         if self.eat(&Tok::Minus) {
-            // Fold `-5` into a literal so `-128` fits SINT, unless `**`
-            // follows: `-2**2` is `-(2**2)`.
-            if *self.tok_at(1) != Tok::Power {
-                match self.tok().clone() {
-                    Tok::Int { value, prefix: None } => {
-                        self.advance();
-                        return Ok(Expr {
-                            kind: ExprKind::Int {
-                                value: -value,
-                                prefix: None,
-                            },
-                            pos,
-                        });
-                    }
-                    Tok::Real { value, prefix: None } => {
-                        self.advance();
-                        return Ok(Expr {
-                            kind: ExprKind::Real {
-                                value: -value,
-                                prefix: None,
-                            },
-                            pos,
-                        });
-                    }
-                    _ => {}
+            // Fold `-5` into a literal so `-128` fits SINT.
+            match self.tok().clone() {
+                Tok::Int { value, prefix: None } => {
+                    self.advance();
+                    return Ok(Expr {
+                        kind: ExprKind::Int {
+                            value: -value,
+                            prefix: None,
+                        },
+                        pos,
+                    });
                 }
+                Tok::Real { value, prefix: None } => {
+                    self.advance();
+                    return Ok(Expr {
+                        kind: ExprKind::Real {
+                            value: -value,
+                            prefix: None,
+                        },
+                        pos,
+                    });
+                }
+                _ => {}
             }
             let e = self.unary()?;
             return Ok(Expr {
@@ -995,20 +993,15 @@ impl Parser {
                 pos,
             });
         }
-        self.power()
+        self.postfix()
     }
 
     fn power(&mut self) -> R<Expr> {
-        let mut lhs = self.postfix()?;
+        let mut lhs = self.unary()?;
         while *self.tok() == Tok::Power {
             let pos = self.pos();
             self.advance();
-            // The exponent may carry its own sign: `2.0 ** -1`.
-            let rhs = if matches!(self.tok(), Tok::Minus | Tok::Plus) || self.is_kw("NOT") {
-                self.unary()?
-            } else {
-                self.postfix()?
-            };
+            let rhs = self.unary()?;
             lhs = Expr {
                 kind: ExprKind::Binary(BinOp::Pow, Box::new(lhs), Box::new(rhs)),
                 pos,
@@ -1199,7 +1192,7 @@ mod tests {
             ("1 + 2 * 3", "(1 + (2 * 3))"),
             ("10 - 3 - 2", "((10 - 3) - 2)"),
             ("a MOD b * c", "((A MOD B) * C)"),
-            ("-2 ** 2", "(-(2 ** 2))"),
+            ("-2 ** 2", "(-2 ** 2)"),
             ("2.0 ** 3 ** 2", "((2.0 ** 3) ** 2)"),
             ("2.0 ** -1", "(2.0 ** -1)"),
             ("NOT a AND b", "((NOT A) AND B)"),
@@ -1209,7 +1202,8 @@ mod tests {
             ("INT_TO_REAL(a + 1, b)", "INT_TO_REAL((A + 1), B)"),
             ("a[i + 1, 2].b.c[3]", "A[(I + 1),2].B.C[3]"),
             ("w.3 OR t.Q", "(W.3 OR T.Q)"),
-            ("-a.b ** 2", "(-(A.B ** 2))"),
+            ("-a.b ** 2", "((-A.B) ** 2)"),
+            ("NOT a ** b", "((NOT A) ** B)"),
             ("f(x := 1, y => z)", "F(X:=1, Y=>Z)"),
             ("T#1s + t", "(T#1000000000ns + T)"),
             ("c = Color#Red", "(C = COLOR#RED)"),
