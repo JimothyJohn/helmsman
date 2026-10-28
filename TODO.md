@@ -103,7 +103,7 @@
   depends: explicit-messaging
   id: opener-docker
 
-- [ ] **`tcpethernet-cli` crate** — `discover`, `get <class>.<instance>.<attribute>`, later `io`. Answer to deliverable-shape was "both, library first", so this lands after explicit messaging works.
+- [x] **`tcpethernet-cli` crate** — `discover`, `get <class>.<instance>.<attribute>`, later `io`. Answer to deliverable-shape was "both, library first", so this lands after explicit messaging works.
   needs: explicit-messaging
   result: second workspace member, `cargo install`-able binary
   est: 4h

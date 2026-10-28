@@ -1,0 +1,18 @@
+[package]
+name = "tcpethernet-cli"
+version = "0.1.0"
+description = "Command-line originator: discover devices, read attributes, run Class 1 I/O"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "tcpethernet"
+path = "src/main.rs"
+
+[dependencies]
+tcpethernet = { path = "../tcpethernet" }
+
+[lints]
+workspace = true
