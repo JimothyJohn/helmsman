@@ -151,3 +151,12 @@
   difficulty: med
   depends: pi-prep
   id: codesys-runtime
+
+- [ ] **Deploy tcpethernet-plc to the Pi and smoke it from the Studio** — our own adapter + soft PLC as a systemd service (web page on :8080, token printed by the script). Alternative or complement to CODESYS; needs no Windows. Runs here.
+  needs: pi-prep done (key SSH, passwordless sudo)
+  result: Pi answers discover/identity and echoes 32 bytes over Class 1; then scripts/plc-smoke.sh <pi-ip>
+  notes: ! scripts/pi-deploy-plc.sh nick@codesys-pi.local
+  est: 20m
+  difficulty: low
+  depends: pi-prep
+  id: pi-deploy-plc
