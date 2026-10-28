@@ -34,9 +34,14 @@ pub enum Tok {
     },
     /// `TRUE`/`FALSE`, with an optional `BOOL#` prefix.
     Bool(bool),
+    /// `T#1h30m`, `TIME#-5s`: nanoseconds.
+    Time(i128),
+    /// `Color#Red`: enumeration type and value.
+    EnumLit(String, String),
     /// Directly represented variable: `%IX0.1`, `%QW2`, `%MD4`.
     Direct(String),
     Assign, // :=
+    Arrow,  // =>
     Colon,
     Semi,
     Comma,
@@ -44,6 +49,8 @@ pub enum Tok {
     DotDot,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     Plus,
     Minus,
     Star,
@@ -66,11 +73,14 @@ impl fmt::Display for Tok {
             Self::Int { value, .. } => write!(f, "{value}"),
             Self::Real { value, .. } => write!(f, "{value}"),
             Self::Bool(b) => write!(f, "{}", if *b { "TRUE" } else { "FALSE" }),
+            Self::Time(ns) => write!(f, "T#{ns}ns"),
+            Self::EnumLit(t, v) => write!(f, "{t}#{v}"),
             Self::Direct(d) => write!(f, "%{d}"),
             Self::Eof => write!(f, "end of input"),
             other => {
                 let s = match other {
                     Self::Assign => ":=",
+                    Self::Arrow => "=>",
                     Self::Colon => ":",
                     Self::Semi => ";",
                     Self::Comma => ",",
@@ -78,6 +88,8 @@ impl fmt::Display for Tok {
                     Self::DotDot => "..",
                     Self::LParen => "(",
                     Self::RParen => ")",
+                    Self::LBracket => "[",
+                    Self::RBracket => "]",
                     Self::Plus => "+",
                     Self::Minus => "-",
                     Self::Star => "*",
@@ -107,7 +119,20 @@ struct Lexer<'a> {
     src: &'a [u8],
     i: usize,
     pos: Pos,
+    /// The built-in library may use `__` names; user code may not.
+    system: bool,
 }
+
+/// Nanoseconds per duration unit.
+const UNITS: [(&str, i128); 7] = [
+    ("D", 86_400_000_000_000),
+    ("H", 3_600_000_000_000),
+    ("M", 60_000_000_000),
+    ("S", 1_000_000_000),
+    ("MS", 1_000_000),
+    ("US", 1_000),
+    ("NS", 1),
+];
 
 impl Lexer<'_> {
     fn peek(&self, k: usize) -> Option<u8> {
@@ -282,6 +307,9 @@ impl Lexer<'_> {
                 self.bump();
                 return self.typed_literal(w, start).map(|t| (t, start));
             }
+            if !self.system && w.contains("__") {
+                return Err(Self::err(start, format!("{w}: '__' is not allowed in names")));
+            }
             let tok = match w.as_str() {
                 "TRUE" => Tok::Bool(true),
                 "FALSE" => Tok::Bool(false),
@@ -326,12 +354,14 @@ impl Lexer<'_> {
             b'.' => two(self, b'.', Tok::DotDot, Tok::Dot),
             b'(' => Tok::LParen,
             b')' => Tok::RParen,
+            b'[' => Tok::LBracket,
+            b']' => Tok::RBracket,
             b'+' => Tok::Plus,
             b'-' => Tok::Minus,
             b'*' => two(self, b'*', Tok::Power, Tok::Star),
             b'/' => Tok::Slash,
             b'&' => Tok::Amp,
-            b'=' => Tok::Eq,
+            b'=' => two(self, b'>', Tok::Arrow, Tok::Eq),
             b'<' => match self.peek(0) {
                 Some(b'=') => {
                     self.bump();
@@ -354,7 +384,68 @@ impl Lexer<'_> {
         Ok((tok, start))
     }
 
-    /// After `TYPE#`: a number, or TRUE/FALSE/0/1 for `BOOL#`.
+    /// `1d2h3m4s5ms6us7ns` after `T#`, with optional `_` between parts and
+    /// a fraction on the last part (`1.5s`).
+    fn duration(&mut self, start: Pos) -> Result<i128, LexError> {
+        let bad = |m: &str| Self::err(start, format!("bad TIME literal: {m}"));
+        let mut total: i128 = 0;
+        let mut last_unit = usize::MAX;
+        let mut fraction_seen = false;
+        loop {
+            if fraction_seen {
+                return Err(bad("only the last part may have a fraction"));
+            }
+            if !self.peek(0).is_some_and(|c| c.is_ascii_digit()) {
+                return Err(bad("expected a number"));
+            }
+            let int = self.digits(10, start)?;
+            let mut frac = String::new();
+            if self.peek(0) == Some(b'.') && self.peek(1).is_some_and(|c| c.is_ascii_digit()) {
+                self.bump();
+                frac = self.digits(10, start)?;
+                fraction_seen = true;
+            }
+            let mut unit = String::new();
+            while let Some(c) = self.peek(0) {
+                if c.is_ascii_alphabetic() {
+                    unit.push(char::from(c.to_ascii_uppercase()));
+                    self.bump();
+                } else {
+                    break;
+                }
+            }
+            let Some(u) = UNITS.iter().position(|(n, _)| *n == unit) else {
+                return Err(bad(&format!("unknown unit {unit:?} (d, h, m, s, ms, us, ns)")));
+            };
+            if last_unit != usize::MAX && u <= last_unit {
+                return Err(bad("units must go from largest to smallest"));
+            }
+            last_unit = u;
+            let scale = UNITS[u].1;
+            let whole: i128 = int.parse().map_err(|_| bad("too large"))?;
+            let mut part = whole.checked_mul(scale).ok_or_else(|| bad("too large"))?;
+            if !frac.is_empty() {
+                // Fraction digits beyond nanosecond resolution are dropped.
+                let digits = u32::try_from(frac.len().min(18)).unwrap_or(18);
+                let f: i128 = frac[..digits as usize].parse().map_err(|_| bad("fraction"))?;
+                part += f * scale / 10i128.pow(digits);
+            }
+            total = total.checked_add(part).ok_or_else(|| bad("too large"))?;
+            if self.peek(0) == Some(b'_') {
+                self.bump();
+            }
+            if !self.peek(0).is_some_and(|c| c.is_ascii_digit()) {
+                break;
+            }
+        }
+        if total > i128::from(i64::MAX) {
+            return Err(bad("beyond the TIME range"));
+        }
+        Ok(total)
+    }
+
+    /// After `TYPE#`: a number, TRUE/FALSE/0/1 for `BOOL#`, a duration for
+    /// `T#`/`TIME#`, or a value name for an enumeration.
     fn typed_literal(&mut self, ty: String, start: Pos) -> Result<Tok, LexError> {
         let neg = if self.peek(0) == Some(b'-') {
             self.bump();
@@ -362,6 +453,14 @@ impl Lexer<'_> {
         } else {
             false
         };
+        if ty == "T" || ty == "TIME" {
+            let ns = self.duration(start)?;
+            return Ok(Tok::Time(if neg { -ns } else { ns }));
+        }
+        if ty != "BOOL" && !neg && self.peek(0).is_some_and(|c| c.is_ascii_alphabetic() || c == b'_') {
+            let v = self.word();
+            return Ok(Tok::EnumLit(ty, v));
+        }
         if ty == "BOOL" && !neg {
             if self.peek(0).is_some_and(|c| c.is_ascii_alphabetic()) {
                 return match self.word().as_str() {
@@ -393,12 +492,14 @@ impl Lexer<'_> {
     }
 }
 
-/// Tokenises `src`. Stops at the first error.
-pub fn lex(src: &str) -> Result<Vec<(Tok, Pos)>, LexError> {
+/// Tokenises `src`. Stops at the first error. `system` admits `__` names
+/// (the built-in library).
+pub fn lex(src: &str, system: bool) -> Result<Vec<(Tok, Pos)>, LexError> {
     let mut l = Lexer {
         src: src.as_bytes(),
         i: 0,
         pos: Pos { line: 1, col: 1 },
+        system,
     };
     let mut out = Vec::new();
     loop {
@@ -416,7 +517,66 @@ mod tests {
     use super::*;
 
     fn toks(s: &str) -> Vec<Tok> {
-        lex(s).unwrap().into_iter().map(|(t, _)| t).collect()
+        super::lex(s, false)
+            .unwrap()
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect()
+    }
+
+    fn lex(s: &str) -> Result<Vec<(Tok, Pos)>, LexError> {
+        super::lex(s, false)
+    }
+
+    #[test]
+    fn durations() {
+        let ms = 1_000_000i128;
+        assert_eq!(toks("T#5s"), vec![Tok::Time(5_000 * ms), Tok::Eof]);
+        assert_eq!(toks("time#1h30m"), vec![Tok::Time(5_400_000 * ms), Tok::Eof]);
+        assert_eq!(
+            toks("T#1d_2h_3m_4s_5ms_6us_7ns"),
+            vec![
+                Tok::Time(
+                    86_400_000_000_000
+                        + 7_200_000_000_000
+                        + 180_000_000_000
+                        + 4_000_000_000
+                        + 5_000_000
+                        + 6_000
+                        + 7
+                ),
+                Tok::Eof
+            ]
+        );
+        assert_eq!(
+            toks("T#1.5s T#-250ms"),
+            vec![Tok::Time(1_500 * ms), Tok::Time(-250 * ms), Tok::Eof]
+        );
+        assert_eq!(toks("T#0.123456789123s"), vec![Tok::Time(123_456_789), Tok::Eof]);
+        for bad in ["T#5", "T#5x", "T#1s2h", "T#1.5s2ms", "T#", "T#s", "T#999999999d"] {
+            assert!(lex(bad).unwrap_err().msg.contains("TIME"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn brackets_arrows_enums_and_reserved_names() {
+        assert_eq!(
+            toks("a[1] => Color#Red"),
+            vec![
+                Tok::Ident("A".into()),
+                Tok::LBracket,
+                Tok::Int {
+                    value: 1,
+                    prefix: None
+                },
+                Tok::RBracket,
+                Tok::Arrow,
+                Tok::EnumLit("COLOR".into(), "RED".into()),
+                Tok::Eof
+            ]
+        );
+        assert!(lex("a__b").unwrap_err().msg.contains("'__'"));
+        assert_eq!(super::lex("a__b", true).unwrap()[0].0, Tok::Ident("A__B".into()));
     }
 
     #[test]

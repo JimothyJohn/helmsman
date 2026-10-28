@@ -20,10 +20,12 @@ pub enum Ty {
     LWord,
     Real,
     LReal,
+    /// Duration, held as signed 64-bit nanoseconds.
+    Time,
 }
 
 /// Every type, in the order common supertypes are searched.
-const ALL: [Ty; 15] = [
+const ALL: [Ty; 16] = [
     Ty::Bool,
     Ty::SInt,
     Ty::USInt,
@@ -39,6 +41,7 @@ const ALL: [Ty; 15] = [
     Ty::ULInt,
     Ty::LWord,
     Ty::LReal,
+    Ty::Time,
 ];
 
 impl Ty {
@@ -65,6 +68,7 @@ impl Ty {
             Self::LWord => "LWORD",
             Self::Real => "REAL",
             Self::LReal => "LREAL",
+            Self::Time => "TIME",
         }
     }
 
@@ -76,7 +80,7 @@ impl Ty {
             Self::SInt | Self::USInt | Self::Byte => 8,
             Self::Int | Self::UInt | Self::Word => 16,
             Self::DInt | Self::UDInt | Self::DWord | Self::Real => 32,
-            Self::LInt | Self::ULInt | Self::LWord | Self::LReal => 64,
+            Self::LInt | Self::ULInt | Self::LWord | Self::LReal | Self::Time => 64,
         }
     }
 
@@ -126,11 +130,16 @@ impl Ty {
         self.is_int() || self.is_bit()
     }
 
+    /// Signed two's-complement representation: the signed integers and TIME.
+    const fn is_signed(self) -> bool {
+        self.is_signed_int() || matches!(self, Self::Time)
+    }
+
     /// Inclusive value range of an integral type.
     #[must_use]
     pub fn range(self) -> (i128, i128) {
         let n = self.bits();
-        if self.is_signed_int() {
+        if self.is_signed() {
             (-(1i128 << (n - 1)), (1i128 << (n - 1)) - 1)
         } else {
             (0, (1i128 << n) - 1)
@@ -144,7 +153,7 @@ impl Ty {
         let n = self.bits();
         let mask = (1i128 << n) - 1;
         let u = v & mask;
-        if self.is_signed_int() && u >= 1i128 << (n - 1) {
+        if self.is_signed() && u >= 1i128 << (n - 1) {
             u - (1i128 << n)
         } else {
             u

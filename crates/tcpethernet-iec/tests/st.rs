@@ -405,7 +405,7 @@ fn declaration_and_statement_errors() {
         "inputs (%I) are read-only",
         "EXIT and CONTINUE are only allowed inside a loop",
         "undeclared variable Y",
-        "FOR variable R must be a non-CONSTANT integer",
+        "FOR variable R must be a non-CONSTANT, non-located integer",
     ] {
         assert!(e.contains(want), "missing {want:?} in\n{e}");
     }
