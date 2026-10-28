@@ -155,8 +155,56 @@
 - [x] **Deploy tcpethernet-plc to the Pi and smoke it from the Studio** — our own adapter + soft PLC as a systemd service (web page on :8080, token printed by the script). Alternative or complement to CODESYS; needs no Windows. Runs here.
   needs: pi-prep done (key SSH, passwordless sudo)
   result: Pi answers discover/identity and echoes 32 bytes over Class 1; then scripts/plc-smoke.sh <pi-ip>
-  notes: ! scripts/pi-deploy-plc.sh nick@192.168.3.20 — done 2026-10-27 on the unflashed pick PC (hostname pickpc, eth0 192.168.3.20 direct to the Studio, wlan0 10.0.0.56); smoke PASS; firewall rules are runtime-only, redeploy after a reboot
+  notes: smoke PASSED 2026-10-27 on the unflashed pick PC (hostname pickpc, eth0 192.168.3.20 direct to the Studio, wlan0 10.0.0.56), then removed the same night with the toy PLC (service, unit, state, firewall rules); the IEC runtime replaces it
   est: 20m
   difficulty: low
   depends: pi-prep
   id: pi-deploy-plc
+
+- [ ] **IEC 61131-3 runtime, Structured Text first** — our own MIT runtime in this workspace: ST lexer/parser, type checker (elementary types, arrays, structs, enums), interpreter, POUs (PROGRAM, FUNCTION, FUNCTION_BLOCK with instance state), cyclic task with a fixed scan, located variables (%I/%Q/%M) mapped onto the adapter's assemblies. Programs are .st files deployed from the CLI; no web editor.
+  needs: nothing to start; the IEC text is paywalled, so behaviour is pinned by the differential oracle (iec-oracle), not by quoting the standard
+  result: crates/tcpethernet-iec (library) + a runtime binary; a .st program on the Pi drives Class 1 I/O a scanner sees
+  est: 2w
+  difficulty: high
+  id: iec-st-runtime
+
+- [ ] **Standard function blocks and functions** — TON/TOF/TP, CTU/CTD/CTUD, R_TRIG/F_TRIG, SR/RS, numeric/bit-string/selection/comparison functions, type conversions. Each one property-tested against the oracle.
+  needs: iec-st-runtime parsing and evaluating FB calls
+  result: a library that real ST programs written for other runtimes compile against
+  est: 1w
+  difficulty: med
+  depends: iec-st-runtime
+  id: iec-stdlib
+
+- [ ] **Differential test oracle against ruSTy** — run the same ST programs through PLC-lang/rusty (LGPL-3.0, LLVM, dev/CI only, never linked) and our interpreter, compare variable state after N scans. Generated programs via proptest plus a hand-written conformance corpus.
+  needs: LLVM in CI (ruSTy builds against it); a decision that a dev-only LGPL tool in CI is fine
+  result: `make test-iec-oracle`, run in CI; disagreements become regression tests
+  est: 3d
+  difficulty: med
+  depends: iec-st-runtime
+  id: iec-oracle
+
+- [ ] **EtherCAT master via ethercrab** — ethercrab (MIT/Apache-2.0, pure Rust) as the driver; EtherCAT slaves' PDOs mapped into the runtime's %I/%Q. Master only: a Pi cannot be an EtherCAT slave (needs an ESC chip).
+  needs: a USB 3 gigabit NIC for the Pi (its one port is the Studio link) and one EtherCAT I/O slave to test against (e.g. a bus coupler + digital I/O terminal)
+  result: an ST program toggles a real EtherCAT output from the Pi
+  est: 1w
+  difficulty: high
+  depends: iec-st-runtime
+  id: ethercat-master
+
+- [ ] **PROFINET IO device (RT class 1)** — own Rust implementation over raw Ethernet (DCP, LLDP, RPC connect, cyclic RT frames); IRT is out (needs hardware). Lab use only: shipping a real device needs a PI vendor ID and certification.
+  needs: a PROFINET controller to test against (a Siemens PLC, or a software controller) and access to the PROFINET spec (PI membership) or a decision to work from public captures + p-net's behaviour
+  result: a PROFINET controller sees the Pi as an IO device and exchanges cyclic data with the ST program
+  est: 3w
+  difficulty: high
+  depends: iec-st-runtime
+  id: profinet-device
+
+- [ ] **LD/FBD via PLCopen XML import** — accept TC6 XML from existing free editors (ladder and FBD drawn there), lower to the same IR as ST. No graphical editor of our own.
+  needs: iec-stdlib; one editor chosen to test exports from
+  result: a ladder program drawn in a free editor runs on our runtime
+  est: 1w
+  difficulty: high
+  depends: iec-stdlib
+  id: plcopen-xml
+
