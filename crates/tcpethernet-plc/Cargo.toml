@@ -1,0 +1,18 @@
+[package]
+name = "tcpethernet-plc"
+version = "0.1.0"
+description = "Soft PLC: CIP adapter + scan engine + browser programming interface"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tcpethernet = { path = "../tcpethernet" }
+tcpethernet-adapter = { path = "../tcpethernet-adapter" }
+
+[dev-dependencies]
+proptest = "1.12"
+
+[lints]
+workspace = true

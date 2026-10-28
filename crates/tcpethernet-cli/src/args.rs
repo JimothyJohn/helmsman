@@ -14,9 +14,11 @@ usage:
       Get_Attribute_Single; prints the bytes as hex. Numbers may be 0x-hex.
   tcpethernet io HOST --config N --out N --in N --out-len N --in-len N
                  [--rpi MS] [--seconds S] [--input-only] [--set HEX]
+                 [--io-port N] [--local-io-port N]
       Forward_Open a Class 1 connection, optionally write output bytes,
       print each new input for S seconds (default 5), Forward_Close.
-      Binds UDP 2222 locally; the target sends input there.
+      Binds UDP 2222 locally (--local-io-port); the target sends input
+      there. --io-port is the target's I/O port (2222).
   tcpethernet help
 
   --port N (any command): encapsulation port instead of 44818.";
@@ -52,6 +54,10 @@ pub struct IoArgs {
     pub seconds: u64,
     pub input_only: bool,
     pub set: Option<Vec<u8>>,
+    /// Target's UDP I/O port (2222).
+    pub io_port: u16,
+    /// Local UDP port to receive input on (2222).
+    pub local_io_port: u16,
 }
 
 pub fn number(s: &str) -> Result<u16, String> {
@@ -169,6 +175,8 @@ fn parse_io(rest: &[String]) -> Result<IoArgs, String> {
     let mut seconds = 5;
     let mut input_only = false;
     let mut set = None;
+    let mut io_port = 2222;
+    let mut local_io_port = 2222;
     let mut i = 1;
     while i < rest.len() {
         let flag = rest[i].as_str();
@@ -188,6 +196,8 @@ fn parse_io(rest: &[String]) -> Result<IoArgs, String> {
             }
             "--input-only" => input_only = true,
             "--set" => set = Some(hex_bytes(flag_value(rest, &mut i, flag)?)?),
+            "--io-port" => io_port = number(flag_value(rest, &mut i, flag)?)?,
+            "--local-io-port" => local_io_port = number(flag_value(rest, &mut i, flag)?)?,
             other => return Err(format!("unknown flag {other}")),
         }
         i += 1;
@@ -208,6 +218,8 @@ fn parse_io(rest: &[String]) -> Result<IoArgs, String> {
         seconds,
         input_only,
         set,
+        io_port,
+        local_io_port,
     };
     if let Some(s) = &args.set {
         if args.input_only {
