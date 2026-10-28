@@ -1,0 +1,18 @@
+[package]
+name = "tcpethernet-plc"
+version = "0.1.0"
+description = "Soft PLC: an IEC 61131-3 Structured Text program behind the CIP adapter"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tcpethernet-adapter = { path = "../tcpethernet-adapter" }
+tcpethernet-iec = { path = "../tcpethernet-iec" }
+
+[dev-dependencies]
+tcpethernet = { path = "../tcpethernet" }
+
+[lints]
+workspace = true
