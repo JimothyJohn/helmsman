@@ -78,7 +78,7 @@
   id: odva-email-public
   answer: redact and re-add
 
-- [ ] **Keep the ruSTy oracle as a CI job?** `make test-oracle` runs the ST interpreter against ruSTy (LGPL-3.0) in a pinned, hash-checked Docker image; ruSTy is executed, never linked or shipped, so the licence never touches what we distribute. The draft PR adds a non-required `oracle` job (~1 min, downloads ~32 MB of .deb per run).
+- [x] **Keep the ruSTy oracle as a CI job?** `make test-oracle` runs the ST interpreter against ruSTy (LGPL-3.0) in a pinned, hash-checked Docker image; ruSTy is executed, never linked or shipped, so the licence never touches what we distribute. The draft PR adds a non-required `oracle` job (~1 min, downloads ~32 MB of .deb per run).
   asked: 2026-10-28
   by: claude-session
   needs: your call
@@ -87,8 +87,9 @@
   est: 5m
   difficulty: low
   id: oracle-in-ci
+  answer: keep (stays not required)
 
-- [ ] **Report ruSTy's unsigned-compare bug upstream?** ruSTy 1.0.7 compares UDINT/ULINT as signed (`ULINT_max > 1` is FALSE; minimal repro in tests/oracle.rs `rusty_unsigned_compare_bug`). Filing an issue on PLC-lang/rusty is a public post under your account.
+- [x] **Report ruSTy's unsigned-compare bug upstream?** ruSTy 1.0.7 compares UDINT/ULINT as signed (`ULINT_max > 1` is FALSE; minimal repro in tests/oracle.rs `rusty_unsigned_compare_bug`). Filing an issue on PLC-lang/rusty is a public post under your account.
   asked: 2026-10-28
   by: claude-session
   needs: your call
@@ -97,6 +98,8 @@
   est: 10m
   difficulty: low
   id: rusty-unsigned-bug
+  answer: report it, as a draft issue
+  notes: not filed: already fixed on ruSTy master by PLC-lang/rusty#2015 (merged 2026-10-21, after v1.0.7); repro re-verified against 1.0.7 on 2026-10-28. Follow-up card rusty-bump.
 
 ## Tasks
 
@@ -196,14 +199,22 @@
   depends: iec-st-runtime
   id: iec-stdlib
 
-- [ ] **Differential test oracle against ruSTy** — run the same ST programs through PLC-lang/rusty (LGPL-3.0, LLVM, dev/CI only, never linked) and our interpreter, compare variable state after N scans. Generated programs via proptest plus a hand-written conformance corpus.
+- [x] **Differential test oracle against ruSTy** — run the same ST programs through PLC-lang/rusty (LGPL-3.0, LLVM, dev/CI only, never linked) and our interpreter, compare variable state after N scans. Generated programs via proptest plus a hand-written conformance corpus.
   needs: LLVM in CI (ruSTy builds against it); a decision that a dev-only LGPL tool in CI is fine
   result: `make test-iec-oracle`, run in CI; disagreements become regression tests
   est: 3d
   difficulty: med
   depends: iec-st-runtime
   id: iec-oracle
-  notes: harness done 2026-10-28 (tests/oracle.rs, make test-oracle, CI job `oracle` not required); 6000 random programs + corpus agree; open question oracle-in-ci decides whether the CI job stays
+  notes: harness done 2026-10-28 (tests/oracle.rs, make test-oracle, CI job `oracle` not required); 6000 random programs + corpus agree; oracle-in-ci answered: keep, not required
+
+- [ ] **Bump ruSTy past 1.0.7 and drop the unsigned-compare workaround** — PLC-lang/rusty#2015 fixes signed compares of UDINT/ULINT (and unsigned division, CASE, negation) on master; no release carries it yet. When one does: new version + SHA-256 digests in docker/rusty/Dockerfile, flip `rusty_unsigned_compare_bug` to assert agreement, drop the UDINT/ULINT dodge in `cond` (tests/oracle.rs), widen the sweep once.
+  needs: a ruSTy release after 2026-10-21 (`gh release list -R PLC-lang/rusty`)
+  result: oracle compares unsigned conditions directly
+  est: 1h
+  difficulty: low
+  depends: iec-oracle
+  id: rusty-bump
 
 - [ ] **EtherCAT master via ethercrab** — ethercrab (MIT/Apache-2.0, pure Rust) as the driver; EtherCAT slaves' PDOs mapped into the runtime's %I/%Q. Master only: a Pi cannot be an EtherCAT slave (needs an ESC chip).
   needs: a USB 3 gigabit NIC for the Pi (its one port is the Studio link) and one EtherCAT I/O slave to test against (e.g. a bus coupler + digital I/O terminal)
