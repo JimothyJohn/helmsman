@@ -127,7 +127,7 @@
   difficulty: low
   id: pi-flash
 
-- [ ] **Cable the Pi to the office LAN** — USB-C on a Pi 5 is power only; the 2026-10-27 sweep found no Pi on either subnet, over mDNS, or on USB.
+- [x] **Cable the Pi to the office LAN** — USB-C on a Pi 5 is power only; the 2026-10-27 sweep found no Pi on either subnet, over mDNS, or on USB.
   needs: an Ethernet cable from the Pi to the 10.0.0.0/24 switch
   result: Pi answers at raspberrypi.local
   est: 5m
@@ -152,10 +152,10 @@
   depends: pi-prep
   id: codesys-runtime
 
-- [ ] **Deploy tcpethernet-plc to the Pi and smoke it from the Studio** — our own adapter + soft PLC as a systemd service (web page on :8080, token printed by the script). Alternative or complement to CODESYS; needs no Windows. Runs here.
+- [x] **Deploy tcpethernet-plc to the Pi and smoke it from the Studio** — our own adapter + soft PLC as a systemd service (web page on :8080, token printed by the script). Alternative or complement to CODESYS; needs no Windows. Runs here.
   needs: pi-prep done (key SSH, passwordless sudo)
   result: Pi answers discover/identity and echoes 32 bytes over Class 1; then scripts/plc-smoke.sh <pi-ip>
-  notes: ! scripts/pi-deploy-plc.sh nick@codesys-pi.local
+  notes: ! scripts/pi-deploy-plc.sh nick@192.168.3.20 — done 2026-10-27 on the unflashed pick PC (hostname pickpc, eth0 192.168.3.20 direct to the Studio, wlan0 10.0.0.56); smoke PASS; firewall rules are runtime-only, redeploy after a reboot
   est: 20m
   difficulty: low
   depends: pi-prep
