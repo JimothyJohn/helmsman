@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tcpethernet</title>
+<meta name="description" content="Open-source originator (explicit-message client and I/O scanner) for CIP over TCP/UDP on Ethernet, written in Rust with zero runtime dependencies.">
+<style>
+:root {
+  --bg: #f6f5f1;
+  --surface: #ffffff;
+  --text: #1b1d1f;
+  --muted: #5c6166;
+  --line: #dcdad3;
+  --accent: #b5480f;
+  --accent-soft: #f6e4d8;
+  --code-bg: #1d2024;
+  --code-text: #e6e3dc;
+  --code-dim: #8b9097;
+  --code-key: #f0a46b;
+  --ok: #2f7a3e;
+  --pending: #8a6d1a;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131517;
+    --surface: #1b1e21;
+    --text: #e8e6e1;
+    --muted: #9aa0a6;
+    --line: #2d3135;
+    --accent: #f08a4b;
+    --accent-soft: #3a2619;
+    --code-bg: #0d0f11;
+    --ok: #6cc17e;
+    --pending: #d8b44f;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 var(--sans);
+}
+a { color: var(--accent); }
+.wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+
+header.top {
+  border-bottom: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 14px;
+}
+header.top .wrap { display: flex; align-items: center; justify-content: space-between; height: 52px; gap: 16px; }
+header.top .brand { font-weight: 700; color: var(--text); text-decoration: none; }
+header.top nav { display: flex; gap: 18px; overflow-x: auto; }
+header.top nav a { color: var(--muted); text-decoration: none; white-space: nowrap; }
+header.top nav a:hover { color: var(--text); }
+
+.hero { padding-top: 72px; padding-bottom: 56px; }
+.hero .tag {
+  display: inline-block;
+  font: 12px/1 var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 6px 10px;
+  border-radius: 3px;
+}
+.hero h1 {
+  font: 700 clamp(36px, 7vw, 60px)/1.05 var(--mono);
+  letter-spacing: -.02em;
+  margin: 20px 0 16px;
+}
+.hero p.lede { font-size: 19px; color: var(--muted); max-width: 640px; margin: 0 0 28px; }
+.hero p.lede strong { color: var(--text); font-weight: 600; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn {
+  font: 600 14px/1 var(--mono);
+  padding: 12px 16px;
+  border-radius: 4px;
+  text-decoration: none;
+  border: 1px solid var(--line);
+  color: var(--text);
+  background: var(--surface);
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { .btn.primary { color: #131517; } }
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.facts div { padding: 18px 16px 18px 0; }
+.facts b { display: block; font: 600 15px var(--mono); }
+.facts span { font-size: 14px; color: var(--muted); }
+
+section { padding: 56px 0 8px; }
+h2 {
+  font: 700 13px/1 var(--mono);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 10px;
+}
+h3 { font-size: 24px; line-height: 1.25; margin: 0 0 16px; letter-spacing: -.01em; }
+section > .wrap > p { max-width: 700px; }
+.muted { color: var(--muted); }
+
+pre {
+  background: var(--code-bg);
+  color: var(--code-text);
+  font: 13.5px/1.6 var(--mono);
+  padding: 18px 20px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 20px 0;
+}
+pre .c { color: var(--code-dim); }
+pre .k { color: var(--code-key); }
+code { font-family: var(--mono); font-size: .92em; }
+p code, li code, td code {
+  background: var(--accent-soft);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.diagram { margin: 24px 0; overflow-x: auto; }
+.diagram svg { width: 100%; min-width: 600px; height: auto; display: block; }
+.diagram svg text { font-family: var(--mono); fill: var(--text); }
+.diagram svg .dim { fill: var(--muted); }
+.diagram svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.diagram svg .us { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+.diagram svg .wire { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+.diagram svg .wire.io { stroke: var(--accent); stroke-dasharray: 5 4; }
+.diagram svg .arrow { fill: var(--muted); }
+.diagram svg .arrow.io { fill: var(--accent); }
+
+.crates { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; margin-top: 24px; }
+.crate {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 18px 18px 16px;
+}
+.crate h4 { font: 700 15px var(--mono); margin: 0 0 6px; }
+.crate p { margin: 0 0 10px; font-size: 14.5px; color: var(--muted); }
+.crate ul { margin: 0; padding-left: 18px; font-size: 14px; }
+
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; margin: 20px 0; }
+.table-scroll { overflow-x: auto; }
+th, td { text-align: left; padding: 10px 12px 10px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 600 12px var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.st { font: 600 12px var(--mono); white-space: nowrap; }
+.st.ok { color: var(--ok); }
+.st.pending { color: var(--pending); }
+
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+.two > * { min-width: 0; }
+@media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+
+
+footer {
+  margin-top: 72px;
+  border-top: 1px solid var(--line);
+  padding: 28px 0 48px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#">tcpethernet</a>
+    <nav>
+      <a href="#what">What</a>
+      <a href="#crates">Crates</a>
+      <a href="#cli">CLI</a>
+      <a href="#plc">Soft PLC</a>
+      <a href="#status">Status</a>
+      <a href="https://github.com/JimothyJohn/tcpethernet">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap hero">
+  <span class="tag">Early · Rust · zero runtime deps</span>
+  <h1>tcpethernet</h1>
+  <p class="lede">An open-source <strong>originator</strong> for CIP over TCP/UDP on Ethernet: an explicit-message client and I/O scanner, so an open device can <strong>discover, configure, and exchange cyclic I/O</strong> with industrial devices that run a conformant adapter stack.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/JimothyJohn/tcpethernet">View on GitHub</a>
+    <a class="btn" href="#cli">Quick start</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="facts">
+    <div><b>Cargo workspace</b><span>five crates, edition 2024</span></div>
+    <div><b>std only</b><span>no runtime dependencies</span></div>
+    <div><b>Interop in CI</b><span>tested against OpENer in Docker</span></div>
+    <div><b>MIT</b><span>open source</span></div>
+  </div>
+</div>
+
+<section id="what">
+  <div class="wrap">
+    <h2>What it is</h2>
+    <h3>The scanner side of the wire, in the open.</h3>
+    <p>Most open CIP stacks are <em>adapters</em>: the device end that answers requests. tcpethernet is the other end, the <em>originator</em> that finds devices, reads and writes their attributes over TCP 44818, and opens Class 1 connections that exchange I/O over UDP 2222 at a fixed requested packet interval (RPI).</p>
+
+    <div class="diagram" role="img" aria-label="tcpethernet originator talking to an adapter device: explicit messages over TCP 44818, ListIdentity over UDP, and Class 1 cyclic I/O over UDP 2222 in both directions.">
+      <svg viewBox="0 0 760 230" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="aio" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow io" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="us" x="10" y="30" width="210" height="170" rx="6"/>
+        <text x="115" y="70" text-anchor="middle" font-size="15" font-weight="700">tcpethernet</text>
+        <text x="115" y="92" text-anchor="middle" font-size="12" class="dim">originator</text>
+        <text x="115" y="130" text-anchor="middle" font-size="12" class="dim">discover · session</text>
+        <text x="115" y="150" text-anchor="middle" font-size="12" class="dim">explicit messaging</text>
+        <text x="115" y="170" text-anchor="middle" font-size="12" class="dim">Forward_Open · scanner</text>
+
+        <rect class="box" x="540" y="30" width="210" height="170" rx="6"/>
+        <text x="645" y="70" text-anchor="middle" font-size="15" font-weight="700">adapter</text>
+        <text x="645" y="92" text-anchor="middle" font-size="12" class="dim">target device</text>
+        <text x="645" y="130" text-anchor="middle" font-size="12" class="dim">PLC · drive · I/O block</text>
+        <text x="645" y="150" text-anchor="middle" font-size="12" class="dim">OpENer · tcpethernet-plc</text>
+
+        <path class="wire" d="M222,62 H538" marker-end="url(#a)"/>
+        <text x="380" y="54" text-anchor="middle" font-size="12">ListIdentity · UDP broadcast</text>
+
+        <path class="wire" d="M222,106 H538" marker-start="url(#a)" marker-end="url(#a)"/>
+        <text x="380" y="98" text-anchor="middle" font-size="12">explicit messages · TCP 44818</text>
+
+        <path class="wire io" d="M222,152 H538" marker-end="url(#aio)"/>
+        <text x="380" y="144" text-anchor="middle" font-size="12">O→T outputs · UDP 2222 every RPI</text>
+        <path class="wire io" d="M538,184 H222" marker-end="url(#aio)"/>
+        <text x="380" y="176" text-anchor="middle" font-size="12">T→O inputs · UDP 2222 every RPI</text>
+      </svg>
+    </div>
+
+    <p class="muted">The workspace also ships the adapter side, used as an in-repo test target and as the base for a soft PLC, so both ends can be exercised without hardware.</p>
+  </div>
+</section>
+
+<section id="crates">
+  <div class="wrap">
+    <h2>Crates</h2>
+    <h3>Five crates, one workspace.</h3>
+    <div class="crates">
+      <div class="crate">
+        <h4>tcpethernet</h4>
+        <p>The originator library.</p>
+        <ul>
+          <li>Encapsulation header and CPF codecs</li>
+          <li><code>ListIdentity</code> discovery over UDP</li>
+          <li>Sessions, unconnected explicit messaging, typed errors</li>
+          <li>Forward_Open and the Class 1 I/O scanner</li>
+        </ul>
+      </div>
+      <div class="crate">
+        <h4>tcpethernet-cli</h4>
+        <p>The <code>tcpethernet</code> binary: discover devices, read attributes, run Class 1 I/O.</p>
+      </div>
+      <div class="crate">
+        <h4>tcpethernet-adapter</h4>
+        <p>The target side: sessions, explicit messaging, Forward_Open, Class 1 I/O. The device state machine takes <code>now</code> on every call, so timeouts and production schedules test deterministically.</p>
+      </div>
+      <div class="crate">
+        <h4>tcpethernet-iec</h4>
+        <p>IEC 61131-3 Structured Text: a compiler and a scan-cycle interpreter over an <code>%I</code> / <code>%Q</code> / <code>%M</code> process image.</p>
+      </div>
+      <div class="crate">
+        <h4>tcpethernet-plc</h4>
+        <p>A soft PLC: one Structured Text program behind the CIP adapter, with a web page for programming it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="cli">
+  <div class="wrap">
+    <h2>Command line</h2>
+    <h3>Build it, point it at a device.</h3>
+<pre><span class="k">cargo</span> build --release
+
+<span class="c"># ListIdentity broadcast</span>
+target/release/tcpethernet discover
+
+<span class="c"># Identity object, attributes 1-7</span>
+target/release/tcpethernet identity 10.0.0.50
+
+<span class="c"># any attribute, class.instance.attribute, printed as hex</span>
+target/release/tcpethernet get 10.0.0.50 0xF5.1.5
+
+<span class="c"># Class 1 exclusive-owner connection</span>
+target/release/tcpethernet io 10.0.0.50 --config 151 --out 150 --in 100 \
+    --out-len 32 --in-len 32 --rpi 50 --set 0102...</pre>
+    <p><code>tcpethernet help</code> lists every flag. <code>io</code> binds UDP 2222 locally, because targets send their input data there.</p>
+  </div>
+</section>
+
+<section id="plc">
+  <div class="wrap two">
+    <div>
+      <h2>Soft PLC</h2>
+      <h3>Structured Text behind the adapter.</h3>
+      <p><code>tcpethernet-plc</code> runs one IEC 61131-3 program per scan. Each scan copies assembly 150 (what the scanner sends) into <code>%I</code>, runs the program, and copies <code>%Q</code> into assembly 100 (what the scanner receives).</p>
+      <p>A runtime fault zeroes the outputs and stops the program; the adapter stays on the network so the PLC can still be found.</p>
+      <p class="muted">Ships as a Docker target (<code>docker compose</code> service <code>plc</code>) and a systemd unit for a Raspberry Pi.</p>
+    </div>
+<pre><span class="k">PROGRAM</span> blink
+<span class="k">VAR</span> count : INT; <span class="k">END_VAR</span>
+  count := count + 1;
+  %QX0.0 := count MOD 2 = 0;
+  %QW1 := INT_TO_WORD(count);
+<span class="k">END_PROGRAM</span></pre>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <h2>Status</h2>
+    <h3>Verified means a capture or a passing test.</h3>
+    <p>Every interop claim is backed by a test in this repo. CI runs a lint and test gate plus an interop suite against the OpENer POSIX sample adapter in Docker.</p>
+    <div class="table-scroll">
+    <table>
+      <thead><tr><th>Target</th><th>Role for us</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>OpENer POSIX sample (Docker)</td><td>Adapter under CI</td><td><span class="st ok">verified</span></td></tr>
+        <tr><td><code>tcpethernet-plc</code></td><td>In-repo adapter, soft PLC</td><td><span class="st ok">verified</span></td></tr>
+        <tr><td>Rockwell CompactLogix</td><td>Explicit-message server, Class 1 target</td><td><span class="st pending">bench pending</span></td></tr>
+        <tr><td>Panasonic FP0H</td><td>Explicit client; Class 1 originator and target</td><td><span class="st pending">bench pending</span></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="muted">Details per target are in <a href="https://github.com/JimothyJohn/tcpethernet/blob/master/docs/INTEROP.md">docs/INTEROP.md</a>; the review of the reference stacks and documents this project draws on is in <a href="https://github.com/JimothyJohn/tcpethernet/blob/master/docs/SOURCES.md">docs/SOURCES.md</a>.</p>
+  </div>
+</section>
+
+<section id="develop">
+  <div class="wrap">
+    <h2>Develop</h2>
+    <h3>A Makefile is the entry point.</h3>
+<pre><span class="k">make</span> help              <span class="c"># list targets</span>
+<span class="k">make</span> lint              <span class="c"># rustfmt check + clippy, warnings denied</span>
+<span class="k">make</span> test-all          <span class="c"># everything, locked to Cargo.lock</span>
+
+<span class="k">make</span> opener-up         <span class="c"># OpENer adapter in Docker</span>
+<span class="k">make</span> test-interop      <span class="c"># interop suite against it</span>
+<span class="k">make</span> opener-down</pre>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>tcpethernet · MIT</span>
+    <a href="https://github.com/JimothyJohn/tcpethernet">github.com/JimothyJohn/tcpethernet</a>
+  </div>
+</footer>
+
+</body>
+</html>
