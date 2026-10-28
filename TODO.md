@@ -239,4 +239,13 @@
   difficulty: high
   depends: iec-stdlib
   id: plcopen-xml
+  notes: slice 1 on feat/plcopen-xml (2026-10-28): tcpethernet_iec::compile_plcopen, `tcpethernet-plc PROJECT.xml [--emit-st]`; LD/FBD/ST bodies, data types, located vars; lowered to ST text (not the AST), diagnostics mapped to XML line:col. Format pinned to the TC6 v2.01 XSD and Beremiz's own test project (both GPL, read only, nothing copied; Beremiz's LD/FBD counters lower to what its generator emits). Not yet: SFC, IL, jumps/labels, VAR_IN_OUT block params. Ticks once plcopen-editor-check passes.
+
+- [ ] **Draw a ladder in a real editor and run its export** — OpenPLC Editor (Beremiz-based, free) or Beremiz: a rung or two with contacts, a coil, a TON; located I/O as `%IX0.n` / `%QX0.n` in the variable table. Save, then `cargo run -q -p tcpethernet-plc -- path/to/plc.xml --emit-st` to see the lowering, and drop `--emit-st` to run it behind the adapter. Paste any error here; a project that works becomes a fixture.
+  needs: an editor on a Mac or Windows box (GUI; not something I can drive)
+  result: a real export in crates/tcpethernet-iec/tests/plcopen/ and plcopen-xml ticked
+  est: 30m
+  difficulty: low
+  depends: plcopen-xml
+  id: plcopen-editor-check
 
