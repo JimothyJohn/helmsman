@@ -1,0 +1,134 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Ladder: set and reset coils, rising and falling edge contacts, and an
+     ADD block enabled through EN whose ENO drives a coil. -->
+<project xmlns:xhtml="http://www.w3.org/1999/xhtml" xmlns="http://www.plcopen.org/xml/tc6_0201">
+  <fileHeader companyName="tcpethernet" productName="coils" productVersion="1" creationDateTime="2026-10-28T09:00:00"/>
+  <contentHeader name="coils" modificationDateTime="2026-10-28T09:00:00">
+    <coordinateInfo>
+      <fbd><scaling x="0" y="0"/></fbd>
+      <ld><scaling x="0" y="0"/></ld>
+      <sfc><scaling x="0" y="0"/></sfc>
+    </coordinateInfo>
+  </contentHeader>
+  <types>
+    <dataTypes/>
+    <pous>
+      <pou name="coils" pouType="program">
+        <interface>
+          <localVars>
+            <variable name="A" address="%IX0.4"><type><BOOL/></type></variable>
+            <variable name="B" address="%IX0.5"><type><BOOL/></type></variable>
+            <variable name="Latched"><type><BOOL/></type></variable>
+            <variable name="Edges"><type><INT/></type></variable>
+            <variable name="Pulsed"><type><BOOL/></type></variable>
+            <variable name="Fell"><type><BOOL/></type></variable>
+          </localVars>
+        </interface>
+        <body>
+          <LD>
+            <leftPowerRail localId="1" height="320" width="3">
+              <position x="20" y="20"/>
+              <connectionPointOut formalParameter=""><relPosition x="3" y="20"/></connectionPointOut>
+              <connectionPointOut formalParameter=""><relPosition x="3" y="80"/></connectionPointOut>
+              <connectionPointOut formalParameter=""><relPosition x="3" y="140"/></connectionPointOut>
+              <connectionPointOut formalParameter=""><relPosition x="3" y="280"/></connectionPointOut>
+            </leftPowerRail>
+            <!-- rung 1: A sets Latched -->
+            <contact localId="2" height="15" width="21" negated="false">
+              <position x="60" y="32"/>
+              <connectionPointIn><relPosition x="0" y="8"/><connection refLocalId="1"/></connectionPointIn>
+              <connectionPointOut><relPosition x="21" y="8"/></connectionPointOut>
+              <variable>A</variable>
+            </contact>
+            <coil localId="3" height="15" width="21" negated="false" storage="set">
+              <position x="200" y="32"/>
+              <connectionPointIn><relPosition x="0" y="8"/><connection refLocalId="2"/></connectionPointIn>
+              <connectionPointOut><relPosition x="21" y="8"/></connectionPointOut>
+              <variable>Latched</variable>
+            </coil>
+            <!-- rung 2: B resets Latched -->
+            <contact localId="4" height="15" width="21" negated="false">
+              <position x="60" y="92"/>
+              <connectionPointIn><relPosition x="0" y="8"/><connection refLocalId="1"/></connectionPointIn>
+              <connectionPointOut><relPosition x="21" y="8"/></connectionPointOut>
+              <variable>B</variable>
+            </contact>
+            <coil localId="5" height="15" width="21" negated="false" storage="reset">
+              <position x="200" y="92"/>
+              <connectionPointIn><relPosition x="0" y="8"/><connection refLocalId="4"/></connectionPointIn>
+              <connectionPointOut><relPosition x="21" y="8"/></connectionPointOut>
+              <variable>Latched</variable>
+            </coil>
+            <!-- rung 3: on A's rising edge, Edges := Edges + 1; ENO drives Pulsed -->
+            <contact localId="6" height="15" width="21" negated="false" edge="rising">
+              <position x="60" y="152"/>
+              <connectionPointIn><relPosition x="0" y="8"/><connection refLocalId="1"/></connectionPointIn>
+              <connectionPointOut><relPosition x="21" y="8"/></connectionPointOut>
+              <variable>A</variable>
+            </contact>
+            <inVariable localId="7" height="30" width="50" negated="false">
+              <position x="60" y="190"/>
+              <connectionPointOut><relPosition x="50" y="15"/></connectionPointOut>
+              <expression>Edges</expression>
+            </inVariable>
+            <inVariable localId="8" height="30" width="20" negated="false">
+              <position x="60" y="230"/>
+              <connectionPointOut><relPosition x="20" y="15"/></connectionPointOut>
+              <expression>1</expression>
+            </inVariable>
+            <block localId="9" typeName="ADD" height="100" width="60">
+              <position x="140" y="140"/>
+              <inputVariables>
+                <variable formalParameter="EN">
+                  <connectionPointIn><relPosition x="0" y="20"/><connection refLocalId="6"/></connectionPointIn>
+                </variable>
+                <variable formalParameter="IN1">
+                  <connectionPointIn><relPosition x="0" y="50"/><connection refLocalId="7"/></connectionPointIn>
+                </variable>
+                <variable formalParameter="IN2">
+                  <connectionPointIn><relPosition x="0" y="80"/><connection refLocalId="8"/></connectionPointIn>
+                </variable>
+              </inputVariables>
+              <inOutVariables/>
+              <outputVariables>
+                <variable formalParameter="ENO">
+                  <connectionPointOut><relPosition x="60" y="20"/></connectionPointOut>
+                </variable>
+                <variable formalParameter="OUT">
+                  <connectionPointOut><relPosition x="60" y="50"/></connectionPointOut>
+                </variable>
+              </outputVariables>
+            </block>
+            <coil localId="10" height="15" width="21" negated="false">
+              <position x="260" y="152"/>
+              <connectionPointIn><relPosition x="0" y="8"/><connection refLocalId="9" formalParameter="ENO"/></connectionPointIn>
+              <connectionPointOut><relPosition x="21" y="8"/></connectionPointOut>
+              <variable>Pulsed</variable>
+            </coil>
+            <outVariable localId="11" height="30" width="50" negated="false">
+              <position x="260" y="182"/>
+              <connectionPointIn><relPosition x="0" y="15"/><connection refLocalId="9" formalParameter="OUT"/></connectionPointIn>
+              <expression>Edges</expression>
+            </outVariable>
+            <!-- rung 4: A's falling edge drives Fell -->
+            <contact localId="12" height="15" width="21" negated="false" edge="falling">
+              <position x="60" y="292"/>
+              <connectionPointIn><relPosition x="0" y="8"/><connection refLocalId="1"/></connectionPointIn>
+              <connectionPointOut><relPosition x="21" y="8"/></connectionPointOut>
+              <variable>A</variable>
+            </contact>
+            <coil localId="13" height="15" width="21" negated="false">
+              <position x="200" y="292"/>
+              <connectionPointIn><relPosition x="0" y="8"/><connection refLocalId="12"/></connectionPointIn>
+              <connectionPointOut><relPosition x="21" y="8"/></connectionPointOut>
+              <variable>Fell</variable>
+            </coil>
+          </LD>
+        </body>
+      </pou>
+    </pous>
+  </types>
+  <instances>
+    <configurations/>
+  </instances>
+</project>

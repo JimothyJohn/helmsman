@@ -1137,6 +1137,17 @@ pub fn parse(src: &str, system: bool) -> R<Unit> {
     Parser { toks, i: 0 }.unit()
 }
 
+/// Parses `src` as exactly one expression.
+pub fn parse_expr(src: &str) -> R<Expr> {
+    let toks = lex(src, false)?;
+    let mut p = Parser { toks, i: 0 };
+    let e = p.expr()?;
+    if *p.tok() != Tok::Eof {
+        return p.err(format!("expected the end of the expression, found {}", p.tok()));
+    }
+    Ok(e)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

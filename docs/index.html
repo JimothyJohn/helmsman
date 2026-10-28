@@ -278,7 +278,7 @@ footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; g
       </div>
       <div class="crate">
         <h4>tcpethernet-iec</h4>
-        <p>IEC 61131-3 Structured Text: a compiler and a scan-cycle interpreter over an <code>%I</code> / <code>%Q</code> / <code>%M</code> process image.</p>
+        <p>IEC 61131-3 Structured Text: a compiler and a scan-cycle interpreter over an <code>%I</code> / <code>%Q</code> / <code>%M</code> process image. Ladder and FBD come in as PLCopen XML.</p>
       </div>
       <div class="crate">
         <h4>tcpethernet-plc</h4>
@@ -315,7 +315,7 @@ target/release/tcpethernet io 10.0.0.50 --config 151 --out 150 --in 100 \
     <div>
       <h2>Soft PLC</h2>
       <h3>Structured Text behind the adapter.</h3>
-      <p><code>tcpethernet-plc</code> runs one IEC 61131-3 program per scan. Each scan copies assembly 150 (what the scanner sends) into <code>%I</code>, runs the program, and copies <code>%Q</code> into assembly 100 (what the scanner receives).</p>
+      <p><code>tcpethernet-plc</code> runs one IEC 61131-3 program per scan. Each scan copies assembly 150 (what the scanner sends) into <code>%I</code>, runs the program, and copies <code>%Q</code> into assembly 100 (what the scanner receives). It also takes a PLCopen XML project, so ladder (LD) and function block diagrams (FBD) drawn in Beremiz or the OpenPLC Editor run too; <code>--emit-st</code> shows the Structured Text they lower to.</p>
       <p>A runtime fault zeroes the outputs and stops the program; the adapter stays on the network so the PLC can still be found.</p>
       <p class="muted">Ships as a Docker target (<code>docker compose</code> service <code>plc</code>) and a systemd unit for a Raspberry Pi.</p>
     </div>

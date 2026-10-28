@@ -33,12 +33,18 @@
 //! ROR, TRUNC, MOVE) and function blocks (TON, TOF, TP, CTU, CTD, CTUD,
 //! `R_TRIG`, `F_TRIG`, SR, RS). Not yet: STRING, `VAR_IN_OUT`, `VAR_GLOBAL`,
 //! function outputs, pointers and references.
+//!
+//! Ladder (LD) and function block diagrams (FBD) drawn in an editor such
+//! as Beremiz or the `OpenPLC` Editor come in as `PLCopen` TC6 XML through
+//! [`compile_plcopen`].
 
 mod check;
 mod interp;
 mod lexer;
 mod parser;
+pub mod plcopen;
 mod types;
+mod xml;
 
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -105,6 +111,24 @@ pub fn compile(src: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>>
         code,
         budget: DEFAULT_BUDGET,
         started: None,
+    })
+}
+
+/// Compiles a `PLCopen` TC6 XML project (see [`plcopen`]) holding one
+/// `PROGRAM`, against an image of `sizes`.
+///
+/// # Errors
+/// Every problem found, positioned in the XML.
+pub fn compile_plcopen(xml: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>> {
+    let lowered = plcopen::lower(xml)?;
+    compile(lowered.st(), sizes).map_err(|diags| {
+        diags
+            .into_iter()
+            .map(|d| Diagnostic {
+                pos: lowered.origin(d.pos),
+                msg: d.msg,
+            })
+            .collect()
     })
 }
 
