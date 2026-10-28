@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# End-to-end check of a tcpethernet-plc (or any OpENer-sample-compatible
-# adapter) from this machine: discover it, read its identity, open a Class 1
-# exclusive-owner connection and confirm the output comes back as input
-# (the PLC's default program echoes I to Q).
+# End-to-end check of an OpENer-sample-compatible adapter (OpENer itself or
+# tcpethernet-adapter) from this machine: discover it, read its identity,
+# open a Class 1 exclusive-owner connection and confirm the output comes back
+# as input (both copy assembly 150 into 100).
 #
 # Needs: the release CLI (`cargo build --release -p tcpethernet-cli`), UDP
 # 2222 free here and reachable from the target (macOS may ask to allow
 # incoming connections for the binary the first time).
 #
-# Usage: scripts/plc-smoke.sh HOST
+# Usage: scripts/adapter-smoke.sh HOST
 set -euo pipefail
 host="${1:?usage: $0 HOST}"
 cd "$(dirname "$0")/.."
@@ -27,6 +27,6 @@ want="$(printf '%02x ' $(seq 1 32) | sed 's/ $//')"
 if echo "$out" | grep -qx "$want"; then
     echo "PASS: $host echoed 32 bytes over Class 1"
 else
-    echo "FAIL: never saw the output come back as input (is the default program loaded?)" >&2
+    echo "FAIL: never saw the output come back as input (does the target echo 150 into 100?)" >&2
     exit 1
 fi
