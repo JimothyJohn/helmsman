@@ -75,33 +75,33 @@ jobs:
         if: always()
         run: docker compose down
 
-  # The same interop suite against our own adapter (tcpethernet-plc in its
-  # OpENer-sample profile). Not a required check until it has a green history.
-  interop-plc:
+  # The same interop suite against our own adapter (tcpethernet-adapter, which
+  # mimics OpENer's sample). Not a required check until it has a green history.
+  interop-adapter:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
-      - name: Start tcpethernet-plc
-        run: docker compose up -d --build plc
+      - name: Start tcpethernet-adapter
+        run: docker compose up -d --build adapter
       - name: Wait for it to listen
         run: |
-          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose ps -q plc)")
+          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose ps -q adapter)")
           for i in $(seq 1 60); do
-            if (echo > /dev/tcp/$ip/44818) 2>/dev/null; then echo "PLC at $ip"; echo "PLC_IP=$ip" >> "$GITHUB_ENV"; exit 0; fi
+            if (echo > /dev/tcp/$ip/44818) 2>/dev/null; then echo "adapter at $ip"; echo "ADAPTER_IP=$ip" >> "$GITHUB_ENV"; exit 0; fi
             sleep 1
           done
-          docker compose logs plc
+          docker compose logs adapter
           exit 1
-      - name: Interop suite against tcpethernet-plc
-        run: TCPETHERNET_OPENER_ADDR="$PLC_IP" ./scripts/test-interop.sh
+      - name: Interop suite against tcpethernet-adapter
+        run: TCPETHERNET_OPENER_ADDR="$ADAPTER_IP" ./scripts/test-interop.sh
         env:
           TCPETHERNET_OPENER_IO: '1'
-      - name: PLC logs
+      - name: Adapter logs
         if: always()
-        run: docker compose logs plc
+        run: docker compose logs adapter
       - name: Stop
         if: always()
         run: docker compose down

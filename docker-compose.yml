@@ -8,13 +8,11 @@ services:
     ports:
       - "44818:44818/tcp"
       - "44818:44818/udp"
-  # Our own adapter (crates/tcpethernet-plc) with OpENer's identity, so the
-  # same interop suite runs against it. Nothing CIP is published (it would
-  # clash with opener); address the container IP. Web page on 127.0.0.1:8088.
-  plc:
+  # Our own adapter (crates/tcpethernet-adapter) mimicking OpENer's sample, so
+  # the same interop suite runs against it. Nothing is published (it would
+  # clash with opener); address the container IP.
+  adapter:
     build:
       context: .
-      dockerfile: docker/plc/Dockerfile
-    image: tcpethernet/plc:dev
-    ports:
-      - "127.0.0.1:8088:8080"
+      dockerfile: docker/adapter/Dockerfile
+    image: tcpethernet/adapter:dev

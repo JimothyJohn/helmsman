@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/tcpethernet", "crates/tcpethernet-adapter", "crates/tcpethernet-cli", "crates/tcpethernet-plc"]
+members = ["crates/tcpethernet", "crates/tcpethernet-adapter", "crates/tcpethernet-cli"]
 
 [workspace.package]
 edition = "2024"
