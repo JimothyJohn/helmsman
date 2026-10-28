@@ -105,3 +105,16 @@ jobs:
       - name: Stop
         if: always()
         run: docker compose down
+
+  # The Structured Text interpreter against ruSTy, an independent compiler
+  # (docker/rusty/, pinned and hash-checked). ruSTy is only executed as an
+  # oracle, never linked. Not a required check.
+  oracle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: stable
+      - name: Differential test against ruSTy
+        run: ./scripts/test-oracle.sh

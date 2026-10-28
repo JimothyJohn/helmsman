@@ -1,8 +1,11 @@
-//! Recursive-descent parser for a `PROGRAM ... END_PROGRAM` unit.
+//! Recursive-descent parser for a compilation unit: `TYPE` blocks and
+//! `PROGRAM`, `FUNCTION` and `FUNCTION_BLOCK` units in any order.
 //!
-//! Operator precedence, tightest first: `( )` and calls, `**`, unary `-` `+`
-//! `NOT`, `* / MOD`, `+ -`, `< > <= >=`, `= <>`, `AND &`, `XOR`, `OR`.
-//! Binary operators of equal precedence associate left to right.
+//! Operator precedence, tightest first: `( )`, calls, `[ ]` and `.`, then
+//! unary `-` `+` `NOT`, `**`, `* / MOD`, `+ -`, `< > <= >=`, `= <>`,
+//! `AND &`, `XOR`, `OR`. Binary operators of equal precedence associate
+//! left to right. Unary minus binding tighter than `**` (`-2.0 ** 2` is 4)
+//! follows ruSTy; see tests/oracle.rs.
 
 use crate::lexer::{LexError, Pos, Tok, lex};
 
@@ -57,25 +60,60 @@ impl BinOp {
             Self::Pow => "**",
         }
     }
+
+    pub const fn is_comparison(self) -> bool {
+        matches!(
+            self,
+            Self::Eq | Self::Ne | Self::Lt | Self::Le | Self::Gt | Self::Ge
+        )
+    }
+}
+
+/// A call argument: positional `e`, input `NAME := e` or output `NAME => v`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Arg {
+    pub name: Option<String>,
+    pub output: bool,
+    pub value: Expr,
+    pub pos: Pos,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
-    Int { value: i128, prefix: Option<String> },
-    Real { value: f64, prefix: Option<String> },
+    Int {
+        value: i128,
+        prefix: Option<String>,
+    },
+    Real {
+        value: f64,
+        prefix: Option<String>,
+    },
     Bool(bool),
+    Time(i128),
+    EnumLit(String, String),
+    /// A name: a variable, an enumeration value or a function.
     Var(String),
     Direct(String),
+    Member(Box<Expr>, String),
+    Index(Box<Expr>, Vec<Expr>),
+    /// Partial access `w.3`.
+    Bit(Box<Expr>, u8),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
-    Call(String, Vec<Expr>),
+    Call(Box<Expr>, Vec<Arg>),
 }
 
-/// Inclusive range of a CASE label; a single value has `lo == hi`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A CASE label bound: an integer or an enumeration value name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LabelValue {
+    Int(i128),
+    Name(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaseLabel {
-    pub lo: i128,
-    pub hi: i128,
+    pub lo: LabelValue,
+    pub hi: LabelValue,
     pub pos: Pos,
 }
 
@@ -87,11 +125,16 @@ pub struct Stmt {
     pub pos: Pos,
 }
 
+/// One arm of a CASE: its labels and statements.
+pub type CaseArm = (Vec<CaseLabel>, Block);
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
     Assign(Expr, Expr),
+    /// A call used as a statement (function or function block instance).
+    Call(Expr),
     If(Vec<(Expr, Block)>, Block),
-    Case(Expr, Vec<(Vec<CaseLabel>, Block)>, Block),
+    Case(Expr, Vec<CaseArm>, Block),
     For {
         var: String,
         from: Expr,
@@ -107,31 +150,108 @@ pub enum StmtKind {
     Empty,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeRef {
+    Named(String, Pos),
+    Array {
+        dims: Vec<(i128, i128)>,
+        elem: Box<TypeRef>,
+        pos: Pos,
+    },
+}
+
+impl TypeRef {
+    pub const fn pos(&self) -> Pos {
+        match self {
+            Self::Named(_, p) | Self::Array { pos: p, .. } => *p,
+        }
+    }
+}
+
+/// An initial value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Init {
+    Expr(Expr),
+    /// `[a, b, n(c)]`: elements, each optionally repeated.
+    Array(Vec<(usize, Init)>, Pos),
+    /// `(x := 1, y := 2)`.
+    Struct(Vec<(String, Pos, Init)>, Pos),
+}
+
+impl Init {
+    pub const fn pos(&self) -> Pos {
+        match self {
+            Self::Expr(e) => e.pos,
+            Self::Array(_, p) | Self::Struct(_, p) => *p,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VarKind {
-    /// `VAR`: keeps its value from scan to scan.
+pub enum Section {
+    /// `VAR`: keeps its value between scans (programs) or calls (FBs).
     Var,
-    /// `VAR_TEMP`: re-initialised at the start of every scan.
+    /// `VAR_TEMP`: re-initialised on every entry.
     Temp,
+    Input,
+    Output,
+    InOut,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VarDecl {
     pub name: String,
     pub pos: Pos,
-    pub kind: VarKind,
+    pub section: Section,
     pub constant: bool,
-    pub ty: String,
-    pub ty_pos: Pos,
+    pub ty: TypeRef,
     pub at: Option<(String, Pos)>,
-    pub init: Option<Expr>,
+    pub init: Option<Init>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Program {
+pub enum PouKind {
+    Program,
+    Function(TypeRef),
+    FunctionBlock,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pou {
     pub name: String,
+    pub pos: Pos,
+    pub kind: PouKind,
     pub vars: Vec<VarDecl>,
     pub body: Block,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Field {
+    pub name: String,
+    pub pos: Pos,
+    pub ty: TypeRef,
+    pub init: Option<Init>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeDef {
+    Alias(TypeRef, Option<Init>),
+    Struct(Vec<Field>),
+    /// Values with optional explicit integers.
+    Enum(Vec<(String, Pos, Option<i128>)>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeDecl {
+    pub name: String,
+    pub pos: Pos,
+    pub def: TypeDef,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Unit {
+    pub types: Vec<TypeDecl>,
+    pub pous: Vec<Pou>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,9 +282,11 @@ const BLOCK_END: &[&str] = &[
     "UNTIL",
     "END_REPEAT",
     "END_PROGRAM",
+    "END_FUNCTION",
+    "END_FUNCTION_BLOCK",
 ];
 
-/// Reserved words that cannot be variable names.
+/// Reserved words that cannot be names.
 const RESERVED: &[&str] = &[
     "PROGRAM",
     "END_PROGRAM",
@@ -212,6 +334,9 @@ const RESERVED: &[&str] = &[
     "END_FUNCTION_BLOCK",
     "TYPE",
     "END_TYPE",
+    "STRUCT",
+    "END_STRUCT",
+    "ARRAY",
 ];
 
 struct Parser {
@@ -296,36 +421,225 @@ impl Parser {
         }
     }
 
-    fn program(&mut self) -> R<Program> {
-        self.expect_kw("PROGRAM")?;
-        let (name, _) = self.ident()?;
-        let mut vars = Vec::new();
-        loop {
-            let kind = if self.eat_kw("VAR") {
-                VarKind::Var
-            } else if self.eat_kw("VAR_TEMP") {
-                VarKind::Temp
-            } else if let Tok::Ident(s) = self.tok()
-                && s.starts_with("VAR_")
-            {
-                return self.err(format!("{s} is not supported in a PROGRAM yet"));
-            } else {
-                break;
-            };
-            self.var_block(kind, &mut vars)?;
+    fn signed_int(&mut self) -> R<i128> {
+        let neg = self.eat(&Tok::Minus);
+        match self.tok().clone() {
+            Tok::Int { value, prefix: None } => {
+                self.advance();
+                Ok(if neg { -value } else { value })
+            }
+            t => self.err(format!("expected an integer, found {t}")),
         }
-        let body = self.block()?;
-        self.expect_kw("END_PROGRAM")?;
-        if *self.tok() != Tok::Eof {
-            return self.err(format!(
-                "expected end of input after END_PROGRAM, found {}",
-                self.tok()
-            ));
-        }
-        Ok(Program { name, vars, body })
     }
 
-    fn var_block(&mut self, kind: VarKind, out: &mut Vec<VarDecl>) -> R<()> {
+    // ---- units ----
+
+    fn unit(&mut self) -> R<Unit> {
+        let mut u = Unit::default();
+        loop {
+            if *self.tok() == Tok::Eof {
+                return Ok(u);
+            }
+            if self.eat_kw("TYPE") {
+                while !self.eat_kw("END_TYPE") {
+                    u.types.push(self.type_decl()?);
+                }
+                continue;
+            }
+            let pos = self.pos();
+            let (kind, end) = if self.eat_kw("PROGRAM") {
+                (None, "END_PROGRAM")
+            } else if self.eat_kw("FUNCTION_BLOCK") {
+                (Some(None), "END_FUNCTION_BLOCK")
+            } else if self.eat_kw("FUNCTION") {
+                (Some(Some(())), "END_FUNCTION")
+            } else {
+                return self.err(format!(
+                    "expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found {}",
+                    self.tok()
+                ));
+            };
+            let (name, _) = self.ident()?;
+            let kind = match kind {
+                None => PouKind::Program,
+                Some(None) => PouKind::FunctionBlock,
+                Some(Some(())) => {
+                    self.expect(&Tok::Colon)?;
+                    PouKind::Function(self.type_ref()?)
+                }
+            };
+            let vars = self.var_sections()?;
+            let body = self.block()?;
+            self.expect_kw(end)?;
+            u.pous.push(Pou {
+                name,
+                pos,
+                kind,
+                vars,
+                body,
+            });
+        }
+    }
+
+    fn type_decl(&mut self) -> R<TypeDecl> {
+        let (name, pos) = self.ident()?;
+        self.expect(&Tok::Colon)?;
+        let def = if self.eat_kw("STRUCT") {
+            let mut fields = Vec::new();
+            while !self.eat_kw("END_STRUCT") {
+                let (fname, fpos) = self.ident()?;
+                self.expect(&Tok::Colon)?;
+                let ty = self.type_ref()?;
+                let init = if self.eat(&Tok::Assign) {
+                    Some(self.init()?)
+                } else {
+                    None
+                };
+                self.expect(&Tok::Semi)?;
+                fields.push(Field {
+                    name: fname,
+                    pos: fpos,
+                    ty,
+                    init,
+                });
+            }
+            TypeDef::Struct(fields)
+        } else if self.eat(&Tok::LParen) {
+            let mut values = Vec::new();
+            loop {
+                let (v, vpos) = self.ident()?;
+                let explicit = if self.eat(&Tok::Assign) {
+                    Some(self.signed_int()?)
+                } else {
+                    None
+                };
+                values.push((v, vpos, explicit));
+                if self.eat(&Tok::RParen) {
+                    break;
+                }
+                self.expect(&Tok::Comma)?;
+            }
+            TypeDef::Enum(values)
+        } else {
+            let t = self.type_ref()?;
+            let init = if self.eat(&Tok::Assign) {
+                Some(self.init()?)
+            } else {
+                None
+            };
+            TypeDef::Alias(t, init)
+        };
+        self.expect(&Tok::Semi)?;
+        Ok(TypeDecl { name, pos, def })
+    }
+
+    fn type_ref(&mut self) -> R<TypeRef> {
+        let pos = self.pos();
+        if self.eat_kw("ARRAY") {
+            self.expect(&Tok::LBracket)?;
+            let mut dims = Vec::new();
+            loop {
+                let rpos = self.pos();
+                let lo = self.signed_int()?;
+                self.expect(&Tok::DotDot)?;
+                let hi = self.signed_int()?;
+                if hi < lo {
+                    return Err(ParseError {
+                        pos: rpos,
+                        msg: format!("empty array range {lo}..{hi}"),
+                    });
+                }
+                dims.push((lo, hi));
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RBracket)?;
+            self.expect_kw("OF")?;
+            let elem = Box::new(self.type_ref()?);
+            return Ok(TypeRef::Array { dims, elem, pos });
+        }
+        match self.advance().0 {
+            Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => Ok(TypeRef::Named(s, pos)),
+            t => Err(ParseError {
+                pos,
+                msg: format!("expected a type, found {t}"),
+            }),
+        }
+    }
+
+    fn init(&mut self) -> R<Init> {
+        let pos = self.pos();
+        if self.eat(&Tok::LBracket) {
+            let mut items = Vec::new();
+            loop {
+                // `n(x)` repeats x n times.
+                let item = if matches!(self.tok(), Tok::Int { prefix: None, .. })
+                    && *self.tok_at(1) == Tok::LParen
+                {
+                    let n = self.signed_int()?;
+                    let n = usize::try_from(n).map_err(|_| ParseError {
+                        pos,
+                        msg: "bad repeat count".into(),
+                    })?;
+                    self.expect(&Tok::LParen)?;
+                    let v = self.init()?;
+                    self.expect(&Tok::RParen)?;
+                    (n, v)
+                } else {
+                    (1, self.init()?)
+                };
+                items.push(item);
+                if self.eat(&Tok::RBracket) {
+                    break;
+                }
+                self.expect(&Tok::Comma)?;
+            }
+            return Ok(Init::Array(items, pos));
+        }
+        if *self.tok() == Tok::LParen
+            && matches!(self.tok_at(1), Tok::Ident(_))
+            && *self.tok_at(2) == Tok::Assign
+        {
+            self.advance();
+            let mut fields = Vec::new();
+            loop {
+                let (name, fpos) = self.ident()?;
+                self.expect(&Tok::Assign)?;
+                fields.push((name, fpos, self.init()?));
+                if self.eat(&Tok::RParen) {
+                    break;
+                }
+                self.expect(&Tok::Comma)?;
+            }
+            return Ok(Init::Struct(fields, pos));
+        }
+        Ok(Init::Expr(self.expr()?))
+    }
+
+    fn var_sections(&mut self) -> R<Vec<VarDecl>> {
+        let mut vars = Vec::new();
+        loop {
+            let section = match self.tok() {
+                Tok::Ident(s) => match s.as_str() {
+                    "VAR" => Section::Var,
+                    "VAR_TEMP" => Section::Temp,
+                    "VAR_INPUT" => Section::Input,
+                    "VAR_OUTPUT" => Section::Output,
+                    "VAR_IN_OUT" => Section::InOut,
+                    "VAR_GLOBAL" | "VAR_EXTERNAL" | "VAR_ACCESS" | "VAR_CONFIG" => {
+                        return self.err(format!("{s} is not supported yet"));
+                    }
+                    _ => return Ok(vars),
+                },
+                _ => return Ok(vars),
+            };
+            self.advance();
+            self.var_block(section, &mut vars)?;
+        }
+    }
+
+    fn var_block(&mut self, section: Section, out: &mut Vec<VarDecl>) -> R<()> {
         let mut constant = false;
         loop {
             if self.eat_kw("CONSTANT") {
@@ -360,18 +674,9 @@ impl Parser {
                 });
             }
             self.expect(&Tok::Colon)?;
-            let ty_pos = self.pos();
-            let ty = match self.advance().0 {
-                Tok::Ident(s) => s,
-                t => {
-                    return Err(ParseError {
-                        pos: ty_pos,
-                        msg: format!("expected a type name, found {t}"),
-                    });
-                }
-            };
+            let ty = self.type_ref()?;
             let init = if self.eat(&Tok::Assign) {
-                Some(self.expr()?)
+                Some(self.init()?)
             } else {
                 None
             };
@@ -380,10 +685,9 @@ impl Parser {
                 out.push(VarDecl {
                     name,
                     pos,
-                    kind,
+                    section,
                     constant,
                     ty: ty.clone(),
-                    ty_pos,
                     at: at.clone(),
                     init: init.clone(),
                 });
@@ -392,20 +696,31 @@ impl Parser {
         Ok(())
     }
 
-    /// Statements up to a block-ending keyword (not consumed) or, inside a
-    /// CASE, the start of the next label.
+    // ---- statements ----
+
     fn block(&mut self) -> R<Block> {
         self.block_until(false)
     }
 
+    /// Statements up to a block-ending keyword (not consumed) or, inside a
+    /// CASE, the start of the next label.
     fn block_until(&mut self, in_case: bool) -> R<Block> {
         let mut out = Vec::new();
         loop {
+            let label_start = in_case
+                && match self.tok() {
+                    Tok::Int { .. } => true,
+                    Tok::Minus => matches!(self.tok_at(1), Tok::Int { .. }),
+                    Tok::Ident(s) => {
+                        !RESERVED.contains(&s.as_str())
+                            && matches!(self.tok_at(1), Tok::Colon | Tok::Comma | Tok::DotDot)
+                    }
+                    _ => false,
+                };
             match self.tok() {
                 Tok::Eof => return Ok(out),
                 Tok::Ident(s) if BLOCK_END.contains(&s.as_str()) => return Ok(out),
-                Tok::Int { .. } if in_case => return Ok(out),
-                Tok::Minus if in_case && matches!(self.tok_at(1), Tok::Int { .. }) => return Ok(out),
+                _ if label_start => return Ok(out),
                 _ => out.push(self.stmt()?),
             }
         }
@@ -453,35 +768,38 @@ impl Parser {
                     self.advance();
                     StmtKind::Return
                 }
-                _ => self.assign()?,
+                _ => self.assign_or_call()?,
             },
-            Tok::Direct(_) => self.assign()?,
+            Tok::Direct(_) => self.assign_or_call()?,
             t => return self.err(format!("expected a statement, found {t}")),
         };
         self.expect(&Tok::Semi)?;
         Ok(Stmt { kind, pos })
     }
 
-    fn assign(&mut self) -> R<StmtKind> {
+    fn assign_or_call(&mut self) -> R<StmtKind> {
         let pos = self.pos();
-        let target = match self.advance().0 {
-            Tok::Direct(d) => Expr {
-                kind: ExprKind::Direct(d),
-                pos,
-            },
-            Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => Expr {
-                kind: ExprKind::Var(s),
-                pos,
-            },
-            t => {
+        let target = self.postfix()?;
+        if self.eat(&Tok::Assign) {
+            if !matches!(
+                target.kind,
+                ExprKind::Var(_)
+                    | ExprKind::Direct(_)
+                    | ExprKind::Member(..)
+                    | ExprKind::Index(..)
+                    | ExprKind::Bit(..)
+            ) {
                 return Err(ParseError {
                     pos,
-                    msg: format!("expected a statement, found {t}"),
+                    msg: "cannot assign to this".into(),
                 });
             }
-        };
-        self.expect(&Tok::Assign)?;
-        Ok(StmtKind::Assign(target, self.expr()?))
+            return Ok(StmtKind::Assign(target, self.expr()?));
+        }
+        if matches!(target.kind, ExprKind::Call(..)) {
+            return Ok(StmtKind::Call(target));
+        }
+        self.err(format!("expected := or a call, found {}", self.tok()))
     }
 
     fn if_stmt(&mut self) -> R<StmtKind> {
@@ -504,14 +822,20 @@ impl Parser {
         Ok(StmtKind::If(arms, other))
     }
 
-    fn case_value(&mut self) -> R<i128> {
-        let neg = self.eat(&Tok::Minus);
-        match self.tok().clone() {
-            Tok::Int { value, prefix: None } => {
-                self.advance();
-                Ok(if neg { -value } else { value })
-            }
-            t => self.err(format!("expected an integer CASE label, found {t}")),
+    fn case_value(&mut self) -> R<LabelValue> {
+        if let Tok::Ident(s) = self.tok().clone()
+            && !RESERVED.contains(&s.as_str())
+        {
+            self.advance();
+            return Ok(LabelValue::Name(s));
+        }
+        if let Tok::EnumLit(_, v) = self.tok().clone() {
+            self.advance();
+            return Ok(LabelValue::Name(v));
+        }
+        match self.signed_int() {
+            Ok(v) => Ok(LabelValue::Int(v)),
+            Err(_) => self.err(format!("expected a CASE label, found {}", self.tok())),
         }
     }
 
@@ -528,12 +852,14 @@ impl Parser {
                 let hi = if self.eat(&Tok::DotDot) {
                     self.case_value()?
                 } else {
-                    lo
+                    lo.clone()
                 };
-                if hi < lo {
+                if let (LabelValue::Int(a), LabelValue::Int(b)) = (&lo, &hi)
+                    && b < a
+                {
                     return Err(ParseError {
                         pos,
-                        msg: format!("empty CASE range {lo}..{hi}"),
+                        msg: format!("empty CASE range {a}..{b}"),
                     });
                 }
                 labels.push(CaseLabel { lo, hi, pos });
@@ -577,6 +903,8 @@ impl Parser {
         })
     }
 
+    // ---- expressions ----
+
     pub fn expr(&mut self) -> R<Expr> {
         self.binary(0)
     }
@@ -607,7 +935,7 @@ impl Parser {
 
     fn binary(&mut self, level: usize) -> R<Expr> {
         if level > 6 {
-            return self.unary();
+            return self.power();
         }
         let mut lhs = self.binary(level + 1)?;
         while let Some(op) = self.binop(level) {
@@ -625,31 +953,29 @@ impl Parser {
     fn unary(&mut self) -> R<Expr> {
         let pos = self.pos();
         if self.eat(&Tok::Minus) {
-            // Fold `-5` into a literal so `-128` fits SINT, unless `**`
-            // follows: `-2**2` is `-(2**2)`.
-            if let Tok::Int { value, prefix: None } = self.tok().clone()
-                && *self.tok_at(1) != Tok::Power
-            {
-                self.advance();
-                return Ok(Expr {
-                    kind: ExprKind::Int {
-                        value: -value,
-                        prefix: None,
-                    },
-                    pos,
-                });
-            }
-            if let Tok::Real { value, prefix: None } = self.tok().clone()
-                && *self.tok_at(1) != Tok::Power
-            {
-                self.advance();
-                return Ok(Expr {
-                    kind: ExprKind::Real {
-                        value: -value,
-                        prefix: None,
-                    },
-                    pos,
-                });
+            // Fold `-5` into a literal so `-128` fits SINT.
+            match self.tok().clone() {
+                Tok::Int { value, prefix: None } => {
+                    self.advance();
+                    return Ok(Expr {
+                        kind: ExprKind::Int {
+                            value: -value,
+                            prefix: None,
+                        },
+                        pos,
+                    });
+                }
+                Tok::Real { value, prefix: None } => {
+                    self.advance();
+                    return Ok(Expr {
+                        kind: ExprKind::Real {
+                            value: -value,
+                            prefix: None,
+                        },
+                        pos,
+                    });
+                }
+                _ => {}
             }
             let e = self.unary()?;
             return Ok(Expr {
@@ -667,20 +993,15 @@ impl Parser {
                 pos,
             });
         }
-        self.power()
+        self.postfix()
     }
 
     fn power(&mut self) -> R<Expr> {
-        let mut lhs = self.primary()?;
+        let mut lhs = self.unary()?;
         while *self.tok() == Tok::Power {
             let pos = self.pos();
             self.advance();
-            // The exponent may carry its own sign: `2.0 ** -1`.
-            let rhs = if matches!(self.tok(), Tok::Minus | Tok::Plus) || self.is_kw("NOT") {
-                self.unary()?
-            } else {
-                self.primary()?
-            };
+            let rhs = self.unary()?;
             lhs = Expr {
                 kind: ExprKind::Binary(BinOp::Pow, Box::new(lhs), Box::new(rhs)),
                 pos,
@@ -689,35 +1010,116 @@ impl Parser {
         Ok(lhs)
     }
 
+    fn args(&mut self) -> R<Vec<Arg>> {
+        let mut args = Vec::new();
+        if self.eat(&Tok::RParen) {
+            return Ok(args);
+        }
+        loop {
+            let pos = self.pos();
+            let named =
+                matches!(self.tok(), Tok::Ident(_)) && matches!(self.tok_at(1), Tok::Assign | Tok::Arrow);
+            let arg = if named {
+                let (name, _) = self.ident()?;
+                let output = self.advance().0 == Tok::Arrow;
+                let value = if output { self.postfix()? } else { self.expr()? };
+                Arg {
+                    name: Some(name),
+                    output,
+                    value,
+                    pos,
+                }
+            } else {
+                Arg {
+                    name: None,
+                    output: false,
+                    value: self.expr()?,
+                    pos,
+                }
+            };
+            args.push(arg);
+            if self.eat(&Tok::RParen) {
+                return Ok(args);
+            }
+            self.expect(&Tok::Comma)?;
+        }
+    }
+
+    /// A primary followed by `.member`, `.bit`, `[index]` and `(args)`.
+    fn postfix(&mut self) -> R<Expr> {
+        let mut e = self.primary()?;
+        loop {
+            let pos = self.pos();
+            match self.tok().clone() {
+                Tok::Dot => {
+                    self.advance();
+                    match self.advance().0 {
+                        Tok::Ident(m) => {
+                            e = Expr {
+                                kind: ExprKind::Member(Box::new(e), m),
+                                pos,
+                            }
+                        }
+                        Tok::Int { value, prefix: None } if (0..64).contains(&value) => {
+                            let bit = u8::try_from(value).unwrap_or(0);
+                            e = Expr {
+                                kind: ExprKind::Bit(Box::new(e), bit),
+                                pos,
+                            };
+                        }
+                        t => {
+                            return Err(ParseError {
+                                pos,
+                                msg: format!("expected a member name or bit number, found {t}"),
+                            });
+                        }
+                    }
+                }
+                Tok::LBracket => {
+                    self.advance();
+                    let mut idx = vec![self.expr()?];
+                    while self.eat(&Tok::Comma) {
+                        idx.push(self.expr()?);
+                    }
+                    self.expect(&Tok::RBracket)?;
+                    e = Expr {
+                        kind: ExprKind::Index(Box::new(e), idx),
+                        pos,
+                    };
+                }
+                Tok::LParen
+                    if matches!(
+                        e.kind,
+                        ExprKind::Var(_) | ExprKind::Member(..) | ExprKind::Index(..)
+                    ) =>
+                {
+                    self.advance();
+                    let args = self.args()?;
+                    e = Expr {
+                        kind: ExprKind::Call(Box::new(e), args),
+                        pos,
+                    };
+                }
+                _ => return Ok(e),
+            }
+        }
+    }
+
     fn primary(&mut self) -> R<Expr> {
         let pos = self.pos();
         let kind = match self.advance().0 {
             Tok::Int { value, prefix } => ExprKind::Int { value, prefix },
             Tok::Real { value, prefix } => ExprKind::Real { value, prefix },
             Tok::Bool(b) => ExprKind::Bool(b),
+            Tok::Time(ns) => ExprKind::Time(ns),
+            Tok::EnumLit(t, v) => ExprKind::EnumLit(t, v),
             Tok::Direct(d) => ExprKind::Direct(d),
             Tok::LParen => {
                 let e = self.expr()?;
                 self.expect(&Tok::RParen)?;
                 return Ok(e);
             }
-            Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => {
-                if self.eat(&Tok::LParen) {
-                    let mut args = Vec::new();
-                    if !self.eat(&Tok::RParen) {
-                        loop {
-                            args.push(self.expr()?);
-                            if self.eat(&Tok::RParen) {
-                                break;
-                            }
-                            self.expect(&Tok::Comma)?;
-                        }
-                    }
-                    ExprKind::Call(s, args)
-                } else {
-                    ExprKind::Var(s)
-                }
-            }
+            Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => ExprKind::Var(s),
             t => {
                 return Err(ParseError {
                     pos,
@@ -729,10 +1131,10 @@ impl Parser {
     }
 }
 
-/// Parses one `PROGRAM` unit.
-pub fn parse(src: &str) -> R<Program> {
-    let toks = lex(src)?;
-    Parser { toks, i: 0 }.program()
+/// Parses a compilation unit. `system` admits `__` names.
+pub fn parse(src: &str, system: bool) -> R<Unit> {
+    let toks = lex(src, system)?;
+    Parser { toks, i: 0 }.unit()
 }
 
 #[cfg(test)]
@@ -740,7 +1142,7 @@ mod tests {
     use super::*;
 
     fn expr(src: &str) -> Expr {
-        let toks = lex(src).unwrap();
+        let toks = lex(src, false).unwrap();
         let mut p = Parser { toks, i: 0 };
         let e = p.expr().unwrap();
         assert_eq!(*p.tok(), Tok::Eof, "trailing input in {src:?}");
@@ -753,13 +1155,29 @@ mod tests {
             ExprKind::Int { value, .. } => value.to_string(),
             ExprKind::Real { value, .. } => format!("{value:?}"),
             ExprKind::Bool(b) => b.to_string(),
+            ExprKind::Time(ns) => format!("T#{ns}ns"),
+            ExprKind::EnumLit(t, v) => format!("{t}#{v}"),
             ExprKind::Var(v) => v.clone(),
             ExprKind::Direct(d) => format!("%{d}"),
+            ExprKind::Member(b, m) => format!("{}.{m}", show(b)),
+            ExprKind::Bit(b, n) => format!("{}.{n}", show(b)),
+            ExprKind::Index(b, i) => format!(
+                "{}[{}]",
+                show(b),
+                i.iter().map(show).collect::<Vec<_>>().join(",")
+            ),
             ExprKind::Unary(UnOp::Neg, a) => format!("(-{})", show(a)),
             ExprKind::Unary(UnOp::Not, a) => format!("(NOT {})", show(a)),
             ExprKind::Binary(op, a, b) => format!("({} {} {})", show(a), op.symbol(), show(b)),
             ExprKind::Call(f, args) => {
-                format!("{f}({})", args.iter().map(show).collect::<Vec<_>>().join(", "))
+                let a: Vec<String> = args
+                    .iter()
+                    .map(|a| match &a.name {
+                        Some(n) => format!("{n}{}{}", if a.output { "=>" } else { ":=" }, show(&a.value)),
+                        None => show(&a.value),
+                    })
+                    .collect();
+                format!("{}({})", show(f), a.join(", "))
             }
         }
     }
@@ -774,7 +1192,7 @@ mod tests {
             ("1 + 2 * 3", "(1 + (2 * 3))"),
             ("10 - 3 - 2", "((10 - 3) - 2)"),
             ("a MOD b * c", "((A MOD B) * C)"),
-            ("-2 ** 2", "(-(2 ** 2))"),
+            ("-2 ** 2", "(-2 ** 2)"),
             ("2.0 ** 3 ** 2", "((2.0 ** 3) ** 2)"),
             ("2.0 ** -1", "(2.0 ** -1)"),
             ("NOT a AND b", "((NOT A) AND B)"),
@@ -782,6 +1200,13 @@ mod tests {
             ("-x", "(-X)"),
             ("-(1 + 2)", "(-(1 + 2))"),
             ("INT_TO_REAL(a + 1, b)", "INT_TO_REAL((A + 1), B)"),
+            ("a[i + 1, 2].b.c[3]", "A[(I + 1),2].B.C[3]"),
+            ("w.3 OR t.Q", "(W.3 OR T.Q)"),
+            ("-a.b ** 2", "((-A.B) ** 2)"),
+            ("NOT a ** b", "((NOT A) ** B)"),
+            ("f(x := 1, y => z)", "F(X:=1, Y=>Z)"),
+            ("T#1s + t", "(T#1000000000ns + T)"),
+            ("c = Color#Red", "(C = COLOR#RED)"),
         ];
         for (src, want) in cases {
             assert_eq!(show(&expr(src)), want, "{src}");
@@ -807,8 +1232,47 @@ mod tests {
     }
 
     #[test]
+    fn units_and_types() {
+        let u = parse(
+            "TYPE
+               Point : STRUCT x : INT := 1; y : REAL; END_STRUCT;
+               Color : (Red, Green := 5, Blue);
+               Speed : INT := 10;
+               Row : ARRAY[0..3] OF Point;
+             END_TYPE
+             FUNCTION add : INT VAR_INPUT a, b : INT; END_VAR add := a + b; END_FUNCTION
+             FUNCTION_BLOCK counter
+               VAR_INPUT up : BOOL; END_VAR VAR_OUTPUT n : DINT; END_VAR
+               IF up THEN n := n + 1; END_IF;
+             END_FUNCTION_BLOCK
+             PROGRAM main
+               VAR c : counter; grid : ARRAY[1..2, 1..3] OF INT := [1, 2, 4(0)]; p : Point := (x := 3); END_VAR
+               c(up := TRUE);
+               grid[1, 2] := add(1, b := 2);
+               CASE Color#Red OF Red: ; Green, Blue: ; END_CASE;
+             END_PROGRAM",
+            false,
+        )
+        .unwrap();
+        assert_eq!(u.types.len(), 4);
+        assert!(matches!(&u.types[1].def, TypeDef::Enum(v) if v[1].2 == Some(5)));
+        assert_eq!(u.pous.len(), 3);
+        assert!(matches!(u.pous[0].kind, PouKind::Function(_)));
+        assert_eq!(u.pous[1].vars[0].section, Section::Input);
+        let main = &u.pous[2];
+        assert!(matches!(&main.vars[1].ty, TypeRef::Array { dims, .. } if dims == &[(1, 2), (1, 3)]));
+        assert!(matches!(&main.vars[1].init, Some(Init::Array(items, _)) if items[2].0 == 4));
+        assert!(matches!(&main.vars[2].init, Some(Init::Struct(f, _)) if f[0].0 == "X"));
+        assert!(matches!(main.body[0].kind, StmtKind::Call(_)));
+        let StmtKind::Case(_, arms, _) = &main.body[2].kind else {
+            panic!()
+        };
+        assert_eq!(arms[1].0.len(), 2);
+    }
+
+    #[test]
     fn statements() {
-        let p = parse(
+        let u = parse(
             "PROGRAM main
              VAR CONSTANT k : INT := 3; END_VAR
              VAR a, b : INT; x AT %IX0.1 : BOOL; END_VAR
@@ -822,32 +1286,31 @@ mod tests {
                %QX0.0 := x;
                RETURN;
              END_PROGRAM",
+            false,
         )
         .unwrap();
+        let p = &u.pous[0];
         assert_eq!(p.name, "MAIN");
         assert_eq!(p.vars.len(), 5);
         assert!(p.vars[0].constant);
         assert_eq!(p.vars[3].at.as_ref().unwrap().0, "IX0.1");
-        assert_eq!(p.vars[4].kind, VarKind::Temp);
+        assert_eq!(p.vars[4].section, Section::Temp);
         assert_eq!(p.body.len(), 9);
         assert_eq!(p.body[1].kind, StmtKind::Empty);
         let StmtKind::Case(_, arms, other) = &p.body[3].kind else {
             panic!()
         };
-        assert_eq!(
-            arms[0].0.iter().map(|l| (l.lo, l.hi)).collect::<Vec<_>>(),
-            vec![(1, 1), (3, 5)]
-        );
-        assert_eq!((arms[1].0[0].lo, arms[1].0[0].hi), (-2, -2));
+        assert_eq!(arms[0].0[1].hi, LabelValue::Int(5));
+        assert_eq!(arms[1].0[0].lo, LabelValue::Int(-2));
         assert_eq!(other.len(), 1);
     }
 
     #[test]
     fn errors_point_at_the_problem() {
-        let e = |src: &str| parse(src).unwrap_err();
+        let e = |src: &str| parse(src, false).unwrap_err();
         assert_eq!(e("PROGRAM p a := 1 END_PROGRAM").pos.col, 18);
         assert!(
-            e("PROGRAM p VAR_INPUT a : INT; END_VAR END_PROGRAM")
+            e("PROGRAM p VAR_GLOBAL a : INT; END_VAR END_PROGRAM")
                 .msg
                 .contains("not supported")
         );
@@ -866,12 +1329,28 @@ mod tests {
                 .msg
                 .contains("empty CASE range")
         );
-        assert!(e("PROGRAM p END_PROGRAM x").msg.contains("end of input"));
+        assert!(e("PROGRAM p END_PROGRAM x").msg.contains("expected PROGRAM"));
         assert!(
             e("PROGRAM p a := (1 + ; END_PROGRAM")
                 .msg
                 .contains("expected an expression")
         );
         assert!(e("PROGRAM p IF a THEN END_PROGRAM").msg.contains("END_IF"));
+        assert!(
+            e("PROGRAM p a; END_PROGRAM")
+                .msg
+                .contains("expected := or a call")
+        );
+        assert!(e("PROGRAM p (a) := 1; END_PROGRAM").msg.contains("statement"));
+        assert!(
+            e("PROGRAM p VAR a : ARRAY[3..1] OF INT; END_VAR END_PROGRAM")
+                .msg
+                .contains("empty array range")
+        );
+        assert!(
+            e("FUNCTION f VAR_INPUT a : INT; END_VAR END_FUNCTION")
+                .msg
+                .contains("expected :")
+        );
     }
 }
