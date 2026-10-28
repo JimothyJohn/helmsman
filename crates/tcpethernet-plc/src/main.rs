@@ -1,22 +1,24 @@
-//! `tcpethernet-plc`: runs one IEC 61131-3 Structured Text program behind
-//! the CIP adapter. Each scan copies assembly 150 (what the scanner sends)
+//! `tcpethernet-plc`: runs one IEC 61131-3 program behind the CIP adapter:
+//! Structured Text, or a `PLCopen` XML project (LD, FBD, ST) exported from an
+//! editor such as Beremiz or the `OpenPLC` Editor. Each scan copies assembly 150 (what the scanner sends)
 //! into `%I`, runs the program, and copies `%Q` into assembly 100 (what the
 //! scanner receives). A runtime fault zeroes the outputs and stops the
 //! program; the adapter stays on the network so the PLC can still be found.
 
 use std::fs;
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use tcpethernet_adapter::device::lock_ref;
 use tcpethernet_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
-use tcpethernet_iec::{Image, ImageSizes, compile};
+use tcpethernet_iec::{Image, ImageSizes, compile, compile_plcopen, plcopen};
 
 const USAGE: &str = "\
-usage: tcpethernet-plc PROGRAM.st [options]
+usage: tcpethernet-plc PROGRAM.st|PROJECT.xml [options]
+  --emit-st            print the Structured Text a .xml project lowers to, and exit
   --scan-ms N          scan period (default 10, 1..=10000)
   --memory N           %M area in bytes (default 1024)
   --serial HEX         identity serial number (default 1)
@@ -35,6 +37,7 @@ const OUTPUTS: u16 = 100;
 
 struct Opts {
     program: PathBuf,
+    emit_st: bool,
     scan: Duration,
     memory: usize,
     serial: u32,
@@ -45,6 +48,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     let mut program = None;
     let mut o = Opts {
         program: PathBuf::new(),
+        emit_st: false,
         scan: Duration::from_millis(10),
         memory: 1024,
         serial: 1,
@@ -55,6 +59,11 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         let flag = args[i].as_str();
         if flag == "-h" || flag == "--help" {
             return Err(String::new());
+        }
+        if flag == "--emit-st" {
+            o.emit_st = true;
+            i += 1;
+            continue;
         }
         if !flag.starts_with("--") {
             if program.replace(PathBuf::from(flag)).is_some() {
@@ -90,7 +99,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         }
         i += 2;
     }
-    o.program = program.ok_or("missing PROGRAM.st")?;
+    o.program = program.ok_or("missing PROGRAM.st or PROJECT.xml")?;
     Ok(o)
 }
 
@@ -112,15 +121,37 @@ fn assembly_size(cfg: &DeviceConfig, instance: u16) -> usize {
         .map_or(0, |(_, n)| *n)
 }
 
+fn is_xml(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xml"))
+}
+
 fn run(o: &Opts) -> Result<(), String> {
     let src = fs::read_to_string(&o.program).map_err(|e| format!("{}: {e}", o.program.display()))?;
+    let xml = is_xml(&o.program);
+    if o.emit_st {
+        if !xml {
+            return Err("--emit-st needs a .xml project".into());
+        }
+        let lowered = plcopen::lower(&src).map_err(|diags| {
+            let file = o.program.display();
+            let lines: Vec<String> = diags.iter().map(|d| format!("\n  {file}:{d}")).collect();
+            format!("{file} does not lower:{}", lines.concat())
+        })?;
+        print!("{}", lowered.st());
+        return Ok(());
+    }
     let cfg = device_config(o.serial);
     let sizes = ImageSizes {
         i: assembly_size(&cfg, INPUTS),
         q: assembly_size(&cfg, OUTPUTS),
         m: o.memory,
     };
-    let mut program = compile(&src, sizes).map_err(|diags| {
+    let compiled = if xml {
+        compile_plcopen(&src, sizes)
+    } else {
+        compile(&src, sizes)
+    };
+    let mut program = compiled.map_err(|diags| {
         let file = o.program.display();
         let lines: Vec<String> = diags.iter().map(|d| format!("\n  {file}:{d}")).collect();
         format!("{file} does not compile:{}", lines.concat())

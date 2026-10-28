@@ -1,0 +1,104 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Data types (struct, enumeration, array, alias with a default), a
+     function with an ST body, and a program with an ST body using them. -->
+<project xmlns:xhtml="http://www.w3.org/1999/xhtml" xmlns="http://www.plcopen.org/xml/tc6_0201">
+  <fileHeader companyName="tcpethernet" productName="types" productVersion="1" creationDateTime="2026-10-28T09:00:00"/>
+  <contentHeader name="types" modificationDateTime="2026-10-28T09:00:00">
+    <coordinateInfo>
+      <fbd><scaling x="0" y="0"/></fbd>
+      <ld><scaling x="0" y="0"/></ld>
+      <sfc><scaling x="0" y="0"/></sfc>
+    </coordinateInfo>
+  </contentHeader>
+  <types>
+    <dataTypes>
+      <dataType name="Point">
+        <baseType>
+          <struct>
+            <variable name="x">
+              <type><INT/></type>
+              <initialValue><simpleValue value="1"/></initialValue>
+            </variable>
+            <variable name="y">
+              <type><INT/></type>
+            </variable>
+          </struct>
+        </baseType>
+      </dataType>
+      <dataType name="Mode">
+        <baseType>
+          <enum>
+            <values>
+              <value name="Idle"/>
+              <value name="Running" value="5"/>
+            </values>
+          </enum>
+        </baseType>
+      </dataType>
+      <dataType name="Buffer">
+        <baseType>
+          <array>
+            <dimension lower="0" upper="3"/>
+            <baseType><INT/></baseType>
+          </array>
+        </baseType>
+        <initialValue>
+          <arrayValue>
+            <value><simpleValue value="10"/></value>
+            <value repetitionValue="3"><simpleValue value="2"/></value>
+          </arrayValue>
+        </initialValue>
+      </dataType>
+      <dataType name="Speed">
+        <baseType><INT/></baseType>
+        <initialValue><simpleValue value="7"/></initialValue>
+      </dataType>
+    </dataTypes>
+    <pous>
+      <pou name="Twice" pouType="function">
+        <interface>
+          <returnType><INT/></returnType>
+          <inputVars>
+            <variable name="v"><type><INT/></type></variable>
+          </inputVars>
+        </interface>
+        <body>
+          <ST>
+            <xhtml:p><![CDATA[Twice := v * 2;]]></xhtml:p>
+          </ST>
+        </body>
+      </pou>
+      <pou name="main" pouType="program">
+        <interface>
+          <localVars>
+            <variable name="p">
+              <type><derived name="Point"/></type>
+              <initialValue>
+                <structValue>
+                  <value member="y"><simpleValue value="4"/></value>
+                </structValue>
+              </initialValue>
+            </variable>
+            <variable name="m"><type><derived name="Mode"/></type></variable>
+            <variable name="buf"><type><derived name="Buffer"/></type></variable>
+            <variable name="s"><type><derived name="Speed"/></type></variable>
+            <variable name="sum"><type><INT/></type></variable>
+            <variable name="scans"><type><DINT/></type></variable>
+          </localVars>
+        </interface>
+        <body>
+          <ST>
+            <xhtml:p><![CDATA[scans := scans + 1;
+IF scans > 1 THEN
+  m := Mode#Running;
+END_IF;
+sum := Twice(p.x + p.y) + buf[0] + buf[3] + s;]]></xhtml:p>
+          </ST>
+        </body>
+      </pou>
+    </pous>
+  </types>
+  <instances>
+    <configurations/>
+  </instances>
+</project>

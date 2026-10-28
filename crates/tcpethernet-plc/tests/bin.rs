@@ -1,5 +1,5 @@
 //! The `tcpethernet-plc` binary as a scanner sees it: a Structured Text
-//! program behind a real CIP adapter on loopback.
+//! program, or a ladder project, behind a real CIP adapter on loopback.
 
 use std::io::{BufRead, BufReader, Read};
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
@@ -38,6 +38,10 @@ fn program_file(name: &str, src: &str) -> PathBuf {
     let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.st"));
     std::fs::write(&path, src).unwrap();
     path
+}
+
+fn ladder() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tcpethernet-iec/tests/plcopen/motor.xml")
 }
 
 fn plc() -> Command {
@@ -225,4 +229,67 @@ fn shipped_echo_program_echoes() {
         .expect("echo.st did not echo all 32 bytes");
     conn.close(&mut s).unwrap();
     s.close();
+}
+
+#[test]
+fn ladder_project_drives_class1_io() {
+    // motor.xml: Start = %IX0.0, Stop = %IX0.1, Lamp = %QX0.0 (sealed in).
+    let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let (_plc, encap, io) = spawn(&ladder(), scanner_sock.local_addr().unwrap().port());
+    let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
+    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
+    let mut out = [0u8; 32];
+    conn.set_output(&out).unwrap();
+    wait_for(&conn, "the lamp off", |i| i.data[0] & 1 == 0);
+    out[0] = 0b01; // Start
+    conn.set_output(&out).unwrap();
+    wait_for(&conn, "the lamp on", |i| i.data[0] & 1 == 1);
+    out[0] = 0;
+    conn.set_output(&out).unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    wait_for(&conn, "the lamp sealed in", |i| i.data[0] & 1 == 1);
+    out[0] = 0b10; // Stop
+    conn.set_output(&out).unwrap();
+    wait_for(&conn, "the lamp off after Stop", |i| i.data[0] & 1 == 0);
+    conn.close(&mut s).unwrap();
+    s.close();
+}
+
+#[test]
+fn emit_st_prints_the_lowered_project() {
+    let out = plc().arg(ladder()).arg("--emit-st").output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let st = String::from_utf8_lossy(&out.stdout);
+    assert!(st.starts_with("PROGRAM motor\n"), "{st}");
+    assert!(st.contains("delay(IN := Run, PT := T#2s);"), "{st}");
+
+    let st_prog = program_file("not_xml", "PROGRAM p END_PROGRAM");
+    let out = plc().arg(&st_prog).arg("--emit-st").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+}
+
+#[test]
+fn project_errors_exit_1_with_xml_positions() {
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bad.xml");
+    let xml = std::fs::read_to_string(ladder())
+        .unwrap()
+        .replace("<variable>Stop</variable>", "<variable>Stopp</variable>");
+    std::fs::write(&path, &xml).unwrap();
+    let line = xml
+        .lines()
+        .position(|l| l.contains("<contact localId=\"4\""))
+        .unwrap()
+        + 1;
+    let out = plc()
+        .arg(&path)
+        .args(["--encap-port", "0", "--io-port", "0"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains(&format!("bad.xml:{line}:13: undeclared variable STOPP")),
+        "{err}"
+    );
 }
