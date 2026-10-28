@@ -24,9 +24,3 @@ target/release/tcpethernet io 10.0.0.50 --config 151 --out 150 --in 100 \
 `tcpethernet help` lists every flag. `io` binds UDP 2222 locally because
 targets send input there.
 
-## Not an ODVA product
-
-This project is not affiliated with or endorsed by ODVA, Inc. EtherNet/IP and
-CIP are trademarks of ODVA, Inc. This code conveys no license to the
-EtherNet/IP technology or marks; anyone shipping a product that implements the
-protocol needs their own ODVA Terms of Usage Agreement and Vendor ID.
