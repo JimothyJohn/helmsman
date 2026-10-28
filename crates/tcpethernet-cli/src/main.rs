@@ -94,13 +94,18 @@ fn get(port: u16, host: Ipv4Addr, class_id: u16, instance: u16, attribute: u16) 
 
 fn io(port: u16, a: &IoArgs) -> Result<(), String> {
     let mut s = Session::connect((a.host, port), TIMEOUT).map_err(|e| e.to_string())?;
-    let sock = bind_io_socket(Ipv4Addr::UNSPECIFIED).map_err(|e| format!("bind UDP {IO_PORT}: {e}"))?;
+    let sock = if a.local_io_port == IO_PORT {
+        bind_io_socket(Ipv4Addr::UNSPECIFIED)
+    } else {
+        UdpSocket::bind((Ipv4Addr::UNSPECIFIED, a.local_io_port))
+    }
+    .map_err(|e| format!("bind UDP {}: {e}", a.local_io_port))?;
     let cfg = if a.input_only {
         IoConfig::input_only(a.config, a.out, a.input, a.in_len, a.rpi)
     } else {
         IoConfig::exclusive_owner(a.config, a.out, a.input, a.out_len, a.in_len, a.rpi)
     };
-    let conn = IoConnection::open(&mut s, &sock, SocketAddrV4::new(a.host, IO_PORT), cfg)
+    let conn = IoConnection::open(&mut s, &sock, SocketAddrV4::new(a.host, a.io_port), cfg)
         .map_err(|e| e.to_string())?;
     eprintln!(
         "open: O->T 0x{:08X} T->O 0x{:08X} rpi {}/{} us",
