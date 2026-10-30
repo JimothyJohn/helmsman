@@ -9,6 +9,9 @@ repository.workspace = true
 
 [dependencies]
 helmsman-adapter = { path = "../helmsman-adapter" }
+# The chat panel's agent loop (relay client and tools), for the box API's
+# /api/chat; https follows ours.
+helmsman-agent = { path = "../helmsman-agent", default-features = false, optional = true }
 helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
 serde = { version = "1.0", features = ["derive"] }
@@ -17,6 +20,9 @@ rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"
 sha2 = { version = "0.11.1", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"], optional = true }
 webpki-roots = { version = "1.0.11", optional = true }
+# Ed25519 for bundle signatures (bundle::sign says why ring). Already in the
+# lockfile through rustls; the `box` feature now needs it too.
+ring = { version = "0.17.14", optional = true }
 
 [dev-dependencies]
 # The box build itself never enables `unrestricted`; its tests play scanner.
@@ -35,8 +41,8 @@ workspace = true
 # compiled in). On by default so the Pi can post to a cloud receiver;
 # `--no-default-features --features box` builds an http-only box.
 default = ["box", "https"]
-box = ["dep:rusqlite"]
-https = ["dep:rustls", "dep:webpki-roots"]
+box = ["dep:rusqlite", "dep:ring", "dep:helmsman-agent"]
+https = ["dep:rustls", "dep:webpki-roots", "helmsman-agent?/https"]
 
 [[bin]]
 name = "helmsman-plc"
@@ -53,6 +59,10 @@ required-features = ["box"]
 
 [[test]]
 name = "sink_bin"
+required-features = ["box"]
+
+[[test]]
+name = "bundle"
 required-features = ["box"]
 
 [[test]]
@@ -73,4 +83,8 @@ required-features = ["box"]
 
 [[test]]
 name = "reload"
+required-features = ["box"]
+
+[[test]]
+name = "agent"
 required-features = ["box"]

@@ -281,6 +281,7 @@ impl Bench {
             running: Some(cs.clone()),
             snapshots: Some(Mutex::new(Store::open(&store).unwrap())),
             approval: Some(approval),
+            chat: None,
         };
         let api = Api::start(cfg, shared).unwrap();
         let addr = api.addr();

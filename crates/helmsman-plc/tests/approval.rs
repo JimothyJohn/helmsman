@@ -251,6 +251,7 @@ impl Bench {
             running: Some(running()),
             snapshots: store.as_ref().map(|d| Mutex::new(Store::open(d).unwrap())),
             approval: Some(approval),
+            chat: None,
         };
         let api = Api::start(cfg, shared).unwrap();
         let addr = api.addr();
