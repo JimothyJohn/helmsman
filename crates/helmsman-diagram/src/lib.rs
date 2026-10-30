@@ -45,9 +45,11 @@ pub mod layout;
 pub mod live;
 pub mod lower;
 pub mod model;
+pub mod phrase;
 pub mod text;
 
 pub use explain::{Because, Why, explain};
 pub use live::{Gate, Live, Scan, annotate};
 pub use lower::{LowerError, Module, Pou, StmtPos, lower, lower_table};
 pub use model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Stmt, Wire};
+pub use phrase::{Phrased, Sentence, Words, phrase};
