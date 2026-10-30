@@ -180,6 +180,8 @@ fn sig(name: &str, ty: Ty, dir: Dir, binding: Binding) -> Signal {
         ty,
         dir,
         binding,
+        unit: None,
+        poll: None,
     }
 }
 

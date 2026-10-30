@@ -43,6 +43,7 @@ mod interp;
 mod lexer;
 mod parser;
 pub mod plcopen;
+mod state;
 pub mod trace;
 mod types;
 mod xml;
@@ -53,6 +54,7 @@ use std::time::{Duration, Instant};
 pub use check::{Area, Diagnostic, ImageSizes};
 pub use interp::{Fault, FaultKind, Image};
 pub use lexer::Pos;
+pub use state::{Carry, State};
 pub use types::{Ty, Value};
 
 use check::{AggKind, Checked, Type};
