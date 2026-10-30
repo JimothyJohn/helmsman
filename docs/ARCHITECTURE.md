@@ -237,6 +237,34 @@ param    beacon  bool true
   sequences or bidi overrides in a log or a review). Files over 1 MiB are
   refused.
 
+## Shift calendar (`shift-calendar`, built)
+
+`helmsman-plc --calendar FILE` loads shifts, breaks and planned downtime
+(`calendar/`; file format in `calendar/text.rs`, contract in
+`tests/calendar.rs`). Weekly patterns plus dated exceptions (`holiday`,
+a dated `shift` that replaces that day's occurrence), in local time at a
+fixed UTC offset, with daylight saving written as dated offset changes: no
+time zone database (`calendar-timezones` asks about one). Shifts may cross
+midnight; overlapping shifts and breaks outside their shift are refused at
+load.
+
+- **Evaluation** (`Calendar::at`) is a pure, total function of wall-clock
+  seconds: the runtime still has no clock, the binary reads `SystemTime`
+  each loop and wakes at least once a second when a calendar is loaded.
+- **As signals**: `calendar::Source` adds `in_shift`, `on_break`,
+  `planned_down`, `working` (`BOOL`) and `shift_id`, `shift_minute`,
+  `shift_left` (`INT`) to the `SignalTable` as box-provided inputs. A
+  module asks "in shift?" by declaring `VAR_INPUT in_shift : BOOL;`, the
+  same binding as a device signal; a map signal with one of those names is
+  refused.
+- **Scheduled outputs**: `drive SIGNAL [!]COND` makes the calendar the
+  writer of a `bool` output signal. The table records it, and a module
+  binding a `VAR_OUTPUT` to that signal is refused at load
+  (`TwoWriters`, writer `calendar`). Links write it like any command.
+- **Untrusted clock**: before 2024-01-01 (a Pi with no RTC before NTP) the
+  calendar's signals are missing, so modules reading them are held, and
+  driven outputs go to their safe values.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -244,7 +272,7 @@ param    beacon  bool true
 | module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | built |
 | module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault) | built |
 | module ↔ network | nothing | ST has no network primitives; sinks (webhook, OPC UA) are core-owned | built by construction; sinks planned |
-| module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one module per output signal), hold-on-missing-input | built |
+| module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | the box build exposes read services only (no Write Tag, no `Set_Attribute`) | planned (`logix-tag-read`); **today the `helmsman-proto` library and CLI can send any service and drive Class 1 outputs** |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
