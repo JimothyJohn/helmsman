@@ -589,14 +589,18 @@ fn readers_snapshotting_in_parallel_always_see_a_consistent_recording() {
     let mut t = table();
     let mut r = Recorder::new(&t, cfg, None);
     let stop = Arc::new(AtomicBool::new(false));
+    let go = Arc::new(std::sync::Barrier::new(5));
     let readers: Vec<_> = (0..4)
         .map(|_| {
             let tap = r.tap();
             let stop = Arc::clone(&stop);
+            let go = Arc::clone(&go);
             std::thread::spawn(move || {
                 let mut n = 0u32;
-                while !stop.load(Ordering::Relaxed) {
+                go.wait();
+                loop {
                     let rec = tap.snapshot();
+                    exact_within(&rec);
                     // Every snapshot is a valid recording: sorted, in span.
                     Recording::new(
                         rec.wall_ms,
@@ -608,6 +612,9 @@ fn readers_snapshotting_in_parallel_always_see_a_consistent_recording() {
                     )
                     .unwrap();
                     n += 1;
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
                 }
                 n
             })
@@ -615,23 +622,42 @@ fn readers_snapshotting_in_parallel_always_see_a_consistent_recording() {
         .collect();
     // level = k at tick k, every tick: a snapshot is exact iff level at
     // any recorded time t equals t in ticks.
+    go.wait();
     for k in 0..20_000u64 {
         t.set_input(1, Some(Value::Int(i64::try_from(k).unwrap())));
         r.observe(ms(k), &t);
     }
-    r.observe(ms(20_000), &t);
     stop.store(true, Ordering::Relaxed);
     let reads: u32 = readers.into_iter().map(|h| h.join().unwrap()).sum();
-    assert!(reads > 0);
+    assert!(reads >= 4, "each reader took a snapshot");
+    // Uncontended now: this handover always lands, so the recording
+    // reaches the last tick (restarted there if the backlog overflowed).
+    r.observe(ms(20_000), &t);
     let rec = r.snapshot();
-    let restarts = r.stats().restarts;
-    let from = rec.start.as_millis();
-    for at in (from..=19_999).step_by(7) {
+    assert_eq!(rec.end, ms(20_000));
+    assert_eq!(rec.value_at(1, ms(20_000)), Some(Value::Int(19_999)));
+    exact_within(&rec);
+}
+
+/// `level` was set to `k` before the observation at `k` ms (until 19 999):
+/// every instant a recording covers must read back exactly that. A
+/// snapshot covers `start ..= end` only, the last handover so far.
+fn exact_within(rec: &Recording) {
+    if rec.events.is_empty() && rec.base.iter().all(Option::is_none) {
+        assert_eq!(
+            (rec.start, rec.end),
+            (ms(0), ms(0)),
+            "empty only before the first handover"
+        );
+        return;
+    }
+    let (from, to) = (rec.start.as_millis(), rec.end.as_millis());
+    for at in (from..=to).step_by(7).chain([to]) {
         let at = u64::try_from(at).unwrap();
         assert_eq!(
             rec.value_at(1, ms(at)),
-            Some(Value::Int(i64::try_from(at).unwrap())),
-            "at {at} ms (start {from}, {restarts} restarts)"
+            Some(Value::Int(i64::try_from(at.min(19_999)).unwrap())),
+            "at {at} ms of {from}..={to}"
         );
     }
 }
