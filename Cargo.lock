@@ -2356,6 +2356,7 @@ dependencies = [
 name = "tcpethernet-plc"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "tcpethernet",
  "tcpethernet-adapter",
  "tcpethernet-iec",
