@@ -150,10 +150,21 @@ impl Session {
     ///
     /// # Errors
     /// Transport, decode, encapsulation, or context mismatch.
+    #[cfg(feature = "unrestricted")]
     pub fn request_raw(&mut self, request: &cip::Request) -> Result<cip::Response, Error> {
+        let mut mr = crate::codec::Writer::default();
+        request.encode(&mut mr);
+        self.exchange(&mr.into_inner())
+    }
+
+    /// Send one encoded Message Router request and read its reply. Crate
+    /// private: outside the `unrestricted` feature only read services reach
+    /// it (through [`Self::get_attribute_single`] and
+    /// [`crate::logix::TagReader`]).
+    pub(crate) fn exchange(&mut self, mr: &[u8]) -> Result<cip::Response, Error> {
         let ctx = self.context();
         self.stream
-            .write_all(&explicit::send_rr_data(self.handle, ctx, 0, request))?;
+            .write_all(&explicit::send_rr_data_bytes(self.handle, ctx, 0, mr))?;
         let bytes = self.read_frame()?;
         let (frame, _) = Frame::decode(&bytes)?;
         if frame.header.sender_context != ctx {
@@ -169,8 +180,12 @@ impl Session {
     ///
     /// # Errors
     /// As [`Self::request_raw`], plus `Error::Cip` for a CIP error status.
+    #[cfg(feature = "unrestricted")]
     pub fn request(&mut self, request: &cip::Request) -> Result<Vec<u8>, Error> {
-        let resp = self.request_raw(request)?;
+        self.request_raw(request).and_then(Self::data_or_error)
+    }
+
+    fn data_or_error(resp: cip::Response) -> Result<Vec<u8>, Error> {
         if resp.status.is_success() {
             Ok(resp.data)
         } else {
@@ -191,7 +206,9 @@ impl Session {
         instance: u16,
         attribute: u16,
     ) -> Result<Vec<u8>, Error> {
-        self.request(&cip::Request::get_attribute_single(class, instance, attribute))
+        let mut mr = crate::codec::Writer::default();
+        cip::Request::get_attribute_single(class, instance, attribute).encode(&mut mr);
+        self.exchange(&mr.into_inner()).and_then(Self::data_or_error)
     }
 
     /// Unregister and drop the connection. Errors on the final write are

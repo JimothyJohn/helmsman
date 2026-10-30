@@ -11,6 +11,8 @@ repository.workspace = true
 helmsman-proto = { path = "../helmsman-proto" }
 
 [dev-dependencies]
+# Tests drive the target with the full originator (scanner, any service).
+helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
 
 [lints]

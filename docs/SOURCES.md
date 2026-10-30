@@ -192,6 +192,62 @@ anything above:
 pycomm3 is the one to study first for the Python shape of the problem. It
 doesn't do implicit I/O, which is the gap EIPScanner's example fills.
 
+### pycomm3 — ottowayi/pycomm3 (Logix tag services, prior art)
+
+- **What:** Python client for Logix-family controllers over explicit
+  messaging. MIT (Ian Ottoway, Agostino Ruscito). Read 2026-10-30 at
+  `master` = `36aeb19b5cb47495df9fd1caa38ce9d2f6d12ea3`, for byte layouts
+  only; no code copied.
+- **Leaned on by** `crates/helmsman-proto/src/logix/` and the fixture in
+  `crates/helmsman-adapter/src/logix.rs`:
+  - `pycomm3/cip/data_types.py`: elementary type codes (BOOL `0xC1` ..
+    LREAL `0xCB`, BYTE `0xD1` .. LWORD `0xD4`); `DataSegment` extended
+    symbolic `0x91` with length byte and odd-length pad; `LogicalSegment`
+    member type and 8/16-bit widths.
+  - `pycomm3/const.py`: `STRUCTURE_READ_REPLY = b"\xa0\x02"`,
+    `INSUFFICIENT_PACKETS = 6`, `PRIORITY = b"\x0a"`,
+    `TIMEOUT_TICKS = b"\x05"`.
+  - `pycomm3/packets/logix.py`: Read Tag request (service, path, element
+    count `UINT`); Read Tag Fragmented adds a `UDINT` byte offset; reply
+    type is 2 bytes for atomics, 4 for structures;
+    `MultiServiceRequestPacket` (to Message Router instance 1, count,
+    offsets from the count field, requests) and its response parser.
+  - `pycomm3/packets/util.py`: `tag_request_path` (split on `.`, indexes
+    as member segments), `wrap_unconnected_send` (priority, timeout ticks,
+    length, message, pad if odd, route path), `parse_read_reply`.
+  - `pycomm3/logix_driver.py`: `_get_instance_attribute_list_service`
+    (Symbol object `0x6B`, Get Instance Attribute List, attribute ids),
+    `_parse_instance_attribute_list` (instance `UDINT`, name as `UINT`
+    length + bytes, then the requested attributes in order),
+    continuation on status `0x06` from `instance + 1`, `_create_tag`
+    (symbol type bits: 15 structure, 13-14 dimension count, 12 system,
+    0-11 template id, 0-7 atomic code; bits 8-10 as a BOOL's bit position
+    are read there but not used here),
+    `_send_read_fragmented` (offset advances by bytes received).
+  - `pycomm3/cip_driver.py`: the route path is encoded
+    `length=True, pad_length=True` with `PortSegment("bp", slot)` for the
+    backplane. The bytes (`words, 0x00, 0x01, slot`) are our reading of
+    those flags (the encoder itself was not read); unverified on hardware.
+  - `pycomm3/cip/status_info.py`: meanings of general status `0x04`,
+    `0x05`, `0x06`, `0x13`, `0x1E`, `0x26` and extended `0x2104`,
+    `0x2105`, `0x2107` under `0xFF` (the fixture's error choices).
+- **How to cite:** `pycomm3 <file> <function or constant>`.
+
+### libplctag — libplctag/libplctag (Logix tag paths, prior art)
+
+- **What:** C library for PLC tag access. MPL-2.0 (the repo's SPDX id;
+  older releases also offered LGPL). Read 2026-10-30 at `release` =
+  `7712ed7f1ee05ba0ebfca641b3f5c43da52a66ed`, for layouts and parsing
+  rules only; **no code copied** (copyleft).
+- **Leaned on by** `crates/helmsman-proto/src/logix/path.rs`:
+  `src/libplctag/protocols/ab/cip.c` `parse_numeric_segment` (element
+  index segments `0x28` 8-bit, `0x29 0x00` + 16-bit, `0x2A 0x00` + 32-bit),
+  `cip_encode_tag_name` (at most three dimensions; a `.N` bit suffix is
+  kept out of the encoded path), `parse_symbolic_segment` (name
+  characters: letters, digits, `_`, `:`; length byte, odd pad). This
+  repo is stricter on the first character (letter or `_`).
+- **How to cite:** `libplctag cip.c <function>`.
+
 ## Document sources
 
 ### ODVA PUB00213R0, EtherNet/IP Quick Start for Vendors Handbook (2008, 41 pp)
@@ -305,6 +361,20 @@ into the code.
   (transaction id, protocol id 0, length counting unit id + PDU, unit id;
   §3.1.3 p.5) and port 502 (p.5).
 - **How to cite:** `TCP §<x> p.<n>`.
+
+### Logix 5000 Controllers Data Access, programming manual (publication 1756-PM020)
+
+- **Where:** the controller vendor's literature library,
+  `literature.rockwellautomation.com/idc/groups/literature/documents/pm/1756-pm020_-en-p.pdf`.
+  **Not read:** the fetch on 2026-10-30 returned HTTP 403 (as with the
+  Modbus documents before they were fetched by hand). It is the primary
+  reference for Read Tag, Read Tag Fragmented, Multiple Service Packet,
+  the Symbol object and their error codes.
+- **Status:** every layout in `helmsman-proto::logix` is taken from the
+  pycomm3 and libplctag entries above instead, and checked only against
+  our own fixture. Once the PDF is in hand, check the reader against it
+  and cite it per item as `PM020 p.<n>`; real-controller verification
+  waits for a CompactLogix on the bench (TODO `logix-tag-read`).
 
 ## Test corpora (fetched, not vendored)
 

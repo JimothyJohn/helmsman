@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use helmsman_plc::store::{ChangeSet, DB_FILE, Meta, ModuleFiles, Store};
 use helmsman_proto::cip::class;
 use helmsman_proto::scanner::{Input, IoConfig, IoConnection};
 use helmsman_proto::session::Session;
@@ -711,4 +712,116 @@ fn a_module_directory_whose_manifest_lies_is_refused_before_the_adapter_starts()
         assert!(err.contains(why), "{name}: {err}");
         assert!(!err.contains("CIP on"), "{name}: {err}");
     }
+}
+
+// ---- --store -----------------------------------------------------------------
+
+fn store_dir(name: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("bin-stores")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+/// One module that writes `base + 2` to output byte 0 while the stored
+/// calendar says it is in shift (always), with an I/O map beside it.
+fn offset_set(base: u8) -> ChangeSet {
+    let module = ModuleFiles {
+        manifest: format!(
+            "name offset\nauthor test\nscan_ms 2\nq 0+1\nreads in_shift\ndrives\n\
+             param base int {base} min=0 max=200\n"
+        ),
+        source: "PROGRAM offset
+                 VAR_INPUT base : USINT := 0; in_shift : BOOL; END_VAR
+                 VAR o AT %QB0 : USINT; END_VAR
+                   IF in_shift THEN o := base + 2; ELSE o := 1; END_IF;
+                 END_PROGRAM"
+            .into(),
+    };
+    ChangeSet {
+        modules: [("offset".to_string(), module)].into_iter().collect(),
+        io_map: Some("out lamp bool box do:0\n".into()),
+        calendar: Some("zone UTC\nshift 7 daily 00:00-24:00\n".into()),
+    }
+}
+
+fn store_meta(author: &str) -> Meta {
+    Meta {
+        author: author.into(),
+        prompt: String::new(),
+        approver: None,
+        time_ms: 0,
+    }
+}
+
+#[test]
+fn the_store_runs_its_head_snapshot_after_a_rollback() {
+    let dir = store_dir("rollback");
+    let mut store = Store::open(&dir).unwrap();
+    let a = store.commit(&offset_set(40), &store_meta("agent")).unwrap();
+    store.commit(&offset_set(60), &store_meta("agent")).unwrap();
+    store.rollback(&a, &store_meta("Nick")).unwrap();
+    drop(store);
+    let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let args = [std::ffi::OsStr::new("--store"), dir.as_os_str()];
+    let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
+    let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
+    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
+    conn.set_output(&[0; 32]).unwrap();
+    wait_for(
+        &conn,
+        "the rolled-back param, in shift by the stored calendar",
+        |i| i.data[0] == 42,
+    );
+    conn.close(&mut s).unwrap();
+    s.close();
+    let log = plc.finish();
+    let want = format!("snapshot {a} (entry 3, rolled back to {a} by Nick)");
+    assert!(log.contains(&want), "missing {want:?} in:\n{log}");
+}
+
+#[test]
+fn a_store_that_cannot_run_is_refused_before_the_adapter_starts() {
+    let empty = store_dir("empty");
+    Store::open(&empty).unwrap();
+    let newer = store_dir("newer");
+    Store::open(&newer).unwrap();
+    rusqlite::Connection::open(newer.join(DB_FILE))
+        .unwrap()
+        .pragma_update(None, "user_version", 99)
+        .unwrap();
+    let foreign = store_dir("foreign");
+    std::fs::create_dir_all(&foreign).unwrap();
+    std::fs::write(foreign.join(DB_FILE), [0x5a; 4096]).unwrap();
+    let bad_module = store_dir("bad-module");
+    let mut set = offset_set(40);
+    set.modules.get_mut("offset").unwrap().source = "PROGRAM offset END_PROGRAM".into();
+    Store::open(&bad_module)
+        .unwrap()
+        .commit(&set, &store_meta("agent"))
+        .unwrap();
+    for (dir, why) in [
+        (&empty, "has no snapshot yet"),
+        (&newer, "newer than this build"),
+        (&foreign, "snapshot store"),
+        (&bad_module, "does not match module.st"),
+    ] {
+        let out = plc()
+            .args([std::ffi::OsStr::new("--store"), dir.as_os_str()])
+            .args(["--encap-port", "0", "--io-port", "0"])
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{why}: {err}");
+        assert!(err.contains(why), "{why}: {err}");
+        assert!(!err.contains("CIP on"), "{why}: {err}");
+    }
+    let out = plc()
+        .args([std::ffi::OsStr::new("--store"), empty.as_os_str()])
+        .args(["--module-dir", "x"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "--store takes no other module source");
 }
