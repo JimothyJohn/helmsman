@@ -167,7 +167,7 @@
   id: protocol-crate-name
   answer: rename everything to helmsman-*
 
-- [ ] **Multi-module: module-relative addresses, private %M?** Built tonight (feat/multi-module) on two calls I made and you may want to reverse. (1) A module's `%I`/`%Q` addresses are relative to its window: `%QX0.0` is bit 0 of *its* outputs, wherever the window sits, so the checker bounds it at compile time and a module can be moved without editing its ST. The cost: the same address means different bytes in different modules, which matters for debugging against the raw assembly. (2) `%M` is private per module; modules can't share memory, and talking between modules waits for signals (io-runtime / signal-model). Both are cheap to change now and expensive after module-format and hot-swap build on them.
+- [x] **Multi-module: module-relative addresses, private %M?** Built tonight (feat/multi-module) on two calls I made and you may want to reverse. (1) A module's `%I`/`%Q` addresses are relative to its window: `%QX0.0` is bit 0 of *its* outputs, wherever the window sits, so the checker bounds it at compile time and a module can be moved without editing its ST. The cost: the same address means different bytes in different modules, which matters for debugging against the raw assembly. (2) `%M` is private per module; modules can't share memory, and talking between modules waits for signals (io-runtime / signal-model). Both are cheap to change now and expensive after module-format and hot-swap build on them.
   asked: 2026-10-30
   by: claude-session
   needs: your call
@@ -178,7 +178,7 @@
   id: module-addressing
   answer: keep relative + private %M (recommended)
 
-- [ ] **A device drops: hold the modules that read it?** Built tonight (feat/io-runtime): a module never computes on missing data. If any signal it reads has no value (its device is down, or the value doesn't fit the port, e.g. 40000 into an INT), it is *held*: not scanned, its %Q window zeroed, its output signals sent to their safe values; it resumes when every input is back. The alternative most PLCs offer is holding the last good value with a quality bit the logic can test, which keeps unrelated logic in the same module running but lets a stale "tag X is high" keep a light on. Held is the conservative call for a box whose outputs need a human's approval to move.
+- [x] **A device drops: hold the modules that read it?** Built tonight (feat/io-runtime): a module never computes on missing data. If any signal it reads has no value (its device is down, or the value doesn't fit the port, e.g. 40000 into an INT), it is *held*: not scanned, its %Q window zeroed, its output signals sent to their safe values; it resumes when every input is back. The alternative most PLCs offer is holding the last good value with a quality bit the logic can test, which keeps unrelated logic in the same module running but lets a stale "tag X is high" keep a light on. Held is the conservative call for a box whose outputs need a human's approval to move.
   asked: 2026-10-30
   by: claude-session
   needs: your call
@@ -189,7 +189,7 @@
   id: missing-input-policy
   answer: hold the module, outputs safe (recommended)
 
-- [ ] **I/O map file: keep the line format?** `--io-map FILE` reads a small line format (`device rio modbus-tcp 192.168.3.50:502 unit=1`, `out lamp bool box do:0 safe=true`; parser in tcpethernet-io `text.rs`, round-trip proptested). I didn't pull serde into the runtime for it: the repo parses its own formats and the module-format manifest and box API (JSON over HTTP) will decide the long-term shape. Switching later is one parser; nothing deployed reads it yet.
+- [x] **I/O map file: keep the line format?** `--io-map FILE` reads a small line format (`device rio modbus-tcp 192.168.3.50:502 unit=1`, `out lamp bool box do:0 safe=true`; parser in tcpethernet-io `text.rs`, round-trip proptested). I didn't pull serde into the runtime for it: the repo parses its own formats and the module-format manifest and box API (JSON over HTTP) will decide the long-term shape. Switching later is one parser; nothing deployed reads it yet.
   asked: 2026-10-30
   by: claude-session
   needs: your call
@@ -201,15 +201,6 @@
   answer: keep the line format until box-api, then JSON from the API (recommended)
 
 ## Tasks
-
-- [ ] **Bench sweep against the CompactLogix and FP0H** — `cargo run --example discover <subnet broadcast>`; fill the rows in `docs/INTEROP.md`, keep the first capture.
-  needs: devices powered and on a Studio-reachable subnet (answer on 2026-10-26: not hooked up yet)
-  result: first real ListIdentity from each device
-  est: 30m
-  difficulty: low
-  status: blocked
-  id: bench-sweep
-  notes: I just realized these are EthernetIP masters...I need to connect to a Ethernet/IP slave device so remove this for now since we've pivoted.
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
   needs: nothing
@@ -444,11 +435,10 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: signal-model
 
 - [ ] **Logix symbolic tag read** — Read Tag (0x4C) and multi-service packets over the existing explicit session; tag list browse (Symbol object 0x6B) so the agent can see what's on the PLC. Read-only by construction: no Write Tag in the box build.
-  needs: bench-sweep for real-device verification; OpENer can't serve symbolic tags, so a fixture server for tests
+  needs: a fixture server for tests (OpENer can't serve symbolic tags); real-device verification waits for an EtherNet/IP target device on the bench
   result: CompactLogix tags become signals
   est: 4d
   difficulty: high
-  depends: bench-sweep
   id: logix-tag-read
 
 - [ ] **Box outputs: GPIO stack light** — Pi GPIO (or a relay hat) as box-owned outputs with named channels; blink patterns as a stdlib FB.
