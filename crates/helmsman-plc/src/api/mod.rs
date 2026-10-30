@@ -13,7 +13,7 @@
 //! GET  /api/devices                       device links: up, down (why), unknown
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
-//! POST /api/proposals                     token: a module draft or a param change, checked, stored as a draft
+//! POST /api/proposals                     token: a module draft, a param change, or a new io_map / calendar file, checked, stored as a draft
 //! POST /api/proposals/check               token: check a draft as POST /api/proposals would; nothing stored
 //! POST /api/proposals/replay              token: sim replay of a draft {draft, minutes}; nothing stored, not evidence
 //! POST /api/proposals/{id}/replay         token: sim replay of the draft against what runs; evidence for apply
@@ -174,6 +174,9 @@ struct Ctx {
     running: Mutex<Option<ChangeSet>>,
     approval: Option<Approval>,
     replays: Replays,
+    /// The table and recording the box runs, for replays; replaced by a
+    /// reload. `None` without an approval path.
+    shape: Mutex<Option<approve::Shape>>,
     /// Held for the whole of an apply or rollback.
     applying: Mutex<()>,
     /// Per module name: the newest traced scan, rendered, and its scan
@@ -203,6 +206,31 @@ impl Ctx {
         *self.running.lock().unwrap_or_else(PoisonError::into_inner) = Some(cs);
         *self.catalog.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(catalog);
         self.traces.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+
+    fn shape(&self) -> approve::Shape {
+        self.shape
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| approve::Shape {
+                table: crate::SignalTable::default(),
+                record: None,
+            })
+    }
+
+    fn set_shape(&self, shape: approve::Shape) {
+        *self.shape.lock().unwrap_or_else(PoisonError::into_inner) = Some(shape);
+    }
+
+    /// A reload started and ended device links: the device list follows.
+    fn links_changed(&self, links: &crate::link::Finished) {
+        for name in &links.removed {
+            self.box_.devices.remove(name);
+        }
+        for name in &links.added {
+            self.box_.devices.add(name);
+        }
     }
 }
 
@@ -308,6 +336,10 @@ impl Api {
             chat,
             catalog: RwLock::new(Arc::new(std::mem::take(&mut shared.catalog))),
             running: Mutex::new(shared.running.take()),
+            shape: Mutex::new(shared.approval.as_ref().map(|a| approve::Shape {
+                table: a.plant.table.clone(),
+                record: a.plant.record.clone(),
+            })),
             approval: shared.approval.take(),
             replays: Replays::new(1000),
             applying: Mutex::new(()),
@@ -999,7 +1031,7 @@ fn index() -> Json {
             e("GET", "/api/devices", false, "device links up or down"),
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
-            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source} or {kind: param, module, param, value}"),
+            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}"),
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),

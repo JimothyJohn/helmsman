@@ -498,3 +498,105 @@ fn threaded_links_carry_a_scan_to_the_device_and_report_the_drop() {
 fn rio_went_down(events: &Mutex<Vec<(String, bool)>>) -> bool {
     events.lock().unwrap().iter().any(|(n, up)| n == "rio" && !up)
 }
+
+fn table_of(src: &str) -> SignalTable {
+    let p = helmsman_io::text::parse(src).unwrap();
+    SignalTable::new(&p.map, &p.safe).unwrap()
+}
+
+#[test]
+fn a_reloaded_table_keeps_exactly_the_signals_whose_name_type_direction_and_binding_held() {
+    let mut old = table_of(
+        "device a modbus-tcp 127.0.0.1:1\n\
+         in  run   bool a di:0\n\
+         in  level int  a hr:0\n\
+         out valve bool a coil:0 safe=false\n\
+         out horn  bool a coil:1 safe=false\n\
+         out lamp  bool a coil:2 safe=false\n",
+    );
+    let ix = |t: &SignalTable, n: &str| t.index(n).unwrap();
+    old.set_input(ix(&old, "run"), Some(Value::Bool(true)));
+    old.set_input(ix(&old, "level"), Some(Value::Int(7)));
+    let mut rt = Runtime::with_signals(
+        0,
+        0,
+        vec![module(
+            "m",
+            "PROGRAM m VAR_INPUT run : BOOL; END_VAR VAR_OUTPUT valve : BOOL; horn : BOOL; lamp : BOOL; END_VAR \
+             valve := run; horn := run; lamp := run; END_PROGRAM",
+        )],
+        &old,
+    )
+    .unwrap();
+    rt.tick_with(ms(0), &[], &mut old);
+    old.set_point_error(ix(&old, "run"), Some("flaky".into()));
+    let mut new = table_of(
+        "device a modbus-tcp 127.0.0.1:1\n\
+         out lamp  bool a coil:2 safe=true\n\
+         in  level real a hr:0:f32\n\
+         out horn  bool a coil:5 safe=false\n\
+         in  run   bool a di:0 poll_ms=7\n\
+         out valve bool a coil:0 safe=false unit=on\n\
+         out extra bool a coil:9 safe=true\n",
+    );
+    let from = new.carry_from(&old);
+    assert_eq!(new.epoch(), old.epoch() + 1);
+    // The same signal: poll rate, unit and safe value are not its identity.
+    assert_eq!(new.value(ix(&new, "run")), Some(Value::Bool(true)));
+    assert_eq!(new.point_error(ix(&new, "run")), Some("flaky"));
+    assert_eq!(new.command(ix(&new, "valve")), Some(Value::Bool(true)));
+    assert_eq!(
+        new.command(ix(&new, "lamp")),
+        Some(Value::Bool(true)),
+        "a new safe value keeps the command"
+    );
+    assert_eq!(new.safe(ix(&new, "lamp")), Some(Value::Bool(true)));
+    // Another signal under the same name: retyped, rebound, or new.
+    assert_eq!(new.value(ix(&new, "level")), None, "retyped: missing until read");
+    assert_eq!(
+        new.command(ix(&new, "horn")),
+        Some(Value::Bool(false)),
+        "rebound: starts safe"
+    );
+    assert_eq!(
+        new.command(ix(&new, "extra")),
+        Some(Value::Bool(true)),
+        "added: starts safe"
+    );
+    assert_eq!(from[ix(&new, "run")], Some(ix(&old, "run")));
+    assert_eq!(from[ix(&new, "horn")], None);
+    assert_eq!(new.point(ix(&new, "horn")), Some(("a", "coil:5")));
+}
+
+#[test]
+fn rebinding_onto_a_reloaded_table_makes_what_nothing_healthy_drives_safe_or_refuses_whole() {
+    let src = "device a modbus-tcp 127.0.0.1:1\n\
+               in  run   bool a di:0\n\
+               out valve bool a coil:0 safe=false\n\
+               out spare bool a coil:1 safe=false\n";
+    let mut old = table_of(src);
+    let m = || {
+        module(
+            "m",
+            "PROGRAM m VAR_INPUT run : BOOL; END_VAR VAR_OUTPUT valve : BOOL; END_VAR valve := run; END_PROGRAM",
+        )
+    };
+    let mut rt = Runtime::with_signals(0, 0, vec![m()], &old).unwrap();
+    old.set_input(old.index("run").unwrap(), Some(Value::Bool(true)));
+    rt.tick_with(ms(0), &[], &mut old);
+    // A map without `run`: the module no longer binds, and nothing changes.
+    let mut bad = table_of("device a modbus-tcp 127.0.0.1:1\nout valve bool a coil:0\n");
+    bad.carry_from(&old);
+    assert!(rt.rebind(vec![m()], &mut bad).is_err());
+    assert_eq!(rt.status("m"), Some(Status::Running));
+    // Held, then new safe values: its output and the undriven spare take
+    // them in the reload step itself.
+    old.set_input(old.index("run").unwrap(), None);
+    rt.tick_with(ms(10), &[], &mut old);
+    assert_eq!(rt.status("m"), Some(Status::Held));
+    let mut new = table_of(&src.replace("safe=false", "safe=true"));
+    new.carry_from(&old);
+    rt.rebind(vec![m()], &mut new).unwrap();
+    assert_eq!(new.command(new.index("valve").unwrap()), Some(Value::Bool(true)));
+    assert_eq!(new.command(new.index("spare").unwrap()), Some(Value::Bool(true)));
+}

@@ -805,7 +805,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: dropin-photo
   id: dropin-pid
 
-- [ ] **Map and calendar reload on a running box** — an apply or rollback whose I/O map or calendar differs from what runs is refused (409) today: only the module set hot-swaps. Reloading means rebuilding the signal table, restarting device links and re-attaching the calendar between ticks, with the same "refused changes nothing" rule. Proposals cannot change the map or calendar yet, so today this only blocks rolling back across a map change.
+- [x] **Map and calendar reload on a running box** — an apply or rollback whose I/O map or calendar differs from what runs is refused (409) today: only the module set hot-swaps. Reloading means rebuilding the signal table, restarting device links and re-attaching the calendar between ticks, with the same "refused changes nothing" rule. Proposals cannot change the map or calendar yet, so today this only blocks rolling back across a map change.
   result: rollback to any snapshot; map and calendar edits through the same approval path
   est: 3d
   difficulty: high

@@ -8,6 +8,7 @@ pub mod api;
 #[cfg(feature = "box")]
 pub mod bundle;
 pub mod calendar;
+pub mod layout;
 pub mod link;
 pub mod manifest;
 #[cfg(feature = "box")]
