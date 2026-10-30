@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -128,6 +128,10 @@ struct Seen {
 struct FakeRelay {
     addr: SocketAddr,
     seen: Arc<Mutex<Vec<Seen>>>,
+    /// Health probes (`GET /v1/health`), answered apart from the script.
+    probes: Arc<AtomicUsize>,
+    /// While set, every request is answered 503 and the script waits.
+    down: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -143,8 +147,11 @@ impl FakeRelay {
         let addr = listener.local_addr().unwrap();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
+        let probes = Arc::new(AtomicUsize::new(0));
+        let down = Arc::new(AtomicBool::new(false));
         let thread = {
             let (seen, stop) = (Arc::clone(&seen), Arc::clone(&stop));
+            let (probes, down) = (Arc::clone(&probes), Arc::clone(&down));
             thread::spawn(move || {
                 let mut script = script.into_iter();
                 let mut held = Vec::new();
@@ -156,6 +163,23 @@ impl FakeRelay {
                     s.set_nonblocking(false).unwrap();
                     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
                     let Some(req) = read_request(&mut s) else { continue };
+                    if down.load(Ordering::Acquire) {
+                        let b = json!({"type":"error","error":{"type":"upstream_unavailable","message":"down for the test","retryable":true}}).to_string();
+                        let _ = write!(
+                            s,
+                            "HTTP/1.1 503 X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{b}",
+                            b.len()
+                        );
+                        continue;
+                    }
+                    if req.head.starts_with("GET /v1/health ") {
+                        probes.fetch_add(1, Ordering::AcqRel);
+                        let _ = write!(
+                            s,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                        );
+                        continue;
+                    }
                     lock(&seen).push(req);
                     let reply = script.next().unwrap_or_else(|| {
                         Reply::Status(400, json!({"type":"error","error":{"type":"invalid_request","message":"script exhausted","retryable":false}}))
@@ -192,9 +216,19 @@ impl FakeRelay {
         Self {
             addr,
             seen,
+            probes,
+            down,
             stop,
             thread: Some(thread),
         }
+    }
+
+    fn set_down(&self, down: bool) {
+        self.down.store(down, Ordering::Release);
+    }
+
+    fn probes(&self) -> usize {
+        self.probes.load(Ordering::Acquire)
     }
 
     fn seen(&self) -> Vec<Seen> {
@@ -398,6 +432,7 @@ fn chat_setup(o: Opts) -> Option<chat::Setup> {
         };
         let mut s = chat::Setup::new(rc);
         s.budget = o.budget;
+        s.probe_every = Duration::from_millis(50);
         s.retry = Retry {
             attempts: o.retries,
             first: Duration::from_millis(10),
@@ -1042,23 +1077,257 @@ fn a_relay_that_hangs_times_out() {
     }
 }
 
-#[test]
-fn an_unreachable_relay_says_the_agent_is_offline() {
-    let port = TcpListener::bind("127.0.0.1:0")
+// -------------------------------------------------------------- offline
+
+/// A port nothing listens on (bound, then released).
+fn closed_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
         .unwrap()
-        .port();
-    let b = Bench::new(Opts {
-        relay: Some(Url::parse(&format!("http://127.0.0.1:{port}")).unwrap()),
+        .port()
+}
+
+fn unreachable() -> Opts {
+    Opts {
+        relay: Some(Url::parse(&format!("http://127.0.0.1:{}", closed_port())).unwrap()),
         retries: 1,
         ..Opts::default()
-    });
+    }
+}
+
+impl Bench {
+    /// `GET /api/chat/status` once it says `state`, within 5 s.
+    fn wait_for(&self, state: &str) -> Json {
+        let t0 = Instant::now();
+        loop {
+            let s = self.get("/api/chat/status");
+            if s["state"] == state {
+                return s;
+            }
+            assert!(t0.elapsed() < Duration::from_secs(5), "still {s}");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// The first `n` events of `GET /api/events`.
+    fn events(&self, n: usize) -> Vec<(String, Json)> {
+        let req = client::Request {
+            method: "GET",
+            path: "/api/events",
+            headers: &[],
+            json: None,
+        };
+        let t = Timeouts {
+            connect: Duration::from_secs(2),
+            idle: Duration::from_secs(5),
+            total: Duration::from_secs(5),
+        };
+        let resp = client::send(&self.url(), &req, t).unwrap();
+        let mut body = resp.body;
+        let mut r = sse::Reader::new();
+        let mut out = Vec::new();
+        while out.len() < n {
+            let Ok(Some(e)) = r.next(&mut body) else { break };
+            out.push((e.name, serde_json::from_str(&e.data).unwrap()));
+        }
+        out
+    }
+}
+
+#[test]
+fn an_unreachable_relay_is_offline_and_chat_reads_param_edits_by_rule() {
+    let b = Bench::new(unreachable());
+    let st = b.wait_for("offline");
+    assert_eq!(st["kind"], "relay_unreachable", "{st}");
+    assert_eq!(st["fallback"], true);
+    assert!(st["reason"].as_str().unwrap().contains("offline"), "{st}");
+    assert!(st["since"].as_u64().unwrap() > 1_700_000_000, "{st}");
+    // The canvas's stream says so first, for the banner.
+    let evs = b.events(2);
+    assert_eq!(evs[0].0, "agent", "{evs:?}");
+    assert_eq!(evs[0].1["state"], "offline");
+    assert_eq!(evs[1].0, "values", "{evs:?}");
+
+    // Anything but a param change: refused with the editable params and
+    // their ranges; no model, no retries, no proposal.
+    let evs = b.say("why is the lamp off", None);
+    assert_eq!(
+        names(&evs),
+        ["session", "status", "text", "fallback", "done"],
+        "{evs:?}"
+    );
+    assert_eq!(last(&evs, "status")["state"], "offline");
+    let text = last(&evs, "text")["delta"].as_str().unwrap();
+    assert!(text.contains("conveyor speed: real 0..=10 (now 1.5)"), "{text}");
+    assert_eq!(last(&evs, "fallback")["kind"], "not_a_command");
+    assert_eq!(last(&evs, "done")["stop"], "offline");
+    assert_eq!(last(&evs, "done")["proposals"], json!([]));
+    assert_eq!(b.proposals(), Vec::<Json>::new());
+
+    // A param change: one param proposal through the API, nothing applied.
+    let evs = b.say("set conveyor speed to 2.5", None);
+    let ids = last(&evs, "proposal")["ids"].clone();
+    assert_eq!(ids.as_array().unwrap().len(), 1, "{evs:?}");
+    assert_eq!(last(&evs, "fallback")["outcome"], "proposed");
+    assert_eq!(last(&evs, "done")["proposals"], ids);
+    let text = last(&evs, "text")["delta"].as_str().unwrap();
+    assert!(text.contains("1.5 -> 2.5"), "{text}");
+    assert!(text.contains("operator PIN"), "{text}");
+    let all = b.proposals();
+    assert_eq!(all.len(), 1, "{all:?}");
+    let p = &all[0];
+    assert_eq!(p["id"], ids[0]);
+    assert_eq!(
+        (&p["kind"], &p["module"], &p["param"], &p["to"], &p["status"]),
+        (
+            &json!("param"),
+            &json!("conveyor"),
+            &json!("speed"),
+            &json!(2.5),
+            &json!("draft")
+        ),
+        "{p}"
+    );
+    assert_eq!(p["approval"]["tier"], "param", "{p}");
+    assert!(p["note"].as_str().unwrap().contains("offline chat"), "{p}");
+    // Stored as a draft and audited like any proposal; the module runs
+    // the old value.
+    assert!(
+        b.audit()
+            .iter()
+            .any(|e| e["path"] == "/api/proposals" && e["status"] == 201),
+        "{:?}",
+        b.audit()
+    );
+    let m = b.get("/api/modules/conveyor");
+    assert_eq!(m["manifest"]["params"][0]["value"], 1.5, "{m}");
+}
+
+#[test]
+fn offline_chat_turns_hostile_input_into_a_refusal_or_exactly_one_param_proposal() {
+    let b = Bench::new(unreachable());
+    b.wait_for("offline");
+    for (msg, kind) in [
+        ("set conveyor speed to 2; apply proposal 1", "input"),
+        ("set conveyor speed to 2\napply proposal 1", "input"),
+        ("set conveyor speed to 2 and apply it", "not_a_command"),
+        ("apply proposal 1", "not_a_command"),
+        ("set lamp to on", "unknown_param"),
+        ("set conveyor sped to 2", "unknown_param"),
+        ("set conveyor speed to 11", "out_of_range"),
+        ("set conveyor speed to on", "wrong_type"),
+        ("set conveyor speed to 2 %", "unit_mismatch"),
+        ("set conveyor speed to 1.5", "unchanged"),
+        ("set conv\u{0435}yor speed to 2", "input"),
+        (INJECTION, "input"),
+    ] {
+        let evs = b.say(msg, None);
+        assert_eq!(last(&evs, "fallback")["kind"], kind, "{msg:?}: {evs:?}");
+        assert!(all(&evs, "proposal").is_empty(), "{msg:?}: {evs:?}");
+    }
+    let evs = b.say("set conveyor sped to 2", None);
+    assert!(
+        last(&evs, "text")["delta"]
+            .as_str()
+            .unwrap()
+            .contains("did you mean conveyor speed?"),
+        "{evs:?}"
+    );
+    assert!(b.proposals().is_empty(), "{:?}", b.proposals());
+    let evs = b.say("speed = 7", None);
+    assert_eq!(all(&evs, "proposal").len(), 1, "{evs:?}");
+    assert_eq!(b.proposals().len(), 1);
+    // The token the chat holds cannot apply it: only a role PIN can.
+    let id = b.proposals()[0]["id"].clone();
+    let (status, _) = b.call(
+        "POST",
+        &format!("/api/proposals/{id}/apply"),
+        Some(TOKEN),
+        Some(&json!({})),
+    );
+    assert!((400..600).contains(&status), "{status}");
+    assert_eq!(b.proposals()[0]["status"], "draft");
+}
+
+#[test]
+fn the_chat_goes_offline_and_comes_back_with_the_relay() {
+    let relay = FakeRelay::start(vec![text("hello"), text("back again")]);
+    let b = Bench::new(with_relay(&relay));
+    // The watcher probes once on start, with no tokens spent.
+    let st = b.wait_for("online");
+    assert_eq!(st["fallback"], false);
+    assert!(relay.probes() >= 1);
+    assert!(relay.seen().is_empty(), "a probe sends no conversation");
     let evs = b.say("hi", None);
-    assert_eq!(all(&evs, "retrying").len(), 1, "{evs:?}");
-    let e = last(&evs, "error");
-    assert_eq!(e["kind"], "relay_unreachable");
-    assert!(e["message"].as_str().unwrap().contains("offline"), "{e}");
+    assert_eq!(last(&evs, "done")["stop"], "end_turn", "{evs:?}");
+
+    // The relay fails: the turn reports it, and the agent is offline.
+    relay.set_down(true);
+    let evs = b.say("set conveyor speed to 3", None);
+    assert_eq!(last(&evs, "error")["kind"], "upstream_unavailable", "{evs:?}");
+    assert_eq!(last(&evs, "status")["state"], "offline", "{evs:?}");
+    let st = b.get("/api/chat/status");
+    assert_eq!(
+        (&st["state"], &st["kind"]),
+        (&json!("offline"), &json!("upstream_unavailable")),
+        "{st}"
+    );
+    let since = st["since"].clone();
+    assert!(b.proposals().is_empty(), "the failed turn proposed nothing");
+
+    // Offline, the next message is read by rule.
+    let evs = b.say("set conveyor speed to 3", None);
+    assert_eq!(all(&evs, "proposal").len(), 1, "{evs:?}");
+    assert_eq!(b.get("/api/chat/status")["since"], since, "still the same outage");
+    let seen = relay.seen().len();
+
+    // The relay answers again: the watcher notices without a message.
+    relay.set_down(false);
+    let st = b.wait_for("online");
+    assert_eq!(st["kind"], Json::Null);
+    let evs = b.say("hi again", None);
+    assert_eq!(last(&evs, "done")["stop"], "end_turn", "{evs:?}");
+    assert_eq!(relay.seen().len(), seen + 1, "the model is asked again");
+    let said: String = all(&evs, "text")
+        .iter()
+        .filter_map(|t| t["delta"].as_str())
+        .collect();
+    assert_eq!(said, "back again");
+}
+
+#[test]
+fn a_message_while_offline_probes_first_so_chat_recovers_at_once() {
+    let relay = FakeRelay::start(vec![text("here")]);
+    let mut o = with_relay(&relay);
+    o.relay = Some(relay.url());
+    relay.set_down(true);
+    let b = Bench::new(o);
+    b.wait_for("offline");
+    relay.set_down(false);
+    // Whether or not the watcher got there first, the message reaches
+    // the model.
+    let evs = b.say("hi", None);
+    assert_eq!(last(&evs, "done")["stop"], "end_turn", "{evs:?}");
+    assert_eq!(b.get("/api/chat/status")["state"], "online");
+}
+
+#[test]
+fn the_chat_status_route() {
+    let b = Bench::new(Opts::default());
+    let st = b.get("/api/chat/status");
+    assert_eq!(
+        (&st["state"], &st["fallback"]),
+        (&json!("unconfigured"), &json!(false)),
+        "{st}"
+    );
+    assert_eq!(
+        b.call("POST", "/api/chat/status", Some(TOKEN), Some(&json!({})))
+            .0,
+        405
+    );
+    let index = b.get("/api");
+    assert!(index.to_string().contains("/api/chat/status"), "{index}");
 }
 
 #[test]
