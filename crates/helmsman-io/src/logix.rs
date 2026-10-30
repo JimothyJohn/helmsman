@@ -179,6 +179,61 @@ impl LogixDriver {
     }
 }
 
+/// One tag in a controller's symbol table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Browsed {
+    /// Controller scope as is; program tags as `Program:Main.Tag`.
+    pub name: String,
+    /// The Logix type for an atomic tag (`DINT`, `REAL`, ...), `struct`
+    /// for anything else (a UDT, a timer, a string: the template is not
+    /// read).
+    pub ty: String,
+    /// Array dimensions, outermost first.
+    pub dims: Vec<u32>,
+}
+
+/// Programs browsed at most; the rest are left out.
+pub const MAX_BROWSE_PROGRAMS: usize = 64;
+
+impl LogixDriver {
+    /// The controller's tags, controller scope and then each program's,
+    /// system symbols left out. Read-only: the Symbol object's Get
+    /// Instance Attribute List, over a session of its own that is closed
+    /// afterwards (the scan's connection is never borrowed).
+    ///
+    /// # Errors
+    /// Transport or protocol trouble, as for reads.
+    pub fn browse(&self) -> Result<Vec<Browsed>, Error> {
+        let r = TagReader::connect(self.endpoint.as_str(), self.timeout).map_err(transport)?;
+        let mut r = match self.slot {
+            Some(s) => r.with_slot(s),
+            None => r,
+        };
+        let one = |s: &logix::Symbol, prefix: &str| Browsed {
+            name: format!("{prefix}{}", s.name),
+            ty: s.atomic().map_or_else(|| "struct".to_string(), |t| t.to_string()),
+            dims: s.shape().to_vec(),
+        };
+        let top = r.list_tags(None).map_err(transport)?;
+        let mut out = Vec::new();
+        let mut programs = Vec::new();
+        for s in top.iter().filter(|s| !s.is_system()) {
+            if s.is_program() {
+                programs.push(s.name.clone());
+            } else {
+                out.push(one(s, ""));
+            }
+        }
+        for p in programs.iter().take(MAX_BROWSE_PROGRAMS) {
+            let tags = r.list_tags(Some(p)).map_err(transport)?;
+            let prefix = format!("{p}.");
+            out.extend(tags.iter().filter(|s| !s.is_system()).map(|s| one(s, &prefix)));
+        }
+        r.close();
+        Ok(out)
+    }
+}
+
 impl Driver for LogixDriver {
     fn parse(&self, addr: &str) -> Result<PointInfo, Error> {
         Point::parse(addr).map(|p| p.info())

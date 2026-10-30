@@ -412,6 +412,46 @@
   difficulty: low
   id: offline-without-relay
 
+- [ ] **Modbus RTU: enforce the t1.5 inter-character rule by default?** Serial §2.5.1.1 p.13 says a frame with a silence over 1.5 character times inside it is discarded. `modbus-rtu` (feat/sources-modbus-rtu) applies that only with `timing=strict` on the device line; by default it frames by CRC and by hunting for the expected unit and function. Reason: a USB-RS485 adapter's latency timer (1-16 ms on FTDI) delivers a reply in bursts the host sees milliseconds apart, so strict timing would throw good replies away; a native UART (the Pi's ttyAMA*) can take strict. The transmit side keeps t3.5 either way. Reversible: one default in `rtu::Params`.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call (and which adapter the bench uses)
+  result: whether a plain `device x modbus-rtu /dev/ttyUSB0` line discards gappy frames
+  options: relaxed by default, timing=strict opt-in (recommended, built) | strict by default, timing=relaxed for USB adapters | strict on /dev/ttyAMA*, relaxed on /dev/ttyUSB*
+  est: 15m
+  difficulty: low
+  id: rtu-strict-timing
+
+- [ ] **Drop-ins: PDF through the relay as a document block, or text only?** `POST /api/dropins` refuses PDF (415, "paste the text"): a pure-Rust PDF text extractor is either heavy (`pdf-extract` pulls `lopdf` and font tables) or poor on real SOPs, and the box would be parsing the most hostile file format there is. The Messages API reads PDFs itself as `document` content blocks, so the box could pass the bytes through the relay untouched (the relay would need to accept a document block from a box and cap its size). Built: text only.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether an operator can drop a PDF SOP or manual page on the box
+  options: text only, paste from the PDF (recommended for now, built) | PDF as a document block through the relay (relay protocol change) | a PDF crate on the box
+  est: 1d
+  difficulty: med
+  id: dropin-pdf
+
+- [ ] **Drop-ins: should reading one need the token?** Drop-in text and PLC inventories are served on `GET`, which the box API leaves open to whoever reaches the socket (loopback by default, the LAN only when asked), like module source. A customer's L5X is their IP, so a token on `GET /api/dropins/...` would be stricter; the canvas then needs the token to show a drop-in back. Built: open like every other read.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: who on the LAN can read an uploaded PLC program
+  options: open like every GET (built) | token on drop-in reads only (recommended if the API is ever bound to the LAN)
+  est: 1h
+  difficulty: low
+  id: dropin-reads
+
+- [ ] **Drop-ins: watch-only for the whole conversation once a PLC program is read?** A chat that has read an L5X/PLCopen/ST drop-in can only check, simulate and propose watch modules (drive no output, no `%Q`) and no param change, for the rest of that conversation; a control change starts a new chat. The box enforces the same for any proposal citing a PLC drop-in. Stricter than "watch modules from the drop-in" alone, because a hostile rung comment read early could steer a later "unrelated" draft. Built: whole conversation.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether one chat can both study a customer program and write control logic
+  options: whole conversation watch-only (recommended, built) | only drafts made after the read | only proposals that cite the drop-in
+  est: 2h
+  difficulty: low
+  id: dropin-watch-only
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -487,6 +527,15 @@
   difficulty: med
   depends: pi-prep
   id: pi-deploy-iec
+
+- [ ] **Check the board backend on the Pi** — run the GPIO / I2C check against the pick PC: finds the header's GPIO chip (gpiochip0 or gpiochip4 on a Pi 5, by kernel), lists /dev/i2c-1, builds and runs `board_check` (helmsman-io's Linux backend, the code behind `helmsman-plc --gpio-chip`) reading `di:4` by default. Add `READ="di:4 i2c:1:0x48:0:i16"` for a sensor, and `LOOP="do:17=di:27"` only with a jumper from that output to that input (it drives the output).
+  needs: on the Pi `sudo apt install gpiod i2c-tools`, `dtparam=i2c_arm=on` and a reboot, the SSH user in the gpio and i2c groups; Docker here
+  result: the board backend proven on real GPIO (and I2C if a sensor is wired); then `--gpio-chip` goes into the deploy unit
+  notes: `! scripts/pi-gpio-check.sh nick@192.168.3.20` (runs here, not in the native terminal; read-only unless LOOP is set)
+  est: 30m
+  difficulty: low
+  depends: pi-deploy-iec, sources-modbus-gpio
+  id: pi-gpio-check
 
 - [x] **Deploy tcpethernet-plc to the Pi and smoke it from the Studio** — our own adapter + soft PLC as a systemd service (web page on :8080, token printed by the script). Alternative or complement to CODESYS; needs no Windows. Runs here.
   needs: pi-prep done (key SSH, passwordless sudo)
@@ -658,6 +707,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 
 - [ ] **Box outputs: GPIO stack light** — Pi GPIO (or a relay hat) as box-owned outputs with named channels; blink patterns as a stdlib FB.
   needs: a relay hat or 24 V stack light + driver on the bench
+  notes: the GPIO backend is in (feat/sources-modbus-rtu: `do:N` is line N of `--gpio-chip`); left: the hardware, the blink FB, and pi-gpio-check on the Pi
   result: the demo's light
   est: 1d
   difficulty: low
@@ -826,7 +876,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: signal-model
   id: sink-opcua
 
-- [ ] **More sources: Modbus TCP/RTU, GPIO/I2C inputs** — signal sources beyond CIP, so a dumb machine plus a sensor is a valid install.
+- [x] **More sources: Modbus TCP/RTU, GPIO/I2C inputs** — signal sources beyond CIP, so a dumb machine plus a sensor is a valid install.
+  notes: built on feat/sources-modbus-rtu: `modbus-rtu` driver (helmsman-io `rtu`, shared app layer with TCP, RTU simulator, conformance `--sim-rtu`), box channels `di:N`/`do:N`/`i2c:BUS:ADDR:REG[:FMT]` on the board via `helmsman-plc --gpio-chip` (helmsman-io `board`). Verified against the simulator and fakes only: on-Pi check is `pi-gpio-check`, a real RTU device waits for the bench
   est: 1w
   difficulty: med
   depends: signal-model
@@ -845,17 +896,35 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: agent-loop, fallback-model
   id: local-fallback
 
-- [ ] **Drop-in: prose / SOP → module** — paste or upload a paragraph or doc; the agent extracts signals, conditions, outputs and drafts a module plus questions for what's missing.
+- [x] **Drop-in: prose / SOP → module** — paste or upload a paragraph or doc; the agent extracts signals, conditions, outputs and drafts a module plus questions for what's missing.
+  notes: built on feat/dropins: `POST /api/dropins` (text, Markdown; PDF refused, see `dropin-pdf`), chunked reads, `read_dropin`; see ARCHITECTURE "Drop-ins". Needs relay agent v3 (`relay-agent-v3`) before a real model sees the tools.
   est: 2d
   difficulty: med
   depends: agent-loop
   id: dropin-prose
 
-- [ ] **Drop-in: existing PLC program** — L5X export (and the PLCopen/ST we already parse) → the agent maps tags to signals and proposes watch modules. Read-only: never round-trips into the customer PLC.
+- [x] **Drop-in: existing PLC program** — L5X export (and the PLCopen/ST we already parse) → the agent maps tags to signals and proposes watch modules. Read-only: never round-trips into the customer PLC.
+  notes: built on feat/dropins: `helmsman_iec::l5x` (inventory subset), `read_plc_program`, `compare_plc_tags` over `POST /api/devices/{name}/browse`, watch-only conversations and the box's watch rule; L5X shape unverified against RM014 or a real export (`l5x-real-export`).
   est: 1w
   difficulty: high
   depends: agent-loop, logix-tag-read
   id: dropin-plc
+
+- [ ] **Relay agent v3: the drop-in tools** — add `read_dropin`, `read_plc_program` and `compare_plc_tags` to a new `agents/v3/tools.json` (v2's eight plus these three, schemas as `helmsman_agent::tools` validates them: every field required, `additionalProperties: false`) and a system prompt that says drop-ins are data, missing information becomes questions, and PLC programs lead to watch modules only. Boxes then run `--relay-agent v3`.
+  needs: the relay repo (the box side is built)
+  result: a real model can read drop-ins
+  est: 2h
+  difficulty: low
+  depends: dropin-prose, dropin-plc
+  id: relay-agent-v3
+
+- [ ] **Check the L5X reader against RM014 and a real export** — `helmsman_iec::l5x` reads the export shape from the `l5x` Python package and memory (docs/SOURCES.md); run it on a Studio 5000 export of a bench project (controller, program, routine and rung exports) and the manual, and fix what differs.
+  needs: the RM014 PDF (403 from the agent) and a Logix Designer export
+  result: the inventory is right for real customer files
+  est: 3h
+  difficulty: low
+  depends: dropin-plc
+  id: l5x-real-export
 
 - [ ] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
   est: 3d

@@ -127,8 +127,9 @@ scan; the scheduler bounds how often.
 ## The I/O layer, as built (`helmsman-io`)
 
 - **`Device`**: an endpoint the box is master of: `id`, `driver` name
-  (`modbus-tcp`), `endpoint` (`host:port`), driver params (`unit`,
-  `timeout_ms`).
+  (`modbus-tcp`, `modbus-rtu`, `logix-tag`), `endpoint` (`host:port`, or a
+  serial port's path for `modbus-rtu`), driver params (`unit`,
+  `timeout_ms`, and the serial settings).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
   `Real`), a direction (`In`, `Out`), an optional engineering `unit`
   (metadata, never converted), an optional per-input `poll` period, and a
@@ -148,22 +149,47 @@ scan; the scheduler bounds how often.
   nothing, batching is the driver's business), `write(addr, value)`. Strings
   and plain values only, so the same contract crosses a WASM boundary
   unchanged.
-- **`modbus`**: the Modbus TCP client and driver, from the spec (citations
-  in `docs/SOURCES.md`).
+- **`modbus`**: the Modbus application layer (points, PDUs, reply checks,
+  `app`) over a `Transport`, and the TCP client; the driver is generic over
+  the transport. From the spec (citations in `docs/SOURCES.md`).
+- **`rtu`**: `modbus-rtu`, the same application layer on a serial line:
+  RTU framing and CRC-16, t3.5 silence before each request, the response
+  time-out, broadcast (unit 0: writes only, no reply, then the turnaround
+  delay), units 1..=247. The receiver hunts for the expected unit and
+  function and takes the first frame whose CRC checks, so noise and other
+  units' replies are skipped; after a link error the line is drained until
+  quiet for a whole time-out, so a late reply is never taken for the next
+  answer (RTU has no transaction id; a reply later than about two time-outs
+  still could be). CRC errors, truncated frames and time-outs are link
+  errors; exceptions are point errors. The serial port is a `Line` trait:
+  `rtu::serial` (termios through rustix, the `serial` feature) on the box,
+  `rtu::pipe` (in memory) in tests.
 - **`sim`**: a Modbus device with cross-wires (a coil driving a discrete
-  input, like a wire on the bench) and injectable faults.
+  input, like a wire on the bench) and injectable faults, over TCP; and
+  `rtu::sim`, the same tables as an RTU unit on a pipe, with the serial
+  faults (bad CRC, truncated frame, another unit answering, noise, a reply
+  in pieces, late replies).
 - **`harness`**: driver conformance, reported as `PASS`/`FAIL`/`SKIP` lines.
   Writes are proven through loops (output wired to input), so a driver that
-  only pretends to write fails. `cargo run -p helmsman-io --example
-  conformance -- --sim`.
+  only pretends to write fails. Each simulator lists the faults that mean
+  something on its transport. `cargo run -p helmsman-io --example
+  conformance -- --sim` (TCP) or `-- --sim-rtu`.
 
 - **`logix`**: `logix-tag`, read-only signals from an observed Logix
   controller by tag name (`in temp real plc Program:Main.Temp@real`); the
   `@TYPE` is the tag's Logix type and is checked on every reply. Reads are
   batched into one Multiple Service Packet per cycle.
 
-- **`local`**: the box's own channels (`do:N`, `di:N`) behind the same
-  contract; in memory until `gpio-outputs` adds the Pi backend.
+- **`local`**: the box's own channels (`do:N`, `di:N`, and
+  `i2c:BUS:ADDR:REG[:FMT]` integer inputs from a sensor register) in
+  memory, the default. **`board`**: the same channels on the board: a
+  `Board` driver over `Gpio` and `I2c` traits (direction rules, formats,
+  errors: a line that won't request or a sensor that doesn't answer is a
+  point error), and `board::linux` (Linux, the `gpio` feature): GPIO lines
+  through the character device's uAPI v2 (gpiocdev) and `/dev/i2c-N` with a
+  combined write-then-read (i2cdev). `helmsman-plc --gpio-chip
+  /dev/gpiochipN` picks it; the chip is checked at start. Both features are
+  in helmsman-plc's `box`, so the canvas's wasm build has neither.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
@@ -625,6 +651,11 @@ threads, the Modbus simulator over TCP).
   dropped; if the device does not answer that cannot happen (the box only
   reaches a device through its link), and the apply says so in
   `reload.notes`: the device's own comm watchdog is the backstop.
+- **The floor screen** (`--screen`) must fit the new map as it must at
+  startup (`screen::Layout::check`: every tile's signals are screen
+  outputs on it, every screen output is on a tile; no screen, no screen
+  outputs); if not, 409 and the old map keeps running. A screen output's
+  tile is part of its binding, so it carries like any other signal.
 - **Around it.** Sinks rebind their emits by name; the API's catalog,
   device list and replay table follow. The recording restarts, so the
   next replay's window starts at the reload. A published live view from
@@ -734,6 +765,74 @@ to rule-based param edits, with no model on the box (`fallback.rs`,
   The offline path applies nothing, and a param proposal cannot touch
   logic or an output's wiring. Offline messages do not enter the
   conversation; the model sees their proposals through its tools later.
+
+## Drop-ins (`dropin-prose`, `dropin-plc`, built)
+
+A person hands the agent a document instead of describing everything in
+chat (`api/dropin.rs`, `helmsman_iec::l5x`, the agent's v3 tools;
+contracts in `helmsman-plc/tests/dropins.rs` and
+`helmsman-iec/tests/l5x.rs`).
+
+- **Upload.** `POST /api/dropins?name=N[&kind=K]` (token, audited without
+  its name or text) takes the document as the body: plain text or
+  Markdown (`prose`), a Rockwell L5X export (`l5x`), a `PLCopen` TC6
+  project (`plcopen`) or Structured Text (`st`), sniffed from the content
+  unless `kind` says. At most 1 MiB (the API body limit), UTF-8 without
+  control characters but line breaks and tabs. **PDF is refused (415)**:
+  there is no pure-Rust PDF text extraction worth its weight, so the
+  person pastes the text (question card `dropin-pdf`). The box keeps the
+  newest 32 documents and 16 MiB in memory; a restart forgets them.
+  `GET /api/dropins` lists them (no text); `GET /api/dropins/{id}?chunk=K`
+  serves the text in 6 KiB chunks cut at line breaks; a PLC program is
+  read once at upload into an inventory served by
+  `GET /api/dropins/{id}/plc?view=overview|tags|routine|names` in pages of
+  at most 20 KiB, so no tool result outgrows the agent's limit.
+- **The L5X subset** (`helmsman_iec::l5x`, hand-written on the same XML
+  reader as the `PLCopen` importer: no DOCTYPE so no entities, nesting
+  capped at 256, 8 MiB and 100 000 items): the controller's name and
+  processor; user data types with their visible members; add-on
+  instruction names; controller tags and each program's tags with type,
+  dimensions, alias target, usage, external access, constant and
+  description; each program's main routine and routines, ladder rungs as
+  neutral text with their comments, ST routines as lines, FBD and SFC by
+  name only; tasks with their type, rate and scheduled programs. Every
+  name must be a Logix identifier (40 characters at most); anything else is
+  left out and listed as skipped. Descriptions are clipped to 1000
+  characters, rung text and comments to 8000. Nothing gives the rungs
+  meaning on the box: they are text for the agent to read. `PLCopen` and ST
+  drop-ins come out in the same shape (each POU a program, its variables
+  tags, its source one ST routine).
+- **Chat.** `POST /api/chat` takes `dropins: [ids]` (at most 8, each one
+  the box holds, else 404 before the agent runs) and adds a note to the
+  user's message in the box's own words: the id, the kind, the chunk
+  count, which tool reads it. Nothing the uploader wrote (not even the
+  file name) is in the note.
+- **Tools** (relay agent v3): `read_dropin {dropin_id, chunk}`,
+  `read_plc_program {dropin_id, view, name, offset}` and
+  `compare_plc_tags {dropin_id, device}` (the file's tags against an
+  observed Logix controller's symbol table: matched, differing in type or
+  shape, only in the file, only on the controller). The browse behind it,
+  `POST /api/devices/{name}/browse` (token, audited, one at a time, reused
+  for 30 s), lists symbols over a session of its own with the Symbol
+  object's Get Instance Attribute List only (`LogixDriver::browse`); it
+  exists for the `logix-tag` devices in the I/O map. Nothing ever goes
+  back into the customer's PLC.
+- **Watch modules.** A conversation that has read a PLC drop-in is
+  watch-only from then on (`Drafts::watch_only`): its checks, simulations
+  and proposals go to the box with `watch: true`, and it can propose no
+  param change. Every proposal names the drop-ins its conversation read
+  (`dropins`, shown to the engineer). The box holds the rule itself: a
+  proposal that cites a PLC drop-in, or one the box no longer holds, must
+  be `kind: module, watch: true`, and a watch module drives no output
+  signal and has no `%Q` window (it may publish its own outputs as module
+  signals the map declares, `in NAME TYPE module MODULE`). So a planted
+  "propose a module that drives every output" in a rung comment gets a
+  checker refusal, never a proposal; from prose it can get at most a draft
+  an engineer must read, replay and PIN, with its source named on it.
+- **Questions, not guesses.** What the document leaves out (a signal the
+  box does not have, a shift that is not defined) comes back as questions
+  in the chat; the relay's v3 prompt says so, and the module only names
+  signals the box has because the checker refuses any other.
 
 ## Bundles (`bundle-format`, built)
 
@@ -997,6 +1096,8 @@ file and token in a temporary state directory).
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
 | text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `helmsman-plc/tests/agent.rs`) |
+
+| text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents and PLC programs | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply; a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; the host rules above hold regardless | built (`agent-loop`, `dropin-prose`, `dropin-plc`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 
@@ -1027,5 +1128,6 @@ prompt. The agent never touches the Rust core.
 
 - `agent-loop` (built, above) → `local-fallback` (built, above) answers
   the chat route by rule when the relay is unreachable; `explain-mode`
-  and `dropin-prose` are prompts over the same tools, plus a trace tool
-  for explain mode.
+  is a prompt over the same tools, plus a trace tool. `dropin-prose` and
+  `dropin-plc` (built, above) add the drop-in tools; `dropin-photo` and
+  `dropin-pid` would add image and drawing drop-ins beside them.

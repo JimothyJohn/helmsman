@@ -98,14 +98,17 @@ pub trait Driver {
 /// Unknown driver, or the address does not parse.
 pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
     match driver {
-        crate::modbus::DRIVER => crate::modbus::Point::parse(addr).map(crate::modbus::Point::info),
+        crate::modbus::DRIVER | crate::rtu::DRIVER => {
+            crate::modbus::Point::parse(addr).map(crate::modbus::Point::info)
+        }
         crate::logix::DRIVER => crate::logix::Point::parse(addr).map(|p| p.info()),
         other => Err(Error::UnknownDriver(other.into())),
     }
 }
 
 /// Opens a driver for `device` by its driver name. Network drivers connect
-/// lazily, on the first read or write, and reconnect after an error.
+/// lazily, on the first read or write, and reconnect after an error; so
+/// does a serial port.
 ///
 /// # Errors
 /// Unknown driver, or a device param that does not parse.
@@ -115,6 +118,7 @@ pub fn open(device: &Device) -> Result<Box<dyn Driver + Send>, Error> {
             &device.endpoint,
             &device.params,
         )?)),
+        crate::rtu::DRIVER => crate::rtu::open(&device.endpoint, &device.params),
         crate::logix::DRIVER => Ok(Box::new(crate::logix::LogixDriver::from_params(
             &device.endpoint,
             &device.params,

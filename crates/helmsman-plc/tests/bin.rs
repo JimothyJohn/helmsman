@@ -376,7 +376,7 @@ out lamp  bool box do:0 safe=true
 
     let log = plc.finish();
     for want in [
-        "box channels (do:N, di:N) are in memory only",
+        "box channels (do:N, di:N, i2c:...) are in memory only",
         "device rio up",
         "device box up",
         "device rio down: io:",
@@ -443,6 +443,42 @@ fn a_bad_io_map_is_refused_before_the_adapter_starts() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2), "one --io-map only");
+}
+
+#[test]
+fn a_gpio_chip_that_is_not_there_is_refused_before_the_adapter_starts() {
+    let prog = program_file(
+        "gpio_ports",
+        "PROGRAM p VAR_INPUT start : BOOL; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR lamp := start; END_PROGRAM",
+    );
+    let map = text_file(
+        "gpio.iomap",
+        "in start bool box di:4\nout lamp bool box do:17\nin temp int box i2c:1:0x48:0:i16\n",
+    );
+    let out = plc()
+        .arg(&prog)
+        .arg("--io-map")
+        .arg(&map)
+        .args(["--gpio-chip", "/nonexistent/gpiochip9"])
+        .args(["--encap-port", "0", "--io-port", "0"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    assert!(err.contains("--gpio-chip"), "{err}");
+    if cfg!(not(target_os = "linux")) {
+        assert!(err.contains("Linux only"), "{err}");
+    }
+    assert!(
+        !err.contains("CIP on"),
+        "refused before going on the network: {err}"
+    );
+    let out = plc()
+        .arg(&prog)
+        .args(["--gpio-chip", "a", "--gpio-chip", "b"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "one --gpio-chip only");
 }
 
 #[test]

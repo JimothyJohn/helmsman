@@ -29,6 +29,14 @@ pub struct New {
     /// `io_map` and `calendar`: the whole new file.
     pub text: Option<String>,
     pub note: Option<String>,
+    /// A watch module: it reads and reports, and drives no output signal
+    /// and no `%Q` (refused otherwise).
+    #[serde(default)]
+    pub watch: Option<bool>,
+    /// The drop-ins the draft was made from (see `api::dropin`); recorded
+    /// on the proposal for the engineer.
+    #[serde(default)]
+    pub dropins: Option<Vec<u64>>,
 }
 
 /// Longest `note`, in characters.
@@ -84,8 +92,12 @@ pub fn check(
 ) -> Result<(Json, Option<ChangeSet>), Refusal> {
     let note = note(new.note.as_deref())?;
     let as_edit = |(p, f): (Json, Files)| (p, f.map(|(n, f)| Edit::Module(n, f)));
+    let watch = new.watch == Some(true);
     let (mut p, edit) = match new.kind.as_str() {
         "module" => as_edit(module(new, catalog, memory)?),
+        "param" | "io_map" | "calendar" if watch => {
+            return Err((400, json!({ "error": "watch is for module proposals" })));
+        }
         "param" => as_edit(param(new, catalog, running)?),
         "io_map" | "calendar" => file(new, catalog, running)?,
         _ => {
@@ -96,6 +108,8 @@ pub fn check(
         }
     };
     p["note"] = json!(note);
+    p["watch"] = json!(watch);
+    p["dropins"] = json!(new.dropins.clone().unwrap_or_default());
     let cs = if let (Some(base), Some(edit)) = (running, edit) {
         let mut cs = base.clone();
         match edit {
@@ -190,6 +204,27 @@ fn module(new: &New, catalog: &Catalog, memory: usize) -> Result<(Json, Files), 
         return Err(refuse("names signals the box does not have", &unknown));
     }
     let q = m.q.unwrap_or(crate::Window::new(0, 0));
+    if new.watch == Some(true) {
+        let mut drives: Vec<String> = m
+            .drives
+            .iter()
+            .filter(|n| {
+                catalog
+                    .signal(n)
+                    .is_none_or(|i| catalog.signals[i].dir == helmsman_io::Dir::Out)
+            })
+            .map(|n| format!("drives output signal {n}"))
+            .collect();
+        if q.len > 0 {
+            drives.push(format!("has a %Q window of {} bytes", q.len));
+        }
+        if !drives.is_empty() {
+            return Err(refuse(
+                "a watch module reads and reports; it drives no output",
+                &drives,
+            ));
+        }
+    }
     let files = ModuleFiles {
         manifest: text.clone(),
         source: source.clone(),

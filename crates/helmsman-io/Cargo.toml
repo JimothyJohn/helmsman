@@ -11,6 +11,24 @@ repository.workspace = true
 # No features: the box build reads observed controllers, it never writes them.
 helmsman-proto = { path = "../helmsman-proto" }
 
+# Serial ports for modbus-rtu: termios through rustix (safe Rust, no C;
+# already in the lock), unix only, behind `serial`.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", optional = true, default-features = false, features = ["std", "termios", "fs", "event"] }
+
+# The box's own GPIO lines and I2C buses, Linux only, behind `gpio`.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpiocdev = { version = "0.8", optional = true, default-features = false, features = ["uapi_v2"] }
+i2cdev = { version = "0.6", optional = true }
+
+[features]
+# None by default: the canvas's wasm build pulls this crate in through
+# helmsman-plc, and neither belongs there. helmsman-plc's `box` turns
+# both on.
+default = []
+serial = ["dep:rustix"]
+gpio = ["dep:gpiocdev", "dep:i2cdev"]
+
 [dev-dependencies]
 helmsman-adapter = { path = "../helmsman-adapter" }
 proptest = "1.12"

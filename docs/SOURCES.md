@@ -347,7 +347,9 @@ into the code.
   0x01-0x06 (§6.1-6.6 pp.11-19) with their quantity limits (2000 bits, 125
   registers) and coil encoding (0xFF00/0x0000, §6.5 p.17), LSB-first bit
   packing with zero padding (§6.1 p.11), 0x10 Write Multiple Registers (§6.12
-  p.30, 1-123 registers), exception replies and codes (§7 p.47).
+  p.30, 1-123 registers), exception replies and codes (§7 p.47). The same
+  application layer runs over RTU (`rtu.rs`), which also takes reply lengths
+  from it.
 - **How to cite:** `App §<x> p.<n>` in the module, after the module docs name
   the document once.
 
@@ -362,6 +364,69 @@ into the code.
   §3.1.3 p.5) and port 502 (p.5).
 - **How to cite:** `TCP §<x> p.<n>`.
 
+### Modbus Organization, MODBUS over Serial Line Specification and Implementation Guide V1.02 (2006-12-20, 44 pp)
+
+- **Where:** https://www.modbus.org/file/secure/modbusoverserial.pdf (linked
+  from https://www.modbus.org/modbus-specifications). Fetched 2026-10-30 with
+  WebFetch (curl gets 403), read with `pdftotext -layout`; sha256
+  `85a91e278b26d68c94a2f61a5300cd39c9e4c855034833f391abc6541fbdf7e5`. Not
+  vendored: Modbus Organization copyright.
+- **Leaned on by** `crates/helmsman-io/src/rtu.rs` and `rtu/sim.rs`:
+  - unicast and broadcast; broadcast requests are writes and get no reply
+    (§2.1 p.7); address 0 broadcast, 1-247 units, 248-255 reserved (§2.2 p.8);
+  - the master's response time-out, which keeps running past a reply from an
+    unexpected slave, and the turnaround delay after a broadcast, typically
+    100-200 ms (§2.4.1 pp.9-10); a slave sends nothing for a frame in error
+    or not addressed to it (§2.4.2 p.10);
+  - RTU characters of 11 bits: start, 8 data LSB first, parity, stop; even
+    parity the required default; no parity takes 2 stop bits (§2.5.1 p.12);
+  - the RTU frame (address, function, data, CRC low byte then high byte) and
+    its 256-byte maximum (§2.5.1 p.13);
+  - frames separated by at least t3.5 of silence, a frame with a silence over
+    t1.5 inside it discarded, and fixed 750 µs / 1.750 ms above 19200 baud
+    (§2.5.1.1 p.13);
+  - the CRC field and its byte order (§2.5.1.2 pp.14-15); the CRC procedure,
+    preset 0xFFFF and polynomial 0xA001 (§6.2.2 pp.39-40) and the worked
+    example (frame 02 07 gives register 0x1241, sent as 41 12, p.41);
+  - 9600 and 19200 baud required, 19200 the default (§3.2 p.20).
+- **Where we differ, and why:** the receiver does not apply the t1.5 rule
+  unless the device says `timing=strict`. A host behind a USB serial bridge
+  timestamps bytes in bursts several milliseconds apart (the bridge's latency
+  timer), which the rule would throw away; the CRC and the hunt for the
+  expected unit and function do the framing instead. The transmit side
+  always keeps t3.5 of silence before a frame.
+- **How to cite:** `Serial §<x> p.<n>`.
+
+### Linux GPIO character device, uAPI v2 (kernel documentation)
+
+- **Where:** https://docs.kernel.org/userspace-api/gpio/chardev.html, read
+  2026-10-30. GPL-2.0 kernel documentation; nothing copied.
+- **Leaned on by** `crates/helmsman-io/src/board/linux.rs` through the
+  `gpiocdev` crate: chips are `/dev/gpiochipX` ("Chip"), lines are requested
+  with `GPIO_V2_GET_LINE_IOCTL` and read and driven through the request's
+  file descriptor ("Line Request", "Get Line Values", "Set Line Values").
+  First added in Linux 5.10.
+- **How to cite:** the section name, e.g. `chardev "Line Request"`.
+
+### Linux I2C device interface, `/dev/i2c-N` (kernel documentation)
+
+- **Where:** https://docs.kernel.org/i2c/dev-interface.html, read 2026-10-30.
+- **Leaned on by** `board.rs` and `board/linux.rs` (through `i2cdev`):
+  adapters are named `i2c-%d`, all 256 minor numbers reserved for I2C
+  ("Implementing I2C device drivers in userspace"); `I2C_RDWR` does a combined
+  write-then-read "without stop in between", which plain read()/write()
+  cannot ("Full interface description", "C example"). The register read is
+  that combined transfer.
+- **How to cite:** the section name.
+
+### i2cdetect(8), i2c-tools (Debian trixie manual page)
+
+- **Where:** https://manpages.debian.org/trixie/i2c-tools/i2cdetect.8.en.html,
+  read 2026-10-30.
+- **Leaned on by** `board.rs`: the 7-bit addresses an `i2c:` point accepts,
+  0x08-0x77, are the range i2cdetect scans by default ("default: from 0x08 to
+  0x77"); the others it calls "non-regular addresses".
+
 ### Logix 5000 Controllers Data Access, programming manual (publication 1756-PM020)
 
 - **Where:** the controller vendor's literature library,
@@ -375,6 +440,27 @@ into the code.
   our own fixture. Once the PDF is in hand, check the reader against it
   and cite it per item as `PM020 p.<n>`; real-controller verification
   waits for a CompactLogix on the bench (TODO `logix-tag-read`).
+
+### Logix 5000 Controllers Import/Export, reference manual (publication 1756-RM014)
+
+- **Where:** the controller vendor's literature library,
+  `literature.rockwellautomation.com/idc/groups/literature/documents/rm/1756-rm014_-en-p.pdf`.
+  **Not read:** the fetch on 2026-10-30 returned HTTP 403, as for PM020.
+  It is the primary reference for the L5X format.
+- **Used instead:** the open-source `l5x` Python package
+  (https://github.com/jvalenzuela/l5x, `l5x/project.py` and `l5x/tag.py`,
+  read 2026-10-30) for `RSLogix5000Content` > `Controller` > `Programs` /
+  `Tags`, tag `Name`, `TagType` (`Alias`, `Consumed`), `DataType`,
+  `Dimensions`, `AliasFor` and `Data Format`. The rest of what
+  `helmsman_iec::l5x` reads (`DataTypes`/`Members`, `Routines`/`Routine
+  Type`, `RLLContent`/`Rung`/`Text`/`Comment`, `STContent`/`Line`,
+  `Tasks`/`ScheduledPrograms`, `Usage`, `ExternalAccess`) is the export
+  shape as the agent remembers Studio 5000 writing it, **not verified**
+  against the manual or a real export: the fixtures in
+  `helmsman-iec/tests/fixtures/l5x/` are hand-written in that shape.
+- **Status:** check the reader against RM014 and against a real Studio
+  5000 export once one is on the bench (TODO `l5x-real-export`), and cite
+  it per element as `RM014 p.<n>`.
 
 ## Test corpora (fetched, not vendored)
 
