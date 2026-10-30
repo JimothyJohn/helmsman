@@ -1000,6 +1000,43 @@ agent as ST; nothing here writes ST back).
   the last scan of every frame; scripted or hand-switched inputs. Pan,
   zoom, click a block for its source line, click an output for why.
 
+## Explain mode (`explain-mode`, built)
+
+Tap any block or output on the live diagram: the side panel says why it
+is in its state right now, in two layers.
+
+- **The box's own words** (`helmsman_diagram::phrase`, no model, works
+  offline and in the demo): the `explain` facts phrased by fixed
+  templates. Assigned (the line, what it read, the gates that let it
+  run, which change would stop that line), held (each skipped line and
+  the gate that closed it), TON/TOF/TP in time (`blink turns ON after
+  400 ms of its input being ON. Now blink.in is ON and blink.et is
+  340 ms of 400 ms so far`), counters against their preset, edges,
+  latches, FB arguments, CASE (the selector's value and the branch it
+  picked), loops. Units come from the signal model, TIME values read as
+  durations, and an input seen at one value over several scans says so
+  (`unchanged in the scans seen over the last 12 s`: sampled, so "seen").
+  It never claims more than the trace: every sentence lists the
+  variables it names and they are all in the explanation (a property
+  test over generated programs); "what would change it" only says which
+  line would stop or start running, never what a value would become.
+  The cited source lines are highlighted on the diagram.
+- **Ask why** (`POST /api/explain {module, path}`, token, audited): the
+  box explains its own newest trace of the module (not one the browser
+  sends), streams those sentences as an `explain` event, then runs the
+  agent loop on one user message: a fixed ask (no plant text in it) and
+  the facts, sentences and cited source lines inside the `<box-data>`
+  envelope. The loop runs with `tools::READ_ONLY` (list/read signals and
+  modules): a draft, check, simulate or propose call is answered "not
+  available in this mode", unrun, so an explanation stores nothing, not
+  even a proposal. One question per conversation, none kept; its own
+  budget (6 turns, 32k output tokens, 3 min); the chat's running slots.
+  `--relay-explain-agent V` asks the relay for an explain profile
+  (default: `--relay-agent`'s). `GET /api` says whether the box has an
+  agent; the canvas disables Ask why with its reason (box offline, no
+  relay, no token) and the first layer stays up. The canvas holds the
+  API token the operator typed in memory only.
+
 ## Proposal review (`proposal-ui`, built)
 
 The screen an engineer approves on: "Proposals" in the canvas top bar
@@ -1058,6 +1095,8 @@ file and token in a temporary state directory).
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
+| text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `helmsman-plc/tests/agent.rs`) |
+
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents and PLC programs | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply; a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; the host rules above hold regardless | built (`agent-loop`, `dropin-prose`, `dropin-plc`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
@@ -1082,6 +1121,11 @@ prompt. The agent never touches the Rust core.
 - `sim-replay` (built, above) → `box-api` serves the recorder's tap and
   runs the replay; `proposal-ui` charts it; `approval-policy` requires one
   for logic and output-affecting changes.
+- `agent-loop` (built, above) → `local-fallback` answers the chat route
+  when the relay is unreachable (today: an `error` event); `explain-mode`
+  (built, above) runs the same loop on read-only tools; `dropin-prose` is
+  a prompt over the full set.
+
 - `agent-loop` (built, above) → `local-fallback` (built, above) answers
   the chat route by rule when the relay is unreachable; `explain-mode`
   is a prompt over the same tools, plus a trace tool. `dropin-prose` and

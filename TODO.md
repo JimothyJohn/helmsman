@@ -372,6 +372,16 @@
   depends: map-reload
   id: screen-layout-snapshot
 
+- [ ] **How does the browser canvas hold the box API token?** Ask why (`POST /api/explain`) needs the token like every POST, and the canvas is served without one. Today the operator types it into the panel; it stays in page memory only (gone on reload, never in storage, never in a URL or log). That works on the bench but nobody on the floor should be handed the box-wide token, and proposal-ui's apply has the same need. Options: keep typing it (built, reversible); a narrower per-device "viewer" token that can only reach `/api/explain` and `/api/chat`; or the box sets an HttpOnly session cookie after a role PIN (that is `local-accounts`' shape). Until then Ask why is an engineer feature in practice; the first layer (no model) needs nothing.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether operators can ask the agent from a tablet without the box-wide token
+  options: type the token, memory only (recommended for now, built) | per-device token scoped to explain/chat | PIN login with an HttpOnly session cookie
+  est: 1d
+  difficulty: med
+  id: canvas-token
+
 - [ ] **Param units: a `unit=` key on manifest param lines?** The offline chat (feat/local-fallback) checks a typed unit ("80 %", "5 s") against the param's, but params had no unit; signals did. I added an optional `unit=U` to `param` lines for int/real (same rule as a signal's unit: 1..=16 printable ASCII, no `#`), parsed, rendered, served in the API's manifest and param-proposal JSON, metadata only, never converted. A unit change counts as a manifest change, so it is logic tier, not param. Without it the offline chat would accept bare numbers only. The agent's `draft_module` does not write units yet (the relay's tool schema would need a `unit` field).
   asked: 2026-10-30
   by: claude-agent
@@ -873,11 +883,12 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: signal-model
   id: sources-modbus-gpio
 
-- [ ] **Explain mode** — tap any block or output in the canvas; the agent explains in floor language why it's in this state right now, using trace-tap data.
+- [x] **Explain mode** — tap any block or output in the canvas; the agent explains in floor language why it's in this state right now, using trace-tap data.
   est: 2d
   difficulty: med
   depends: st-graph-view, agent-loop
   id: explain-mode
+  notes: done 2026-10-30 (feat/explain-mode). Layer 1: helmsman_diagram::phrase (templates, offline). Layer 2: POST /api/explain on READ_ONLY tools, --relay-explain-agent. The relay needs an explain profile (prompt + the four read tools); see docs/ARCHITECTURE.md "Explain mode".
 
 - [x] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
   est: 3d
