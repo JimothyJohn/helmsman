@@ -287,6 +287,64 @@ load.
   calendar's signals are missing, so modules reading them are held, and
   driven outputs go to their safe values.
 
+## Sim replay (`sim-replay`, built)
+
+The evidence an engineer approves an output change on: what a proposed
+module would have done over the last few minutes, beside what the running
+one did. `record.rs` and `replay.rs` in `helmsman-plc`; contract in
+`tests/replay.rs`.
+
+- **Recorder** (`record::Recorder`). Just before each tick the scheduler
+  calls `observe(now, &table)`: every signal a module reads that the
+  runtime does not compute (device and box inputs, the calendar's
+  signals, outputs the calendar drives) is compared with the last tick
+  and each change, value or missing, stamped with the tick's `now`. So
+  the recording is exactly what the modules scanned against, on the
+  runtime's clock; the links are untouched. Module outputs are not
+  recorded: replay recomputes them.
+- **Bounded**: `RecordConfig { window, max_bytes }` (default 10 min,
+  4 MiB, about 100 000 changes), allocated up front, never grown.
+  Evicted changes fold into a per-signal base value, so a recording is
+  exact from its `start` however much was evicted.
+- **Never blocks the scan**: the ring is behind a mutex the scheduler
+  only `try_lock`s; changes it cannot hand over wait in a preallocated
+  backlog (part of the same byte budget). A reader that holds the ring
+  past the backlog restarts the recording from the scheduler's view:
+  history is lost, never falsified. Measured
+  (`examples/record_bench.rs`, release, M-series Mac): `observe` costs
+  about 65 ns with 16 signals, 190 ns with 64, 700 ns with 256 when
+  nothing changed (2.4 µs when all 256 did), against a 10 ms scan; a
+  snapshot of a full 4 MiB ring holds it about 0.35 ms.
+- **Recording** (`record::Recording`): channels, base values at
+  `start`, changes to `end`. Exported as versioned text
+  (`helmsman-recording 1`, one `signal` / `base` / `at` line each,
+  reals in shortest round-trip form so it reads back bit for bit),
+  hand-parsed, 64 MiB cap, every problem reported with its line. This
+  is what a proposal carries and what tests use as fixtures.
+- **Replay** (`replay::replay(table, i_len, q_len, modules, &rec)`):
+  a fresh `Runtime` (programs cold-restarted) over a copy of the table,
+  fed the recorded values and ticked at its own deadlines from `start`
+  to `end`. It *is* the live runtime, so hold-on-missing, faults and
+  scan periods behave as live. Refused: a recorded signal whose type or
+  role the map changed (`Changed`), a module reading a signal the
+  recording lacks (`NotRecorded`), modules that don't fit (`Config`),
+  over 5 000 000 scans (`TooLong`).
+- **Output**: a `Timeline`: per driven signal a `Track` (the value after
+  each tick at which it changed: a step function, plus `rises()` and
+  `on_time()`), per module its `Running` / `Held` / `Faulted` spans, and
+  each fault with its time. `propose(.., running, proposal, &rec)`
+  replays the running set and the set with the proposal swapped in (or
+  added) and `compare`s them per signal: `extra_rises()` is "would have
+  fired 3 more times".
+- **Faithfulness**: replaying the running modules over a recording taken
+  from the runtime's start reproduces the live outputs exactly when live
+  scans were on time (property-tested against the Modbus simulator over
+  TCP); a late live scan saw a slightly later `now`. A rolling window
+  starts timers and counters cold at its `start`. The CIP scanner's `%I`
+  image is not recorded and replays as zero. A proposal faster than every
+  running module sees data at the running tick rate
+  (`replay-granularity` asks).
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -317,5 +375,6 @@ prompt. The agent never touches the Rust core.
   rendered on the ST diagram, served by the box.
 - `snapshots`: each applied change set (modules, params, bindings) is an
   immutable, content-addressed record in SQLite; rollback is one call.
-- `sim-replay`: a RAM ring buffer of signal values that a proposed module is
-  replayed against before approval.
+- `sim-replay` (built, above) → `box-api` serves the recorder's tap and
+  runs `propose`; `proposal-ui` charts the `Timeline`; `approval-policy`
+  requires one for anything that can move an output.

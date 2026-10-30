@@ -133,6 +133,10 @@ fn run(src: &str, period: u64, rec: &Recording) -> Timeline {
     replay(&table(), 0, 0, vec![module("line", period, src)], rec).unwrap()
 }
 
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "a present bool, as tracks and recordings hold them"
+)]
 fn on(b: bool) -> Option<Value> {
     Some(Value::Bool(b))
 }
@@ -355,13 +359,6 @@ END_PROGRAM";
 
 #[test]
 fn a_recording_from_a_map_whose_types_changed_is_refused() {
-    let mut m = io_map("127.0.0.1:1");
-    m.signals[1].ty = Ty::Real; // level was INT when recorded
-    m.signals[1].binding = Binding::Device {
-        device: "rio".into(),
-        point: "hr:5:f32".into(),
-    };
-    let t = SignalTable::new(&m, &BTreeMap::new()).unwrap();
     const REAL: &str = "
 PROGRAM line
 VAR_INPUT start : BOOL; level : REAL; END_VAR
@@ -369,6 +366,13 @@ VAR_OUTPUT motor : BOOL; lamp : BOOL; END_VAR
   motor := start;
   lamp := level > 10.0;
 END_PROGRAM";
+    let mut m = io_map("127.0.0.1:1");
+    m.signals[1].ty = Ty::Real; // level was INT when recorded
+    m.signals[1].binding = Binding::Device {
+        device: "rio".into(),
+        point: "hr:5:f32".into(),
+    };
+    let t = SignalTable::new(&m, &BTreeMap::new()).unwrap();
     let rec = recording(100, Vec::new());
     let err = replay(&t, 0, 0, vec![module("line", 10, REAL)], &rec).unwrap_err();
     let ReplayError::Changed(m) = &err else {
@@ -402,16 +406,16 @@ fn a_signal_that_was_an_input_and_is_now_an_output_is_refused() {
 
 #[test]
 fn a_module_reading_a_signal_the_recording_lacks_is_refused() {
-    // A new sensor added to the map after the recording was made.
-    let mut m = io_map("127.0.0.1:1");
-    m.signals.push(sig("jam", Ty::Bool, Dir::In, "di:7"));
-    let t = SignalTable::new(&m, &BTreeMap::new()).unwrap();
     const JAM: &str = "
 PROGRAM line
 VAR_INPUT jam : BOOL; END_VAR
 VAR_OUTPUT motor : BOOL; END_VAR
   motor := NOT jam;
 END_PROGRAM";
+    // A new sensor added to the map after the recording was made.
+    let mut m = io_map("127.0.0.1:1");
+    m.signals.push(sig("jam", Ty::Bool, Dir::In, "di:7"));
+    let t = SignalTable::new(&m, &BTreeMap::new()).unwrap();
     let rec = recording(100, Vec::new());
     let err = replay(&t, 0, 0, vec![module("line", 10, JAM)], &rec).unwrap_err();
     assert!(
@@ -576,8 +580,8 @@ fn a_reader_holding_the_recording_never_blocks_the_scan() {
 
 #[test]
 fn readers_snapshotting_in_parallel_always_see_a_consistent_recording() {
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     let cfg = RecordConfig {
         window: Duration::from_secs(3600),
         max_bytes: 64 << 10,
@@ -594,7 +598,15 @@ fn readers_snapshotting_in_parallel_always_see_a_consistent_recording() {
                 while !stop.load(Ordering::Relaxed) {
                     let rec = tap.snapshot();
                     // Every snapshot is a valid recording: sorted, in span.
-                    Recording::new(rec.wall_ms, rec.start, rec.end, rec.channels, rec.base, rec.events).unwrap();
+                    Recording::new(
+                        rec.wall_ms,
+                        rec.start,
+                        rec.end,
+                        rec.channels,
+                        rec.base,
+                        rec.events,
+                    )
+                    .unwrap();
                     n += 1;
                 }
                 n
@@ -649,6 +661,12 @@ fn a_backlog_past_its_bound_restarts_the_recording_consistently() {
 
 #[test]
 fn the_calendar_is_recorded_and_its_driven_outputs_replay() {
+    const GATED: &str = "
+PROGRAM line
+VAR_INPUT start : BOOL; in_shift : BOOL; END_VAR
+VAR_OUTPUT motor : BOOL; END_VAR
+  motor := in_shift;
+END_PROGRAM";
     let mut t = table();
     let cal = load("zone UTC\nshift 1 mon-sun 06:00-14:00\ndrive lamp in_shift\n").unwrap();
     let src = Source::attach(cal, &mut t).unwrap();
@@ -674,12 +692,6 @@ fn the_calendar_is_recorded_and_its_driven_outputs_replay() {
     );
 
     // A module gated on in_shift replays against the recorded calendar.
-    const GATED: &str = "
-PROGRAM line
-VAR_INPUT start : BOOL; in_shift : BOOL; END_VAR
-VAR_OUTPUT motor : BOOL; END_VAR
-  motor := in_shift;
-END_PROGRAM";
     let tl = replay(&t, 0, 0, vec![module("line", 1000, GATED)], &rec).unwrap();
     // start was never read from a device here, so the module is held
     // throughout: replay says so rather than inventing a value.

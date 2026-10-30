@@ -204,20 +204,9 @@ impl fmt::Display for ReplayError {
 
 impl std::error::Error for ReplayError {}
 
-/// Replays `modules` over `rec` against images of `i_len` and `q_len`
-/// bytes and a copy of `table` (the live one, calendar attached; its
-/// current values are ignored). See the [module docs](self).
-///
-/// # Errors
-/// [`ReplayError`]: the map changed, a module reads an unrecorded signal,
-/// the modules do not fit, or the replay is too long.
-pub fn replay(
-    table: &SignalTable,
-    i_len: usize,
-    q_len: usize,
-    mut modules: Vec<Module>,
-    rec: &Recording,
-) -> Result<Timeline, ReplayError> {
+/// Each recorded channel's table index and kind (`None`: not in the map
+/// any more, ignored), or the channels whose type or role changed.
+fn channel_slots(table: &SignalTable, rec: &Recording) -> Result<Vec<Option<(usize, Kind)>>, ReplayError> {
     let mut mismatches = Vec::new();
     let mut slots = Vec::with_capacity(rec.channels.len());
     for c in &rec.channels {
@@ -238,14 +227,27 @@ pub fn replay(
             slots.push(None);
         }
     }
-    if !mismatches.is_empty() {
-        return Err(ReplayError::Changed(mismatches));
+    if mismatches.is_empty() {
+        Ok(slots)
+    } else {
+        Err(ReplayError::Changed(mismatches))
     }
+}
+
+/// Cold-restarts each module and returns the output signals each drives,
+/// `(module, signal index)`; refuses a module reading an unrecorded
+/// signal, and a replay over [`MAX_TICKS`].
+fn check_modules(
+    table: &SignalTable,
+    modules: &mut [Module],
+    slots: &[Option<(usize, Kind)>],
+    rec: &Recording,
+) -> Result<Vec<(String, usize)>, ReplayError> {
     let recorded = |i: usize| slots.iter().flatten().any(|(j, _)| *j == i);
     let mut drives = Vec::new();
-    let mut span = 0u64;
+    let mut ticks = 0u64;
     let window = rec.end.saturating_sub(rec.start).as_nanos();
-    for m in &mut modules {
+    for m in modules {
         m.program.reset();
         for p in m.program.ports() {
             if m.params.iter().any(|(q, _)| q.eq_ignore_ascii_case(&p.name)) {
@@ -266,11 +268,30 @@ pub fn replay(
             }
         }
         let period = m.period.as_nanos().max(1);
-        span = span.saturating_add(u64::try_from(window / period + 1).unwrap_or(u64::MAX));
+        ticks = ticks.saturating_add(u64::try_from(window / period + 1).unwrap_or(u64::MAX));
     }
-    if span > MAX_TICKS {
-        return Err(ReplayError::TooLong { ticks: span });
+    if ticks > MAX_TICKS {
+        return Err(ReplayError::TooLong { ticks });
     }
+    Ok(drives)
+}
+
+/// Replays `modules` over `rec` against images of `i_len` and `q_len`
+/// bytes and a copy of `table` (the live one, calendar attached; its
+/// current values are ignored). See the [module docs](self).
+///
+/// # Errors
+/// [`ReplayError`]: the map changed, a module reads an unrecorded signal,
+/// the modules do not fit, or the replay is too long.
+pub fn replay(
+    table: &SignalTable,
+    i_len: usize,
+    q_len: usize,
+    mut modules: Vec<Module>,
+    rec: &Recording,
+) -> Result<Timeline, ReplayError> {
+    let slots = channel_slots(table, rec)?;
+    let drives = check_modules(table, &mut modules, &slots, rec)?;
     let names: Vec<String> = modules.iter().map(|m| m.name.clone()).collect();
     let mut t = table.clone();
     t.reset();

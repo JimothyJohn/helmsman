@@ -23,6 +23,7 @@ use helmsman_io::local::Channels;
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
 use helmsman_plc::manifest::ModuleDir;
+use helmsman_plc::record::{RecordConfig, Recorder};
 use helmsman_plc::spec::{Defaults, Spec};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
@@ -403,6 +404,12 @@ fn run(o: &Opts) -> Result<(), String> {
     start_io(io_links, &table);
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
+    // What the modules saw, for sim replay (the box API serves its tap).
+    let mut recorder = Recorder::new(
+        &table.lock().unwrap_or_else(PoisonError::into_inner),
+        RecordConfig::default(),
+        wall().and_then(|s| s.checked_mul(1000)),
+    );
     let start = Instant::now();
     loop {
         {
@@ -421,7 +428,9 @@ fn run(o: &Opts) -> Result<(), String> {
             if let Some(c) = &cal {
                 c.update(wall(), &mut t);
             }
-            rt.tick_with(start.elapsed(), &inputs, &mut t)
+            let now = start.elapsed();
+            recorder.observe(now, &t);
+            rt.tick_with(now, &inputs, &mut t)
         };
         for (s, was) in specs.iter().zip(held) {
             match (was, rt.status(&s.name)) {
