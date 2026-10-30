@@ -6,6 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use eframe::egui::{self, RichText};
 use helmsman_graph::{BlockId, CmpOp, Kind, MathOp, Node, NodeId, Project, Scope, Sim, Ty};
 
+use crate::andon::AndonView;
 use crate::box_view::BoxView;
 use crate::canvas::{Interaction, View};
 use crate::example;
@@ -49,6 +50,8 @@ pub struct App {
     pub st: Option<StView>,
     /// The box's, likewise.
     pub boxv: Option<BoxView>,
+    /// The floor screen, likewise.
+    pub andon: Option<AndonView>,
 }
 
 /// Where the live ST view's scans come from.
@@ -69,6 +72,8 @@ pub enum Mode {
     Lab,
     /// A module's ST as a live, read-only diagram.
     Live,
+    /// The floor screen: the box's andon tiles, full screen (`?andon`).
+    Andon,
 }
 
 impl App {
@@ -91,8 +96,16 @@ impl App {
         };
         #[cfg(not(target_arch = "wasm32"))]
         let source = Source::Demo;
+        #[cfg(target_arch = "wasm32")]
+        let mode = if crate::web::wants("andon") {
+            Mode::Andon
+        } else {
+            Mode::Live
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let mode = Mode::Live;
         Self {
-            mode: Mode::Live,
+            mode,
             source,
             ..Self::with_project(project)
         }
@@ -121,6 +134,7 @@ impl App {
             source: Source::Demo,
             st: None,
             boxv: None,
+            andon: None,
         }
     }
 
@@ -1023,6 +1037,10 @@ impl App {
     /// One frame of the whole window. Split from [`eframe::App::ui`] so tests
     /// can drive it without a window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        if self.mode == Mode::Andon {
+            self.andon.get_or_insert_with(AndonView::new).show(ui);
+            return;
+        }
         if self.mode == Mode::Live {
             self.show_live(ui);
             return;

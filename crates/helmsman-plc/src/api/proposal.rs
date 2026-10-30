@@ -1,5 +1,6 @@
 //! Checking a proposal before it is stored. A proposal is a draft: a new
-//! or replacement module (manifest + ST), or one param's new value. It is
+//! or replacement module (manifest + ST), one param's new value, or a new
+//! I/O map or calendar file (applied as a reload; `map-reload`). It is
 //! checked here exactly as the runtime would check it at load (manifest
 //! parse, compile against its windows, manifest against the program's
 //! ports, signals known), so the agent iterates on the same errors a
@@ -25,6 +26,8 @@ pub struct New {
     pub module: Option<String>,
     pub param: Option<String>,
     pub value: Option<Json>,
+    /// `io_map` and `calendar`: the whole new file.
+    pub text: Option<String>,
     pub note: Option<String>,
     /// A watch module: it reads and reports, and drives no output signal
     /// and no `%Q` (refused otherwise).
@@ -61,6 +64,13 @@ fn note(n: Option<&str>) -> Result<Option<String>, Refusal> {
     }
 }
 
+/// What a proposal changes in the running change set.
+enum Edit {
+    Module(String, ModuleFiles),
+    IoMap(String),
+    Calendar(String),
+}
+
 /// A module's files as a proposal would leave them.
 type Files = Option<(String, ModuleFiles)>;
 
@@ -81,19 +91,34 @@ pub fn check(
     running: Option<&ChangeSet>,
 ) -> Result<(Json, Option<ChangeSet>), Refusal> {
     let note = note(new.note.as_deref())?;
+    let as_edit = |(p, f): (Json, Files)| (p, f.map(|(n, f)| Edit::Module(n, f)));
     let watch = new.watch == Some(true);
-    let (mut p, files) = match new.kind.as_str() {
-        "module" => module(new, catalog, memory)?,
-        "param" if watch => return Err((400, json!({ "error": "watch is for module proposals" }))),
-        "param" => param(new, catalog, running)?,
-        _ => return Err((400, json!({ "error": "kind must be \"module\" or \"param\"" }))),
+    let (mut p, edit) = match new.kind.as_str() {
+        "module" => as_edit(module(new, catalog, memory)?),
+        "param" | "io_map" | "calendar" if watch => {
+            return Err((400, json!({ "error": "watch is for module proposals" })));
+        }
+        "param" => as_edit(param(new, catalog, running)?),
+        "io_map" | "calendar" => file(new, catalog, running)?,
+        _ => {
+            return Err((
+                400,
+                json!({ "error": "kind must be \"module\", \"param\", \"io_map\" or \"calendar\"" }),
+            ));
+        }
     };
     p["note"] = json!(note);
     p["watch"] = json!(watch);
     p["dropins"] = json!(new.dropins.clone().unwrap_or_default());
-    let cs = if let (Some(base), Some((name, f))) = (running, files) {
+    let cs = if let (Some(base), Some(edit)) = (running, edit) {
         let mut cs = base.clone();
-        cs.modules.insert(name, f);
+        match edit {
+            Edit::Module(name, f) => {
+                cs.modules.insert(name, f);
+            }
+            Edit::IoMap(text) => cs.io_map = Some(text),
+            Edit::Calendar(text) => cs.calendar = Some(text),
+        }
         cs.validate()
             .map_err(|errs| refuse("the change set would not be stored", &errs))?;
         p["base"] = json!(base.id().to_string());
@@ -111,6 +136,7 @@ pub fn check(
 
 fn only(new: &New, allowed: &[&str]) -> Result<(), Refusal> {
     let given = [
+        ("text", new.text.is_some()),
         ("manifest", new.manifest.is_some()),
         ("source", new.source.is_some()),
         ("module", new.module.is_some()),
@@ -266,7 +292,59 @@ fn param(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(J
         "to": render::value(Some(to)),
         "min": render::value(p.range.map(|r| r.0)),
         "max": render::value(p.range.map(|r| r.1)),
+        "unit": p.unit,
         "touches_outputs": !m.drives.is_empty() || m.q.is_some_and(|w| w.len > 0),
     });
     Ok((j, files))
+}
+
+/// A new I/O map or calendar file: it must load beside the running other
+/// one ([`crate::layout::Layout::build`], as the box loads it), and every
+/// signal a running module's manifest reads or drives must still be there.
+/// The full check (every module bound to the new table) is the apply's.
+fn file(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(Json, Option<Edit>), Refusal> {
+    only(new, &["text"])?;
+    let Some(text) = &new.text else {
+        return Err((
+            400,
+            json!({ "error": "an io_map or calendar proposal needs text" }),
+        ));
+    };
+    let cap = usize::try_from(manifest::MAX_FILE).unwrap_or(usize::MAX);
+    if text.len() > cap {
+        return Err(refuse("file larger than a change set may hold", &[]));
+    }
+    let Some(base) = running else {
+        return Err(refuse(
+            "this box does not run a change set (module directories or a store), so its map and calendar cannot be proposed",
+            &[],
+        ));
+    };
+    let map = base.io_map.as_deref();
+    let cal = base.calendar.as_deref();
+    let (map, cal, edit) = if new.kind == "io_map" {
+        (Some(text.as_str()), cal, Edit::IoMap(text.clone()))
+    } else {
+        (map, Some(text.as_str()), Edit::Calendar(text.clone()))
+    };
+    let layout = crate::layout::Layout::build(map, cal).map_err(|errs| refuse("does not load", &errs))?;
+    let missing: Vec<String> = catalog
+        .modules
+        .iter()
+        .filter_map(|m| m.manifest.as_ref().map(|man| (&m.name, man)))
+        .flat_map(|(name, man)| man.reads.iter().chain(&man.drives).map(move |s| (name, s)))
+        .filter(|(_, s)| layout.table.index(s).is_none())
+        .map(|(name, s)| format!("module {name} names {s}, which this would remove"))
+        .collect();
+    if !missing.is_empty() {
+        return Err(refuse("running modules name signals this would remove", &missing));
+    }
+    let j = json!({
+        "kind": new.kind,
+        "touches_outputs": true,
+        "signals": layout.table.len(),
+        "devices": layout.map.as_ref().map_or(0, |m| m.devices.len()),
+        "text": text,
+    });
+    Ok((j, Some(edit)))
 }

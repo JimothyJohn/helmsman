@@ -13,7 +13,7 @@
 //! GET  /api/devices                       device links: up, down (why), unknown
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
-//! POST /api/proposals                     token: a module draft or a param change, checked, stored as a draft
+//! POST /api/proposals                     token: a module draft, a param change, or a new io_map / calendar file, checked, stored as a draft
 //! POST /api/proposals/check               token: check a draft as POST /api/proposals would; nothing stored
 //! POST /api/proposals/replay              token: sim replay of a draft {draft, minutes}; nothing stored, not evidence
 //! POST /api/proposals/{id}/replay         token: sim replay of the draft against what runs; evidence for apply
@@ -31,6 +31,8 @@
 //! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
+//! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
+//! GET  /api/screen                        the floor screen's layout (with --screen FILE; see [`crate::screen`])
 //! POST /api/dropins?name=N&kind=K         token: a document for the agent, stored in memory (see [`dropin`])
 //! GET  /api/dropins                       the drop-ins held
 //! GET  /api/dropins/{id}?chunk=K          one chunk of a drop-in's text
@@ -166,6 +168,47 @@ pub struct Shared {
     pub chat: Option<chat::Setup>,
 }
 
+/// What a box may serve besides its state; none of it changes while the
+/// box runs.
+#[derive(Default)]
+pub struct Extras {
+    /// The canvas, at `/`.
+    pub ui: Option<ui::Ui>,
+    /// The floor screen's layout, at `/api/screen`.
+    pub screen: Option<Screen>,
+    /// Publishers whose bundles import (`POST /api/bundles`); `None`:
+    /// import answers 501.
+    pub trust: Option<TrustStore>,
+}
+
+/// A floor screen layout as loaded: the file, byte for byte, and what it
+/// parsed to (already checked against the I/O map).
+#[derive(Debug, Clone)]
+pub struct Screen {
+    pub source: String,
+    pub layout: crate::screen::Layout,
+}
+
+/// `GET /api/screen`: the layout, its source (the canvas parses that with
+/// the same parser) and the fixed palette.
+fn screen_json(s: &Screen) -> Json {
+    let hex = |c: [u8; 3]| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+    let palette: serde_json::Map<String, Json> = crate::screen::Colour::ALL
+        .iter()
+        .map(|c| {
+            (
+                c.name().to_string(),
+                json!({ "fill": hex(c.fill()), "ink": hex(c.ink()) }),
+            )
+        })
+        .collect();
+    json!({
+        "source": s.source,
+        "layout": serde_json::to_value(&s.layout).unwrap_or(Json::Null),
+        "palette": palette,
+    })
+}
+
 /// A traced scan's number and its JSON.
 type Rendered = (u64, Arc<Json>);
 
@@ -180,6 +223,9 @@ struct Ctx {
     running: Mutex<Option<ChangeSet>>,
     approval: Option<Approval>,
     replays: Replays,
+    /// The table and recording the box runs, for replays; replaced by a
+    /// reload. `None` without an approval path.
+    shape: Mutex<Option<approve::Shape>>,
     /// Held for the whole of an apply or rollback.
     applying: Mutex<()>,
     /// Per module name: the newest traced scan, rendered, and its scan
@@ -189,6 +235,8 @@ struct Ctx {
     streams: AtomicUsize,
     chat: Option<chat::Chat>,
     ui: Option<ui::Ui>,
+    /// `GET /api/screen`'s body, rendered once.
+    screen: Option<Json>,
     /// Publishers whose bundles import; `None`: import answers 501.
     trust: Option<TrustStore>,
     /// Drop-in documents (see [`dropin`]).
@@ -217,6 +265,31 @@ impl Ctx {
         *self.running.lock().unwrap_or_else(PoisonError::into_inner) = Some(cs);
         *self.catalog.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(catalog);
         self.traces.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+
+    fn shape(&self) -> approve::Shape {
+        self.shape
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| approve::Shape {
+                table: crate::SignalTable::default(),
+                record: None,
+            })
+    }
+
+    fn set_shape(&self, shape: approve::Shape) {
+        *self.shape.lock().unwrap_or_else(PoisonError::into_inner) = Some(shape);
+    }
+
+    /// A reload started and ended device links: the device list follows.
+    fn links_changed(&self, links: &crate::link::Finished) {
+        for name in &links.removed {
+            self.box_.devices.remove(name);
+        }
+        for name in &links.added {
+            self.box_.devices.add(name);
+        }
     }
 }
 
@@ -250,6 +323,8 @@ pub struct Api {
     addr: SocketAddr,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// The chat's relay watcher ([`chat::Chat::watch`]).
+    watcher: Option<JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for Api {
@@ -306,10 +381,27 @@ impl Api {
     /// The bind fails.
     pub fn start_with_trust(
         cfg: Config,
-        mut shared: Shared,
+        shared: Shared,
         ui: Option<ui::Ui>,
         trust: Option<TrustStore>,
     ) -> io::Result<Self> {
+        Self::start_with(
+            cfg,
+            shared,
+            Extras {
+                ui,
+                screen: None,
+                trust,
+            },
+        )
+    }
+
+    /// [`Api::start`], with what a box may serve besides its state.
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_with(cfg: Config, mut shared: Shared, extras: Extras) -> io::Result<Self> {
+        let Extras { ui, screen, trust } = extras;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -322,6 +414,10 @@ impl Api {
             chat,
             catalog: RwLock::new(Arc::new(std::mem::take(&mut shared.catalog))),
             running: Mutex::new(shared.running.take()),
+            shape: Mutex::new(shared.approval.as_ref().map(|a| approve::Shape {
+                table: a.plant.table.clone(),
+                record: a.plant.record.clone(),
+            })),
             approval: shared.approval.take(),
             replays: Replays::new(1000),
             applying: Mutex::new(()),
@@ -331,10 +427,12 @@ impl Api {
             stop: Arc::clone(&stop),
             streams: AtomicUsize::new(0),
             ui,
+            screen: screen.map(|s| screen_json(&s)),
             trust,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
         });
+        let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
             .name("api".into())
             .spawn(move || accept(&listener, &ctx))?;
@@ -342,6 +440,7 @@ impl Api {
             addr,
             stop,
             thread: Some(thread),
+            watcher,
         })
     }
 
@@ -355,6 +454,9 @@ impl Drop for Api {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+        if let Some(t) = self.watcher.take() {
             let _ = t.join();
         }
     }
@@ -443,7 +545,7 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
         }
         Reply::Chat(taken) => {
             if let Some(chat) = &ctx.chat {
-                chat.serve(&mut stream, taken);
+                chat.serve(&mut stream, taken, &ctx.catalog());
             }
         }
         Reply::File(asset) => {
@@ -513,6 +615,20 @@ fn handle(req: &Request, ctx: &Ctx) -> Reply {
         return start_chat(req, ctx);
     }
     Reply::Once(mutate(req, ctx))
+}
+
+/// `GET /api/chat/status`: `unconfigured` without a relay.
+fn chat_status(ctx: &Ctx) -> Json {
+    ctx.chat.as_ref().map_or_else(
+        || {
+            json!({
+                "state": "unconfigured", "since": null, "kind": null, "reason": null,
+                "seq": 0, "fallback": false,
+                "message": "no relay configured on this box (--relay); the agent is offline",
+            })
+        },
+        chat::Chat::status,
+    )
 }
 
 /// `POST /api/chat`: audited when it starts; the turn itself streams.
@@ -667,7 +783,8 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api"]
         | [
             "api",
-            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy",
+            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
+            | "screen",
         ]
         | [
             "api",
@@ -678,6 +795,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "snapshots", _, "bundle"]
         | ["api", "dropins", _, "plc"]
         | ["api", "modules", _, "trace"]
+        | ["api", "chat", "status"]
         | ["api", "modules", _, "trace", "events"] => Some("GET"),
         _ => None,
     }
@@ -1000,6 +1118,11 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         },
         ["api", "events"] => return Reply::Values,
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
+        ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
+        ["api", "screen"] => match &ctx.screen {
+            Some(j) => Response::json(200, j),
+            None => Response::error(404, "no floor screen on this box (--screen FILE)"),
+        },
         ["api", "policy"] => match &ctx.approval {
             Some(a) => Response::json(200, &approve::policy_json(&a.policy)),
             None => Response::error(404, "no approval path on this box"),
@@ -1063,7 +1186,7 @@ fn index() -> Json {
             e("GET", "/api/devices", false, "device links up or down"),
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
-            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source} or {kind: param, module, param, value}"),
+            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}"),
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
@@ -1086,6 +1209,8 @@ fn index() -> Json {
             e("GET", "/api/dropins/{id}?chunk=K", false, "one chunk of a drop-in's text"),
             e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", false, "a PLC drop-in's inventory: overview, tags, routine, names"),
             e("POST", "/api/devices/{name}/browse", true, "an observed Logix controller's tag list, read-only"),
+                        e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
+            e("GET", "/api/screen", false, "the floor screen's layout: tiles, state codes, colours (with --screen)"),
         ],
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
     })
@@ -1181,7 +1306,15 @@ fn pump(
 
 fn value_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
     let mut last = None;
+    let mut agent = None;
     pump(stream, ctx, || {
+        if let Some(c) = &ctx.chat {
+            let seq = c.status_seq();
+            if agent != Some(seq) {
+                agent = Some(seq);
+                return Some(("agent", c.status()));
+            }
+        }
         let view = ctx.box_.live.view();
         if last == Some(view.seq) {
             return None;

@@ -82,5 +82,9 @@ name = "ui"
 required-features = ["box"]
 
 [[test]]
+name = "reload"
+required-features = ["box"]
+
+[[test]]
 name = "agent"
 required-features = ["box"]

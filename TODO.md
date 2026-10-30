@@ -351,6 +351,47 @@
   difficulty: low
   id: dev-bundles-switch
 
+- [ ] **Floor screen layout: a startup file, or part of the snapshot?** The andon view (feat/andon-screen) reads its layout from `--screen FILE` at startup, like the sinks file: tile titles, which signal each tile shows, and the state code → colour/message table. It is not in the snapshot store, so changing a message is a file edit plus a restart, outside the approval path and the history. What the tiles *are* (the `screen` outputs and their safe states) is in the I/O map, which is snapshotted and output-affecting, so nothing that drives a tile bypasses approval; only the words and colours do. Putting the layout in a change set means a store schema bump (a `screen` blob beside `io-map` and `calendar`), a tier for it (I'd say `param`: it moves no output), and a live reload in the canvas. I kept it a startup file (reversible: the API already serves it by content).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether changing a floor screen message goes through approval and shows in the snapshot history
+  options: startup file, like sinks (recommended for now, built) | in the snapshot, applied at the param tier | in the snapshot, output-affecting
+  est: 1d
+  difficulty: med
+  depends: map-reload
+  id: screen-layout-snapshot
+
+- [ ] **Param units: a `unit=` key on manifest param lines?** The offline chat (feat/local-fallback) checks a typed unit ("80 %", "5 s") against the param's, but params had no unit; signals did. I added an optional `unit=U` to `param` lines for int/real (same rule as a signal's unit: 1..=16 printable ASCII, no `#`), parsed, rendered, served in the API's manifest and param-proposal JSON, metadata only, never converted. A unit change counts as a manifest change, so it is logic tier, not param. Without it the offline chat would accept bare numbers only. The agent's `draft_module` does not write units yet (the relay's tool schema would need a `unit` field).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether manifests carry param units (format change, additive; old manifests read unchanged)
+  options: unit= on param lines (recommended, built) | no param units, bare numbers only offline | units only from a bound signal
+  est: 10m
+  difficulty: low
+  id: param-units
+
+- [ ] **Relay health route for the offline probe?** While the agent is offline the box probes `GET {relay}/v1/health` with its box token every 15 s and on each chat message. Today any answer below 500 except 401/403 counts as "online", so a relay without the route (404) still counts as up. If the relay's upstream (the model API) is down but the relay itself answers, the box flips online, the next turn fails, and it goes offline again: one failed message per flap. A real `/v1/health` on the relay that reflects its upstream (503 when it cannot serve turns) closes that.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call, then a relay change in the relay repo
+  result: how accurately the banner tracks a relay whose upstream is down
+  options: add GET /v1/health to the relay, 200/503 by upstream (recommended) | keep any-answer-is-up | probe with a real one-token turn
+  est: 1h
+  difficulty: low
+  id: relay-health
+
+- [ ] **No relay configured: should chat still take param edits by rule?** A box started without `--relay` answers `POST /api/chat` with 503 ("no relay configured"), as before; `GET /api/chat/status` says `unconfigured`. The rule-based param edits only run for a box that has a relay and lost it. An air-gapped box could use them too, but then "chat" exists on a box that never has an agent. Kept as is (reversible: the chat route would be built without a relay).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether an air-gapped box gets the rule-based chat
+  options: only boxes with a relay (recommended for now, built) | every box, rules when no relay
+  est: 1h
+  difficulty: low
+  id: offline-without-relay
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -744,11 +785,12 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: multi-module
   id: shift-calendar
 
-- [ ] **Floor screen output** — a box-driven full-screen andon view (big tiles, colors, a message) as an output kind, next to GPIO lights.
+- [x] **Floor screen output** — a box-driven full-screen andon view (big tiles, colors, a message) as an output kind, next to GPIO lights.
   est: 2d
   difficulty: low
   depends: canvas-web
   id: andon-screen
+  notes: built on feat/andon-screen: `out NAME int screen TILE` in the I/O map, `--screen FILE` layout (helmsman_plc::screen), `GET /api/screen`, the canvas at `/?andon`; see docs/ARCHITECTURE.md "Floor screen". Messages are INT state codes mapped to fixed text in the layout (no string signal type).
 
 - [x] **Webhook sink** — core-owned publisher: modules emit to named outputs, sinks POST JSON with retry and a bounded on-disk queue. Modules never see the network.
   est: 2d
@@ -775,7 +817,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: st-graph-view, agent-loop
   id: explain-mode
 
-- [ ] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
+- [x] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
   est: 3d
   difficulty: med
   depends: agent-loop, fallback-model
@@ -805,7 +847,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: dropin-photo
   id: dropin-pid
 
-- [ ] **Map and calendar reload on a running box** — an apply or rollback whose I/O map or calendar differs from what runs is refused (409) today: only the module set hot-swaps. Reloading means rebuilding the signal table, restarting device links and re-attaching the calendar between ticks, with the same "refused changes nothing" rule. Proposals cannot change the map or calendar yet, so today this only blocks rolling back across a map change.
+- [x] **Map and calendar reload on a running box** — an apply or rollback whose I/O map or calendar differs from what runs is refused (409) today: only the module set hot-swaps. Reloading means rebuilding the signal table, restarting device links and re-attaching the calendar between ticks, with the same "refused changes nothing" rule. Proposals cannot change the map or calendar yet, so today this only blocks rolling back across a map change.
   result: rollback to any snapshot; map and calendar edits through the same approval path
   est: 3d
   difficulty: high

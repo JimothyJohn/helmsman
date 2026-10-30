@@ -12,7 +12,26 @@
 //! event: retrying     {"error", "after_ms"}
 //! event: done         {"stop", "steps", "output_tokens", "proposals"}
 //! event: error        {"kind", "message", "retryable"}     the turn failed (relay unreachable, ...)
+//! event: status       {"state", "since", "reason", ...}   the agent went offline (or is): the banner
+//! event: fallback     {"outcome", "kind", "proposal"}     offline: what the rules made of the message
 //! ```
+//!
+//! **Offline.** The route keeps the agent's state ([`Chat::status`],
+//! `GET /api/chat/status`, and an `agent` event on `GET /api/events`):
+//! `unknown` until the relay is first asked, `online`, or `offline` since
+//! a time with the reason. A turn that fails because the relay is
+//! unreachable, silent, failing (5xx) or refusing the box token
+//! ([`relay::Error::offline`]) takes the agent offline; any answer from
+//! the relay brings it back. While it is not online a watcher
+//! ([`Chat::watch`]) probes the relay ([`relay::probe`], no tokens spent)
+//! every [`Setup::probe_every`], and each chat message probes once more
+//! before it is read, so the chat recovers as soon as the relay answers.
+//! Offline, a message never reaches a model: it is read by
+//! [`crate::fallback`]'s rules and becomes either one param proposal,
+//! posted to `POST /api/proposals` with the API token like the agent's
+//! (so stored as a draft, audited, and applied only through the approval
+//! policy), or a refusal with the editable params. The offline path
+//! applies nothing, and a param proposal can only change a param.
 //!
 //! Conversations live in memory, at most [`Setup::sessions`], each used by
 //! one request at a time, dropped after [`Setup::idle`] without use (the
@@ -22,15 +41,18 @@
 use std::collections::BTreeMap;
 use std::io::{self, Write as _};
 use std::net::{SocketAddr, TcpStream};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use helmsman_agent::{Agent, BoxApi, Budget, Conversation, Limits, Progress, Retry, Stop, relay};
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
+use super::catalog::Catalog;
 use super::http::{self, Response};
+use crate::fallback;
 
 /// Longest user message, in characters.
 pub const MAX_MESSAGE: usize = 8000;
@@ -48,6 +70,8 @@ pub struct Setup {
     pub running: usize,
     /// A conversation unused this long is dropped.
     pub idle: Duration,
+    /// How often the relay is probed while the agent is not online.
+    pub probe_every: Duration,
 }
 
 impl Setup {
@@ -61,8 +85,48 @@ impl Setup {
             sessions: 16,
             running: 2,
             idle: Duration::from_secs(3600),
+            probe_every: Duration::from_secs(15),
         }
     }
+}
+
+/// Whether the agent can be reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    /// Not asked yet.
+    Unknown,
+    Online,
+    /// Chat reads param edits by rule ([`crate::fallback`]).
+    Offline,
+}
+
+impl State {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Online => "online",
+            Self::Offline => "offline",
+        }
+    }
+}
+
+/// The agent's state and when it last changed.
+#[derive(Debug, Clone)]
+struct Link {
+    state: State,
+    /// Unix seconds.
+    since: u64,
+    /// Why it is offline: the relay error's kind and message.
+    reason: Option<(String, String)>,
+    /// Bumped on every change, so a stream sends each once.
+    seq: u64,
+}
+
+fn wall() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 struct Session {
@@ -77,6 +141,7 @@ pub struct Chat {
     sessions: Mutex<BTreeMap<String, Session>>,
     next: AtomicU64,
     running: AtomicUsize,
+    link: Arc<Mutex<Link>>,
 }
 
 impl std::fmt::Debug for Chat {
@@ -130,6 +195,37 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+fn set(link: &Mutex<Link>, state: State, reason: Option<(String, String)>) {
+    // Only a change of state counts: an outage keeps the reason it
+    // started with, however later probes fail.
+    let mut l = lock(link);
+    if l.state != state {
+        l.state = state;
+        l.since = wall();
+        l.seq += 1;
+        l.reason = reason;
+    }
+}
+
+fn status_json(l: &Link) -> Json {
+    let message = match l.state {
+        State::Unknown => "the agent has not been reached yet",
+        State::Online => "the agent is online",
+        State::Offline => {
+            "the agent is offline: installed modules keep running; chat takes param changes only, like \"set conveyor speed to 2.5\""
+        }
+    };
+    json!({
+        "state": l.state.as_str(),
+        "since": l.since,
+        "kind": l.reason.as_ref().map(|r| r.0.as_str()),
+        "reason": l.reason.as_ref().map(|r| r.1.as_str()),
+        "seq": l.seq,
+        "fallback": l.state == State::Offline,
+        "message": message,
+    })
+}
+
 impl Chat {
     /// The route over the API at `addr` (the agent's tools call it there
     /// with `token`).
@@ -145,7 +241,68 @@ impl Chat {
             sessions: Mutex::new(BTreeMap::new()),
             next: AtomicU64::new(0),
             running: AtomicUsize::new(0),
+            link: Arc::new(Mutex::new(Link {
+                state: State::Unknown,
+                since: wall(),
+                reason: None,
+                seq: 0,
+            })),
         }
+    }
+
+    /// The agent's state, as `GET /api/chat/status` and the streams show
+    /// it: `{state, since, kind, reason, seq, fallback, message}`.
+    #[must_use]
+    pub fn status(&self) -> Json {
+        status_json(&lock(&self.link))
+    }
+
+    /// Bumped whenever [`Chat::status`] changes.
+    #[must_use]
+    pub fn status_seq(&self) -> u64 {
+        lock(&self.link).seq
+    }
+
+    /// The current state.
+    #[must_use]
+    pub fn state(&self) -> State {
+        lock(&self.link).state
+    }
+
+    fn online(&self) {
+        set(&self.link, State::Online, None);
+    }
+
+    fn offline(&self, e: &relay::Error) {
+        set(
+            &self.link,
+            State::Offline,
+            Some((e.kind().to_string(), e.to_string())),
+        );
+    }
+
+    /// Probes the relay every [`Setup::probe_every`] while the agent is
+    /// not online (at once on start), until `stop`.
+    #[must_use]
+    pub fn watch(&self, stop: Arc<AtomicBool>) -> JoinHandle<()> {
+        let link = Arc::clone(&self.link);
+        let cfg = self.setup.relay.clone();
+        let every = self.setup.probe_every;
+        thread::spawn(move || {
+            let mut last: Option<Instant> = None;
+            while !stop.load(Ordering::Acquire) {
+                let due = last.is_none_or(|t| t.elapsed() >= every);
+                if due && lock(&link).state != State::Online {
+                    let r = relay::probe(&cfg);
+                    last = Some(Instant::now());
+                    match r {
+                        Ok(()) => set(&link, State::Online, None),
+                        Err(e) => set(&link, State::Offline, Some((e.kind().to_string(), e.to_string()))),
+                    }
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        })
     }
 
     /// Checks a request and takes its conversation out of the store (a
@@ -313,7 +470,7 @@ impl Chat {
     /// agent's progress, and how it stopped. A client that goes away does
     /// not stop the turn (its history must stay whole); writes to it are
     /// dropped.
-    pub fn serve(&self, stream: &mut TcpStream, taken: Taken) {
+    pub fn serve(&self, stream: &mut TcpStream, taken: Taken, catalog: &Catalog) {
         let Taken {
             id,
             mut conv,
@@ -338,6 +495,18 @@ impl Chat {
             }
         };
         send("session", &json!({ "id": id }));
+        if self.state() == State::Offline {
+            match relay::probe(&self.setup.relay) {
+                Ok(()) => self.online(),
+                Err(e) => self.offline(&e),
+            }
+        }
+        if self.state() == State::Offline {
+            self.give_back(id, conv);
+            send("status", &self.status());
+            self.by_rule(&message, catalog, &mut send);
+            return;
+        }
         let agent = Agent {
             relay: self.setup.relay.clone(),
             api: self.api.clone(),
@@ -370,6 +539,16 @@ impl Chat {
             ),
         });
         self.give_back(id, conv);
+        self.finish(&outcome, &mut send);
+    }
+
+    /// The turn's last event; settles the agent's state from how it went.
+    fn finish(&self, outcome: &helmsman_agent::Outcome, send: &mut dyn FnMut(&str, &Json)) {
+        match &outcome.stop {
+            Stop::Relay(e) if e.offline() => self.offline(e),
+            Stop::TooLong => {}
+            _ => self.online(),
+        }
         let done = |stop: &str, why: Option<String>| {
             json!({
                 "stop": stop, "why": why, "steps": outcome.steps,
@@ -398,11 +577,129 @@ impl Chat {
                 "error",
                 &json!({ "kind": "conversation_too_long", "message": "this conversation is too long to send; start a new chat", "retryable": false }),
             ),
-            Stop::Relay(e) => send(
-                "error",
-                &json!({ "kind": e.kind(), "message": e.to_string(), "retryable": e.retryable() }),
+            Stop::Relay(e) => {
+                send(
+                    "error",
+                    &json!({ "kind": e.kind(), "message": e.to_string(), "retryable": e.retryable() }),
+                );
+                if e.offline() {
+                    send("status", &self.status());
+                }
+            }
+        }
+    }
+
+    /// Offline: the message read by rule, and at most one param proposal
+    /// posted through the box API. Ends with `done` (`stop: "offline"`).
+    fn by_rule(&self, message: &str, catalog: &Catalog, send: &mut dyn FnMut(&str, &Json)) {
+        let params = fallback::editable(
+            catalog
+                .modules
+                .iter()
+                .filter_map(|m| m.manifest.as_ref().map(|f| (m.name.as_str(), f))),
+        );
+        let mut proposals: Vec<u64> = Vec::new();
+        let (text, outcome) = match fallback::parse(message, &params) {
+            fallback::Reply::Refused(r) => {
+                let mut text = r.to_string();
+                if matches!(
+                    r,
+                    fallback::Refusal::Input(_)
+                        | fallback::Refusal::NotACommand
+                        | fallback::Refusal::Unknown { .. }
+                ) {
+                    text.push_str("\n\n");
+                    text.push_str(&fallback::help(&params));
+                }
+                (
+                    text,
+                    json!({ "outcome": "refused", "kind": r.kind(), "proposal": null }),
+                )
+            }
+            fallback::Reply::Edit(e) => {
+                let (text, outcome, id) = self.propose(&e, message, send);
+                proposals.extend(id);
+                (text, outcome)
+            }
+        };
+        send("text", &json!({ "delta": text }));
+        send("fallback", &outcome);
+        send(
+            "done",
+            &json!({
+                "stop": "offline", "why": "the agent is offline; this message was read by rule",
+                "steps": 0, "output_tokens": 0, "proposals": proposals,
+            }),
+        );
+    }
+
+    /// Posts `e` as a param proposal: the reply text, the `fallback`
+    /// event, and the proposal's id if one was stored.
+    fn propose(
+        &self,
+        e: &fallback::Edit,
+        message: &str,
+        send: &mut dyn FnMut(&str, &Json),
+    ) -> (String, Json, Option<u64>) {
+        let value = match e.value {
+            helmsman_io::Value::Bool(b) => json!(b),
+            helmsman_io::Value::Int(n) => json!(n),
+            helmsman_io::Value::Real(x) => json!(x),
+        };
+        let body = json!({
+            "kind": "param",
+            "module": e.module,
+            "param": e.param,
+            "value": value,
+            "note": format!("offline chat (rule-based, no model): {}", message.trim()),
+        });
+        match self.api.post("/api/proposals", &body) {
+            Ok((201, p)) => {
+                let id = p["id"].as_u64().unwrap_or_default();
+                let unit = p["unit"].as_str().map(|u| format!(" {u}")).unwrap_or_default();
+                let summary = format!(
+                    "{} {}: {} -> {}{unit}",
+                    e.module,
+                    e.param,
+                    show(&p["from"]),
+                    show(&p["to"])
+                );
+                send("proposal", &json!({ "ids": [id], "summary": summary }));
+                let needs = p["approval"]["needs"]["role"]
+                    .as_str()
+                    .map(|r| format!(" Applying it takes an {r} PIN."))
+                    .unwrap_or_default();
+                (
+                    format!(
+                        "Proposed {summary} (proposal {id}). Nothing changes until it is approved.{needs}"
+                    ),
+                    json!({ "outcome": "proposed", "kind": null, "proposal": id }),
+                    Some(id),
+                )
+            }
+            Ok((status, p)) => (
+                format!(
+                    "The box refused the change ({status}): {}",
+                    p["error"].as_str().unwrap_or("refused")
+                ),
+                json!({ "outcome": "refused", "kind": "box_refused", "proposal": null }),
+                None,
+            ),
+            Err(err) => (
+                format!("The change could not be proposed: {err}"),
+                json!({ "outcome": "refused", "kind": "box_unreachable", "proposal": null }),
+                None,
             ),
         }
+    }
+}
+
+fn show(v: &Json) -> String {
+    match v {
+        Json::Bool(true) => "on".into(),
+        Json::Bool(false) => "off".into(),
+        Json::String(s) => s.clone(),
+        other => other.to_string(),
     }
 }
 

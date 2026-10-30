@@ -166,8 +166,9 @@ scan; the scheduler bounds how often.
   contract; in memory until `gpio-outputs` adds the Pi backend.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
-  `in NAME TYPE module MODULE` is another module's output. Older maps read
-  unchanged; `box` and `module` are reserved device ids.
+  `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
+  screen TILE` a floor screen tile (below). Older maps read unchanged;
+  `box`, `module` and `screen` are reserved device ids.
 
 ## Signals in the scan (`io-runtime`, built)
 
@@ -225,7 +226,7 @@ scan_ms  50
 q        0+2
 reads    start jam
 drives   motor lamp
-param    speed   real 1.5 min=0 max=10
+param    speed   real 1.5 min=0 max=10 unit=m/s
 param    beacon  bool true
 ```
 
@@ -295,6 +296,46 @@ load.
 - **Untrusted clock**: before 2024-01-01 (a Pi with no RTC before NTP) the
   calendar's signals are missing, so modules reading them are held, and
   driven outputs go to their safe values.
+
+## Floor screen (`andon-screen`, built)
+
+A box-driven full-screen andon view, an output kind next to GPIO lights
+(`screen.rs` in `helmsman-plc`, `andon.rs` in the canvas; contracts in
+`tests/screen.rs`, `andon_tests.rs`).
+
+- **Tiles are outputs.** `out line1_state int screen line1` in the I/O map
+  (`Binding::Screen`): an `out` signal no device takes, so no link polls or
+  writes it. A module drives it through a `VAR_OUTPUT` of that name, so the
+  one-writer rule, safe values (a held or faulted module's tile goes to its
+  `safe=` state), the approval tiers (a map change is output-affecting) and
+  the audit apply as to a stack light. Several signals may feed one tile.
+- **Messages are state codes, not strings.** A module drives an `INT` (or a
+  `BOOL`, read as 0/1); the layout maps each code to a fixed colour and a
+  fixed message. Signals stay scalar (no string type in the scan, recorder,
+  replay or sinks), and the words in front of the line are reviewed box
+  configuration, never text a module computes. A code the layout does not
+  name shows as "UNKNOWN STATE n".
+- **Layout file** (`--screen FILE`, `helmsman-screen 1`, hand-parsed, 64 KiB
+  cap): `title`, `grid COLS ROWS` (1..=8), `code SET N COLOUR TEXT`, `tile
+  ID COL,ROW[,W,H] SET SIGNAL TITLE`, `value ID SIGNAL LABEL` (a number
+  under the message). Colours are a fixed palette (IEC 60073 stack-light
+  colours plus the brand's safety yellow and graphite; no user theming).
+  Checked at startup against the map: each tile's signals are `screen`
+  outputs on that tile, of a type it can show, and every `screen` output is
+  on a tile; a map with tiles and no layout is refused while the API runs.
+  Changing it is a box config change (a restart), like the sinks file; it
+  is not in snapshots (`screen-layout-snapshot` asks).
+- **Served read-only** at `GET /api/screen`: the file byte for byte (the
+  canvas parses it with the same parser), the parsed layout and the palette.
+- **The view** is the served canvas at `/?andon`: a header (title, and the
+  shift from the calendar's `in_shift`/`shift_id`/`on_break`/`planned_down`
+  when the box has them), big tiles filling the window, type sized to fit
+  each tile. Fed by `/api/events`. **Stale data never shows as a colour**:
+  when the stream fails the values are dropped, and when no event arrives
+  for 3 s every tile shows "NO DATA" on black under a red banner ("BOX
+  UNREACHABLE", "NO DATA FROM THE BOX FOR n s"); a stream quiet for 10 s is
+  reopened. Full screen is the browser's (F11, or `chromium --kiosk
+  http://BOX:8080/?andon`).
 
 ## Sim replay (`sim-replay`, built)
 
@@ -462,7 +503,7 @@ and later MCP (`api/`; contract in `tests/api.rs`). Endpoints are listed at
   screens at once.
 - **The canvas** (`--ui DIR`, `api/ui.rs`; contract in `tests/ui.rs`):
   `GET /` and the files beside it are the wasm canvas `make canvas-web`
-  builds, on the API's origin (no CORS). Only `GET`; a path is refused
+  builds (`/?andon` is the floor screen, above), on the API's origin (no CORS). Only `GET`; a path is refused
   (404) before the file system is asked unless every segment is
   `[A-Za-z0-9._-]`, not empty, not dot-led (after percent-decoding, so
   `%2e%2e`, `%2f`, `%5c`, `%00` and any non-ASCII never pass), at most 8
@@ -517,7 +558,11 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
 - **Evidence bound to content.** `POST /api/proposals/{id}/replay` (or
   `/api/snapshots/{id}/replay` for a rollback) replays what runs and the
   target over the recorder's window (`replay::replay` twice, then
-  `compare`) and keeps the result with both snapshot ids. An apply that
+  `compare`) and keeps the result with both snapshot ids. A target with
+  another map or calendar runs against its own (`replay::propose_change`):
+  a signal the recording lacks is missing there, its readers held, and
+  the evidence's `reload` says which (`unrecorded`, `complete`, `note`).
+  The ids hash the map and calendar, so evidence binds to them too. An apply that
   needs one names it (`"replay": N`) and is refused (428) unless its base
   is exactly what runs and its content exactly the target, over at least
   `min-replay`: an old replay, or one of other content, never counts.
@@ -525,10 +570,10 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   `POST /api/snapshots/{id}/rollback` take the token and `{role, pin,
   replay?}`; in order: target known; draft not stale (its base is what
   runs, else 409); tier and rule; role at least the rule's (403, no PIN
-  spent); evidence (428); map and calendar unchanged (a live map or
-  calendar reload is not built: 409, card `map-reload`); PIN (403/429);
-  every module compiles (422). Then the scan thread runs
-  `Runtime::reconfigure` between ticks (refused: nothing changed, 409; not
+  spent); evidence (428); PIN (403/429); every module compiles (422); another map or calendar
+  loads (422) and the modules bind to it (409). Then the scan thread runs
+  `Runtime::reconfigure` between ticks (or, with another map or calendar,
+  the reload below) (refused: nothing changed, 409; not
   taken within 5 s: the job is withdrawn and can never land later), the
   store commits the target with author, prompt, approver (`ROLE (PIN)`) and
   time, and the API's view of the box moves to it; if the commit fails the
@@ -540,6 +585,51 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   not, is an audit entry with time, status, role (once the body parsed),
   target and base snapshot ids; an apply that acts writes one entry before
   (so a full log stops it) and one after.
+
+## Map and calendar reload (`map-reload`, built)
+
+An apply or rollback whose I/O map or calendar differs from what runs
+reloads them on the running box, through the same approval path
+(always `output-affecting` for a map, `logic` for a calendar with the same
+`drive` lines). `POST /api/proposals` takes `{kind: io_map|calendar, text}`;
+any snapshot can be rolled back to. Contract in `tests/reload.rs` (real
+threads, the Modbus simulator over TCP).
+
+- **Sequence** (`api/swap.rs`): load the new `Layout` (table + calendar)
+  and bind the modules to it, both before anything moves; `LinkSet::plan`
+  builds the links the new map needs with their drivers opened (one that
+  will not open: 409, nothing changed); stop and join the links of
+  removed or changed devices; the scan thread, between two ticks with the
+  table locked, carries every unchanged signal into the new table
+  (`SignalTable::carry_from`), rebinds the modules (`Runtime::rebind`),
+  evaluates the new calendar, swaps the table and restarts the recorder
+  on it, as one step; then (refused: the stopped links resume as they
+  were) every output point the new map dropped from its device is written
+  to its safe value through the stopped link's own driver, and the new
+  links start. Then the store commits; if that fails the old change set
+  is reloaded the same way (500).
+- **No glitch.** A signal whose name, type, direction and binding are
+  unchanged keeps its value, command and point error; a link whose device
+  line and points are unchanged never stops (links find their points by
+  name, device and address whenever the table's epoch changes, and never
+  touch a point the table no longer binds to them). A restarted link
+  rewrites the carried command, the value the device already holds; a
+  driver with the same device line is carried into it (connection, `box`
+  channels). An unchanged signal's point is never sent to safe on the way
+  (pace params `poll_ms`/`timeout_ms` do not make it another device).
+  Property-checked over 50 reloads across four map/calendar variants.
+- **Safe.** What no healthy module drives takes the new map's safe value
+  in the reload step: undriven outputs, and outputs of held or faulted
+  modules (so a new safe value reaches the device at once). Added outputs
+  start safe. Removed outputs are written safe before their link is
+  dropped; if the device does not answer that cannot happen (the box only
+  reaches a device through its link), and the apply says so in
+  `reload.notes`: the device's own comm watchdog is the backstop.
+- **Around it.** Sinks rebind their emits by name; the API's catalog,
+  device list and replay table follow. The recording restarts, so the
+  next replay's window starts at the reload. A published live view from
+  just before the catalog moves can be read against the other one for a
+  moment (display only).
 
 ## Agent loop (`agent-loop`, built)
 
@@ -598,6 +688,52 @@ serves those per agent version (relay protocol v1).
   proposal (`POST /api/proposals/{id}/replay`), and only a role PIN applies.
   The agent holds the API token and nothing else: it has no tool that
   reaches `apply`, `rollback` or a PIN, and the token alone cannot apply.
+
+## Offline chat (`local-fallback`, built)
+
+Relay unreachable: installed modules keep running and the chat degrades
+to rule-based param edits, with no model on the box (`fallback.rs`,
+`api/chat.rs`; contracts in `tests/fallback.rs` and `tests/agent.rs`).
+
+- **State, explicit.** The chat route keeps the agent's state: `unknown`
+  until the relay is first asked, `online`, or `offline` since a time
+  (unix seconds) with the reason (the relay error's kind and message, of
+  the failure that started the outage). `GET /api/chat/status` serves it
+  (`unconfigured` without `--relay`); `GET /api/events` sends an `agent`
+  event with it on connect and on every change (the canvas's banner); a
+  chat turn that takes the agent offline ends with a `status` event, and
+  every message read offline starts with one.
+- **Detection.** A turn that fails because the relay is unreachable,
+  times out, answers 5xx, or refuses the box token (401/403) takes the
+  agent offline; any other relay answer counts as online. A turn failing
+  in its own way (a stream error, a malformed stream) does not.
+- **Recovery, automatic.** While the agent is not online, a watcher thread
+  probes the relay every 15 s (`GET {relay}/v1/health` with the box token;
+  any answer below 500 except 401/403 counts, the body is never read, no
+  conversation is sent, no tokens are spent), at once on start. Each chat
+  message also probes once before it is read offline, so a reply goes
+  back to the model as soon as the relay answers.
+- **The grammar** (`fallback::parse`, hand-written, no regex): one command
+  per message on one line, `set REF to VALUE`, `set REF = VALUE` or
+  `REF = VALUE`; REF is `PARAM`, `MODULE PARAM` or `MODULE.PARAM`, a
+  param's words joined by `_`; VALUE a number (`[+-]D[.D]`, no exponent,
+  hex, inf or NaN) with an optional unit, or `on/off/true/false/
+  enable(d)/disable(d)`. Names match exactly (ASCII case aside); a ref that
+  reads as two params is refused with both, never guessed; near names
+  (edit distance, prefixes) are only suggested. Ints take whole numbers,
+  values must be in the manifest's range and differ from the current one,
+  and a unit must be the param's own `unit=` (a few spellings accepted,
+  never converted). Anything else, including more than 200 bytes, a
+  second line, a character outside ASCII letters, digits, blanks and
+  `_ . - + % = /`, or any trailing word, is refused whole with the reason
+  and the editable params with their ranges.
+- **Only a proposal.** An accepted command is posted to
+  `POST /api/proposals` (`kind: param`) with the API token, like the
+  agent's, so it is checked, stored as a draft, audited, and applied only
+  by `apply` with whatever role and PIN the policy's `param` tier asks.
+  The offline path applies nothing, and a param proposal cannot touch
+  logic or an output's wiring. Offline messages do not enter the
+  conversation; the model sees their proposals through its tools later.
 
 ## Bundles (`bundle-format`, built)
 
@@ -801,7 +937,7 @@ prompt. The agent never touches the Rust core.
 - `sim-replay` (built, above) → `box-api` serves the recorder's tap and
   runs the replay; `proposal-ui` charts it; `approval-policy` requires one
   for logic and output-affecting changes.
-- `agent-loop` (built, above) → `local-fallback` answers the chat route
-  when the relay is unreachable (today: an `error` event); `explain-mode`
+- `agent-loop` (built, above) → `local-fallback` (built, above) answers
+  the chat route by rule when the relay is unreachable; `explain-mode`
   and `dropin-prose` are prompts over the same tools, plus a trace tool
   for explain mode.
