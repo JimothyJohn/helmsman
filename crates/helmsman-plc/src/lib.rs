@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod link;
+pub mod manifest;
 pub mod runtime;
 pub mod signals;
 pub mod spec;
