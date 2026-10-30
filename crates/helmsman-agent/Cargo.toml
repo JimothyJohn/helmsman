@@ -1,0 +1,28 @@
+[package]
+name = "helmsman-agent"
+version = "0.1.0"
+description = "The box's agent loop: relay client, Claude stream parser, and the tools it runs against the box API"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Same crates and versions helmsman-plc's https sinks already use: no new
+# third-party code, only another user of it.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"], optional = true }
+webpki-roots = { version = "1.0.11", optional = true }
+
+[dev-dependencies]
+proptest = "1.12"
+
+[lints]
+workspace = true
+
+[features]
+# https:// relays (rustls with the ring provider, Mozilla roots compiled in).
+# Without it the agent reaches only an http:// relay (a dev relay on the LAN).
+default = ["https"]
+https = ["dep:rustls", "dep:webpki-roots"]

@@ -875,6 +875,7 @@ fn bench(trust: Option<TrustStore>) -> Bench {
         running: Some(running()),
         snapshots: Some(Mutex::new(Store::open(&store).unwrap())),
         approval: Some(approval),
+        chat: None,
     };
     let api = Api::start_with_trust(cfg, shared, None, trust).unwrap();
     Bench {

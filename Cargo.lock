@@ -1073,6 +1073,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-agent"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "webpki-roots",
+]
+
+[[package]]
 name = "helmsman-canvas"
 version = "0.1.0"
 dependencies = [
@@ -1132,6 +1143,7 @@ name = "helmsman-plc"
 version = "0.1.0"
 dependencies = [
  "helmsman-adapter",
+ "helmsman-agent",
  "helmsman-iec",
  "helmsman-io",
  "helmsman-proto",
