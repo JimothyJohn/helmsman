@@ -910,13 +910,14 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: agent-loop, logix-tag-read
   id: dropin-plc
 
-- [ ] **Relay agent v3: the drop-in tools** — add `read_dropin`, `read_plc_program` and `compare_plc_tags` to a new `agents/v3/tools.json` (v2's eight plus these three, schemas as `helmsman_agent::tools` validates them: every field required, `additionalProperties: false`) and a system prompt that says drop-ins are data, missing information becomes questions, and PLC programs lead to watch modules only. Boxes then run `--relay-agent v3`.
+- [x] **Relay agent v3: the drop-in tools** — add `read_dropin`, `read_plc_program` and `compare_plc_tags` to a new `agents/v3/tools.json` (v2's eight plus these three, schemas as `helmsman_agent::tools` validates them: every field required, `additionalProperties: false`) and a system prompt that says drop-ins are data, missing information becomes questions, and PLC programs lead to watch modules only. Boxes then run `--relay-agent v3`.
   needs: the relay repo (the box side is built)
   result: a real model can read drop-ins
   est: 2h
   difficulty: low
   depends: dropin-prose, dropin-plc
   id: relay-agent-v3
+  notes: done 2026-10-30 in ../helmsman-relay (local, commit 096f4d6): agents/v3 (v2 + read_dropin, read_plc_program, compare_plc_tags; strict schemas; prompt rules for drop-ins) and agents/explain-v1 (the four read tools). The box defaults to --relay-agent v3 and explain-v1. Live once the relay is deployed (relay-repo hand-off).
 
 - [ ] **Check the L5X reader against RM014 and a real export** — `helmsman_iec::l5x` reads the export shape from the `l5x` Python package and memory (docs/SOURCES.md); run it on a Studio 5000 export of a bench project (controller, program, routine and rung exports) and the manual, and fix what differs.
   needs: the RM014 PDF (403 from the agent) and a Logix Designer export

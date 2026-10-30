@@ -664,7 +664,7 @@ threads, the Modbus simulator over TCP).
 
 ## Agent loop (`agent-loop`, built)
 
-`helmsman-plc --relay URL --relay-token FILE [--relay-agent v1]` turns on
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v3]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
 an Anthropic key, and names no model, prompt or tool schema: the relay
@@ -1032,7 +1032,8 @@ is in its state right now, in two layers.
   even a proposal. One question per conversation, none kept; its own
   budget (6 turns, 32k output tokens, 3 min); the chat's running slots.
   `--relay-explain-agent V` asks the relay for an explain profile
-  (default: `--relay-agent`'s). `GET /api` says whether the box has an
+  (default `explain-v1`: the relay's read-only, floor-language profile;
+  the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
   agent; the canvas disables Ask why with its reason (box offline, no
   relay, no token) and the first layer stays up. The canvas holds the
   API token the operator typed in memory only.
