@@ -1116,7 +1116,8 @@ impl App {
             });
         });
         match self.mode {
-            Mode::Lab => return,
+            // The floor screen is drawn by `show` before it gets here.
+            Mode::Lab | Mode::Andon => return,
             Mode::Review => {
                 self.review.get_or_insert_with(ReviewView::new).show(ui);
                 return;
