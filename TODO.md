@@ -314,6 +314,20 @@
   depends: plcopen-xml
   id: plcopen-editor-check
 
+- [ ] **Consolidate the canvas work into dev** — on 2026-10-29 the node canvas existed in two places, both outside dev: (1) the main checkout /Users/nick/github/tcpethernet on `feat/node-canvas` (4591603), about 20 files staged, never committed: crates/tcpethernet-canvas (app, canvas, example, look, main, ui_tests, index.html), crates/tcpethernet-graph (edit, model, sim + proptests), scripts/canvas-serve.sh, scripts/canvas-web.sh, Cargo.toml/Cargo.lock/Makefile edits; (2) worktree /Users/nick/github/tcpethernet-canvas on `feat/canvas` (98f4afb), draft PR #19, three commits (7ca5b1e canvas + sim, 5d8eae8 todo card, merge of dev). Steps: confirm both sessions are stopped; commit (1) to `wip/recovered-node-canvas-20261029`; diff it against `feat/canvas` and keep the newer/fuller one, cherry-picking anything only the other has; land it via PR #19 into dev; remove the spent worktree and branches. Per canvas-edit-scope the canvas becomes the read-only ST view (st-graph-view), so the editing paths (edit.rs, canvas edit UI) can stay as-is for now but aren't the direction.
+  needs: the two agents in /Users/nick/github/tcpethernet and /Users/nick/github/tcpethernet-canvas wound down
+  result: one canvas branch in dev; main checkout back on dev; no stray worktrees
+  notes: also stale: /Users/nick/github/tcpethernet/.claude/handoff.md (says main is on dev, pi-deploy-iec pending; both untrue). Replace it with /Users/nick/github/tcpethernet-dev/.claude/handoff.md, then remove the tcpethernet-dev worktree (its branches are all merged). Worktree /Users/nick/github/tcpethernet-io (`feat/io-model`) was clean at dev on 2026-10-29; check it before removing.
+  est: 1h
+  difficulty: med
+  id: consolidate-canvas
+
+- [ ] **Decide the leftover README branch** — `wip/recovered-readme-odva-20261028` holds a README edit reverted off the main checkout on 2026-10-28 and never merged. Read it (`git log -p dev..wip/recovered-readme-odva-20261028`), then PR it into dev or delete the branch.
+  result: no unmerged wip branches
+  est: 10m
+  difficulty: low
+  id: readme-wip-branch
+
 
 ## Product vision (interview 2026-10-29)
 
