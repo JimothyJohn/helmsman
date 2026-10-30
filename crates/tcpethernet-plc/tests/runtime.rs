@@ -467,7 +467,7 @@ proptest! {
                 let name = format!("m{n}");
                 let want = match rt.status(&name).unwrap() {
                     Status::Running => u8::try_from(n + 1).unwrap(),
-                    Status::Faulted(_) => 0,
+                    Status::Faulted(_) | Status::Held => 0,
                 };
                 prop_assert_eq!(rt.outputs()[n], want, "{} at {} ms", name, t * 7);
             }

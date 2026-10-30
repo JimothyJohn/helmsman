@@ -11,7 +11,11 @@
 //! - a module that faults has its output window zeroed and is stopped, and
 //!   the others keep their schedule;
 //! - a module that falls behind skips the periods it missed (counted as
-//!   overruns) instead of bursting to catch up.
+//!   overruns) instead of bursting to catch up;
+//! - a module's `VAR_INPUT`s and `VAR_OUTPUT`s are bound to signals by name
+//!   (see [`crate::signals`]); one module drives each output signal, and a
+//!   module whose inputs are missing is held, not scanned, with its outputs
+//!   safe, until they are back.
 //!
 //! The runtime has no clock of its own: [`Runtime::tick`] takes `now`, so
 //! scheduling is deterministic under test.
@@ -19,7 +23,9 @@
 use std::fmt;
 use std::time::Duration;
 
-use tcpethernet_iec::{Fault, Image, Program};
+use tcpethernet_iec::{Fault, FaultKind, Image, PortDir, Program};
+
+use crate::signals::{BindError, PortBinding, SignalTable, bind, from_st, to_st};
 
 /// Longest scan period a module may ask for.
 pub const MAX_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
@@ -70,6 +76,9 @@ pub struct Module {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Running,
+    /// Not scanned because a signal it reads has no value; its outputs are
+    /// zero and its output signals safe. Runs again when the value returns.
+    Held,
     /// Stopped by this fault; its outputs are zero.
     Faulted(Fault),
 }
@@ -80,6 +89,8 @@ pub struct Stats {
     pub scans: u64,
     /// Deadlines that passed without a scan because the module was late.
     pub overruns: u64,
+    /// Deadlines skipped because the module was held.
+    pub held: u64,
 }
 
 /// Why a set of modules cannot run together.
@@ -103,6 +114,17 @@ pub enum ConfigError {
         a: String,
         b: String,
     },
+    /// A port that does not bind to the signal table.
+    Port {
+        module: String,
+        err: BindError,
+    },
+    /// Two modules would drive the same output signal; `a` comes first.
+    TwoWriters {
+        signal: String,
+        a: String,
+        b: String,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -120,6 +142,8 @@ impl fmt::Display for ConfigError {
             }
             Self::BadPeriod(n) => write!(f, "{n}: scan period must be 1 ns ..= 24 h"),
             Self::OutputOverlap { a, b } => write!(f, "{a} and {b} drive the same %Q bytes"),
+            Self::Port { module, err } => write!(f, "{module}: {err}"),
+            Self::TwoWriters { signal, a, b } => write!(f, "{a} and {b} both drive signal {signal}"),
         }
     }
 }
@@ -129,6 +153,7 @@ impl std::error::Error for ConfigError {}
 #[derive(Debug)]
 struct Slot {
     module: Module,
+    ports: Vec<PortBinding>,
     image: Image,
     status: Status,
     next: Duration,
@@ -148,8 +173,27 @@ impl Runtime {
     ///
     /// # Errors
     /// Every problem found: per module in order, then each overlapping pair.
+    /// A module with ports is refused here ([`ConfigError::Port`]); bind
+    /// it with [`Runtime::with_signals`].
     pub fn new(i_len: usize, q_len: usize, modules: Vec<Module>) -> Result<Self, Vec<ConfigError>> {
+        Self::with_signals(i_len, q_len, modules, &SignalTable::default())
+    }
+
+    /// [`Runtime::new`], with each module's ports bound by name to the
+    /// signals of `table`. Pass the same table (or a clone) to
+    /// [`Runtime::tick_with`].
+    ///
+    /// # Errors
+    /// As [`Runtime::new`], plus ports that do not bind and output signals
+    /// driven by two modules.
+    pub fn with_signals(
+        i_len: usize,
+        q_len: usize,
+        modules: Vec<Module>,
+        table: &SignalTable,
+    ) -> Result<Self, Vec<ConfigError>> {
         let mut errs = Vec::new();
+        let mut ports = Vec::with_capacity(modules.len());
         for (n, m) in modules.iter().enumerate() {
             let name = || m.name.clone();
             if modules[..n].iter().any(|p| p.name == m.name) {
@@ -165,6 +209,25 @@ impl Runtime {
             }
             if m.period.is_zero() || m.period > MAX_PERIOD {
                 errs.push(ConfigError::BadPeriod(name()));
+            }
+            let (bound, bad) = bind(&m.program.ports(), table);
+            errs.extend(
+                bad.into_iter()
+                    .map(|err| ConfigError::Port { module: name(), err }),
+            );
+            ports.push(bound);
+        }
+        let mut writers: Vec<Option<usize>> = vec![None; table.len()];
+        for (n, bound) in ports.iter().enumerate() {
+            for b in bound.iter().filter(|b| b.dir == PortDir::Output) {
+                match writers[b.signal] {
+                    Some(prev) => errs.push(ConfigError::TwoWriters {
+                        signal: b.port.clone(),
+                        a: modules[prev].name.clone(),
+                        b: modules[n].name.clone(),
+                    }),
+                    None => writers[b.signal] = Some(n),
+                }
             }
         }
         for (n, a) in modules.iter().enumerate() {
@@ -182,9 +245,11 @@ impl Runtime {
         }
         let slots = modules
             .into_iter()
-            .map(|module| Slot {
+            .zip(ports)
+            .map(|(module, ports)| Slot {
                 image: Image::new(module.program.sizes()),
                 module,
+                ports,
                 status: Status::Running,
                 next: Duration::ZERO,
                 stats: Stats::default(),
@@ -199,26 +264,58 @@ impl Runtime {
     /// Runs every running module whose deadline is at or before `now`, in
     /// the order they were given, each against its window of `inputs`
     /// (bytes past the end of `inputs` read as zero). Returns the modules
-    /// that faulted in this tick.
+    /// that faulted in this tick. For a runtime without signals.
     pub fn tick(&mut self, now: Duration, inputs: &[u8]) -> Vec<(String, Fault)> {
+        self.tick_with(now, inputs, &mut SignalTable::default())
+    }
+
+    /// [`Runtime::tick`] with signals: each due module's `VAR_INPUT`s are
+    /// set from `table` before its scan and its `VAR_OUTPUT`s become the
+    /// commands of their signals after it. A module with an input that has
+    /// no value (or one that does not fit its port) is held instead.
+    pub fn tick_with(
+        &mut self,
+        now: Duration,
+        inputs: &[u8],
+        table: &mut SignalTable,
+    ) -> Vec<(String, Fault)> {
         let mut faults = Vec::new();
         for s in &mut self.slots {
-            if s.status != Status::Running || s.next > now {
+            if matches!(s.status, Status::Faulted(_)) || s.next > now {
                 continue;
             }
-            let w = s.module.i;
-            for (k, b) in s.image.i.iter_mut().enumerate() {
-                *b = inputs.get(w.start + k).copied().unwrap_or(0);
-            }
-            s.stats.scans = s.stats.scans.saturating_add(1);
             let q = &mut self.outputs[s.module.q.start..][..s.module.q.len];
-            match s.module.program.scan_at(&mut s.image, now) {
-                Ok(()) => q.copy_from_slice(&s.image.q),
-                Err(fault) => {
-                    q.fill(0);
-                    s.status = Status::Faulted(fault);
-                    faults.push((s.module.name.clone(), fault));
+            if set_inputs(s, table) {
+                s.status = Status::Running;
+                let w = s.module.i;
+                for (k, b) in s.image.i.iter_mut().enumerate() {
+                    *b = inputs.get(w.start + k).copied().unwrap_or(0);
                 }
+                s.stats.scans = s.stats.scans.saturating_add(1);
+                let result = s
+                    .module
+                    .program
+                    .scan_at(&mut s.image, now)
+                    .and_then(|()| outputs(s));
+                match result {
+                    Ok(commands) => {
+                        q.copy_from_slice(&s.image.q);
+                        for (signal, v) in commands {
+                            table.drive(signal, v);
+                        }
+                    }
+                    Err(fault) => {
+                        q.fill(0);
+                        make_safe(s, table);
+                        s.status = Status::Faulted(fault);
+                        faults.push((s.module.name.clone(), fault));
+                    }
+                }
+            } else {
+                q.fill(0);
+                make_safe(s, table);
+                s.status = Status::Held;
+                s.stats.held = s.stats.held.saturating_add(1);
             }
             s.next = s.next.saturating_add(s.module.period);
             if s.next <= now {
@@ -243,12 +340,13 @@ impl Runtime {
         &self.outputs
     }
 
-    /// When the next running module is due; `None` once all have stopped.
+    /// When the next running or held module is due; `None` once all have
+    /// stopped.
     #[must_use]
     pub fn next_deadline(&self) -> Option<Duration> {
         self.slots
             .iter()
-            .filter(|s| s.status == Status::Running)
+            .filter(|s| !matches!(s.status, Status::Faulted(_)))
             .map(|s| s.next)
             .min()
     }
@@ -276,5 +374,49 @@ impl Runtime {
     /// Module names, in scan order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.slots.iter().map(|s| s.module.name.as_str())
+    }
+}
+
+/// Sets every `VAR_INPUT` of the module from its signal. False if any
+/// signal has no value or the value does not fit the port; inputs already
+/// set stay set, which is harmless as the module is then not scanned.
+fn set_inputs(s: &mut Slot, table: &SignalTable) -> bool {
+    s.ports.iter().filter(|b| b.dir == PortDir::Input).all(|b| {
+        table
+            .value(b.signal)
+            .is_some_and(|v| s.module.program.set_input(&b.port, to_st(v)).is_ok())
+    })
+}
+
+/// The module's `VAR_OUTPUT`s as signal commands, or an
+/// [`FaultKind::OutputRange`] fault if one cannot be carried.
+fn outputs(s: &Slot) -> Result<Vec<(usize, tcpethernet_io::Value)>, Fault> {
+    let unfit = Fault {
+        kind: FaultKind::OutputRange,
+        line: 0,
+    };
+    s.ports
+        .iter()
+        .filter(|b| b.dir == PortDir::Output)
+        .map(|b| {
+            let v = s.module.program.get(&b.port).ok_or(unfit)?;
+            from_st(v, signal_ty(b.ty)).map(|v| (b.signal, v)).ok_or(unfit)
+        })
+        .collect()
+}
+
+fn signal_ty(st: tcpethernet_iec::Ty) -> tcpethernet_io::Ty {
+    if st == tcpethernet_iec::Ty::Bool {
+        tcpethernet_io::Ty::Bool
+    } else if st.is_real() {
+        tcpethernet_io::Ty::Real
+    } else {
+        tcpethernet_io::Ty::Int
+    }
+}
+
+fn make_safe(s: &Slot, table: &mut SignalTable) {
+    for b in s.ports.iter().filter(|b| b.dir == PortDir::Output) {
+        table.make_safe(b.signal);
     }
 }

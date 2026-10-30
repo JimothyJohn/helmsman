@@ -5,7 +5,7 @@
 use std::fmt;
 use std::io;
 
-use crate::model::{Ty, Value};
+use crate::model::{Device, Ty, Value};
 
 /// What a point is, once the driver has parsed its address.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +84,21 @@ pub trait Driver {
 pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
     match driver {
         crate::modbus::DRIVER => crate::modbus::Point::parse(addr).map(crate::modbus::Point::info),
+        other => Err(Error::UnknownDriver(other.into())),
+    }
+}
+
+/// Opens a driver for `device` by its driver name. Network drivers connect
+/// lazily, on the first read or write, and reconnect after an error.
+///
+/// # Errors
+/// Unknown driver, or a device param that does not parse.
+pub fn open(device: &Device) -> Result<Box<dyn Driver + Send>, Error> {
+    match device.driver.as_str() {
+        crate::modbus::DRIVER => Ok(Box::new(crate::modbus::ModbusDriver::from_params(
+            &device.endpoint,
+            &device.params,
+        )?)),
         other => Err(Error::UnknownDriver(other.into())),
     }
 }

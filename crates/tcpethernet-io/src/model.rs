@@ -134,7 +134,7 @@ fn is_ident(s: &str) -> bool {
 }
 
 /// Parses a box channel: `do:N` is a writable output, `di:N` an input.
-fn local_point(channel: &str) -> Result<PointInfo, String> {
+pub(crate) fn local_point(channel: &str) -> Result<PointInfo, String> {
     let (kind, n) = channel
         .split_once(':')
         .ok_or_else(|| format!("bad channel {channel:?}"))?;
