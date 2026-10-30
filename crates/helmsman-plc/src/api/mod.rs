@@ -14,20 +14,26 @@
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
 //! POST /api/proposals                     token: a module draft or a param change, checked, stored as a draft
-//! POST /api/proposals/{id}/apply          token: 501, applying is the approval policy's (not built)
+//! POST /api/proposals/{id}/replay         token: sim replay of the draft against what runs; evidence for apply
+//! POST /api/proposals/{id}/apply          token + {role, pin, replay?}: apply through the approval policy
 //! GET  /api/audit?after=N&limit=M         every mutating call, append-only, naming snapshot ids
 //! GET  /api/snapshots                     snapshot history (with --store), head, the running change set's id
 //! GET  /api/snapshots/head
 //! GET  /api/snapshots/{id}                a snapshot's files
 //! GET  /api/snapshots/{a}/diff/{b}
-//! POST /api/snapshots/{id}/rollback       token: 501, rollback is the approval policy's (not built)
+//! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
+//! POST /api/snapshots/{id}/rollback       token + {role, pin, replay?}: roll back through the approval policy
+//! GET  /api/replays/{n}                   a replay kept as evidence
+//! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
 //! ```
 //!
 //! **What it cannot do.** There is no route that writes a signal, an
 //! output, a param or a module, with or without the token. Proposals are
-//! stored drafts; applying one answers 501 until the approval policy
-//! (`approval-policy`) exists and is the only path to apply. Limits are
+//! stored drafts; the only way one runs is `apply` (and the only way back
+//! is `rollback`), both through [`approve`]: tier, policy, role, PIN and
+//! sim evidence, checked by the host ([`crate::policy`]). The token alone
+//! (what the agent holds) can draft and replay, never apply. Limits are
 //! enforced here, by the host, never by whatever is calling.
 //!
 //! **Auth.** Reads (`GET`) are open to whoever can reach the socket (the
@@ -756,16 +762,20 @@ fn index() -> Json {
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source} or {kind: param, module, param, value}"),
-            e("POST", "/api/proposals/{id}/apply", true, "501: needs the approval policy"),
+            e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
+            e("POST", "/api/proposals/{id}/apply", true, "apply: {role, pin, replay?}, checked against the policy"),
             e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),
             e("GET", "/api/snapshots", false, "snapshot history (needs --store), head, and the running change set's id"),
             e("GET", "/api/snapshots/head", false, "the head entry"),
             e("GET", "/api/snapshots/{id}", false, "a snapshot's files"),
             e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
-            e("POST", "/api/snapshots/{id}/rollback", true, "501: needs the approval policy"),
+            e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
+            e("POST", "/api/snapshots/{id}/rollback", true, "roll back: {role, pin, replay?}, checked against the policy"),
+            e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
+            e("GET", "/api/policy", false, "the approval policy this box enforces"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
         ],
-        "writes": "no endpoint writes a signal, an output or a module; applying a proposal needs the approval policy",
+        "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
     })
 }
 
