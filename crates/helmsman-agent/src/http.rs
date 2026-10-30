@@ -387,6 +387,17 @@ struct Chunked<R> {
     done: bool,
 }
 
+/// A transport error back as an `io::Error` of the same kind, so a
+/// timeout inside a chunked body still reads as a timeout.
+fn to_io(e: Error) -> io::Error {
+    match e {
+        Error::Timeout => io::Error::from(io::ErrorKind::TimedOut),
+        Error::Io(k) => io::Error::from(k),
+        Error::Protocol(why) => bad(why),
+        e => io::Error::other(e.to_string()),
+    }
+}
+
 fn bad(why: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, why)
 }
@@ -397,14 +408,14 @@ impl<R: BufRead> Read for Chunked<R> {
             return Ok(0);
         }
         if self.left == 0 {
-            let line = read_line(&mut self.r, MAX_CHUNK_LINE).map_err(|_| bad("bad chunk size line"))?;
+            let line = read_line(&mut self.r, MAX_CHUNK_LINE).map_err(to_io)?;
             let line = std::str::from_utf8(&line).map_err(|_| bad("bad chunk size line"))?;
             let size = line.split(';').next().unwrap_or("").trim();
             let n = u64::from_str_radix(size, 16).map_err(|_| bad("bad chunk size"))?;
             if n == 0 {
                 // Trailers, then the blank line.
                 loop {
-                    let l = read_line(&mut self.r, MAX_CHUNK_LINE).map_err(|_| bad("bad trailer"))?;
+                    let l = read_line(&mut self.r, MAX_CHUNK_LINE).map_err(to_io)?;
                     if l.is_empty() {
                         break;
                     }
@@ -421,7 +432,7 @@ impl<R: BufRead> Read for Chunked<R> {
         }
         self.left -= n as u64;
         if self.left == 0 {
-            let crlf = read_line(&mut self.r, 2).map_err(|_| bad("chunk not followed by CRLF"))?;
+            let crlf = read_line(&mut self.r, 2).map_err(to_io)?;
             if !crlf.is_empty() {
                 return Err(bad("chunk not followed by CRLF"));
             }

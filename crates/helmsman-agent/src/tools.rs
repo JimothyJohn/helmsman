@@ -403,6 +403,63 @@ fn read_module(api: &BoxApi, i: &ReadModule) -> Outcome {
     ok(m, format!("module {}", i.name))
 }
 
+/// Free text for `author` and `prompt`: anything but control characters.
+fn free(what: &str, s: &str) -> Result<String, String> {
+    if s.chars().any(char::is_control) {
+        return Err(format!("{what} may not carry line breaks or control characters"));
+    }
+    Ok(s.trim().to_string())
+}
+
+/// A name or a literal: printable ASCII without blanks or `#`.
+fn word(what: &str, s: &str) -> Result<String, String> {
+    if s.is_empty() || s.len() > 128 || !s.bytes().all(|b| b.is_ascii_graphic() && b != b'#') {
+        return Err(format!("{what} {s:?}: printable ASCII without blanks or #"));
+    }
+    Ok(s.to_string())
+}
+
+fn int(what: &str, v: &Json) -> Result<i64, String> {
+    v.as_i64().ok_or_else(|| format!("{what} must be a whole number"))
+}
+
+/// The `param` lines.
+fn param_lines(out: &mut String, params: &Json) -> Result<(), String> {
+    let params = params.as_array().ok_or("params must be a list")?;
+    for p in params {
+        let p = p
+            .as_object()
+            .ok_or("each param is {name, type, value, min, max}")?;
+        let pname = word(
+            "param name",
+            p.get("name").and_then(Json::as_str).unwrap_or_default(),
+        )?;
+        let ty = word(
+            "param type",
+            p.get("type").and_then(Json::as_str).unwrap_or_default(),
+        )?;
+        let lit = |v: Option<&Json>| -> Result<Option<String>, String> {
+            match v {
+                None | Some(Json::Null) => Ok(None),
+                Some(Json::Bool(b)) => Ok(Some(b.to_string())),
+                Some(Json::Number(n)) => Ok(Some(n.to_string())),
+                Some(Json::String(s)) => word("param value", s).map(Some),
+                Some(_) => Err("param values are booleans or numbers".into()),
+            }
+        };
+        let value = lit(p.get("value"))?.ok_or("each param needs a value")?;
+        let _ = write!(out, "param    {pname} {ty} {value}");
+        if let Some(min) = lit(p.get("min"))? {
+            let _ = write!(out, " min={min}");
+        }
+        if let Some(max) = lit(p.get("max"))? {
+            let _ = write!(out, " max={max}");
+        }
+        out.push('\n');
+    }
+    Ok(())
+}
+
 /// A manifest's text from the tool's object: the keys `read_module`
 /// returns (`author`, `prompt`, `scan_ms`, `i`, `q`, `m`, `reads`,
 /// `drives`, `params`; `name` and `text` are optional and checked). Every
@@ -424,21 +481,6 @@ pub fn manifest_text(name: &str, m: &Map<String, Json>) -> Result<String, String
     {
         return Err("manifest name differs from the draft's name".into());
     }
-    let free = |what: &str, s: &str| -> Result<String, String> {
-        if s.chars().any(char::is_control) {
-            return Err(format!("{what} may not carry line breaks or control characters"));
-        }
-        Ok(s.trim().to_string())
-    };
-    let word = |what: &str, s: &str| -> Result<String, String> {
-        if s.is_empty() || s.len() > 128 || !s.bytes().all(|b| b.is_ascii_graphic() && b != b'#') {
-            return Err(format!("{what} {s:?}: printable ASCII without blanks or #"));
-        }
-        Ok(s.to_string())
-    };
-    let int = |what: &str, v: &Json| -> Result<i64, String> {
-        v.as_i64().ok_or_else(|| format!("{what} must be a whole number"))
-    };
     let mut out = format!("name     {name}\n");
     let author = m.get("author").and_then(Json::as_str).unwrap_or("Helmsman agent");
     let author = free("author", author)?;
@@ -495,38 +537,7 @@ pub fn manifest_text(name: &str, m: &Map<String, Json>) -> Result<String, String
         let _ = writeln!(out, "{key:<8} {}", names.join(" "));
     }
     if let Some(params) = m.get("params").filter(|v| !v.is_null()) {
-        let params = params.as_array().ok_or("params must be a list")?;
-        for p in params {
-            let p = p
-                .as_object()
-                .ok_or("each param is {name, type, value, min, max}")?;
-            let pname = word(
-                "param name",
-                p.get("name").and_then(Json::as_str).unwrap_or_default(),
-            )?;
-            let ty = word(
-                "param type",
-                p.get("type").and_then(Json::as_str).unwrap_or_default(),
-            )?;
-            let lit = |v: Option<&Json>| -> Result<Option<String>, String> {
-                match v {
-                    None | Some(Json::Null) => Ok(None),
-                    Some(Json::Bool(b)) => Ok(Some(b.to_string())),
-                    Some(Json::Number(n)) => Ok(Some(n.to_string())),
-                    Some(Json::String(s)) => word("param value", s).map(Some),
-                    Some(_) => Err("param values are booleans or numbers".into()),
-                }
-            };
-            let value = lit(p.get("value"))?.ok_or("each param needs a value")?;
-            let _ = write!(out, "param    {pname} {ty} {value}");
-            if let Some(min) = lit(p.get("min"))? {
-                let _ = write!(out, " min={min}");
-            }
-            if let Some(max) = lit(p.get("max"))? {
-                let _ = write!(out, " max={max}");
-            }
-            out.push('\n');
-        }
+        param_lines(&mut out, params)?;
     }
     Ok(out)
 }
