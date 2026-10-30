@@ -278,6 +278,22 @@ impl SignalTable {
         Ok(self.sigs.len() - 1)
     }
 
+    /// A signal's name, as the map spells it.
+    #[must_use]
+    pub fn name(&self, i: usize) -> Option<&str> {
+        self.sigs.get(i).map(|s| s.name.as_str())
+    }
+
+    /// Back to how [`SignalTable::new`] left it: every input missing,
+    /// every output at its safe value. Claims stay.
+    pub(crate) fn reset(&mut self) {
+        for s in &mut self.sigs {
+            s.value = None;
+            s.command = s.safe;
+            s.error = None;
+        }
+    }
+
     /// A signal's direction and type.
     #[must_use]
     pub fn signal(&self, i: usize) -> Option<(Dir, Ty)> {
