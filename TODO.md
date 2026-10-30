@@ -179,6 +179,7 @@
 - [ ] **Deploy tcpethernet-plc (IEC runtime) to the pick PC** — the Pi target now that CODESYS is out. The old toy-PLC deploy/smoke scripts left with #11; write scripts/pi-deploy-plc.sh for the IEC runtime (cross-build aarch64, systemd unit, open 44818/tcp+udp and 2222/udp in perceptronics' firewall) and re-smoke from the Studio.
   needs: nothing; Pi prepped (192.168.3.20, key SSH, passwordless sudo)
   result: a .st program on the Pi drives Class 1 I/O the Studio's scanner sees
+  notes: `! scripts/pi-deploy-plc.sh nick@192.168.3.20` then `scripts/adapter-smoke.sh 192.168.3.20` (both run here); script written, binary verified in a Trixie arm64 container, not yet run against the Pi
   est: 2h
   difficulty: med
   depends: pi-prep
