@@ -137,6 +137,20 @@ impl Emitter {
         }
     }
 
+    /// Finds each watched signal in `table` (another layout than it was
+    /// bound to) by name. A signal that is gone is watched nowhere (its
+    /// emit is silent); one whose type changed starts again as if unseen.
+    pub fn rebind(&mut self, table: &SignalTable) {
+        for w in &mut self.watches {
+            let at = table.index(&w.name);
+            let ty = at.and_then(|i| table.signal(i)).map(|(_, ty)| ty);
+            if w.last.is_some_and(|v| Some(v.ty()) != ty) {
+                w.last = None;
+            }
+            w.signal = at.unwrap_or(usize::MAX);
+        }
+    }
+
     /// Looks at every watched signal once, at monotonic time `now`, and
     /// returns what fired, in emit order.
     pub fn observe(&mut self, table: &SignalTable, now: Duration) -> Vec<Fired> {

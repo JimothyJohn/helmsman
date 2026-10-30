@@ -84,6 +84,8 @@ use crate::SignalTable;
 pub struct Sinks {
     emitter: Emitter,
     handles: Vec<Handle>,
+    /// The table layout the emitter is bound to ([`SignalTable::epoch`]).
+    epoch: u64,
 }
 
 /// Where the sinks write their log lines.
@@ -129,13 +131,25 @@ impl Sinks {
                 .map_err(|e| vec![format!("sink {name}: {e}")])?;
             handles.push(h);
         }
-        Ok(Self { emitter, handles })
+        Ok(Self {
+            emitter,
+            handles,
+            epoch: table.epoch(),
+        })
     }
 
     /// Looks at `table` after a tick and offers each event that fired to
     /// its sink, never blocking: an event a sink's channel has no room for
     /// is counted in its [`Stats::dropped_channel`].
+    ///
+    /// After a reload of the I/O map or calendar (a table of another
+    /// layout) each emit finds its signal again by name; one whose signal
+    /// the new map no longer has is silent until a map brings it back.
     pub fn observe(&mut self, table: &SignalTable, now: Duration, ts_ms: Option<i64>) {
+        if table.epoch() != self.epoch {
+            self.epoch = table.epoch();
+            self.emitter.rebind(table);
+        }
         for f in self.emitter.observe(table, now) {
             if let Some(h) = self.handles.get(f.sink) {
                 let _ = h.offer(f.into_event(ts_ms));

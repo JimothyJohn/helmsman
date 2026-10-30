@@ -40,6 +40,10 @@ struct Sig {
     /// The last point error its link hit (a refused write or read), until
     /// the point next goes through.
     error: Option<String>,
+    /// The device id (`box` for the box's own channels) and point a link
+    /// polls or writes it at; `None` for module outputs and the box's own
+    /// inputs (the calendar's).
+    point: Option<(String, String)>,
 }
 
 /// Why an I/O map and its safe values cannot become a table.
@@ -78,6 +82,10 @@ pub struct SignalTable {
     /// Outputs driven by the box itself (the calendar), not by a module:
     /// signal index and who drives it.
     claims: BTreeMap<usize, String>,
+    /// Which layout this is: bumped each time a reload replaces the table
+    /// ([`SignalTable::carry_from`]), so a link holding indices into an
+    /// older one knows to look its signals up again.
+    epoch: u64,
 }
 
 const fn zero(ty: Ty) -> Value {
@@ -145,12 +153,18 @@ impl SignalTable {
                     command: safe,
                     safe,
                     error: None,
+                    point: match &s.binding {
+                        Binding::Device { device, point } => Some((device.clone(), point.clone())),
+                        Binding::Local { channel } => Some((helmsman_io::text::BOX.into(), channel.clone())),
+                        Binding::Module { .. } => None,
+                    },
                 }
             })
             .collect();
         Ok(Self {
             sigs,
             claims: BTreeMap::new(),
+            epoch: 0,
         })
     }
 
@@ -280,6 +294,7 @@ impl SignalTable {
             source: None,
             unit: None,
             error: None,
+            point: None,
         });
         Ok(self.sigs.len() - 1)
     }
@@ -318,6 +333,73 @@ impl SignalTable {
     #[must_use]
     pub fn writer(&self, i: usize) -> Option<&str> {
         self.claims.get(&i).map(String::as_str)
+    }
+
+    /// The device id (`box` for the box's own channels) and point signal
+    /// `i` is polled or written at; `None` for a module output or one of
+    /// the box's own inputs.
+    #[must_use]
+    pub fn point(&self, i: usize) -> Option<(&str, &str)> {
+        self.sigs
+            .get(i)?
+            .point
+            .as_ref()
+            .map(|(d, p)| (d.as_str(), p.as_str()))
+    }
+
+    /// Which layout this table is (see [`SignalTable::carry_from`]).
+    #[must_use]
+    pub const fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// Whether signal `i` here and signal `j` of `old` are the same
+    /// signal: name, type, direction and binding (device and point, the
+    /// module it carries, or neither) all equal.
+    fn same_signal(&self, i: usize, old: &Self, j: usize) -> bool {
+        let (a, b) = (&self.sigs[i], &old.sigs[j]);
+        a.name == b.name && a.ty == b.ty && a.dir == b.dir && a.source == b.source && a.point == b.point
+    }
+
+    /// Makes this freshly built table (a new I/O map and calendar) the
+    /// successor of `old`, the one the box runs: every signal that is the
+    /// same signal in both (name, type, direction and binding unchanged)
+    /// keeps its value, its command and its point error, so nothing that
+    /// did not change glitches; every other signal starts as
+    /// [`SignalTable::new`] leaves it (inputs missing, outputs at their safe
+    /// value). Safe values, units and claims are this table's. The epoch
+    /// is one past `old`'s. Returns, per signal of this table, the index
+    /// of the same signal in `old`.
+    pub fn carry_from(&mut self, old: &Self) -> Vec<Option<usize>> {
+        self.epoch = old.epoch.wrapping_add(1);
+        let mut from = Vec::with_capacity(self.sigs.len());
+        for i in 0..self.sigs.len() {
+            let j = old
+                .index(&self.sigs[i].name)
+                .filter(|&j| self.same_signal(i, old, j));
+            if let Some(j) = j {
+                let o = &old.sigs[j];
+                let s = &mut self.sigs[i];
+                s.value = o.value;
+                s.command = o.command;
+                s.error.clone_from(&o.error);
+            }
+            from.push(j);
+        }
+        from
+    }
+
+    /// Outputs not driven by any of `driven` (a module's output signal) nor
+    /// claimed by the box, and module-output signals no module drives:
+    /// what a reload sends to safe. Indices.
+    pub(crate) fn undriven(&self, driven: &[usize]) -> Vec<usize> {
+        (0..self.sigs.len())
+            .filter(|i| !driven.contains(i))
+            .filter(|&i| {
+                let s = &self.sigs[i];
+                (s.dir == Dir::Out && !self.claims.contains_key(&i)) || s.source.is_some()
+            })
+            .collect()
     }
 }
 
@@ -440,14 +522,15 @@ pub(crate) struct Polled {
 }
 
 /// Signals bound to devices, grouped by device id (`None` for the box's
-/// own channels), with their addresses. Module outputs are no device's.
+/// own channels), with their addresses. Module outputs and screen tiles
+/// are no device's: nothing polls or writes them.
 pub(crate) fn by_device(map: &IoMap) -> BTreeMap<Option<String>, Vec<Polled>> {
     let mut groups: BTreeMap<Option<String>, Vec<Polled>> = BTreeMap::new();
     for (i, s) in map.signals.iter().enumerate() {
         let (dev, addr) = match &s.binding {
             Binding::Device { device, point } => (Some(device.clone()), point.clone()),
             Binding::Local { channel } => (None, channel.clone()),
-            Binding::Module { .. } => continue,
+            Binding::Module { .. } | Binding::Screen { .. } => continue,
         };
         groups.entry(dev).or_default().push(Polled {
             signal: i,
