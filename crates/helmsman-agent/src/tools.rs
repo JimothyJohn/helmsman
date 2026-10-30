@@ -110,7 +110,11 @@ impl BoxApi {
         self.call("GET", path, None)
     }
 
-    fn post(&self, path: &str, body: &Json) -> Result<(u16, Json), String> {
+    /// `POST` with the token; the status and the JSON answer.
+    ///
+    /// # Errors
+    /// The box API could not be reached or did not answer.
+    pub fn post(&self, path: &str, body: &Json) -> Result<(u16, Json), String> {
         self.call("POST", path, Some(body))
     }
 }

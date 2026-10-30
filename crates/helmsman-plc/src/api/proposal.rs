@@ -233,6 +233,7 @@ fn param(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(J
         "to": render::value(Some(to)),
         "min": render::value(p.range.map(|r| r.0)),
         "max": render::value(p.range.map(|r| r.1)),
+        "unit": p.unit,
         "touches_outputs": !m.drives.is_empty() || m.q.is_some_and(|w| w.len > 0),
     });
     Ok((j, files))

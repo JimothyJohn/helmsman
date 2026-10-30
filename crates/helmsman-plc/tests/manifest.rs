@@ -31,8 +31,8 @@ scan_ms  50
 q        0+2
 reads    start jam
 drives   motor lamp
-param    speed   real 1.5 min=0 max=10
-param    ramp_ms int  500 min=0 max=5000
+param    speed   real 1.5 min=0 max=10 unit=m/s
+param    ramp_ms int  500 min=0 max=5000 unit=ms
 param    beacon  bool true
 ";
 
@@ -68,16 +68,19 @@ fn the_documented_example_parses() {
                 name: "speed".into(),
                 value: Value::Real(1.5),
                 range: Some((Value::Real(0.0), Value::Real(10.0))),
+                unit: Some("m/s".into()),
             },
             Param {
                 name: "ramp_ms".into(),
                 value: Value::Int(500),
                 range: Some((Value::Int(0), Value::Int(5000))),
+                unit: Some("ms".into()),
             },
             Param {
                 name: "beacon".into(),
                 value: Value::Bool(true),
                 range: None,
+                unit: None,
             },
         ]
     );
@@ -160,6 +163,10 @@ fn every_bad_line_is_reported_with_its_number() {
         "param p bool 1",
         "param p string x",
         "param p int 1 min=0 max=2 step=1",
+        "param p int 1 min=0 max=2 unit=",                  // empty unit
+        "param p int 1 min=0 max=2 unit=s unit=ms",         // unit twice
+        "param p int 1 min=0 max=2 unit=abcdefghijklmnopq", // 17 characters
+        "param p bool true unit=s",                         // a bool has no unit
         "param 9p int 1 min=0 max=2",
         "param p-q bool true",
         "author",               // empty author
@@ -567,6 +574,7 @@ fn manifest_strategy() -> impl Strategy<Value = Manifest> {
                             name,
                             value: Value::Bool(flag),
                             range: None,
+                            unit: None,
                         },
                         1 => {
                             let mut v = [a, b, c];
@@ -575,6 +583,7 @@ fn manifest_strategy() -> impl Strategy<Value = Manifest> {
                                 name,
                                 value: Value::Int(v[1]),
                                 range: Some((Value::Int(v[0]), Value::Int(v[2]))),
+                                unit: flag.then(|| "ms".to_string()),
                             }
                         }
                         _ => {
@@ -584,6 +593,7 @@ fn manifest_strategy() -> impl Strategy<Value = Manifest> {
                                 name,
                                 value: Value::Real(v[1]),
                                 range: Some((Value::Real(v[0]), Value::Real(v[2]))),
+                                unit: flag.then(|| "m/s".to_string()),
                             }
                         }
                     }
