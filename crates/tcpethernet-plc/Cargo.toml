@@ -13,6 +13,7 @@ tcpethernet-iec = { path = "../tcpethernet-iec" }
 
 [dev-dependencies]
 tcpethernet = { path = "../tcpethernet" }
+proptest = "1.12"
 
 [lints]
 workspace = true
