@@ -1069,6 +1069,8 @@ dependencies = [
 name = "helmsman-io"
 version = "0.1.0"
 dependencies = [
+ "helmsman-adapter",
+ "helmsman-proto",
  "proptest",
 ]
 
@@ -1089,6 +1091,7 @@ dependencies = [
 name = "helmsman-proto"
 version = "0.1.0"
 dependencies = [
+ "helmsman-proto",
  "proptest",
 ]
 

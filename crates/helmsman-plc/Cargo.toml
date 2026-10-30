@@ -15,7 +15,8 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 webpki-roots = { version = "1.0.11", optional = true }
 
 [dev-dependencies]
-helmsman-proto = { path = "../helmsman-proto" }
+# The box build itself never enables `unrestricted`; its tests play scanner.
+helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
 
 [lints]

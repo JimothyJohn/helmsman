@@ -43,7 +43,7 @@ roadmap card, by id).
      a Logix PLC, our CLI)             drives, sensors
 
   observed controllers (a CompactLogix): read-only, via helmsman-proto (originator)
-  (planned: logix-tag-read; no Write Tag in the box build)
+  (built: logix-tag driver; no Write Tag, no unrestricted session in the box build)
 ```
 
 Three directions of traffic, three different rules:
@@ -61,8 +61,8 @@ Three directions of traffic, three different rules:
 
 | crate | owns | status |
 | --- | --- | --- |
-| `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Class 1 scanner. Byte codecs plus socket-level session, discovery and scanner. | built |
-| `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O. | built |
+| `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Logix tag reads (`logix`: Read Tag, Multiple Service Packet, Read Tag Fragmented, Symbol object browse, backplane routing), Class 1 scanner. Byte codecs plus socket-level session, discovery and scanner. Any-service requests and the scanner sit behind the `unrestricted` feature. | built |
+| `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
@@ -155,6 +155,11 @@ scan; the scheduler bounds how often.
   Writes are proven through loops (output wired to input), so a driver that
   only pretends to write fails. `cargo run -p helmsman-io --example
   conformance -- --sim`.
+
+- **`logix`**: `logix-tag`, read-only signals from an observed Logix
+  controller by tag name (`in temp real plc Program:Main.Temp@real`); the
+  `@TYPE` is the tag's Logix type and is checked on every reply. Reads are
+  batched into one Multiple Service Packet per cycle.
 
 - **`local`**: the box's own channels (`do:N`, `di:N`) behind the same
   contract; in memory until `gpio-outputs` adds the Pi backend.
@@ -287,6 +292,33 @@ load.
   calendar's signals are missing, so modules reading them are held, and
   driven outputs go to their safe values.
 
+## Hot swap (`hot-swap`, built)
+
+`Runtime::swap(module, &mut table)` replaces the module of the same name
+between its scans (contract in `tests/swap.rs`). The adapter, the links and
+the other modules never notice.
+
+- **Checked like a fresh load**, by the same code, against the other modules
+  as they run: windows, sizes, period, ports against the `SignalTable`, one
+  writer per `%Q` byte and per output signal. A refused swap changes nothing.
+- **State carries by name and type** (`Program::state` / `Program::restore`
+  in `helmsman-iec`): top-level `VAR`, `VAR_INPUT`, `VAR_OUTPUT`, not
+  `VAR_TEMP`, constants or located variables. A variable carries whole when
+  its type has the same shape in both programs (same elementary type; same
+  enumeration; same array bounds; same struct or function block, by name and
+  members), so a `TON` keeps its elapsed time and a `CTU` its count; a new or
+  retyped variable starts at its initial value. Every copied slot is also
+  checked against the new slot's type, so nothing ill-typed lands in memory.
+  `%M` keeps its bytes over the length both share.
+- **No glitch**: the `%Q` bytes and output signals the module keeps hold their
+  last values until the new program's first scan; bytes it gives up go to
+  zero and signals it stops driving go safe at once.
+- A **faulted or held** module restarts Running, its state carried; a faulted
+  one is next due on its old phase after the last tick (open question
+  `hot-swap-faulted-state`).
+
+Not in the binary yet: there is no control channel until `box-api`.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -296,7 +328,7 @@ load.
 | module ↔ network | nothing | ST has no network primitives; sinks (webhook, OPC UA) are core-owned | built by construction; sinks planned |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
-| box ↔ observed PLCs | tag reads | the box build exposes read services only (no Write Tag, no `Set_Attribute`) | planned (`logix-tag-read`); **today the `helmsman-proto` library and CLI can send any service and drive Class 1 outputs** |
+| box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | planned (`box-api`, `approval-policy`) |
 | text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions, in the agent prompt; the host rules above hold regardless | planned (`agent-loop`) |
@@ -308,8 +340,6 @@ prompt. The agent never touches the Rust core.
 
 ## Where the planned pieces attach
 
-- `hot-swap`: replace one module's `Program` between its scans; its windows
-  and the adapter connection stay up. Needs `multi-module`.
 - `module-format` → `signal-model` → `box-api`: the manifest (signals read,
   outputs driven, schedule, params) is what the scheduler, the I/O map and
   the policy check; the box API serves it.
