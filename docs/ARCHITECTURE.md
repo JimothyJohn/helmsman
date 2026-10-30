@@ -127,8 +127,9 @@ scan; the scheduler bounds how often.
 ## The I/O layer, as built (`helmsman-io`)
 
 - **`Device`**: an endpoint the box is master of: `id`, `driver` name
-  (`modbus-tcp`), `endpoint` (`host:port`), driver params (`unit`,
-  `timeout_ms`).
+  (`modbus-tcp`, `modbus-rtu`, `logix-tag`), `endpoint` (`host:port`, or a
+  serial port's path for `modbus-rtu`), driver params (`unit`,
+  `timeout_ms`, and the serial settings).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
   `Real`), a direction (`In`, `Out`), an optional engineering `unit`
   (metadata, never converted), an optional per-input `poll` period, and a
@@ -148,22 +149,47 @@ scan; the scheduler bounds how often.
   nothing, batching is the driver's business), `write(addr, value)`. Strings
   and plain values only, so the same contract crosses a WASM boundary
   unchanged.
-- **`modbus`**: the Modbus TCP client and driver, from the spec (citations
-  in `docs/SOURCES.md`).
+- **`modbus`**: the Modbus application layer (points, PDUs, reply checks,
+  `app`) over a `Transport`, and the TCP client; the driver is generic over
+  the transport. From the spec (citations in `docs/SOURCES.md`).
+- **`rtu`**: `modbus-rtu`, the same application layer on a serial line:
+  RTU framing and CRC-16, t3.5 silence before each request, the response
+  time-out, broadcast (unit 0: writes only, no reply, then the turnaround
+  delay), units 1..=247. The receiver hunts for the expected unit and
+  function and takes the first frame whose CRC checks, so noise and other
+  units' replies are skipped; after a link error the line is drained until
+  quiet for a whole time-out, so a late reply is never taken for the next
+  answer (RTU has no transaction id; a reply later than about two time-outs
+  still could be). CRC errors, truncated frames and time-outs are link
+  errors; exceptions are point errors. The serial port is a `Line` trait:
+  `rtu::serial` (termios through rustix, the `serial` feature) on the box,
+  `rtu::pipe` (in memory) in tests.
 - **`sim`**: a Modbus device with cross-wires (a coil driving a discrete
-  input, like a wire on the bench) and injectable faults.
+  input, like a wire on the bench) and injectable faults, over TCP; and
+  `rtu::sim`, the same tables as an RTU unit on a pipe, with the serial
+  faults (bad CRC, truncated frame, another unit answering, noise, a reply
+  in pieces, late replies).
 - **`harness`**: driver conformance, reported as `PASS`/`FAIL`/`SKIP` lines.
   Writes are proven through loops (output wired to input), so a driver that
-  only pretends to write fails. `cargo run -p helmsman-io --example
-  conformance -- --sim`.
+  only pretends to write fails. Each simulator lists the faults that mean
+  something on its transport. `cargo run -p helmsman-io --example
+  conformance -- --sim` (TCP) or `-- --sim-rtu`.
 
 - **`logix`**: `logix-tag`, read-only signals from an observed Logix
   controller by tag name (`in temp real plc Program:Main.Temp@real`); the
   `@TYPE` is the tag's Logix type and is checked on every reply. Reads are
   batched into one Multiple Service Packet per cycle.
 
-- **`local`**: the box's own channels (`do:N`, `di:N`) behind the same
-  contract; in memory until `gpio-outputs` adds the Pi backend.
+- **`local`**: the box's own channels (`do:N`, `di:N`, and
+  `i2c:BUS:ADDR:REG[:FMT]` integer inputs from a sensor register) in
+  memory, the default. **`board`**: the same channels on the board: a
+  `Board` driver over `Gpio` and `I2c` traits (direction rules, formats,
+  errors: a line that won't request or a sensor that doesn't answer is a
+  point error), and `board::linux` (Linux, the `gpio` feature): GPIO lines
+  through the character device's uAPI v2 (gpiocdev) and `/dev/i2c-N` with a
+  combined write-then-read (i2cdev). `helmsman-plc --gpio-chip
+  /dev/gpiochipN` picks it; the chip is checked at start. Both features are
+  in helmsman-plc's `box`, so the canvas's wasm build has neither.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
   `in NAME TYPE module MODULE` is another module's output. Older maps read

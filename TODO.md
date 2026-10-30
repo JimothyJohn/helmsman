@@ -331,6 +331,16 @@
   depends: api-lan-reads
   id: canvas-lan-default
 
+- [ ] **Modbus RTU: enforce the t1.5 inter-character rule by default?** Serial §2.5.1.1 p.13 says a frame with a silence over 1.5 character times inside it is discarded. `modbus-rtu` (feat/sources-modbus-rtu) applies that only with `timing=strict` on the device line; by default it frames by CRC and by hunting for the expected unit and function. Reason: a USB-RS485 adapter's latency timer (1-16 ms on FTDI) delivers a reply in bursts the host sees milliseconds apart, so strict timing would throw good replies away; a native UART (the Pi's ttyAMA*) can take strict. The transmit side keeps t3.5 either way. Reversible: one default in `rtu::Params`.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call (and which adapter the bench uses)
+  result: whether a plain `device x modbus-rtu /dev/ttyUSB0` line discards gappy frames
+  options: relaxed by default, timing=strict opt-in (recommended, built) | strict by default, timing=relaxed for USB adapters | strict on /dev/ttyAMA*, relaxed on /dev/ttyUSB*
+  est: 15m
+  difficulty: low
+  id: rtu-strict-timing
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -406,6 +416,15 @@
   difficulty: med
   depends: pi-prep
   id: pi-deploy-iec
+
+- [ ] **Check the board backend on the Pi** — run the GPIO / I2C check against the pick PC: finds the header's GPIO chip (gpiochip0 or gpiochip4 on a Pi 5, by kernel), lists /dev/i2c-1, builds and runs `board_check` (helmsman-io's Linux backend, the code behind `helmsman-plc --gpio-chip`) reading `di:4` by default. Add `READ="di:4 i2c:1:0x48:0:i16"` for a sensor, and `LOOP="do:17=di:27"` only with a jumper from that output to that input (it drives the output).
+  needs: on the Pi `sudo apt install gpiod i2c-tools`, `dtparam=i2c_arm=on` and a reboot, the SSH user in the gpio and i2c groups; Docker here
+  result: the board backend proven on real GPIO (and I2C if a sensor is wired); then `--gpio-chip` goes into the deploy unit
+  notes: `! scripts/pi-gpio-check.sh nick@192.168.3.20` (runs here, not in the native terminal; read-only unless LOOP is set)
+  est: 30m
+  difficulty: low
+  depends: pi-deploy-iec, sources-modbus-gpio
+  id: pi-gpio-check
 
 - [x] **Deploy tcpethernet-plc to the Pi and smoke it from the Studio** — our own adapter + soft PLC as a systemd service (web page on :8080, token printed by the script). Alternative or complement to CODESYS; needs no Windows. Runs here.
   needs: pi-prep done (key SSH, passwordless sudo)
@@ -577,6 +596,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 
 - [ ] **Box outputs: GPIO stack light** — Pi GPIO (or a relay hat) as box-owned outputs with named channels; blink patterns as a stdlib FB.
   needs: a relay hat or 24 V stack light + driver on the bench
+  notes: the GPIO backend is in (feat/sources-modbus-rtu: `do:N` is line N of `--gpio-chip`); left: the hardware, the blink FB, and pi-gpio-check on the Pi
   result: the demo's light
   est: 1d
   difficulty: low
@@ -742,7 +762,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: signal-model
   id: sink-opcua
 
-- [ ] **More sources: Modbus TCP/RTU, GPIO/I2C inputs** — signal sources beyond CIP, so a dumb machine plus a sensor is a valid install.
+- [x] **More sources: Modbus TCP/RTU, GPIO/I2C inputs** — signal sources beyond CIP, so a dumb machine plus a sensor is a valid install.
+  notes: built on feat/sources-modbus-rtu: `modbus-rtu` driver (helmsman-io `rtu`, shared app layer with TCP, RTU simulator, conformance `--sim-rtu`), box channels `di:N`/`do:N`/`i2c:BUS:ADDR:REG[:FMT]` on the board via `helmsman-plc --gpio-chip` (helmsman-io `board`). Verified against the simulator and fakes only: on-Pi check is `pi-gpio-check`, a real RTU device waits for the bench
   est: 1w
   difficulty: med
   depends: signal-model

@@ -14,7 +14,7 @@
 //! masters; the params are the driver's. `in`/`out NAME TYPE DEVICE POINT`
 //! declares a signal (`bool`, `int` or `real`) bound to a point in that
 //! device's address syntax; the device `box` is the box's own channels
-//! (`do:N`, `di:N`). `in NAME TYPE module MODULE` is another module's
+//! (`do:N`, `di:N`, `i2c:BUS:ADDR:REG[:FMT]`; see [`crate::board`]). `in NAME TYPE module MODULE` is another module's
 //! output: the `VAR_OUTPUT` called NAME in module MODULE, which any other
 //! module may read as a `VAR_INPUT` called NAME.
 //!
