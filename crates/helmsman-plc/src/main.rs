@@ -8,6 +8,7 @@
 //! the network so the PLC can still be found.
 
 use std::fs;
+use std::io::BufRead as _;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -20,10 +21,15 @@ use helmsman_adapter::device::lock_ref;
 use helmsman_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
 use helmsman_iec::{ImageSizes, compile, compile_plcopen, plcopen};
 use helmsman_io::local::Channels;
-use helmsman_plc::api::{self, Api, Catalog, Devices, Live, MemAudit, MemProposals, ModuleInfo, Publisher};
+use helmsman_plc::api::{
+    self, Api, Approval, Catalog, Devices, Live, MemAudit, MemProposals, ModuleInfo, Plant, Publisher,
+    Swapper,
+};
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
 use helmsman_plc::manifest::ModuleDir;
+use helmsman_plc::policy::pin::{self, Gate, Pins};
+use helmsman_plc::policy::{Policy, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
 use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::spec::{Defaults, Spec};
@@ -54,9 +60,15 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
                        for the LAN), or `off`. Reads are open; anything
                        else needs the token from the state directory.
-  --state-dir DIR      where the API token lives (default $STATE_DIRECTORY,
-                       as systemd's StateDirectory= sets it, else
-                       ./helmsman-state)
+  --state-dir DIR      where the API token and the role PINs live (default
+                       $STATE_DIRECTORY, as systemd's StateDirectory= sets
+                       it, else ./helmsman-state)
+  --policy FILE        approval policy (see helmsman_plc::policy); stricter
+                       than the built-in floor or refused. Default: the floor
+  --set-pin ROLE       read a PIN for operator, engineer or integrator from
+                       stdin (one line), store its hash in the state
+                       directory, and exit. Applying a change through the API
+                       takes the token and a PIN of a role the policy allows
   --scan-ms N          default scan period (10, 1..=10000)
   --memory N           default %M area in bytes (1024)
   --serial HEX         identity serial number (default 1)
@@ -86,6 +98,8 @@ struct Opts {
     emit_st: bool,
     api: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
+    policy: Option<PathBuf>,
+    set_pin: Option<Role>,
     scan: Duration,
     memory: usize,
     serial: u32,
@@ -100,6 +114,7 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse(args: &[String]) -> Result<Opts, String> {
     let mut o = Opts {
         programs: Vec::new(),
@@ -113,6 +128,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         state_dir: None,
+        policy: None,
+        set_pin: None,
         scan: Duration::from_millis(10),
         memory: 1024,
         serial: 1,
@@ -162,6 +179,12 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 );
             }
             "--state-dir" => o.state_dir = Some(PathBuf::from(v)),
+            "--policy" => once(&mut o.policy, flag, v)?,
+            "--set-pin" => {
+                o.set_pin = Some(Role::parse(v).ok_or_else(|| {
+                    format!("--set-pin: expected operator, engineer or integrator, got {v:?}")
+                })?);
+            }
             "--module" => o.modules.push(v.clone()),
             "--module-dir" => o.module_dirs.push(PathBuf::from(v)),
             "--io-map" => once(&mut o.io_map, flag, v)?,
@@ -186,6 +209,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
              --io-map, --calendar or --emit-st"
                 .into(),
         );
+    }
+    if o.set_pin.is_some() {
+        return Ok(o);
     }
     if !from_files && o.store.is_none() {
         return Err("missing PROGRAM.st, PROJECT.xml, --module, --module-dir or --store".into());
@@ -565,6 +591,49 @@ fn state_dir(o: &Opts) -> PathBuf {
 
 /// Starts the API on `bind` over the loaded box; prints the token if it
 /// was just made. The API opens its own read connection to the store.
+/// Reads one PIN from stdin for `role`, hashes it and stores it in the
+/// state directory beside the others.
+fn set_pin(o: &Opts, role: Role) -> Result<(), String> {
+    let dir = state_dir(o);
+    let mut pins = Pins::load(&dir, pin::MIN_ITERATIONS)?;
+    eprintln!("helmsman-plc: PIN for {role} (one line on stdin):");
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| format!("stdin: {e}"))?;
+    let salt = pin::salt().map_err(|e| format!("random salt: {e}"))?;
+    pins.set(role, line.trim_end_matches(['\r', '\n']), pin::ITERATIONS, salt)?;
+    pins.save(&dir)
+        .map_err(|e| format!("{}: {e}", dir.join(pin::FILE).display()))?;
+    eprintln!(
+        "helmsman-plc: {role} PIN stored (hashed) in {}",
+        dir.join(pin::FILE).display()
+    );
+    Ok(())
+}
+
+/// The policy file, or the floor.
+fn load_policy(o: &Opts) -> Result<Policy, String> {
+    let Some(path) = &o.policy else {
+        return Ok(Policy::default());
+    };
+    let file = path.display();
+    let src = fs::read_to_string(path).map_err(|e| format!("{file}: {e}"))?;
+    Policy::parse(&src).map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|(n, e)| format!("\n  {file}:{n}: {e}")).collect();
+        format!("{file} is refused:{}", lines.concat())
+    })
+}
+
+/// The policy file and the PINs, read before anything starts so a bad one
+/// stops the box before it is on the network.
+fn load_access(o: &Opts) -> Result<(Policy, Pins), String> {
+    let policy = load_policy(o)?;
+    let pins = Pins::load(&state_dir(o), pin::MIN_ITERATIONS)?;
+    Ok((policy, pins))
+}
+
 fn start_api(
     o: &Opts,
     bind: SocketAddr,
@@ -572,6 +641,7 @@ fn start_api(
     running: Option<ChangeSet>,
     live: &Arc<Live>,
     devices: &Arc<Devices>,
+    approval: Approval,
 ) -> Result<Api, String> {
     let dir = state_dir(o);
     let token =
@@ -581,6 +651,12 @@ fn start_api(
         .as_deref()
         .map(|d| Store::open(d).map(Mutex::new).map_err(|e| e.to_string()))
         .transpose()?;
+    if Role::ALL.iter().all(|r| !approval.gate.pins().has(*r)) {
+        eprintln!(
+            "helmsman-plc: no role PINs in {}: nothing can be applied until one is set (--set-pin ROLE)",
+            dir.display()
+        );
+    }
     let cfg = api::Config {
         bind,
         token: token.token.clone(),
@@ -597,6 +673,7 @@ fn start_api(
         proposals: Box::new(MemProposals::new(1000)),
         running,
         snapshots,
+        approval: Some(approval),
     };
     let server = Api::start(cfg, shared).map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
@@ -674,15 +751,20 @@ fn announce(adapter: &Adapter, specs: &[Spec], content: &Content, uses_box: bool
 
 /// Journal lines for modules that were held or came back this tick
 /// (`held`: which were held before it), and for those that faulted.
-fn report_changes(specs: &[Spec], rt: &Runtime, held: &[bool], faults: Vec<(String, helmsman_iec::Fault)>) {
-    for (s, was) in specs.iter().zip(held) {
-        match (was, rt.status(&s.name)) {
-            (false, Some(Status::Held)) => eprintln!(
-                "helmsman-plc: HOLD, outputs safe: a signal module {} reads has no value",
-                s.name
-            ),
+fn report_changes(
+    specs: &[Spec],
+    names: &[String],
+    rt: &Runtime,
+    held: &[bool],
+    faults: Vec<(String, helmsman_iec::Fault)>,
+) {
+    for (name, was) in names.iter().zip(held) {
+        match (was, rt.status(name)) {
+            (false, Some(Status::Held)) => {
+                eprintln!("helmsman-plc: HOLD, outputs safe: a signal module {name} reads has no value");
+            }
             (true, Some(Status::Running)) => {
-                eprintln!("helmsman-plc: module {} running again", s.name);
+                eprintln!("helmsman-plc: module {name} running again");
             }
             _ => {}
         }
@@ -696,10 +778,15 @@ fn report_changes(specs: &[Spec], rt: &Runtime, held: &[bool], faults: Vec<(Stri
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn run(o: &Opts) -> Result<(), String> {
     if o.emit_st {
         return emit_st(o);
     }
+    if let Some(role) = o.set_pin {
+        return set_pin(o, role);
+    }
+    let access = o.api.map(|_| load_access(o)).transpose()?;
     let cfg = device_config(o.serial);
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
     let d = defaults(o, i_len, q_len);
@@ -736,10 +823,36 @@ fn run(o: &Opts) -> Result<(), String> {
     let live = Arc::new(Live::default());
     let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
     announce(&adapter, &specs, &content, uses_box, cal.as_ref());
+    let mut recorder = recorder(&table);
+    let (swap, swapper) = api::swap::channel(Duration::from_secs(5));
+    let approval = access.map(|(policy, pins)| Approval {
+        gate: Gate::new(pins, policy.lockout, Arc::new(Instant::now)),
+        policy,
+        plant: Plant {
+            table: table.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            i_len,
+            q_len,
+            defaults: d,
+            record: Some(recorder.tap()),
+        },
+        swap,
+    });
     let server = o
         .api
-        .map(|bind| start_api(o, bind, catalog, content.running.take(), &live, &devices))
+        .zip(approval)
+        .map(|(bind, approval)| {
+            start_api(
+                o,
+                bind,
+                catalog,
+                content.running.take(),
+                &live,
+                &devices,
+                approval,
+            )
+        })
         .transpose()?;
+    let swapper: Option<Swapper> = server.as_ref().map(|_| swapper);
     let mut publisher = server
         .as_ref()
         .map(|_| Publisher::new(Arc::clone(&live), api::PUBLISH_EVERY));
@@ -754,7 +867,7 @@ fn run(o: &Opts) -> Result<(), String> {
     start_io(io_links, &table, &devices);
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
-    let mut recorder = recorder(&table);
+    let mut names: Vec<String> = rt.names().map(str::to_string).collect();
     let start = Instant::now();
     loop {
         {
@@ -764,12 +877,18 @@ fn run(o: &Opts) -> Result<(), String> {
                 inputs.extend_from_slice(src);
             }
         }
-        let held: Vec<bool> = specs
-            .iter()
-            .map(|s| rt.status(&s.name) == Some(Status::Held))
-            .collect();
-        let faults = {
+        let (held, faults) = {
             let mut t = table.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(sw) = &swapper
+                && sw.serve(&mut rt, &mut t)
+            {
+                names = rt.names().map(str::to_string).collect();
+                eprintln!(
+                    "helmsman-plc: approved change applied; modules now: {}",
+                    names.join(", ")
+                );
+            }
+            let held: Vec<bool> = names.iter().map(|n| rt.status(n) == Some(Status::Held)).collect();
             if let Some(c) = &cal {
                 c.update(wall(), &mut t);
             }
@@ -782,9 +901,9 @@ fn run(o: &Opts) -> Result<(), String> {
             if let Some(sk) = &mut sinks {
                 sk.observe(&t, now, sink::wall_ms(SystemTime::now()));
             }
-            faults
+            (held, faults)
         };
-        report_changes(&specs, &rt, &held, faults);
+        report_changes(&specs, &names, &rt, &held, faults);
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
         sleep_to(start, rt.next_deadline(), cap, &mut said);
     }

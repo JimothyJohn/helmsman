@@ -346,6 +346,107 @@ impl Runtime {
         Ok(carry)
     }
 
+    /// Replaces the whole module set with `modules`, between scans, as one
+    /// step: what an approved change set does to a running box. Modules
+    /// keep, gain or lose names freely; the new set is checked like a
+    /// fresh load (the same code as [`Runtime::with_signals`]) and a
+    /// refused set changes nothing.
+    ///
+    /// - A module whose name was running before is carried exactly as
+    ///   [`Runtime::swap`] carries it: retained state by name and type,
+    ///   `%M` over the shared length, its trace tap, its schedule (a
+    ///   faulted or held one restarts Running).
+    /// - A new module starts cold and is due at the last tick's `now`.
+    /// - No glitch: `%Q` bytes and output signals that some module of the
+    ///   new set drives hold their last values until that module's first
+    ///   scan; bytes no module covers any more go to zero and signals no
+    ///   module drives any more go safe at once.
+    ///
+    /// Scan order is the order of `modules`.
+    ///
+    /// # Errors
+    /// Every problem the new set would have in a fresh load.
+    pub fn reconfigure(
+        &mut self,
+        modules: Vec<Module>,
+        table: &mut SignalTable,
+    ) -> Result<(), Vec<ConfigError>> {
+        let ports = check(
+            self.i_len,
+            self.outputs.len(),
+            &modules.iter().collect::<Vec<_>>(),
+            table,
+        )?;
+        for (n, b) in self.outputs.iter_mut().enumerate() {
+            if !modules.iter().any(|m| m.q.contains(n)) {
+                *b = 0;
+            }
+        }
+        for b in self
+            .slots
+            .iter()
+            .flat_map(|s| &s.ports)
+            .filter(|b| b.dir == PortDir::Output)
+        {
+            let kept = ports
+                .iter()
+                .flatten()
+                .any(|p| p.dir == PortDir::Output && p.signal == b.signal);
+            if !kept {
+                table.make_safe(b.signal);
+            }
+        }
+        let mut old: Vec<Option<Slot>> = std::mem::take(&mut self.slots).into_iter().map(Some).collect();
+        let now = self.last.unwrap_or(Duration::ZERO);
+        for (mut module, ports) in modules.into_iter().zip(ports) {
+            let mut image = Image::new(module.program.sizes());
+            let q = module.q;
+            image.q.copy_from_slice(&self.outputs[q.start..][..q.len]);
+            let prev = old
+                .iter_mut()
+                .find(|s| s.as_ref().is_some_and(|s| s.module.name == module.name))
+                .and_then(Option::take);
+            let slot = match prev {
+                Some(s) => {
+                    let _ = module.program.restore(&s.module.program.state());
+                    let m = image.m.len().min(s.image.m.len());
+                    image.m[..m].copy_from_slice(&s.image.m[..m]);
+                    let mut next = s.next;
+                    if let (Status::Faulted(_), Some(last)) = (s.status, self.last)
+                        && next <= last
+                    {
+                        let rem =
+                            u64::try_from(last.saturating_sub(next).as_nanos() % module.period.as_nanos())
+                                .expect("remainder below a 24 h period");
+                        next = last
+                            .saturating_add(module.period)
+                            .saturating_sub(Duration::from_nanos(rem));
+                    }
+                    Slot {
+                        module,
+                        ports,
+                        image,
+                        status: Status::Running,
+                        next,
+                        stats: s.stats,
+                        tap: s.tap,
+                    }
+                }
+                None => Slot {
+                    module,
+                    ports,
+                    image,
+                    status: Status::Running,
+                    next: now,
+                    stats: Stats::default(),
+                    tap: TraceTap::default(),
+                },
+            };
+            self.slots.push(slot);
+        }
+        Ok(())
+    }
+
     /// Runs every running module whose deadline is at or before `now`, in
     /// the order they were given, each against its window of `inputs`
     /// (bytes past the end of `inputs` read as zero). Returns the modules

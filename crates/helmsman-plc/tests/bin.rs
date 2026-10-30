@@ -938,3 +938,98 @@ fn a_taken_api_port_stops_the_plc_with_a_message() {
         assert_eq!(out.status.code(), Some(2), "--api {bad:?}");
     }
 }
+
+fn set_pin(dir: &Path, role: &str, pin: &str) -> std::process::Output {
+    use std::io::Write as _;
+    let mut child = plc()
+        .args(["--set-pin", role, "--state-dir"])
+        .arg(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("{pin}\n").as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn set_pin_stores_a_slow_salted_private_hash_and_never_prints_the_pin() {
+    use helmsman_plc::policy::pin::{self, Pins};
+    let dir = state_dir();
+    let out = set_pin(&dir, "engineer", "eng-135797");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    let out = set_pin(&dir, "operator", "op-246810");
+    assert_eq!(out.status.code(), Some(0));
+    let text = std::fs::read_to_string(dir.join(pin::FILE)).unwrap();
+    let shown = format!("{err}{}{text}", String::from_utf8_lossy(&out.stderr));
+    assert!(!shown.contains("135797") && !shown.contains("246810"), "{shown}");
+    assert!(
+        text.contains(&format!("engineer pbkdf2-sha256 {} ", pin::ITERATIONS)),
+        "{text}"
+    );
+    let salts: Vec<&str> = text.lines().skip(1).filter_map(|l| l.split(' ').nth(3)).collect();
+    assert_eq!(salts.len(), 2);
+    assert_ne!(salts[0], salts[1], "a salt each");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.join(pin::FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let pins = Pins::load(&dir, pin::MIN_ITERATIONS).unwrap();
+    assert!(pins.has(helmsman_plc::policy::Role::Engineer) && pins.has(helmsman_plc::policy::Role::Operator));
+    for (role, weak) in [
+        ("engineer", "123"),
+        ("operator", "has space"),
+        ("root", "eng-135797"),
+    ] {
+        let out = set_pin(&dir, role, weak);
+        assert_ne!(out.status.code(), Some(0), "{role} {weak:?}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(dir.join(pin::FILE)).unwrap(),
+        text,
+        "refusals change nothing"
+    );
+}
+
+#[test]
+fn a_policy_that_loosens_the_floor_stops_the_box_before_it_is_on_the_network() {
+    let echo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
+    for (text, want) in [
+        (
+            "helmsman-policy 1\noutput-affecting operator replay=no\n",
+            ":2: output-affecting: role operator is below the floor",
+        ),
+        ("helmsman-policy 1\nlockout 50 1\n", ":2: lockout"),
+        ("allow all\n", ":1: expected"),
+    ] {
+        let policy = text_file("loose.policy", text);
+        let out = plc()
+            .arg(&echo)
+            .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
+            .args(["--api", "127.0.0.1:0", "--state-dir"])
+            .arg(state_dir())
+            .arg("--policy")
+            .arg(&policy)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{text}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(want), "{text}: {err}");
+        assert!(
+            !err.contains("CIP on"),
+            "refused before the adapter started: {err}"
+        );
+    }
+}
