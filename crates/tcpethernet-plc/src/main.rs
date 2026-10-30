@@ -11,20 +11,26 @@ use std::fs;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use tcpethernet_adapter::device::lock_ref;
 use tcpethernet_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
 use tcpethernet_iec::{ImageSizes, compile, compile_plcopen, plcopen};
+use tcpethernet_io::local::Channels;
+use tcpethernet_plc::link::{Link, links, spawn};
 use tcpethernet_plc::spec::{Defaults, Spec};
-use tcpethernet_plc::{Module, Runtime, Window};
+use tcpethernet_plc::{Module, Runtime, SignalTable, Status, Window};
 
 const USAGE: &str = "\
 usage: tcpethernet-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [options]
   --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
+  --io-map FILE        devices and named signals (see tcpethernet_io::text); a
+                       module's VAR_INPUT/VAR_OUTPUT bind to signals by name
   --emit-st            print the Structured Text a .xml project lowers to, and exit
   --scan-ms N          default scan period (10, 1..=10000)
   --memory N           default %M area in bytes (1024)
@@ -46,6 +52,7 @@ const OUTPUTS: u16 = 100;
 struct Opts {
     programs: Vec<PathBuf>,
     modules: Vec<String>,
+    io_map: Option<PathBuf>,
     emit_st: bool,
     scan: Duration,
     memory: usize,
@@ -57,6 +64,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     let mut o = Opts {
         programs: Vec::new(),
         modules: Vec::new(),
+        io_map: None,
         emit_st: false,
         scan: Duration::from_millis(10),
         memory: 1024,
@@ -100,6 +108,11 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     .map_err(|_| format!("--bind: not an IPv4 address: {v:?}"))?;
             }
             "--module" => o.modules.push(v.clone()),
+            "--io-map" => {
+                if o.io_map.replace(PathBuf::from(v)).is_some() {
+                    return Err("one --io-map only".into());
+                }
+            }
             "--encap-port" => o.server.encap_port = port()?,
             "--io-port" => o.server.io_port = port()?,
             "--peer-io-port" => o.server.peer_io_port = port()?,
@@ -192,6 +205,44 @@ fn emit_st(o: &Opts) -> Result<(), String> {
     Ok(())
 }
 
+/// The I/O map's signal table and its links, not yet started, and whether
+/// any signal is on the box's own channels.
+fn load_io(path: &Path) -> Result<(SignalTable, Vec<Link>, bool), String> {
+    let file = path.display();
+    let src = fs::read_to_string(path).map_err(|e| format!("{file}: {e}"))?;
+    let parsed = tcpethernet_io::text::parse(&src).map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|(n, e)| format!("\n  {file}:{n}: {e}")).collect();
+        format!("{file} does not parse:{}", lines.concat())
+    })?;
+    let table = SignalTable::new(&parsed.map, &parsed.safe).map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
+        format!("{file} is not a valid map:{}", lines.concat())
+    })?;
+    let uses_box = parsed
+        .map
+        .signals
+        .iter()
+        .any(|s| matches!(s.binding, tcpethernet_io::Binding::Local { .. }));
+    let links = links(&parsed.map, tcpethernet_io::open, Box::new(Channels::new()))?;
+    Ok((table, links, uses_box))
+}
+
+/// Runs each link on its own thread for the life of the process.
+fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>) {
+    let stop = Arc::new(AtomicBool::new(false));
+    for link in links {
+        spawn(
+            link,
+            Arc::clone(table),
+            Arc::clone(&stop),
+            |name, err| match err {
+                None => eprintln!("tcpethernet-plc: device {name} up"),
+                Some(e) => eprintln!("tcpethernet-plc: device {name} down: {e}"),
+            },
+        );
+    }
+}
+
 fn run(o: &Opts) -> Result<(), String> {
     if o.emit_st {
         return emit_st(o);
@@ -200,7 +251,18 @@ fn run(o: &Opts) -> Result<(), String> {
     let specs = specs(o, &cfg)?;
     let modules = specs.iter().map(load).collect::<Result<Vec<_>, _>>()?;
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
-    let mut rt = Runtime::new(i_len, q_len, modules).map_err(|errs| {
+    let (table, io_links, uses_box) = match &o.io_map {
+        Some(path) => load_io(path)?,
+        None => (SignalTable::default(), Vec::new(), false),
+    };
+    let table = Arc::new(Mutex::new(table));
+    let bound = Runtime::with_signals(
+        i_len,
+        q_len,
+        modules,
+        &table.lock().unwrap_or_else(PoisonError::into_inner),
+    );
+    let mut rt = bound.map_err(|errs| {
         let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
         format!("modules do not fit together:{}", lines.concat())
     })?;
@@ -227,6 +289,10 @@ fn run(o: &Opts) -> Result<(), String> {
         specs.len(),
         listed.join("; ")
     );
+    if uses_box {
+        eprintln!("tcpethernet-plc: box channels (do:N, di:N) are in memory only; no GPIO yet");
+    }
+    start_io(io_links, &table);
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
     let start = Instant::now();
@@ -238,7 +304,28 @@ fn run(o: &Opts) -> Result<(), String> {
                 inputs.extend_from_slice(src);
             }
         }
-        for (name, fault) in rt.tick(start.elapsed(), &inputs) {
+        let held: Vec<bool> = specs
+            .iter()
+            .map(|s| rt.status(&s.name) == Some(Status::Held))
+            .collect();
+        let faults = rt.tick_with(
+            start.elapsed(),
+            &inputs,
+            &mut table.lock().unwrap_or_else(PoisonError::into_inner),
+        );
+        for (s, was) in specs.iter().zip(held) {
+            match (was, rt.status(&s.name)) {
+                (false, Some(Status::Held)) => eprintln!(
+                    "tcpethernet-plc: HOLD, outputs safe: a signal module {} reads has no value",
+                    s.name
+                ),
+                (true, Some(Status::Running)) => {
+                    eprintln!("tcpethernet-plc: module {} running again", s.name);
+                }
+                _ => {}
+            }
+        }
+        for (name, fault) in faults {
             let path = specs.iter().find(|s| s.name == name).map(|s| s.path.display());
             eprintln!(
                 "tcpethernet-plc: STOP, outputs zeroed: {}: {fault} (module {name})",

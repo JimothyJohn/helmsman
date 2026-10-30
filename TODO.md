@@ -176,6 +176,26 @@
   difficulty: low
   id: module-addressing
 
+- [ ] **A device drops: hold the modules that read it?** Built tonight (feat/io-runtime): a module never computes on missing data. If any signal it reads has no value (its device is down, or the value doesn't fit the port, e.g. 40000 into an INT), it is *held*: not scanned, its %Q window zeroed, its output signals sent to their safe values; it resumes when every input is back. The alternative most PLCs offer is holding the last good value with a quality bit the logic can test, which keeps unrelated logic in the same module running but lets a stale "tag X is high" keep a light on. Held is the conservative call for a box whose outputs need a human's approval to move.
+  asked: 2026-10-30
+  by: claude-session
+  needs: your call
+  result: the failure semantics module-format, sim-replay and the proposal UI explain to the engineer
+  options: hold the module, outputs safe (recommended) | last good value plus a quality input the ST can read | zero the missing inputs and keep scanning
+  est: 5m
+  difficulty: low
+  id: missing-input-policy
+
+- [ ] **I/O map file: keep the line format?** `--io-map FILE` reads a small line format (`device rio modbus-tcp 192.168.3.50:502 unit=1`, `out lamp bool box do:0 safe=true`; parser in tcpethernet-io `text.rs`, round-trip proptested). I didn't pull serde into the runtime for it: the repo parses its own formats and the module-format manifest and box API (JSON over HTTP) will decide the long-term shape. Switching later is one parser; nothing deployed reads it yet.
+  asked: 2026-10-30
+  by: claude-session
+  needs: your call
+  result: whether module-format / box-api replace it or adopt it
+  options: keep the line format until box-api, then JSON from the API (recommended) | JSON now via serde (already in the lockfile for tcpethernet-graph) | TOML (new dep)
+  est: 5m
+  difficulty: low
+  id: iomap-format
+
 ## Tasks
 
 - [ ] **Bench sweep against the CompactLogix and FP0H** — `cargo run --example discover <subnet broadcast>`; fill the rows in `docs/INTEROP.md`, keep the first capture.
@@ -519,7 +539,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   id: io-map
 
-- [ ] **Signals in the scan** — tcpethernet-plc reads its I/O map: a poll task per device fills input signals, programs read and write signals by name instead of %I/%Q, outputs are written on change, and a device that drops sends its outputs to a declared safe state.
+- [x] **Signals in the scan** — tcpethernet-plc reads its I/O map: a poll task per device fills input signals, programs read and write signals by name instead of %I/%Q, outputs are written on change, and a device that drops sends its outputs to a declared safe state.
   result: an ST program drives a Modbus coil and a box output by name
   est: 3d
   difficulty: high

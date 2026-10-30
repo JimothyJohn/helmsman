@@ -777,7 +777,10 @@ impl<'a> Ck<'a> {
             let allowed = matches!(
                 (kind, d.section),
                 (_, Section::Var | Section::Temp)
-                    | (PouType::FunctionBlock, Section::Input | Section::Output)
+                    | (
+                        PouType::FunctionBlock | PouType::Program,
+                        Section::Input | Section::Output
+                    )
                     | (PouType::Function, Section::Input)
             );
             if !allowed {
@@ -822,6 +825,24 @@ impl<'a> Ck<'a> {
             if !self.layout_type(ty, d.pos) {
                 ok = false;
                 continue;
+            }
+            // A program's inputs and outputs are its ports: the host binds
+            // them to signals by name, one scalar each.
+            if kind == PouType::Program && matches!(d.section, Section::Input | Section::Output) {
+                let problem = if !matches!(ty, Type::Elem(_)) {
+                    Some("a PROGRAM input or output must be an elementary type")
+                } else if d.at.is_some() {
+                    Some("a PROGRAM input or output is bound by name, not located")
+                } else if d.constant {
+                    Some("a PROGRAM input or output cannot be CONSTANT")
+                } else {
+                    None
+                };
+                if let Some(m) = problem {
+                    self.err(d.pos, format!("{}: {m}", d.name));
+                    ok = false;
+                    continue;
+                }
             }
             if let Some((addr, apos)) = &d.at {
                 let problem = if kind != PouType::Program {

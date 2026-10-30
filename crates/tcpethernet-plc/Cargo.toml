@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 tcpethernet-adapter = { path = "../tcpethernet-adapter" }
 tcpethernet-iec = { path = "../tcpethernet-iec" }
+tcpethernet-io = { path = "../tcpethernet-io" }
 
 [dev-dependencies]
 tcpethernet = { path = "../tcpethernet" }

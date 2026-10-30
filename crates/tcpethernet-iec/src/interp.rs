@@ -93,6 +93,10 @@ pub enum FaultKind {
     IndexOutOfRange,
     /// The scan used up its instruction budget (an endless loop, usually).
     Watchdog,
+    /// Raised by a host, not the interpreter: a `VAR_OUTPUT` holds a value
+    /// its signal cannot carry (a non-finite REAL, an integer past 64 bits).
+    /// `line` is 0.
+    OutputRange,
 }
 
 /// A runtime error. The program is in an undefined state afterwards; the
@@ -110,6 +114,7 @@ impl fmt::Display for Fault {
             FaultKind::DivisionByZero => "integer division by zero",
             FaultKind::IndexOutOfRange => "array index or MUX selector out of range",
             FaultKind::Watchdog => "watchdog: scan exceeded its instruction budget",
+            FaultKind::OutputRange => "an output's value does not fit its signal",
         };
         write!(f, "line {}: {what}", self.line)
     }

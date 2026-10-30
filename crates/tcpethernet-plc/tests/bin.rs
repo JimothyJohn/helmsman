@@ -301,6 +301,133 @@ fn modules_fighting_for_an_output_are_refused_before_the_adapter_starts() {
     }
 }
 
+fn text_file(name: &str, text: &str) -> PathBuf {
+    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+fn wait_until(what: &str, ok: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !ok() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn an_io_map_lets_a_module_drive_a_modbus_device_by_signal_name() {
+    use tcpethernet_io::sim::{Fault, Sim, State};
+    let mut st = State::new(8);
+    st.wires.push((0, 0));
+    let sim = Sim::start(st).unwrap();
+    let map = text_file(
+        "bench.iomap",
+        &format!(
+            "device rio modbus-tcp {} timeout_ms=200 poll_ms=5
+in  start bool rio di:1
+in  fb    bool rio di:0   # wired from coil 0
+out motor bool rio coil:0
+out lamp  bool box do:0 safe=true
+",
+            sim.endpoint()
+        ),
+    );
+    let prog = program_file(
+        "io_line",
+        "PROGRAM line
+         VAR_INPUT start : BOOL; fb : BOOL; END_VAR
+         VAR_OUTPUT motor : BOOL; lamp : BOOL; END_VAR
+           motor := start;
+           lamp := fb;
+         END_PROGRAM",
+    );
+    let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let args = [prog.as_os_str(), "--io-map".as_ref(), map.as_os_str()];
+    let (plc, _, _) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
+
+    wait_until("the module to run", || sim.state().requests > 3);
+    assert!(!sim.state().coils[0]);
+    sim.state().discrete[1] = true;
+    wait_until("coil 0 to follow start", || sim.state().coils[0]);
+
+    for _ in 0..20 {
+        sim.inject(Fault::Drop);
+    }
+    wait_until("the drops to be used up", || sim.state().faults.is_empty());
+    wait_until("coil 0 back after the drop", || sim.state().coils[0]);
+
+    let log = plc.finish();
+    for want in [
+        "box channels (do:N, di:N) are in memory only",
+        "device rio up",
+        "device box up",
+        "device rio down: io:",
+        "HOLD, outputs safe: a signal module io_line reads has no value",
+        "module io_line running again",
+    ] {
+        assert!(log.contains(want), "missing {want:?} in:\n{log}");
+    }
+}
+
+#[test]
+fn a_bad_io_map_is_refused_before_the_adapter_starts() {
+    let prog = program_file(
+        "io_ports",
+        "PROGRAM p VAR_INPUT start : BOOL; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR lamp := start; END_PROGRAM",
+    );
+    for (name, text, want) in [
+        (
+            "syntax.iomap",
+            "in start bool\nout lamp bool box do:0 safe=maybe\n",
+            "syntax.iomap:1: in: too few words",
+        ),
+        (
+            "invalid.iomap",
+            "in start bool nowhere di:0\nout lamp bool box do:0\n",
+            "invalid.iomap: start: no device \"nowhere\"",
+        ),
+        (
+            "unbound.iomap",
+            "in begin bool box di:0\nout lamp bool box do:0\n",
+            "io_ports: port START: no signal of that name",
+        ),
+        (
+            "driver.iomap",
+            "device d nosuch h:1\nin start bool d x\nout lamp bool box do:0\n",
+            "unknown driver",
+        ),
+    ] {
+        let map = text_file(name, text);
+        let out = plc()
+            .arg(&prog)
+            .arg("--io-map")
+            .arg(&map)
+            .args(["--encap-port", "0", "--io-port", "0"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(want), "{name}: {err}");
+        assert!(
+            !err.contains("CIP on"),
+            "{name}: refused before going on the network: {err}"
+        );
+    }
+    let out = plc()
+        .arg(&prog)
+        .args(["--io-map", "/nonexistent/x.iomap"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let out = plc()
+        .arg(&prog)
+        .args(["--io-map", "a", "--io-map", "b"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "one --io-map only");
+}
+
 #[test]
 fn compile_errors_exit_1_with_file_line_col() {
     let prog = program_file(

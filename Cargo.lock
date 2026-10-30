@@ -2360,6 +2360,7 @@ dependencies = [
  "tcpethernet",
  "tcpethernet-adapter",
  "tcpethernet-iec",
+ "tcpethernet-io",
 ]
 
 [[package]]
