@@ -10,6 +10,7 @@ pub mod runtime;
 pub mod signals;
 pub mod sink;
 pub mod spec;
+pub mod store;
 pub mod tap;
 
 pub use runtime::{ConfigError, MAX_PERIOD, Module, Runtime, Stats, Status, Window};

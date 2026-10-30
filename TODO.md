@@ -240,6 +240,26 @@
   difficulty: low
   id: logix-pm020
 
+- [ ] **Where does the relay live?** The relay holds the Anthropic key and meters boxes, which the vision puts on the paid side of open core, and the `open-core-split` card says to decide before paid code lands in this MIT repo. So relay v0 is being built in a NEW local repo `../helmsman-relay` (Rust, SAM template, no remote, nothing deployed). Creating the private GitHub repo and deploying the stack (account 403059190476, us-east-1) are your steps; scripts and cards are in that repo's TODO.md.
+  asked: 2026-10-30
+  by: claude-session
+  needs: your call
+  result: relay-v0 has a home; agent-loop can target its protocol
+  options: private repo JimothyJohn/helmsman-relay (recommended) | relay/ in this repo, split later | private monorepo for all paid code (relay, fleet, market)
+  est: 5m
+  difficulty: low
+  id: relay-repo
+
+- [ ] **Stop parallel PRs breaking dev?** Twice on 2026-10-30 two PRs that were each green merged back to back and broke dev's build (trace-tap + signal-model; fixed by #39). Branch protection on dev doesn't require branches to be up to date. Options: require up-to-date branches (each PR re-runs CI after every merge; slow with many agents), or GitHub's merge queue (tests each PR on top of the ones ahead of it; built for this), or leave it and fix forward.
+  asked: 2026-10-30
+  by: claude-session
+  needs: your call (repo setting)
+  result: dev stays green under parallel agents
+  options: merge queue on dev (recommended) | require up-to-date branches | leave as is, fix forward
+  est: 15m
+  difficulty: low
+  id: dev-merge-safety
+
 - [ ] **Webhook sinks: keep `https` (rustls + ring) on by default?** The webhook sink (feat/sink-webhook) posts over a hand-written std HTTP/1.1 client so every SSRF rule is ours; `https://` needs TLS, so the `https` cargo feature adds rustls 0.23 (ring provider, TLS 1.2+1.3) and webpki-roots: 15 third-party crates in all (ring, rustls, rustls-webpki, rustls-pki-types, webpki-roots, untrusted, subtle, zeroize, once_cell, getrandom, libc, cfg-if; build-only cc, shlex, find-msvc-tools). ring compiles C and assembly, which the deploy image (rust:*-slim-trixie ships gcc and libc6-dev) handles; the Docker arm64 build was not run in this session (Docker Desktop was not running and the session was over SSH), so the first `scripts/pi-deploy-plc.sh` run is the proof. I made it a default feature so the Pi build can reach a cloud receiver; `--no-default-features` gives an http-only box with zero third-party crates. Alternative: off by default and the deploy script opts in, or roots from the OS (`rustls-native-certs`) instead of compiled in.
   asked: 2026-10-30
   by: claude-agent
@@ -508,8 +528,9 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format, signal-model
   id: box-api
 
-- [ ] **Snapshots and rollback** — each applied change set is an immutable, content-addressed snapshot in SQLite (modules, params, signal bindings) with author, prompt, approver, time. One-call rollback. Exportable as a bundle later.
+- [x] **Snapshots and rollback** — each applied change set is an immutable, content-addressed snapshot in SQLite (modules, params, signal bindings) with author, prompt, approver, time. One-call rollback. Exportable as a bundle later.
   result: undo for everything the agent does
+  notes: built: helmsman_plc::store (rusqlite bundled + sha2), `helmsman-plc --store DIR` runs head; see ARCHITECTURE "Snapshots"
   est: 2d
   difficulty: med
   depends: module-format

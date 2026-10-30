@@ -163,7 +163,7 @@ const REQUIRED: [&str; 5] = ["name", "author", "scan_ms", "reads", "drives"];
 /// Characters free text may not carry: controls, and the invisible
 /// formatting characters that can make text read differently than it is
 /// (bidi overrides and isolates, zero-width characters, the BOM).
-fn hidden(c: char) -> bool {
+pub(crate) fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(c,
             '\u{00AD}' | '\u{061C}' | '\u{180E}'
@@ -580,7 +580,7 @@ pub struct ModuleDir {
     pub source: String,
 }
 
-fn read_capped(path: &Path) -> Result<String, String> {
+pub(crate) fn read_capped(path: &Path) -> Result<String, String> {
     let file = path.display();
     let f = fs::File::open(path).map_err(|e| format!("{file}: {e}"))?;
     let mut buf = Vec::new();
@@ -600,15 +600,25 @@ impl ModuleDir {
     /// A file missing, too large or not UTF-8, or a manifest that does not
     /// parse (every problem, one per line of the message).
     pub fn read(dir: &Path, d: &Defaults) -> Result<Self, String> {
-        let path = dir.join(FILE);
-        let src = read_capped(&path)?;
-        let manifest = Manifest::parse(&src).map_err(|errs| {
+        let mut md = Self::from_text(dir, &read_capped(&dir.join(FILE))?, String::new(), d)?;
+        md.source = read_capped(&md.spec.path)?;
+        Ok(md)
+    }
+
+    /// A module directory whose two files are already in memory (a
+    /// snapshot's); `dir` is only where messages say they are.
+    ///
+    /// # Errors
+    /// A manifest that does not parse (every problem, one per line of the
+    /// message).
+    pub fn from_text(dir: &Path, manifest: &str, source: String, d: &Defaults) -> Result<Self, String> {
+        let manifest = Manifest::parse(manifest).map_err(|errs| {
+            let path = dir.join(FILE);
             let file = path.display();
             let lines: Vec<String> = errs.iter().map(|(n, e)| format!("\n  {file}:{n}: {e}")).collect();
             format!("{file} does not parse:{}", lines.concat())
         })?;
         let spec = manifest.spec(dir, d);
-        let source = read_capped(&spec.path)?;
         Ok(Self {
             manifest,
             spec,
