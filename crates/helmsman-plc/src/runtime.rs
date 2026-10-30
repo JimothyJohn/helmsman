@@ -461,6 +461,12 @@ impl Runtime {
         self.slot(name).map(|s| s.stats)
     }
 
+    /// A module's scan period and its `%I` and `%Q` windows.
+    #[must_use]
+    pub fn schedule(&self, name: &str) -> Option<(Duration, Window, Window)> {
+        self.slot(name).map(|s| (s.module.period, s.module.i, s.module.q))
+    }
+
     /// A module's program, to read its variables.
     #[must_use]
     pub fn program(&self, name: &str) -> Option<&Program> {

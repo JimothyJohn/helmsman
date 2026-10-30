@@ -127,6 +127,18 @@ for _ in $(seq 1 20); do
 done
 ssh "$target" 'systemctl is-active helmsman-plc; journalctl -u helmsman-plc -n 5 --no-pager' || true
 [ -n "$up" ] || { echo "FAIL: helmsman-plc is not listening on 44818 (journal above)" >&2; exit 1; }
+# The box API on the Pi's loopback: proves StateDirectory= let it write its
+# token under the unit's hardening. The token itself stays in the journal.
+api=
+for _ in $(seq 1 10); do
+    if ssh "$target" 'curl -fsS --max-time 2 http://127.0.0.1:8080/api/modules >/dev/null'; then
+        api=1
+        break
+    fi
+    sleep 1
+done
+[ -n "$api" ] || { echo "FAIL: box API not answering on the Pi's 127.0.0.1:8080" >&2; exit 1; }
+echo "box API answers on the Pi's 127.0.0.1:8080; token: ssh $target journalctl -u helmsman-plc | grep 'API token'"
 host="${target#*@}"
 echo
 echo "PLC is up on $host running $(basename "$program") every ${scan_ms} ms"

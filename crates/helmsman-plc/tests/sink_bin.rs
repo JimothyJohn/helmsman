@@ -11,7 +11,10 @@ use std::thread;
 use std::time::Duration;
 
 fn plc() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
+    let mut c = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"));
+    // No box API here: its default port and state directory are shared.
+    c.args(["--api", "off"]);
+    c
 }
 
 fn dir(name: &str) -> PathBuf {

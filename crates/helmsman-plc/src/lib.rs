@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod api;
 pub mod calendar;
 pub mod link;
 pub mod manifest;

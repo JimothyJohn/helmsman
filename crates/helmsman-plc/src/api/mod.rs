@@ -1,0 +1,807 @@
+//! The box API: one local HTTP/1.1 + JSON surface for the canvas, the
+//! agent's tools and (later) MCP. Testable without a UI.
+//!
+//! ```text
+//! GET  /api                               this list
+//! GET  /api/signals                       every signal: type, unit, dir, binding, writer, value, quality
+//! GET  /api/signals/{name}
+//! GET  /api/modules                       every module: schedule, windows, status, stats
+//! GET  /api/modules/{name}                + ports, source, manifest
+//! GET  /api/modules/{name}/trace          asks for a traced scan; the newest one (200), or 202 until one lands
+//! GET  /api/modules/{name}/trace/events   event stream of traced scans
+//! GET  /api/outputs                       output signals' commands and safe values, the %Q image
+//! GET  /api/devices                       device links: up, down (why), unknown
+//! GET  /api/proposals                     drafts awaiting approval
+//! GET  /api/proposals/{id}
+//! POST /api/proposals                     token: a module draft or a param change, checked, stored as a draft
+//! POST /api/proposals/{id}/apply          token: 501, applying is the approval policy's (not built)
+//! GET  /api/audit?after=N&limit=M         every mutating call, append-only, naming snapshot ids
+//! GET  /api/snapshots                     snapshot history (with --store), head, the running change set's id
+//! GET  /api/snapshots/head
+//! GET  /api/snapshots/{id}                a snapshot's files
+//! GET  /api/snapshots/{a}/diff/{b}
+//! POST /api/snapshots/{id}/rollback       token: 501, rollback is the approval policy's (not built)
+//! GET  /api/events                        event stream of live values and module status
+//! ```
+//!
+//! **What it cannot do.** There is no route that writes a signal, an
+//! output, a param or a module, with or without the token. Proposals are
+//! stored drafts; applying one answers 501 until the approval policy
+//! (`approval-policy`) exists and is the only path to apply. Limits are
+//! enforced here, by the host, never by whatever is calling.
+//!
+//! **Auth.** Reads (`GET`) are open to whoever can reach the socket (the
+//! default bind is loopback; the LAN only when asked). Every other method
+//! needs `Authorization: Bearer <token>` ([`token`]) and is written to the
+//! audit log whatever its outcome; without the token it is refused with
+//! 401 before any routing. A token in the query string is refused
+//! outright (400), on any request, so it never lands in a log or a
+//! browser history.
+//!
+//! **The scan never waits on the API.** The scheduler publishes a
+//! [`live::View`] with a `try_lock` and the API reads only that, the
+//! [`catalog::Catalog`] fixed at startup, and the trace taps (whose
+//! scheduler side is a `try_lock` too). No API thread ever takes the
+//! signal table's lock or touches the runtime.
+//!
+//! **Bounded.** Thread per connection, at most [`Limits::workers`] at
+//! once (503 beyond), event streams at most [`Limits::streams`] of those.
+//! One request per connection. The whole request must arrive within
+//! [`Limits::deadline`]; a stalled writer is dropped after
+//! [`Limits::write_timeout`], and an event stream ends after
+//! [`Limits::stream_life`] (the browser reconnects). Sizes are capped
+//! ([`Limits`]).
+
+pub mod catalog;
+pub mod http;
+pub mod live;
+pub mod proposal;
+pub mod render;
+pub mod store;
+pub mod token;
+
+use std::io::{self, Write as _};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use serde_json::{Value as Json, json};
+
+use crate::store::{self as snapshots, ChangeSet, SnapshotId, Store};
+
+pub use catalog::{Catalog, Devices, ModuleInfo, SignalInfo};
+pub use http::{Limits, Request, Response};
+pub use live::{Live, ModuleLive, Publisher, View};
+pub use store::{Audit, AuditEntry, MemAudit, MemProposals, Proposals};
+
+/// How often the scheduler publishes a view while the API runs, and so
+/// the longest it sleeps between ticks.
+pub const PUBLISH_EVERY: Duration = Duration::from_millis(100);
+
+/// Event streams send a comment line this often when nothing changed, so
+/// a dead peer is noticed.
+const KEEPALIVE: Duration = Duration::from_secs(15);
+
+/// Longest text logged from a request (a path), in characters.
+const LOG_MAX: usize = 120;
+
+/// Where log lines go (the journal, via stderr, in the binary).
+pub type Log = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// How the API is served.
+#[derive(Clone)]
+pub struct Config {
+    pub bind: SocketAddr,
+    /// What `Authorization: Bearer` must carry for any mutating call.
+    pub token: String,
+    pub limits: Limits,
+    /// How often an event stream checks for something new to send.
+    pub stream_every: Duration,
+    /// The default `%M` size, for checking module drafts.
+    pub memory: usize,
+    pub log: Log,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("bind", &self.bind)
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What the API serves from.
+pub struct Shared {
+    pub catalog: Catalog,
+    pub live: Arc<Live>,
+    pub devices: Arc<Devices>,
+    pub audit: Box<dyn Audit>,
+    pub proposals: Box<dyn Proposals>,
+    /// What the box runs, as a change set: the store's head, or the
+    /// module directories, map and calendar it was started from. `None`
+    /// when bare programs or `--module` specs are part of it (they are not
+    /// module directories, so no snapshot can hold them).
+    pub running: Option<ChangeSet>,
+    /// The snapshot store, read-only here (`--store`). Its calls block on
+    /// `SQLite`, so only API worker threads make them.
+    pub snapshots: Option<Mutex<Store>>,
+}
+
+/// A traced scan's number and its JSON.
+type Rendered = (u64, Arc<Json>);
+
+struct Ctx {
+    cfg: Config,
+    box_: Shared,
+    /// Per module: the newest traced scan, rendered, and its scan number.
+    traces: Vec<Mutex<Option<Rendered>>>,
+    stop: Arc<AtomicBool>,
+    streams: AtomicUsize,
+}
+
+/// A running API; stops (and joins its acceptor) when dropped. Open
+/// connections end on their own deadlines; event streams see the stop
+/// within one [`Config::stream_every`].
+pub struct Api {
+    addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for Api {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Api")
+            .field("addr", &self.addr)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Decrements a counter when dropped, so a panicking worker still frees
+/// its slot.
+struct Slot<'a>(&'a AtomicUsize);
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Takes one of `cap` slots, if one is free.
+fn take(n: &AtomicUsize, cap: usize) -> Option<Slot<'_>> {
+    let mut v = n.load(Ordering::Acquire);
+    while v < cap {
+        match n.compare_exchange_weak(v, v + 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return Some(Slot(n)),
+            Err(now) => v = now,
+        }
+    }
+    None
+}
+
+impl Api {
+    /// Binds `cfg.bind` and serves `shared` on a thread of its own.
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start(cfg: Config, shared: Shared) -> io::Result<Self> {
+        let listener = TcpListener::bind(cfg.bind)?;
+        let addr = listener.local_addr()?;
+        listener.set_nonblocking(true)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let ctx = Arc::new(Ctx {
+            traces: shared.catalog.modules.iter().map(|_| Mutex::new(None)).collect(),
+            box_: shared,
+            cfg,
+            stop: Arc::clone(&stop),
+            streams: AtomicUsize::new(0),
+        });
+        let thread = thread::Builder::new()
+            .name("api".into())
+            .spawn(move || accept(&listener, &ctx))?;
+        Ok(Self {
+            addr,
+            stop,
+            thread: Some(thread),
+        })
+    }
+
+    #[must_use]
+    pub const fn addr(&self) -> SocketAddr {
+        self.addr
+    }
+}
+
+impl Drop for Api {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+fn accept(listener: &TcpListener, ctx: &Arc<Ctx>) {
+    let workers = Arc::new(AtomicUsize::new(0));
+    while !ctx.stop.load(Ordering::Acquire) {
+        let (mut stream, _) = match listener.accept() {
+            Ok(s) => s,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            Err(_) => {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+        };
+        let accepted = Instant::now();
+        // Accepted sockets inherit non-blocking on BSDs; workers use timeouts.
+        if stream.set_nonblocking(false).is_err() {
+            continue;
+        }
+        let limits = ctx.cfg.limits;
+        if workers.load(Ordering::Acquire) >= limits.workers {
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
+            let _ = http::respond(&mut stream, &Response::error(503, "busy; try again"));
+            continue;
+        }
+        workers.fetch_add(1, Ordering::AcqRel);
+        let (ctx, n) = (Arc::clone(ctx), Arc::clone(&workers));
+        let spawned = thread::Builder::new().name("api-conn".into()).spawn(move || {
+            let _slot = Slot(&n);
+            serve(stream, &ctx, accepted);
+        });
+        if spawned.is_err() {
+            workers.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// `s` safe for a one-line log: control characters escaped, cut short.
+#[must_use]
+pub fn clean(s: &str) -> String {
+    let mut out: String = s.chars().take(LOG_MAX).flat_map(char::escape_debug).collect();
+    if s.chars().count() > LOG_MAX {
+        out.push_str("...");
+    }
+    out
+}
+
+fn wall() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// What a request turns into.
+enum Reply {
+    Once(Response),
+    /// The values stream.
+    Values,
+    /// A module's trace stream.
+    Traces(usize),
+}
+
+fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
+    let limits = ctx.cfg.limits;
+    if stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
+        return;
+    }
+    let reply = match http::read_request(&mut stream, &limits, accepted) {
+        Ok(req) => handle(&req, ctx),
+        Err(http::ReadError::Status(code, why)) => Reply::Once(Response::error(code, why)),
+        Err(http::ReadError::Closed) => return,
+    };
+    let _ = stream.set_read_timeout(None);
+    match reply {
+        Reply::Once(r) => {
+            let _ = http::respond(&mut stream, &r);
+        }
+        Reply::Values | Reply::Traces(_) => {
+            let Some(_slot) = take(&ctx.streams, limits.streams) else {
+                let _ = http::respond(&mut stream, &Response::error(503, "too many event streams"));
+                return;
+            };
+            let _ = match reply {
+                Reply::Traces(k) => trace_stream(&mut stream, ctx, k),
+                _ => value_stream(&mut stream, ctx),
+            };
+        }
+    }
+}
+
+/// Query keys that would carry a credential.
+fn secret(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    [
+        "token",
+        "access_token",
+        "auth",
+        "authorization",
+        "bearer",
+        "key",
+        "api_key",
+    ]
+    .contains(&k.as_str())
+}
+
+fn handle(req: &Request, ctx: &Ctx) -> Reply {
+    if req.query.iter().any(|(k, _)| secret(k)) {
+        return Reply::Once(Response::error(
+            400,
+            "credentials go in the Authorization header, never the URL",
+        ));
+    }
+    if req.method == "GET" {
+        return get(req, ctx);
+    }
+    let authorized = req
+        .bearer
+        .as_deref()
+        .is_some_and(|t| token::eq(t, &ctx.cfg.token));
+    if !authorized {
+        (ctx.cfg.log)(&format!(
+            "api: refused {} {} (no or wrong token)",
+            clean(&req.method),
+            clean(&req.path)
+        ));
+        let why = if req.authorization {
+            "wrong token"
+        } else {
+            "this call needs Authorization: Bearer <token>"
+        };
+        return Reply::Once(Response::error(401, why).with("WWW-Authenticate", "Bearer".into()));
+    }
+    Reply::Once(mutate(req, ctx))
+}
+
+/// Records a mutating call; `None` if the log is full (the call must not
+/// take effect).
+fn audit(ctx: &Ctx, req: &Request, status: u16, detail: &str) -> Option<u64> {
+    audit_with(ctx, req, status, detail, None)
+}
+
+/// [`audit`], naming the snapshot the call concerns.
+fn audit_with(ctx: &Ctx, req: &Request, status: u16, detail: &str, snapshot: Option<String>) -> Option<u64> {
+    let seq = ctx
+        .box_
+        .audit
+        .append(AuditEntry {
+            seq: 0,
+            at: wall(),
+            method: req.method.clone(),
+            path: req.path.clone(),
+            status,
+            detail: detail.into(),
+            snapshot,
+        })
+        .ok();
+    (ctx.cfg.log)(&format!(
+        "api: {} {} -> {status}: {}{}",
+        clean(&req.method),
+        clean(&req.path),
+        clean(detail),
+        if seq.is_some() { "" } else { " (audit full)" }
+    ));
+    seq
+}
+
+fn audit_full() -> Response {
+    Response::error(507, "audit log full; nothing was done")
+}
+
+/// Answers an authenticated non-GET request; every outcome is audited.
+fn mutate(req: &Request, ctx: &Ctx) -> Response {
+    let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
+    let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
+        ("POST", ["api", "proposals"]) => return create(req, ctx),
+        ("POST", ["api", "proposals", id, "apply"]) => {
+            match proposal_id(id).and_then(|id| ctx.box_.proposals.get(id)) {
+                None => (
+                    Response::error(404, "no such proposal"),
+                    "apply: no such proposal".to_string(),
+                ),
+                Some(p) => {
+                    let snap = p.json["snapshot"].as_str().map(str::to_string);
+                    let r = Response::json(
+                        501,
+                        &json!({
+                            "error": "applying a proposal needs the approval policy (card approval-policy), which is not built; nothing was changed",
+                            "proposal": p.id,
+                        }),
+                    );
+                    let d = format!("apply proposal {} refused: needs approval-policy", p.id);
+                    return match audit_with(ctx, req, 501, &d, snap) {
+                        Some(_) => r,
+                        None => audit_full(),
+                    };
+                }
+            }
+        }
+        ("POST", ["api", "snapshots", id, "rollback"]) => match snapshot(ctx, id) {
+            Err(r) => {
+                let d = format!("rollback refused: {}", r.status);
+                (r, d)
+            }
+            Ok(cs) => {
+                let id = cs.id().to_string();
+                let r = Response::json(
+                    501,
+                    &json!({
+                        "error": "rolling back needs the approval policy (card approval-policy), which is not built; nothing was changed",
+                        "snapshot": id,
+                    }),
+                );
+                return match audit_with(ctx, req, 501, "rollback refused: needs approval-policy", Some(id)) {
+                    Some(_) => r,
+                    None => audit_full(),
+                };
+            }
+        },
+        (_, path) => match allowed(path) {
+            Some(allow) => (
+                Response::error(405, "method not allowed").with("Allow", allow.into()),
+                "method not allowed".to_string(),
+            ),
+            None => (
+                Response::error(404, "no such resource"),
+                "no such resource".to_string(),
+            ),
+        },
+    };
+    match audit(ctx, req, r.status, &detail) {
+        Some(_) => r,
+        None => audit_full(),
+    }
+}
+
+/// The methods a known path takes.
+fn allowed(path: &[&str]) -> Option<&'static str> {
+    match path {
+        ["api", "proposals"] => Some("GET, POST"),
+        ["api", "proposals" | "snapshots", _, "apply" | "rollback"] => Some("POST"),
+        ["api"]
+        | [
+            "api",
+            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots",
+        ]
+        | ["api", "signals" | "modules" | "proposals" | "snapshots", _]
+        | ["api", "snapshots", _, "diff", _]
+        | ["api", "modules", _, "trace"]
+        | ["api", "modules", _, "trace", "events"] => Some("GET"),
+        _ => None,
+    }
+}
+
+fn proposal_id(s: &str) -> Option<u64> {
+    if s.is_empty() || s.len() > 20 || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
+fn create(req: &Request, ctx: &Ctx) -> Response {
+    let refused = |status: u16, body: Json, detail: &str| match audit(ctx, req, status, detail) {
+        Some(_) => Response::json(status, &body),
+        None => audit_full(),
+    };
+    let json_type = req
+        .content_type
+        .as_deref()
+        .is_some_and(|t| t == "application/json" || t.starts_with("application/json;"));
+    if !json_type {
+        return refused(
+            415,
+            json!({ "error": "Content-Type must be application/json" }),
+            "not JSON",
+        );
+    }
+    let new: proposal::New = match serde_json::from_slice(&req.body) {
+        Ok(n) => n,
+        Err(e) => {
+            return refused(
+                400,
+                json!({ "error": format!("malformed proposal: {e}") }),
+                "malformed proposal",
+            );
+        }
+    };
+    let checked = proposal::check(&new, &ctx.box_.catalog, ctx.cfg.memory, ctx.box_.running.as_ref());
+    let (mut p, change) = match checked {
+        Ok(p) => p,
+        Err((status, body)) => return refused(status, body, "proposal refused by the checks"),
+    };
+    let Ok(id) = ctx.box_.proposals.reserve() else {
+        return refused(507, json!({ "error": "too many proposals" }), "proposals full");
+    };
+    let what = match (p["kind"].as_str(), p["name"].as_str(), p["module"].as_str()) {
+        (Some("module"), Some(name), _) => format!("proposal {id}: module {name}"),
+        (_, _, Some(module)) => format!(
+            "proposal {id}: param {}.{}",
+            module,
+            p["param"].as_str().unwrap_or_default()
+        ),
+        _ => format!("proposal {id}"),
+    };
+    p["id"] = json!(id);
+    p["status"] = json!("draft");
+    p["at"] = json!(wall());
+    p["apply"] = json!("needs approval-policy");
+    let snap = change.as_ref().map(|cs| cs.id().to_string());
+    let what = match (&snap, p["base"].as_str()) {
+        (Some(to), Some(base)) => format!("{what}: snapshot {base} -> {to}"),
+        _ => what,
+    };
+    if audit_with(ctx, req, 201, &what, snap).is_none() {
+        return audit_full();
+    }
+    ctx.box_.proposals.insert(store::Stored {
+        id,
+        json: p.clone(),
+        change,
+    });
+    Response::json(201, &p).with("Location", format!("/api/proposals/{id}"))
+}
+
+fn get(req: &Request, ctx: &Ctx) -> Reply {
+    let c = &ctx.box_.catalog;
+    let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
+    let view = ctx.box_.live.view();
+    let module = |name: &str| c.module(name);
+    let r = match segs.as_slice() {
+        ["api"] => Response::json(200, &index()),
+        ["api", "signals"] => Response::json(200, &render::signals(c, &view)),
+        ["api", "signals", name] => match c.signal(name) {
+            Some(i) => Response::json(
+                200,
+                &render::signal(
+                    &c.signals[i],
+                    view.signals.get(i).copied().flatten(),
+                    view.errors.get(i).and_then(Option::as_deref),
+                ),
+            ),
+            None => Response::error(404, "no such signal"),
+        },
+        ["api", "modules"] => Response::json(200, &render::modules(c, &view)),
+        ["api", "modules", name] => match module(name) {
+            Some(k) => Response::json(200, &render::module_detail(&c.modules[k], view.modules.get(k))),
+            None => Response::error(404, "no such module"),
+        },
+        ["api", "modules", name, "trace"] => match module(name) {
+            Some(k) => match latest_trace(ctx, k) {
+                Some((_, j)) => Response::json(200, &j),
+                None => Response::json(
+                    202,
+                    &json!({ "pending": true, "why": "the module's next scan is traced; ask again" }),
+                ),
+            },
+            None => Response::error(404, "no such module"),
+        },
+        ["api", "modules", name, "trace", "events"] => match module(name) {
+            Some(k) => return Reply::Traces(k),
+            None => Response::error(404, "no such module"),
+        },
+        ["api", "outputs"] => Response::json(200, &render::outputs(c, &view)),
+        ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices)),
+        ["api", "proposals"] => Response::json(
+            200,
+            &Json::Array(ctx.box_.proposals.list().into_iter().map(|p| p.json).collect()),
+        ),
+        ["api", "proposals", id] => match proposal_id(id).and_then(|id| ctx.box_.proposals.get(id)) {
+            Some(p) => Response::json(200, &p.json),
+            None => Response::error(404, "no such proposal"),
+        },
+        ["api", "audit"] => audit_list(req, ctx),
+        ["api", "snapshots"] => with_store(ctx, |s| {
+            let entries = s.list()?;
+            // Newest first: head leads.
+            let head = entries.first().map(|e| e.id.to_string());
+            Ok(json!({
+                "head": head,
+                "running": ctx.box_.running.as_ref().map(|cs| cs.id().to_string()),
+                "log": entries.iter().map(render::entry).collect::<Vec<_>>(),
+            }))
+        }),
+        ["api", "snapshots", "head"] => {
+            with_store(ctx, |s| Ok(s.head()?.as_ref().map_or(Json::Null, render::entry)))
+        }
+        ["api", "snapshots", id] => match snapshot(ctx, id) {
+            Ok(cs) => Response::json(200, &render::change_set(&cs)),
+            Err(r) => r,
+        },
+        ["api", "snapshots", a, "diff", b] => match (snapshot(ctx, a), snapshot(ctx, b)) {
+            (Ok(a), Ok(b)) => Response::json(200, &render::diff(&snapshots::diff(&a, &b))),
+            (Err(r), _) | (_, Err(r)) => r,
+        },
+        ["api", "events"] => return Reply::Values,
+        _ => Response::error(404, "no such resource"),
+    };
+    Reply::Once(r)
+}
+
+/// Runs `f` on the store; 404 without one, 500 if it fails.
+fn with_store(ctx: &Ctx, f: impl FnOnce(&Store) -> Result<Json, snapshots::Error>) -> Response {
+    let Some(store) = &ctx.box_.snapshots else {
+        return Response::error(404, "no snapshot store on this box (--store)");
+    };
+    let store = store.lock().unwrap_or_else(PoisonError::into_inner);
+    match f(&store) {
+        Ok(j) => Response::json(200, &j),
+        Err(e) => store_error(&e),
+    }
+}
+
+fn store_error(e: &snapshots::Error) -> Response {
+    match e {
+        snapshots::Error::NotFound(_) => Response::error(404, "no such snapshot"),
+        e => Response::error(500, &e.to_string()),
+    }
+}
+
+/// A snapshot's content by id (64 hex digits): from the store, or the
+/// running change set when it has that id.
+fn snapshot(ctx: &Ctx, id: &str) -> Result<ChangeSet, Response> {
+    let Some(id) = SnapshotId::parse(id) else {
+        return Err(Response::error(404, "no such snapshot"));
+    };
+    if let Some(cs) = ctx.box_.running.as_ref().filter(|cs| cs.id() == id) {
+        return Ok(cs.clone());
+    }
+    let Some(store) = &ctx.box_.snapshots else {
+        return Err(Response::error(404, "no such snapshot"));
+    };
+    let store = store.lock().unwrap_or_else(PoisonError::into_inner);
+    store.get(&id).map_err(|e| store_error(&e))
+}
+
+fn index() -> Json {
+    let e = |method: &str, path: &str, token: bool, what: &str| json!({ "method": method, "path": path, "token": token, "what": what });
+    json!({
+        "service": "helmsman box API",
+        "endpoints": [
+            e("GET", "/api/signals", false, "every signal with its live value and quality"),
+            e("GET", "/api/signals/{name}", false, "one signal"),
+            e("GET", "/api/modules", false, "every module: schedule, status, stats"),
+            e("GET", "/api/modules/{name}", false, "one module with ports, source and manifest"),
+            e("GET", "/api/modules/{name}/trace", false, "request a traced scan; 200 with the newest, 202 until one lands"),
+            e("GET", "/api/modules/{name}/trace/events", false, "event stream of traced scans"),
+            e("GET", "/api/outputs", false, "output commands, safe values, the %Q image"),
+            e("GET", "/api/devices", false, "device links up or down"),
+            e("GET", "/api/proposals", false, "drafts awaiting approval"),
+            e("GET", "/api/proposals/{id}", false, "one proposal"),
+            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source} or {kind: param, module, param, value}"),
+            e("POST", "/api/proposals/{id}/apply", true, "501: needs the approval policy"),
+            e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),
+            e("GET", "/api/snapshots", false, "snapshot history (needs --store), head, and the running change set's id"),
+            e("GET", "/api/snapshots/head", false, "the head entry"),
+            e("GET", "/api/snapshots/{id}", false, "a snapshot's files"),
+            e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
+            e("POST", "/api/snapshots/{id}/rollback", true, "501: needs the approval policy"),
+            e("GET", "/api/events", false, "event stream of live values and module status"),
+        ],
+        "writes": "no endpoint writes a signal, an output or a module; applying a proposal needs the approval policy",
+    })
+}
+
+fn devices(d: &Devices) -> Json {
+    Json::Array(
+        d.list()
+            .into_iter()
+            .map(|(name, state)| match state {
+                None => json!({ "name": name, "state": "unknown" }),
+                Some(Ok(())) => json!({ "name": name, "state": "up" }),
+                Some(Err(why)) => json!({ "name": name, "state": "down", "error": why }),
+            })
+            .collect(),
+    )
+}
+
+fn audit_list(req: &Request, ctx: &Ctx) -> Response {
+    let mut after = 0u64;
+    let mut limit = 100usize;
+    for (k, v) in &req.query {
+        let n = (!v.is_empty() && v.len() <= 20 && v.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| v.parse::<u64>().ok())
+            .flatten();
+        match (k.as_str(), n) {
+            ("after", Some(n)) => after = n,
+            ("limit", Some(n)) => limit = usize::try_from(n.min(1000)).unwrap_or(1000),
+            ("after" | "limit", None) => return Response::error(400, "after and limit are whole numbers"),
+            _ => {}
+        }
+    }
+    let entries: Vec<Json> = ctx
+        .box_
+        .audit
+        .list(after, limit)
+        .into_iter()
+        .map(|e| {
+            json!({
+                "seq": e.seq, "at": e.at, "method": e.method, "path": e.path,
+                "status": e.status, "detail": e.detail, "snapshot": e.snapshot,
+            })
+        })
+        .collect();
+    Response::json(200, &Json::Array(entries))
+}
+
+/// Asks module `k` for a traced scan and returns the newest one seen.
+fn latest_trace(ctx: &Ctx, k: usize) -> Option<Rendered> {
+    let m = &ctx.box_.catalog.modules[k];
+    let tap = m.tap.as_ref()?;
+    tap.request();
+    let fresh = tap.take().map(|s| (s.scan, Arc::new(render::trace(&m.name, &s))));
+    let mut slot = ctx.traces[k].lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(f) = fresh {
+        *slot = Some(f);
+    }
+    slot.clone()
+}
+
+fn event(stream: &mut TcpStream, name: &str, data: &Json) -> io::Result<()> {
+    let body = serde_json::to_string(data).unwrap_or_default();
+    write!(stream, "event: {name}\ndata: {body}\n\n")?;
+    stream.flush()
+}
+
+/// Streams until the client goes, a write stalls past the write timeout,
+/// or the API stops. `next` yields what to send, if anything is new.
+fn pump(
+    stream: &mut TcpStream,
+    ctx: &Ctx,
+    mut next: impl FnMut() -> Option<(&'static str, Json)>,
+) -> io::Result<()> {
+    http::start_stream(stream)?;
+    stream.write_all(b"retry: 2000\n\n")?;
+    let mut quiet = Instant::now();
+    let opened = Instant::now();
+    while !ctx.stop.load(Ordering::Acquire) && opened.elapsed() < ctx.cfg.limits.stream_life {
+        if let Some((name, data)) = next() {
+            event(stream, name, &data)?;
+            quiet = Instant::now();
+        } else if quiet.elapsed() >= KEEPALIVE {
+            stream.write_all(b": keepalive\n\n")?;
+            stream.flush()?;
+            quiet = Instant::now();
+        }
+        thread::sleep(ctx.cfg.stream_every);
+    }
+    Ok(())
+}
+
+fn value_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
+    let mut last = None;
+    pump(stream, ctx, || {
+        let view = ctx.box_.live.view();
+        if last == Some(view.seq) {
+            return None;
+        }
+        last = Some(view.seq);
+        let c = &ctx.box_.catalog;
+        Some((
+            "values",
+            json!({
+                "seq": view.seq,
+                "at_ms": u64::try_from(view.at.as_millis()).unwrap_or(u64::MAX),
+                "signals": render::signals(c, &view),
+                "modules": render::modules(c, &view),
+                "outputs": view.outputs,
+            }),
+        ))
+    })
+}
+
+fn trace_stream(stream: &mut TcpStream, ctx: &Ctx, k: usize) -> io::Result<()> {
+    let mut last = None;
+    pump(stream, ctx, || {
+        let (scan, j) = latest_trace(ctx, k)?;
+        if last == Some(scan) {
+            return None;
+        }
+        last = Some(scan);
+        Some(("trace", (*j).clone()))
+    })
+}

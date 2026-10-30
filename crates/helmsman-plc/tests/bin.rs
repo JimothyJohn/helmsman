@@ -49,6 +49,19 @@ fn plc() -> Command {
     Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
 }
 
+/// A fresh, empty state directory for one PLC process.
+fn state_dir() -> PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "bin-state-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
 /// Starts the PLC on free loopback ports; returns it and its CIP and I/O addresses.
 fn spawn(program: &Path, peer_io_port: u16) -> (Running, SocketAddrV4, SocketAddrV4) {
     spawn_with(&[program.as_os_str()], peer_io_port)
@@ -69,6 +82,9 @@ fn spawn_with(args: &[&std::ffi::OsStr], peer_io_port: u16) -> (Running, SocketA
             "2",
         ])
         .args(["--peer-io-port", &peer_io_port.to_string()])
+        // Its own API port and token, so parallel tests never share them.
+        .args(["--api", "127.0.0.1:0", "--state-dir"])
+        .arg(state_dir())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -824,4 +840,101 @@ fn a_store_that_cannot_run_is_refused_before_the_adapter_starts() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2), "--store takes no other module source");
+}
+
+/// Starts the PLC with its API on a free loopback port and `state` as its
+/// state directory; returns it, the API address and the token line.
+fn spawn_api(state: &Path) -> (Running, std::net::SocketAddr, String) {
+    let echo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
+    let mut child = plc()
+        .arg(&echo)
+        .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
+        .args(["--api", "127.0.0.1:0", "--state-dir"])
+        .arg(state)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let (mut api, mut token) = (None, None);
+    while api.is_none() || token.is_none() {
+        let mut line = String::new();
+        assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
+        if let Some(rest) = line.strip_prefix("helmsman-plc: API on http://") {
+            api = rest.split('/').next().and_then(|a| a.parse().ok());
+        } else if line.starts_with("helmsman-plc: API token") {
+            token = Some(line.trim_end().to_string());
+        }
+    }
+    (Running { child, stderr }, api.unwrap(), token.unwrap())
+}
+
+fn http_get(addr: std::net::SocketAddr, path: &str) -> String {
+    use std::io::Write as _;
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    write!(s, "GET {path} HTTP/1.1\r\nHost: box\r\n\r\n").unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn the_api_serves_the_running_box_and_its_token_is_printed_once() {
+    let state = state_dir();
+    let (plc, api, line) = spawn_api(&state);
+    let token_file = state.join("api-token");
+    let token = std::fs::read_to_string(&token_file).unwrap().trim().to_string();
+    assert_eq!(token.len(), 64);
+    assert!(
+        line.contains("new, shown once") && line.ends_with(&token),
+        "{line}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&token_file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut modules = http_get(api, "/api/modules");
+    while !modules.contains("\"state\":\"running\"") && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        modules = http_get(api, "/api/modules");
+    }
+    assert!(modules.starts_with("HTTP/1.1 200 OK"), "{modules}");
+    assert!(
+        modules.contains("\"name\":\"echo\"") && modules.contains("\"state\":\"running\""),
+        "{modules}"
+    );
+    drop(plc);
+
+    let (plc, _, line) = spawn_api(&state);
+    assert!(
+        !line.contains(&token),
+        "the token is printed only when made: {line}"
+    );
+    assert!(line.contains("API token in"), "{line}");
+    let rest = plc.finish();
+    assert!(!rest.contains(&token), "{rest}");
+}
+
+#[test]
+fn a_taken_api_port_stops_the_plc_with_a_message() {
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = taken.local_addr().unwrap().to_string();
+    let echo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
+    let out = plc()
+        .arg(&echo)
+        .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
+        .args(["--api", &addr, "--state-dir"])
+        .arg(state_dir())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains(&format!("--api {addr}")), "{err}");
+    for bad in ["8080", "localhost:8080", "on", ""] {
+        let out = plc().arg(&echo).args(["--api", bad]).output().unwrap();
+        assert_eq!(out.status.code(), Some(2), "--api {bad:?}");
+    }
 }

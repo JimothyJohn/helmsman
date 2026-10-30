@@ -1136,6 +1136,8 @@ dependencies = [
  "proptest",
  "rusqlite",
  "rustls",
+ "serde",
+ "serde_json",
  "sha2",
  "webpki-roots",
 ]

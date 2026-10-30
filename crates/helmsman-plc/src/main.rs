@@ -8,7 +8,7 @@
 //! the network so the PLC can still be found.
 
 use std::fs;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
@@ -20,13 +20,14 @@ use helmsman_adapter::device::lock_ref;
 use helmsman_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
 use helmsman_iec::{ImageSizes, compile, compile_plcopen, plcopen};
 use helmsman_io::local::Channels;
+use helmsman_plc::api::{self, Api, Catalog, Devices, Live, MemAudit, MemProposals, ModuleInfo, Publisher};
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::record::{RecordConfig, Recorder};
 use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::spec::{Defaults, Spec};
-use helmsman_plc::store::{Kind, Store};
+use helmsman_plc::store::{ChangeSet, Kind, Store};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
 const USAGE: &str = "\
@@ -49,6 +50,13 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        helmsman_plc::store): its modules, I/O map and calendar,
                        instead of the files above
   --emit-st            print the Structured Text a .xml project lowers to, and exit
+  --api ADDR           box API (HTTP + JSON, see helmsman_plc::api) on ADDR
+                       (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
+                       for the LAN), or `off`. Reads are open; anything
+                       else needs the token from the state directory.
+  --state-dir DIR      where the API token lives (default $STATE_DIRECTORY,
+                       as systemd's StateDirectory= sets it, else
+                       ./helmsman-state)
   --scan-ms N          default scan period (10, 1..=10000)
   --memory N           default %M area in bytes (1024)
   --serial HEX         identity serial number (default 1)
@@ -76,10 +84,20 @@ struct Opts {
     sink_dir: Option<PathBuf>,
     store: Option<PathBuf>,
     emit_st: bool,
+    api: Option<SocketAddr>,
+    state_dir: Option<PathBuf>,
     scan: Duration,
     memory: usize,
     serial: u32,
     server: ServerConfig,
+}
+
+/// Sets a flag that may be given once.
+fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
+    if slot.replace(PathBuf::from(v)).is_some() {
+        return Err(format!("one {flag} only"));
+    }
+    Ok(())
 }
 
 fn parse(args: &[String]) -> Result<Opts, String> {
@@ -93,6 +111,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         sink_dir: None,
         store: None,
         emit_st: false,
+        api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
+        state_dir: None,
         scan: Duration::from_millis(10),
         memory: 1024,
         serial: 1,
@@ -134,33 +154,21 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     .parse::<Ipv4Addr>()
                     .map_err(|_| format!("--bind: not an IPv4 address: {v:?}"))?;
             }
+            "--api" if v == "off" => o.api = None,
+            "--api" => {
+                o.api = Some(
+                    v.parse::<SocketAddr>()
+                        .map_err(|_| format!("--api: expected IP:PORT or off, got {v:?}"))?,
+                );
+            }
+            "--state-dir" => o.state_dir = Some(PathBuf::from(v)),
             "--module" => o.modules.push(v.clone()),
             "--module-dir" => o.module_dirs.push(PathBuf::from(v)),
-            "--io-map" => {
-                if o.io_map.replace(PathBuf::from(v)).is_some() {
-                    return Err("one --io-map only".into());
-                }
-            }
-            "--calendar" => {
-                if o.calendar.replace(PathBuf::from(v)).is_some() {
-                    return Err("one --calendar only".into());
-                }
-            }
-            "--sinks" => {
-                if o.sinks.replace(PathBuf::from(v)).is_some() {
-                    return Err("one --sinks only".into());
-                }
-            }
-            "--sink-dir" => {
-                if o.sink_dir.replace(PathBuf::from(v)).is_some() {
-                    return Err("one --sink-dir only".into());
-                }
-            }
-            "--store" => {
-                if o.store.replace(PathBuf::from(v)).is_some() {
-                    return Err("one --store only".into());
-                }
-            }
+            "--io-map" => once(&mut o.io_map, flag, v)?,
+            "--calendar" => once(&mut o.calendar, flag, v)?,
+            "--sinks" => once(&mut o.sinks, flag, v)?,
+            "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
+            "--store" => once(&mut o.store, flag, v)?,
             "--encap-port" => o.server.encap_port = port()?,
             "--io-port" => o.server.io_port = port()?,
             "--peer-io-port" => o.server.peer_io_port = port()?,
@@ -228,6 +236,10 @@ struct Content {
     calendar: Option<Text>,
     /// Which snapshot, when it came from a store.
     origin: Option<String>,
+    /// All of it as a change set, for the API's proposals: the head
+    /// snapshot, or the files read again. `None` when bare programs or
+    /// `--module` specs are loaded too (no snapshot can hold those).
+    running: Option<ChangeSet>,
 }
 
 fn read_text(path: &Path) -> Result<Text, String> {
@@ -244,6 +256,7 @@ fn from_store(dir: &Path, d: &Defaults) -> Result<Content, String> {
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("store {} has no snapshot yet", dir.display()))?;
     let cs = store.get(&head.id).map_err(|e| e.to_string())?;
+    let running = Some(cs.clone());
     let at = dir.join(head.id.to_string());
     let kind = match head.kind {
         Kind::Apply => "applied".to_string(),
@@ -265,6 +278,7 @@ fn from_store(dir: &Path, d: &Defaults) -> Result<Content, String> {
             head.seq,
             head.meta.author
         )),
+        running,
     })
 }
 
@@ -281,6 +295,9 @@ fn content(o: &Opts, d: &Defaults) -> Result<Content, String> {
         io_map: o.io_map.as_deref().map(read_text).transpose()?,
         calendar: o.calendar.as_deref().map(read_text).transpose()?,
         origin: None,
+        running: (o.programs.is_empty() && o.modules.is_empty())
+            .then(|| ChangeSet::read(&o.module_dirs, o.io_map.as_deref(), o.calendar.as_deref()).ok())
+            .flatten(),
     })
 }
 
@@ -297,7 +314,8 @@ fn specs(o: &Opts, d: &Defaults, dirs: Vec<ModuleDir>) -> Result<Vec<(Spec, Opti
     Ok(specs)
 }
 
-fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<Module, String> {
+/// The module and its source text.
+fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<(Module, String), String> {
     let file = spec.path.display();
     let src = match dir {
         Some(md) => md.source.clone(),
@@ -318,16 +336,17 @@ fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<Module, String> {
         format!("{file} does not compile:{}", lines.concat())
     })?;
     if let Some(md) = dir {
-        return md.module(program);
+        return Ok((md.module(program)?, src));
     }
-    Ok(Module {
+    let module = Module {
         name: spec.name.clone(),
         program,
         period: spec.period,
         i: spec.i,
         q: spec.q,
         params: Vec::new(),
-    })
+    };
+    Ok((module, src))
 }
 
 fn emit_st(o: &Opts) -> Result<(), String> {
@@ -347,9 +366,20 @@ fn emit_st(o: &Opts) -> Result<(), String> {
     Ok(())
 }
 
-/// The I/O map's signal table and its links, not yet started, and whether
-/// any signal is on the box's own channels.
-fn load_io((path, src): &Text) -> Result<(SignalTable, Vec<Link>, bool), String> {
+/// What the I/O map and calendar load into: the signal table, the device
+/// links (not yet started), whether any signal is on the box's own
+/// channels, the map itself, and the calendar.
+struct Signals {
+    table: SignalTable,
+    links: Vec<Link>,
+    uses_box: bool,
+    map: Option<helmsman_io::IoMap>,
+    calendar: Option<Source>,
+}
+
+/// The I/O map's signal table and its links, not yet started, whether
+/// any signal is on the box's own channels, and the map.
+fn load_io((path, src): &Text) -> Result<(SignalTable, Vec<Link>, bool, helmsman_io::IoMap), String> {
     let file = path.display();
     let parsed = helmsman_io::text::parse(src).map_err(|errs| {
         let lines: Vec<String> = errs.iter().map(|(n, e)| format!("\n  {file}:{n}: {e}")).collect();
@@ -365,7 +395,7 @@ fn load_io((path, src): &Text) -> Result<(SignalTable, Vec<Link>, bool), String>
         .iter()
         .any(|s| matches!(s.binding, helmsman_io::Binding::Local { .. }));
     let links = links(&parsed.map, helmsman_io::open, Box::new(Channels::new()))?;
-    Ok((table, links, uses_box))
+    Ok((table, links, uses_box, parsed.map))
 }
 
 /// The calendar file, bound to `table`.
@@ -382,17 +412,26 @@ fn load_calendar((path, src): &Text, table: &mut SignalTable) -> Result<Source, 
 }
 
 /// [`load_io`] (or no signals), with the calendar's added.
-fn load_signals(c: &Content) -> Result<(SignalTable, Vec<Link>, bool, Option<Source>), String> {
-    let (mut table, links, uses_box) = match &c.io_map {
-        Some(text) => load_io(text)?,
-        None => (SignalTable::default(), Vec::new(), false),
+fn load_signals(c: &Content) -> Result<Signals, String> {
+    let (mut table, links, uses_box, map) = match &c.io_map {
+        Some(text) => {
+            let (table, links, uses_box, map) = load_io(text)?;
+            (table, links, uses_box, Some(map))
+        }
+        None => (SignalTable::default(), Vec::new(), false, None),
     };
-    let cal = c
+    let calendar = c
         .calendar
         .as_ref()
         .map(|t| load_calendar(t, &mut table))
         .transpose()?;
-    Ok((table, links, uses_box, cal))
+    Ok(Signals {
+        table,
+        links,
+        uses_box,
+        map,
+        calendar,
+    })
 }
 
 /// Wall-clock seconds since the epoch, or `None` before it.
@@ -430,22 +469,27 @@ fn report_calendar(c: &Source) {
 
 /// Sleeps to the runtime's `next` deadline (from `start`). A late tick
 /// skips missed periods (the runtime counts them), so this never bursts.
-/// With a calendar it wakes at least every [`CALENDAR_TICK`] so the
-/// calendar's signals and outputs stay current, even once every module has
-/// stopped; without one, a runtime with nothing left to run parks for good.
-fn sleep_to(start: Instant, next: Option<Duration>, calendar: bool) {
-    let next = match next {
-        Some(next) => next,
-        None if !calendar => {
+/// With a `cap` (a calendar to keep current, a view to publish for the
+/// API) it wakes at least that often, even once every module has stopped;
+/// without one, a runtime with nothing left to run parks for good.
+/// `said` keeps the "every module has stopped" line to once.
+fn sleep_to(start: Instant, next: Option<Duration>, cap: Option<Duration>, said: &mut bool) {
+    let next = if let Some(next) = next {
+        next
+    } else {
+        if !*said {
             eprintln!("helmsman-plc: every module has stopped; the adapter stays up");
-            loop {
-                thread::park();
-            }
+            *said = true;
         }
-        None => start.elapsed() + CALENDAR_TICK,
+        match cap {
+            Some(cap) => start.elapsed() + cap,
+            None => loop {
+                thread::park();
+            },
+        }
     };
     let wait = (start + next).checked_duration_since(Instant::now());
-    if let Some(wait) = wait.map(|w| if calendar { w.min(CALENDAR_TICK) } else { w }) {
+    if let Some(wait) = wait.map(|w| cap.map_or(w, |c| w.min(c))) {
         thread::sleep(wait);
     }
 }
@@ -479,19 +523,19 @@ fn start_sinks(o: &Opts, table: &SignalTable) -> Result<Option<Sinks>, String> {
     })
 }
 
-/// Runs each link on its own thread for the life of the process.
-fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>) {
+/// Runs each link on its own thread for the life of the process,
+/// reporting up/down to the journal and to `devices`.
+fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>, devices: &Arc<Devices>) {
     let stop = Arc::new(AtomicBool::new(false));
     for link in links {
-        spawn(
-            link,
-            Arc::clone(table),
-            Arc::clone(&stop),
-            |name, err| match err {
+        let devices = Arc::clone(devices);
+        spawn(link, Arc::clone(table), Arc::clone(&stop), move |name, err| {
+            match err {
                 None => eprintln!("helmsman-plc: device {name} up"),
                 Some(e) => eprintln!("helmsman-plc: device {name} down: {e}"),
-            },
-        );
+            }
+            devices.set(name, err.map(ToString::to_string));
+        });
     }
 }
 
@@ -509,31 +553,106 @@ fn describe(s: &Spec) -> String {
     )
 }
 
-fn run(o: &Opts) -> Result<(), String> {
-    if o.emit_st {
-        return emit_st(o);
-    }
-    let cfg = device_config(o.serial);
-    let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
-    let d = defaults(o, i_len, q_len);
-    let mut content = content(o, &d)?;
-    let loaded = specs(o, &d, std::mem::take(&mut content.dirs))?;
-    let modules = loaded.iter().map(load).collect::<Result<Vec<_>, _>>()?;
-    let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
-    let (table, io_links, uses_box, cal) = load_signals(&content)?;
-    let table = Arc::new(Mutex::new(table));
-    let bound = Runtime::with_signals(
-        i_len,
-        q_len,
-        modules,
-        &table.lock().unwrap_or_else(PoisonError::into_inner),
+/// Where the token lives: `--state-dir`, systemd's `$STATE_DIRECTORY`,
+/// or `./helmsman-state`.
+fn state_dir(o: &Opts) -> PathBuf {
+    o.state_dir.clone().unwrap_or_else(|| {
+        std::env::var_os("STATE_DIRECTORY")
+            .filter(|v| !v.is_empty())
+            .map_or_else(|| PathBuf::from("helmsman-state"), PathBuf::from)
+    })
+}
+
+/// Starts the API on `bind` over the loaded box; prints the token if it
+/// was just made. The API opens its own read connection to the store.
+fn start_api(
+    o: &Opts,
+    bind: SocketAddr,
+    catalog: Catalog,
+    running: Option<ChangeSet>,
+    live: &Arc<Live>,
+    devices: &Arc<Devices>,
+) -> Result<Api, String> {
+    let dir = state_dir(o);
+    let token =
+        api::token::load_or_create(&dir).map_err(|e| format!("API token in {}: {e}", dir.display()))?;
+    let snapshots = o
+        .store
+        .as_deref()
+        .map(|d| Store::open(d).map(Mutex::new).map_err(|e| e.to_string()))
+        .transpose()?;
+    let cfg = api::Config {
+        bind,
+        token: token.token.clone(),
+        limits: api::Limits::default(),
+        stream_every: Duration::from_millis(250),
+        memory: o.memory,
+        log: Arc::new(|line: &str| eprintln!("helmsman-plc: {line}")),
+    };
+    let shared = api::Shared {
+        catalog,
+        live: Arc::clone(live),
+        devices: Arc::clone(devices),
+        audit: Box::new(MemAudit::new(100_000)),
+        proposals: Box::new(MemProposals::new(1000)),
+        running,
+        snapshots,
+    };
+    let server = Api::start(cfg, shared).map_err(|e| format!("--api {bind}: {e}"))?;
+    eprintln!(
+        "helmsman-plc: API on http://{}/api (reads open; changes need the token)",
+        server.addr()
     );
-    let mut rt = bound.map_err(|errs| {
-        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
-        format!("modules do not fit together:{}", lines.concat())
-    })?;
-    let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
-    let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
+    if token.new {
+        eprintln!(
+            "helmsman-plc: API token (new, shown once, kept in {}): {}",
+            token.path.display(),
+            token.token
+        );
+    } else {
+        eprintln!("helmsman-plc: API token in {}", token.path.display());
+    }
+    Ok(server)
+}
+
+/// What the API serves that is fixed once the runtime is built.
+fn catalog(
+    rt: &Runtime,
+    loaded: &[(Spec, Option<ModuleDir>)],
+    sources: Vec<String>,
+    table: &Mutex<SignalTable>,
+    map: Option<&helmsman_io::IoMap>,
+) -> Catalog {
+    let modules: Vec<ModuleInfo> = loaded
+        .iter()
+        .zip(sources)
+        .filter_map(|((spec, dir), source)| {
+            let origin = dir
+                .as_ref()
+                .and_then(|_| spec.path.parent())
+                .unwrap_or(&spec.path)
+                .display()
+                .to_string();
+            ModuleInfo::of(
+                rt,
+                &spec.name,
+                origin,
+                source,
+                dir.as_ref().map(|d| d.manifest.clone()),
+            )
+        })
+        .collect();
+    let signals = Catalog::signals(
+        &table.lock().unwrap_or_else(PoisonError::into_inner),
+        map,
+        &modules,
+    );
+    Catalog { signals, modules }
+}
+
+/// The startup lines: the CIP banner (tests read its addresses from the
+/// first line), where the content came from, what is simulated.
+fn announce(adapter: &Adapter, specs: &[Spec], content: &Content, uses_box: bool, cal: Option<&Source>) {
     let listed: Vec<String> = specs.iter().map(describe).collect();
     eprintln!(
         "helmsman-plc: CIP on {} (I/O {}), {} module(s): {}",
@@ -548,10 +667,91 @@ fn run(o: &Opts) -> Result<(), String> {
     if uses_box {
         eprintln!("helmsman-plc: box channels (do:N, di:N) are in memory only; no GPIO yet");
     }
-    if let Some(c) = &cal {
+    if let Some(c) = cal {
         report_calendar(c);
     }
-    start_io(io_links, &table);
+}
+
+/// Journal lines for modules that were held or came back this tick
+/// (`held`: which were held before it), and for those that faulted.
+fn report_changes(specs: &[Spec], rt: &Runtime, held: &[bool], faults: Vec<(String, helmsman_iec::Fault)>) {
+    for (s, was) in specs.iter().zip(held) {
+        match (was, rt.status(&s.name)) {
+            (false, Some(Status::Held)) => eprintln!(
+                "helmsman-plc: HOLD, outputs safe: a signal module {} reads has no value",
+                s.name
+            ),
+            (true, Some(Status::Running)) => {
+                eprintln!("helmsman-plc: module {} running again", s.name);
+            }
+            _ => {}
+        }
+    }
+    for (name, fault) in faults {
+        let path = specs.iter().find(|s| s.name == name).map(|s| s.path.display());
+        eprintln!(
+            "helmsman-plc: STOP, outputs zeroed: {}: {fault} (module {name})",
+            path.map_or_else(String::new, |p| p.to_string())
+        );
+    }
+}
+
+fn run(o: &Opts) -> Result<(), String> {
+    if o.emit_st {
+        return emit_st(o);
+    }
+    let cfg = device_config(o.serial);
+    let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
+    let d = defaults(o, i_len, q_len);
+    let mut content = content(o, &d)?;
+    let loaded = specs(o, &d, std::mem::take(&mut content.dirs))?;
+    let (modules, sources): (Vec<Module>, Vec<String>) = loaded
+        .iter()
+        .map(load)
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .unzip();
+    let Signals {
+        table,
+        links: io_links,
+        uses_box,
+        map,
+        calendar: cal,
+    } = load_signals(&content)?;
+    let table = Arc::new(Mutex::new(table));
+    let bound = Runtime::with_signals(
+        i_len,
+        q_len,
+        modules,
+        &table.lock().unwrap_or_else(PoisonError::into_inner),
+    );
+    let mut rt = bound.map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
+        format!("modules do not fit together:{}", lines.concat())
+    })?;
+    let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
+    let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
+    let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
+    let devices = Arc::new(Devices::new(io_links.iter().map(|l| l.name.clone())));
+    let live = Arc::new(Live::default());
+    let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
+    announce(&adapter, &specs, &content, uses_box, cal.as_ref());
+    let server = o
+        .api
+        .map(|bind| start_api(o, bind, catalog, content.running.take(), &live, &devices))
+        .transpose()?;
+    let mut publisher = server
+        .as_ref()
+        .map(|_| Publisher::new(Arc::clone(&live), api::PUBLISH_EVERY));
+    let cap = [
+        cal.as_ref().map(|_| CALENDAR_TICK),
+        publisher.as_ref().map(|p| p.every),
+    ]
+    .into_iter()
+    .flatten()
+    .min();
+    let mut said = false;
+    start_io(io_links, &table, &devices);
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
     let mut recorder = recorder(&table);
@@ -576,32 +776,17 @@ fn run(o: &Opts) -> Result<(), String> {
             let now = start.elapsed();
             recorder.observe(now, &t);
             let faults = rt.tick_with(now, &inputs, &mut t);
-            if let Some(s) = &mut sinks {
-                s.observe(&t, start.elapsed(), sink::wall_ms(SystemTime::now()));
+            if let Some(p) = &mut publisher {
+                p.publish(now, &rt, &t);
+            }
+            if let Some(sk) = &mut sinks {
+                sk.observe(&t, now, sink::wall_ms(SystemTime::now()));
             }
             faults
         };
-        for (s, was) in specs.iter().zip(held) {
-            match (was, rt.status(&s.name)) {
-                (false, Some(Status::Held)) => eprintln!(
-                    "helmsman-plc: HOLD, outputs safe: a signal module {} reads has no value",
-                    s.name
-                ),
-                (true, Some(Status::Running)) => {
-                    eprintln!("helmsman-plc: module {} running again", s.name);
-                }
-                _ => {}
-            }
-        }
-        for (name, fault) in faults {
-            let path = specs.iter().find(|s| s.name == name).map(|s| s.path.display());
-            eprintln!(
-                "helmsman-plc: STOP, outputs zeroed: {}: {fault} (module {name})",
-                path.map_or_else(String::new, |p| p.to_string())
-            );
-        }
+        report_changes(&specs, &rt, &held, faults);
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
-        sleep_to(start, rt.next_deadline(), cal.is_some());
+        sleep_to(start, rt.next_deadline(), cap, &mut said);
     }
 }
 
