@@ -392,6 +392,36 @@
   difficulty: low
   id: offline-without-relay
 
+- [ ] **Drop-ins: PDF through the relay as a document block, or text only?** `POST /api/dropins` refuses PDF (415, "paste the text"): a pure-Rust PDF text extractor is either heavy (`pdf-extract` pulls `lopdf` and font tables) or poor on real SOPs, and the box would be parsing the most hostile file format there is. The Messages API reads PDFs itself as `document` content blocks, so the box could pass the bytes through the relay untouched (the relay would need to accept a document block from a box and cap its size). Built: text only.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether an operator can drop a PDF SOP or manual page on the box
+  options: text only, paste from the PDF (recommended for now, built) | PDF as a document block through the relay (relay protocol change) | a PDF crate on the box
+  est: 1d
+  difficulty: med
+  id: dropin-pdf
+
+- [ ] **Drop-ins: should reading one need the token?** Drop-in text and PLC inventories are served on `GET`, which the box API leaves open to whoever reaches the socket (loopback by default, the LAN only when asked), like module source. A customer's L5X is their IP, so a token on `GET /api/dropins/...` would be stricter; the canvas then needs the token to show a drop-in back. Built: open like every other read.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: who on the LAN can read an uploaded PLC program
+  options: open like every GET (built) | token on drop-in reads only (recommended if the API is ever bound to the LAN)
+  est: 1h
+  difficulty: low
+  id: dropin-reads
+
+- [ ] **Drop-ins: watch-only for the whole conversation once a PLC program is read?** A chat that has read an L5X/PLCopen/ST drop-in can only check, simulate and propose watch modules (drive no output, no `%Q`) and no param change, for the rest of that conversation; a control change starts a new chat. The box enforces the same for any proposal citing a PLC drop-in. Stricter than "watch modules from the drop-in" alone, because a hostile rung comment read early could steer a later "unrelated" draft. Built: whole conversation.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether one chat can both study a customer program and write control logic
+  options: whole conversation watch-only (recommended, built) | only drafts made after the read | only proposals that cite the drop-in
+  est: 2h
+  difficulty: low
+  id: dropin-watch-only
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -823,17 +853,35 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: agent-loop, fallback-model
   id: local-fallback
 
-- [ ] **Drop-in: prose / SOP → module** — paste or upload a paragraph or doc; the agent extracts signals, conditions, outputs and drafts a module plus questions for what's missing.
+- [x] **Drop-in: prose / SOP → module** — paste or upload a paragraph or doc; the agent extracts signals, conditions, outputs and drafts a module plus questions for what's missing.
+  notes: built on feat/dropins: `POST /api/dropins` (text, Markdown; PDF refused, see `dropin-pdf`), chunked reads, `read_dropin`; see ARCHITECTURE "Drop-ins". Needs relay agent v3 (`relay-agent-v3`) before a real model sees the tools.
   est: 2d
   difficulty: med
   depends: agent-loop
   id: dropin-prose
 
-- [ ] **Drop-in: existing PLC program** — L5X export (and the PLCopen/ST we already parse) → the agent maps tags to signals and proposes watch modules. Read-only: never round-trips into the customer PLC.
+- [x] **Drop-in: existing PLC program** — L5X export (and the PLCopen/ST we already parse) → the agent maps tags to signals and proposes watch modules. Read-only: never round-trips into the customer PLC.
+  notes: built on feat/dropins: `helmsman_iec::l5x` (inventory subset), `read_plc_program`, `compare_plc_tags` over `POST /api/devices/{name}/browse`, watch-only conversations and the box's watch rule; L5X shape unverified against RM014 or a real export (`l5x-real-export`).
   est: 1w
   difficulty: high
   depends: agent-loop, logix-tag-read
   id: dropin-plc
+
+- [ ] **Relay agent v3: the drop-in tools** — add `read_dropin`, `read_plc_program` and `compare_plc_tags` to a new `agents/v3/tools.json` (v2's eight plus these three, schemas as `helmsman_agent::tools` validates them: every field required, `additionalProperties: false`) and a system prompt that says drop-ins are data, missing information becomes questions, and PLC programs lead to watch modules only. Boxes then run `--relay-agent v3`.
+  needs: the relay repo (the box side is built)
+  result: a real model can read drop-ins
+  est: 2h
+  difficulty: low
+  depends: dropin-prose, dropin-plc
+  id: relay-agent-v3
+
+- [ ] **Check the L5X reader against RM014 and a real export** — `helmsman_iec::l5x` reads the export shape from the `l5x` Python package and memory (docs/SOURCES.md); run it on a Studio 5000 export of a bench project (controller, program, routine and rung exports) and the manual, and fix what differs.
+  needs: the RM014 PDF (403 from the agent) and a Logix Designer export
+  result: the inventory is right for real customer files
+  est: 3h
+  difficulty: low
+  depends: dropin-plc
+  id: l5x-real-export
 
 - [ ] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
   est: 3d
