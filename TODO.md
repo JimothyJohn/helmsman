@@ -259,3 +259,11 @@
   depends: plcopen-xml
   id: plcopen-editor-check
 
+
+- [ ] **Try the node canvas (PR #19)** — ComfyUI/Node-RED style editor in Rust (egui, wasm): nested function blocks, live scan sim, not wired to the PLC yet. Open http://10.0.0.41:8790/ from the Air; hold a start button, double-click a motor to go inside, select nodes + Cmd+G to make your own block, `?` lists the controls.
+  needs: your eyes on the UI; say what to add next (backend hookup, I/O mapping, more node kinds)
+  result: PR #19 out of draft, or a list of changes
+  notes: served by python3 http.server from the tcpethernet-canvas worktree (pid in target/canvas-http.pid). Stop: `kill $(lsof -tiTCP:8790 -sTCP:LISTEN)`. Rebuild: `make canvas-web`. `make canvas-serve` (trunk, live reload) only answers on localhost here: macOS's firewall holds the unsigned trunk binary's incoming connections behind a GUI prompt
+  est: 15m
+  difficulty: low
+  id: canvas-try
