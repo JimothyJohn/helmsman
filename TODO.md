@@ -101,6 +101,56 @@
   answer: report it, as a draft issue
   notes: not filed: already fixed on ruSTy master by PLC-lang/rusty#2015 (merged 2026-10-21, after v1.0.7); repro re-verified against 1.0.7 on 2026-10-28. Follow-up card rusty-bump.
 
+- [ ] **Theme depth: tokens, layout, or custom widgets?** "Want a new theme? Talk to it." You skipped this in the 2026-10-29 interview. Tokens only (colors, fonts, density) is safe and always consistent. Layout adds per-role panel arrangement. Custom widgets (a gauge, a machine mimic) makes visuals a module tier with its own sandbox story.
+  asked: 2026-10-29
+  by: claude-session
+  needs: your call
+  result: scope of theme-engine (M3)
+  options: tokens only | tokens + layout | custom widgets too
+  est: 5m
+  difficulty: low
+  id: theme-depth
+
+- [ ] **Marketplace floor under the AI review.** You picked "AI-reviewed on install". I'd keep that, but not alone: a hostile bundle can carry text aimed at the reviewer (prompt injection), and AI review is non-deterministic. Proposal: signing, a capability manifest, and WASM/ST sandboxing enforced by the host are the mechanical floor; Claude's plain-language review sits on top and can only refuse, never grant.
+  asked: 2026-10-29
+  by: claude-session
+  needs: your call
+  result: trust model for bundle-format and marketplace
+  options: floor + AI review (recommended) | AI review only
+  est: 5m
+  difficulty: low
+  id: market-floor
+
+- [ ] **Can the operator edit in the canvas, or only watch?** Per your 2026-10-29 note, ST is the source of truth (agent-written, engineer-tweakable) and the canvas is the operator's live view of what the code does. Edit-in-canvas means round-tripping a graph edit back to ST, which is hard to do without mangling the agent's source. View-only plus "ask the agent" keeps one direction.
+  asked: 2026-10-29
+  by: claude-session
+  needs: your call
+  result: whether st-graph-view needs a graph→ST writer, and what the uncommitted tcpethernet-graph editor becomes
+  options: view-only, change via agent (recommended) | small edits (params, thresholds) in canvas | full graph editing
+  est: 10m
+  difficulty: med
+  id: canvas-edit-scope
+
+- [ ] **Local fallback model: on the Pi, or nothing until a hub exists?** You chose "runs + local fallback" for offline. A Pi 5 can run a ~1–3B model via llama.cpp, slowly, good enough to change a threshold or explain a node, not to write modules. Costs RAM next to the runtime.
+  asked: 2026-10-29
+  by: claude-session
+  needs: your call
+  result: scope of local-fallback (M2)
+  options: small model on the Pi | site hub only | rule-based param edits only (no model)
+  est: 10m
+  difficulty: med
+  id: fallback-model
+
+- [ ] **Relay hosting shape.** The relay holds the Anthropic key, meters per box, and versions prompts/tools. My default: API Gateway + Lambda + DynamoDB (box tokens, usage), streaming via Lambda response streaming. Your AWS account, a new stack.
+  asked: 2026-10-29
+  by: claude-session
+  needs: your call; which AWS account/region
+  result: relay-v0 can start
+  options: Lambda + DynamoDB (recommended) | small EC2/Fargate service
+  est: 10m
+  difficulty: low
+  id: relay-hosting
+
 ## Tasks
 
 - [ ] **Bench sweep against the CompactLogix and FP0H** — `cargo run --example discover <subnet broadcast>`; fill the rows in `docs/INTEROP.md`, keep the first capture.
@@ -259,3 +309,295 @@
   depends: plcopen-xml
   id: plcopen-editor-check
 
+
+## Product vision (interview 2026-10-29)
+
+Working title until naming lands. A small, opinionated controller for factory edge boxes (Pi 5 reference, headless, browser UI), for non-mission-critical work: low-frequency detection, shift-aware scheduling of its own outputs, on-floor signalling (stack light, andon, screen). Data is pushed elsewhere (webhooks, OPC UA); the box keeps no historian.
+
+Agentic first. The agent (Claude, behind our relay) is the primary programmer. Every module is Structured Text the agent writes and an engineer can tweak; the existing parser, checker, interpreter and ruSTy oracle are its feedback loop. The canvas is the operator's window into the code: ST rendered as a live diagram with values on wires and the reason each output is on. The canvas is the app shell; chat lives in its side panel.
+
+Extension tiers: data (params, signals, schedules) → ST modules → WASM (drivers, heavy code; M3). Users are layered: operator (view, ask), engineer (approve, edit ST, PIN), integrator (modules, policy). The approval policy depends on tier and role. Param and theme changes go live with undo; logic changes get a preview; anything that can move an output needs an engineer PIN plus a sim replay.
+
+Hard limits, enforced by the host and never by the prompt: no writes to external PLCs (CIP is read-only toward them); no output change without human approval; modules have no network access (core sinks publish); the agent never touches the Rust core. Offline: everything installed keeps running, chat degrades to a local fallback. Business: open core (runtime + canvas MIT; relay, fleet and verified marketplace paid) plus a preloaded box. Standalone first, fleet-shaped data model from day one.
+
+## Roadmap M1: bench demo, talk → module → light
+
+Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". The agent drafts ST, the canvas shows it live against real values, a PIN approves it, the Pi's output toggles, and undo restores the previous snapshot.
+
+- [ ] **Architecture note** — docs/ARCHITECTURE.md: the vision above as boxes and arrows. Box core (runtime, signals, sinks, snapshots, policy), box API, canvas, agent loop, relay. Which crate owns what; the trust boundaries.
+  result: one page every later card points at
+  est: 3h
+  difficulty: med
+  id: arch-note
+
+- [ ] **Multiple ST modules in one runtime** — tcpethernet-plc runs one program today. Run N modules as separate tasks, each with its own scan rate, %I/%Q/%M slice and fault isolation (one faulting module zeroes only its own outputs).
+  needs: nothing
+  result: a box runs several independent agent-written modules
+  est: 3d
+  difficulty: med
+  id: multi-module
+
+- [ ] **Hot-swap a module without dropping I/O** — replace one module's compiled program between scans, carrying over retained state where names and types match; the adapter connection stays up.
+  result: applying a change is instant and doesn't fault the scanner
+  est: 2d
+  difficulty: med
+  depends: multi-module
+  id: hot-swap
+
+- [ ] **Module format** — a module is a directory/bundle: `module.st` plus a manifest (signals read, outputs driven, schedule, params with types and ranges, author, prompt that produced it). The manifest is what policy and the sandbox enforce.
+  result: the unit the agent writes, snapshots store, and bundles ship
+  est: 1d
+  difficulty: med
+  depends: arch-note
+  id: module-format
+
+- [ ] **Signal model** — named, typed signals with units and poll rates, bound to a source (CIP tag, CIP attribute, GPIO in, another module's output). Modules read signals by name, never raw addresses.
+  result: one vocabulary for the agent, the canvas and the manifest
+  est: 2d
+  difficulty: med
+  depends: module-format
+  id: signal-model
+
+- [ ] **Logix symbolic tag read** — Read Tag (0x4C) and multi-service packets over the existing explicit session; tag list browse (Symbol object 0x6B) so the agent can see what's on the PLC. Read-only by construction: no Write Tag in the box build.
+  needs: bench-sweep for real-device verification; OpENer can't serve symbolic tags, so a fixture server for tests
+  result: CompactLogix tags become signals
+  est: 4d
+  difficulty: high
+  depends: bench-sweep
+  id: logix-tag-read
+
+- [ ] **Box outputs: GPIO stack light** — Pi GPIO (or a relay hat) as box-owned outputs with named channels; blink patterns as a stdlib FB.
+  needs: a relay hat or 24 V stack light + driver on the bench
+  result: the demo's light
+  est: 1d
+  difficulty: low
+  id: gpio-outputs
+
+- [ ] **Box API** — one local HTTP API on the box: signals (list, live values), modules (list, source, manifest, status), proposals, snapshots, outputs, audit. The canvas, the agent tools and later MCP all go through it. Supersedes the `daemon` card's shape.
+  result: single surface, testable without a UI
+  est: 4d
+  difficulty: med
+  depends: module-format, signal-model
+  id: box-api
+
+- [ ] **Snapshots and rollback** — each applied change set is an immutable, content-addressed snapshot in SQLite (modules, params, signal bindings) with author, prompt, approver, time. One-call rollback. Exportable as a bundle later.
+  result: undo for everything the agent does
+  est: 2d
+  difficulty: med
+  depends: module-format
+  id: snapshots
+
+- [ ] **Runtime trace tap** — the interpreter exposes per-scan variable values and which statements/branches executed, sampled at UI rates, without slowing the scan.
+  result: the data the live canvas draws
+  est: 3d
+  difficulty: high
+  depends: multi-module
+  id: trace-tap
+
+- [ ] **ST → diagram view** — lower a module's ST AST into an FBD-like diagram (blocks for FB calls and expressions, wires for data flow, IF/CASE as gated regions) and lay it out. Live values from trace-tap on wires; outputs show "on because …". Reuses tcpethernet-graph's model and the egui canvas as the renderer.
+  needs: canvas-edit-scope answered
+  result: the operator sees what the code is doing
+  est: 1w
+  difficulty: high
+  depends: trace-tap
+  id: st-graph-view
+
+- [ ] **Serve the canvas from the box** — wasm build of tcpethernet-canvas served by the box API, talking to it over HTTP/WebSocket; any browser or tablet on the LAN is the HMI.
+  result: headless Pi, browser UI
+  est: 2d
+  difficulty: med
+  depends: box-api
+  id: canvas-web
+
+- [ ] **Relay v0** — the boxes' only path to Claude: per-box token, the Anthropic key server-side, usage metering, versioned system prompt and tool schema. Dev runs against a local relay with a .env key.
+  needs: relay-hosting answered
+  result: no API keys on boxes; prompts upgrade without reflashing
+  est: 3d
+  difficulty: med
+  depends: relay-hosting
+  id: relay-v0
+
+- [ ] **Agent loop** — the tool-using agent behind the chat panel. Tools: list/read signals and live values, read modules, draft module, check (our ST checker), simulate (sim-replay), propose. It iterates on checker and sim errors before a human sees anything. The prompt treats PLC tag names, comments and bundle text as data, never instructions.
+  result: "talk to it" works end to end
+  est: 1w
+  difficulty: high
+  depends: box-api, relay-v0
+  id: agent-loop
+
+- [ ] **Sim replay** — record a rolling window of signal values on the box (RAM ring buffer, not a historian) and replay a proposed module against it, showing when its outputs would have fired.
+  result: the evidence an engineer approves output changes on
+  est: 3d
+  difficulty: med
+  depends: signal-model, multi-module
+  id: sim-replay
+
+- [ ] **Approval policy + PIN roles + audit** — proposals carry a tier (param / logic / output-affecting); policy decides live vs preview vs PIN + sim. Operator/engineer/integrator PINs; every apply/rollback is logged with role and time (accounts later).
+  result: the safety story is mechanical, not a prompt
+  est: 3d
+  difficulty: med
+  depends: snapshots, box-api
+  id: approval-policy
+
+- [ ] **Proposal review UI** — in the canvas: ST diff, diagram diff (ghost blocks), sim replay chart, manifest changes (new outputs/signals highlighted), approve with PIN.
+  est: 4d
+  difficulty: med
+  depends: st-graph-view, approval-policy, sim-replay
+  id: proposal-ui
+
+- [ ] **M1 demo run** — the sentence at the top of this section, on the bench, recorded. scripts/m1-demo.sh brings the box up from a clean deploy.
+  needs: CompactLogix on the bench
+  result: the thing to show people
+  est: 1d
+  difficulty: med
+  depends: logix-tag-read, gpio-outputs, agent-loop, proposal-ui, hot-swap, canvas-web
+  id: m1-demo
+
+## Roadmap M2: floor-ready core
+
+- [ ] **Stock module: counters and uptime** — cycle counts, run/idle/down state, shift totals; the first shipped module, written in ST like everything else, so it doubles as the agent's few-shot example.
+  est: 2d
+  difficulty: low
+  depends: m1-demo
+  id: stock-counters
+
+- [ ] **Shift calendar and scheduled outputs** — shifts, breaks, planned downtime as box data; modules can ask "in shift?" and the scheduler drives outputs on a calendar (with the output policy applying).
+  est: 3d
+  difficulty: med
+  depends: multi-module
+  id: shift-calendar
+
+- [ ] **Floor screen output** — a box-driven full-screen andon view (big tiles, colors, a message) as an output kind, next to GPIO lights.
+  est: 2d
+  difficulty: low
+  depends: canvas-web
+  id: andon-screen
+
+- [ ] **Webhook sink** — core-owned publisher: modules emit to named outputs, sinks POST JSON with retry and a bounded on-disk queue. Modules never see the network.
+  est: 2d
+  difficulty: low
+  depends: signal-model
+  id: sink-webhook
+
+- [ ] **OPC UA server** — expose signals and module outputs as an OPC UA address space for SCADA/MES to pull. Dependency review first (pure-Rust stack vs bindings).
+  est: 1w
+  difficulty: high
+  depends: signal-model
+  id: sink-opcua
+
+- [ ] **More sources: Modbus TCP/RTU, GPIO/I2C inputs** — signal sources beyond CIP, so a dumb machine plus a sensor is a valid install.
+  est: 1w
+  difficulty: med
+  depends: signal-model
+  id: sources-modbus-gpio
+
+- [ ] **Explain mode** — tap any block or output in the canvas; the agent explains in floor language why it's in this state right now, using trace-tap data.
+  est: 2d
+  difficulty: med
+  depends: st-graph-view, agent-loop
+  id: explain-mode
+
+- [ ] **Offline behaviour and local fallback** — relay unreachable: banner, chat in fallback mode; installed modules unaffected.
+  needs: fallback-model answered
+  est: 3d
+  difficulty: med
+  depends: agent-loop, fallback-model
+  id: local-fallback
+
+- [ ] **Drop-in: prose / SOP → module** — paste or upload a paragraph or doc; the agent extracts signals, conditions, outputs and drafts a module plus questions for what's missing.
+  est: 2d
+  difficulty: med
+  depends: agent-loop
+  id: dropin-prose
+
+- [ ] **Drop-in: existing PLC program** — L5X export (and the PLCopen/ST we already parse) → the agent maps tags to signals and proposes watch modules. Read-only: never round-trips into the customer PLC.
+  est: 1w
+  difficulty: high
+  depends: agent-loop, logix-tag-read
+  id: dropin-plc
+
+- [ ] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
+  est: 3d
+  difficulty: med
+  depends: agent-loop
+  id: dropin-photo
+
+- [ ] **Drop-in: P&ID / electrical PDF** — extract I/O lists and tag names from drawings into a draft signal map.
+  est: 1w
+  difficulty: high
+  depends: dropin-photo
+  id: dropin-pid
+
+## Roadmap M3: tiers, sharing, fleet
+
+- [ ] **WASM module tier** — wasmtime host; capabilities from the manifest (read signals, emit outputs, nothing else); fuel/memory limits; for drivers and code ST is bad at. Built off-box by the relay.
+  est: 2w
+  difficulty: high
+  depends: module-format
+  id: wasm-tier
+
+- [ ] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
+  needs: market-floor answered
+  est: 1w
+  difficulty: med
+  depends: snapshots, module-format
+  id: bundle-format
+
+- [ ] **Theme engine** — scope per theme-depth; themes are data the agent writes, applied live with undo.
+  est: 3d
+  difficulty: med
+  depends: theme-depth, canvas-web
+  id: theme-engine
+
+- [ ] **MCP server on the box** — the box API as MCP tools so an engineer's own Claude / Claude Code can work on it, under the same policy and audit.
+  est: 2d
+  difficulty: med
+  depends: box-api, approval-policy
+  id: box-mcp
+
+- [ ] **Local accounts** — per-person logins replacing PINs; audit carries the person.
+  est: 3d
+  difficulty: med
+  depends: approval-policy
+  id: local-accounts
+
+- [ ] **Multi-box site view** — boxes discover each other on the LAN; one canvas shows the floor.
+  est: 1w
+  difficulty: high
+  depends: canvas-web
+  id: site-view
+
+- [ ] **Fleet console + OTA** — the relay grows into the fleet backbone: box registry, snapshot sync, signed updates of the core.
+  est: 3w
+  difficulty: high
+  depends: relay-v0, bundle-format
+  id: fleet-console
+
+- [ ] **Vision sources** — deferred per interview; card kept so the signal model leaves room for camera-derived signals.
+  est: 2w
+  difficulty: high
+  id: vision
+
+## Roadmap M4: marketplace and the box
+
+- [ ] **Community marketplace** — publish/browse/install bundles; floor per market-floor, then an AI review on install that explains risk in plain words and can only refuse.
+  est: 3w
+  difficulty: high
+  depends: bundle-format, market-floor, fleet-console
+  id: marketplace
+
+- [ ] **Box SKU** — reproducible Pi image, first-boot pairing with the relay, provisioning script, enclosure/BOM for the preloaded kit.
+  est: 2w
+  difficulty: high
+  depends: fleet-console
+  id: box-sku
+
+- [ ] **Open-core split** — decide which crates stay MIT and where relay/fleet/verified-market code lives (private repo), before any paid code lands here.
+  est: 2h
+  difficulty: low
+  depends: relay-v0
+  id: open-core-split
+
+- [ ] **Product name** — the app gets its own name; tcpethernet stays the protocol layer.
+  est: 1h
+  difficulty: low
+  id: naming
