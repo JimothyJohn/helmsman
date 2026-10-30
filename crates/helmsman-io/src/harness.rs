@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::driver::{Driver, Error};
 use crate::model::{Ty, Value};
-use crate::sim::{Fault, Sim};
+use crate::sim::{Fault, Faults};
 
 /// What to exercise on a device.
 #[derive(Clone, Debug, Default)]
@@ -88,7 +88,7 @@ fn check(name: impl Into<String>, r: Result<(), String>) -> Check {
 /// Runs every check. `sim` enables the fault checks (a real device can't be
 /// told to misbehave); without it they are skipped.
 #[allow(clippy::too_many_lines)]
-pub fn run(d: &mut dyn Driver, bench: &Bench, sim: Option<&Sim>) -> Vec<Check> {
+pub fn run(d: &mut dyn Driver, bench: &Bench, sim: Option<&dyn Faults>) -> Vec<Check> {
     let mut out = Vec::new();
 
     for p in &bench.points {
@@ -169,13 +169,8 @@ pub fn run(d: &mut dyn Driver, bench: &Bench, sim: Option<&Sim>) -> Vec<Check> {
         }),
     }
 
-    let faults = [
-        ("drop", Fault::Drop),
-        ("garbage", Fault::Garbage),
-        ("wrong transaction", Fault::WrongTransaction),
-        ("device failure", Fault::DeviceFailure),
-        ("late reply", Fault::Delay(Duration::from_secs(3))),
-    ];
+    // Without a simulator the TCP checks are named, and skipped.
+    let faults = sim.map_or_else(crate::sim::tcp_fault_checks, <dyn Faults>::fault_checks);
     for (name, fault) in faults {
         let name = format!("fault {name}");
         let (Some(sim), Some(p)) = (sim, &first) else {

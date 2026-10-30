@@ -28,14 +28,15 @@ workspace = true
 
 [features]
 # `box`: what only a real box needs: the snapshot store (SQLite, built from
-# C), the HTTP API, and the binary. Without it the crate is the runtime
+# C), the HTTP API, serial ports (modbus-rtu) and the board's GPIO / I2C
+# (Linux), and the binary. Without it the crate is the runtime
 # alone (scheduler, signals, links, tap, replay), which the canvas embeds
 # and which builds for wasm32.
 # `https`: https:// sinks (rustls with the ring provider, Mozilla roots
 # compiled in). On by default so the Pi can post to a cloud receiver;
 # `--no-default-features --features box` builds an http-only box.
 default = ["box", "https"]
-box = ["dep:rusqlite"]
+box = ["dep:rusqlite", "helmsman-io/serial", "helmsman-io/gpio"]
 https = ["dep:rustls", "dep:webpki-roots"]
 
 [[bin]]

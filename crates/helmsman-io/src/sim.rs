@@ -1,4 +1,5 @@
-//! A Modbus TCP device simulator for tests and the bench harness: four tables,
+//! A Modbus device simulator (TCP here; RTU over a pipe in
+//! [`crate::rtu::sim`], sharing [`State`]) for tests and the bench harness: four tables,
 //! cross-wires (a coil driving a discrete input, as a wire from an output
 //! terminal to an input terminal would), and injectable faults. It answers
 //! the function codes [`crate::modbus`] uses and refuses the rest with the
@@ -31,6 +32,28 @@ pub enum Fault {
     WrongTransaction,
     /// Answer with exception 04 (server device failure).
     DeviceFailure,
+    /// RTU: answer with one bit of the frame flipped, so its CRC fails.
+    BadCrc,
+    /// RTU: answer with the frame cut short by two bytes.
+    Truncate,
+    /// RTU: answer as another unit (a valid frame, CRC and all).
+    WrongUnit,
+    /// RTU: line noise just before an otherwise good answer.
+    Noise,
+    /// RTU: a good answer, one byte at a time.
+    Split,
+}
+
+/// A simulator that can be told to misbehave: what the conformance
+/// harness's fault checks drive. The TCP simulator ignores the RTU-only
+/// faults (it answers normally), so each simulator lists the faults that
+/// mean something on its transport.
+pub trait Faults {
+    /// Applies `fault` to the next request.
+    fn inject(&self, fault: Fault);
+    fn clear_faults(&self);
+    /// The faults worth checking on this transport, named.
+    fn fault_checks(&self) -> Vec<(&'static str, Fault)>;
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -57,6 +80,16 @@ impl State {
             holding: vec![0; n],
             input: vec![0; n],
             ..Self::default()
+        }
+    }
+
+    /// Counts a request and takes the fault for it, if any.
+    pub(crate) fn next_fault(&mut self) -> Option<Fault> {
+        self.requests += 1;
+        if self.faults.is_empty() {
+            None
+        } else {
+            Some(self.faults.remove(0))
         }
     }
 
@@ -184,7 +217,7 @@ pub struct Sim {
     accept: Option<JoinHandle<()>>,
 }
 
-fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
+pub(crate) fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -239,6 +272,31 @@ impl Sim {
     }
 }
 
+/// The TCP fault checks.
+pub(crate) fn tcp_fault_checks() -> Vec<(&'static str, Fault)> {
+    vec![
+        ("drop", Fault::Drop),
+        ("garbage", Fault::Garbage),
+        ("wrong transaction", Fault::WrongTransaction),
+        ("device failure", Fault::DeviceFailure),
+        ("late reply", Fault::Delay(Duration::from_secs(3))),
+    ]
+}
+
+impl Faults for Sim {
+    fn inject(&self, fault: Fault) {
+        Self::inject(self, fault);
+    }
+
+    fn clear_faults(&self) {
+        Self::clear_faults(self);
+    }
+
+    fn fault_checks(&self) -> Vec<(&'static str, Fault)> {
+        tcp_fault_checks()
+    }
+}
+
 impl Drop for Sim {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -284,12 +342,7 @@ fn serve(mut conn: TcpStream, state: &Mutex<State>, stop: &AtomicBool) {
         }
         let (fault, mut reply) = {
             let mut s = lock(state);
-            s.requests += 1;
-            let fault = if s.faults.is_empty() {
-                None
-            } else {
-                Some(s.faults.remove(0))
-            };
+            let fault = s.next_fault();
             let reply = match fault {
                 Some(Fault::DeviceFailure) => vec![pdu[0] | 0x80, SERVER_DEVICE_FAILURE],
                 _ => s.handle(&pdu),
@@ -302,7 +355,15 @@ fn serve(mut conn: TcpStream, state: &Mutex<State>, stop: &AtomicBool) {
             Some(Fault::Delay(d)) => thread::sleep(d),
             Some(Fault::Garbage) => reply = vec![0xDE, 0xAD],
             Some(Fault::WrongTransaction) => tid = u16::from_be_bytes(tid).wrapping_add(1).to_be_bytes(),
-            Some(Fault::DeviceFailure) | None => {}
+            Some(
+                Fault::DeviceFailure
+                | Fault::BadCrc
+                | Fault::Truncate
+                | Fault::WrongUnit
+                | Fault::Noise
+                | Fault::Split,
+            )
+            | None => {}
         }
         let mut frame = Vec::with_capacity(MBAP_LEN + reply.len());
         frame.extend(tid);

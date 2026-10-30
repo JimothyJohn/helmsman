@@ -1,5 +1,7 @@
-//! Modbus TCP client: the box as master of Modbus devices (remote I/O blocks,
-//! drives, meters).
+//! Modbus client: the box as master of Modbus devices (remote I/O blocks,
+//! drives, meters). The application layer (points, PDUs, reply checks,
+//! [`app`]) is shared; this module is also the TCP transport, and
+//! [`crate::rtu`] the serial one.
 //!
 //! References (see docs/SOURCES.md):
 //! - MODBUS Application Protocol Specification V1.1b3 (Modbus Organization,
@@ -435,25 +437,19 @@ impl Client {
     /// # Errors
     /// See [`Self::transact`] and [`reply::bits`].
     pub fn read_bits(&mut self, fc: u8, start: u16, qty: u16) -> Result<Vec<bool>, Error> {
-        let req = pdu::read(fc, start, qty)?;
-        let r = self.transact(&req)?;
-        reply::bits(fc, qty, &r)
+        app::read_bits(self, fc, start, qty)
     }
 
     /// # Errors
     /// See [`Self::transact`] and [`reply::registers`].
     pub fn read_registers(&mut self, fc: u8, start: u16, qty: u16) -> Result<Vec<u16>, Error> {
-        let req = pdu::read(fc, start, qty)?;
-        let r = self.transact(&req)?;
-        reply::registers(fc, qty, &r)
+        app::read_registers(self, fc, start, qty)
     }
 
     /// # Errors
     /// See [`Self::transact`] and [`reply::echo`].
     pub fn write_coil(&mut self, addr: u16, on: bool) -> Result<(), Error> {
-        let req = pdu::write_single(WRITE_SINGLE_COIL, addr, if on { COIL_ON } else { COIL_OFF });
-        let r = self.transact(&req)?;
-        reply::echo(&req, &r)
+        app::write_coil(self, addr, on)
     }
 
     /// One register with FC 0x06, more with FC 0x10.
@@ -461,21 +457,102 @@ impl Client {
     /// # Errors
     /// See [`Self::transact`] and [`reply::echo`].
     pub fn write_registers(&mut self, start: u16, values: &[u16]) -> Result<(), Error> {
+        app::write_registers(self, start, values)
+    }
+}
+
+impl Transport for Client {
+    fn request(&mut self, pdu: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+        self.transact(pdu).map(Some)
+    }
+}
+
+/// How a request PDU reaches a unit and its reply comes back: TCP here
+/// (MBAP, TCP §3.1.3), RTU in [`crate::rtu`] (address + CRC, Serial §2.5.1).
+/// The application layer in [`app`] is the same over both.
+pub trait Transport {
+    /// Sends one request PDU and returns the reply PDU, or `None` when the
+    /// request was broadcast and no reply is due (Serial §2.1 p.7).
+    ///
+    /// # Errors
+    /// Link trouble ([`Error::is_link`]), or a request the transport
+    /// refuses to send.
+    fn request(&mut self, pdu: &[u8]) -> Result<Option<Vec<u8>>, Error>;
+}
+
+/// The application layer over any [`Transport`]: build the request PDU,
+/// send it, check the reply. A broadcast write succeeds once sent.
+pub mod app {
+    use super::{COIL_OFF, COIL_ON, Error, Transport, WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER, pdu, reply};
+
+    fn answer(t: &mut (impl Transport + ?Sized), req: &[u8]) -> Result<Vec<u8>, Error> {
+        t.request(req)?
+            .ok_or_else(|| Error::Protocol("a read got no reply: broadcast takes writes only".into()))
+    }
+
+    /// # Errors
+    /// See [`Transport::request`] and [`reply::bits`].
+    pub fn read_bits(
+        t: &mut (impl Transport + ?Sized),
+        fc: u8,
+        start: u16,
+        qty: u16,
+    ) -> Result<Vec<bool>, Error> {
+        let req = pdu::read(fc, start, qty)?;
+        let r = answer(t, &req)?;
+        reply::bits(fc, qty, &r)
+    }
+
+    /// # Errors
+    /// See [`Transport::request`] and [`reply::registers`].
+    pub fn read_registers(
+        t: &mut (impl Transport + ?Sized),
+        fc: u8,
+        start: u16,
+        qty: u16,
+    ) -> Result<Vec<u16>, Error> {
+        let req = pdu::read(fc, start, qty)?;
+        let r = answer(t, &req)?;
+        reply::registers(fc, qty, &r)
+    }
+
+    /// # Errors
+    /// See [`Transport::request`] and [`reply::echo`].
+    pub fn write_coil(t: &mut (impl Transport + ?Sized), addr: u16, on: bool) -> Result<(), Error> {
+        let req = pdu::write_single(WRITE_SINGLE_COIL, addr, if on { COIL_ON } else { COIL_OFF });
+        match t.request(&req)? {
+            Some(r) => reply::echo(&req, &r),
+            None => Ok(()),
+        }
+    }
+
+    /// One register with FC 0x06, more with FC 0x10.
+    ///
+    /// # Errors
+    /// See [`Transport::request`] and [`reply::echo`].
+    pub fn write_registers(
+        t: &mut (impl Transport + ?Sized),
+        start: u16,
+        values: &[u16],
+    ) -> Result<(), Error> {
         let req = match values {
             [v] => pdu::write_single(WRITE_SINGLE_REGISTER, start, *v),
             _ => pdu::write_registers(start, values)?,
         };
-        let r = self.transact(&req)?;
-        reply::echo(&req, &r)
+        match t.request(&req)? {
+            Some(r) => reply::echo(&req, &r),
+            None => Ok(()),
+        }
     }
 }
 
-/// [`Driver`] over a [`Client`]. Reads one point per request for now.
-pub struct ModbusDriver {
-    pub client: Client,
+/// [`Driver`] over a [`Transport`]: a TCP [`Client`] by default, an RTU
+/// master in [`crate::rtu`]. Reads one point per request for now.
+pub struct ModbusDriver<T = Client> {
+    pub client: T,
 }
 
-impl ModbusDriver {
+impl ModbusDriver<Client> {
     /// From device params: `unit` (default 1) and `timeout_ms` (default 1000).
     ///
     /// # Errors
@@ -498,7 +575,7 @@ impl ModbusDriver {
     }
 }
 
-impl Driver for ModbusDriver {
+impl<T: Transport> Driver for ModbusDriver<T> {
     fn parse(&self, addr: &str) -> Result<PointInfo, Error> {
         Point::parse(addr).map(Point::info)
     }
@@ -514,7 +591,7 @@ impl Driver for ModbusDriver {
                     } else {
                         READ_DISCRETE_INPUTS
                     };
-                    Ok(Value::Bool(self.client.read_bits(fc, p.addr, 1)?[0]))
+                    Ok(Value::Bool(app::read_bits(&mut self.client, fc, p.addr, 1)?[0]))
                 }
                 Table::Holding | Table::Input => {
                     let fc = if p.table == Table::Holding {
@@ -522,7 +599,7 @@ impl Driver for ModbusDriver {
                     } else {
                         READ_INPUT_REGISTERS
                     };
-                    let regs = self.client.read_registers(fc, p.addr, p.format.words())?;
+                    let regs = app::read_registers(&mut self.client, fc, p.addr, p.format.words())?;
                     Ok(p.format.decode(&regs))
                 }
             })
@@ -534,7 +611,7 @@ impl Driver for ModbusDriver {
         match p.table {
             Table::DiscreteInput | Table::Input => Err(Error::ReadOnly(addr.into())),
             Table::Coil => match value {
-                Value::Bool(b) => self.client.write_coil(p.addr, b),
+                Value::Bool(b) => app::write_coil(&mut self.client, p.addr, b),
                 v => Err(Error::Type {
                     want: Ty::Bool,
                     got: v.ty(),
@@ -542,7 +619,7 @@ impl Driver for ModbusDriver {
             },
             Table::Holding => {
                 let regs = p.format.encode(value)?;
-                self.client.write_registers(p.addr, &regs)
+                app::write_registers(&mut self.client, p.addr, &regs)
             }
         }
     }
