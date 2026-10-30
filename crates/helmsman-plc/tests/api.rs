@@ -1000,6 +1000,7 @@ fn a_client_that_never_reads_its_event_stream_is_dropped() {
         limits: Limits {
             streams: 2,
             write_timeout: Duration::from_millis(200),
+            stream_life: Duration::from_secs(1),
             ..Limits::default()
         },
         stream_every: Duration::from_millis(1),
@@ -1017,9 +1018,10 @@ fn a_client_that_never_reads_its_event_stream_is_dropped() {
     assert_eq!(third.status, 503, "streams are capped: {third:?}");
     // Reads keep working while the streams are stuck.
     assert_eq!(get(b.addr, "/api/signals").status, 200);
-    // Once the kernel buffers fill, the stuck writers time out and the
-    // slots come back.
-    Bench::wait("a stream slot freed by the write timeout", || {
+    // The stuck streams end: at the write timeout once the kernel's
+    // buffers for them are full (fast on macOS loopback, many megabytes on
+    // Linux), and at their lifetime whatever the buffers.
+    Bench::wait("a stream slot freed", || {
         let mut s = TcpStream::connect(b.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         s.write_all(b"GET /api/events HTTP/1.1\r\n\r\n").unwrap();

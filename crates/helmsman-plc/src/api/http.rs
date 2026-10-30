@@ -33,8 +33,13 @@ pub struct Limits {
     /// Of those, event streams open at once.
     pub streams: usize,
     /// How long one write may block before the client is dropped (a client
-    /// that stops reading an event stream).
+    /// that stops reading an event stream, once the kernel's buffers for
+    /// it are full).
     pub write_timeout: Duration,
+    /// Longest an event stream stays open; the server then ends it and the
+    /// browser's `EventSource` reconnects. Bounds what a client that never
+    /// reads can hold however large the socket buffers are.
+    pub stream_life: Duration,
 }
 
 impl Default for Limits {
@@ -47,6 +52,7 @@ impl Default for Limits {
             workers: 32,
             streams: 8,
             write_timeout: Duration::from_secs(2),
+            stream_life: Duration::from_secs(600),
         }
     }
 }

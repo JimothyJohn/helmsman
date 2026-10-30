@@ -48,7 +48,9 @@
 //! once (503 beyond), event streams at most [`Limits::streams`] of those.
 //! One request per connection. The whole request must arrive within
 //! [`Limits::deadline`]; a stalled writer is dropped after
-//! [`Limits::write_timeout`]. Sizes are capped ([`Limits`]).
+//! [`Limits::write_timeout`], and an event stream ends after
+//! [`Limits::stream_life`] (the browser reconnects). Sizes are capped
+//! ([`Limits`]).
 
 pub mod catalog;
 pub mod http;
@@ -751,7 +753,8 @@ fn pump(
     http::start_stream(stream)?;
     stream.write_all(b"retry: 2000\n\n")?;
     let mut quiet = Instant::now();
-    while !ctx.stop.load(Ordering::Acquire) {
+    let opened = Instant::now();
+    while !ctx.stop.load(Ordering::Acquire) && opened.elapsed() < ctx.cfg.limits.stream_life {
         if let Some((name, data)) = next() {
             event(stream, name, &data)?;
             quiet = Instant::now();

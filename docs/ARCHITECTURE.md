@@ -390,7 +390,8 @@ and later MCP (`api/`; contract in `tests/api.rs`). Endpoints are listed at
   in the workspace, for JSON): one request per connection, 32 at once (503
   beyond), 8 event streams, 16 KiB head, 64 headers, 1 MiB body,
   `Content-Length` only, 5 s for the whole request however slowly it
-  arrives, 2 s for any write before a client is dropped. Audit log and
+  arrives, 2 s for any write before a client is dropped, 10 min for an
+  event stream (the browser reconnects). Audit log and
   proposals are bounded and refuse (507) rather than forget.
 
 ## The live ST view (`st-graph-view`, built)
