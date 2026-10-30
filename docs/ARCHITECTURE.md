@@ -186,9 +186,12 @@ manifest declares, and is checked against.
   the commands that changed since the device last took them, then reads
   every input that is due. A link cycles at the fastest of its device's
   `poll_ms` and its inputs' own; an input without one is read at the
-  device's rate. Any error marks the link down: its inputs go missing, and it
-  forgets what the device holds, so every output is written again on
-  reconnect.
+  device's rate. A *link* error (I/O, an invalid reply) marks the link down:
+  its inputs go missing, and it forgets what the device holds, so every
+  output is written again on reconnect. A *point* error (a value the point
+  can't hold, a device exception, an unknown tag) stays on that signal: it
+  is recorded (`SignalTable::point_error`), a refused output is retried each
+  cycle, a refused input goes missing alone, and the link stays up.
 - **A module never computes on missing data.** If any signal it reads has no
   value (device down, or a value that doesn't fit the port), it is held: not
   scanned, `%Q` window zeroed, output signals sent to their safe values. It
