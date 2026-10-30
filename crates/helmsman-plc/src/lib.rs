@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "box")]
 pub mod api;
 pub mod calendar;
 pub mod link;
@@ -13,6 +14,7 @@ pub mod runtime;
 pub mod signals;
 pub mod sink;
 pub mod spec;
+#[cfg(feature = "box")]
 pub mod store;
 pub mod tap;
 
