@@ -63,6 +63,9 @@ impl std::error::Error for TableError {}
 #[derive(Debug, Clone, Default)]
 pub struct SignalTable {
     sigs: Vec<Sig>,
+    /// Outputs driven by the box itself (the calendar), not by a module:
+    /// signal index and who drives it.
+    claims: BTreeMap<usize, String>,
 }
 
 const fn zero(ty: Ty) -> Value {
@@ -127,7 +130,10 @@ impl SignalTable {
                 }
             })
             .collect();
-        Ok(Self { sigs })
+        Ok(Self {
+            sigs,
+            claims: BTreeMap::new(),
+        })
     }
 
     /// Index of a signal, by name in any case.
@@ -185,6 +191,50 @@ impl SignalTable {
         if let Some(s) = self.command_mut(i) {
             s.command = s.safe;
         }
+    }
+
+    /// Adds an input signal the box provides itself (no device link reads
+    /// it), after every existing signal; it has no value until set.
+    ///
+    /// # Errors
+    /// [`TableError::SameName`] if a signal of that name, in any case,
+    /// exists.
+    pub fn add_box_input(&mut self, name: &str, ty: Ty) -> Result<usize, TableError> {
+        if let Some(i) = self.index(name) {
+            return Err(TableError::SameName {
+                a: self.sigs[i].name.clone(),
+                b: name.into(),
+            });
+        }
+        self.sigs.push(Sig {
+            name: name.into(),
+            ty,
+            dir: Dir::In,
+            value: None,
+            command: zero(ty),
+            safe: zero(ty),
+        });
+        Ok(self.sigs.len() - 1)
+    }
+
+    /// A signal's direction and type.
+    #[must_use]
+    pub fn signal(&self, i: usize) -> Option<(Dir, Ty)> {
+        self.sigs.get(i).map(|s| (s.dir, s.ty))
+    }
+
+    /// Marks output `i` as driven by `writer` rather than by a module; a
+    /// module binding a `VAR_OUTPUT` to it is then refused.
+    pub(crate) fn claim(&mut self, i: usize, writer: &str) {
+        if self.command_mut(i).is_some() {
+            self.claims.insert(i, writer.into());
+        }
+    }
+
+    /// Who other than a module drives output `i`, if anyone.
+    #[must_use]
+    pub fn writer(&self, i: usize) -> Option<&str> {
+        self.claims.get(&i).map(String::as_str)
     }
 }
 
