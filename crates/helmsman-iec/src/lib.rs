@@ -38,6 +38,35 @@
 //! as Beremiz or the `OpenPLC` Editor come in as `PLCopen` TC6 XML through
 //! [`compile_plcopen`].
 
+/// The syntax tree of a compilation unit, read-only, for views built from
+/// the source (the ST diagram, `helmsman-diagram`). Statement positions are
+/// the ones [`trace::StmtInfo`] carries, so a view finds a statement's
+/// [`trace::StmtId`] by POU, line and column.
+pub mod ast {
+    pub use crate::lexer::Pos;
+    pub use crate::parser::{
+        Arg, BinOp, Block, CaseArm, CaseLabel, Expr, ExprKind, Field, Init, LabelValue, Pou, PouKind,
+        Section, Stmt, StmtKind, TypeDecl, TypeDef, TypeRef, UnOp, Unit, VarDecl,
+    };
+
+    /// Parses a unit: syntax only. [`crate::compile`] parses and checks.
+    ///
+    /// # Errors
+    /// The first syntax error.
+    pub fn parse(src: &str) -> Result<Unit, crate::Diagnostic> {
+        crate::parser::parse(src, false).map_err(|e| crate::Diagnostic {
+            pos: e.pos,
+            msg: e.msg,
+        })
+    }
+
+    /// The standard function blocks ([`crate::LIBRARY`]), parsed.
+    #[must_use]
+    pub fn library() -> &'static Unit {
+        crate::library()
+    }
+}
+
 mod check;
 mod interp;
 mod lexer;

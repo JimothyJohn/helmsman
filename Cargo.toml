@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/helmsman-proto", "crates/helmsman-adapter", "crates/helmsman-canvas", "crates/helmsman-cli", "crates/helmsman-graph", "crates/helmsman-iec", "crates/helmsman-io", "crates/helmsman-plc"]
+members = ["crates/helmsman-proto", "crates/helmsman-adapter", "crates/helmsman-canvas", "crates/helmsman-cli", "crates/helmsman-diagram","crates/helmsman-graph", "crates/helmsman-iec", "crates/helmsman-io", "crates/helmsman-plc"]
 
 [workspace.package]
 edition = "2024"
