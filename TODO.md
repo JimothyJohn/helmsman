@@ -270,6 +270,16 @@
   difficulty: low
   id: plcopen-fixture-license
 
+- [ ] **Webhook sinks: keep `https` (rustls + ring) on by default?** The webhook sink (feat/sink-webhook) posts over a hand-written std HTTP/1.1 client so every SSRF rule is ours; `https://` needs TLS, so the `https` cargo feature adds rustls 0.23 (ring provider, TLS 1.2+1.3) and webpki-roots: 15 third-party crates in all (ring, rustls, rustls-webpki, rustls-pki-types, webpki-roots, untrusted, subtle, zeroize, once_cell, getrandom, libc, cfg-if; build-only cc, shlex, find-msvc-tools). ring compiles C and assembly, which the deploy image (rust:*-slim-trixie ships gcc and libc6-dev) handles; the Docker arm64 build was not run in this session (Docker Desktop was not running and the session was over SSH), so the first `scripts/pi-deploy-plc.sh` run is the proof. I made it a default feature so the Pi build can reach a cloud receiver; `--no-default-features` gives an http-only box with zero third-party crates. Alternative: off by default and the deploy script opts in, or roots from the OS (`rustls-native-certs`) instead of compiled in.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether the box binary carries a TLS stack by default, and where its CA roots come from
+  options: keep https on by default, compiled-in Mozilla roots (recommended) | off by default, deploy script opts in | on, but OS roots via rustls-native-certs
+  est: 15m
+  difficulty: low
+  id: sink-https-default
+
 - [ ] **Should the canvas open on the live ST view or the lab editor?** st-graph-view added "Live ST view" (a module's ST as a live, read-only diagram, with "on because") as a second mode beside the node editor. Per canvas-edit-scope the live view is the product and the editor a lab tool, so the canvas now opens on the live view (the editor is one click away, "Lab editor", and is unchanged). Reversible: one line in `App::new` in crates/helmsman-canvas/src/app.rs.
   asked: 2026-10-30
   by: claude-agent
@@ -675,11 +685,12 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: canvas-web
   id: andon-screen
 
-- [ ] **Webhook sink** — core-owned publisher: modules emit to named outputs, sinks POST JSON with retry and a bounded on-disk queue. Modules never see the network.
+- [x] **Webhook sink** — core-owned publisher: modules emit to named outputs, sinks POST JSON with retry and a bounded on-disk queue. Modules never see the network.
   est: 2d
   difficulty: low
   depends: signal-model
   id: sink-webhook
+  notes: done 2026-10-30 (feat/sink-webhook). `--sinks FILE --sink-dir DIR`; format and semantics in docs/ARCHITECTURE.md "Webhook sinks" and crates/helmsman-plc/src/sink/.
 
 - [ ] **OPC UA server** — expose signals and module outputs as an OPC UA address space for SCADA/MES to pull. Dependency review first (pure-Rust stack vs bindings).
   est: 1w
