@@ -66,7 +66,7 @@ impl Spec {
             seen.push(key);
             match key {
                 "name" => {
-                    if v.is_empty() || v.len() > 64 || !v.bytes().all(name_byte) {
+                    if !name_ok(v) {
                         return Err(format!("--module name: 1..=64 of A-Z a-z 0-9 _ -, got {v:?}"));
                     }
                     spec.name = v.into();
@@ -95,6 +95,11 @@ impl Spec {
     }
 }
 
+/// A module name: 1..=64 of `A-Z a-z 0-9 _ -`, safe in a log line.
+pub(crate) fn name_ok(v: &str) -> bool {
+    !v.is_empty() && v.len() <= 64 && v.bytes().all(name_byte)
+}
+
 const fn name_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
 }
@@ -116,7 +121,7 @@ fn safe_name(stem: &str) -> String {
     if name.is_empty() { "module".into() } else { name }
 }
 
-fn window(v: &str) -> Option<Window> {
+pub(crate) fn window(v: &str) -> Option<Window> {
     let (start, len) = v.split_once('+')?;
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     if !digits(start) || !digits(len) {

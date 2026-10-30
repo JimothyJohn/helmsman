@@ -22,14 +22,17 @@ use helmsman_iec::{ImageSizes, compile, compile_plcopen, plcopen};
 use helmsman_io::local::Channels;
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
+use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::spec::{Defaults, Spec};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
 const USAGE: &str = "\
-usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [options]
+usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-dir DIR ...] [options]
   --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
+  --module-dir DIR     one module as a directory: module.st and module.manifest
+                       (see helmsman_plc::manifest), checked against each other
   --io-map FILE        devices and named signals (see helmsman_io::text); a
                        module's VAR_INPUT/VAR_OUTPUT bind to signals by name
   --calendar FILE      shifts, breaks, planned downtime (see
@@ -57,6 +60,7 @@ const OUTPUTS: u16 = 100;
 struct Opts {
     programs: Vec<PathBuf>,
     modules: Vec<String>,
+    module_dirs: Vec<PathBuf>,
     io_map: Option<PathBuf>,
     calendar: Option<PathBuf>,
     emit_st: bool,
@@ -70,6 +74,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     let mut o = Opts {
         programs: Vec::new(),
         modules: Vec::new(),
+        module_dirs: Vec::new(),
         io_map: None,
         calendar: None,
         emit_st: false,
@@ -115,6 +120,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     .map_err(|_| format!("--bind: not an IPv4 address: {v:?}"))?;
             }
             "--module" => o.modules.push(v.clone()),
+            "--module-dir" => o.module_dirs.push(PathBuf::from(v)),
             "--io-map" => {
                 if o.io_map.replace(PathBuf::from(v)).is_some() {
                     return Err("one --io-map only".into());
@@ -132,8 +138,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         }
         i += 2;
     }
-    if o.programs.is_empty() && o.modules.is_empty() {
-        return Err("missing PROGRAM.st, PROJECT.xml or --module".into());
+    if o.programs.is_empty() && o.modules.is_empty() && o.module_dirs.is_empty() {
+        return Err("missing PROGRAM.st, PROJECT.xml, --module or --module-dir".into());
     }
     Ok(o)
 }
@@ -160,23 +166,35 @@ fn is_xml(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xml"))
 }
 
-fn specs(o: &Opts, cfg: &DeviceConfig) -> Result<Vec<Spec>, String> {
+/// Each module's spec, and its directory when it came from one.
+fn specs(o: &Opts, cfg: &DeviceConfig) -> Result<Vec<(Spec, Option<ModuleDir>)>, String> {
     let d = Defaults {
         period: o.scan,
         i: Window::new(0, assembly_size(cfg, INPUTS)),
         q: Window::new(0, assembly_size(cfg, OUTPUTS)),
         m: o.memory,
     };
-    let mut specs: Vec<Spec> = o.programs.iter().map(|p| Spec::from_path(p, &d)).collect();
+    let mut specs: Vec<(Spec, Option<ModuleDir>)> = o
+        .programs
+        .iter()
+        .map(|p| (Spec::from_path(p, &d), None))
+        .collect();
     for m in &o.modules {
-        specs.push(Spec::parse(m, &d)?);
+        specs.push((Spec::parse(m, &d)?, None));
+    }
+    for dir in &o.module_dirs {
+        let md = ModuleDir::read(dir, &d)?;
+        specs.push((md.spec.clone(), Some(md)));
     }
     Ok(specs)
 }
 
-fn load(spec: &Spec) -> Result<Module, String> {
+fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<Module, String> {
     let file = spec.path.display();
-    let src = fs::read_to_string(&spec.path).map_err(|e| format!("{file}: {e}"))?;
+    let src = match dir {
+        Some(md) => md.source.clone(),
+        None => fs::read_to_string(&spec.path).map_err(|e| format!("{file}: {e}"))?,
+    };
     let sizes = ImageSizes {
         i: spec.i.len,
         q: spec.q.len,
@@ -191,12 +209,16 @@ fn load(spec: &Spec) -> Result<Module, String> {
         let lines: Vec<String> = diags.iter().map(|d| format!("\n  {file}:{d}")).collect();
         format!("{file} does not compile:{}", lines.concat())
     })?;
+    if let Some(md) = dir {
+        return md.module(program);
+    }
     Ok(Module {
         name: spec.name.clone(),
         program,
         period: spec.period,
         i: spec.i,
         q: spec.q,
+        params: Vec::new(),
     })
 }
 
@@ -204,7 +226,7 @@ fn emit_st(o: &Opts) -> Result<(), String> {
     let [path] = o.programs.as_slice() else {
         return Err("--emit-st takes exactly one .xml project".into());
     };
-    if !is_xml(path) || !o.modules.is_empty() {
+    if !is_xml(path) || !o.modules.is_empty() || !o.module_dirs.is_empty() {
         return Err("--emit-st takes exactly one .xml project".into());
     }
     let src = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -333,8 +355,9 @@ fn run(o: &Opts) -> Result<(), String> {
         return emit_st(o);
     }
     let cfg = device_config(o.serial);
-    let specs = specs(o, &cfg)?;
-    let modules = specs.iter().map(load).collect::<Result<Vec<_>, _>>()?;
+    let loaded = specs(o, &cfg)?;
+    let modules = loaded.iter().map(load).collect::<Result<Vec<_>, _>>()?;
+    let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
     let (table, io_links, uses_box, cal) = load_signals(o)?;
     let table = Arc::new(Mutex::new(table));

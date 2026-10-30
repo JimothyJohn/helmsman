@@ -431,7 +431,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: multi-module
   id: hot-swap
 
-- [ ] **Module format** — a module is a directory/bundle: `module.st` plus a manifest (signals read, outputs driven, schedule, params with types and ranges, author, prompt that produced it). The manifest is what policy and the sandbox enforce.
+- [x] **Module format** — a module is a directory/bundle: `module.st` plus a manifest (signals read, outputs driven, schedule, params with types and ranges, author, prompt that produced it). The manifest is what policy and the sandbox enforce.
   result: the unit the agent writes, snapshots store, and bundles ship
   est: 1d
   difficulty: med

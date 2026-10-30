@@ -631,3 +631,84 @@ fn a_bad_calendar_is_refused_before_the_adapter_starts() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2), "one --calendar only");
 }
+
+fn module_dir(name: &str, manifest: &str, source: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("bin-modules")
+        .join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("module.manifest"), manifest).unwrap();
+    std::fs::write(dir.join("module.st"), source).unwrap();
+    dir
+}
+
+#[test]
+fn a_module_directory_runs_with_its_param_beside_a_module_flag() {
+    // The directory's module owns output byte 0 and writes its param there;
+    // a --module owns byte 1. Both behind one adapter.
+    let dir = module_dir(
+        "offset",
+        "name offset\nauthor test\nscan_ms 2\nq 0+1\nreads\ndrives\n\
+         param base int 40 min=0 max=200\n",
+        "PROGRAM offset
+         VAR_INPUT base : USINT := 0; END_VAR
+         VAR o AT %QB0 : USINT; END_VAR
+           o := base + 2;
+         END_PROGRAM",
+    );
+    let other = program_file(
+        "beside_dir",
+        "PROGRAM p VAR o AT %QB0 : USINT; END_VAR o := 7; END_PROGRAM",
+    );
+    let spec = format!("{},scan=2,q=1+1", other.display());
+    let args = [
+        std::ffi::OsStr::new("--module-dir"),
+        dir.as_os_str(),
+        std::ffi::OsStr::new("--module"),
+        std::ffi::OsStr::new(&spec),
+    ];
+    let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let (_plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
+    let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
+    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
+    conn.set_output(&[0; 32]).unwrap();
+    wait_for(&conn, "the param through the directory's module", |i| {
+        i.data[..2] == [42, 7]
+    });
+    conn.close(&mut s).unwrap();
+    s.close();
+}
+
+#[test]
+fn a_module_directory_whose_manifest_lies_is_refused_before_the_adapter_starts() {
+    let src = "PROGRAM p VAR_INPUT a : BOOL; END_VAR VAR_OUTPUT b : BOOL; END_VAR b := a; END_PROGRAM";
+    for (name, manifest, why) in [
+        (
+            "lies",
+            "name lies\nauthor t\nscan_ms 10\nreads a\ndrives\n",
+            "VAR_OUTPUT B is not in the manifest",
+        ),
+        (
+            "badline",
+            "name badline\nauthor t\nscan_ms 10\nreads a\ndrives b\nbogus 1\n",
+            "module.manifest:6: unknown key",
+        ),
+        (
+            "outofrange",
+            "name r\nauthor t\nscan_ms 10\nreads\ndrives b\nparam a int 9 min=0 max=1\n",
+            "param a: 9 is outside 0..=1",
+        ),
+    ] {
+        let dir = module_dir(name, manifest, src);
+        let out = plc()
+            .args([std::ffi::OsStr::new("--module-dir"), dir.as_os_str()])
+            .args(["--encap-port", "0", "--io-port", "0"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(why), "{name}: {err}");
+        assert!(!err.contains("CIP on"), "{name}: {err}");
+    }
+}
