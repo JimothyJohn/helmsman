@@ -11,6 +11,8 @@ repository.workspace = true
 helmsman-adapter = { path = "../helmsman-adapter" }
 helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"], optional = true }
+webpki-roots = { version = "1.0.11", optional = true }
 
 [dev-dependencies]
 helmsman-proto = { path = "../helmsman-proto" }
@@ -18,3 +20,10 @@ proptest = "1.12"
 
 [lints]
 workspace = true
+
+[features]
+# https:// sinks (rustls with the ring provider, Mozilla roots compiled in).
+# On by default so the Pi build can post to a cloud receiver; build with
+# --no-default-features for an http-only box with no third-party crates.
+default = ["https"]
+https = ["dep:rustls", "dep:webpki-roots"]
