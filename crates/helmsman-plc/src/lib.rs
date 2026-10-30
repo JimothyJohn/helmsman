@@ -9,6 +9,7 @@ pub mod link;
 pub mod manifest;
 pub mod runtime;
 pub mod signals;
+pub mod sink;
 pub mod spec;
 pub mod store;
 pub mod tap;

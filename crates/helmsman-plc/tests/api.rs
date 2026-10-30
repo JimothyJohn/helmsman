@@ -1216,6 +1216,33 @@ fn without_a_store_snapshots_are_not_found() {
     assert_eq!(get(b.addr, "/api/snapshots/head").status, 404);
 }
 
+#[test]
+fn a_point_error_shows_on_its_signal_until_it_clears() {
+    let b = Bench::new();
+    assert_eq!(get(b.addr, "/api/signals/lamp").json()["point_error"], Json::Null);
+    let why = "exception 2 \"illegal address\"\nsecond line";
+    b.table
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .set_point_error(b.lamp, Some(why.into()));
+    Bench::wait("the error published", || {
+        get(b.addr, "/api/signals/lamp").json()["point_error"] == json!(why)
+    });
+    let out = get(b.addr, "/api/outputs").json();
+    assert_eq!(out["signals"][0]["point_error"], json!(why), "{out}");
+    assert_eq!(
+        get(b.addr, "/api/signals/start").json()["point_error"],
+        Json::Null
+    );
+    b.table
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .set_point_error(b.lamp, None);
+    Bench::wait("the error cleared", || {
+        get(b.addr, "/api/signals/lamp").json()["point_error"] == Json::Null
+    });
+}
+
 // ---- the token ----------------------------------------------------------------
 
 #[cfg(unix)]

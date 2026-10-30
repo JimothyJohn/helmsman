@@ -24,6 +24,7 @@ use helmsman_plc::api::{self, Api, Catalog, Devices, Live, MemAudit, MemProposal
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
 use helmsman_plc::manifest::ModuleDir;
+use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::spec::{Defaults, Spec};
 use helmsman_plc::store::{ChangeSet, Kind, Store};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
@@ -41,6 +42,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        helmsman_plc::calendar::text): adds the signals in_shift,
                        on_break, planned_down, working, shift_id, shift_minute,
                        shift_left, and drives the outputs its `drive` lines name
+  --sinks FILE         webhook sinks and the signals they publish (see
+                       helmsman_plc::sink); needs --sink-dir
+  --sink-dir DIR       where each sink keeps its on-disk queue (state, not config)
   --store DIR          run the head snapshot of the store in DIR (see
                        helmsman_plc::store): its modules, I/O map and calendar,
                        instead of the files above
@@ -75,6 +79,8 @@ struct Opts {
     module_dirs: Vec<PathBuf>,
     io_map: Option<PathBuf>,
     calendar: Option<PathBuf>,
+    sinks: Option<PathBuf>,
+    sink_dir: Option<PathBuf>,
     store: Option<PathBuf>,
     emit_st: bool,
     api: Option<SocketAddr>,
@@ -85,6 +91,14 @@ struct Opts {
     server: ServerConfig,
 }
 
+/// Sets a flag that may be given once.
+fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
+    if slot.replace(PathBuf::from(v)).is_some() {
+        return Err(format!("one {flag} only"));
+    }
+    Ok(())
+}
+
 fn parse(args: &[String]) -> Result<Opts, String> {
     let mut o = Opts {
         programs: Vec::new(),
@@ -92,6 +106,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         module_dirs: Vec::new(),
         io_map: None,
         calendar: None,
+        sinks: None,
+        sink_dir: None,
         store: None,
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
@@ -147,27 +163,20 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--state-dir" => o.state_dir = Some(PathBuf::from(v)),
             "--module" => o.modules.push(v.clone()),
             "--module-dir" => o.module_dirs.push(PathBuf::from(v)),
-            "--io-map" => {
-                if o.io_map.replace(PathBuf::from(v)).is_some() {
-                    return Err("one --io-map only".into());
-                }
-            }
-            "--calendar" => {
-                if o.calendar.replace(PathBuf::from(v)).is_some() {
-                    return Err("one --calendar only".into());
-                }
-            }
-            "--store" => {
-                if o.store.replace(PathBuf::from(v)).is_some() {
-                    return Err("one --store only".into());
-                }
-            }
+            "--io-map" => once(&mut o.io_map, flag, v)?,
+            "--calendar" => once(&mut o.calendar, flag, v)?,
+            "--sinks" => once(&mut o.sinks, flag, v)?,
+            "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
+            "--store" => once(&mut o.store, flag, v)?,
             "--encap-port" => o.server.encap_port = port()?,
             "--io-port" => o.server.io_port = port()?,
             "--peer-io-port" => o.server.peer_io_port = port()?,
             other => return Err(format!("unknown flag {other}")),
         }
         i += 2;
+    }
+    if o.sinks.is_some() != o.sink_dir.is_some() {
+        return Err("--sinks and --sink-dir go together".into());
     }
     let from_files = !(o.programs.is_empty() && o.modules.is_empty() && o.module_dirs.is_empty());
     if o.store.is_some() && (from_files || o.io_map.is_some() || o.calendar.is_some() || o.emit_st) {
@@ -474,6 +483,35 @@ fn sleep_to(start: Instant, next: Option<Duration>, cap: Option<Duration>, said:
     }
 }
 
+/// The sinks file's sinks, started, if there is one.
+fn start_sinks(o: &Opts, table: &SignalTable) -> Result<Option<Sinks>, String> {
+    let (Some(path), Some(dir)) = (&o.sinks, &o.sink_dir) else {
+        return Ok(None);
+    };
+    let file = path.display();
+    let src = fs::read_to_string(path).map_err(|e| format!("{file}: {e}"))?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let seed = (u64::from(nanos) << 32) ^ u64::from(std::process::id());
+    let log: sink::Log = Arc::new(|m: &str| eprintln!("helmsman-plc: {m}"));
+    let env = |k: &str| std::env::var(k).ok();
+    Sinks::start(
+        &src,
+        dir,
+        table,
+        &env,
+        &sink::config::read_header_file,
+        seed,
+        &log,
+    )
+    .map(Some)
+    .map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
+        format!("{file} is not a valid sinks file:{}", lines.concat())
+    })
+}
+
 /// Runs each link on its own thread for the life of the process,
 /// reporting up/down to the journal and to `devices`.
 fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>, devices: &Arc<Devices>) {
@@ -488,6 +526,20 @@ fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>, devices: &Arc<Dev
             devices.set(name, err.map(ToString::to_string));
         });
     }
+}
+
+/// One module, for the startup banner.
+fn describe(s: &Spec) -> String {
+    format!(
+        "{} from {} every {} ms, %I {}+{}, %Q {}+{}",
+        s.name,
+        s.path.display(),
+        s.period.as_millis(),
+        s.i.start,
+        s.i.len,
+        s.q.start,
+        s.q.len
+    )
 }
 
 /// Where the token lives: `--state-dir`, systemd's `$STATE_DIRECTORY`,
@@ -590,21 +642,7 @@ fn catalog(
 /// The startup lines: the CIP banner (tests read its addresses from the
 /// first line), where the content came from, what is simulated.
 fn announce(adapter: &Adapter, specs: &[Spec], content: &Content, uses_box: bool, cal: Option<&Source>) {
-    let listed: Vec<String> = specs
-        .iter()
-        .map(|s| {
-            format!(
-                "{} from {} every {} ms, %I {}+{}, %Q {}+{}",
-                s.name,
-                s.path.display(),
-                s.period.as_millis(),
-                s.i.start,
-                s.i.len,
-                s.q.start,
-                s.q.len
-            )
-        })
-        .collect();
+    let listed: Vec<String> = specs.iter().map(describe).collect();
     eprintln!(
         "helmsman-plc: CIP on {} (I/O {}), {} module(s): {}",
         adapter.encap_addr(),
@@ -680,6 +718,7 @@ fn run(o: &Opts) -> Result<(), String> {
         let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
         format!("modules do not fit together:{}", lines.concat())
     })?;
+    let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
     let devices = Arc::new(Devices::new(io_links.iter().map(|l| l.name.clone())));
@@ -726,6 +765,9 @@ fn run(o: &Opts) -> Result<(), String> {
             let faults = rt.tick_with(now, &inputs, &mut t);
             if let Some(p) = &mut publisher {
                 p.publish(now, &rt, &t);
+            }
+            if let Some(sk) = &mut sinks {
+                sk.observe(&t, now, sink::wall_ms(SystemTime::now()));
             }
             faults
         };

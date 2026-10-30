@@ -87,7 +87,7 @@ impl Point {
     /// width, an integer outside `i64`, or a reply that does not decode.
     pub fn decode(&self, data: &TagData) -> Result<Value, Error> {
         let mismatch = || {
-            Error::Protocol(format!(
+            Error::Point(format!(
                 "{} is {} on the controller, the map says {}",
                 self.path, data.ty, self.ty
             ))
@@ -102,7 +102,7 @@ impl Point {
             return value
                 .bit(bit)
                 .map(Value::Bool)
-                .ok_or_else(|| Error::Protocol(format!("{}: bit past the end of a {}", self.path, data.ty)));
+                .ok_or_else(|| Error::Point(format!("{}: bit past the end of a {}", self.path, data.ty)));
         }
         if data.ty != DataType::Atomic(self.ty) {
             return Err(mismatch());
@@ -114,9 +114,8 @@ impl Point {
             v => {
                 let n = v.as_integer().ok_or_else(mismatch)?;
                 Value::Int(
-                    i64::try_from(n).map_err(|_| {
-                        Error::Protocol(format!("{}: {n} does not fit a signal int", self.path))
-                    })?,
+                    i64::try_from(n)
+                        .map_err(|_| Error::Point(format!("{}: {n} does not fit a signal int", self.path)))?,
                 )
             }
         })
@@ -203,7 +202,7 @@ impl Driver for LogixDriver {
             match reply {
                 Ok(data) => out.push(p.decode(&data)?),
                 // The controller refused this tag; the session is fine.
-                Err(e @ logix::Error::Cip { .. }) => return Err(Error::Protocol(format!("{}: {e}", p.path))),
+                Err(e @ logix::Error::Cip { .. }) => return Err(Error::Point(format!("{}: {e}", p.path))),
                 Err(e) => {
                     self.reader = None;
                     return Err(Error::Protocol(format!("{}: {e}", p.path)));

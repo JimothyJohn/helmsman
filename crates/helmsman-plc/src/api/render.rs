@@ -80,9 +80,10 @@ fn millis(d: std::time::Duration) -> u64 {
 
 /// A signal with its live value. Inputs are `good` with a value or
 /// `missing` without (device down, not read yet, source module held);
-/// outputs carry their command and are `commanded`.
+/// outputs carry their command and are `commanded`. `point_error` is the
+/// last error its link hit on this one point, while it stands.
 #[must_use]
-pub fn signal(s: &SignalInfo, v: Option<Value>) -> Json {
+pub fn signal(s: &SignalInfo, v: Option<Value>, error: Option<&str>) -> Json {
     let quality = match (s.dir, v) {
         (Dir::Out, _) => "commanded",
         (Dir::In, Some(_)) => "good",
@@ -97,6 +98,7 @@ pub fn signal(s: &SignalInfo, v: Option<Value>) -> Json {
         "writer": s.writer,
         "value": value(v),
         "quality": quality,
+        "point_error": error,
     })
 }
 
@@ -106,7 +108,13 @@ pub fn signals(c: &Catalog, view: &View) -> Json {
         c.signals
             .iter()
             .enumerate()
-            .map(|(i, s)| signal(s, view.signals.get(i).copied().flatten()))
+            .map(|(i, s)| {
+                signal(
+                    s,
+                    view.signals.get(i).copied().flatten(),
+                    view.errors.get(i).and_then(Option::as_deref),
+                )
+            })
             .collect(),
     )
 }
@@ -129,6 +137,7 @@ pub fn outputs(c: &Catalog, view: &View) -> Json {
                 "writer": s.writer,
                 "command": value(view.signals.get(i).copied().flatten()),
                 "safe": value(s.safe),
+                "point_error": view.errors.get(i).and_then(Option::as_deref),
             })
         })
         .collect();

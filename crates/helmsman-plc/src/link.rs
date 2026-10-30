@@ -1,9 +1,15 @@
 //! Device links: one per device in the I/O map, plus one for the box's own
 //! channels. Each [`Link::cycle`] writes the output commands that changed
-//! since the device last took them, then reads every input. Any failure
-//! marks the link down: its inputs go missing (so the modules reading them
-//! are held and their outputs go safe) and it forgets what the device holds,
-//! so every output is written again once the device answers.
+//! since the device last took them, then reads every input.
+//!
+//! A *link* error (I/O, a reply that isn't valid; [`Error::is_link`]) marks
+//! the link down: its inputs go missing (so the modules reading them are
+//! held and their outputs go safe) and it forgets what the device holds, so
+//! every output is written again once the device answers. A *point* error
+//! (a value the point can't hold, a device exception, an unknown tag)
+//! stays on that point: it is recorded on the signal
+//! ([`SignalTable::point_error`]), a refused output is retried next cycle,
+//! a refused input goes missing alone, and the link stays up.
 //!
 //! An input may have its own poll period (`poll_ms=` on its map line);
 //! the link then cycles at the fastest of its device's and its inputs'
@@ -115,8 +121,17 @@ impl Link {
         };
         for (k, cmd) in due {
             let o = &mut self.outputs[k];
-            self.driver.write(&o.addr, cmd)?;
-            o.written = Some(cmd);
+            match self.driver.write(&o.addr, cmd) {
+                Ok(()) => {
+                    o.written = Some(cmd);
+                    lock(table).set_point_error(o.signal, None);
+                }
+                Err(e) if !e.is_link() => {
+                    // Left unwritten, so it is tried again next cycle.
+                    lock(table).set_point_error(o.signal, Some(e.to_string()));
+                }
+                Err(e) => return Err(e),
+            }
         }
         let due: Vec<usize> = (0..self.inputs.len())
             .filter(|&k| now.is_none_or(|now| self.inputs[k].next <= now))
@@ -125,11 +140,37 @@ impl Link {
             return Ok(());
         }
         let addrs: Vec<&str> = due.iter().map(|&k| self.inputs[k].addr.as_str()).collect();
-        let values = self.driver.read(&addrs)?;
+        let values: Vec<Result<Value, String>> = match self.driver.read(&addrs) {
+            Ok(vs) => vs.into_iter().map(Ok).collect(),
+            Err(e) if !e.is_link() => {
+                // A read is all or nothing, so find the point(s) that
+                // refused by reading each due input on its own.
+                let mut each = Vec::with_capacity(addrs.len());
+                for a in &addrs {
+                    match self.driver.read(&[a]) {
+                        Ok(mut v) if v.len() == 1 => each.push(Ok(v.remove(0))),
+                        Ok(_) => return Err(Error::Protocol(format!("{a}: read returned the wrong count"))),
+                        Err(e) if !e.is_link() => each.push(Err(e.to_string())),
+                        Err(e) => return Err(e),
+                    }
+                }
+                each
+            }
+            Err(e) => return Err(e),
+        };
         let mut t = lock(table);
         for (&k, v) in due.iter().zip(values) {
             let i = &mut self.inputs[k];
-            t.set_input(i.signal, Some(v));
+            match v {
+                Ok(v) => {
+                    t.set_input(i.signal, Some(v));
+                    t.set_point_error(i.signal, None);
+                }
+                Err(e) => {
+                    t.set_input(i.signal, None);
+                    t.set_point_error(i.signal, Some(e));
+                }
+            }
             if let Some(now) = now {
                 i.next = now.saturating_add(i.poll);
             }

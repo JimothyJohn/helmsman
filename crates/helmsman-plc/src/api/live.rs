@@ -36,6 +36,9 @@ pub struct View {
     /// Per signal, in table order: what a module reading it would see
     /// ([`SignalTable::value`]); for outputs, the command.
     pub signals: Vec<Option<Value>>,
+    /// Per signal, in table order: the last point error its link hit
+    /// ([`SignalTable::point_error`]), if one stands.
+    pub errors: Vec<Option<String>>,
     /// Per module, in scan order ([`Runtime::names`]).
     pub modules: Vec<ModuleLive>,
     /// The output image (`%Q`, assembly 100).
@@ -110,6 +113,9 @@ impl Publisher {
             seq: self.seq,
             at: now,
             signals: (0..table.len()).map(|i| table.value(i)).collect(),
+            errors: (0..table.len())
+                .map(|i| table.point_error(i).map(str::to_string))
+                .collect(),
             modules: rt
                 .names()
                 .map(|n| ModuleLive {

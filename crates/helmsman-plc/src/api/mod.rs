@@ -557,7 +557,11 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "signals", name] => match c.signal(name) {
             Some(i) => Response::json(
                 200,
-                &render::signal(&c.signals[i], view.signals.get(i).copied().flatten()),
+                &render::signal(
+                    &c.signals[i],
+                    view.signals.get(i).copied().flatten(),
+                    view.errors.get(i).and_then(Option::as_deref),
+                ),
             ),
             None => Response::error(404, "no such signal"),
         },

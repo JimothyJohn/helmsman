@@ -37,6 +37,9 @@ struct Sig {
     /// Outputs: what the links write.
     command: Value,
     safe: Value,
+    /// The last point error its link hit (a refused write or read), until
+    /// the point next goes through.
+    error: Option<String>,
 }
 
 /// Why an I/O map and its safe values cannot become a table.
@@ -141,6 +144,7 @@ impl SignalTable {
                     unit: s.unit.clone(),
                     command: safe,
                     safe,
+                    error: None,
                 }
             })
             .collect();
@@ -220,6 +224,21 @@ impl SignalTable {
         }
     }
 
+    /// The last point error the signal's link hit (a write the device or
+    /// driver refused, an input it would not read), or `None` once the
+    /// point goes through again.
+    #[must_use]
+    pub fn point_error(&self, i: usize) -> Option<&str> {
+        self.sigs.get(i)?.error.as_deref()
+    }
+
+    /// Records (or, with `None`, clears) a point error.
+    pub fn set_point_error(&mut self, i: usize, e: Option<String>) {
+        if let Some(s) = self.sigs.get_mut(i) {
+            s.error = e;
+        }
+    }
+
     /// What a module's `VAR_OUTPUT` drives: an output's command, or the
     /// published value of a module-output signal.
     pub(crate) fn drive(&mut self, i: usize, v: Value) {
@@ -266,6 +285,7 @@ impl SignalTable {
             safe: zero(ty),
             source: None,
             unit: None,
+            error: None,
         });
         Ok(self.sigs.len() - 1)
     }
