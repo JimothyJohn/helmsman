@@ -4,30 +4,45 @@
 //! # remote I/O block on the bench
 //! device rio modbus-tcp 192.168.3.50:502 unit=1 timeout_ms=200 poll_ms=50
 //! in  start  bool rio di:1
-//! in  level  int  rio hr:5:i16
+//! in  level  int  rio hr:5:i16  unit=mm poll_ms=500
 //! out motor  bool rio coil:0
 //! out lamp   bool box do:0  safe=true
+//! in  rate   real module conveyor  unit=m/s
 //! ```
 //!
 //! `device ID DRIVER ENDPOINT [KEY=VALUE ...]` declares a device the box
 //! masters; the params are the driver's. `in`/`out NAME TYPE DEVICE POINT`
 //! declares a signal (`bool`, `int` or `real`) bound to a point in that
 //! device's address syntax; the device `box` is the box's own channels
-//! (`do:N`, `di:N`). An `out` may end in `safe=VALUE`, what the output is
-//! driven to whenever no healthy module drives it (default off / zero).
+//! (`do:N`, `di:N`). `in NAME TYPE module MODULE` is another module's
+//! output: the `VAR_OUTPUT` called NAME in module MODULE, which any other
+//! module may read as a `VAR_INPUT` called NAME.
+//!
+//! After the binding, in any order, each at most once:
+//! - `unit=U`: the engineering unit (1..=16 printable characters);
+//! - `poll_ms=N` (`in` on a device or `box` only): read this signal every
+//!   N ms (1..=60000) instead of at the device's `poll_ms`;
+//! - `safe=VALUE` (`out` only): what the output is driven to whenever no
+//!   healthy module drives it (default off / zero).
+//!
 //! `#` starts a comment. Tokens are separated by spaces or tabs; nothing is
-//! quoted, so no token contains either.
+//! quoted, so no token contains either. Maps written before units and
+//! poll rates read the same as ever; `box` and `module` are reserved
+//! device ids.
 //!
 //! [`parse`] checks only the syntax; [`crate::IoMap::validate`] checks the
 //! map.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::time::Duration;
 
-use crate::model::{Binding, Device, Dir, IoMap, Signal, Ty, Value};
+use crate::model::{Binding, Device, Dir, IoMap, MAX_UNIT, Signal, Ty, Value, unit_ok};
 
 /// The device name for the box's own channels.
 pub const BOX: &str = "box";
+/// The device name for another module's outputs.
+pub const MODULE: &str = "module";
 
 /// A parsed map file: the map and the declared safe values.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -94,8 +109,10 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
     }
     match words {
         ["device", id, driver, endpoint, params @ ..] => {
-            if !is_ident(id) || *id == BOX {
-                return Err(format!("device id {id:?}: an identifier other than {BOX}"));
+            if !is_ident(id) || *id == BOX || *id == MODULE {
+                return Err(format!(
+                    "device id {id:?}: an identifier other than {BOX} and {MODULE}"
+                ));
             }
             let mut map = BTreeMap::new();
             for p in params {
@@ -118,33 +135,60 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
         [dir @ ("in" | "out"), name, t, device, point, rest @ ..] => {
             let dir = if *dir == "in" { Dir::In } else { Dir::Out };
             let ty = ty(t).ok_or_else(|| format!("type {t:?}: bool, int or real"))?;
-            match (dir, rest) {
-                (_, []) => {}
-                (Dir::Out, [safe]) => {
-                    let v = safe
-                        .strip_prefix("safe=")
-                        .and_then(|v| value(ty, v))
-                        .ok_or_else(|| format!("{safe:?}: expected safe=VALUE of type {t}"))?;
-                    out.safe.insert((*name).into(), v);
-                }
-                (Dir::In, [_]) => return Err("only an out signal has a safe value".into()),
-                _ => return Err("too many words".into()),
-            }
-            let binding = if *device == BOX {
-                Binding::Local {
+            let binding = match *device {
+                BOX => Binding::Local {
                     channel: (*point).into(),
-                }
-            } else {
-                Binding::Device {
+                },
+                MODULE => Binding::Module {
+                    module: (*point).into(),
+                },
+                _ => Binding::Device {
                     device: (*device).into(),
                     point: (*point).into(),
-                }
+                },
             };
+            let (mut unit, mut poll, mut safe) = (None, None, None);
+            for opt in rest {
+                let (k, v) = opt.split_once('=').unwrap_or((opt, ""));
+                match k {
+                    "unit" => {
+                        if !unit_ok(v) {
+                            return Err(format!("unit={v}: 1..={MAX_UNIT} printable characters"));
+                        }
+                        once(&mut unit, k, v.to_string())?;
+                    }
+                    "poll_ms" => {
+                        if dir == Dir::Out || *device == MODULE {
+                            return Err("poll_ms: only an in signal on a device or box is polled".into());
+                        }
+                        let ms = v
+                            .parse::<u64>()
+                            .ok()
+                            .filter(|ms| (1..=60_000).contains(ms) && v.bytes().all(|b| b.is_ascii_digit()))
+                            .ok_or_else(|| format!("poll_ms={v}: expected 1..=60000"))?;
+                        once(&mut poll, k, Duration::from_millis(ms))?;
+                    }
+                    "safe" => {
+                        if dir == Dir::In {
+                            return Err("only an out signal has a safe value".into());
+                        }
+                        let x = value(ty, v)
+                            .ok_or_else(|| format!("{opt:?}: expected safe=VALUE of type {t}"))?;
+                        once(&mut safe, k, x)?;
+                    }
+                    _ => return Err(format!("{opt:?}: expected unit=, poll_ms= or safe=")),
+                }
+            }
+            if let Some(x) = safe {
+                out.safe.insert((*name).into(), x);
+            }
             out.map.signals.push(Signal {
                 name: (*name).into(),
                 ty,
                 dir,
                 binding,
+                unit,
+                poll,
             });
             Ok(())
         }
@@ -152,6 +196,13 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
         [w, ..] => Err(format!("{w:?}: expected device, in or out")),
         [] => Ok(()),
     }
+}
+
+fn once<T>(slot: &mut Option<T>, key: &str, v: T) -> Result<(), String> {
+    if slot.replace(v).is_some() {
+        return Err(format!("{key} given twice"));
+    }
+    Ok(())
 }
 
 /// Writes a map file that [`parse`] reads back as `file`.
@@ -175,6 +226,7 @@ pub fn render(file: &MapFile) -> String {
         let (dev, point) = match &sig.binding {
             Binding::Device { device, point } => (device.as_str(), point.as_str()),
             Binding::Local { channel } => (BOX, channel.as_str()),
+            Binding::Module { module } => (MODULE, module.as_str()),
         };
         let _ = write!(s, "{dir} {} {ty} {dev} {point}", sig.name);
         match file.safe.get(&sig.name) {
@@ -188,6 +240,12 @@ pub fn render(file: &MapFile) -> String {
                 let _ = write!(s, " safe={x:?}");
             }
             None => {}
+        }
+        if let Some(u) = &sig.unit {
+            let _ = write!(s, " unit={u}");
+        }
+        if let Some(p) = sig.poll {
+            let _ = write!(s, " poll_ms={}", p.as_millis());
         }
         s.push('\n');
     }

@@ -200,6 +200,16 @@
   id: iomap-format
   answer: keep the line format until box-api, then JSON from the API (recommended)
 
+- [ ] **Shift calendar time zones: fixed offsets, or read the OS tz database?** The shift calendar (feat/shift-calendar) takes `zone +01:00` plus each DST change written out as `zone +02:00 from 2026-03-29T01:00Z`; `zone Europe/Berlin` is refused with a message saying so. No new dependency, and evaluation stays a pure function of the instant, but someone has to add next year's change dates by hand and a forgotten one shifts every shift by an hour. Two ways to accept zone names: hand-parse the TZif files already on the Pi (`/usr/share/zoneinfo`, a few hundred lines, no crate, but the box then depends on the OS tzdata being current), or add `jiff` (well-maintained, bundles or reads tzdata, a sizeable new dependency). I kept fixed offsets for now (reversible: a zone name would only add a parser branch).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether `zone Europe/Berlin` works in a calendar file, and what the box depends on for it
+  options: keep fixed offsets with explicit changes (recommended for now) | hand-parse the OS TZif files, no new crate | add jiff
+  est: 1d
+  difficulty: med
+  id: calendar-timezones
+
 - [ ] **Logix point syntax: require `@TYPE`?** The `logix-tag` driver (feat/logix-tag-read) binds a signal to `TAG@TYPE`, e.g. `in temp real plc Program:Main.Temp@real`, `in fault bool plc Status.5@bool`. The map validator needs a point's type without touching the device, and the declared Logix type is checked against every reply, so a tag that turns out to be a DINT is an error rather than a REAL read as garbage. The alternative is a bare tag path whose type is learned on connect (browse), which reads nicer but makes `IoMap::validate` unable to catch a bool/int/real mismatch until the box talks to the PLC. Built with `@TYPE` required; switching later is a change in `helmsman-io/src/logix.rs` and the map files that use it.
   asked: 2026-10-30
   by: claude-agent
@@ -395,7 +405,7 @@
   notes: done 2026-10-30. Map: tcpethernet → helmsman-proto (kept CIP, an ODVA mark, out of crate names), -adapter → helmsman-adapter, -cli → helmsman-cli (bin `helmsman`), -plc/-iec/-io/-graph/-canvas → helmsman-*. Env vars HELMSMAN_*. The next pi-deploy-plc.sh run retires the old tcpethernet-plc unit and its firewall rules.
   notes: brand canvas (private) https://claude.ai/artifact/WB1uKtP1NRHHfGoWw95tBt: wordmark Saira Stencil One, descriptor Barlow Condensed 700; palette yellow #FFC20E, black #141414, graphite #3A3A3A, steel #8C8C8C (rules only), white; never yellow on white; mark is the stencil encoder gear. crates.io `helmsman` is taken by an unrelated crate: run `cargo search <name>` on each new name before publishing. Restarting or removing the service on the pick PC asks Nick each time.
 
-- [ ] **GitHub Pages brand gallery for Helmsman** — Pages already serves docs/ from master (legacy build, https://jimothyjohn.github.io/helmsman/, landing page docs/index.html still titled tcpethernet). Rebrand that landing page to Helmsman Factory Automation (stencil wordmark, yellow/black/graphite/white, stencil encoder mark), and add docs/brand/index.html showing every concept from the brand canvas: the marks (round 1 and the round-2 gear set), the wordmarks, all color themes with hex and contrast rules, the in-the-field mockups and the spray-painted stencil-encoder surfaces. Static HTML/CSS and inline SVG only, no build step, no JS framework (the repo ships no JS); fonts from Google Fonts. Also commit the final mark as SVG files under docs/brand/ (full stencil encoder, a heavier small-size variant for 16–20 px, black, yellow and white) so the rename and the UI can reuse them.
+- [x] **GitHub Pages brand gallery for Helmsman** — Pages already serves docs/ from master (legacy build, https://jimothyjohn.github.io/helmsman/, landing page docs/index.html still titled tcpethernet). Rebrand that landing page to Helmsman Factory Automation (stencil wordmark, yellow/black/graphite/white, stencil encoder mark), and add docs/brand/index.html showing every concept from the brand canvas: the marks (round 1 and the round-2 gear set), the wordmarks, all color themes with hex and contrast rules, the in-the-field mockups and the spray-painted stencil-encoder surfaces. Static HTML/CSS and inline SVG only, no build step, no JS framework (the repo ships no JS); fonts from Google Fonts. Also commit the final mark as SVG files under docs/brand/ (full stencil encoder, a heavier small-size variant for 16–20 px, black, yellow and white) so the rename and the UI can reuse them.
   needs: the brand canvas (private, so the agent needs Nick to share it or the HTML exported into the repo first; the SVG geometry is in its StencilEncoder board); helmsman-rename landed, so the page and the code use the same names
   result: docs/brand/ with the gallery page and mark SVGs; docs/index.html rebranded; live at /helmsman/brand/ after Nick merges dev → master
   est: 4h
@@ -403,6 +413,7 @@
   depends: helmsman-rename
   id: brand-pages
   notes: GitHub Pages builds from master/docs, so nothing goes live until Nick's own dev → master merge; don't change the Pages source or add a deploy workflow without asking. Helmsmand brand guide is here bt that should be in another corktree already: https://claude.ai/artifact/WB1uKtP1NRHHfGoWw95tBt#page-dcb81aee8d83
+  notes: done 2026-10-30. docs/brand/index.html reproduces all eight canvas boards with computed WCAG ratios; mark SVGs are helmsman-mark-{black,yellow,white}.svg (full, 32 px and up) plus helmsman-mark-20-* and helmsman-mark-16-* (the board's two heavier small-size cuts). The pages are hand-maintained static HTML, no generator.
 
 
 ## Product vision (interview 2026-10-29)
@@ -441,14 +452,14 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: multi-module
   id: hot-swap
 
-- [ ] **Module format** — a module is a directory/bundle: `module.st` plus a manifest (signals read, outputs driven, schedule, params with types and ranges, author, prompt that produced it). The manifest is what policy and the sandbox enforce.
+- [x] **Module format** — a module is a directory/bundle: `module.st` plus a manifest (signals read, outputs driven, schedule, params with types and ranges, author, prompt that produced it). The manifest is what policy and the sandbox enforce.
   result: the unit the agent writes, snapshots store, and bundles ship
   est: 1d
   difficulty: med
   depends: arch-note
   id: module-format
 
-- [ ] **Signal model** — named, typed signals with units and poll rates, bound to a source (CIP tag, CIP attribute, GPIO in, another module's output). Modules read signals by name, never raw addresses.
+- [x] **Signal model** — named, typed signals with units and poll rates, bound to a source (CIP tag, CIP attribute, GPIO in, another module's output). Modules read signals by name, never raw addresses.
   result: one vocabulary for the agent, the canvas and the manifest
   est: 2d
   difficulty: med
@@ -484,7 +495,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format
   id: snapshots
 
-- [ ] **Runtime trace tap** — the interpreter exposes per-scan variable values and which statements/branches executed, sampled at UI rates, without slowing the scan.
+- [x] **Runtime trace tap** — the interpreter exposes per-scan variable values and which statements/branches executed, sampled at UI rates, without slowing the scan.
   result: the data the live canvas draws
   est: 3d
   difficulty: high
@@ -601,7 +612,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: m1-demo
   id: stock-counters
 
-- [ ] **Shift calendar and scheduled outputs** — shifts, breaks, planned downtime as box data; modules can ask "in shift?" and the scheduler drives outputs on a calendar (with the output policy applying).
+- [x] **Shift calendar and scheduled outputs** — shifts, breaks, planned downtime as box data; modules can ask "in shift?" and the scheduler drives outputs on a calendar (with the output policy applying).
   est: 3d
   difficulty: med
   depends: multi-module

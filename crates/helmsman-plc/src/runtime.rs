@@ -15,7 +15,14 @@
 //! - a module's `VAR_INPUT`s and `VAR_OUTPUT`s are bound to signals by name
 //!   (see [`crate::signals`]); one module drives each output signal, and a
 //!   module whose inputs are missing is held, not scanned, with its outputs
-//!   safe, until they are back.
+//!   safe, until they are back;
+//! - a module may read another module's output through a signal bound to
+//!   it; the module it names must be loaded and drive it
+//!   ([`ConfigError::NoSource`]), and modules may not read each other's
+//!   outputs in a cycle ([`ConfigError::Cycle`]), which would hold them
+//!   all forever. A reader sees the value from its source's latest
+//!   completed scan: within one tick if the source comes first in scan
+//!   order, the tick before otherwise.
 //!
 //! The runtime has no clock of its own: [`Runtime::tick`] takes `now`, so
 //! scheduling is deterministic under test.
@@ -26,6 +33,7 @@ use std::time::Duration;
 use helmsman_iec::{Fault, FaultKind, Image, PortDir, Program};
 
 use crate::signals::{BindError, PortBinding, SignalTable, bind, from_st, to_st};
+use crate::tap::{Sample, TraceTap};
 
 /// Longest scan period a module may ask for.
 pub const MAX_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
@@ -71,6 +79,9 @@ pub struct Module {
     pub period: Duration,
     pub i: Window,
     pub q: Window,
+    /// `VAR_INPUT`s held at a fixed value instead of bound to a signal
+    /// (a module manifest's `param`s), set before every scan.
+    pub params: Vec<(String, helmsman_io::Value)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,12 +130,28 @@ pub enum ConfigError {
         module: String,
         err: BindError,
     },
-    /// Two modules would drive the same output signal; `a` comes first.
+    /// Two modules would drive the same output signal; `a` comes first,
+    /// or is `calendar` for an output the shift calendar drives.
     TwoWriters {
         signal: String,
         a: String,
         b: String,
     },
+    /// A param that names no `VAR_INPUT`, is given twice, or whose value
+    /// the input cannot hold.
+    Param {
+        module: String,
+        param: String,
+    },
+    /// `module` reads `signal`, another module's output, but no loaded
+    /// module of that name drives it.
+    NoSource {
+        module: String,
+        signal: String,
+    },
+    /// Modules that read each other's outputs in a loop, each reading the
+    /// one before it (the first reads the last).
+    Cycle(Vec<String>),
 }
 
 impl fmt::Display for ConfigError {
@@ -144,6 +171,19 @@ impl fmt::Display for ConfigError {
             Self::OutputOverlap { a, b } => write!(f, "{a} and {b} drive the same %Q bytes"),
             Self::Port { module, err } => write!(f, "{module}: {err}"),
             Self::TwoWriters { signal, a, b } => write!(f, "{a} and {b} both drive signal {signal}"),
+            Self::Param { module, param } => write!(
+                f,
+                "{module}: param {param} names no VAR_INPUT that can hold its value, or is given twice"
+            ),
+            Self::NoSource { module, signal } => write!(
+                f,
+                "{module}: reads {signal}, a module output that no loaded module drives"
+            ),
+            Self::Cycle(names) => write!(
+                f,
+                "modules read each other's outputs in a loop: {}",
+                names.join(" -> ")
+            ),
         }
     }
 }
@@ -158,6 +198,7 @@ struct Slot {
     status: Status,
     next: Duration,
     stats: Stats,
+    tap: TraceTap,
 }
 
 /// The modules and the box's images they share.
@@ -210,7 +251,23 @@ impl Runtime {
             if m.period.is_zero() || m.period > MAX_PERIOD {
                 errs.push(ConfigError::BadPeriod(name()));
             }
-            let (bound, bad) = bind(&m.program.ports(), table);
+            let mut probe = m.program.clone();
+            for (k, (p, v)) in m.params.iter().enumerate() {
+                let twice = m.params[..k].iter().any(|(q, _)| q.eq_ignore_ascii_case(p));
+                if twice || probe.set_input(p, to_st(*v)).is_err() {
+                    errs.push(ConfigError::Param {
+                        module: name(),
+                        param: p.clone(),
+                    });
+                }
+            }
+            let signal_ports: Vec<_> = m
+                .program
+                .ports()
+                .into_iter()
+                .filter(|p| !m.params.iter().any(|(q, _)| q.eq_ignore_ascii_case(&p.name)))
+                .collect();
+            let (bound, bad) = bind(&m.name, &signal_ports, table);
             errs.extend(
                 bad.into_iter()
                     .map(|err| ConfigError::Port { module: name(), err }),
@@ -226,10 +283,18 @@ impl Runtime {
                         a: modules[prev].name.clone(),
                         b: modules[n].name.clone(),
                     }),
-                    None => writers[b.signal] = Some(n),
+                    None => match table.writer(b.signal) {
+                        Some(w) => errs.push(ConfigError::TwoWriters {
+                            signal: b.port.clone(),
+                            a: w.into(),
+                            b: modules[n].name.clone(),
+                        }),
+                        None => writers[b.signal] = Some(n),
+                    },
                 }
             }
         }
+        errs.extend(module_links(&modules, &ports, table, &writers));
         for (n, a) in modules.iter().enumerate() {
             for b in &modules[n + 1..] {
                 if a.q.overlaps(b.q) {
@@ -253,6 +318,7 @@ impl Runtime {
                 status: Status::Running,
                 next: Duration::ZERO,
                 stats: Stats::default(),
+                tap: TraceTap::default(),
             })
             .collect();
         Ok(Self {
@@ -292,11 +358,21 @@ impl Runtime {
                     *b = inputs.get(w.start + k).copied().unwrap_or(0);
                 }
                 s.stats.scans = s.stats.scans.saturating_add(1);
-                let result = s
-                    .module
-                    .program
-                    .scan_at(&mut s.image, now)
-                    .and_then(|()| outputs(s));
+                let result = if s.tap.claim() {
+                    let (r, trace) = s.module.program.scan_traced(&mut s.image, now);
+                    let result = r.and_then(|()| outputs(s));
+                    s.tap.post(Sample {
+                        scan: s.stats.scans,
+                        fault: result.as_ref().err().copied(),
+                        trace,
+                    });
+                    result
+                } else {
+                    s.module
+                        .program
+                        .scan_at(&mut s.image, now)
+                        .and_then(|()| outputs(s))
+                };
                 match result {
                     Ok(commands) => {
                         q.copy_from_slice(&s.image.q);
@@ -371,16 +447,106 @@ impl Runtime {
         self.slot(name).map(|s| &s.module.program)
     }
 
+    /// The module's trace tap: [`TraceTap::request`] traces its next scan.
+    /// Clone it to another thread before moving the runtime to its own.
+    /// A swap keeps the tap.
+    #[must_use]
+    pub fn tap(&self, name: &str) -> Option<TraceTap> {
+        self.slot(name).map(|s| s.tap.clone())
+    }
+
     /// Module names, in scan order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.slots.iter().map(|s| s.module.name.as_str())
     }
 }
 
+/// Checks the signals modules read from each other: each has a loaded
+/// source that drives it, and no loop. `writers[signal]` is the module
+/// driving it.
+fn module_links(
+    modules: &[Module],
+    ports: &[Vec<PortBinding>],
+    table: &SignalTable,
+    writers: &[Option<usize>],
+) -> Vec<ConfigError> {
+    let mut errs = Vec::new();
+    // feeds[a] = modules reading an output of module a.
+    let mut feeds: Vec<Vec<usize>> = vec![Vec::new(); modules.len()];
+    for (n, bound) in ports.iter().enumerate() {
+        for b in bound.iter().filter(|b| b.dir == PortDir::Input) {
+            let Some(source) = table.source(b.signal) else {
+                continue;
+            };
+            match writers[b.signal].filter(|&w| modules[w].name == source) {
+                Some(w) => {
+                    if !feeds[w].contains(&n) {
+                        feeds[w].push(n);
+                    }
+                }
+                None => errs.push(ConfigError::NoSource {
+                    module: modules[n].name.clone(),
+                    signal: b.port.clone(),
+                }),
+            }
+        }
+    }
+    if let Some(cycle) = find_cycle(&feeds) {
+        errs.push(ConfigError::Cycle(
+            cycle.into_iter().map(|n| modules[n].name.clone()).collect(),
+        ));
+    }
+    errs
+}
+
+/// The first loop in the graph `edges`, from the lowest-numbered node a
+/// depth-first search reaches it from; deterministic for a given graph.
+fn find_cycle(edges: &[Vec<usize>]) -> Option<Vec<usize>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        New,
+        Open,
+        Done,
+    }
+    let mut mark = vec![Mark::New; edges.len()];
+    for root in 0..edges.len() {
+        if mark[root] != Mark::New {
+            continue;
+        }
+        // (node, next edge to follow); the stack is the current path.
+        let mut stack = vec![(root, 0usize)];
+        mark[root] = Mark::Open;
+        while let Some(&mut (node, ref mut k)) = stack.last_mut() {
+            let Some(&next) = edges[node].get(*k) else {
+                mark[node] = Mark::Done;
+                stack.pop();
+                continue;
+            };
+            *k += 1;
+            match mark[next] {
+                Mark::New => {
+                    mark[next] = Mark::Open;
+                    stack.push((next, 0));
+                }
+                Mark::Open => {
+                    let from = stack.iter().position(|&(n, _)| n == next)?;
+                    return Some(stack[from..].iter().map(|&(n, _)| n).collect());
+                }
+                Mark::Done => {}
+            }
+        }
+    }
+    None
+}
+
 /// Sets every `VAR_INPUT` of the module from its signal. False if any
 /// signal has no value or the value does not fit the port; inputs already
 /// set stay set, which is harmless as the module is then not scanned.
 fn set_inputs(s: &mut Slot, table: &SignalTable) -> bool {
+    for (p, v) in &s.module.params {
+        // Checked when the runtime was built.
+        let _ = s.module.program.set_input(p, to_st(*v));
+    }
     s.ports.iter().filter(|b| b.dir == PortDir::Input).all(|b| {
         table
             .value(b.signal)
