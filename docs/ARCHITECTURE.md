@@ -178,6 +178,33 @@ manifest can be derived from.
   runs again once every input is back. An output value its signal can't
   carry (a non-finite `REAL`) faults the module (`OutputRange`).
 
+## Hot swap (`hot-swap`, built)
+
+`Runtime::swap(module, &mut table)` replaces the module of the same name
+between its scans (contract in `tests/swap.rs`). The adapter, the links and
+the other modules never notice.
+
+- **Checked like a fresh load**, by the same code, against the other modules
+  as they run: windows, sizes, period, ports against the `SignalTable`, one
+  writer per `%Q` byte and per output signal. A refused swap changes nothing.
+- **State carries by name and type** (`Program::state` / `Program::restore`
+  in `helmsman-iec`): top-level `VAR`, `VAR_INPUT`, `VAR_OUTPUT`, not
+  `VAR_TEMP`, constants or located variables. A variable carries whole when
+  its type has the same shape in both programs (same elementary type; same
+  enumeration; same array bounds; same struct or function block, by name and
+  members), so a `TON` keeps its elapsed time and a `CTU` its count; a new or
+  retyped variable starts at its initial value. Every copied slot is also
+  checked against the new slot's type, so nothing ill-typed lands in memory.
+  `%M` keeps its bytes over the length both share.
+- **No glitch**: the `%Q` bytes and output signals the module keeps hold their
+  last values until the new program's first scan; bytes it gives up go to
+  zero and signals it stops driving go safe at once.
+- A **faulted or held** module restarts Running, its state carried; a faulted
+  one is next due on its old phase after the last tick (open question
+  `hot-swap-faulted-state`).
+
+Not in the binary yet: there is no control channel until `box-api`.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -199,8 +226,6 @@ prompt. The agent never touches the Rust core.
 
 ## Where the planned pieces attach
 
-- `hot-swap`: replace one module's `Program` between its scans; its windows
-  and the adapter connection stay up. Needs `multi-module`.
 - `module-format` → `signal-model` → `box-api`: the manifest (signals read,
   outputs driven, schedule, params) is what the scheduler, the I/O map and
   the policy check; the box API serves it.

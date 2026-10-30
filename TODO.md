@@ -200,6 +200,16 @@
   id: iomap-format
   answer: keep the line format until box-api, then JSON from the API (recommended)
 
+- [ ] **Hot swap of a faulted module: carry its state, or start it cold?** Built in feat/hot-swap: `Runtime::swap` replaces a module's program between scans, carrying every retained variable whose name and type match. A Faulted (or Held) module may be swapped and restarts Running with the fault cleared, and I chose to carry its state like any other swap: a parts counter survives the fix, as tags do after a Logix online edit and fault clear. The cost: the variables are as the fault left them, so a bad index that caused the fault can fault the new program again on its first scan (outputs are already zero, so that is safe, just noisy). `%M` keeps its bytes over the shared length, as an address means the same byte in both programs. Switching to cold start for faulted modules is one branch in `swap`.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: what an applied fix does to a stopped module's counters and timers; box-api and the proposal UI explain it
+  options: carry state, as for a running module (recommended) | start cold (initial values) after a fault | let the caller choose per swap
+  est: 5m
+  difficulty: low
+  id: hot-swap-faulted-state
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -414,7 +424,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   id: multi-module
 
-- [ ] **Hot-swap a module without dropping I/O** — replace one module's compiled program between scans, carrying over retained state where names and types match; the adapter connection stays up.
+- [x] **Hot-swap a module without dropping I/O** — replace one module's compiled program between scans, carrying over retained state where names and types match; the adapter connection stays up.
   result: applying a change is instant and doesn't fault the scanner
   est: 2d
   difficulty: med

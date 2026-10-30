@@ -180,7 +180,7 @@ impl Program {
     fn fits(&self, slot: Slot, v: Value) -> bool {
         match (slot, v) {
             (Slot::Elem(Ty::Bool), Value::Bool(_)) => true,
-            (Slot::Elem(t), Value::Real(x)) if t.is_real() => x.is_finite() && round_real(t, x) == x,
+            (Slot::Elem(t), Value::Real(x)) if t.is_real() => x.is_finite() && round_real(t, x).to_bits() == x.to_bits(),
             (Slot::Elem(t), Value::Int(n)) if t != Ty::Bool && !t.is_real() => {
                 let (lo, hi) = t.range();
                 lo <= n && n <= hi

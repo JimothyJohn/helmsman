@@ -23,7 +23,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use helmsman_iec::{Fault, FaultKind, Image, PortDir, Program};
+use helmsman_iec::{Carry, Fault, FaultKind, Image, PortDir, Program};
 
 use crate::signals::{BindError, PortBinding, SignalTable, bind, from_st, to_st};
 
@@ -58,6 +58,10 @@ impl Window {
             (Some(a), Some(b)) => self.start < b && other.start < a && self.len > 0 && other.len > 0,
             _ => false,
         }
+    }
+
+    fn contains(self, byte: usize) -> bool {
+        self.start <= byte && self.end().is_some_and(|e| byte < e)
     }
 }
 
@@ -125,6 +129,8 @@ pub enum ConfigError {
         a: String,
         b: String,
     },
+    /// A swap names no module of the runtime.
+    UnknownModule(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -144,6 +150,7 @@ impl fmt::Display for ConfigError {
             Self::OutputOverlap { a, b } => write!(f, "{a} and {b} drive the same %Q bytes"),
             Self::Port { module, err } => write!(f, "{module}: {err}"),
             Self::TwoWriters { signal, a, b } => write!(f, "{a} and {b} both drive signal {signal}"),
+            Self::UnknownModule(n) => write!(f, "no module named {n:?}"),
         }
     }
 }
@@ -165,6 +172,9 @@ struct Slot {
 pub struct Runtime {
     slots: Vec<Slot>,
     outputs: Vec<u8>,
+    i_len: usize,
+    /// `now` of the last tick.
+    last: Option<Duration>,
 }
 
 impl Runtime {
@@ -192,57 +202,7 @@ impl Runtime {
         modules: Vec<Module>,
         table: &SignalTable,
     ) -> Result<Self, Vec<ConfigError>> {
-        let mut errs = Vec::new();
-        let mut ports = Vec::with_capacity(modules.len());
-        for (n, m) in modules.iter().enumerate() {
-            let name = || m.name.clone();
-            if modules[..n].iter().any(|p| p.name == m.name) {
-                errs.push(ConfigError::DuplicateName(name()));
-            }
-            let sizes = m.program.sizes();
-            for (area, w, image, compiled) in [('I', m.i, i_len, sizes.i), ('Q', m.q, q_len, sizes.q)] {
-                if !w.fits(image) {
-                    errs.push(ConfigError::OutsideImage { module: name(), area });
-                } else if w.len != compiled {
-                    errs.push(ConfigError::SizeMismatch { module: name(), area });
-                }
-            }
-            if m.period.is_zero() || m.period > MAX_PERIOD {
-                errs.push(ConfigError::BadPeriod(name()));
-            }
-            let (bound, bad) = bind(&m.program.ports(), table);
-            errs.extend(
-                bad.into_iter()
-                    .map(|err| ConfigError::Port { module: name(), err }),
-            );
-            ports.push(bound);
-        }
-        let mut writers: Vec<Option<usize>> = vec![None; table.len()];
-        for (n, bound) in ports.iter().enumerate() {
-            for b in bound.iter().filter(|b| b.dir == PortDir::Output) {
-                match writers[b.signal] {
-                    Some(prev) => errs.push(ConfigError::TwoWriters {
-                        signal: b.port.clone(),
-                        a: modules[prev].name.clone(),
-                        b: modules[n].name.clone(),
-                    }),
-                    None => writers[b.signal] = Some(n),
-                }
-            }
-        }
-        for (n, a) in modules.iter().enumerate() {
-            for b in &modules[n + 1..] {
-                if a.q.overlaps(b.q) {
-                    errs.push(ConfigError::OutputOverlap {
-                        a: a.name.clone(),
-                        b: b.name.clone(),
-                    });
-                }
-            }
-        }
-        if !errs.is_empty() {
-            return Err(errs);
-        }
+        let ports = check(i_len, q_len, &modules.iter().collect::<Vec<_>>(), table)?;
         let slots = modules
             .into_iter()
             .zip(ports)
@@ -258,7 +218,86 @@ impl Runtime {
         Ok(Self {
             slots,
             outputs: vec![0; q_len],
+            i_len,
+            last: None,
         })
+    }
+
+    /// Replaces the module named `module.name` between its scans: its
+    /// program, and its windows and period if those changed. The other
+    /// modules, the output image and the signal commands are untouched.
+    ///
+    /// - Checked like a fresh load, against the other modules as they are:
+    ///   windows, sizes, period, ports against `table`, one writer per
+    ///   output byte and per output signal. A refused swap changes nothing.
+    /// - Retained state carries by name and type
+    ///   ([`helmsman_iec::Program::restore`]): a timer keeps its elapsed
+    ///   time, a counter its count; a variable that is new, or whose type
+    ///   changed, starts at its initial value. `%M` keeps its bytes over the
+    ///   length both sizes share.
+    /// - No glitch: the `%Q` bytes and output signals the module keeps hold
+    ///   their last values until the new program's first scan (its `%Q`
+    ///   image starts as what the output image holds). Bytes it gives up go
+    ///   to zero and signals it stops driving go safe now, as no module
+    ///   drives them any more.
+    /// - A faulted or held module restarts ([`Status::Running`]): the fault
+    ///   is cleared and its state carries like any other. A faulted module
+    ///   is next due at its first deadline after the last tick, so the time
+    ///   it spent stopped is not counted as overruns. Otherwise the next
+    ///   deadline stays as scheduled and a new period applies after it.
+    ///
+    /// # Errors
+    /// [`ConfigError::UnknownModule`], or every problem the new module
+    /// would have in a fresh load beside the others.
+    pub fn swap(&mut self, module: Module, table: &mut SignalTable) -> Result<Carry, Vec<ConfigError>> {
+        let Some(k) = self.slots.iter().position(|s| s.module.name == module.name) else {
+            return Err(vec![ConfigError::UnknownModule(module.name)]);
+        };
+        let all: Vec<&Module> = self
+            .slots
+            .iter()
+            .enumerate()
+            .map(|(n, s)| if n == k { &module } else { &s.module })
+            .collect();
+        let ports = check(self.i_len, self.outputs.len(), &all, table)?.swap_remove(k);
+        let mut module = module;
+        let s = &mut self.slots[k];
+        let carry = module.program.restore(&s.module.program.state());
+
+        let (old_q, new_q) = (s.module.q, module.q);
+        for (n, b) in self.outputs[old_q.start..][..old_q.len].iter_mut().enumerate() {
+            if !new_q.contains(old_q.start + n) {
+                *b = 0;
+            }
+        }
+        for b in s.ports.iter().filter(|b| b.dir == PortDir::Output) {
+            if !ports
+                .iter()
+                .any(|p| p.dir == PortDir::Output && p.signal == b.signal)
+            {
+                table.make_safe(b.signal);
+            }
+        }
+        let mut image = Image::new(module.program.sizes());
+        image.q.copy_from_slice(&self.outputs[new_q.start..][..new_q.len]);
+        let m = image.m.len().min(s.image.m.len());
+        image.m[..m].copy_from_slice(&s.image.m[..m]);
+
+        if let (Status::Faulted(_), Some(last)) = (s.status, self.last)
+            && s.next <= last
+        {
+            let period = module.period.as_nanos();
+            let rem = u64::try_from(last.saturating_sub(s.next).as_nanos() % period)
+                .expect("remainder below a 24 h period");
+            s.next = last
+                .saturating_add(module.period)
+                .saturating_sub(Duration::from_nanos(rem));
+        }
+        s.status = Status::Running;
+        s.module = module;
+        s.ports = ports;
+        s.image = image;
+        Ok(carry)
     }
 
     /// Runs every running module whose deadline is at or before `now`, in
@@ -280,6 +319,7 @@ impl Runtime {
         table: &mut SignalTable,
     ) -> Vec<(String, Fault)> {
         let mut faults = Vec::new();
+        self.last = Some(now);
         for s in &mut self.slots {
             if matches!(s.status, Status::Faulted(_)) || s.next > now {
                 continue;
@@ -371,10 +411,75 @@ impl Runtime {
         self.slot(name).map(|s| &s.module.program)
     }
 
+    /// A module as it runs now: program, period and windows.
+    #[must_use]
+    pub fn module(&self, name: &str) -> Option<&Module> {
+        self.slot(name).map(|s| &s.module)
+    }
+
     /// Module names, in scan order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.slots.iter().map(|s| s.module.name.as_str())
     }
+}
+
+/// Checks `modules` as one load against images of `i_len` and `q_len`
+/// bytes; each module's port bindings, in order, or every problem.
+fn check(
+    i_len: usize,
+    q_len: usize,
+    modules: &[&Module],
+    table: &SignalTable,
+) -> Result<Vec<Vec<PortBinding>>, Vec<ConfigError>> {
+    let mut errs = Vec::new();
+    let mut ports = Vec::with_capacity(modules.len());
+    for (n, m) in modules.iter().enumerate() {
+        let name = || m.name.clone();
+        if modules[..n].iter().any(|p| p.name == m.name) {
+            errs.push(ConfigError::DuplicateName(name()));
+        }
+        let sizes = m.program.sizes();
+        for (area, w, image, compiled) in [('I', m.i, i_len, sizes.i), ('Q', m.q, q_len, sizes.q)] {
+            if !w.fits(image) {
+                errs.push(ConfigError::OutsideImage { module: name(), area });
+            } else if w.len != compiled {
+                errs.push(ConfigError::SizeMismatch { module: name(), area });
+            }
+        }
+        if m.period.is_zero() || m.period > MAX_PERIOD {
+            errs.push(ConfigError::BadPeriod(name()));
+        }
+        let (bound, bad) = bind(&m.program.ports(), table);
+        errs.extend(
+            bad.into_iter()
+                .map(|err| ConfigError::Port { module: name(), err }),
+        );
+        ports.push(bound);
+    }
+    let mut writers: Vec<Option<usize>> = vec![None; table.len()];
+    for (n, bound) in ports.iter().enumerate() {
+        for b in bound.iter().filter(|b| b.dir == PortDir::Output) {
+            match writers[b.signal] {
+                Some(prev) => errs.push(ConfigError::TwoWriters {
+                    signal: b.port.clone(),
+                    a: modules[prev].name.clone(),
+                    b: modules[n].name.clone(),
+                }),
+                None => writers[b.signal] = Some(n),
+            }
+        }
+    }
+    for (n, a) in modules.iter().enumerate() {
+        for b in &modules[n + 1..] {
+            if a.q.overlaps(b.q) {
+                errs.push(ConfigError::OutputOverlap {
+                    a: a.name.clone(),
+                    b: b.name.clone(),
+                });
+            }
+        }
+    }
+    if errs.is_empty() { Ok(ports) } else { Err(errs) }
 }
 
 /// Sets every `VAR_INPUT` of the module from its signal. False if any
