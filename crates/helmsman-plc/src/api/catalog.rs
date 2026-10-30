@@ -171,6 +171,23 @@ impl Devices {
         }
     }
 
+    /// A link that a reload started: state unknown until it reports. A
+    /// name already listed is left as it is.
+    pub fn add(&self, name: &str) {
+        let mut links = self.links.lock().unwrap_or_else(PoisonError::into_inner);
+        if !links.iter().any(|(n, _)| n == name) {
+            links.push((name.into(), None));
+        }
+    }
+
+    /// A link that a reload ended for good.
+    pub fn remove(&self, name: &str) {
+        self.links
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(n, _)| n != name);
+    }
+
     /// Every link: name, then up (`Some(Ok)`), down with why, or not yet known.
     #[must_use]
     pub fn list(&self) -> Vec<(String, LinkState)> {

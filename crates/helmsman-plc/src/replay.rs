@@ -21,6 +21,11 @@
 //!
 //! [`propose`] replays the running modules and the same set with one
 //! module replaced or added, and [`compare`]s the two per output signal.
+//! [`propose_change`] does the same for a whole change set that may bring
+//! its own I/O map and calendar: the proposed modules run against the
+//! proposed table ([`replay_onto`]), where a signal the recording does not
+//! have is missing, so the modules reading it are held, and says so
+//! ([`Coverage`]).
 
 use std::fmt;
 use std::time::Duration;
@@ -204,9 +209,44 @@ impl fmt::Display for ReplayError {
 
 impl std::error::Error for ReplayError {}
 
+/// What a replay onto another map than the recording's could not feed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Coverage {
+    /// Recorded signals that the map types or roles differently: not
+    /// replayed, so they are missing (inputs) or safe (box-driven
+    /// outputs) throughout.
+    pub changed: Vec<Mismatch>,
+    /// `(module, signal)`: a module reads a signal the recording does not
+    /// have (or has as something else). An input is missing for the whole
+    /// replay, so the module is held throughout; a box-driven output reads
+    /// as its safe value.
+    pub unrecorded: Vec<(String, String)>,
+}
+
+impl Coverage {
+    /// Whether the replay fed every module everything it reads.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.changed.is_empty() && self.unrecorded.is_empty()
+    }
+}
+
 /// Each recorded channel's table index and kind (`None`: not in the map
 /// any more, ignored), or the channels whose type or role changed.
 fn channel_slots(table: &SignalTable, rec: &Recording) -> Result<Vec<Option<(usize, Kind)>>, ReplayError> {
+    let (slots, mismatches) = channel_slots_lenient(table, rec);
+    if mismatches.is_empty() {
+        Ok(slots)
+    } else {
+        Err(ReplayError::Changed(mismatches))
+    }
+}
+
+/// [`channel_slots`], with the mismatched channels left out and listed.
+fn channel_slots_lenient(
+    table: &SignalTable,
+    rec: &Recording,
+) -> (Vec<Option<(usize, Kind)>>, Vec<Mismatch>) {
     let mut mismatches = Vec::new();
     let mut slots = Vec::with_capacity(rec.channels.len());
     for c in &rec.channels {
@@ -227,11 +267,7 @@ fn channel_slots(table: &SignalTable, rec: &Recording) -> Result<Vec<Option<(usi
             slots.push(None);
         }
     }
-    if mismatches.is_empty() {
-        Ok(slots)
-    } else {
-        Err(ReplayError::Changed(mismatches))
-    }
+    (slots, mismatches)
 }
 
 /// Cold-restarts each module and returns the output signals each drives,
@@ -242,6 +278,7 @@ fn check_modules(
     modules: &mut [Module],
     slots: &[Option<(usize, Kind)>],
     rec: &Recording,
+    mut unrecorded: Option<&mut Vec<(String, String)>>,
 ) -> Result<Vec<(String, usize)>, ReplayError> {
     let recorded = |i: usize| slots.iter().flatten().any(|(j, _)| *j == i);
     let mut drives = Vec::new();
@@ -258,10 +295,11 @@ fn check_modules(
             };
             match p.dir {
                 PortDir::Input if kind_of(table, i).is_some() && !recorded(i) => {
-                    return Err(ReplayError::NotRecorded {
-                        module: m.name.clone(),
-                        signal: table.name(i).unwrap_or_default().into(),
-                    });
+                    let (module, signal) = (m.name.clone(), table.name(i).unwrap_or_default().to_string());
+                    match unrecorded.as_deref_mut() {
+                        Some(list) => list.push((module, signal)),
+                        None => return Err(ReplayError::NotRecorded { module, signal }),
+                    }
                 }
                 PortDir::Output => drives.push((m.name.clone(), i)),
                 PortDir::Input => {}
@@ -287,11 +325,48 @@ pub fn replay(
     table: &SignalTable,
     i_len: usize,
     q_len: usize,
-    mut modules: Vec<Module>,
+    modules: Vec<Module>,
     rec: &Recording,
 ) -> Result<Timeline, ReplayError> {
     let slots = channel_slots(table, rec)?;
-    let drives = check_modules(table, &mut modules, &slots, rec)?;
+    run(table, i_len, q_len, modules, rec, &slots, None)
+}
+
+/// [`replay`] against `table` built from another I/O map or calendar than
+/// the one `rec` was recorded under (a proposal's): recorded signals the
+/// table types or roles differently are not replayed, and a module that
+/// reads a signal the recording lacks is not refused but runs with it
+/// missing (held throughout) or, for a box-driven output, safe. What was
+/// left out is the [`Coverage`].
+///
+/// # Errors
+/// As [`replay`], but never [`ReplayError::Changed`] or
+/// [`ReplayError::NotRecorded`].
+pub fn replay_onto(
+    table: &SignalTable,
+    i_len: usize,
+    q_len: usize,
+    modules: Vec<Module>,
+    rec: &Recording,
+) -> Result<(Timeline, Coverage), ReplayError> {
+    let (slots, changed) = channel_slots_lenient(table, rec);
+    let mut unrecorded = Vec::new();
+    let tl = run(table, i_len, q_len, modules, rec, &slots, Some(&mut unrecorded))?;
+    unrecorded.sort();
+    unrecorded.dedup();
+    Ok((tl, Coverage { changed, unrecorded }))
+}
+
+fn run(
+    table: &SignalTable,
+    i_len: usize,
+    q_len: usize,
+    mut modules: Vec<Module>,
+    rec: &Recording,
+    slots: &[Option<(usize, Kind)>],
+    unrecorded: Option<&mut Vec<(String, String)>>,
+) -> Result<Timeline, ReplayError> {
+    let drives = check_modules(table, &mut modules, slots, rec, unrecorded)?;
     let names: Vec<String> = modules.iter().map(|m| m.name.clone()).collect();
     let mut t = table.clone();
     t.reset();
@@ -489,4 +564,34 @@ pub fn propose(
         proposed,
         diff,
     })
+}
+
+/// Replays `running` against `table` (what runs: its map and calendar)
+/// and `target` against `target_table` (a change set's own map and
+/// calendar, which may be `table` itself) over the same recording, and
+/// compares them. The current side is strict ([`replay`]); the proposed
+/// side is [`replay_onto`], and its [`Coverage`] says what it could not
+/// feed.
+///
+/// # Errors
+/// Either replay's [`ReplayError`], the current one's first.
+pub fn propose_change(
+    table: &SignalTable,
+    running: Vec<Module>,
+    target_table: &SignalTable,
+    target: Vec<Module>,
+    (i_len, q_len): (usize, usize),
+    rec: &Recording,
+) -> Result<(Proposal, Coverage), ReplayError> {
+    let current = replay(table, i_len, q_len, running, rec)?;
+    let (proposed, coverage) = replay_onto(target_table, i_len, q_len, target, rec)?;
+    let diff = compare(&current, &proposed);
+    Ok((
+        Proposal {
+            current,
+            proposed,
+            diff,
+        },
+        coverage,
+    ))
 }

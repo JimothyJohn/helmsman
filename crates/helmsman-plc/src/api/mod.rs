@@ -163,6 +163,9 @@ struct Ctx {
     running: Mutex<Option<ChangeSet>>,
     approval: Option<Approval>,
     replays: Replays,
+    /// The table and recording the box runs, for replays; replaced by a
+    /// reload. `None` without an approval path.
+    shape: Mutex<Option<approve::Shape>>,
     /// Held for the whole of an apply or rollback.
     applying: Mutex<()>,
     /// Per module name: the newest traced scan, rendered, and its scan
@@ -189,6 +192,31 @@ impl Ctx {
         *self.running.lock().unwrap_or_else(PoisonError::into_inner) = Some(cs);
         *self.catalog.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(catalog);
         self.traces.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+
+    fn shape(&self) -> approve::Shape {
+        self.shape
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| approve::Shape {
+                table: crate::SignalTable::default(),
+                record: None,
+            })
+    }
+
+    fn set_shape(&self, shape: approve::Shape) {
+        *self.shape.lock().unwrap_or_else(PoisonError::into_inner) = Some(shape);
+    }
+
+    /// A reload started and ended device links: the device list follows.
+    fn links_changed(&self, links: &crate::link::Finished) {
+        for name in &links.removed {
+            self.box_.devices.remove(name);
+        }
+        for name in &links.added {
+            self.box_.devices.add(name);
+        }
     }
 }
 
@@ -275,6 +303,10 @@ impl Api {
         let ctx = Arc::new(Ctx {
             catalog: RwLock::new(Arc::new(std::mem::take(&mut shared.catalog))),
             running: Mutex::new(shared.running.take()),
+            shape: Mutex::new(shared.approval.as_ref().map(|a| approve::Shape {
+                table: a.plant.table.clone(),
+                record: a.plant.record.clone(),
+            })),
             approval: shared.approval.take(),
             replays: Replays::new(1000),
             applying: Mutex::new(()),

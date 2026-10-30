@@ -529,6 +529,7 @@ pub struct Recorder {
     observed: bool,
     last: Duration,
     stats: RecordStats,
+    cfg: RecordConfig,
     shared: Arc<Shared>,
 }
 
@@ -560,6 +561,7 @@ impl Recorder {
             observed: false,
             last: Duration::ZERO,
             stats: RecordStats::default(),
+            cfg,
             shared: Arc::new(Shared {
                 channels,
                 wall_ms,
@@ -574,6 +576,15 @@ impl Recorder {
                 }),
             }),
         }
+    }
+
+    /// A new recorder, with this one's bounds and wall clock, of `table`:
+    /// what a reload of the I/O map or calendar starts recording with.
+    /// The recording starts again (its channels are the new table's), at
+    /// the next observation; readers need the new [`Recorder::tap`].
+    #[must_use]
+    pub fn rebuilt(&self, table: &SignalTable) -> Self {
+        Self::new(table, self.cfg, self.shared.wall_ms)
     }
 
     /// Bytes reserved for change events: never more than

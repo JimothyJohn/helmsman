@@ -396,6 +396,66 @@ impl Runtime {
                 table.make_safe(b.signal);
             }
         }
+        self.carry(modules, ports);
+        Ok(())
+    }
+
+    /// Replaces the whole module set with `modules`, the same way as
+    /// [`Runtime::reconfigure`], onto `table`: a *different* signal table
+    /// than the one the runtime ran against (a reloaded I/O map or
+    /// calendar), already carried from it ([`SignalTable::carry_from`]).
+    /// Checked like a fresh load against `table`; a refused set changes
+    /// nothing, neither here nor in `table`.
+    ///
+    /// No glitch, as for `reconfigure`: a signal the table carried keeps
+    /// its command until its module's next scan. What no healthy module
+    /// drives is safe at once, by `table`'s safe values: outputs no module
+    /// of the new set drives (and the box does not claim), module-output
+    /// signals no module publishes, and the outputs of a kept module that
+    /// was held or faulted (it restarts Running, but its outputs were safe
+    /// and a reload may have changed what safe is).
+    ///
+    /// # Errors
+    /// Every problem the new set would have in a fresh load on `table`.
+    pub fn rebind(&mut self, modules: Vec<Module>, table: &mut SignalTable) -> Result<(), Vec<ConfigError>> {
+        let ports = check(
+            self.i_len,
+            self.outputs.len(),
+            &modules.iter().collect::<Vec<_>>(),
+            table,
+        )?;
+        for (n, b) in self.outputs.iter_mut().enumerate() {
+            if !modules.iter().any(|m| m.q.contains(n)) {
+                *b = 0;
+            }
+        }
+        let driven: Vec<usize> = ports
+            .iter()
+            .flatten()
+            .filter(|p| p.dir == PortDir::Output)
+            .map(|p| p.signal)
+            .collect();
+        for i in table.undriven(&driven) {
+            table.make_safe(i);
+        }
+        for (m, bound) in modules.iter().zip(&ports) {
+            let stopped = self
+                .slots
+                .iter()
+                .any(|s| s.module.name == m.name && s.status != Status::Running);
+            if stopped {
+                for b in bound.iter().filter(|b| b.dir == PortDir::Output) {
+                    table.make_safe(b.signal);
+                }
+            }
+        }
+        self.carry(modules, ports);
+        Ok(())
+    }
+
+    /// The new slots for `modules` (bound as `ports`), carrying each kept
+    /// module's state as [`Runtime::reconfigure`] says.
+    fn carry(&mut self, modules: Vec<Module>, ports: Vec<Vec<PortBinding>>) {
         let mut old: Vec<Option<Slot>> = std::mem::take(&mut self.slots).into_iter().map(Some).collect();
         let now = self.last.unwrap_or(Duration::ZERO);
         for (mut module, ports) in modules.into_iter().zip(ports) {
@@ -444,7 +504,6 @@ impl Runtime {
             };
             self.slots.push(slot);
         }
-        Ok(())
     }
 
     /// Runs every running module whose deadline is at or before `now`, in

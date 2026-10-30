@@ -12,7 +12,6 @@ use std::io::BufRead as _;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -21,12 +20,13 @@ use helmsman_adapter::device::lock_ref;
 use helmsman_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
 use helmsman_iec::{ImageSizes, compile, compile_plcopen, plcopen};
 use helmsman_io::local::Channels;
+use helmsman_plc::api::swap::Scene;
 use helmsman_plc::api::{
     self, Api, Approval, Catalog, Devices, Live, MemAudit, MemProposals, ModuleInfo, Plant, Publisher,
     Swapper,
 };
 use helmsman_plc::calendar::{self, Source};
-use helmsman_plc::link::{Link, links, spawn};
+use helmsman_plc::link::{LinkSet, Plan};
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::policy::pin::{self, Gate, Pins};
 use helmsman_plc::policy::{Policy, Role};
@@ -401,20 +401,18 @@ fn emit_st(o: &Opts) -> Result<(), String> {
     Ok(())
 }
 
-/// What the I/O map and calendar load into: the signal table, the device
-/// links (not yet started), whether any signal is on the box's own
-/// channels, the map itself, and the calendar.
+/// What the I/O map and calendar load into: the signal table, whether any
+/// signal is on the box's own channels, the map itself, and the calendar.
 struct Signals {
     table: SignalTable,
-    links: Vec<Link>,
     uses_box: bool,
     map: Option<helmsman_io::IoMap>,
     calendar: Option<Source>,
 }
 
-/// The I/O map's signal table and its links, not yet started, whether
-/// any signal is on the box's own channels, and the map.
-fn load_io((path, src): &Text) -> Result<(SignalTable, Vec<Link>, bool, helmsman_io::IoMap), String> {
+/// The I/O map's signal table, whether any signal is on the box's own
+/// channels, and the map.
+fn load_io((path, src): &Text) -> Result<(SignalTable, bool, helmsman_io::IoMap), String> {
     let file = path.display();
     let parsed = helmsman_io::text::parse(src).map_err(|errs| {
         let lines: Vec<String> = errs.iter().map(|(n, e)| format!("\n  {file}:{n}: {e}")).collect();
@@ -429,8 +427,7 @@ fn load_io((path, src): &Text) -> Result<(SignalTable, Vec<Link>, bool, helmsman
         .signals
         .iter()
         .any(|s| matches!(s.binding, helmsman_io::Binding::Local { .. }));
-    let links = links(&parsed.map, helmsman_io::open, Box::new(Channels::new()))?;
-    Ok((table, links, uses_box, parsed.map))
+    Ok((table, uses_box, parsed.map))
 }
 
 /// The calendar file, bound to `table`.
@@ -448,12 +445,12 @@ fn load_calendar((path, src): &Text, table: &mut SignalTable) -> Result<Source, 
 
 /// [`load_io`] (or no signals), with the calendar's added.
 fn load_signals(c: &Content) -> Result<Signals, String> {
-    let (mut table, links, uses_box, map) = match &c.io_map {
+    let (mut table, uses_box, map) = match &c.io_map {
         Some(text) => {
-            let (table, links, uses_box, map) = load_io(text)?;
-            (table, links, uses_box, Some(map))
+            let (table, uses_box, map) = load_io(text)?;
+            (table, uses_box, Some(map))
         }
-        None => (SignalTable::default(), Vec::new(), false, None),
+        None => (SignalTable::default(), false, None),
     };
     let calendar = c
         .calendar
@@ -462,7 +459,6 @@ fn load_signals(c: &Content) -> Result<Signals, String> {
         .transpose()?;
     Ok(Signals {
         table,
-        links,
         uses_box,
         map,
         calendar,
@@ -558,20 +554,29 @@ fn start_sinks(o: &Opts, table: &SignalTable) -> Result<Option<Sinks>, String> {
     })
 }
 
-/// Runs each link on its own thread for the life of the process,
-/// reporting up/down to the journal and to `devices`.
-fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>, devices: &Arc<Devices>) {
-    let stop = Arc::new(AtomicBool::new(false));
-    for link in links {
-        let devices = Arc::clone(devices);
-        spawn(link, Arc::clone(table), Arc::clone(&stop), move |name, err| {
+/// The device links of `map`, built (drivers opened) but not started:
+/// each will run on its own thread, reporting up/down to the journal and
+/// to `devices`. A reload changes them ([`LinkSet`]).
+fn plan_io(
+    map: Option<&helmsman_io::IoMap>,
+    table: &Arc<Mutex<SignalTable>>,
+    devices: &Arc<Devices>,
+) -> Result<(LinkSet, Plan), String> {
+    let devices = Arc::clone(devices);
+    let set = LinkSet::new(
+        Arc::clone(table),
+        Arc::new(helmsman_io::open),
+        Arc::new(|| Box::new(Channels::new())),
+        Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
             match err {
                 None => eprintln!("helmsman-plc: device {name} up"),
                 Some(e) => eprintln!("helmsman-plc: device {name} down: {e}"),
             }
             devices.set(name, err.map(ToString::to_string));
-        });
-    }
+        }),
+    );
+    let plan = set.plan(&map.cloned().unwrap_or_default())?;
+    Ok((set, plan))
 }
 
 /// One module, for the startup banner.
@@ -817,7 +822,6 @@ fn run(o: &Opts) -> Result<(), String> {
         .unzip();
     let Signals {
         table,
-        links: io_links,
         uses_box,
         map,
         calendar: cal,
@@ -836,12 +840,18 @@ fn run(o: &Opts) -> Result<(), String> {
     let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
-    let devices = Arc::new(Devices::new(io_links.iter().map(|l| l.name.clone())));
+    let devices = Arc::new(Devices::new(Vec::new()));
+    let (link_set, io_plan) = plan_io(map.as_ref(), &table, &devices)?;
+    for name in io_plan.starts() {
+        devices.add(name);
+    }
+    let link_set = Arc::new(Mutex::new(link_set));
     let live = Arc::new(Live::default());
     let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
     announce(&adapter, &specs, &content, uses_box, cal.as_ref());
-    let mut recorder = recorder(&table);
+    let recorder = recorder(&table);
     let (swap, swapper) = api::swap::channel(Duration::from_secs(5));
+    let swap = swap.with_links(Arc::clone(&link_set));
     let approval = access.map(|(policy, pins)| Approval {
         gate: Gate::new(pins, policy.lockout, Arc::new(Instant::now)),
         policy,
@@ -873,15 +883,24 @@ fn run(o: &Opts) -> Result<(), String> {
     let mut publisher = server
         .as_ref()
         .map(|_| Publisher::new(Arc::clone(&live), api::PUBLISH_EVERY));
-    let cap = [
-        cal.as_ref().map(|_| CALENDAR_TICK),
-        publisher.as_ref().map(|p| p.every),
-    ]
-    .into_iter()
-    .flatten()
-    .min();
+    let every = publisher.as_ref().map(|p| p.every);
+    let cap = |cal: Option<&Source>| {
+        [cal.map(|_| CALENDAR_TICK), every]
+            .into_iter()
+            .flatten()
+            .min()
+    };
     let mut said = false;
-    start_io(io_links, &table, &devices);
+    {
+        let mut set = link_set.lock().unwrap_or_else(PoisonError::into_inner);
+        let stopped = set.stop(&io_plan);
+        set.finish(io_plan, stopped);
+    }
+    let mut scene = Scene {
+        calendar: cal,
+        recorder: Some(recorder),
+        wall: None,
+    };
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
     let mut names: Vec<String> = rt.names().map(str::to_string).collect();
@@ -896,21 +915,34 @@ fn run(o: &Opts) -> Result<(), String> {
         }
         let (held, faults) = {
             let mut t = table.lock().unwrap_or_else(PoisonError::into_inner);
-            if let Some(sw) = &swapper
-                && sw.serve(&mut rt, &mut t)
-            {
-                names = rt.names().map(str::to_string).collect();
-                eprintln!(
-                    "helmsman-plc: approved change applied; modules now: {}",
-                    names.join(", ")
-                );
+            scene.wall = wall();
+            if let Some(sw) = &swapper {
+                let served = sw.serve_scene(&mut rt, &mut t, Some(&mut scene));
+                if served.modules {
+                    names = rt.names().map(str::to_string).collect();
+                    eprintln!(
+                        "helmsman-plc: approved change applied; modules now: {}",
+                        names.join(", ")
+                    );
+                }
+                if served.reloaded {
+                    eprintln!(
+                        "helmsman-plc: I/O map and calendar reloaded: {} signal(s)",
+                        t.len()
+                    );
+                    if let Some(c) = &scene.calendar {
+                        report_calendar(c);
+                    }
+                }
             }
             let held: Vec<bool> = names.iter().map(|n| rt.status(n) == Some(Status::Held)).collect();
-            if let Some(c) = &cal {
-                c.update(wall(), &mut t);
+            if let Some(c) = &scene.calendar {
+                c.update(scene.wall, &mut t);
             }
             let now = start.elapsed();
-            recorder.observe(now, &t);
+            if let Some(r) = &mut scene.recorder {
+                r.observe(now, &t);
+            }
             let faults = rt.tick_with(now, &inputs, &mut t);
             if let Some(p) = &mut publisher {
                 p.publish(now, &rt, &t);
@@ -922,7 +954,7 @@ fn run(o: &Opts) -> Result<(), String> {
         };
         report_changes(&specs, &names, &rt, &held, faults);
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
-        sleep_to(start, rt.next_deadline(), cap, &mut said);
+        sleep_to(start, rt.next_deadline(), cap(scene.calendar.as_ref()), &mut said);
     }
 }
 

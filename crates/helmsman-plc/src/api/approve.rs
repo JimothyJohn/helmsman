@@ -27,6 +27,7 @@
 //! ids; an apply that acts writes an entry before (so a full log stops it)
 //! and one after.
 
+use std::fmt::Write as _;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
@@ -34,10 +35,11 @@ use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
 use super::store::Stored;
-use super::swap::{Plant, SwapError, SwapHandle, compile_set};
+use super::swap::{Plant, Reloaded, SwapHandle, compile_set};
 use super::{Ctx, Note, Request, Response, audit_full, record, wall};
 use crate::policy::pin::{Gate, Refused};
 use crate::policy::{Policy, Role, Tier, classify};
+use crate::layout::Layout;
 use crate::replay;
 use crate::store::{ChangeSet, Meta, SnapshotId};
 
@@ -226,7 +228,8 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
     };
     let base = running.id();
     let note = Note::target(content, Some(base));
-    let Some(tap) = &appr.plant.record else {
+    let shape = ctx.shape();
+    let Some(tap) = &shape.record else {
         return refuse(
             ctx,
             req,
@@ -235,6 +238,19 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
             &format!("{label}: no recording"),
             note,
         );
+    };
+    let layout = match reload_layout(&running, &target) {
+        Ok(l) => l,
+        Err(problems) => {
+            return refuse(
+                ctx,
+                req,
+                422,
+                &json!({ "error": "the I/O map or calendar does not load", "problems": problems, "changed": false }),
+                &format!("{label}: the I/O map or calendar does not load"),
+                note,
+            );
+        }
     };
     let defaults = &appr.plant.defaults;
     let (cur, new) = match (compile_set(&running, defaults), compile_set(&target, defaults)) {
@@ -252,8 +268,17 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
     };
     let rec = tap.snapshot();
     let plant = &appr.plant;
-    let run = |m| replay::replay(&plant.table, plant.i_len, plant.q_len, m, &rec);
-    let (current, proposed) = match run(cur).and_then(|c| run(new).map(|n| (c, n))) {
+    let replayed = match &layout {
+        // What runs, against what runs, and the target against its own
+        // map and calendar: a signal the recording lacks is missing there.
+        Some(l) => replay::propose_change(&shape.table, cur, &l.table, new, (plant.i_len, plant.q_len), &rec)
+            .map(|(p, cov)| (p.current, p.proposed, Some(cov))),
+        None => {
+            let run = |m| replay::replay(&shape.table, plant.i_len, plant.q_len, m, &rec);
+            run(cur).and_then(|c| run(new).map(|n| (c, n, None)))
+        }
+    };
+    let (current, proposed, coverage) = match replayed {
         Ok(x) => x,
         Err(e) => {
             return refuse(
@@ -287,6 +312,34 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
         .map(|(at, m, f)| json!({ "at_ms": ms(*at), "module": m, "fault": super::render::fault(*f) }))
         .collect();
     let window = rec.end.saturating_sub(rec.start);
+    let reload = coverage.map(|cov| {
+        let unrecorded: Vec<Json> = cov
+            .unrecorded
+            .iter()
+            .map(|(m, s)| json!({ "module": m, "signal": s }))
+            .collect();
+        let retyped: Vec<&str> = cov.changed.iter().map(|m| m.signal.as_str()).collect();
+        let held: Vec<&str> = {
+            let mut v: Vec<&str> = cov.unrecorded.iter().map(|(m, _)| m.as_str()).collect();
+            v.dedup();
+            v
+        };
+        json!({
+            "io_map_changed": running.io_map != target.io_map,
+            "calendar_changed": running.calendar != target.calendar,
+            "unrecorded": unrecorded,
+            "retyped": retyped,
+            "complete": cov.is_complete(),
+            "note": if cov.is_complete() {
+                "the proposed modules ran against the proposed I/O map and calendar; the recording fed every signal they read".to_string()
+            } else {
+                format!(
+                    "the proposed modules ran against the proposed I/O map and calendar; signals the recording does not have were missing (or, for box-driven outputs, safe), so {} held wherever they read one",
+                    held.join(", ")
+                )
+            },
+        })
+    });
     let ev = Evidence {
         id: 0,
         base,
@@ -301,6 +354,7 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
             "ticks": proposed.ticks,
             "signals": signals,
             "faults": faults,
+            "reload": reload,
         }),
     };
     let Some(ev) = ctx.replays.push(ev) else {
@@ -476,12 +530,6 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             );
         }
     }
-    if running.io_map != target.io_map || running.calendar != target.calendar {
-        return refused(
-            409,
-            "changing the I/O map or the calendar on a running box is not built (card map-reload); nothing was changed",
-        );
-    }
     match appr.gate.check(role, &body.pin) {
         Ok(()) => {}
         Err(Refused::Wrong) => return refused(403, "wrong PIN"),
@@ -517,6 +565,37 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             );
         }
     };
+    let layout = match reload_layout(&running, &target) {
+        Ok(l) => l,
+        Err(problems) => {
+            return refuse(
+                ctx,
+                req,
+                422,
+                &json!({ "error": "the I/O map or calendar does not load", "problems": problems, "changed": false }),
+                &format!(
+                    "{label} failed ({tier}, {role}): the I/O map or calendar does not load; nothing was changed"
+                ),
+                note,
+            );
+        }
+    };
+    if let Some(l) = &layout {
+        let fits = crate::Runtime::with_signals(appr.plant.i_len, appr.plant.q_len, new.clone(), &l.table);
+        if let Err(errs) = fits {
+            let problems: Vec<String> = errs.iter().map(ToString::to_string).collect();
+            return refuse(
+                ctx,
+                req,
+                409,
+                &json!({ "error": "the modules do not fit the new I/O map or calendar", "problems": problems, "tier": tier.as_str(), "changed": false }),
+                &format!(
+                    "{label} failed ({tier}, {role}): the modules do not fit the new I/O map or calendar; nothing was changed"
+                ),
+                note,
+            );
+        }
+    }
     if record(
         ctx,
         req,
@@ -528,13 +607,17 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     {
         return audit_full();
     }
-    let catalog = match appr.swap.run(new, target.clone()) {
-        Ok(c) => c,
+    let landed = match layout {
+        None => appr.swap.run(new, target.clone()).map(|c| (c, None)),
+        Some(l) => appr.swap.reload(new, target.clone(), l).map(|r| {
+            let Reloaded { swapped, links } = r;
+            (swapped.catalog, Some((swapped.table, swapped.record, links)))
+        }),
+    };
+    let (catalog, reloaded) = match landed {
+        Ok(x) => x,
         Err(e) => {
-            let why = match e {
-                SwapError::Refused(errs) => format!("the running box refused it: {}", errs.join("; ")),
-                SwapError::NotTaken => "the scan thread did not take it in time".into(),
-            };
+            let why = e.to_string();
             let _ = record(
                 ctx,
                 req,
@@ -548,6 +631,9 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             );
         }
     };
+    if let Some((_, _, links)) = &reloaded {
+        ctx.links_changed(links);
+    }
     let m = meta(proposal.as_ref(), role);
     let committed = {
         let store = ctx.box_.snapshots.as_ref().expect("checked above");
@@ -558,11 +644,10 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         }
     };
     if let Err(e) = committed {
-        let back = appr.swap.run(old, running.clone());
-        let undone = if back.is_ok() {
-            "the running box was swapped back"
-        } else {
-            "SWAPPING BACK FAILED: the box runs the new modules uncommitted"
+        let back = swap_back(appr, ctx, old, &running, reloaded.is_some());
+        let undone = match &back {
+            Ok(()) => "the running box was swapped back".to_string(),
+            Err(e) => format!("SWAPPING BACK FAILED ({e}): the box runs the new change set uncommitted"),
         };
         let why = format!("the snapshot store refused the commit ({e}); {undone}");
         let _ = record(
@@ -575,13 +660,30 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         return Response::json(500, &json!({ "error": why, "changed": back.is_err() }));
     }
     ctx.set_running(target, catalog);
+    let reload = reloaded.map(|(table, record, links)| {
+        if let Some(table) = table {
+            ctx.set_shape(Shape { table, record });
+        }
+        json!({
+            "links_removed": links.removed,
+            "links_added": links.added,
+            "safed": links.safed,
+            "notes": links.notes,
+        })
+    });
     if let Some(mut p) = proposal {
         p.json["status"] = json!("applied");
         p.json["applied_by"] = json!(role.as_str());
         ctx.box_.proposals.update(p);
     }
     let undo = format!("/api/snapshots/{base}/rollback");
-    let detail = format!("{label}: applied ({tier}) by {role}, {base} -> {content}");
+    let mut detail = format!("{label}: applied ({tier}) by {role}, {base} -> {content}");
+    if let Some(r) = &reload {
+        let _ = write!(detail, "; I/O map or calendar reloaded");
+        for n in r["notes"].as_array().into_iter().flatten().filter_map(Json::as_str) {
+            let _ = write!(detail, "; {n}");
+        }
+    }
     let _ = record(ctx, req, 200, &detail, note);
     Response::json(
         200,
@@ -593,8 +695,45 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             "snapshot": content.to_string(),
             "previous": base.to_string(),
             "undo": undo,
+            "reload": reload,
         }),
     )
+}
+
+/// The commit failed after the box took the change: puts `running` back
+/// (modules `old`, compiled from it), reloading its map and calendar too
+/// if the change had reloaded them.
+fn swap_back(appr: &Approval, ctx: &Ctx, old: Vec<crate::Module>, running: &ChangeSet, reloaded: bool) -> Result<(), String> {
+    if !reloaded {
+        return appr.swap.run(old, running.clone()).map(drop).map_err(|e| e.to_string());
+    }
+    let layout = Layout::build(running.io_map.as_deref(), running.calendar.as_deref()).map_err(|e| e.join("; "))?;
+    let r = appr
+        .swap
+        .reload(old, running.clone(), layout)
+        .map_err(|e| e.to_string())?;
+    ctx.links_changed(&r.links);
+    Ok(())
+}
+
+/// The table and calendar a step from `running` to `target` loads, if it
+/// changes either: `Ok(None)` when both are the running ones.
+///
+/// # Errors
+/// What does not load, file by file.
+fn reload_layout(running: &ChangeSet, target: &ChangeSet) -> Result<Option<Layout>, Vec<String>> {
+    if running.io_map == target.io_map && running.calendar == target.calendar {
+        return Ok(None);
+    }
+    Layout::build(target.io_map.as_deref(), target.calendar.as_deref()).map(Some)
+}
+
+/// The table and recording the box runs now, which replays use: the
+/// [`super::Plant`]'s at start, replaced by each reload.
+#[derive(Debug, Clone)]
+pub struct Shape {
+    pub table: crate::SignalTable,
+    pub record: Option<crate::record::RecordTap>,
 }
 
 /// The tier a proposal's change set would be, against what it was drafted
