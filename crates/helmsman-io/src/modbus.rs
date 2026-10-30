@@ -121,7 +121,7 @@ impl Format {
             let (hi, lo) = ((x >> 16) as u16, (x & 0xFFFF) as u16);
             if swapped { vec![lo, hi] } else { vec![hi, lo] }
         };
-        let range = |n: i64, what: &str| Error::Protocol(format!("{n} does not fit {what}"));
+        let range = |n: i64, what: &str| Error::Point(format!("{n} does not fit {what}"));
         match (self, v) {
             (Self::Bit, Value::Bool(b)) => Ok(vec![u16::from(b)]),
             (Self::U16, Value::Int(n)) => u16::try_from(n).map(|x| vec![x]).map_err(|_| range(n, "u16")),

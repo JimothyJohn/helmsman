@@ -24,6 +24,7 @@ use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::record::{RecordConfig, Recorder};
+use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::spec::{Defaults, Spec};
 use helmsman_plc::store::{Kind, Store};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
@@ -41,6 +42,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        helmsman_plc::calendar::text): adds the signals in_shift,
                        on_break, planned_down, working, shift_id, shift_minute,
                        shift_left, and drives the outputs its `drive` lines name
+  --sinks FILE         webhook sinks and the signals they publish (see
+                       helmsman_plc::sink); needs --sink-dir
+  --sink-dir DIR       where each sink keeps its on-disk queue (state, not config)
   --store DIR          run the head snapshot of the store in DIR (see
                        helmsman_plc::store): its modules, I/O map and calendar,
                        instead of the files above
@@ -68,6 +72,8 @@ struct Opts {
     module_dirs: Vec<PathBuf>,
     io_map: Option<PathBuf>,
     calendar: Option<PathBuf>,
+    sinks: Option<PathBuf>,
+    sink_dir: Option<PathBuf>,
     store: Option<PathBuf>,
     emit_st: bool,
     scan: Duration,
@@ -83,6 +89,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         module_dirs: Vec::new(),
         io_map: None,
         calendar: None,
+        sinks: None,
+        sink_dir: None,
         store: None,
         emit_st: false,
         scan: Duration::from_millis(10),
@@ -138,6 +146,16 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     return Err("one --calendar only".into());
                 }
             }
+            "--sinks" => {
+                if o.sinks.replace(PathBuf::from(v)).is_some() {
+                    return Err("one --sinks only".into());
+                }
+            }
+            "--sink-dir" => {
+                if o.sink_dir.replace(PathBuf::from(v)).is_some() {
+                    return Err("one --sink-dir only".into());
+                }
+            }
             "--store" => {
                 if o.store.replace(PathBuf::from(v)).is_some() {
                     return Err("one --store only".into());
@@ -149,6 +167,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             other => return Err(format!("unknown flag {other}")),
         }
         i += 2;
+    }
+    if o.sinks.is_some() != o.sink_dir.is_some() {
+        return Err("--sinks and --sink-dir go together".into());
     }
     let from_files = !(o.programs.is_empty() && o.modules.is_empty() && o.module_dirs.is_empty());
     if o.store.is_some() && (from_files || o.io_map.is_some() || o.calendar.is_some() || o.emit_st) {
@@ -429,6 +450,35 @@ fn sleep_to(start: Instant, next: Option<Duration>, calendar: bool) {
     }
 }
 
+/// The sinks file's sinks, started, if there is one.
+fn start_sinks(o: &Opts, table: &SignalTable) -> Result<Option<Sinks>, String> {
+    let (Some(path), Some(dir)) = (&o.sinks, &o.sink_dir) else {
+        return Ok(None);
+    };
+    let file = path.display();
+    let src = fs::read_to_string(path).map_err(|e| format!("{file}: {e}"))?;
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let seed = (u64::from(nanos) << 32) ^ u64::from(std::process::id());
+    let log: sink::Log = Arc::new(|m: &str| eprintln!("helmsman-plc: {m}"));
+    let env = |k: &str| std::env::var(k).ok();
+    Sinks::start(
+        &src,
+        dir,
+        table,
+        &env,
+        &sink::config::read_header_file,
+        seed,
+        &log,
+    )
+    .map(Some)
+    .map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
+        format!("{file} is not a valid sinks file:{}", lines.concat())
+    })
+}
+
 /// Runs each link on its own thread for the life of the process.
 fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>) {
     let stop = Arc::new(AtomicBool::new(false));
@@ -445,24 +495,18 @@ fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>) {
     }
 }
 
-/// One line per module for the startup banner, joined with `; `.
-fn listing(specs: &[Spec]) -> String {
-    let listed: Vec<String> = specs
-        .iter()
-        .map(|s| {
-            format!(
-                "{} from {} every {} ms, %I {}+{}, %Q {}+{}",
-                s.name,
-                s.path.display(),
-                s.period.as_millis(),
-                s.i.start,
-                s.i.len,
-                s.q.start,
-                s.q.len
-            )
-        })
-        .collect();
-    listed.join("; ")
+/// One module, for the startup banner.
+fn describe(s: &Spec) -> String {
+    format!(
+        "{} from {} every {} ms, %I {}+{}, %Q {}+{}",
+        s.name,
+        s.path.display(),
+        s.period.as_millis(),
+        s.i.start,
+        s.i.len,
+        s.q.start,
+        s.q.len
+    )
 }
 
 fn run(o: &Opts) -> Result<(), String> {
@@ -488,13 +532,15 @@ fn run(o: &Opts) -> Result<(), String> {
         let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
         format!("modules do not fit together:{}", lines.concat())
     })?;
+    let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
     let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
+    let listed: Vec<String> = specs.iter().map(describe).collect();
     eprintln!(
         "helmsman-plc: CIP on {} (I/O {}), {} module(s): {}",
         adapter.encap_addr(),
         adapter.io_addr(),
         specs.len(),
-        listing(&specs)
+        listed.join("; ")
     );
     if let Some(origin) = &content.origin {
         eprintln!("helmsman-plc: {origin}");
@@ -529,7 +575,11 @@ fn run(o: &Opts) -> Result<(), String> {
             }
             let now = start.elapsed();
             recorder.observe(now, &t);
-            rt.tick_with(now, &inputs, &mut t)
+            let faults = rt.tick_with(now, &inputs, &mut t);
+            if let Some(s) = &mut sinks {
+                s.observe(&t, start.elapsed(), sink::wall_ms(SystemTime::now()));
+            }
+            faults
         };
         for (s, was) in specs.iter().zip(held) {
             match (was, rt.status(&s.name)) {

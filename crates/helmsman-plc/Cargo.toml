@@ -13,6 +13,8 @@ helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 sha2 = { version = "0.11.1", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"], optional = true }
+webpki-roots = { version = "1.0.11", optional = true }
 
 [dev-dependencies]
 # The box build itself never enables `unrestricted`; its tests play scanner.
@@ -21,3 +23,10 @@ proptest = "1.12"
 
 [lints]
 workspace = true
+
+[features]
+# https:// sinks (rustls with the ring provider, Mozilla roots compiled in).
+# On by default so the Pi build can post to a cloud receiver; build with
+# --no-default-features for an http-only box with no third-party crates.
+default = ["https"]
+https = ["dep:rustls", "dep:webpki-roots"]

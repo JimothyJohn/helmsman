@@ -10,6 +10,7 @@ pub mod record;
 pub mod replay;
 pub mod runtime;
 pub mod signals;
+pub mod sink;
 pub mod spec;
 pub mod store;
 pub mod tap;
