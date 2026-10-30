@@ -24,6 +24,7 @@ use helmsman_plc::api::{self, Api, Catalog, Devices, Live, MemAudit, MemProposal
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
 use helmsman_plc::manifest::ModuleDir;
+use helmsman_plc::record::{RecordConfig, Recorder};
 use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::spec::{Defaults, Spec};
 use helmsman_plc::store::{ChangeSet, Kind, Store};
@@ -439,6 +440,16 @@ fn wall() -> Option<i64> {
     i64::try_from(d.as_secs()).ok()
 }
 
+/// What the modules see, recorded for sim replay (the box API will serve
+/// its tap). Built after the calendar attaches, so its signals are in.
+fn recorder(table: &Mutex<SignalTable>) -> Recorder {
+    Recorder::new(
+        &table.lock().unwrap_or_else(PoisonError::into_inner),
+        RecordConfig::default(),
+        wall().and_then(|s| s.checked_mul(1000)),
+    )
+}
+
 /// How long the loop may sleep with a calendar to keep current.
 const CALENDAR_TICK: Duration = Duration::from_secs(1);
 
@@ -743,6 +754,7 @@ fn run(o: &Opts) -> Result<(), String> {
     start_io(io_links, &table, &devices);
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
+    let mut recorder = recorder(&table);
     let start = Instant::now();
     loop {
         {
@@ -762,6 +774,7 @@ fn run(o: &Opts) -> Result<(), String> {
                 c.update(wall(), &mut t);
             }
             let now = start.elapsed();
+            recorder.observe(now, &t);
             let faults = rt.tick_with(now, &inputs, &mut t);
             if let Some(p) = &mut publisher {
                 p.publish(now, &rt, &t);

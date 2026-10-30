@@ -290,6 +290,16 @@
   difficulty: low
   id: canvas-default-mode
 
+- [ ] **Sim replay: record at the scan's ticks, or at every link read?** The recorder (feat/sim-replay) samples the signal table just before each runtime tick, stamped with the tick's `now`: exactly what the running modules scanned against, one clock, nothing added to the device links, and replaying the running modules over a recording made from a deterministic run reproduces their outputs exactly (property-tested against the Modbus simulator). The cost: a change that came and went between two ticks is not recorded, so a *proposed* module scanning faster than every running one sees the data at the running modules' tick rate (at most 1 s apart with a calendar loaded). Recording at each link read instead would catch every polled value but needs the links and the scheduler on one clock and puts a handoff in every link thread. Defaults are 10 minutes and 4 MiB of changes (about 100 000); neither is on the command line yet. Reversible: the recording format and replay don't change either way.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: how faithful a replay is for a proposal faster than what runs today
+  options: tick-time sampling (recommended, built) | sample at every link read | tick-time, plus the box ticks at least every 10 ms while recording
+  est: 1d
+  difficulty: med
+  id: replay-granularity
+
 - [ ] **Box API on the LAN: keep reads open?** The box API (feat/box-api) answers `GET` without a token: signals, outputs, modules with their ST source, proposals, the audit log, snapshots. Mutations need the token. The default bind is 127.0.0.1:8080, so this only matters once you run it with `--api 0.0.0.0:8080` for the canvas on a tablet. Open reads mean anyone on the plant LAN can read every module's source and live values (no writes). The alternative is a second, read-only token (or the same one) for reads too, which the canvas would need to be given once per browser. I kept reads open per the brief (reversible: one check in `handle`).
   asked: 2026-10-30
   by: claude-agent
@@ -604,11 +614,12 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: box-api, relay-v0
   id: agent-loop
 
-- [ ] **Sim replay** — record a rolling window of signal values on the box (RAM ring buffer, not a historian) and replay a proposed module against it, showing when its outputs would have fired.
+- [x] **Sim replay** — record a rolling window of signal values on the box (RAM ring buffer, not a historian) and replay a proposed module against it, showing when its outputs would have fired.
   result: the evidence an engineer approves output changes on
   est: 3d
   difficulty: med
   depends: signal-model, multi-module
+  notes: built on feat/sim-replay: helmsman-plc `record` (Recorder, RecordTap, Recording + text format) and `replay` (replay, propose, compare → Timeline); the box API serves the tap and the proposal UI charts the Timeline
   id: sim-replay
 
 - [ ] **Approval policy + PIN roles + audit** — proposals carry a tier (param / logic / output-affecting); policy decides live vs preview vs PIN + sim. Operator/engineer/integrator PINs; every apply/rollback is logged with role and time (accounts later).
