@@ -95,6 +95,14 @@ pub fn parse_address(s: &str, sizes: ImageSizes) -> Result<Loc, String> {
         Some(c) if c.is_ascii_digit() => (1, &s[1..]),
         _ => return Err(format!("%{s}: expected a size X, B, W, D or L")),
     };
+    if rest.matches('.').count() > usize::from(bits == 1) {
+        return Err(format!(
+            "%{s}: multi-level addresses (as Beremiz extensions assign) are not supported; \
+             this runtime takes %{area}X<byte>.<bit> or %{area}{size}<n>",
+            area = char::from(b[0]),
+            size = if bits == 1 { 'W' } else { char::from(b[1]) },
+        ));
+    }
     let num = |t: &str| -> Result<usize, String> {
         if t.is_empty() || !t.bytes().all(|c| c.is_ascii_digit()) {
             return Err(format!("%{s}: malformed address"));
@@ -376,6 +384,9 @@ pub struct Checked {
     pub library: usize,
     /// Initial contents of the whole slot array.
     pub mem_init: Vec<Value>,
+    /// Located variables' initial values, written to the image at a cold
+    /// start.
+    pub loc_init: Vec<(Loc, Ty, Value)>,
 }
 
 /// Type of a synthesized expression: known, or a literal still free to take
@@ -451,6 +462,11 @@ struct Ck<'a> {
     pou_state: Vec<u8>,
     /// Calls made by each POU (functions and FB types), for the recursion check.
     calls: Vec<HashSet<usize>>,
+    /// Variables whose declaration failed, by POU: already reported, so
+    /// their uses are not reported again.
+    dropped: HashMap<usize, HashSet<String>>,
+    /// Initial values of located variables: (where, type, value).
+    loc_init: Vec<(Loc, Ty, Value)>,
     diags: Vec<Diagnostic>,
 }
 
@@ -464,6 +480,11 @@ struct Scope {
 impl<'a> Ck<'a> {
     fn err(&mut self, pos: Pos, msg: impl Into<String>) {
         self.diags.push(Diagnostic { pos, msg: msg.into() });
+    }
+
+    /// Whether `name` in POU `pou` failed to declare (and was reported).
+    fn was_dropped(&self, pou: usize, name: &str) -> bool {
+        self.dropped.get(&pou).is_some_and(|d| d.contains(name))
     }
 
     fn type_name(&self, t: Type) -> String {
@@ -557,10 +578,11 @@ impl<'a> Ck<'a> {
                     Some(Named::Type(t)) => Some(t),
                     Some(Named::Alias(id)) => self.resolve_alias(id, *pos),
                     None => {
-                        let hint = if n == "STRING" || n == "WSTRING" {
-                            " (STRING is not supported yet)"
-                        } else {
-                            ""
+                        let hint = match n.as_str() {
+                            "STRING" | "WSTRING" => " (STRING is not supported yet)".to_string(),
+                            "DATE" | "DT" | "TOD" | "DATE_AND_TIME" | "TIME_OF_DAY" | "LDATE" | "LDT"
+                            | "LTOD" | "LTIME" => format!(" ({n} is not supported yet)"),
+                            _ => String::new(),
                         };
                         self.err(*pos, format!("unknown type {n}{hint}"));
                         None
@@ -861,8 +883,8 @@ impl<'a> Ck<'a> {
                     Some("VAR_TEMP cannot be located")
                 } else if d.constant {
                     Some("a CONSTANT cannot be located")
-                } else if d.init.is_some() {
-                    Some("a located variable takes no initial value")
+                } else if d.init.is_some() && addr.starts_with('I') {
+                    Some("an input (%I) cannot take an initial value")
                 } else {
                     None
                 };
@@ -890,14 +912,34 @@ impl<'a> Ck<'a> {
                         );
                         ok = false;
                     }
-                    Ok(loc) => vars.push(VarInfo {
-                        name: d.name.clone(),
-                        ty,
-                        off: 0,
-                        section: d.section,
-                        constant: false,
-                        loc: Some(loc),
-                    }),
+                    Ok(loc) => {
+                        // Written to the image once, before the first scan.
+                        if let Some(i) = &d.init {
+                            let scope = Scope {
+                                pou: p,
+                                vars: vars
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(k, v)| (v.name.clone(), k))
+                                    .collect(),
+                                loops: 0,
+                            };
+                            self.pous[p].vars.clone_from(&vars);
+                            self.pous[p].init.clone_from(&init);
+                            match self.init_value(i, ty, Some(&scope)).as_deref() {
+                                Some(&[v]) => self.loc_init.push((loc, ety, v)),
+                                _ => ok = false,
+                            }
+                        }
+                        vars.push(VarInfo {
+                            name: d.name.clone(),
+                            ty,
+                            off: 0,
+                            section: d.section,
+                            constant: false,
+                            loc: Some(loc),
+                        });
+                    }
                     Err(m) => {
                         self.err(*apos, m);
                         ok = false;
@@ -946,6 +988,15 @@ impl<'a> Ck<'a> {
                 constant: d.constant,
                 loc: None,
             });
+        }
+        let dropped: HashSet<String> = src
+            .vars
+            .iter()
+            .filter(|d| !vars.iter().any(|v| v.name == d.name))
+            .map(|d| d.name.clone())
+            .collect();
+        if !dropped.is_empty() {
+            self.dropped.insert(p, dropped);
         }
         let pc = &mut self.pous[p];
         pc.size = init.len();
@@ -1062,6 +1113,9 @@ impl<'a> Ck<'a> {
         match &e.kind {
             ExprKind::Var(name) => {
                 let Some(&k) = sc.vars.get(name) else {
+                    if self.was_dropped(sc.pou, name) {
+                        return None;
+                    }
                     let hint = if self.pou_index.contains_key(name) {
                         " (a function is called with parentheses)"
                     } else {
@@ -1399,6 +1453,8 @@ impl<'a> Ck<'a> {
                 }
                 Value::Int(v)
             }
+            // boolean_literal: [BOOL#] (1 | 0) | TRUE | FALSE.
+            (T::IntLit(v @ (0 | 1)), Ty::Bool) => Value::Bool(v == 1),
             (T::IntLit(v), t) if t.is_real() => Value::Real(round_real(t, v as f64)),
             (T::RealLit(v), t) if t.is_real() => {
                 let r = round_real(t, v);
@@ -1749,7 +1805,9 @@ impl<'a> Ck<'a> {
             return self.synth(&args[0].value, want, sc);
         }
         let Some(&(_, b)) = BUILTINS.iter().find(|(n, _)| *n == name) else {
-            self.err(pos, format!("unknown function {name}"));
+            if !self.was_dropped(sc.pou, name) {
+                self.err(pos, format!("unknown function {name}"));
+            }
             return None;
         };
         if !self.positional(name, args, pos) {
@@ -2217,7 +2275,9 @@ impl<'a> Ck<'a> {
                 body,
             } => {
                 let Some(&k) = sc.vars.get(var) else {
-                    self.err(s.pos, format!("undeclared variable {var}"));
+                    if !self.was_dropped(sc.pou, var) {
+                        self.err(s.pos, format!("undeclared variable {var}"));
+                    }
                     return None;
                 };
                 let v = self.pous[sc.pou].vars[k].clone();
@@ -2432,6 +2492,8 @@ pub fn check(
         agg_state: Vec::new(),
         pou_state: Vec::new(),
         calls: Vec::new(),
+        dropped: HashMap::new(),
+        loc_init: Vec::new(),
         diags: Vec::new(),
     };
     ck.register_types(&library.types);
@@ -2530,6 +2592,7 @@ pub fn check(
             program,
             library: ck.srcs.iter().take_while(|s| s.system).count(),
             mem_init,
+            loc_init: ck.loc_init,
         }),
         _ => {
             ck.diags.sort_by_key(|d| d.pos);

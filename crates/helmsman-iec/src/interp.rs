@@ -139,6 +139,13 @@ fn real_to_int(r: f64, to: Ty, round: bool) -> i128 {
     v.clamp(lo, hi)
 }
 
+/// Writes located variables' initial values (a cold start).
+pub fn init_located(image: &mut Image, inits: &[(Loc, Ty, Value)]) {
+    for &(loc, ty, v) in inits {
+        image.write(loc, to_raw(ty, v));
+    }
+}
+
 /// Value -> raw image bits for a store of type `ty`.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn to_raw(ty: Ty, v: Value) -> u64 {
