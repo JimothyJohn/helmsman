@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 pub mod device;
+pub mod logix;
 pub mod server;
 
 pub use device::{ConnectionPoint, Device, DeviceConfig, Identity, PointKind};

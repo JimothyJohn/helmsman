@@ -8,8 +8,11 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# No features: the box build reads observed controllers, it never writes them.
+helmsman-proto = { path = "../helmsman-proto" }
 
 [dev-dependencies]
+helmsman-adapter = { path = "../helmsman-adapter" }
 proptest = "1.12"
 
 [lints]

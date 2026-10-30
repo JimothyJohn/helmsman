@@ -12,7 +12,8 @@ name = "helmsman"
 path = "src/main.rs"
 
 [dependencies]
-helmsman-proto = { path = "../helmsman-proto" }
+# The CLI is the bench tool: any explicit service and Class 1 I/O.
+helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 
 [lints]
 workspace = true
