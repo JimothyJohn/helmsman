@@ -347,6 +347,15 @@
   id: helmsman-rename
   notes: brand canvas (private) https://claude.ai/artifact/WB1uKtP1NRHHfGoWw95tBt: wordmark Saira Stencil One, descriptor Barlow Condensed 700; palette yellow #FFC20E, black #141414, graphite #3A3A3A, steel #8C8C8C (rules only), white; never yellow on white; mark is the stencil encoder gear. crates.io `helmsman` is taken by an unrelated crate: run `cargo search <name>` on each new name before publishing. Restarting or removing the service on the pick PC asks Nick each time.
 
+- [ ] **GitHub Pages brand gallery for Helmsman** — Pages already serves docs/ from master (legacy build, https://jimothyjohn.github.io/helmsman/, landing page docs/index.html still titled tcpethernet). Rebrand that landing page to Helmsman Factory Automation (stencil wordmark, yellow/black/graphite/white, stencil encoder mark), and add docs/brand/index.html showing every concept from the brand canvas: the marks (round 1 and the round-2 gear set), the wordmarks, all color themes with hex and contrast rules, the in-the-field mockups and the spray-painted stencil-encoder surfaces. Static HTML/CSS and inline SVG only, no build step, no JS framework (the repo ships no JS); fonts from Google Fonts. Also commit the final mark as SVG files under docs/brand/ (full stencil encoder, a heavier small-size variant for 16–20 px, black, yellow and white) so the rename and the UI can reuse them.
+  needs: the brand canvas (private, so the agent needs Nick to share it or the HTML exported into the repo first; the SVG geometry is in its StencilEncoder board); helmsman-rename landed, so the page and the code use the same names
+  result: docs/brand/ with the gallery page and mark SVGs; docs/index.html rebranded; live at /helmsman/brand/ after Nick merges dev → master
+  est: 4h
+  difficulty: low
+  depends: helmsman-rename
+  id: brand-pages
+  notes: GitHub Pages builds from master/docs, so nothing goes live until Nick's own dev → master merge; don't change the Pages source or add a deploy workflow without asking.
+
 
 ## Product vision (interview 2026-10-29)
 
