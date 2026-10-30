@@ -411,8 +411,11 @@ the other modules never notice.
   one is next due on its old phase after the last tick (open question
   `hot-swap-faulted-state`).
 
-Not in the binary yet: the box API (below) stores proposals but applying
-one waits for `approval-policy`, which will call the swap.
+In the binary, an approved change reaches the runtime as
+`Runtime::reconfigure` (the whole module set in one step: modules kept are
+carried as `swap` carries one, new ones start cold, ones dropped have their
+bytes zeroed and signals made safe), run by the scan thread between ticks;
+see the approval policy below.
 
 ## Box API (`box-api`, built)
 
@@ -439,8 +442,9 @@ and later MCP (`api/`; contract in `tests/api.rs`). Endpoints are listed at
   directory's two files, or one param's value): parsed, compiled against its
   windows, held to its manifest, its signals checked against the box, and,
   when the box runs a change set, carrying the change set applying it would
-  commit, its snapshot id and its diff. `apply` and snapshot `rollback`
-  answer 501 until `approval-policy` exists.
+  commit, its snapshot id, its diff and its tier. The only way a draft runs
+  is `apply`, the only way back `rollback`, both through the approval
+  policy (below).
 - **The scan never waits on it.** The scheduler publishes a view (signal
   values, module status and stats, `%Q`) at most every 100 ms with a
   `try_lock`, dropping it if a reader holds the slot; the API reads only
@@ -470,6 +474,72 @@ and later MCP (`api/`; contract in `tests/api.rs`). Endpoints are listed at
   are cached a year (`immutable`), everything else revalidates
   (`no-cache`); HTML carries a CSP of `'self'`, `'wasm-unsafe-eval'` and its
   own inline scripts by SHA-256.
+
+## Approval policy (`approval-policy`, built)
+
+The safety story as code: `helmsman_plc::policy` (tiers, policy file, PINs)
+and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
+`tests/approval.rs`.
+
+- **Tiers, from the diff alone** (`policy::classify(running, target)`):
+  `param` when only param values changed, each within the range the
+  *running* manifest declares (the manifest may be re-rendered, the program
+  byte for byte the same); `logic` when programs or manifests changed but
+  every module drives the same signals and `%Q` bytes, the map is the same,
+  and the calendar's `drive` lines are the same; `output-affecting` for
+  anything else that can move an output: the I/O map changed at all
+  (bindings, devices, safe values), a module's `drives` or `%Q` window
+  changed, a module that drives something was added or removed, the
+  calendar's `drive` lines changed, or a manifest or calendar does not
+  parse. When in doubt, up. What a proposal says about itself is never
+  read. Property-tested against an independent "what can drive an output"
+  oracle: nothing that alters it is ever below output-affecting.
+- **Policy, with a floor in code.** Per tier, the least role whose PIN
+  applies it and whether a sim replay must be attached. The floor:
+  `param` operator, no replay (applies live; undo is one rollback);
+  `logic` engineer + replay (the preview); `output-affecting` engineer +
+  replay; at most 5 wrong PINs before a lockout of at least 30 s that
+  doubles per further wrong PIN up to 1 h. `--policy FILE` (`helmsman-policy
+  1`, one `TIER ROLE replay=yes|no` line per tier, `lockout N SECONDS`,
+  `min-replay SECONDS`, hand-parsed) can only be stricter: a file that
+  loosens anything, or asks less of a higher tier than a lower one, stops
+  the box at startup naming the line. `GET /api/policy` serves it.
+- **Roles and PINs.** operator < engineer < integrator, each with its own
+  PIN, set with `helmsman-plc --set-pin ROLE` (PIN on stdin) into `pins`
+  in the state directory (mode 0600, refused if readable by others):
+  PBKDF2-HMAC-SHA256, 600 000 iterations, 16-byte random salt each, over
+  the `sha2` the store already uses (HMAC and PBKDF2 written out and
+  checked against RFC 4231 / RFC 7914 vectors; no new crate). One lockout
+  for the whole box across roles and connections; checks are serialized,
+  so parallel guessing is no faster. While locked no PIN is checked
+  (429, `Retry-After`). A PIN is only ever in a request body: never logged,
+  audited or echoed (malformed bodies get a fixed message, not serde's).
+- **Evidence bound to content.** `POST /api/proposals/{id}/replay` (or
+  `/api/snapshots/{id}/replay` for a rollback) replays what runs and the
+  target over the recorder's window (`replay::replay` twice, then
+  `compare`) and keeps the result with both snapshot ids. An apply that
+  needs one names it (`"replay": N`) and is refused (428) unless its base
+  is exactly what runs and its content exactly the target, over at least
+  `min-replay`: an old replay, or one of other content, never counts.
+- **Apply = check, swap, commit, as one.** `POST .../apply` and
+  `POST /api/snapshots/{id}/rollback` take the token and `{role, pin,
+  replay?}`; in order: target known; draft not stale (its base is what
+  runs, else 409); tier and rule; role at least the rule's (403, no PIN
+  spent); evidence (428); map and calendar unchanged (a live map or
+  calendar reload is not built: 409, card `map-reload`); PIN (403/429);
+  every module compiles (422). Then the scan thread runs
+  `Runtime::reconfigure` between ticks (refused: nothing changed, 409; not
+  taken within 5 s: the job is withdrawn and can never land later), the
+  store commits the target with author, prompt, approver (`ROLE (PIN)`) and
+  time, and the API's view of the box moves to it; if the commit fails the
+  scan thread is swapped back (500). Applies are serialized, so of two
+  racing conflicting proposals one wins and the other is stale. Needs
+  `--store`. The response names the previous snapshot as the one-call
+  undo.
+- **Audited, every path.** Every apply, rollback and replay, refused or
+  not, is an audit entry with time, status, role (once the body parsed),
+  target and base snapshot ids; an apply that acts writes one entry before
+  (so a full log stops it) and one after.
 
 ## Webhook sinks (`sink-webhook`, built)
 
@@ -595,7 +665,7 @@ agent as ST; nothing here writes ST back).
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
-| agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | box API built (no write route; mutations need the token and are audited; apply/rollback 501); `approval-policy` planned |
+| agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
 | text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions, in the agent prompt; the host rules above hold regardless | planned (`agent-loop`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token | planned (`relay-v0`) |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | planned (`bundle-format`, `marketplace`) |
@@ -605,16 +675,17 @@ prompt. The agent never touches the Rust core.
 
 ## Where the planned pieces attach
 
-- `box-api` (built) → `approval-policy`: the policy is the only thing that
-  will answer `POST /api/proposals/{id}/apply` and
-  `/api/snapshots/{id}/rollback` with anything but 501; the stored proposal
-  already holds the change set to commit. `box-mcp` wraps the same routes.
+- `approval-policy` (built, above) → `proposal-ui`: the canvas shows a
+  draft's `approval` (tier, reasons, what it needs), charts its replay
+  (`GET /api/replays/{n}`), and posts the PIN to `apply`. `box-mcp` wraps
+  the same routes; `local-accounts` replaces role PINs with people, keeping
+  the role check and the gate.
 - `canvas-web` (built, above) → `andon-screen`: another page the box
   serves from the same directory, on the same streams.
 - `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
-  compile, check, then `Store::commit` with the approver; the box API
+  compile, check, swap, then `Store::commit` with the approver; the box API
   serves `list`, `diff` and `rollback`. `bundle-format` exports a tree and
   its blobs.
 - `sim-replay` (built, above) → `box-api` serves the recorder's tap and
-  runs `propose`; `proposal-ui` charts the `Timeline`; `approval-policy`
-  requires one for anything that can move an output.
+  runs the replay; `proposal-ui` charts it; `approval-policy` requires one
+  for logic and output-affecting changes.

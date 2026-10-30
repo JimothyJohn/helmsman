@@ -78,6 +78,7 @@ impl Bench {
             proposals: Box::new(MemProposals::new(10)),
             running: None,
             snapshots: None,
+            approval: None,
         };
         let api = Api::start(cfg, shared).unwrap();
         let addr = api.addr();

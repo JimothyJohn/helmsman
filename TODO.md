@@ -310,6 +310,16 @@
   difficulty: low
   id: api-lan-reads
 
+- [ ] **Param changes: may an operator apply them?** The approval floor (feat/approval-policy) lets an operator PIN apply a `param` change (a value within the range the running manifest declares; undo is one rollback), reading the vision's "operator: view, ask" plus "param changes go live with undo". Logic and output-affecting need at least engineer, which the policy file can only raise. If params should be engineer-only by default, the floor moves up one line in `policy/mod.rs` (`FLOOR.param.role`); any box can already require it with `param engineer replay=no` in its policy file.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: the least role the box accepts for a live param change
+  options: operator may apply params (recommended, built) | engineer floor for params | operator floor, but the shipped default policy file says engineer
+  est: 5m
+  difficulty: low
+  id: param-apply-role
+
 - [ ] **Pick PC deploys: canvas on the LAN by default?** `scripts/pi-deploy-plc.sh` now builds the canvas and the unit serves it with the API (`--ui`), but on the API's address, which stays 127.0.0.1:8080 unless you deploy with `PLC_API=0.0.0.0:8080` (that also opens 8080/tcp from `PLC_ALLOW` in the perceptronics firewall). So out of the box a tablet cannot see it; from a laptop, `ssh -L 8080:127.0.0.1:8080 nick@<pi>` then http://localhost:8080/. Defaulting to the LAN means every reader on `PLC_ALLOW` sees module source and live values without a token, which is `api-lan-reads`. I kept loopback as the default (reversible: one default in the script).
   asked: 2026-10-30
   by: claude-agent
@@ -634,11 +644,12 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: built on feat/sim-replay: helmsman-plc `record` (Recorder, RecordTap, Recording + text format) and `replay` (replay, propose, compare → Timeline); the box API serves the tap and the proposal UI charts the Timeline
   id: sim-replay
 
-- [ ] **Approval policy + PIN roles + audit** — proposals carry a tier (param / logic / output-affecting); policy decides live vs preview vs PIN + sim. Operator/engineer/integrator PINs; every apply/rollback is logged with role and time (accounts later).
+- [x] **Approval policy + PIN roles + audit** — proposals carry a tier (param / logic / output-affecting); policy decides live vs preview vs PIN + sim. Operator/engineer/integrator PINs; every apply/rollback is logged with role and time (accounts later).
   result: the safety story is mechanical, not a prompt
   est: 3d
   difficulty: med
   depends: snapshots, box-api
+  notes: built on feat/approval-policy: helmsman-plc `policy` (classify from the diff, policy file with a floor in code, PBKDF2 PINs + lockout) and `api/approve.rs` (replay evidence bound to content hashes; apply/rollback = check, scan-thread reconfigure, commit); docs/ARCHITECTURE.md "Approval policy"
   id: approval-policy
 
 - [ ] **Proposal review UI** — in the canvas: ST diff, diagram diff (ghost blocks), sim replay chart, manifest changes (new outputs/signals highlighted), approve with PIN.
@@ -772,6 +783,13 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: high
   depends: dropin-photo
   id: dropin-pid
+
+- [ ] **Map and calendar reload on a running box** — an apply or rollback whose I/O map or calendar differs from what runs is refused (409) today: only the module set hot-swaps. Reloading means rebuilding the signal table, restarting device links and re-attaching the calendar between ticks, with the same "refused changes nothing" rule. Proposals cannot change the map or calendar yet, so today this only blocks rolling back across a map change.
+  result: rollback to any snapshot; map and calendar edits through the same approval path
+  est: 3d
+  difficulty: high
+  depends: approval-policy
+  id: map-reload
 
 ## Roadmap M3: tiers, sharing, fleet
 

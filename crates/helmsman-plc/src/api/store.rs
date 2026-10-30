@@ -26,6 +26,11 @@ pub struct AuditEntry {
     /// The snapshot the call concerns (a proposal's change set, a
     /// rollback target), as its id.
     pub snapshot: Option<String>,
+    /// What the box ran when the call was made, for an apply, rollback or
+    /// replay.
+    pub base: Option<String>,
+    /// The role whose PIN the call carried, if it carried one.
+    pub role: Option<String>,
 }
 
 /// The store is full; nothing was recorded.
@@ -63,6 +68,9 @@ pub trait Proposals: Send + Sync {
     /// Stores a proposal under an id from [`Proposals::reserve`].
     fn insert(&self, p: Stored);
     fn get(&self, id: u64) -> Option<Stored>;
+    /// Replaces the stored proposal with `p.id` (its status after an
+    /// apply); no-op for an unknown id.
+    fn update(&self, p: Stored);
     /// Every proposal, oldest first.
     fn list(&self) -> Vec<Stored>;
 }
@@ -142,6 +150,12 @@ impl Proposals for MemProposals {
 
     fn get(&self, id: u64) -> Option<Stored> {
         lock(&self.inner).1.iter().find(|s| s.id == id).cloned()
+    }
+
+    fn update(&self, p: Stored) {
+        if let Some(slot) = lock(&self.inner).1.iter_mut().find(|s| s.id == p.id) {
+            *slot = p;
+        }
     }
 
     fn list(&self) -> Vec<Stored> {
