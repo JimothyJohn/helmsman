@@ -1,6 +1,7 @@
-//! `helmsman-canvas`: a node canvas for building PLC logic out of inputs,
-//! outputs, timers, counters and latches, grouped into function blocks that
-//! nest without limit. Simulates in the page; not wired to a PLC yet.
+//! `helmsman-canvas`: the operator's live view of a module's Structured
+//! Text, drawn as a diagram with a traced scan on it every frame (opens on
+//! it), and a lab node editor for building logic out of inputs, outputs,
+//! timers, counters and latches, grouped into nested function blocks.
 //!
 //! Native: `cargo run -p helmsman-canvas`. Web: `make canvas-serve`.
 
@@ -19,6 +20,7 @@ mod app;
 mod canvas;
 mod example;
 mod look;
+mod st_view;
 #[cfg(test)]
 mod ui_tests;
 

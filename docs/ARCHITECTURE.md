@@ -67,8 +67,9 @@ Three directions of traffic, three different rules:
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
-| `helmsman-graph` | Node-graph model and scan simulator behind the canvas; the model `st-graph-view` will lower ST into. | built (lab tool) |
-| `helmsman-canvas` | egui canvas, native and wasm. Today an editor over `helmsman-graph`; per `canvas-edit-scope` it becomes the read-only ST view. | built (lab tool) |
+| `helmsman-graph` | Node-graph model and scan simulator behind the canvas's lab editor. | built (lab tool) |
+| `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
+| `helmsman-canvas` | egui canvas, native and wasm: the live ST view (a module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `open-core-split`), the agent loop (behind the box API; the tool surface is the
@@ -263,6 +264,44 @@ load.
 - **Untrusted clock**: before 2024-01-01 (a Pi with no RTC before NTP) the
   calendar's signals are missing, so modules reading them are held, and
   driven outputs go to their safe values.
+
+## The live ST view (`st-graph-view`, built)
+
+The operator's read-only view of what a module's code is doing
+(`canvas-edit-scope`: ST is the source of truth, changes go through the
+agent as ST; nothing here writes ST back).
+
+- **Lowering** (`helmsman_diagram::lower`, from `helmsman_iec::ast`, the
+  parser's tree exposed read-only). Per statement: reads and literals on the
+  left, operators, functions and FB calls as blocks, the assignment on the
+  right. A read of a path the POU already wrote (same region or an enclosing
+  one) is wired from that write, so data flow crosses statements; an FB
+  instance's outputs (`t.Q`, `Q => x`) are ports of its call block. Each
+  IF/ELSIF/ELSE and CASE arm is a region gated by its condition (or the
+  selector); each loop is a region gated by its head or condition. Every
+  node, region and statement carries its `StmtId`, found by POU, line and
+  column in the `TraceMap`, so a trace maps straight onto it.
+- **Layout**: statements stack in source order, each a band laid out as a
+  tidy tree layered by longest path (inputs left, assignment right); arms
+  are boxes to the right of their conditions. Sizes come from label
+  lengths, not fonts. Editing a statement moves nothing above it; the same
+  source always lays out the same. No layout dependency.
+- **Live**: `annotate` puts one `Trace` on a diagram (FB bodies viewed
+  through one instance's prefix): variable values at scan end, logic and
+  comparisons re-evaluated from them, arithmetic left blank; gates open,
+  closed or not reached from arm hits and loop passes.
+- **"On because"** (`explain`): the last assignment to the variable that
+  ran, the gates around it with the conditions they needed TRUE or FALSE
+  and their values, and the same question for every variable read, to a
+  depth. FB outputs are followed into user FB bodies (and FB inputs back
+  out to the caller's argument); library FBs report their inputs. No
+  assignment ran: "held", with the closed gate that stopped each. Data, not
+  prose: explain-mode phrases it.
+- **Canvas**: "Live ST view" in the top bar. A demo module runs in a
+  `helmsman_plc::Runtime` on the page clock with a `TraceTap` asked for
+  the last scan of every frame; scripted or hand-switched inputs. Pan,
+  zoom, click a block for its source line, click an output for why.
+  Native and wasm alike.
 
 ## Trust boundaries
 

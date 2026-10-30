@@ -353,3 +353,129 @@ fn the_example_opens_and_survives_a_click_storm() {
         "still a valid project"
     );
 }
+
+// ---- the live ST view ----
+
+mod live {
+    use eframe::egui::{Event, Modifiers, MouseWheelUnit, Pos2, Vec2};
+    use helmsman_diagram::NodeKind;
+    use helmsman_graph::Project;
+    use helmsman_iec::Value;
+
+    use super::Harness;
+    use crate::app::Mode;
+    use crate::st_view::{DEMO, Pick, StView};
+
+    fn live() -> Harness {
+        let mut h = Harness::new(Project::default());
+        h.app.mode = Mode::Live;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h
+    }
+
+    fn st(h: &Harness) -> &StView {
+        h.app.st.as_ref().unwrap()
+    }
+
+    /// Screen centre of the program's write to `path`.
+    fn write_of(h: &Harness, path: &str) -> Pos2 {
+        let st = st(h);
+        let n = st
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Write { path: path.into() })
+            .unwrap();
+        st.cams[st.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+    }
+
+    #[test]
+    fn the_demo_compiles_and_the_view_runs_it_with_a_trace_every_frame() {
+        assert!(StView::new(DEMO).is_ok());
+        let mut h = live();
+        let first = st(&h).sample.as_ref().unwrap().scan;
+        h.frame(vec![]);
+        let st = st(&h);
+        assert!(st.error.is_none(), "{:?}", st.error);
+        assert!(
+            st.sample.as_ref().unwrap().scan > first,
+            "a fresh traced scan each frame"
+        );
+        assert_eq!(
+            st.outputs(),
+            ["CONVEYOR", "RED", "GREEN"],
+            "in order of first assignment"
+        );
+        let scopes: Vec<&str> = st.scopes.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(scopes, ["PROGRAM CELL", "M : MOTOR"]);
+    }
+
+    #[test]
+    fn clicking_a_block_shows_its_source_line() {
+        let mut h = live();
+        let at = write_of(&h, "CONVEYOR");
+        h.click(at);
+        let (line, text) = st(&h).picked().unwrap();
+        assert_eq!(text, "CONVEYOR := M.ON");
+        assert_eq!(st(&h).source_line(line), format!("{line:>3} | conveyor := m.on;"));
+        // Clicking empty canvas clears it.
+        h.click(Pos2::new(1050.0, 845.0));
+        assert_eq!(st(&h).pick, None);
+    }
+
+    #[test]
+    fn the_scripted_shift_runs_the_conveyor_and_says_why() {
+        let mut h = live();
+        let v = h.app.st.as_mut().unwrap();
+        v.scans(100); // 1 s: started at 0.2 s
+        let t = &v.sample.as_ref().unwrap().trace;
+        assert_eq!(t.get("conveyor"), Some(Value::Bool(true)));
+        let why = helmsman_diagram::explain(&v.module, t, "conveyor", 4).outline();
+        assert!(why[0].starts_with("CONVEYOR = TRUE because line"), "{why:#?}");
+        assert!(
+            why.iter()
+                .any(|l| l.contains("IF NOT FAULT") && l.contains("open")),
+            "{why:#?}"
+        );
+        v.scans(600); // 7 s: jammed
+        let t = &v.sample.as_ref().unwrap().trace;
+        assert_eq!(t.get("conveyor"), Some(Value::Bool(false)));
+        let why = helmsman_diagram::explain(&v.module, t, "conveyor", 4).outline();
+        assert!(why.iter().any(|l| l.contains("JAM = TRUE")), "{why:#?}");
+        h.frame(vec![]);
+        assert!(matches!(
+            st(&h).pick,
+            None | Some(Pick::Node(_) | Pick::Region(_))
+        ));
+    }
+
+    #[test]
+    fn scroll_pans_pinch_zooms_and_the_instance_view_switches_diagrams() {
+        let mut h = live();
+        let before = st(&h).cams[0];
+        h.frame(vec![
+            Event::PointerMoved(Pos2::new(700.0, 400.0)),
+            Event::MouseWheel {
+                unit: MouseWheelUnit::Point,
+                delta: Vec2::new(0.0, -120.0),
+                modifiers: Modifiers::NONE,
+                phase: eframe::egui::TouchPhase::Move,
+                source: eframe::egui::MouseWheelSource::Wheel,
+            },
+        ]);
+        for _ in 0..10 {
+            h.frame(vec![]);
+        }
+        let panned = st(&h).cams[0];
+        assert!(panned.offset.y < before.offset.y, "{before:?} -> {panned:?}");
+        h.frame(vec![Event::Zoom(1.5)]);
+        assert!(st(&h).cams[0].zoom > panned.zoom);
+        h.app.st.as_mut().unwrap().scope = 1;
+        h.frame(vec![]);
+        assert_eq!(st(&h).diagram().pou, "MOTOR");
+        assert!(st(&h).live().is_some());
+        h.app.mode = Mode::Lab;
+        h.frame(vec![]);
+    }
+}

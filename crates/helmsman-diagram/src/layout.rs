@@ -255,3 +255,19 @@ impl Layout<'_> {
         }
     }
 }
+
+/// Where input `k` of a node with box `r` meets its left edge.
+#[must_use]
+pub fn in_port(r: &Rect, k: usize) -> (f32, f32) {
+    (r.x, port_y(r, k))
+}
+
+/// Where output `k` of a node with box `r` meets its right edge.
+#[must_use]
+pub fn out_port(r: &Rect, k: usize) -> (f32, f32) {
+    (r.right(), port_y(r, k))
+}
+
+fn port_y(r: &Rect, k: usize) -> f32 {
+    r.y + HEADER + PORT_ROW * (k as f32 + 0.5) + 2.0
+}
