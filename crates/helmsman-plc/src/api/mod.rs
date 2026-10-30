@@ -14,6 +14,8 @@
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
 //! POST /api/proposals                     token: a module draft or a param change, checked, stored as a draft
+//! POST /api/proposals/check               token: check a draft as POST /api/proposals would; nothing stored
+//! POST /api/proposals/replay              token: sim replay of a draft {draft, minutes}; nothing stored, not evidence
 //! POST /api/proposals/{id}/replay         token: sim replay of the draft against what runs; evidence for apply
 //! POST /api/proposals/{id}/apply          token + {role, pin, replay?}: apply through the approval policy
 //! GET  /api/audit?after=N&limit=M         every mutating call, append-only, naming snapshot ids
@@ -21,11 +23,14 @@
 //! GET  /api/snapshots/head
 //! GET  /api/snapshots/{id}                a snapshot's files
 //! GET  /api/snapshots/{a}/diff/{b}
+//! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
+//! POST /api/bundles                       token: a bundle file, verified, bound by name, stored as a draft
 //! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
 //! POST /api/snapshots/{id}/rollback       token + {role, pin, replay?}: roll back through the approval policy
 //! GET  /api/replays/{n}                   a replay kept as evidence
 //! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
+//! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
 //!
@@ -60,11 +65,14 @@
 //! ([`Limits`]).
 
 pub mod approve;
+pub mod bundle;
 pub mod catalog;
+pub mod chat;
 pub mod http;
 pub mod live;
 pub mod proposal;
 pub mod render;
+pub mod sim;
 pub mod store;
 pub mod swap;
 pub mod token;
@@ -80,6 +88,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value as Json, json};
 
+use crate::bundle::TrustStore;
 use crate::policy::Role;
 use crate::store::{self as snapshots, ChangeSet, SnapshotId, Store};
 
@@ -147,6 +156,8 @@ pub struct Shared {
     /// the scan thread's swap channel. `None`: apply and rollback answer
     /// 501.
     pub approval: Option<Approval>,
+    /// The relay and limits for `POST /api/chat`; `None`: it answers 503.
+    pub chat: Option<chat::Setup>,
 }
 
 /// A traced scan's number and its JSON.
@@ -170,7 +181,10 @@ struct Ctx {
     traces: Mutex<BTreeMap<String, Rendered>>,
     stop: Arc<AtomicBool>,
     streams: AtomicUsize,
+    chat: Option<chat::Chat>,
     ui: Option<ui::Ui>,
+    /// Publishers whose bundles import; `None`: import answers 501.
+    trust: Option<TrustStore>,
 }
 
 impl Ctx {
@@ -267,12 +281,31 @@ impl Api {
     ///
     /// # Errors
     /// The bind fails.
-    pub fn start_with_ui(cfg: Config, mut shared: Shared, ui: Option<ui::Ui>) -> io::Result<Self> {
+    pub fn start_with_ui(cfg: Config, shared: Shared, ui: Option<ui::Ui>) -> io::Result<Self> {
+        Self::start_with_trust(cfg, shared, ui, None)
+    }
+
+    /// [`Api::start_with_ui`], also importing bundles signed by a
+    /// publisher in `trust` (`POST /api/bundles`).
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_with_trust(
+        cfg: Config,
+        mut shared: Shared,
+        ui: Option<ui::Ui>,
+        trust: Option<TrustStore>,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
+        let chat = shared
+            .chat
+            .take()
+            .map(|setup| chat::Chat::new(setup, addr, cfg.token.clone()));
         let ctx = Arc::new(Ctx {
+            chat,
             catalog: RwLock::new(Arc::new(std::mem::take(&mut shared.catalog))),
             running: Mutex::new(shared.running.take()),
             approval: shared.approval.take(),
@@ -284,6 +317,7 @@ impl Api {
             stop: Arc::clone(&stop),
             streams: AtomicUsize::new(0),
             ui,
+            trust,
         });
         let thread = thread::Builder::new()
             .name("api".into())
@@ -370,6 +404,8 @@ enum Reply {
     Values,
     /// A module's trace stream.
     Traces(usize),
+    /// One chat message, its conversation taken out.
+    Chat(chat::Taken),
     /// A file of the UI.
     File(ui::Asset),
 }
@@ -389,6 +425,11 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
         Reply::Once(r) => {
             let _ = http::respond(&mut stream, &r);
         }
+        Reply::Chat(taken) => {
+            if let Some(chat) = &ctx.chat {
+                chat.serve(&mut stream, taken);
+            }
+        }
         Reply::File(asset) => {
             let _ = ui::send(&mut stream, asset);
         }
@@ -399,7 +440,8 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
             };
             let _ = match reply {
                 Reply::Traces(k) => trace_stream(&mut stream, ctx, k),
-                _ => value_stream(&mut stream, ctx),
+                Reply::Values => value_stream(&mut stream, ctx),
+                Reply::Once(_) | Reply::Chat(_) | Reply::File(_) => Ok(()),
             };
         }
     }
@@ -447,7 +489,46 @@ fn handle(req: &Request, ctx: &Ctx) -> Reply {
         };
         return Reply::Once(Response::error(401, why).with("WWW-Authenticate", "Bearer".into()));
     }
+    if req.method == "POST"
+        && req.segments.len() == 2
+        && req.segments[0] == "api"
+        && req.segments[1] == "chat"
+    {
+        return start_chat(req, ctx);
+    }
     Reply::Once(mutate(req, ctx))
+}
+
+/// `POST /api/chat`: audited when it starts; the turn itself streams.
+fn start_chat(req: &Request, ctx: &Ctx) -> Reply {
+    let Some(chat) = &ctx.chat else {
+        let r = Response::error(
+            503,
+            "no relay configured on this box (--relay); the agent is offline",
+        );
+        return Reply::Once(match audit(ctx, req, 503, "chat: no relay configured") {
+            Some(_) => r,
+            None => audit_full(),
+        });
+    };
+    match chat.take(&req.body) {
+        Err((r, detail)) => Reply::Once(match audit(ctx, req, r.status, &detail) {
+            Some(_) => r,
+            None => audit_full(),
+        }),
+        Ok(taken) => {
+            let detail = format!(
+                "chat: session {}, message of {} characters",
+                taken.id,
+                taken.message.chars().count()
+            );
+            if audit(ctx, req, 200, &detail).is_none() {
+                chat.give_back(&taken.id, taken.conv);
+                return Reply::Once(audit_full());
+            }
+            Reply::Chat(taken)
+        }
+    }
 }
 
 /// Records a mutating call; `None` if the log is full (the call must not
@@ -517,6 +598,9 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         ("POST", ["api", "proposals"]) => return create(req, ctx),
+        ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
+        ("POST", ["api", "proposals", "check"]) => return check_only(req, ctx),
+        ("POST", ["api", "proposals", "replay"]) => return replay_draft(req, ctx),
         ("POST", ["api", "proposals", id, "apply"]) => {
             return approve::apply(req, ctx, approve::Target::Proposal(id));
         }
@@ -550,9 +634,10 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
 fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "proposals"] => Some("GET, POST"),
-        ["api", "proposals", _, "apply" | "replay"] | ["api", "snapshots", _, "rollback" | "replay"] => {
-            Some("POST")
-        }
+        ["api", "proposals", _, "apply" | "replay"]
+        | ["api", "snapshots", _, "rollback" | "replay"]
+        | ["api", "proposals", "check" | "replay"]
+        | ["api", "chat" | "bundles"] => Some("POST"),
         ["api"]
         | [
             "api",
@@ -564,6 +649,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
             _,
         ]
         | ["api", "snapshots", _, "diff", _]
+        | ["api", "snapshots", _, "bundle"]
         | ["api", "modules", _, "trace"]
         | ["api", "modules", _, "trace", "events"] => Some("GET"),
         _ => None,
@@ -575,6 +661,128 @@ fn proposal_id(s: &str) -> Option<u64> {
         return None;
     }
     s.parse().ok()
+}
+
+/// Answers with `status` and `body` once the call is audited.
+fn audited(ctx: &Ctx, req: &Request, status: u16, body: &Json, detail: &str) -> Response {
+    match audit(ctx, req, status, detail) {
+        Some(_) => Response::json(status, body),
+        None => audit_full(),
+    }
+}
+
+fn is_json(req: &Request) -> bool {
+    req.content_type
+        .as_deref()
+        .is_some_and(|t| t == "application/json" || t.starts_with("application/json;"))
+}
+
+/// `POST /api/proposals/check`: the checks `POST /api/proposals` runs,
+/// with nothing stored.
+fn check_only(req: &Request, ctx: &Ctx) -> Response {
+    if !is_json(req) {
+        return audited(
+            ctx,
+            req,
+            415,
+            &json!({ "error": "Content-Type must be application/json" }),
+            "check: not JSON",
+        );
+    }
+    let new: proposal::New = match serde_json::from_slice(&req.body) {
+        Ok(n) => n,
+        Err(e) => {
+            return audited(
+                ctx,
+                req,
+                400,
+                &json!({ "error": format!("malformed proposal: {e}") }),
+                "check: malformed proposal",
+            );
+        }
+    };
+    let running = ctx.running();
+    match proposal::check(&new, &ctx.catalog(), ctx.cfg.memory, running.as_ref()) {
+        Ok((mut p, _)) => {
+            p["stored"] = json!(false);
+            audited(ctx, req, 200, &p, "check: clean, not stored")
+        }
+        Err((status, body)) => audited(ctx, req, status, &body, "check: refused by the checks"),
+    }
+}
+
+/// Minutes of recording a draft replay covers when the request does not say.
+const REPLAY_MINUTES: u64 = 10;
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplayDraft {
+    draft: proposal::New,
+    #[serde(default)]
+    minutes: Option<u64>,
+}
+
+/// `POST /api/proposals/replay`: a draft replayed beside what runs; the
+/// draft is checked as `POST /api/proposals` would, and nothing is stored.
+fn replay_draft(req: &Request, ctx: &Ctx) -> Response {
+    if !is_json(req) {
+        return audited(
+            ctx,
+            req,
+            415,
+            &json!({ "error": "Content-Type must be application/json" }),
+            "replay: not JSON",
+        );
+    }
+    let r: ReplayDraft = match serde_json::from_slice(&req.body) {
+        Ok(r) => r,
+        Err(e) => {
+            return audited(
+                ctx,
+                req,
+                400,
+                &json!({ "error": format!("malformed replay request: {e}") }),
+                "replay of a draft: malformed request",
+            );
+        }
+    };
+    let minutes = r.minutes.unwrap_or(REPLAY_MINUTES);
+    if !(1..=sim::MAX_MINUTES).contains(&minutes) {
+        let body = json!({ "error": format!("minutes must be 1 to {}", sim::MAX_MINUTES) });
+        return audited(ctx, req, 400, &body, "replay of a draft: bad minutes");
+    }
+    if r.draft.kind != "module" {
+        let body = json!({ "error": "replay takes a module draft" });
+        return audited(ctx, req, 400, &body, "replay of a draft: not a module");
+    }
+    let running = ctx.running();
+    let target = match proposal::check(&r.draft, &ctx.catalog(), ctx.cfg.memory, running.as_ref()) {
+        Ok((_, target)) => target,
+        Err((status, body)) => {
+            return audited(
+                ctx,
+                req,
+                status,
+                &body,
+                "replay of a draft: refused by the checks",
+            );
+        }
+    };
+    let (Some(appr), Some(running), Some(target)) = (&ctx.approval, running, target) else {
+        let body =
+            json!({ "error": "this box cannot replay drafts: it runs no change set or has no recording" });
+        return audited(ctx, req, 409, &body, "replay of a draft: no change set");
+    };
+    match sim::run(&appr.plant, &running, &target, minutes) {
+        Ok(j) => audited(
+            ctx,
+            req,
+            200,
+            &j,
+            &format!("replay of a draft: {minutes} min, read-only, not stored"),
+        ),
+        Err((status, body)) => audited(ctx, req, status, &body, "replay of a draft: refused"),
+    }
 }
 
 fn create(req: &Request, ctx: &Ctx) -> Response {
@@ -722,6 +930,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             Ok(cs) => Response::json(200, &render::change_set(&cs)),
             Err(r) => r,
         },
+        ["api", "snapshots", id, "bundle"] => bundle::export(ctx, id),
         ["api", "snapshots", a, "diff", b] => match (snapshot(ctx, a), snapshot(ctx, b)) {
             (Ok(a), Ok(b)) => Response::json(200, &render::diff(&snapshots::diff(&a, &b))),
             (Err(r), _) | (_, Err(r)) => r,
@@ -791,6 +1000,8 @@ fn index() -> Json {
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source} or {kind: param, module, param, value}"),
+            e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
+            e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
             e("POST", "/api/proposals/{id}/apply", true, "apply: {role, pin, replay?}, checked against the policy"),
             e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),
@@ -798,11 +1009,14 @@ fn index() -> Json {
             e("GET", "/api/snapshots/head", false, "the head entry"),
             e("GET", "/api/snapshots/{id}", false, "a snapshot's files"),
             e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
+            e("GET", "/api/snapshots/{id}/bundle", false, "that snapshot as an unsigned bundle file (sign it off the box)"),
+            e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: {role, pin, replay?}, checked against the policy"),
             e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
             e("GET", "/api/policy", false, "the approval policy this box enforces"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
+            e("POST", "/api/chat", true, "one message to the agent {message, session?}; an event stream of its progress"),
         ],
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
     })

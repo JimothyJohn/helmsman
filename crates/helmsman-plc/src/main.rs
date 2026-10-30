@@ -19,6 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use helmsman_adapter::device::lock_ref;
 use helmsman_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
+use helmsman_agent::relay;
 use helmsman_iec::{ImageSizes, compile, compile_plcopen, plcopen};
 use helmsman_io::Driver;
 use helmsman_io::local::Channels;
@@ -26,6 +27,7 @@ use helmsman_plc::api::{
     self, Api, Approval, Catalog, Devices, Live, MemAudit, MemProposals, ModuleInfo, Plant, Publisher,
     Swapper,
 };
+use helmsman_plc::bundle::TrustStore;
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
 use helmsman_plc::manifest::ModuleDir;
@@ -39,6 +41,7 @@ use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
 const USAGE: &str = "\
 usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-dir DIR ...] [options]
+       helmsman-plc bundle COMMAND ...   (signed bundles: `helmsman-plc bundle help`)
   --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
@@ -65,10 +68,17 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
                        for the LAN), or `off`. Reads are open; anything
                        else needs the token from the state directory.
+  --relay URL          the relay the chat panel's agent talks to (POST
+                       /api/chat), e.g. https://relay.example.com; without
+                       it the agent is offline and /api/chat answers 503
+  --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
+                       The box never holds an Anthropic key.
+  --relay-agent V      the agent version to ask the relay for (default v1)
   --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
                        at / on the API's address: a browser on the LAN is
                        the HMI (read-only, like the API's reads)
-  --state-dir DIR      where the API token and the role PINs live (default
+  --state-dir DIR      where the API token, the role PINs and the trusted
+                       bundle publishers (trusted-publishers) live (default
                        $STATE_DIRECTORY, as systemd's StateDirectory= sets
                        it, else ./helmsman-state)
   --policy FILE        approval policy (see helmsman_plc::policy); stricter
@@ -107,6 +117,9 @@ struct Opts {
     emit_st: bool,
     api: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
+    relay: Option<String>,
+    relay_token: Option<PathBuf>,
+    relay_agent: String,
     ui: Option<PathBuf>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
@@ -120,6 +133,20 @@ struct Opts {
 fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
     if slot.replace(PathBuf::from(v)).is_some() {
         return Err(format!("one {flag} only"));
+    }
+    Ok(())
+}
+
+/// `--relay`, `--relay-token`, `--relay-agent`.
+fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
+    match flag {
+        "--relay" => {
+            relay::Url::parse(v).map_err(|e| format!("--relay: {e}"))?;
+            o.relay = Some(v.to_string());
+        }
+        "--relay-token" => once(&mut o.relay_token, flag, v)?,
+        _ if relay::version_ok(v) => v.clone_into(&mut o.relay_agent),
+        _ => return Err(format!("--relay-agent: not an agent version: {v:?}")),
     }
     Ok(())
 }
@@ -139,6 +166,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         state_dir: None,
+        relay: None,
+        relay_token: None,
+        relay_agent: "v1".into(),
         ui: None,
         policy: None,
         set_pin: None,
@@ -191,6 +221,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 );
             }
             "--state-dir" => o.state_dir = Some(PathBuf::from(v)),
+            "--relay" | "--relay-token" | "--relay-agent" => relay_flag(&mut o, flag, v)?,
             "--policy" => once(&mut o.policy, flag, v)?,
             "--set-pin" => {
                 o.set_pin = Some(Role::parse(v).ok_or_else(|| {
@@ -212,6 +243,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             other => return Err(format!("unknown flag {other}")),
         }
         i += 2;
+    }
+    if o.relay.is_some() != o.relay_token.is_some() {
+        return Err("--relay and --relay-token go together".into());
     }
     if o.ui.is_some() && o.api.is_none() {
         return Err("--ui is served by the API; it does not go with --api off".into());
@@ -668,6 +702,9 @@ fn load_policy(o: &Opts) -> Result<Policy, String> {
 fn load_access(o: &Opts) -> Result<(Policy, Pins), String> {
     let policy = load_policy(o)?;
     let pins = Pins::load(&state_dir(o), pin::MIN_ITERATIONS)?;
+    // Checked now so a bad trust store stops the box before it is on the
+    // network; the API reads it again when it starts.
+    TrustStore::load(&state_dir(o))?;
     Ok((policy, pins))
 }
 
@@ -715,9 +752,12 @@ fn start_api(
         running,
         snapshots,
         approval: Some(approval),
+        chat: chat_setup(o)?,
     };
+    let trust = TrustStore::load(&dir)?;
     let has_ui = ui.is_some();
-    let server = Api::start_with_ui(cfg, shared, ui).map_err(|e| format!("--api {bind}: {e}"))?;
+    let server =
+        Api::start_with_trust(cfg, shared, ui, Some(trust)).map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
         "helmsman-plc: API on http://{}/api (reads open; changes need the token)",
         server.addr()
@@ -735,6 +775,32 @@ fn start_api(
         eprintln!("helmsman-plc: API token in {}", token.path.display());
     }
     Ok(server)
+}
+
+/// The chat route's relay, from `--relay` and `--relay-token`.
+fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
+    let (Some(url), Some(path)) = (&o.relay, &o.relay_token) else {
+        return Ok(None);
+    };
+    let url = relay::Url::parse(url).map_err(|e| format!("--relay: {e}"))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("--relay-token {}: {}", path.display(), e.kind()))?;
+    let token = text.trim();
+    if !relay::token_ok(token) {
+        return Err(format!(
+            "--relay-token {}: not a relay box token (hmr1_ and 64 hex digits)",
+            path.display()
+        ));
+    }
+    eprintln!(
+        "helmsman-plc: chat agent via relay {url} (agent {})",
+        o.relay_agent
+    );
+    Ok(Some(api::chat::Setup::new(relay::Config::new(
+        url,
+        token.to_string(),
+        o.relay_agent.clone(),
+    ))))
 }
 
 /// What the API serves that is fixed once the runtime is built.
@@ -977,6 +1043,18 @@ fn run(o: &Opts) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "bundle") {
+        return match helmsman_plc::bundle::cli::run(&args[1..]) {
+            Ok(out) => {
+                print!("{out}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let opts = match parse(&args) {
         Ok(o) => o,
         Err(e) if e.is_empty() => {

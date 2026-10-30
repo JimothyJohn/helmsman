@@ -20,7 +20,7 @@ roadmap card, by id).
                                       │ HTTPS, box-initiated
  ┌──────────────────────────── the box (Pi 5) ───────┼────────────────────────────┐
  │                                                   │                            │
- │  ┌─ agent loop (planned) ─┐   tools   ┌─ box API (built) ───────────────────┐  │
+ │  ┌─ agent loop (built) ───┐   tools   ┌─ box API (built) ───────────────────┐  │
  │  │ draft → check → sim →  ├──────────►│ signals · modules · proposals ·     │◄─┼── canvas in any
  │  │ propose                │           │ snapshots · outputs · audit         │  │   browser on the
  │  └────────────────────────┘           └──┬────────────┬───────────────┬─────┘  │   LAN (built:
@@ -69,11 +69,11 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
 | `helmsman-graph` | Node-graph model and scan simulator behind the canvas's lab editor. | built (lab tool) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
+| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. | built |
 | `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
-`open-core-split`), the agent loop (behind the box API; the tool surface is the
-box API, so it can run on the box or the relay), the WASM host (`wasm-tier`).
+`relay-repo`, in `../helmsman-relay`), the WASM host (`wasm-tier`).
 
 ## One scan, as built
 
@@ -397,7 +397,7 @@ module, map or calendar source).
   `module NAME MANIFEST SOURCE` line per module by name, `io-map H`,
   `calendar H`). Same content, same id, in any store. Every read re-hashes
   the tree and each blob, so a corrupted or edited row is an error, never
-  wrong content. A tree plus its blobs is what `bundle-format` will carry.
+  wrong content. A tree plus its blobs is what a bundle carries (below).
 - **History is an append-only log**: one entry per apply or rollback, with
   author, prompt, approver and time (caller's clock), each hashed over its
   fields and the previous entry's hash, so edited history fails `list`.
@@ -567,6 +567,117 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   target and base snapshot ids; an apply that acts writes one entry before
   (so a full log stops it) and one after.
 
+## Agent loop (`agent-loop`, built)
+
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v1]` turns on
+`POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
+`helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
+an Anthropic key, and names no model, prompt or tool schema: the relay
+serves those per agent version (relay protocol v1).
+
+- **The loop.** One user message: send the conversation to
+  `POST /v1/agents/{version}/messages`, assemble the streamed assistant
+  turn (text, `thinking` with its signature, `tool_use` from its
+  `input_json_delta` fragments), run its tool calls in order, send every
+  result back in one user message, repeat until `end_turn`. History is
+  append-only and assistant turns go back exactly as streamed. A turn that
+  fails (`relay_error`, the model API's `error`, a stream that ends without
+  `relay_usage`, malformed events, a timeout) is discarded whole and none
+  of its tools run; `refusal` runs nothing; a `max_tokens` turn's tool
+  calls are answered unrun. Retryable failures are retried (2 s doubling,
+  jittered). Budgets per message: 24 model turns, 200k output tokens, 16
+  tool calls per turn, 15 minutes; a spent budget leaves the tool results
+  last, so the next message continues.
+- **Tools** (the relay's `tools.json` names): `list_signals`,
+  `read_signals` (`GET /api/signals`), `list_modules` (`GET /api/modules`),
+  `read_module` (`GET /api/modules/{name}` and its `trace`),
+  `draft_module` (kept in the conversation, the manifest object rendered to
+  manifest text with every value checked so none can start a line),
+  `check_module` (`POST /api/proposals/check`), `simulate_module`
+  (`POST /api/proposals/replay`), `propose_change` (`POST /api/proposals`,
+  only for a draft that checks clean and has been simulated; param changes
+  as param proposals). A draft reaches the proposal list only when
+  proposed, so the agent iterates on checker and simulator results before
+  a human sees anything. Every input is parsed strictly and validated
+  (unknown fields refused); a bad one is answered `INVALID_JSON` unrun.
+- **Data, not instructions.** Every tool result is plant data (tag names,
+  ST comments, manifest prompt lines, diagnostics quoting them) and goes
+  back inside a `<box-data>` envelope that says so, as JSON with `<`, `>`
+  and `&` escaped, so nothing inside can close it. A tool name the model
+  makes up is answered "no such tool", unrun. No tool reaches `apply`,
+  `rollback` or any write, and the box API enforces token, limits and
+  audit on every call the tools make.
+- **Chat route.** `POST /api/chat` (token, audited) takes
+  `{message, session?}` and streams `session`, `text`, `tool_call`,
+  `tool_result`, `proposal`, `retrying`, then `done` or `error` (relay
+  unreachable: "the agent is offline, installed modules keep running").
+  Conversations are in memory: 16 at most (idle ones dropped after an
+  hour, oldest first when full), one message at a time each (409), two
+  running at once (503 beyond), 900 KiB of history.
+- **Draft routes.** `POST /api/proposals/check` (the checks
+  `POST /api/proposals` runs, nothing stored) and
+  `POST /api/proposals/replay` (`{draft, minutes}`: what runs and the draft's
+  change set replayed over the last 1..=1440 minutes of the recorder's tap,
+  on the approval path's plant, in the same JSON shape as the evidence
+  replay): read-only, token-gated and audited like every other POST. A
+  draft replay is never evidence; an apply cites a replay of the stored
+  proposal (`POST /api/proposals/{id}/replay`), and only a role PIN applies.
+  The agent holds the API token and nothing else: it has no tool that
+  reaches `apply`, `rollback` or a PIN, and the token alone cannot apply.
+
+## Bundles (`bundle-format`, built)
+
+`helmsman_plc::bundle` (format, manifest, signatures, CLI) and
+`api/bundle.rs` (export, import); contract in `tests/bundle.rs`. The trust
+model is `market-floor`'s floor: signing, a capability manifest and
+host-enforced checks; an AI review (`marketplace`) can only refuse on top.
+
+- **One file, hand-framed**: `helmsman-bundle 1\n`, then records of a type
+  byte, a big-endian `u32` length and the bytes: the snapshot tree (`T`),
+  the bundle manifest (`M`), each blob the tree names (`B`, ascending by
+  SHA-256), detached signatures (`S`, 32-byte key + 64-byte Ed25519
+  signature, ascending by key). No archive crate: four record types do not
+  need one, and every byte is accounted for. The tree is the store's, so a
+  bundle's id **is** the snapshot id of the same content.
+- **Refused, with the reason**: over 16 MiB; a record claiming more than
+  its type may hold (tree 256 KiB, manifest 16 KiB, blob 1 MiB, signature
+  96 B) or more than the file has left, checked before any allocation;
+  records missing, repeated, out of order, of an unknown type, or bytes
+  after the last; a blob twice, a blob the tree does not name or a name
+  with no blob (a changed file); a module name that is not a module name
+  (`../`, `/`, non-ASCII lookalikes, invisible characters); a tree or
+  manifest not in canonical form.
+- **Bundle manifest** (`helmsman-bundle-manifest 1`, canonical): name,
+  version, author, description, and the **capability manifest**: modules,
+  signals read, signals driven (modules and calendar `drive` lines), `%Q`
+  bytes, devices and drivers the signal-map template names. It is computed
+  from the content (each module compiled and held to its own manifest, as
+  at load) and must match **exactly**: understated or overstated, refused.
+- **Signatures**: Ed25519 over `helmsman-bundle-signature 1\n` + bundle id
+  + SHA-256 of the manifest, via `ring` (already in the lockfile through
+  rustls; now also under `box`). Every signature on a bundle must verify;
+  at least one must be by a publisher in the box's trust store
+  (`trusted-publishers` in the state directory, mode 0600, refused if
+  others can read it, checked before the box is on the network). With
+  `dev-bundles allow` there (open question `dev-bundles-switch`), unsigned
+  and untrusted bundles import too, marked `DEV BUNDLE` everywhere.
+- **Publishers** use `helmsman-plc bundle keygen | pack | sign | verify`
+  off the box (PKCS#8 keys, mode 0600, never overwritten); integrators use
+  `helmsman-plc bundle trust add NAME KEY`. No key is ever on a box.
+- **Export**: `GET /api/snapshots/{id}/bundle`, unsigned, capability
+  manifest computed, placeholder name and version (`sign` can rename it
+  while unsigned).
+- **Import**: `POST /api/bundles` (token, `application/octet-stream`):
+  verify; bind every signal the bundle reads or drives to this box's by
+  name (missing, a type or direction the template disagrees on, an output
+  another module or the calendar already drives: refused with the whole
+  report); then a **proposal** adding or replacing the bundle's modules in
+  what runs. The bundle's map is a template only (the box's map is never
+  replaced) and its calendar is not imported. From there the approval
+  policy classifies it from the diff like any proposal: a bundle that drives
+  anything is output-affecting (engineer PIN + replay). Every import,
+  refused or not, is audited.
+
 ## Webhook sinks (`sink-webhook`, built)
 
 `helmsman-plc --sinks FILE --sink-dir DIR` publishes signal events over
@@ -692,9 +803,9 @@ agent as ST; nothing here writes ST back).
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
-| text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions, in the agent prompt; the host rules above hold regardless | planned (`agent-loop`) |
-| box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token | planned (`relay-v0`) |
-| bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | planned (`bundle-format`, `marketplace`) |
+| text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply; the host rules above hold regardless | built (`agent-loop`, `helmsman-plc/tests/agent.rs`) |
+| box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
+| bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 
 The rule under all of these: limits are enforced by the host, never by the
 prompt. The agent never touches the Rust core.
@@ -710,8 +821,13 @@ prompt. The agent never touches the Rust core.
   serves from the same directory, on the same streams.
 - `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
   compile, check, swap, then `Store::commit` with the approver; the box API
-  serves `list`, `diff` and `rollback`. `bundle-format` exports a tree and
-  its blobs.
+  serves `list`, `diff` and `rollback`. `bundle-format` (built) exports a
+  tree and its blobs; `marketplace` and `fleet-console` move bundles
+  between boxes and put the AI review on top of `bundle::verify`.
 - `sim-replay` (built, above) → `box-api` serves the recorder's tap and
   runs the replay; `proposal-ui` charts it; `approval-policy` requires one
   for logic and output-affecting changes.
+- `agent-loop` (built, above) → `local-fallback` answers the chat route
+  when the relay is unreachable (today: an `error` event); `explain-mode`
+  and `dropin-prose` are prompts over the same tools, plus a trace tool
+  for explain mode.
