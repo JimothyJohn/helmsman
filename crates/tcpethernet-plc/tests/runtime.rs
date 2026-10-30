@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use proptest::prelude::*;
-use tcpethernet_iec::{FaultKind, ImageSizes, Value, compile};
+use tcpethernet_iec::{Fault, FaultKind, ImageSizes, Value, compile};
 use tcpethernet_plc::{ConfigError, Module, Runtime, Status, Window};
 
 const IMAGE: usize = 32;
@@ -62,6 +62,11 @@ VAR a AT %IB0 : USINT; o AT %QB0 : USINT; END_VAR
   o := a;
 END_PROGRAM";
 
+/// What a tick that faults nothing returns.
+fn none() -> Vec<(String, Fault)> {
+    Vec::new()
+}
+
 fn count(rt: &Runtime, name: &str) -> u64 {
     match rt.program(name).and_then(|p| p.get("n")) {
         Some(Value::Int(n)) => u64::try_from(n).unwrap(),
@@ -80,7 +85,7 @@ fn modules_write_their_own_output_windows_relative_to_the_window() {
         ],
     )
     .unwrap();
-    assert!(rt.tick(ms(0), &[]).is_empty());
+    assert_eq!(rt.tick(ms(0), &[]), none());
     let q = rt.outputs();
     assert_eq!(q.len(), IMAGE);
     assert_eq!(q[0], 1, "a's %QB0 is byte 0");
@@ -152,8 +157,8 @@ fn a_fault_zeroes_only_that_modules_outputs_and_stops_only_it() {
         ],
     )
     .unwrap();
-    assert!(rt.tick(ms(0), &[]).is_empty());
-    assert!(rt.tick(ms(10), &[]).is_empty());
+    assert_eq!(rt.tick(ms(0), &[]), none());
+    assert_eq!(rt.tick(ms(10), &[]), none());
     assert_eq!(rt.outputs()[0], 0xFF);
 
     let faults = rt.tick(ms(20), &[]);
@@ -173,7 +178,7 @@ fn a_fault_zeroes_only_that_modules_outputs_and_stops_only_it() {
     assert_eq!(rt.status("good"), Some(Status::Running));
 
     for t in (30..=100).step_by(10) {
-        assert!(rt.tick(ms(t), &[]).is_empty(), "a stopped module faults once");
+        assert_eq!(rt.tick(ms(t), &[]), none(), "a stopped module faults once");
     }
     assert_eq!(&rt.outputs()[..2], &[0, 0], "and stays zeroed");
     assert_eq!(count(&rt, "bad"), 3, "never scanned again");
@@ -253,6 +258,20 @@ fn a_tick_before_any_deadline_does_nothing() {
 }
 
 #[test]
+fn a_clock_at_the_end_of_time_does_not_panic() {
+    let mut rt = Runtime::new(
+        IMAGE,
+        IMAGE,
+        vec![module("a", COUNTER, 10, Window::new(0, 0), Window::new(0, 1))],
+    )
+    .unwrap();
+    rt.tick(ms(0), &[]);
+    rt.tick(Duration::MAX, &[]);
+    rt.tick(Duration::MAX, &[]);
+    assert!(count(&rt, "a") >= 2);
+}
+
+#[test]
 fn two_modules_fighting_for_an_output_byte_are_refused() {
     let err = Runtime::new(
         IMAGE,
@@ -318,9 +337,17 @@ fn every_configuration_problem_is_reported() {
             },
         ]
     );
-    for e in &err {
-        assert!(!e.to_string().is_empty());
-    }
+    let shown: Vec<String> = err.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        shown,
+        [
+            "module \"a\" defined twice",
+            "wide: %I window reaches past the image",
+            "far: %Q window reaches past the image",
+            "z: scan period must be 1 ns ..= 24 h",
+            "m: compiled for a different %Q size than its window",
+        ]
+    );
 }
 
 #[test]

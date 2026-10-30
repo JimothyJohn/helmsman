@@ -210,7 +210,7 @@ impl Runtime {
             for (k, b) in s.image.i.iter_mut().enumerate() {
                 *b = inputs.get(w.start + k).copied().unwrap_or(0);
             }
-            s.stats.scans += 1;
+            s.stats.scans = s.stats.scans.saturating_add(1);
             let q = &mut self.outputs[s.module.q.start..][..s.module.q.len];
             match s.module.program.scan_at(&mut s.image, now) {
                 Ok(()) => q.copy_from_slice(&s.image.q),
@@ -220,15 +220,18 @@ impl Runtime {
                     faults.push((s.module.name.clone(), fault));
                 }
             }
-            s.next += s.module.period;
+            s.next = s.next.saturating_add(s.module.period);
             if s.next <= now {
                 // Late: jump to the first deadline after `now` on the
                 // original phase, counting the ones skipped.
-                let behind = (now - s.next).as_nanos();
+                let behind = now.saturating_sub(s.next).as_nanos();
                 let period = s.module.period.as_nanos();
                 let rem = u64::try_from(behind % period).expect("remainder below a 24 h period");
-                s.stats.overruns += u64::try_from(behind / period + 1).unwrap_or(u64::MAX);
-                s.next = now + s.module.period - Duration::from_nanos(rem);
+                let skipped = u64::try_from(behind / period + 1).unwrap_or(u64::MAX);
+                s.stats.overruns = s.stats.overruns.saturating_add(skipped);
+                s.next = now
+                    .saturating_add(s.module.period)
+                    .saturating_sub(Duration::from_nanos(rem));
             }
         }
         faults

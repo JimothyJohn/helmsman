@@ -4,5 +4,6 @@
 #![forbid(unsafe_code)]
 
 pub mod runtime;
+pub mod spec;
 
 pub use runtime::{ConfigError, MAX_PERIOD, Module, Runtime, Stats, Status, Window};
