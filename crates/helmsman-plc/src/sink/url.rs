@@ -247,14 +247,12 @@ fn refused_v6(ip: Ipv6Addr, allow_local: bool) -> Option<&'static str> {
     // An IPv4 address carried in IPv6: mapped (::ffff:a.b.c.d), compatible
     // (::a.b.c.d) and NAT64 (64:ff9b::a.b.c.d) all reach that IPv4 host.
     let embedded = match s {
-        [0, 0, 0, 0, 0, 0 | 0xffff, ..] | [0x64, 0xff9b, 0, 0, 0, 0, ..] => {
-            Some(Ipv4Addr::new(
-                (s[6] >> 8) as u8,
-                (s[6] & 0xff) as u8,
-                (s[7] >> 8) as u8,
-                (s[7] & 0xff) as u8,
-            ))
-        }
+        [0, 0, 0, 0, 0, 0 | 0xffff, ..] | [0x64, 0xff9b, 0, 0, 0, 0, ..] => Some(Ipv4Addr::new(
+            (s[6] >> 8) as u8,
+            (s[6] & 0xff) as u8,
+            (s[7] >> 8) as u8,
+            (s[7] & 0xff) as u8,
+        )),
         _ => None,
     };
     embedded.and_then(|v4| refused_v4(v4, allow_local))

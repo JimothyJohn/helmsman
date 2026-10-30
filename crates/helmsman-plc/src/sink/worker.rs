@@ -377,14 +377,17 @@ impl Worker {
         let outcome = http::post(&req, self.cfg.timeout, self.cfg.allow_local, &http::std_resolve);
         match outcome {
             Outcome::Delivered(_) | Outcome::Rejected(_) => {
+                if let Err(e) = self.queue.pop() {
+                    self.say(&format!("cannot record delivery in the queue file: {}", e.kind()));
+                }
+                self.stats
+                    .queued
+                    .store(self.queue.len() as u64, Ordering::Relaxed);
                 if let Outcome::Rejected(s) = outcome {
                     bump(&self.stats.rejected, 1);
                     self.say(&format!("event {key} rejected with status {s}; dropped"));
                 } else {
                     bump(&self.stats.delivered, 1);
-                }
-                if let Err(e) = self.queue.pop() {
-                    self.say(&format!("cannot record delivery in the queue file: {}", e.kind()));
                 }
                 self.attempt = 0;
                 self.next_try = Instant::now();

@@ -295,7 +295,9 @@ impl SinksFile {
     ///
     /// # Errors
     /// Every header that cannot be loaded or is malformed (named, never
-    /// shown), and `https` URLs in a build without TLS.
+    /// shown), `https` URLs in a build without TLS, and URLs whose host is
+    /// an address or name [`super::url`] refuses (names that resolve to one
+    /// are refused at each send, since DNS can change).
     pub fn resolve(
         &self,
         env: &dyn Fn(&str) -> Option<String>,
@@ -307,6 +309,20 @@ impl SinksFile {
             if s.url.scheme == Scheme::Https && !cfg!(feature = "https") {
                 errs.push(format!(
                     "line {}: sink {}: https:// needs a build with the https feature",
+                    s.line, s.name
+                ));
+            }
+            if s.url.is_localhost() && !s.allow_local {
+                errs.push(format!(
+                    "line {}: sink {}: localhost refused (set allow_local=true to allow)",
+                    s.line, s.name
+                ));
+            }
+            if let Ok(ip) = s.url.host.parse::<std::net::IpAddr>()
+                && let Some(why) = super::url::refused(ip, s.allow_local)
+            {
+                errs.push(format!(
+                    "line {}: sink {}: address {ip} refused: {why}",
                     s.line, s.name
                 ));
             }

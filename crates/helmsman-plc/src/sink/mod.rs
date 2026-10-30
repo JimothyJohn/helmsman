@@ -111,9 +111,15 @@ impl Sinks {
                 .map(|(n, e)| format!("line {n}: {e}"))
                 .collect::<Vec<_>>()
         })?;
-        let cfgs = file.resolve(env, read)?;
-        let names: Vec<&str> = cfgs.iter().map(|c| c.name.as_str()).collect();
-        let emitter = Emitter::bind(&file.emits, &names, table)?;
+        let names: Vec<&str> = file.sinks.iter().map(|s| s.name.as_str()).collect();
+        let (cfgs, emitter) = match (file.resolve(env, read), Emitter::bind(&file.emits, &names, table)) {
+            (Ok(c), Ok(e)) => (c, e),
+            (c, e) => {
+                let mut errs = c.err().unwrap_or_default();
+                errs.extend(e.err().unwrap_or_default());
+                return Err(errs);
+            }
+        };
         std::fs::create_dir_all(dir).map_err(|e| vec![format!("{}: {e}", dir.display())])?;
         let mut handles = Vec::new();
         for (i, cfg) in cfgs.into_iter().enumerate() {
@@ -150,5 +156,7 @@ impl Sinks {
 pub fn wall_ms(now: std::time::SystemTime) -> Option<i64> {
     const TRUSTED_FROM_MS: i64 = 1_704_067_200_000;
     let d = now.duration_since(std::time::UNIX_EPOCH).ok()?;
-    i64::try_from(d.as_millis()).ok().filter(|&ms| ms >= TRUSTED_FROM_MS)
+    i64::try_from(d.as_millis())
+        .ok()
+        .filter(|&ms| ms >= TRUSTED_FROM_MS)
 }
