@@ -6,6 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use eframe::egui::{self, RichText};
 use helmsman_graph::{BlockId, CmpOp, Kind, MathOp, Node, NodeId, Project, Scope, Sim, Ty};
 
+use crate::box_view::BoxView;
 use crate::canvas::{Interaction, View};
 use crate::example;
 use crate::look;
@@ -42,8 +43,22 @@ pub struct App {
     io_window: Option<String>,
     show_help: bool,
     pub mode: Mode,
-    /// The live ST view, built the first time it is opened.
+    /// Where the live ST view's scans come from.
+    pub source: Source,
+    /// The demo's live ST view, built the first time it is opened.
     pub st: Option<StView>,
+    /// The box's, likewise.
+    pub boxv: Option<BoxView>,
+}
+
+/// Where the live ST view's scans come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Source {
+    /// A module running in this page.
+    #[default]
+    Demo,
+    /// The box that served the page, over its API.
+    Box,
 }
 
 /// Which view fills the window.
@@ -66,8 +81,19 @@ impl App {
             .unwrap_or_else(example::project);
         // The operator's view first; the editor is a lab tool (TODO.md
         // canvas-default-mode).
+        // In a browser the page came from a box (`helmsman-plc --ui`):
+        // watch it, unless the page asks for the demo (`?demo`).
+        #[cfg(target_arch = "wasm32")]
+        let source = if crate::web::wants_demo() {
+            Source::Demo
+        } else {
+            Source::Box
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let source = Source::Demo;
         Self {
             mode: Mode::Live,
+            source,
             ..Self::with_project(project)
         }
     }
@@ -92,7 +118,9 @@ impl App {
             io_window: None,
             show_help: false,
             mode: Mode::Lab,
+            source: Source::Demo,
             st: None,
+            boxv: None,
         }
     }
 
@@ -1031,14 +1059,42 @@ impl App {
                 }
                 ui.separator();
                 ui.label(RichText::new("HELMSMAN").strong().color(brand::YELLOW));
+                ui.separator();
+                for (s, label, tip) in [
+                    (Source::Box, "Box", "the box that served this page, live"),
+                    (
+                        Source::Demo,
+                        "Demo",
+                        "a module running in this page, no box needed",
+                    ),
+                ] {
+                    if ui
+                        .selectable_label(self.source == s, label)
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        self.source = s;
+                    }
+                }
+                ui.separator();
                 ui.label(
                     RichText::new("live ST view · read-only: changes go through the agent as ST")
                         .color(brand::STEEL),
                 );
             });
         });
-        if self.mode == Mode::Live {
-            self.st.get_or_insert_with(StView::demo).show(ui);
+        if self.mode != Mode::Live {
+            return;
+        }
+        match self.source {
+            Source::Demo => self.st.get_or_insert_with(StView::demo).show(ui),
+            Source::Box => {
+                let b = self.boxv.get_or_insert_with(BoxView::new);
+                b.show(ui);
+                if std::mem::take(&mut b.wants_demo) {
+                    self.source = Source::Demo;
+                }
+            }
         }
     }
 }

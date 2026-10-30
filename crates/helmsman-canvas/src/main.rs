@@ -3,7 +3,10 @@
 //! it), and a lab node editor for building logic out of inputs, outputs,
 //! timers, counters and latches, grouped into nested function blocks.
 //!
-//! Native: `cargo run -p helmsman-canvas`. Web: `make canvas-serve`.
+//! Native: `cargo run -p helmsman-canvas` (the demo). Web: built by
+//! `make canvas-web` and served by the box (`helmsman-plc --ui`), it
+//! watches that box over its API; `?demo` (or `make canvas-serve`, with
+//! no box behind it) runs the demo in the page instead.
 
 // Screen geometry is f32 throughout; counts and sim values convert into it.
 // Drawing code reads best with short geometry names (r, z, p, x, y).
@@ -17,12 +20,18 @@
 )]
 
 mod app;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod box_tests;
+mod box_view;
 mod canvas;
 mod example;
 mod look;
+mod remote;
 mod st_view;
 #[cfg(test)]
 mod ui_tests;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {

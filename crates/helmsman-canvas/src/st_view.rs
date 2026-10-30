@@ -1,6 +1,9 @@
 //! The live ST view: a module's Structured Text drawn as its diagram
 //! (`helmsman-diagram`), read-only, with a traced scan on it every frame.
 //!
+//! [`Viewer`] draws a module from whatever scans it is given: the demo
+//! here ([`StView`]), or a box over its API (`box_view`).
+//!
 //! The demo runs the module in-process the way the box does: a
 //! `helmsman_plc::Runtime` scanning every 10 ms on the page's clock, a
 //! `TraceTap` asked for one scan per frame. Its inputs are simulated (a
@@ -14,7 +17,7 @@ use eframe::egui::{
     epaint::CubicBezierShape,
 };
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
-use helmsman_diagram::{Diagram, Gate, Live, Module, NodeId, NodeKind, RegionId, annotate, explain};
+use helmsman_diagram::{Diagram, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, explain};
 use helmsman_iec::{ImageSizes, Value, compile};
 use helmsman_plc::{Module as Slot, Runtime, Sample, Status, TraceTap, Window};
 
@@ -162,68 +165,25 @@ pub enum Pick {
     Region(RegionId),
 }
 
-pub struct StView {
+/// One module's diagram on screen, whatever the scans come from (the
+/// in-page demo, or a box over its API): scopes, camera, selection, the
+/// variable "on because" is shown for, and the panels drawing them.
+pub struct Viewer {
     pub src: String,
     pub module: Module,
-    rt: Runtime,
-    tap: TraceTap,
-    pub sample: Option<Sample>,
-    /// Runtime clock, ms.
-    pub now_ms: u64,
-    /// Page time the clock last caught up to.
-    last: Option<f64>,
-    pub running: bool,
-    /// Inputs follow the scripted shift; off: switched by hand.
-    pub auto: bool,
-    pub inputs: [bool; 3],
     pub scopes: Vec<Scope>,
     pub scope: usize,
     pub cams: Vec<Cam>,
     pub pick: Option<Pick>,
     /// The variable "on because" is shown for (program path).
     pub because: Option<String>,
-    pub error: Option<String>,
 }
 
-impl StView {
-    /// The demo module, compiled and running.
-    pub fn demo() -> Self {
-        Self::new(DEMO).unwrap_or_else(|e| {
-            // DEMO is a constant that compiles (tested); keep the view up anyway.
-            let mut v = Self::new("PROGRAM cell\nVAR x : BOOL; END_VAR\nx := NOT x;\nEND_PROGRAM")
-                .unwrap_or_else(|_| unreachable!());
-            v.error = Some(e);
-            v
-        })
-    }
-
-    /// `src` as module `cell` with one byte of `%I` and `%Q`.
-    ///
-    /// # Errors
-    /// Compile, lowering or runtime configuration errors, as text.
-    pub fn new(src: &str) -> Result<Self, String> {
-        let sizes = ImageSizes { i: 1, q: 1, m: 0 };
-        let program = compile(src, sizes).map_err(|d| {
-            d.iter()
-                .map(|d| format!("{}: {}", d.pos, d.msg))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
-        let module = helmsman_diagram::lower(src, &program.trace_map()).map_err(|e| e.to_string())?;
-        let rt = Runtime::new(
-            1,
-            1,
-            vec![Slot {
-                name: MODULE.into(),
-                program,
-                period: Duration::from_millis(SCAN_MS),
-                i: Window::new(0, 1),
-                q: Window::new(0, 1),
-                params: Vec::new(),
-            }],
-        )
-        .map_err(|e| format!("{e:?}"))?;
-        let tap = rt.tap(MODULE).ok_or("no tap")?;
+impl Viewer {
+    /// `module`, lowered from `src`: the program first, then each user
+    /// function block instance.
+    #[must_use]
+    pub fn new(src: &str, module: Module) -> Self {
         let mut scopes = Vec::new();
         if let Some(p) = module
             .pous
@@ -245,71 +205,30 @@ impl StView {
                 });
             }
         }
+        if scopes.is_empty() {
+            // No program (a library of blocks): show the first POU as is.
+            scopes.push(Scope {
+                label: module.pous.first().map_or_else(String::new, |p| p.name.clone()),
+                pou: 0,
+                prefix: String::new(),
+            });
+        }
         let cams = vec![Cam::default(); scopes.len()];
-        Ok(Self {
+        Self {
             src: src.to_string(),
             module,
-            rt,
-            tap,
-            sample: None,
-            now_ms: 0,
-            last: None,
-            running: true,
-            auto: true,
-            inputs: [false; 3],
             scopes,
             scope: 0,
             cams,
             pick: None,
-            because: Some("CONVEYOR".into()),
-            error: None,
-        })
+            because: None,
+        }
     }
 
-    /// The scripted shift: start at 0.2 s, a jam from 6 to 7.5 s, stop at 10 s.
+    /// Whether there is anything to draw.
     #[must_use]
-    pub const fn scripted(ms: u64) -> [bool; 3] {
-        let t = ms % SHIFT_MS;
-        [
-            t >= 200 && t < 500,
-            t >= 10_000 && t < 10_300,
-            t >= 6_000 && t < 7_500,
-        ]
-    }
-
-    /// Runs the module up to page time `t` (seconds), tracing the last scan.
-    pub fn advance(&mut self, t: f64) {
-        let last = *self.last.get_or_insert(t);
-        self.last = Some(t);
-        if !self.running {
-            return;
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let due = (((t - last).max(0.0) * 1000.0) as u64 / SCAN_MS).min(200);
-        // At least one scan per frame keeps a live trace on the page.
-        self.scans(due.max(1));
-    }
-
-    /// Runs `n` scans; the last one is traced.
-    pub fn scans(&mut self, n: u64) {
-        for k in 0..n {
-            if self.auto {
-                self.inputs = Self::scripted(self.now_ms);
-            }
-            let byte = self
-                .inputs
-                .iter()
-                .enumerate()
-                .fold(0u8, |b, (i, &on)| b | (u8::from(on) << i));
-            if k + 1 == n {
-                self.tap.request();
-            }
-            self.rt.tick(Duration::from_millis(self.now_ms), &[byte]);
-            self.now_ms += SCAN_MS;
-        }
-        if let Some(s) = self.tap.take() {
-            self.sample = Some(s);
-        }
+    pub fn drawable(&self) -> bool {
+        self.module.pous.get(self.scopes[self.scope].pou).is_some()
     }
 
     #[must_use]
@@ -318,9 +237,8 @@ impl StView {
     }
 
     #[must_use]
-    pub fn live(&self) -> Option<Live> {
-        let s = &self.sample.as_ref()?.trace;
-        Some(annotate(self.diagram(), s, &self.scopes[self.scope].prefix))
+    pub fn live(&self, scan: Option<&dyn Scan>) -> Option<Live> {
+        Some(annotate(self.diagram(), scan?, &self.scopes[self.scope].prefix))
     }
 
     /// The source line a statement starts on, numbered.
@@ -373,53 +291,8 @@ impl StView {
         out
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui) {
-        let t = ui.ctx().input(|i| i.time);
-        self.advance(t);
-        egui::Panel::left("st-left")
-            .resizable(true)
-            .default_size(220.0)
-            .show(ui, |ui| self.left(ui));
-        egui::Panel::right("st-right")
-            .resizable(true)
-            .default_size(340.0)
-            .show(ui, |ui| self.right(ui));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.canvas(ui));
-        if self.running {
-            ui.ctx().request_repaint();
-        }
-    }
-
-    fn left(&mut self, ui: &mut egui::Ui) {
-        ui.heading(RichText::new("Module cell").color(YELLOW));
-        let status = match self.rt.status(MODULE) {
-            Some(Status::Running) => "running".to_string(),
-            Some(Status::Held) => "held".to_string(),
-            Some(Status::Faulted(f)) => format!("faulted: {f:?}"),
-            None => "?".into(),
-        };
-        let scans = self.rt.stats(MODULE).map_or(0, |s| s.scans);
-        ui.label(
-            RichText::new(format!(
-                "{status} · {scans} scans · t={:.1}s",
-                self.now_ms as f64 / 1000.0
-            ))
-            .monospace()
-            .color(STEEL),
-        );
-        ui.horizontal(|ui| {
-            let label = if self.running { "Pause" } else { "Run" };
-            if ui.button(label).clicked() {
-                self.running = !self.running;
-            }
-            if ui.add_enabled(!self.running, egui::Button::new("Step")).clicked() {
-                self.scans(1);
-            }
-        });
-        if let Some(e) = &self.error {
-            ui.colored_label(Color32::from_rgb(255, 110, 100), e);
-        }
-        ui.separator();
+    /// The scope picker (program, or a block through one instance).
+    pub fn scopes_ui(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("View").strong());
         let mut chosen = None;
         for (k, s) in self.scopes.iter().enumerate() {
@@ -433,19 +306,14 @@ impl StView {
             self.scope = k;
             self.pick = None;
         }
-        ui.separator();
-        ui.label(RichText::new("Demo inputs").strong());
-        ui.checkbox(&mut self.auto, "scripted shift");
-        ui.add_enabled_ui(!self.auto, |ui| {
-            for (k, name) in INPUTS.iter().enumerate() {
-                ui.checkbox(&mut self.inputs[k], format!("{name}  %IX0.{k}"));
-            }
-        });
-        ui.separator();
+    }
+
+    /// The outputs with their values; a click asks why.
+    pub fn outputs_ui(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         ui.label(RichText::new("Outputs").strong())
             .on_hover_text("click: why is it in this state?");
         for path in self.outputs() {
-            let value = self.sample.as_ref().and_then(|s| s.trace.get(&path));
+            let value = scan.and_then(|s| s.get(&path));
             let on = value == Some(Value::Bool(true));
             let text = RichText::new(format!("{} {path} = {}", if on { "●" } else { "○" }, show(value)))
                 .monospace()
@@ -459,7 +327,8 @@ impl StView {
         }
     }
 
-    fn right(&mut self, ui: &mut egui::Ui) {
+    /// The selection and "on because" panel.
+    pub fn right(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.label(RichText::new("Selection").strong());
             match self.picked() {
@@ -467,7 +336,7 @@ impl StView {
                     ui.label(RichText::new(self.source_line(line)).monospace().color(YELLOW));
                     ui.label(RichText::new(text).monospace());
                     if let Some(Pick::Node(n)) = self.pick {
-                        let live = self.live();
+                        let live = self.live(scan);
                         let node = &self.diagram().nodes[n.0 as usize];
                         if let Some(live) = &live {
                             for (k, o) in node.outs.iter().enumerate() {
@@ -497,15 +366,16 @@ impl StView {
             }
             ui.separator();
             ui.label(RichText::new("On because").strong());
-            if let (Some(path), Some(s)) = (&self.because, &self.sample) {
-                for line in explain(&self.module, &s.trace, path, 4).outline() {
+            if let (Some(path), Some(s)) = (&self.because, scan) {
+                for line in explain(&self.module, s, path, 4).outline() {
                     ui.label(RichText::new(line).monospace().size(11.5));
                 }
             }
         });
     }
 
-    fn canvas(&mut self, ui: &mut egui::Ui) {
+    /// The diagram, panned, zoomed and clickable, with `scan` on it.
+    pub fn canvas(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         let area = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(area, Sense::click_and_drag());
         let painter = ui.painter_at(area);
@@ -544,12 +414,201 @@ impl StView {
                 .map(Pick::Node)
                 .or_else(|| d.region_at(x, y).map(Pick::Region));
         }
-        let live = self.live();
+        let live = self.live(scan);
         draw(&painter, area, cam, self.diagram(), live.as_ref(), self.pick);
     }
 }
 
-fn show(v: Option<Value>) -> String {
+/// The demo: the module running in-page on a `helmsman_plc::Runtime`.
+pub struct StView {
+    pub view: Viewer,
+    rt: Runtime,
+    tap: TraceTap,
+    pub sample: Option<Sample>,
+    /// Runtime clock, ms.
+    pub now_ms: u64,
+    /// Page time the clock last caught up to.
+    last: Option<f64>,
+    pub running: bool,
+    /// Inputs follow the scripted shift; off: switched by hand.
+    pub auto: bool,
+    pub inputs: [bool; 3],
+    pub error: Option<String>,
+}
+
+impl StView {
+    /// The demo module, compiled and running.
+    pub fn demo() -> Self {
+        Self::new(DEMO).unwrap_or_else(|e| {
+            // DEMO is a constant that compiles (tested); keep the view up anyway.
+            let mut v = Self::new("PROGRAM cell\nVAR x : BOOL; END_VAR\nx := NOT x;\nEND_PROGRAM")
+                .unwrap_or_else(|_| unreachable!());
+            v.error = Some(e);
+            v
+        })
+    }
+
+    /// `src` as module `cell` with one byte of `%I` and `%Q`.
+    ///
+    /// # Errors
+    /// Compile, lowering or runtime configuration errors, as text.
+    pub fn new(src: &str) -> Result<Self, String> {
+        let sizes = ImageSizes { i: 1, q: 1, m: 0 };
+        let program = compile(src, sizes).map_err(|d| {
+            d.iter()
+                .map(|d| format!("{}: {}", d.pos, d.msg))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })?;
+        let module = helmsman_diagram::lower(src, &program.trace_map()).map_err(|e| e.to_string())?;
+        let rt = Runtime::new(
+            1,
+            1,
+            vec![Slot {
+                name: MODULE.into(),
+                program,
+                period: Duration::from_millis(SCAN_MS),
+                i: Window::new(0, 1),
+                q: Window::new(0, 1),
+                params: Vec::new(),
+            }],
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        let tap = rt.tap(MODULE).ok_or("no tap")?;
+        let mut view = Viewer::new(src, module);
+        view.because = Some("CONVEYOR".into());
+        Ok(Self {
+            view,
+            rt,
+            tap,
+            sample: None,
+            now_ms: 0,
+            last: None,
+            running: true,
+            auto: true,
+            inputs: [false; 3],
+            error: None,
+        })
+    }
+
+    /// The scripted shift: start at 0.2 s, a jam from 6 to 7.5 s, stop at 10 s.
+    #[must_use]
+    pub const fn scripted(ms: u64) -> [bool; 3] {
+        let t = ms % SHIFT_MS;
+        [
+            t >= 200 && t < 500,
+            t >= 10_000 && t < 10_300,
+            t >= 6_000 && t < 7_500,
+        ]
+    }
+
+    /// Runs the module up to page time `t` (seconds), tracing the last scan.
+    pub fn advance(&mut self, t: f64) {
+        let last = *self.last.get_or_insert(t);
+        self.last = Some(t);
+        if !self.running {
+            return;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let due = (((t - last).max(0.0) * 1000.0) as u64 / SCAN_MS).min(200);
+        // At least one scan per frame keeps a live trace on the page.
+        self.scans(due.max(1));
+    }
+
+    /// Runs `n` scans; the last one is traced.
+    pub fn scans(&mut self, n: u64) {
+        for k in 0..n {
+            if self.auto {
+                self.inputs = Self::scripted(self.now_ms);
+            }
+            let byte = self
+                .inputs
+                .iter()
+                .enumerate()
+                .fold(0u8, |b, (i, &on)| b | (u8::from(on) << i));
+            if k + 1 == n {
+                self.tap.request();
+            }
+            self.rt.tick(Duration::from_millis(self.now_ms), &[byte]);
+            self.now_ms += SCAN_MS;
+        }
+        if let Some(s) = self.tap.take() {
+            self.sample = Some(s);
+        }
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub fn live(&self) -> Option<Live> {
+        self.view
+            .live(self.sample.as_ref().map(|s| &s.trace as &dyn Scan))
+    }
+
+    pub fn show(&mut self, ui: &mut egui::Ui) {
+        let t = ui.ctx().input(|i| i.time);
+        self.advance(t);
+        egui::Panel::left("st-left")
+            .resizable(true)
+            .default_size(220.0)
+            .show(ui, |ui| self.left(ui));
+        let scan = self.sample.as_ref().map(|s| &s.trace as &dyn Scan);
+        egui::Panel::right("st-right")
+            .resizable(true)
+            .default_size(340.0)
+            .show(ui, |ui| self.view.right(ui, scan));
+        egui::CentralPanel::no_frame().show(ui, |ui| self.view.canvas(ui, scan));
+        if self.running {
+            ui.ctx().request_repaint();
+        }
+    }
+
+    fn left(&mut self, ui: &mut egui::Ui) {
+        ui.heading(RichText::new("Module cell").color(YELLOW));
+        ui.label(RichText::new("demo, running in this page").color(STEEL));
+        let status = match self.rt.status(MODULE) {
+            Some(Status::Running) => "running".to_string(),
+            Some(Status::Held) => "held".to_string(),
+            Some(Status::Faulted(f)) => format!("faulted: {f:?}"),
+            None => "?".into(),
+        };
+        let scans = self.rt.stats(MODULE).map_or(0, |s| s.scans);
+        ui.label(
+            RichText::new(format!(
+                "{status} · {scans} scans · t={:.1}s",
+                self.now_ms as f64 / 1000.0
+            ))
+            .monospace()
+            .color(STEEL),
+        );
+        ui.horizontal(|ui| {
+            let label = if self.running { "Pause" } else { "Run" };
+            if ui.button(label).clicked() {
+                self.running = !self.running;
+            }
+            if ui.add_enabled(!self.running, egui::Button::new("Step")).clicked() {
+                self.scans(1);
+            }
+        });
+        if let Some(e) = &self.error {
+            ui.colored_label(Color32::from_rgb(255, 110, 100), e);
+        }
+        ui.separator();
+        self.view.scopes_ui(ui);
+        ui.separator();
+        ui.label(RichText::new("Demo inputs").strong());
+        ui.checkbox(&mut self.auto, "scripted shift");
+        ui.add_enabled_ui(!self.auto, |ui| {
+            for (k, name) in INPUTS.iter().enumerate() {
+                ui.checkbox(&mut self.inputs[k], format!("{name}  %IX0.{k}"));
+            }
+        });
+        ui.separator();
+        let scan = self.sample.as_ref().map(|s| &s.trace as &dyn Scan);
+        self.view.outputs_ui(ui, scan);
+    }
+}
+
+pub fn show(v: Option<Value>) -> String {
     v.map_or_else(|| "–".into(), |v| v.to_string())
 }
 
