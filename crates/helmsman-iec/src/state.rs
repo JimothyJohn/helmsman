@@ -30,6 +30,9 @@ use crate::types::{Ty, Value, round_real};
 pub struct State {
     vars: Vec<Var>,
     started: Option<Instant>,
+    /// The program had scanned: its image is live, so a program restored
+    /// from it does not write located initial values again.
+    warm: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -207,6 +210,7 @@ impl Program {
         State {
             vars,
             started: self.started,
+            warm: !self.cold,
         }
     }
 
@@ -214,7 +218,9 @@ impl Program {
     /// program takes the value of the variable of the same name in `state`
     /// when their types have the same shape and every value fits; the rest
     /// keep their current values (a freshly compiled program's are its
-    /// initial ones). The wall clock [`Program::scan`] uses carries too.
+    /// initial ones). The wall clock [`Program::scan`] uses carries too,
+    /// and so does a warm start: located initial values are not written
+    /// again over an image the old program has been scanning.
     pub fn restore(&mut self, state: &State) -> Carry {
         let mut carry = Carry::default();
         let mine: Vec<(String, Type, usize)> = self
@@ -241,6 +247,9 @@ impl Program {
             .collect();
         if state.started.is_some() {
             self.started = state.started;
+        }
+        if state.warm {
+            self.cold = false;
         }
         carry
     }
