@@ -478,6 +478,7 @@ impl Bench {
         let extras = Extras {
             ui: None,
             screen: Some(screen),
+            trust: None,
         };
         let api = Api::start_with(cfg, shared, extras).unwrap();
         let addr = api.addr();

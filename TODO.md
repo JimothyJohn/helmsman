@@ -341,6 +341,16 @@
   difficulty: low
   id: agent-drafts
 
+- [ ] **Dev bundles: switch in the trust store, not the policy file?** Bundle import (feat/bundle-format) refuses unsigned bundles and bundles signed by no trusted publisher. The brief said "unless policy explicitly allows local dev bundles"; I put that switch in the box's trust store (`dev-bundles allow` in `trusted-publishers`, state dir, 0600, set with `helmsman-plc bundle trust dev-bundles allow`) rather than the `--policy` file, because the policy file's rule is that it can only be stricter than the floor, and allowing dev bundles loosens. Dev bundles are marked `DEV BUNDLE` in the proposal, its note and the audit log, and still go through the approval policy like any proposal. A broken signature is refused either way.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: where an integrator turns dev bundles on, and whether the policy file stays strictly "only stricter"
+  options: trust store `dev-bundles allow` (recommended, built) | a `bundles dev` line in the policy file (breaks only-stricter) | a `--dev-bundles` command-line flag
+  est: 30m
+  difficulty: low
+  id: dev-bundles-switch
+
 - [ ] **Floor screen layout: a startup file, or part of the snapshot?** The andon view (feat/andon-screen) reads its layout from `--screen FILE` at startup, like the sinks file: tile titles, which signal each tile shows, and the state code → colour/message table. It is not in the snapshot store, so changing a message is a file edit plus a restart, outside the approval path and the history. What the tiles *are* (the `screen` outputs and their safe states) is in the I/O map, which is snapshotted and output-affecting, so nothing that drives a tile bypasses approval; only the words and colours do. Putting the layout in a change set means a store schema bump (a `screen` blob beside `io-map` and `calendar`), a tier for it (I'd say `param`: it moves no output), and a live reload in the canvas. I kept it a startup file (reversible: the API already serves it by content).
   asked: 2026-10-30
   by: claude-agent
@@ -822,8 +832,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format
   id: wasm-tier
 
-- [ ] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
-  notes: floor = signature + capability manifest + host-enforced sandbox; the AI review on install sits on top and can only refuse (market-floor)
+- [x] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
+  notes: floor = signature + capability manifest + host-enforced sandbox; the AI review on install sits on top and can only refuse (market-floor). Built: `bundle` module (format, Ed25519 via ring, trust store), `helmsman-plc bundle keygen/pack/sign/verify/trust`, `GET /api/snapshots/{id}/bundle`, `POST /api/bundles` (proposal only); see ARCHITECTURE "Bundles".
   est: 1w
   difficulty: med
   depends: snapshots, module-format
