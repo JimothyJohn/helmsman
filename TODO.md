@@ -210,6 +210,36 @@
   difficulty: med
   id: calendar-timezones
 
+- [ ] **Hot swap of a faulted module: carry its state, or start it cold?** Built in feat/hot-swap: `Runtime::swap` replaces a module's program between scans, carrying every retained variable whose name and type match. A Faulted (or Held) module may be swapped and restarts Running with the fault cleared, and I chose to carry its state like any other swap: a parts counter survives the fix, as tags do after a Logix online edit and fault clear. The cost: the variables are as the fault left them, so a bad index that caused the fault can fault the new program again on its first scan (outputs are already zero, so that is safe, just noisy). `%M` keeps its bytes over the shared length, as an address means the same byte in both programs. Switching to cold start for faulted modules is one branch in `swap`.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: what an applied fix does to a stopped module's counters and timers; box-api and the proposal UI explain it
+  options: carry state, as for a running module (recommended) | start cold (initial values) after a fault | let the caller choose per swap
+  est: 5m
+  difficulty: low
+  id: hot-swap-faulted-state
+
+- [ ] **Logix point syntax: require `@TYPE`?** The `logix-tag` driver (feat/logix-tag-read) binds a signal to `TAG@TYPE`, e.g. `in temp real plc Program:Main.Temp@real`, `in fault bool plc Status.5@bool`. The map validator needs a point's type without touching the device, and the declared Logix type is checked against every reply, so a tag that turns out to be a DINT is an error rather than a REAL read as garbage. The alternative is a bare tag path whose type is learned on connect (browse), which reads nicer but makes `IoMap::validate` unable to catch a bool/int/real mismatch until the box talks to the PLC. Built with `@TYPE` required; switching later is a change in `helmsman-io/src/logix.rs` and the map files that use it.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: the address syntax map files and the signal-model card use for Logix tags
+  options: keep TAG@TYPE required (recommended) | bare TAG, type learned on connect | both, @TYPE optional
+  est: 5m
+  difficulty: low
+  id: logix-point-syntax
+
+- [ ] **Download 1756-PM020 by hand?** The Logix 5000 Controllers Data Access manual (the reference for Read Tag, fragmented reads, Multiple Service Packet and the Symbol object) returns HTTP 403 to scripted fetches, like the Modbus PDFs did. The tag-read code cites pycomm3 and libplctag for its byte layouts instead (`docs/SOURCES.md`). If you save the PDF anywhere on the Studio, the next session checks every layout and error code against it and adds `PM020 p.<n>` citations.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: the PDF from the vendor's literature library (publication 1756-PM020), dropped under `~/Downloads` or `docs/`
+  result: logix layouts checked against the primary source, citations by page
+  options: here it is (path) | skip, the prior art is enough until the bench test
+  est: 5m
+  difficulty: low
+  id: logix-pm020
+
 - [ ] **Sim replay: record at the scan's ticks, or at every link read?** The recorder (feat/sim-replay) samples the signal table just before each runtime tick, stamped with the tick's `now`: exactly what the running modules scanned against, one clock, nothing added to the device links, and replaying the running modules over a recording made from a deterministic run reproduces their outputs exactly (property-tested against the Modbus simulator). The cost: a change that came and went between two ticks is not recorded, so a *proposed* module scanning faster than every running one sees the data at the running modules' tick rate (at most 1 s apart with a calendar loaded). Recording at each link read instead would catch every polled value but needs the links and the scheduler on one clock and puts a handoff in every link thread. Defaults are 10 minutes and 4 MiB of changes (about 100 000); neither is on the command line yet. Reversible: the recording format and replay don't change either way.
   asked: 2026-10-30
   by: claude-agent
@@ -435,7 +465,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   id: multi-module
 
-- [ ] **Hot-swap a module without dropping I/O** — replace one module's compiled program between scans, carrying over retained state where names and types match; the adapter connection stays up.
+- [x] **Hot-swap a module without dropping I/O** — replace one module's compiled program between scans, carrying over retained state where names and types match; the adapter connection stays up.
   result: applying a change is instant and doesn't fault the scanner
   est: 2d
   difficulty: med
@@ -456,8 +486,9 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format
   id: signal-model
 
-- [ ] **Logix symbolic tag read** — Read Tag (0x4C) and multi-service packets over the existing explicit session; tag list browse (Symbol object 0x6B) so the agent can see what's on the PLC. Read-only by construction: no Write Tag in the box build.
+- [x] **Logix symbolic tag read** — Read Tag (0x4C) and multi-service packets over the existing explicit session; tag list browse (Symbol object 0x6B) so the agent can see what's on the PLC. Read-only by construction: no Write Tag in the box build.
   needs: a fixture server for tests (OpENer can't serve symbolic tags); real-device verification waits for an EtherNet/IP target device on the bench
+  notes: built on feat/logix-tag-read: helmsman-proto `logix` (TagReader: Read Tag, MSP, Read Tag Fragmented, Symbol browse, backplane routing), the `unrestricted` feature gate, the fixture in helmsman-adapter `logix`, the `logix-tag` driver in helmsman-io. Verified only against our fixture; real-CompactLogix verification still waits for hardware on the bench (see `logix-pm020`, `logix-point-syntax`).
   result: CompactLogix tags become signals
   est: 4d
   difficulty: high
@@ -477,8 +508,9 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format, signal-model
   id: box-api
 
-- [ ] **Snapshots and rollback** — each applied change set is an immutable, content-addressed snapshot in SQLite (modules, params, signal bindings) with author, prompt, approver, time. One-call rollback. Exportable as a bundle later.
+- [x] **Snapshots and rollback** — each applied change set is an immutable, content-addressed snapshot in SQLite (modules, params, signal bindings) with author, prompt, approver, time. One-call rollback. Exportable as a bundle later.
   result: undo for everything the agent does
+  notes: built: helmsman_plc::store (rusqlite bundled + sha2), `helmsman-plc --store DIR` runs head; see ARCHITECTURE "Snapshots"
   est: 2d
   difficulty: med
   depends: module-format

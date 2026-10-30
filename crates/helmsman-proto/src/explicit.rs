@@ -75,7 +75,14 @@ pub fn send_rr_data(
 ) -> Vec<u8> {
     let mut mr = Writer::default();
     request.encode(&mut mr);
-    let mr = mr.into_inner();
+    send_rr_data_bytes(session_handle, sender_context, timeout, &mr.into_inner())
+}
+
+/// `SendRRData` request around an already-encoded Message Router request
+/// (one whose path is not a logical [`cip::Path`], such as a symbolic tag
+/// path).
+#[must_use]
+pub fn send_rr_data_bytes(session_handle: u32, sender_context: [u8; 8], timeout: u16, mr: &[u8]) -> Vec<u8> {
     let items = [
         Item {
             type_id: cpf::item::NULL_ADDRESS,
@@ -83,7 +90,7 @@ pub fn send_rr_data(
         },
         Item {
             type_id: cpf::item::UNCONNECTED_DATA,
-            data: &mr,
+            data: mr,
         },
     ];
     let mut w = Writer::default();

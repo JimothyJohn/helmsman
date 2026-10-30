@@ -7,9 +7,16 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# Any explicit service (`Session::request`, `request_raw`) and the Class 1
+# scanner. Off by default so the box build can only read from controllers
+# it observes; the CLI and the tests turn it on.
+unrestricted = []
+
 [dependencies]
 
 [dev-dependencies]
+helmsman-proto = { path = ".", features = ["unrestricted"] }
 proptest = "1.12"
 
 [lints]

@@ -25,6 +25,7 @@ use helmsman_plc::link::{Link, links, spawn};
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::record::{RecordConfig, Recorder};
 use helmsman_plc::spec::{Defaults, Spec};
+use helmsman_plc::store::{Kind, Store};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
 const USAGE: &str = "\
@@ -40,6 +41,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        helmsman_plc::calendar::text): adds the signals in_shift,
                        on_break, planned_down, working, shift_id, shift_minute,
                        shift_left, and drives the outputs its `drive` lines name
+  --store DIR          run the head snapshot of the store in DIR (see
+                       helmsman_plc::store): its modules, I/O map and calendar,
+                       instead of the files above
   --emit-st            print the Structured Text a .xml project lowers to, and exit
   --scan-ms N          default scan period (10, 1..=10000)
   --memory N           default %M area in bytes (1024)
@@ -64,6 +68,7 @@ struct Opts {
     module_dirs: Vec<PathBuf>,
     io_map: Option<PathBuf>,
     calendar: Option<PathBuf>,
+    store: Option<PathBuf>,
     emit_st: bool,
     scan: Duration,
     memory: usize,
@@ -78,6 +83,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         module_dirs: Vec::new(),
         io_map: None,
         calendar: None,
+        store: None,
         emit_st: false,
         scan: Duration::from_millis(10),
         memory: 1024,
@@ -132,6 +138,11 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     return Err("one --calendar only".into());
                 }
             }
+            "--store" => {
+                if o.store.replace(PathBuf::from(v)).is_some() {
+                    return Err("one --store only".into());
+                }
+            }
             "--encap-port" => o.server.encap_port = port()?,
             "--io-port" => o.server.io_port = port()?,
             "--peer-io-port" => o.server.peer_io_port = port()?,
@@ -139,8 +150,16 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         }
         i += 2;
     }
-    if o.programs.is_empty() && o.modules.is_empty() && o.module_dirs.is_empty() {
-        return Err("missing PROGRAM.st, PROJECT.xml, --module or --module-dir".into());
+    let from_files = !(o.programs.is_empty() && o.modules.is_empty() && o.module_dirs.is_empty());
+    if o.store.is_some() && (from_files || o.io_map.is_some() || o.calendar.is_some() || o.emit_st) {
+        return Err(
+            "--store runs the store's head snapshot; it takes no PROGRAM, --module, --module-dir, \
+             --io-map, --calendar or --emit-st"
+                .into(),
+        );
+    }
+    if !from_files && o.store.is_none() {
+        return Err("missing PROGRAM.st, PROJECT.xml, --module, --module-dir or --store".into());
     }
     Ok(o)
 }
@@ -167,24 +186,91 @@ fn is_xml(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xml"))
 }
 
-/// Each module's spec, and its directory when it came from one.
-fn specs(o: &Opts, cfg: &DeviceConfig) -> Result<Vec<(Spec, Option<ModuleDir>)>, String> {
-    let d = Defaults {
+/// What a module gets for whatever it does not set.
+fn defaults(o: &Opts, i_len: usize, q_len: usize) -> Defaults {
+    Defaults {
         period: o.scan,
-        i: Window::new(0, assembly_size(cfg, INPUTS)),
-        q: Window::new(0, assembly_size(cfg, OUTPUTS)),
+        i: Window::new(0, i_len),
+        q: Window::new(0, q_len),
         m: o.memory,
-    };
-    let mut specs: Vec<(Spec, Option<ModuleDir>)> = o
-        .programs
-        .iter()
-        .map(|p| (Spec::from_path(p, &d), None))
-        .collect();
-    for m in &o.modules {
-        specs.push((Spec::parse(m, &d)?, None));
     }
-    for dir in &o.module_dirs {
-        let md = ModuleDir::read(dir, &d)?;
+}
+
+/// A file's text, and where messages say it is.
+type Text = (PathBuf, String);
+
+/// What the box runs beyond bare programs: module directories, the I/O
+/// map and the calendar, read from their files or from a snapshot.
+struct Content {
+    dirs: Vec<ModuleDir>,
+    io_map: Option<Text>,
+    calendar: Option<Text>,
+    /// Which snapshot, when it came from a store.
+    origin: Option<String>,
+}
+
+fn read_text(path: &Path) -> Result<Text, String> {
+    let src = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((path.to_path_buf(), src))
+}
+
+/// The head snapshot of the store in `dir`; messages name its files as
+/// `DIR/<id>/...`.
+fn from_store(dir: &Path, d: &Defaults) -> Result<Content, String> {
+    let store = Store::open(dir).map_err(|e| e.to_string())?;
+    let head = store
+        .head()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("store {} has no snapshot yet", dir.display()))?;
+    let cs = store.get(&head.id).map_err(|e| e.to_string())?;
+    let at = dir.join(head.id.to_string());
+    let kind = match head.kind {
+        Kind::Apply => "applied".to_string(),
+        Kind::Rollback { to } => format!("rolled back to {to}"),
+    };
+    let dirs = cs
+        .modules
+        .into_iter()
+        .map(|(name, f)| ModuleDir::from_text(&at.join(name), &f.manifest, f.source, d))
+        .collect::<Result<_, _>>()?;
+    Ok(Content {
+        dirs,
+        io_map: cs.io_map.map(|s| (at.join("io.map"), s)),
+        calendar: cs.calendar.map(|s| (at.join("calendar"), s)),
+        origin: Some(format!(
+            "store {}: snapshot {} (entry {}, {kind} by {})",
+            dir.display(),
+            head.id,
+            head.seq,
+            head.meta.author
+        )),
+    })
+}
+
+fn content(o: &Opts, d: &Defaults) -> Result<Content, String> {
+    if let Some(dir) = &o.store {
+        return from_store(dir, d);
+    }
+    Ok(Content {
+        dirs: o
+            .module_dirs
+            .iter()
+            .map(|dir| ModuleDir::read(dir, d))
+            .collect::<Result<_, _>>()?,
+        io_map: o.io_map.as_deref().map(read_text).transpose()?,
+        calendar: o.calendar.as_deref().map(read_text).transpose()?,
+        origin: None,
+    })
+}
+
+/// Each module's spec, and its directory when it came from one.
+fn specs(o: &Opts, d: &Defaults, dirs: Vec<ModuleDir>) -> Result<Vec<(Spec, Option<ModuleDir>)>, String> {
+    let mut specs: Vec<(Spec, Option<ModuleDir>)> =
+        o.programs.iter().map(|p| (Spec::from_path(p, d), None)).collect();
+    for m in &o.modules {
+        specs.push((Spec::parse(m, d)?, None));
+    }
+    for md in dirs {
         specs.push((md.spec.clone(), Some(md)));
     }
     Ok(specs)
@@ -242,10 +328,9 @@ fn emit_st(o: &Opts) -> Result<(), String> {
 
 /// The I/O map's signal table and its links, not yet started, and whether
 /// any signal is on the box's own channels.
-fn load_io(path: &Path) -> Result<(SignalTable, Vec<Link>, bool), String> {
+fn load_io((path, src): &Text) -> Result<(SignalTable, Vec<Link>, bool), String> {
     let file = path.display();
-    let src = fs::read_to_string(path).map_err(|e| format!("{file}: {e}"))?;
-    let parsed = helmsman_io::text::parse(&src).map_err(|errs| {
+    let parsed = helmsman_io::text::parse(src).map_err(|errs| {
         let lines: Vec<String> = errs.iter().map(|(n, e)| format!("\n  {file}:{n}: {e}")).collect();
         format!("{file} does not parse:{}", lines.concat())
     })?;
@@ -263,10 +348,9 @@ fn load_io(path: &Path) -> Result<(SignalTable, Vec<Link>, bool), String> {
 }
 
 /// The calendar file, bound to `table`.
-fn load_calendar(path: &Path, table: &mut SignalTable) -> Result<Source, String> {
+fn load_calendar((path, src): &Text, table: &mut SignalTable) -> Result<Source, String> {
     let file = path.display();
-    let src = fs::read_to_string(path).map_err(|e| format!("{file}: {e}"))?;
-    let cal = calendar::load(&src).map_err(|errs| {
+    let cal = calendar::load(src).map_err(|errs| {
         let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
         format!("{file} is not a valid calendar:{}", lines.concat())
     })?;
@@ -277,15 +361,15 @@ fn load_calendar(path: &Path, table: &mut SignalTable) -> Result<Source, String>
 }
 
 /// [`load_io`] (or no signals), with the calendar's added.
-fn load_signals(o: &Opts) -> Result<(SignalTable, Vec<Link>, bool, Option<Source>), String> {
-    let (mut table, links, uses_box) = match &o.io_map {
-        Some(path) => load_io(path)?,
+fn load_signals(c: &Content) -> Result<(SignalTable, Vec<Link>, bool, Option<Source>), String> {
+    let (mut table, links, uses_box) = match &c.io_map {
+        Some(text) => load_io(text)?,
         None => (SignalTable::default(), Vec::new(), false),
     };
-    let cal = o
+    let cal = c
         .calendar
-        .as_deref()
-        .map(|p| load_calendar(p, &mut table))
+        .as_ref()
+        .map(|t| load_calendar(t, &mut table))
         .transpose()?;
     Ok((table, links, uses_box, cal))
 }
@@ -294,6 +378,16 @@ fn load_signals(o: &Opts) -> Result<(SignalTable, Vec<Link>, bool, Option<Source
 fn wall() -> Option<i64> {
     let d = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
     i64::try_from(d.as_secs()).ok()
+}
+
+/// What the modules see, recorded for sim replay (the box API will serve
+/// its tap). Built after the calendar attaches, so its signals are in.
+fn recorder(table: &Mutex<SignalTable>) -> Recorder {
+    Recorder::new(
+        &table.lock().unwrap_or_else(PoisonError::into_inner),
+        RecordConfig::default(),
+        wall().and_then(|s| s.checked_mul(1000)),
+    )
 }
 
 /// How long the loop may sleep with a calendar to keep current.
@@ -351,28 +445,8 @@ fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>) {
     }
 }
 
-fn run(o: &Opts) -> Result<(), String> {
-    if o.emit_st {
-        return emit_st(o);
-    }
-    let cfg = device_config(o.serial);
-    let loaded = specs(o, &cfg)?;
-    let modules = loaded.iter().map(load).collect::<Result<Vec<_>, _>>()?;
-    let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
-    let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
-    let (table, io_links, uses_box, cal) = load_signals(o)?;
-    let table = Arc::new(Mutex::new(table));
-    let bound = Runtime::with_signals(
-        i_len,
-        q_len,
-        modules,
-        &table.lock().unwrap_or_else(PoisonError::into_inner),
-    );
-    let mut rt = bound.map_err(|errs| {
-        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
-        format!("modules do not fit together:{}", lines.concat())
-    })?;
-    let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
+/// One line per module for the startup banner, joined with `; `.
+fn listing(specs: &[Spec]) -> String {
     let listed: Vec<String> = specs
         .iter()
         .map(|s| {
@@ -388,13 +462,43 @@ fn run(o: &Opts) -> Result<(), String> {
             )
         })
         .collect();
+    listed.join("; ")
+}
+
+fn run(o: &Opts) -> Result<(), String> {
+    if o.emit_st {
+        return emit_st(o);
+    }
+    let cfg = device_config(o.serial);
+    let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
+    let d = defaults(o, i_len, q_len);
+    let mut content = content(o, &d)?;
+    let loaded = specs(o, &d, std::mem::take(&mut content.dirs))?;
+    let modules = loaded.iter().map(load).collect::<Result<Vec<_>, _>>()?;
+    let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
+    let (table, io_links, uses_box, cal) = load_signals(&content)?;
+    let table = Arc::new(Mutex::new(table));
+    let bound = Runtime::with_signals(
+        i_len,
+        q_len,
+        modules,
+        &table.lock().unwrap_or_else(PoisonError::into_inner),
+    );
+    let mut rt = bound.map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
+        format!("modules do not fit together:{}", lines.concat())
+    })?;
+    let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
     eprintln!(
         "helmsman-plc: CIP on {} (I/O {}), {} module(s): {}",
         adapter.encap_addr(),
         adapter.io_addr(),
         specs.len(),
-        listed.join("; ")
+        listing(&specs)
     );
+    if let Some(origin) = &content.origin {
+        eprintln!("helmsman-plc: {origin}");
+    }
     if uses_box {
         eprintln!("helmsman-plc: box channels (do:N, di:N) are in memory only; no GPIO yet");
     }
@@ -404,12 +508,7 @@ fn run(o: &Opts) -> Result<(), String> {
     start_io(io_links, &table);
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
-    // What the modules saw, for sim replay (the box API serves its tap).
-    let mut recorder = Recorder::new(
-        &table.lock().unwrap_or_else(PoisonError::into_inner),
-        RecordConfig::default(),
-        wall().and_then(|s| s.checked_mul(1000)),
-    );
+    let mut recorder = recorder(&table);
     let start = Instant::now();
     loop {
         {

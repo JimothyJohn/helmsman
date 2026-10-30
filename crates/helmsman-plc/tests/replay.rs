@@ -280,10 +280,10 @@ fn replay_is_deterministic_and_survives_export() {
         (0..200u32)
             .map(|k| {
                 let at = u64::from(k) * 25;
-                if k % 3 == 0 {
+                if k.is_multiple_of(3) {
                     ev(at, 1, Some(Value::Int(i64::from(k % 17))))
                 } else {
-                    ev(at, 0, on(k % 2 == 0))
+                    ev(at, 0, on(k.is_multiple_of(2)))
                 }
             })
             .collect(),
@@ -302,7 +302,7 @@ fn a_proposal_is_diffed_against_the_running_module() {
     for k in 0..10u64 {
         // pulses of 50 ms (too short for the TON) and 200 ms, alternating
         let at = 500 * k + 100;
-        let len = if k % 2 == 0 { 50 } else { 200 };
+        let len = if k.is_multiple_of(2) { 50 } else { 200 };
         events.push(ev(at, 0, on(true)));
         events.push(ev(at + len, 0, on(false)));
     }
@@ -520,9 +520,9 @@ fn eviction_at_the_byte_cap_keeps_the_recording_exact_from_its_start() {
     for k in 0..2000u64 {
         let v = Value::Int(i64::try_from(k % 97).unwrap());
         t.set_input(1, Some(v));
-        t.set_input(0, Some(Value::Bool(k % 5 == 0)));
+        t.set_input(0, Some(Value::Bool(k.is_multiple_of(5))));
         r.observe(ms(k * 10), &t);
-        truth.push((ms(k * 10), Some(v), Some(Value::Bool(k % 5 == 0))));
+        truth.push((ms(k * 10), Some(v), Some(Value::Bool(k.is_multiple_of(5)))));
     }
     let rec = r.snapshot();
     assert!(rec.events.len() * size_of::<Event>() <= 4096);

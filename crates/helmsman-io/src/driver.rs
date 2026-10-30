@@ -84,6 +84,7 @@ pub trait Driver {
 pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
     match driver {
         crate::modbus::DRIVER => crate::modbus::Point::parse(addr).map(crate::modbus::Point::info),
+        crate::logix::DRIVER => crate::logix::Point::parse(addr).map(|p| p.info()),
         other => Err(Error::UnknownDriver(other.into())),
     }
 }
@@ -96,6 +97,10 @@ pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
 pub fn open(device: &Device) -> Result<Box<dyn Driver + Send>, Error> {
     match device.driver.as_str() {
         crate::modbus::DRIVER => Ok(Box::new(crate::modbus::ModbusDriver::from_params(
+            &device.endpoint,
+            &device.params,
+        )?)),
+        crate::logix::DRIVER => Ok(Box::new(crate::logix::LogixDriver::from_params(
             &device.endpoint,
             &device.params,
         )?)),

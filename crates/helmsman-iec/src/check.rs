@@ -367,6 +367,8 @@ pub enum StKind {
 pub struct Checked {
     pub pous: Vec<PouCode>,
     pub aggs: Vec<AggInfo>,
+    /// Enumerations by id (what [`Type::Enum`] indexes).
+    pub enums: Vec<EnumInfo>,
     pub program: usize,
     /// POUs `0..library` are the built-in library's (they come first).
     /// Kept out of [`PouCode`]: widening that struct slowed scans by a
@@ -2524,6 +2526,7 @@ pub fn check(
         Some(program) if ck.diags.is_empty() => Ok(Checked {
             pous: ck.pous,
             aggs: ck.aggs,
+            enums: ck.enums,
             program,
             library: ck.srcs.iter().take_while(|s| s.system).count(),
             mem_init,

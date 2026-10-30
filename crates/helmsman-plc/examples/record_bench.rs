@@ -35,7 +35,7 @@ fn table(n: usize) -> SignalTable {
     };
     let mut t = SignalTable::new(&map, &BTreeMap::new()).unwrap();
     for k in 0..n {
-        let ty = if k % 2 == 0 { Ty::Bool } else { Ty::Int };
+        let ty = if k.is_multiple_of(2) { Ty::Bool } else { Ty::Int };
         t.add_box_input(&format!("in{k}"), ty).unwrap();
     }
     t
@@ -44,8 +44,8 @@ fn table(n: usize) -> SignalTable {
 /// `changing` inputs change on every tick.
 fn set(t: &mut SignalTable, n: usize, changing: usize, tick: u64) {
     for k in 0..changing.min(n) {
-        let v = if k % 2 == 0 {
-            Value::Bool(tick % 2 == 0)
+        let v = if k.is_multiple_of(2) {
+            Value::Bool(tick.is_multiple_of(2))
         } else {
             Value::Int(i64::try_from(tick).unwrap_or(0))
         };
