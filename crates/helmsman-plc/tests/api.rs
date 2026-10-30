@@ -173,7 +173,7 @@ impl Bench {
             proposals: Box::new(MemProposals::new(1000)),
             running: setup.running,
             snapshots: setup.store.map(|d| Mutex::new(Store::open(&d).unwrap())),
-            replay: None,
+            approval: None,
             chat: None,
         };
         let api = Api::start(cfg, shared).unwrap();

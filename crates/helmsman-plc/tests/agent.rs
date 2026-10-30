@@ -24,12 +24,15 @@ use helmsman_agent::{Budget, Retry, relay, sse};
 use helmsman_iec::{ImageSizes, compile};
 use helmsman_io::Value;
 use helmsman_plc::api::{
-    Api, Catalog, Config, Devices, Limits, Live, MemAudit, MemProposals, ModuleInfo, Publisher, Shared, chat,
-    sim,
+    Api, Approval, Catalog, Config, Devices, Limits, Live, MemAudit, MemProposals, ModuleInfo, Plant,
+    Publisher, Shared, chat, swap,
 };
 use helmsman_plc::manifest::ModuleDir;
+use helmsman_plc::policy::pin::{Gate, Pins};
+use helmsman_plc::policy::{FLOOR, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
 use helmsman_plc::spec::Defaults;
+use helmsman_plc::store::{ChangeSet, ModuleFiles};
 use helmsman_plc::{Runtime, SignalTable, Window};
 use serde_json::{Value as Json, json};
 
@@ -66,6 +69,30 @@ out beacon bool box do:1 safe=false
 
 const GOOD_DRAFT: &str = "PROGRAM flash\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT beacon : BOOL; END_VAR\n  beacon := NOT start;\nEND_PROGRAM\n";
 const BAD_DRAFT: &str = "PROGRAM flash\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT beacon : BOOL; END_VAR\n  beacon := start AND ;\nEND_PROGRAM\n";
+
+const ENGINEER: &str = "eng-135797";
+
+/// What the box runs: the conveyor module and the map, as a change set.
+fn running() -> ChangeSet {
+    ChangeSet {
+        modules: std::collections::BTreeMap::from([(
+            "conveyor".to_string(),
+            ModuleFiles {
+                manifest: MANIFEST.into(),
+                source: SOURCE.into(),
+            },
+        )]),
+        io_map: Some(MAP.into()),
+        calendar: None,
+    }
+}
+
+fn pins() -> Pins {
+    let mut p = Pins::default();
+    // One iteration keeps the tests fast (the binary refuses so few).
+    p.set(Role::Engineer, ENGINEER, 1, [2; 16]).unwrap();
+    p
+}
 
 fn defaults() -> Defaults {
     Defaults {
@@ -360,6 +387,26 @@ impl Default for Opts {
     }
 }
 
+/// The chat route's setup: the fake relay, short timeouts and backoff.
+fn chat_setup(o: Opts) -> Option<chat::Setup> {
+    o.relay.map(|url| {
+        let mut rc = relay::Config::new(url, RELAY_TOKEN.into(), "v1".into());
+        rc.timeouts = Timeouts {
+            connect: Duration::from_secs(2),
+            idle: o.idle,
+            total: Duration::from_secs(20),
+        };
+        let mut s = chat::Setup::new(rc);
+        s.budget = o.budget;
+        s.retry = Retry {
+            attempts: o.retries,
+            first: Duration::from_millis(10),
+            cap: Duration::from_millis(40),
+        };
+        s
+    })
+}
+
 impl Bench {
     fn new(o: Opts) -> Self {
         let d = defaults();
@@ -389,25 +436,22 @@ impl Bench {
             modules,
         };
         let mut recorder = Recorder::new(&table, RecordConfig::default(), None);
-        let replay = sim::Source::new(recorder.tap(), table.clone(), (32, 32), vec![module], d);
+        let (handle, swapper) = swap::channel(Duration::from_secs(5));
+        let approval = Approval {
+            policy: FLOOR,
+            gate: Gate::new(pins(), FLOOR.lockout, Arc::new(Instant::now)),
+            plant: Plant {
+                table: table.clone(),
+                i_len: 32,
+                q_len: 32,
+                defaults: d,
+                record: Some(recorder.tap()),
+            },
+            swap: handle,
+        };
         let table = Arc::new(Mutex::new(table));
         let live = Arc::new(Live::default());
-        let chat = o.relay.map(|url| {
-            let mut rc = relay::Config::new(url, RELAY_TOKEN.into(), "v1".into());
-            rc.timeouts = Timeouts {
-                connect: Duration::from_secs(2),
-                idle: o.idle,
-                total: Duration::from_secs(20),
-            };
-            let mut s = chat::Setup::new(rc);
-            s.budget = o.budget;
-            s.retry = Retry {
-                attempts: o.retries,
-                first: Duration::from_millis(10),
-                cap: Duration::from_millis(40),
-            };
-            s
-        });
+        let chat = chat_setup(o);
         let cfg = Config {
             bind: "127.0.0.1:0".parse().unwrap(),
             token: TOKEN.into(),
@@ -425,9 +469,9 @@ impl Bench {
             devices: Arc::new(Devices::new(["box".to_string()])),
             audit: Box::new(MemAudit::new(1000)),
             proposals: Box::new(MemProposals::new(1000)),
-            running: None,
+            running: Some(running()),
             snapshots: None,
-            replay: Some(replay),
+            approval: Some(approval),
             chat,
         };
         let api = Api::start(cfg, shared).unwrap();
@@ -444,6 +488,7 @@ impl Bench {
                         let mut t = lock(&table);
                         // `start` toggles every 20 ticks, so a replay has edges to see.
                         t.set_input(start, Some(Value::Bool((k / 20).is_multiple_of(2))));
+                        swapper.serve(&mut rt, &mut t);
                         let now = t0.elapsed();
                         recorder.observe(now, &t);
                         rt.tick_with(now, &[], &mut t);
@@ -784,7 +829,7 @@ fn a_draft_that_fails_the_checker_is_fixed_simulated_and_proposed() {
     assert_eq!(data(&r[1])["touches_outputs"], true);
 
     let sim = data(&results(&seen, 3)[0]);
-    let beacon = sim["diff"]
+    let beacon = sim["signals"]
         .as_array()
         .unwrap()
         .iter()
@@ -1315,8 +1360,16 @@ fn replay_routes_are_read_only_and_token_gated() {
     );
     let (status, r) = bench.call("POST", "/api/proposals/replay", Some(TOKEN), Some(&body));
     assert_eq!(status, 200, "{r}");
-    assert!(r["window"]["end_ms"].as_u64().unwrap() > 0, "{r}");
-    assert_eq!(r["module"], "flash");
+    assert!(r["end_ms"].as_u64().unwrap() > 0, "{r}");
+    assert_eq!(r["evidence"], false);
+    assert!(
+        r["signals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["signal"] == "beacon"),
+        "{r}"
+    );
     assert!(bench.proposals().is_empty(), "a replay stores nothing");
     for (bad, code) in [
         (json!({ "draft": body["draft"], "minutes": 0 }), 400),
@@ -1344,41 +1397,18 @@ fn replay_routes_are_read_only_and_token_gated() {
     assert_eq!(checked["stored"], false);
     assert!(bench.proposals().is_empty(), "a check stores nothing");
 
-    // A stored module proposal replays by id; a param proposal does not.
+    // The draft replays above are not evidence: applying the stored
+    // proposal without its own replay (and, here, without a store) is
+    // refused, and nothing changes.
     let (status, p) = bench.call("POST", "/api/proposals", Some(TOKEN), Some(&body["draft"]));
     assert_eq!(status, 201, "{p}");
-    let (status, r) = bench.call(
+    let (status, refused) = bench.call(
         "POST",
-        &format!("/api/proposals/{}/replay", p["id"]),
+        &format!("/api/proposals/{}/apply", p["id"]),
         Some(TOKEN),
-        None,
+        Some(&json!({ "role": "engineer", "pin": ENGINEER })),
     );
-    assert_eq!(status, 200, "{r}");
-    assert_eq!(r["module"], "flash");
-    let (status, param) = bench.call(
-        "POST",
-        "/api/proposals",
-        Some(TOKEN),
-        Some(&json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 2.0 })),
-    );
-    assert_eq!(status, 201, "{param}");
-    assert_eq!(
-        bench
-            .call(
-                "POST",
-                &format!("/api/proposals/{}/replay", param["id"]),
-                Some(TOKEN),
-                None
-            )
-            .0,
-        422
-    );
-    assert_eq!(
-        bench
-            .call("POST", "/api/proposals/99/replay", Some(TOKEN), None)
-            .0,
-        404
-    );
-    assert_eq!(bench.call("POST", "/api/proposals/1/replay", None, None).0, 401);
-    assert_eq!(bench.proposals().len(), 2);
+    assert!((400..500).contains(&status), "{status}: {refused}");
+    assert_eq!(bench.proposals()[0]["status"], "draft");
+    assert_eq!(bench.proposals().len(), 1);
 }

@@ -626,7 +626,7 @@ fn simulate_module(api: &BoxApi, drafts: &mut Drafts, i: &Simulate) -> Outcome {
     match api.post("/api/proposals/replay", &body) {
         Ok((200, r)) => {
             d.simulated = true;
-            let changed = r["diff"]
+            let changed = r["signals"]
                 .as_array()
                 .map_or(0, |a| a.iter().filter(|s| s["identical"] == json!(false)).count());
             ok(r, format!("draft {} simulated: {changed} output(s) differ", d.id))
