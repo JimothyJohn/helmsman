@@ -583,7 +583,9 @@ fn rebinding_an_output_sends_the_old_coil_safe_and_the_command_to_the_new_one() 
     let watch = Watch::start(
         vec![(Arc::clone(&b), 0, true)],
         &bench.table,
-        vec![("valve", true), ("horn", true)],
+        // Not the valve: rebound, it is another signal and starts safe
+        // until its module next scans (one period).
+        vec![("horn", true)],
     );
     let moved = map(&a, &b).replace("valve bool a coil:0", "valve bool a coil:1");
     let id = bench.propose(&json!({ "kind": "io_map", "text": moved }));
@@ -730,7 +732,7 @@ fn rolling_back_across_a_map_change_restores_the_old_map() {
     let watch = Watch::start(
         vec![(Arc::clone(&b), 0, true)],
         &bench.table,
-        vec![("valve", true)],
+        vec![("horn", true)],
     );
     let r = bench.rollback(&original);
     assert_eq!(r.status, 200, "{r:?}");
