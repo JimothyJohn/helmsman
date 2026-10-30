@@ -27,6 +27,7 @@ fn module(name: &str, src: &str, period_ms: u64, i: Window, q: Window) -> Module
         period: ms(period_ms),
         i,
         q,
+        params: Vec::new(),
     }
 }
 
@@ -395,6 +396,7 @@ proptest! {
                     period: ms(10),
                     i: Window::new(0, 0),
                     q: Window::new(start, len),
+                    params: Vec::new(),
                 }
             })
             .collect();

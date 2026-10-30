@@ -29,6 +29,7 @@ fn module(name: &str, src: &str) -> Module {
         period: ms(10),
         i: Window::new(0, 0),
         q: Window::new(0, 0),
+        params: Vec::new(),
     }
 }
 
