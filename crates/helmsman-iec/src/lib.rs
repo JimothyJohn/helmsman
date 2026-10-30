@@ -27,12 +27,15 @@
 //! `VAR_INPUT`, `VAR_OUTPUT`, `VAR CONSTANT`); TYPE declarations (STRUCT,
 //! enumerations, aliases) and ARRAYs; the elementary types BOOL, SINT..LINT,
 //! USINT..ULINT, BYTE..LWORD, REAL, LREAL and TIME; located variables
-//! (`AT %IX0.1`) and direct addresses; partial bit access (`w.3`); the full
-//! ST statement set; conversions; the standard functions (ABS, SQRT, LN,
-//! LOG, EXP, trigonometry, EXPT, MIN, MAX, LIMIT, SEL, MUX, SHL, SHR, ROL,
-//! ROR, TRUNC, MOVE) and function blocks (TON, TOF, TP, CTU, CTD, CTUD,
-//! `R_TRIG`, `F_TRIG`, SR, RS). Not yet: STRING, `VAR_IN_OUT`, `VAR_GLOBAL`,
-//! function outputs, pointers and references.
+//! (`AT %IX0.1`, with an initial value written at a cold start) and direct
+//! addresses; partial bit access (`w.3`); the full ST statement set;
+//! conversions; the standard functions (ABS, SQRT, LN, LOG, EXP,
+//! trigonometry, EXPT, MIN, MAX, LIMIT, SEL, MUX, SHL, SHR, ROL, ROR, TRUNC,
+//! MOVE) and function blocks (TON, TOF, TP, CTU, CTD, CTUD, `R_TRIG`,
+//! `F_TRIG`, SR, RS). Pragmas (`{...}`) are skipped. Not yet: STRING, DATE,
+//! DT and TOD, `VAR_IN_OUT`, `VAR_GLOBAL`, function outputs, pointers and
+//! references, multi-level addresses (`%QW0.1.2`). Nesting is capped at
+//! `MAX_NESTING` levels so hostile input cannot overflow the stack.
 //!
 //! Ladder (LD) and function block diagrams (FBD) drawn in an editor such
 //! as Beremiz or the `OpenPLC` Editor come in as `PLCopen` TC6 XML through
@@ -124,6 +127,8 @@ pub struct Program {
     mem: Vec<Value>,
     budget: u64,
     started: Option<Instant>,
+    /// Located initial values are still to be written (a cold start).
+    cold: bool,
     /// Trace counters per scan (see [`trace`]).
     counters: u32,
     /// Built on the first traced scan; shared by its clones.
@@ -150,6 +155,7 @@ pub fn compile(src: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>>
         code,
         budget: DEFAULT_BUDGET,
         started: None,
+        cold: true,
         counters,
         map: OnceLock::new(),
     })
@@ -199,7 +205,9 @@ impl Program {
     }
 
     /// Runs one scan with the clock at `now` since program start (timers
-    /// read it). `now` should not go backwards.
+    /// read it). `now` should not go backwards. The first scan after
+    /// compiling or [`Program::reset`] first writes located variables'
+    /// initial values (`q AT %QX0.3 : BOOL := TRUE`) into `image`.
     ///
     /// On a fault the variables are left as the fault found them;
     /// [`Program::reset`] restores the initial values.
@@ -232,6 +240,10 @@ impl Program {
     }
 
     fn run(&mut self, image: &mut Image, now: Duration, tap: Option<&mut Recorder>) -> Result<(), Fault> {
+        if self.cold {
+            interp::init_located(image, &self.code.loc_init);
+            self.cold = false;
+        }
         let program = &self.code.pous[self.code.program];
         let mut m = Machine {
             mem: &mut self.mem,
@@ -247,10 +259,12 @@ impl Program {
         m.run(program)
     }
 
-    /// Restores every variable to its initial value (a cold restart).
+    /// Restores every variable to its initial value (a cold restart); the
+    /// next scan rewrites located initial values into the image.
     pub fn reset(&mut self) {
         self.mem.clone_from(&self.code.mem_init);
         self.started = None;
+        self.cold = true;
     }
 
     /// Resolves a variable path such as `t.ET`, `grid[1,2]` or `p.x` to a

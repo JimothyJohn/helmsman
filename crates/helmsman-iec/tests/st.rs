@@ -384,7 +384,7 @@ fn declaration_and_statement_errors() {
         "unknown type FLOAT",
         "%IX0.0 is 1 bits wide, INT is 16",
         "outside the 32-byte Q area",
-        "J: a located variable takes no initial value",
+        "J: an input (%I) cannot take an initial value",
         "TT: VAR_TEMP cannot be located",
     ] {
         assert!(e.contains(want), "missing {want:?} in\n{e}");
@@ -406,6 +406,198 @@ fn declaration_and_statement_errors() {
         assert!(e.contains(want), "missing {want:?} in\n{e}");
     }
     assert_eq!(e.lines().filter(|l| l.contains("read-only")).count(), 2);
+}
+
+/// IEC 61131-3 `boolean_literal` is `[BOOL#] (1 | 0) | TRUE | FALSE`;
+/// the `OpenPLC` Editor's `Random_Generator_Pragma` example writes
+/// `M : BOOL := 0` and `IF M = 0 AND IN = 1`.
+#[test]
+fn zero_and_one_are_bool_literals() {
+    let (p, _) = run(
+        "a : BOOL := 1; b : BOOL := 0; c : BOOL; d : BOOL := 1;",
+        "IF b = 0 AND a = 1 THEN c := 1; END_IF; d := 0;",
+    );
+    assert_eq!(get(&p, "a"), Value::Bool(true));
+    assert_eq!(get(&p, "b"), Value::Bool(false));
+    assert_eq!(get(&p, "c"), Value::Bool(true));
+    assert_eq!(get(&p, "d"), Value::Bool(false));
+    let e = prog_errors("b : BOOL := 2;", "");
+    assert!(e.contains("integer literal 2 cannot be a BOOL"), "{e}");
+    let e = prog_errors("b : BOOL;", "b := -1;");
+    assert!(e.contains("cannot be a BOOL"), "{e}");
+}
+
+/// Features real editor exports use that this runtime lacks are named as
+/// unsupported, not reported as syntax errors.
+#[test]
+fn unsupported_features_say_so() {
+    for (vars, body, want) in [
+        ("x : INT;", "x := 'abc';", "STRING literals are not supported yet"),
+        (
+            "x : INT;",
+            "x := \"abc\";",
+            "STRING literals are not supported yet",
+        ),
+        (
+            "x : INT;",
+            "x := DT#2013-02-23-22:35:46;",
+            "DT literals are not supported yet",
+        ),
+        (
+            "x : INT;",
+            "x := TOD#12:00:00;",
+            "TOD literals are not supported yet",
+        ),
+        (
+            "x : INT;",
+            "x := D#2020-01-01;",
+            "D literals are not supported yet",
+        ),
+        (
+            "x : INT;",
+            "x := DATE_AND_TIME#2020-01-01-00:00:00;",
+            "DATE_AND_TIME literals are not supported yet",
+        ),
+        ("d : DT;", "", "unknown type DT (DT is not supported yet)"),
+        ("d : TOD;", "", "unknown type TOD (TOD is not supported yet)"),
+        ("d : DATE;", "", "unknown type DATE (DATE is not supported yet)"),
+        (
+            "w AT %QW0.1.8192.0 : WORD;",
+            "",
+            "%QW0.1.8192.0: multi-level addresses (as Beremiz extensions assign) are not supported",
+        ),
+        (
+            "x AT %QX0.4.2 : BOOL;",
+            "",
+            "%QX0.4.2: multi-level addresses (as Beremiz extensions assign) are not supported",
+        ),
+    ] {
+        let e = prog_errors(vars, body);
+        assert!(e.contains(want), "{vars} {body}: want {want:?}, got\n{e}");
+    }
+}
+
+/// IEC 61131-3 lets a located variable take an initial value; the
+/// `OpenPLC` Editor's `Traffic_Light_FBD` example starts with
+/// `First_cycle AT %QX0.3 : BOOL := TRUE`. It is written to the image
+/// before the first scan, and again after a reset, never in between.
+#[test]
+fn located_initial_values_are_written_at_a_cold_start() {
+    let mut p = build(
+        "PROGRAM t VAR first AT %QX0.3 : BOOL := TRUE; w AT %QW2 : INT := -2; m AT %MB1 : BYTE := 16#5A;
+         seen : BOOL; END_VAR
+         seen := first; first := FALSE;
+         END_PROGRAM",
+    );
+    let mut img = Image::new(SIZES);
+    p.scan(&mut img).unwrap();
+    assert_eq!(
+        get(&p, "seen"),
+        Value::Bool(true),
+        "first scan sees the initial value"
+    );
+    assert_eq!(img.q[0] & 0b1000, 0, "the body cleared it");
+    assert_eq!(&img.q[4..6], &(-2i16).to_le_bytes());
+    assert_eq!(img.m[1], 0x5A);
+    p.scan(&mut img).unwrap();
+    assert_eq!(
+        get(&p, "seen"),
+        Value::Bool(false),
+        "not rewritten on a warm scan"
+    );
+    p.reset();
+    p.scan(&mut img).unwrap();
+    assert_eq!(get(&p, "seen"), Value::Bool(true), "rewritten after a reset");
+    let e = prog_errors("i AT %IX0.0 : BOOL := TRUE;", "");
+    assert!(e.contains("I: an input (%I) cannot take an initial value"), "{e}");
+    let e = prog_errors("q AT %QB0 : BYTE := 300;", "");
+    assert!(e.contains("300 does not fit BYTE"), "{e}");
+}
+
+/// Hostile nesting is refused with a message instead of overflowing the
+/// stack (which aborts the process: no panic to catch).
+#[test]
+fn deep_nesting_is_refused_not_a_stack_overflow() {
+    let n = 100_000;
+    for (vars, body) in [
+        ("a : BOOL;", format!("a := {}a{};", "(".repeat(n), ")".repeat(n))),
+        ("a : BOOL;", format!("a := a{};", " AND a".repeat(n))),
+        ("a : INT;", format!("a := 2{};", " ** 2".repeat(n))),
+        ("a : BOOL;", format!("a := {}a;", "NOT ".repeat(n))),
+        ("a : INT;", format!("a := {}a;", "- ".repeat(n))),
+        ("a : INT;", format!("a := {}a;", "+ ".repeat(n))),
+        ("a : INT;", format!("a := a{};", ".x".repeat(n))),
+        ("a : INT;", format!("a := a{};", "[0]".repeat(n))),
+        (
+            "a : BOOL;",
+            format!("{}a := TRUE;{}", "IF a THEN ".repeat(n), " END_IF;".repeat(n)),
+        ),
+        (
+            &format!("a : ARRAY[0..1] OF INT := {}1{};", "[".repeat(n), "]".repeat(n)),
+            String::new(),
+        ),
+    ] {
+        let e = prog_errors(vars, &body);
+        assert!(
+            e.contains("nested deeper than"),
+            "{}: {e}",
+            &body[..body.len().min(40)]
+        );
+    }
+}
+
+/// Just inside the limit, the deepest shape of each kind compiles and runs
+/// on a thread with the default 2 MiB test stack (a debug build uses the
+/// most stack per level); a few levels more is refused.
+#[test]
+fn nesting_up_to_the_limit_runs() {
+    /// What is nested, how deep, and a body nesting it that deep.
+    type Shape = (&'static str, usize, fn(usize) -> String);
+    let shapes: [Shape; 5] = [
+        ("parentheses", 64, |k| {
+            format!("b := {}a{};", "(".repeat(k), ")".repeat(k))
+        }),
+        ("(NOT", 48, |k| {
+            format!("b := {}a{};", "(NOT ".repeat(k), ")".repeat(k))
+        }),
+        ("NOT", 190, |k| format!("b := {}a;", "NOT ".repeat(k))),
+        ("+", 190, |k| format!("i := 0{};", " + 1".repeat(k))),
+        ("IF", 64, |k| {
+            format!("{}b := a;{}", "IF a THEN ".repeat(k), " END_IF;".repeat(k))
+        }),
+    ];
+    for (what, k, body) in shapes {
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                let vars = "a : BOOL := TRUE; b : BOOL; i : INT;";
+                let (p, _) = run(vars, &body(k));
+                if what == "+" {
+                    assert_eq!(get(&p, "i"), Value::Int(i128::try_from(k).unwrap()));
+                } else {
+                    assert_eq!(get(&p, "b"), Value::Bool(true), "{k} {what}");
+                }
+                let e = prog_errors(vars, &body(k + 8));
+                assert!(e.contains("nested deeper than"), "{} {what}: {e}", k + 8);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+}
+
+/// A variable whose declaration failed is reported once, at the
+/// declaration, not again at every use.
+#[test]
+fn a_failed_declaration_is_reported_once() {
+    let e = errors(
+        "PROGRAM t VAR f : NOSUCH; w AT %QW0.1.2 : WORD; x : BOOL; END_VAR
+         f(IN := TRUE); x := f.Q; w := 1; f.IN := x; FOR f := 1 TO 2 DO ; END_FOR;
+         END_PROGRAM",
+    );
+    assert_eq!(e.len(), 2, "{e:#?}");
+    assert!(e[0].contains("unknown type NOSUCH"), "{e:#?}");
+    assert!(e[1].contains("multi-level"), "{e:#?}");
 }
 
 #[test]
