@@ -367,6 +367,8 @@ Extension tiers: data (params, signals, schedules) → ST modules → WASM (driv
 
 Hard limits, enforced by the host and never by the prompt: no writes to external PLCs (CIP is read-only toward them); no output change without human approval; modules have no network access (core sinks publish); the agent never touches the Rust core. Offline: everything installed keeps running, chat degrades to rule-based param edits (no local model). Business: open core (runtime + canvas MIT; relay, fleet and verified marketplace paid) plus a preloaded box. Standalone first, fleet-shaped data model from day one.
 
+Update 2026-10-29 (I/O mapping): "This device is the PLC, it just may talk to other slave/client devices. This will be a master/server." The box masters its devices and writes to them through the I/O map; read-only stays the rule for other controllers it only observes (a CompactLogix it reads tags from). Agent-written drivers run in the WASM tier with one extra capability: a socket to their own device's endpoint.
+
 ## Roadmap M1: bench demo, talk → module → light
 
 Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". The agent drafts ST, the canvas shows it live against real values, a PIN approves it, the Pi's output toggles, and undo restores the previous snapshot.
@@ -499,6 +501,42 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   depends: logix-tag-read, gpio-outputs, agent-loop, proposal-ui, hot-swap, canvas-web
   id: m1-demo
+
+- [ ] **I/O map, driver contract, Modbus TCP, conformance harness** — crates/tcpethernet-io: devices the box masters, named signals bound to device points or box channels (do:N / di:N), validation, the string-addressed driver contract, a Modbus TCP driver from the spec, a simulator with cross-wires and faults, and the PASS/FAIL harness (`cargo run -p tcpethernet-io --example conformance -- --sim`).
+  result: the vocabulary for signal-model, and the loop an agent's driver is judged by
+  notes: branch feat/io-model; the first slice of signal-model (no units or poll rates yet)
+  est: 1d
+  difficulty: med
+  id: io-map
+
+- [ ] **Signals in the scan** — tcpethernet-plc reads its I/O map: a poll task per device fills input signals, programs read and write signals by name instead of %I/%Q, outputs are written on change, and a device that drops sends its outputs to a declared safe state.
+  result: an ST program drives a Modbus coil and a box output by name
+  est: 3d
+  difficulty: high
+  depends: io-map, multi-module
+  id: io-runtime
+
+- [ ] **Tabletop I/O bench** — one Modbus TCP remote I/O block with 24 V DI/DO on the Studio link (192.168.3.x), outputs DO0-3 wired back to inputs DI0-3, a 24 V supply, and a Pi GPIO to 24 V output stage for do:N. Then `conformance --endpoint <ip>:502 --loop coil:0=di:0 ...` against it.
+  needs: hardware bought and wired (any Modbus TCP 8DI/8DO block; note its manual's register map and whether it numbers from 0 or 1)
+  result: the harness passes on real hardware, and agents have a bench that proves writes physically
+  est: 4h
+  difficulty: low
+  depends: io-map
+  id: io-bench
+
+- [ ] **Drivers in the WASM tier** — the driver contract across the sandbox: parse/read/write by address string, one capability (a socket to its own device's endpoint), fuel and memory limits. The Modbus driver ported as the first guest, passing the same harness.
+  result: drivers the agent writes can't touch anything but their device
+  est: 1w
+  difficulty: high
+  depends: wasm-tier, io-map
+  id: wasm-driver
+
+- [ ] **Agent writes a driver from the manual** — give the agent a device's documentation (PDF to text, as done for the Modbus spec); it writes the point map and, for a new protocol, a WASM driver, and iterates on harness output: simulator first, then the bench. Engineer approves the map before any output is bound.
+  result: a new device or protocol without hand-written driver code
+  est: 1w
+  difficulty: high
+  depends: wasm-driver, io-bench, agent-loop
+  id: driver-agent
 
 ## Roadmap M2: floor-ready core
 
