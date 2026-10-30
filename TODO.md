@@ -331,6 +331,16 @@
   depends: api-lan-reads
   id: canvas-lan-default
 
+- [ ] **Agent drafts: keep them out of the proposal list until proposed?** The agent loop (feat/agent-loop) keeps a module draft in its chat conversation; `check_module` and `simulate_module` call new read-only routes (`POST /api/proposals/check`, `POST /api/proposals/replay`) that store nothing, and only `propose_change` stores a proposal, with the agent's summary as its note. So the proposal list only ever shows drafts that checked clean and were simulated, and a failed attempt leaves no clutter to approve by mistake. The other way (each draft stored as a proposal at once, replayed by id) shows the engineer every attempt but fills the 1000-proposal store with dead drafts. I built the first; the evidence an apply needs is still a replay of the stored proposal (`POST /api/proposals/{id}/replay`, approval-policy's), so nothing about apply changes either way. Drafts are lost if the box restarts mid-conversation (conversations are in memory).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: what an engineer sees in the proposal list while the agent works
+  options: drafts stay in the conversation until proposed (recommended, built) | every draft is a stored proposal from the start
+  est: 2h
+  difficulty: low
+  id: agent-drafts
+
 - [ ] **Canvas approvals: how does the browser get the API token?** The review screen (feat/proposal-ui) needs the box's bearer token to replay and apply, on top of the role PIN. The token lives in `api-token` in the box's state directory and is printed once to the journal. Built: the operator pastes it once per page load into a masked field; it is held in the page's memory only (never localStorage, never egui's persisted state), dropped on "Forget", a reload, or a 401, and sent only in the `Authorization` header. Trade-off: 64 hex digits is awkward on a tablet, and anyone who can read the journal or state dir can hand it out; but nothing new is stored in the browser and no API change was needed. The better long-term shape is a login exchange: `POST /api/session` with role + PIN returns a short-lived, role-scoped session token (memory only), so operators never see the box token; that is an API change under the same lockout, and overlaps `local-accounts`. Reversible: the token only enters through `Review::set_token` in crates/helmsman-canvas/src/review.rs.
   asked: 2026-10-30
   by: claude-agent
@@ -639,11 +649,12 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: relay-hosting
   id: relay-v0
 
-- [ ] **Agent loop** — the tool-using agent behind the chat panel. Tools: list/read signals and live values, read modules, draft module, check (our ST checker), simulate (sim-replay), propose. It iterates on checker and sim errors before a human sees anything. The prompt treats PLC tag names, comments and bundle text as data, never instructions.
+- [x] **Agent loop** — the tool-using agent behind the chat panel. Tools: list/read signals and live values, read modules, draft module, check (our ST checker), simulate (sim-replay), propose. It iterates on checker and sim errors before a human sees anything. The prompt treats PLC tag names, comments and bundle text as data, never instructions.
   result: "talk to it" works end to end
   est: 1w
   difficulty: high
   depends: box-api, relay-v0
+  notes: built on feat/agent-loop: crate helmsman-agent (relay client, SSE, tool loop, budgets) + POST /api/chat, /api/proposals/check, /api/proposals/replay, /api/proposals/{id}/replay; tests against a fake relay replaying stream fixtures (helmsman-plc/tests/agent.rs). Not yet run against the real relay: that waits for relay-v0 to be deployed or run locally.
   id: agent-loop
 
 - [x] **Sim replay** — record a rolling window of signal values on the box (RAM ring buffer, not a historian) and replay a proposed module against it, showing when its outputs would have fired.
