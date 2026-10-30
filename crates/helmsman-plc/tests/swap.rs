@@ -30,6 +30,7 @@ fn module(name: &str, src: &str, period_ms: u64, q: Window) -> Module {
         period: ms(period_ms),
         i: Window::new(0, 0),
         q,
+        params: Vec::new(),
     }
 }
 
@@ -186,6 +187,7 @@ fn a_swap_onto_another_modules_output_bytes_is_refused_and_changes_nothing() {
                 period: ms(10),
                 i: Window::new(0, 0),
                 q: Window::new(start, len),
+                params: Vec::new(),
             }
         } else {
             module("b", src, 10, Window::new(start, len))
@@ -238,6 +240,7 @@ fn every_fresh_load_check_applies_to_a_swap() {
             period: ms(period),
             i: Window::new(0, 0),
             q,
+            params: Vec::new(),
         };
         assert_refused_changes_nothing(
             Runtime::new(IMAGE, IMAGE, pair()).unwrap(),
@@ -465,6 +468,55 @@ fn a_swap_whose_ports_do_not_bind_is_refused() {
 }
 
 #[test]
+fn a_swap_changes_params_and_refuses_bad_ones() {
+    const TUNED: &str = "
+PROGRAM horn
+VAR_INPUT limit : INT; END_VAR
+VAR_OUTPUT horn : BOOL; END_VAR
+VAR n : UINT; END_VAR
+  n := n + 1;
+  horn := n > limit;
+END_PROGRAM";
+    let with = |params: &[(&str, Value)]| {
+        let mut m = module("horn", TUNED, 10, Window::new(0, 0));
+        m.params = params.iter().map(|(k, v)| ((*k).to_string(), *v)).collect();
+        m
+    };
+    let mut t = table();
+    t.set_input(0, Some(Value::Bool(true)));
+    for (params, bad) in [
+        (vec![("limit", Value::Int(100_000))], "limit"),
+        (vec![("limit", Value::Int(1)), ("LIMIT", Value::Int(2))], "LIMIT"),
+        (vec![("limit", Value::Bool(true))], "limit"),
+    ] {
+        assert_refused_changes_nothing(
+            plant(&t),
+            plant(&t),
+            with(&params),
+            &mut t,
+            &[ConfigError::Param {
+                module: "horn".into(),
+                param: bad.into(),
+            }],
+        );
+    }
+    let mut rt = plant(&t);
+    rt.tick_with(ms(0), &[], &mut t);
+    rt.swap(with(&[("limit", Value::Int(3))]), &mut t).unwrap();
+    for (k, want) in [(1, false), (2, false), (3, true)] {
+        rt.tick_with(ms(k * 10), &[], &mut t);
+        assert_eq!(cmd(&t, "horn"), Value::Bool(want), "scan {}", k + 1);
+    }
+    rt.swap(with(&[("limit", Value::Int(10))]), &mut t).unwrap();
+    rt.tick_with(ms(40), &[], &mut t);
+    assert_eq!(
+        cmd(&t, "horn"),
+        Value::Bool(false),
+        "the new param applies on the next scan"
+    );
+}
+
+#[test]
 fn signals_kept_hold_their_command_and_signals_dropped_go_safe() {
     let mut t = table();
     t.set_input(0, Some(Value::Bool(true)));
@@ -589,6 +641,7 @@ fn generated(s: &Swap) -> Module {
         period: ms(s.period),
         i: Window::new(0, 0),
         q: Window::new(s.start, s.len),
+        params: Vec::new(),
     }
 }
 

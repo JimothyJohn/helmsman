@@ -75,6 +75,9 @@ pub struct Module {
     pub period: Duration,
     pub i: Window,
     pub q: Window,
+    /// `VAR_INPUT`s held at a fixed value instead of bound to a signal
+    /// (a module manifest's `param`s), set before every scan.
+    pub params: Vec<(String, helmsman_io::Value)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +134,12 @@ pub enum ConfigError {
     },
     /// A swap names no module of the runtime.
     UnknownModule(String),
+    /// A param that names no `VAR_INPUT`, is given twice, or whose value
+    /// the input cannot hold.
+    Param {
+        module: String,
+        param: String,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -151,6 +160,10 @@ impl fmt::Display for ConfigError {
             Self::Port { module, err } => write!(f, "{module}: {err}"),
             Self::TwoWriters { signal, a, b } => write!(f, "{a} and {b} both drive signal {signal}"),
             Self::UnknownModule(n) => write!(f, "no module named {n:?}"),
+            Self::Param { module, param } => write!(
+                f,
+                "{module}: param {param} names no VAR_INPUT that can hold its value, or is given twice"
+            ),
         }
     }
 }
@@ -449,7 +462,23 @@ fn check(
         if m.period.is_zero() || m.period > MAX_PERIOD {
             errs.push(ConfigError::BadPeriod(name()));
         }
-        let (bound, bad) = bind(&m.program.ports(), table);
+        let mut probe = m.program.clone();
+        for (k, (p, v)) in m.params.iter().enumerate() {
+            let twice = m.params[..k].iter().any(|(q, _)| q.eq_ignore_ascii_case(p));
+            if twice || probe.set_input(p, to_st(*v)).is_err() {
+                errs.push(ConfigError::Param {
+                    module: name(),
+                    param: p.clone(),
+                });
+            }
+        }
+        let signal_ports: Vec<_> = m
+            .program
+            .ports()
+            .into_iter()
+            .filter(|p| !m.params.iter().any(|(q, _)| q.eq_ignore_ascii_case(&p.name)))
+            .collect();
+        let (bound, bad) = bind(&signal_ports, table);
         errs.extend(
             bad.into_iter()
                 .map(|err| ConfigError::Port { module: name(), err }),
@@ -486,6 +515,10 @@ fn check(
 /// signal has no value or the value does not fit the port; inputs already
 /// set stay set, which is harmless as the module is then not scanned.
 fn set_inputs(s: &mut Slot, table: &SignalTable) -> bool {
+    for (p, v) in &s.module.params {
+        // Checked when the runtime was built.
+        let _ = s.module.program.set_input(p, to_st(*v));
+    }
     s.ports.iter().filter(|b| b.dir == PortDir::Input).all(|b| {
         table
             .value(b.signal)
