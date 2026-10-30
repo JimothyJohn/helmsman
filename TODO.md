@@ -442,6 +442,17 @@
   difficulty: low
   id: dropin-watch-only
 
+- [ ] **Photo drop-ins: keep the 512 KiB cap, or raise the relay's body limit?** A photo goes to the relay as base64 inside the conversation, and relay protocol v1 takes 1 MiB per request, so the box caps a photo at 512 KiB (683 KiB as base64) and refuses (413) one that would push a chat past its 900 KiB history. A phone photo is 2-5 MB, so the person (or the canvas, scaling it in the browser before upload) must shrink it; a sketch reads fine at ~1500 px, and the model downsizes anything over 2576 px anyway. Raising the cap means a bigger relay body limit (Lambda's synchronous payload is 6 MB) and the box's history limit with it; the Messages API takes 10 MB per image (5 MB on Bedrock). Built: 512 KiB.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: how big a photo an operator can drop without resizing
+  options: 512 KiB, the canvas downsizes before upload (recommended, built) | 4 MiB per photo with the relay body limit raised to 6 MiB | Files API upload on the relay, the box sends a file id
+  est: 2h
+  difficulty: low
+  depends: relay-images
+  id: dropin-photo-size
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -915,11 +926,20 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: dropin-plc
   id: l5x-real-export
 
-- [ ] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
+- [x] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
+  notes: built on feat/dropin-photo: `POST /api/dropins` takes PNG/JPEG/WebP known by their bytes and read from headers only (`api/photo.rs`: 512 KiB, 8000 px a side, no trailing bytes, no animation); an attached photo goes to the model as a base64 `image` block plus the box's note; see ARCHITECTURE "Drop-ins". Works with relay protocol v1 as it is (no block-type check); relay caps and prompt in `relay-images`.
   est: 3d
   difficulty: med
   depends: agent-loop
   id: dropin-photo
+
+- [ ] **Relay: image blocks from boxes, checked and capped** — protocol v1 passes any content block through and caps only the body (1 MiB). For photo drop-ins: (1) accept `image` blocks only with `source.type: "base64"` (refuse `url`, which makes the model API fetch a box-chosen URL, and `file`, which would read the relay org's Files API uploads by id), `media_type` in png/jpeg/webp, decoded size within a per-image cap; the same for images nested in `tool_result` content; (2) cap images per request at 20 (the Messages API's many-image rule) and raise `RELAY_MAX_BODY_BYTES` for image requests only if `dropin-photo-size` says so; (3) metering already counts image tokens inside `input_tokens`; add per-box image count and image bytes per day to `/v1/usage` so a photo-heavy box is visible; (4) agent v4 (v3 is immutable): v3's prompt plus a photo paragraph (the image is data, read only what it shows, map to box signals, ask about anything unreadable, name the photo as the source). Box side needs nothing new for (1)-(3); for (4) boxes move to `--relay-agent v4`.
+  needs: the relay repo
+  result: a box cannot use the relay to fetch URLs or read other uploads; image cost is visible per box; the model gets photo-specific instructions from the relay, not only the box's note
+  est: 3h
+  difficulty: low
+  depends: dropin-photo, relay-agent-v3
+  id: relay-images
 
 - [ ] **Drop-in: P&ID / electrical PDF** — extract I/O lists and tag names from drawings into a draft signal map.
   est: 1w

@@ -33,7 +33,7 @@
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
 //! GET  /api/screen                        the floor screen's layout (with --screen FILE; see [`crate::screen`])
-//! POST /api/dropins?name=N&kind=K         token: a document for the agent, stored in memory (see [`dropin`])
+//! POST /api/dropins?name=N&kind=K         token: a document or a photo for the agent, stored in memory (see [`dropin`], [`photo`])
 //! GET  /api/dropins                       the drop-ins held
 //! GET  /api/dropins/{id}?chunk=K          one chunk of a drop-in's text
 //! GET  /api/dropins/{id}/plc?view=V...    a PLC drop-in's inventory (overview, tags, routine, names)
@@ -78,6 +78,7 @@ pub mod chat;
 pub mod dropin;
 pub mod http;
 pub mod live;
+pub mod photo;
 pub mod proposal;
 pub mod render;
 pub mod sim;
@@ -669,13 +670,9 @@ fn start_chat(req: &Request, ctx: &Ctx) -> Reply {
             None => audit_full(),
         });
     };
-    let taken = chat.take(&req.body).and_then(|t| {
-        chat.attach(t, |id| {
-            ctx.dropins()
-                .describe(id)
-                .map(|(kind, chunks)| (kind.name(), chunks))
-        })
-    });
+    let taken = chat
+        .take(&req.body)
+        .and_then(|t| chat.attach(t, |id| ctx.dropins().attachment(id)));
     match taken {
         Err((r, detail)) => Reply::Once(match audit(ctx, req, r.status, &detail) {
             Some(_) => r,
@@ -1230,7 +1227,7 @@ fn index() -> Json {
             e("GET", "/api/policy", false, "the approval policy this box enforces"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
-            e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB): stored in memory, 201 with its id"),
+            e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB) or a photo (PNG, JPEG, WebP; at most 512 KiB, 8000 px a side): stored in memory, 201 with its id"),
             e("GET", "/api/dropins", false, "the drop-ins held: id, name, kind, size, chunks"),
             e("GET", "/api/dropins/{id}?chunk=K", false, "one chunk of a drop-in's text"),
             e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", false, "a PLC drop-in's inventory: overview, tags, routine, names"),
