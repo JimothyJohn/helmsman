@@ -156,7 +156,7 @@ impl SignalTable {
                     point: match &s.binding {
                         Binding::Device { device, point } => Some((device.clone(), point.clone())),
                         Binding::Local { channel } => Some((helmsman_io::text::BOX.into(), channel.clone())),
-                        Binding::Module { .. } => None,
+                        Binding::Module { .. } | Binding::Screen { .. } => None,
                     },
                 }
             })
