@@ -21,6 +21,7 @@ pub mod local;
 pub mod modbus;
 pub mod model;
 pub mod sim;
+pub mod text;
 
 pub use driver::{Driver, Error, PointInfo, open};
 pub use model::{Binding, Device, Dir, IoMap, MapError, Signal, Ty, Value};
