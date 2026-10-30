@@ -16,6 +16,7 @@ pub mod policy;
 pub mod record;
 pub mod replay;
 pub mod runtime;
+pub mod screen;
 pub mod signals;
 pub mod sink;
 pub mod spec;

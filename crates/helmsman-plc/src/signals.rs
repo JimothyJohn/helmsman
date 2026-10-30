@@ -522,14 +522,15 @@ pub(crate) struct Polled {
 }
 
 /// Signals bound to devices, grouped by device id (`None` for the box's
-/// own channels), with their addresses. Module outputs are no device's.
+/// own channels), with their addresses. Module outputs and screen tiles
+/// are no device's: nothing polls or writes them.
 pub(crate) fn by_device(map: &IoMap) -> BTreeMap<Option<String>, Vec<Polled>> {
     let mut groups: BTreeMap<Option<String>, Vec<Polled>> = BTreeMap::new();
     for (i, s) in map.signals.iter().enumerate() {
         let (dev, addr) = match &s.binding {
             Binding::Device { device, point } => (Some(device.clone()), point.clone()),
             Binding::Local { channel } => (None, channel.clone()),
-            Binding::Module { .. } => continue,
+            Binding::Module { .. } | Binding::Screen { .. } => continue,
         };
         groups.entry(dev).or_default().push(Polled {
             signal: i,

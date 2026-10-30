@@ -166,8 +166,9 @@ scan; the scheduler bounds how often.
   contract; in memory until `gpio-outputs` adds the Pi backend.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
-  `in NAME TYPE module MODULE` is another module's output. Older maps read
-  unchanged; `box` and `module` are reserved device ids.
+  `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
+  screen TILE` a floor screen tile (below). Older maps read unchanged;
+  `box`, `module` and `screen` are reserved device ids.
 
 ## Signals in the scan (`io-runtime`, built)
 
@@ -295,6 +296,46 @@ load.
 - **Untrusted clock**: before 2024-01-01 (a Pi with no RTC before NTP) the
   calendar's signals are missing, so modules reading them are held, and
   driven outputs go to their safe values.
+
+## Floor screen (`andon-screen`, built)
+
+A box-driven full-screen andon view, an output kind next to GPIO lights
+(`screen.rs` in `helmsman-plc`, `andon.rs` in the canvas; contracts in
+`tests/screen.rs`, `andon_tests.rs`).
+
+- **Tiles are outputs.** `out line1_state int screen line1` in the I/O map
+  (`Binding::Screen`): an `out` signal no device takes, so no link polls or
+  writes it. A module drives it through a `VAR_OUTPUT` of that name, so the
+  one-writer rule, safe values (a held or faulted module's tile goes to its
+  `safe=` state), the approval tiers (a map change is output-affecting) and
+  the audit apply as to a stack light. Several signals may feed one tile.
+- **Messages are state codes, not strings.** A module drives an `INT` (or a
+  `BOOL`, read as 0/1); the layout maps each code to a fixed colour and a
+  fixed message. Signals stay scalar (no string type in the scan, recorder,
+  replay or sinks), and the words in front of the line are reviewed box
+  configuration, never text a module computes. A code the layout does not
+  name shows as "UNKNOWN STATE n".
+- **Layout file** (`--screen FILE`, `helmsman-screen 1`, hand-parsed, 64 KiB
+  cap): `title`, `grid COLS ROWS` (1..=8), `code SET N COLOUR TEXT`, `tile
+  ID COL,ROW[,W,H] SET SIGNAL TITLE`, `value ID SIGNAL LABEL` (a number
+  under the message). Colours are a fixed palette (IEC 60073 stack-light
+  colours plus the brand's safety yellow and graphite; no user theming).
+  Checked at startup against the map: each tile's signals are `screen`
+  outputs on that tile, of a type it can show, and every `screen` output is
+  on a tile; a map with tiles and no layout is refused while the API runs.
+  Changing it is a box config change (a restart), like the sinks file; it
+  is not in snapshots (`screen-layout-snapshot` asks).
+- **Served read-only** at `GET /api/screen`: the file byte for byte (the
+  canvas parses it with the same parser), the parsed layout and the palette.
+- **The view** is the served canvas at `/?andon`: a header (title, and the
+  shift from the calendar's `in_shift`/`shift_id`/`on_break`/`planned_down`
+  when the box has them), big tiles filling the window, type sized to fit
+  each tile. Fed by `/api/events`. **Stale data never shows as a colour**:
+  when the stream fails the values are dropped, and when no event arrives
+  for 3 s every tile shows "NO DATA" on black under a red banner ("BOX
+  UNREACHABLE", "NO DATA FROM THE BOX FOR n s"); a stream quiet for 10 s is
+  reopened. Full screen is the browser's (F11, or `chromium --kiosk
+  http://BOX:8080/?andon`).
 
 ## Sim replay (`sim-replay`, built)
 
@@ -462,7 +503,7 @@ and later MCP (`api/`; contract in `tests/api.rs`). Endpoints are listed at
   screens at once.
 - **The canvas** (`--ui DIR`, `api/ui.rs`; contract in `tests/ui.rs`):
   `GET /` and the files beside it are the wasm canvas `make canvas-web`
-  builds, on the API's origin (no CORS). Only `GET`; a path is refused
+  builds (`/?andon` is the floor screen, above), on the API's origin (no CORS). Only `GET`; a path is refused
   (404) before the file system is asked unless every segment is
   `[A-Za-z0-9._-]`, not empty, not dot-led (after percent-decoding, so
   `%2e%2e`, `%2f`, `%5c`, `%00` and any non-ASCII never pass), at most 8
