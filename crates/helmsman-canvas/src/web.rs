@@ -176,12 +176,18 @@ async fn get(url: &str) -> Result<String, String> {
 /// Whether the page asked for the demo (`?demo`).
 #[must_use]
 pub fn wants_demo() -> bool {
+    wants("demo")
+}
+
+/// Whether the page's query string has `key` (`?andon`, `?demo`).
+#[must_use]
+pub fn wants(key: &str) -> bool {
     web_sys::window()
         .and_then(|w| w.location().search().ok())
         .is_some_and(|q| {
             q.trim_start_matches('?')
                 .split('&')
-                .any(|kv| kv.split('=').next() == Some("demo"))
+                .any(|kv| kv.split('=').next() == Some(key))
         })
 }
 

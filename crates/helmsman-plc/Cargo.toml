@@ -22,6 +22,9 @@ rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"
 sha2 = { version = "0.11.1", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"], optional = true }
 webpki-roots = { version = "1.0.11", optional = true }
+# Ed25519 for bundle signatures (bundle::sign says why ring). Already in the
+# lockfile through rustls; the `box` feature now needs it too.
+ring = { version = "0.17.14", optional = true }
 
 [dev-dependencies]
 # The box build itself never enables `unrestricted`; its tests play scanner.
@@ -40,7 +43,7 @@ workspace = true
 # compiled in). On by default so the Pi can post to a cloud receiver;
 # `--no-default-features --features box` builds an http-only box.
 default = ["box", "https"]
-box = ["dep:rusqlite", "dep:helmsman-agent", "dep:helmsman-diagram"]
+box = ["dep:rusqlite", "dep:ring", "dep:helmsman-agent", "dep:helmsman-diagram"]
 https = ["dep:rustls", "dep:webpki-roots", "helmsman-agent?/https"]
 
 [[bin]]
@@ -61,6 +64,10 @@ name = "sink_bin"
 required-features = ["box"]
 
 [[test]]
+name = "bundle"
+required-features = ["box"]
+
+[[test]]
 name = "store"
 required-features = ["box"]
 
@@ -74,6 +81,10 @@ required-features = ["box"]
 
 [[test]]
 name = "ui"
+required-features = ["box"]
+
+[[test]]
+name = "reload"
 required-features = ["box"]
 
 [[test]]

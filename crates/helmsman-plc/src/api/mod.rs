@@ -13,7 +13,7 @@
 //! GET  /api/devices                       device links: up, down (why), unknown
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
-//! POST /api/proposals                     token: a module draft or a param change, checked, stored as a draft
+//! POST /api/proposals                     token: a module draft, a param change, or a new io_map / calendar file, checked, stored as a draft
 //! POST /api/proposals/check               token: check a draft as POST /api/proposals would; nothing stored
 //! POST /api/proposals/replay              token: sim replay of a draft {draft, minutes}; nothing stored, not evidence
 //! POST /api/proposals/{id}/replay         token: sim replay of the draft against what runs; evidence for apply
@@ -23,6 +23,8 @@
 //! GET  /api/snapshots/head
 //! GET  /api/snapshots/{id}                a snapshot's files
 //! GET  /api/snapshots/{a}/diff/{b}
+//! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
+//! POST /api/bundles                       token: a bundle file, verified, bound by name, stored as a draft
 //! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
 //! POST /api/snapshots/{id}/rollback       token + {role, pin, replay?}: roll back through the approval policy
 //! GET  /api/replays/{n}                   a replay kept as evidence
@@ -30,6 +32,7 @@
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
+//! GET  /api/screen                        the floor screen's layout (with --screen FILE; see [`crate::screen`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
 //!
@@ -64,6 +67,7 @@
 //! ([`Limits`]).
 
 pub mod approve;
+pub mod bundle;
 pub mod catalog;
 pub mod chat;
 pub mod explain;
@@ -87,6 +91,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value as Json, json};
 
+use crate::bundle::TrustStore;
 use crate::policy::Role;
 use crate::store::{self as snapshots, ChangeSet, SnapshotId, Store};
 
@@ -158,6 +163,47 @@ pub struct Shared {
     pub chat: Option<chat::Setup>,
 }
 
+/// What a box may serve besides its state; none of it changes while the
+/// box runs.
+#[derive(Default)]
+pub struct Extras {
+    /// The canvas, at `/`.
+    pub ui: Option<ui::Ui>,
+    /// The floor screen's layout, at `/api/screen`.
+    pub screen: Option<Screen>,
+    /// Publishers whose bundles import (`POST /api/bundles`); `None`:
+    /// import answers 501.
+    pub trust: Option<TrustStore>,
+}
+
+/// A floor screen layout as loaded: the file, byte for byte, and what it
+/// parsed to (already checked against the I/O map).
+#[derive(Debug, Clone)]
+pub struct Screen {
+    pub source: String,
+    pub layout: crate::screen::Layout,
+}
+
+/// `GET /api/screen`: the layout, its source (the canvas parses that with
+/// the same parser) and the fixed palette.
+fn screen_json(s: &Screen) -> Json {
+    let hex = |c: [u8; 3]| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+    let palette: serde_json::Map<String, Json> = crate::screen::Colour::ALL
+        .iter()
+        .map(|c| {
+            (
+                c.name().to_string(),
+                json!({ "fill": hex(c.fill()), "ink": hex(c.ink()) }),
+            )
+        })
+        .collect();
+    json!({
+        "source": s.source,
+        "layout": serde_json::to_value(&s.layout).unwrap_or(Json::Null),
+        "palette": palette,
+    })
+}
+
 /// A traced scan's number and its JSON.
 type Rendered = (u64, Arc<Json>);
 
@@ -172,6 +218,9 @@ struct Ctx {
     running: Mutex<Option<ChangeSet>>,
     approval: Option<Approval>,
     replays: Replays,
+    /// The table and recording the box runs, for replays; replaced by a
+    /// reload. `None` without an approval path.
+    shape: Mutex<Option<approve::Shape>>,
     /// Held for the whole of an apply or rollback.
     applying: Mutex<()>,
     /// Per module name: the newest traced scan, rendered, and its scan
@@ -184,6 +233,10 @@ struct Ctx {
     streams: AtomicUsize,
     chat: Option<chat::Chat>,
     ui: Option<ui::Ui>,
+    /// `GET /api/screen`'s body, rendered once.
+    screen: Option<Json>,
+    /// Publishers whose bundles import; `None`: import answers 501.
+    trust: Option<TrustStore>,
 }
 
 impl Ctx {
@@ -206,6 +259,31 @@ impl Ctx {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
+    }
+
+    fn shape(&self) -> approve::Shape {
+        self.shape
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| approve::Shape {
+                table: crate::SignalTable::default(),
+                record: None,
+            })
+    }
+
+    fn set_shape(&self, shape: approve::Shape) {
+        *self.shape.lock().unwrap_or_else(PoisonError::into_inner) = Some(shape);
+    }
+
+    /// A reload started and ended device links: the device list follows.
+    fn links_changed(&self, links: &crate::link::Finished) {
+        for name in &links.removed {
+            self.box_.devices.remove(name);
+        }
+        for name in &links.added {
+            self.box_.devices.add(name);
+        }
     }
 }
 
@@ -284,7 +362,38 @@ impl Api {
     ///
     /// # Errors
     /// The bind fails.
-    pub fn start_with_ui(cfg: Config, mut shared: Shared, ui: Option<ui::Ui>) -> io::Result<Self> {
+    pub fn start_with_ui(cfg: Config, shared: Shared, ui: Option<ui::Ui>) -> io::Result<Self> {
+        Self::start_with_trust(cfg, shared, ui, None)
+    }
+
+    /// [`Api::start_with_ui`], also importing bundles signed by a
+    /// publisher in `trust` (`POST /api/bundles`).
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_with_trust(
+        cfg: Config,
+        shared: Shared,
+        ui: Option<ui::Ui>,
+        trust: Option<TrustStore>,
+    ) -> io::Result<Self> {
+        Self::start_with(
+            cfg,
+            shared,
+            Extras {
+                ui,
+                screen: None,
+                trust,
+            },
+        )
+    }
+
+    /// [`Api::start`], with what a box may serve besides its state.
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_with(cfg: Config, mut shared: Shared, extras: Extras) -> io::Result<Self> {
+        let Extras { ui, screen, trust } = extras;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -297,6 +406,10 @@ impl Api {
             chat,
             catalog: RwLock::new(Arc::new(std::mem::take(&mut shared.catalog))),
             running: Mutex::new(shared.running.take()),
+            shape: Mutex::new(shared.approval.as_ref().map(|a| approve::Shape {
+                table: a.plant.table.clone(),
+                record: a.plant.record.clone(),
+            })),
             approval: shared.approval.take(),
             replays: Replays::new(1000),
             applying: Mutex::new(()),
@@ -307,6 +420,8 @@ impl Api {
             stop: Arc::clone(&stop),
             streams: AtomicUsize::new(0),
             ui,
+            screen: screen.map(|s| screen_json(&s)),
+            trust,
         });
         let thread = thread::Builder::new()
             .name("api".into())
@@ -671,6 +786,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         ("POST", ["api", "proposals"]) => return create(req, ctx),
+        ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
         ("POST", ["api", "proposals", "check"]) => return check_only(req, ctx),
         ("POST", ["api", "proposals", "replay"]) => return replay_draft(req, ctx),
         ("POST", ["api", "proposals", id, "apply"]) => {
@@ -709,11 +825,12 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat" | "explain"] => Some("POST"),
+        | ["api", "chat" | "explain" | "bundles"] => Some("POST"),
         ["api"]
         | [
             "api",
-            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy",
+            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
+            | "screen",
         ]
         | [
             "api",
@@ -721,6 +838,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
             _,
         ]
         | ["api", "snapshots", _, "diff", _]
+        | ["api", "snapshots", _, "bundle"]
         | ["api", "modules", _, "trace"]
         | ["api", "modules", _, "trace", "events"] => Some("GET"),
         _ => None,
@@ -1001,11 +1119,16 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             Ok(cs) => Response::json(200, &render::change_set(&cs)),
             Err(r) => r,
         },
+        ["api", "snapshots", id, "bundle"] => bundle::export(ctx, id),
         ["api", "snapshots", a, "diff", b] => match (snapshot(ctx, a), snapshot(ctx, b)) {
             (Ok(a), Ok(b)) => Response::json(200, &render::diff(&snapshots::diff(&a, &b))),
             (Err(r), _) | (_, Err(r)) => r,
         },
         ["api", "events"] => return Reply::Values,
+        ["api", "screen"] => match &ctx.screen {
+            Some(j) => Response::json(200, j),
+            None => Response::error(404, "no floor screen on this box (--screen FILE)"),
+        },
         ["api", "policy"] => match &ctx.approval {
             Some(a) => Response::json(200, &approve::policy_json(&a.policy)),
             None => Response::error(404, "no approval path on this box"),
@@ -1069,7 +1192,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/devices", false, "device links up or down"),
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
-            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source} or {kind: param, module, param, value}"),
+            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}"),
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
@@ -1079,6 +1202,8 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/snapshots/head", false, "the head entry"),
             e("GET", "/api/snapshots/{id}", false, "a snapshot's files"),
             e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
+            e("GET", "/api/snapshots/{id}/bundle", false, "that snapshot as an unsigned bundle file (sign it off the box)"),
+            e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: {role, pin, replay?}, checked against the policy"),
             e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
@@ -1086,6 +1211,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/events", false, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?}; an event stream of its progress"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
+            e("GET", "/api/screen", false, "the floor screen's layout: tiles, state codes, colours (with --screen)"),
         ],
         "agent": agent,
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",

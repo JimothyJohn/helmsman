@@ -104,7 +104,7 @@ fn file() -> impl Strategy<Value = MapFile> {
         ident(),
         0..3u8,
         any::<bool>(),
-        (0..3u8, ident()),
+        (0..4u8, ident()),
         token(),
         any::<i64>(),
         -1e9f64..1e9,
@@ -125,14 +125,20 @@ fn file() -> impl Strategy<Value = MapFile> {
                 let name = format!("{name}{k}");
                 let ty = [Ty::Bool, Ty::Int, Ty::Real][usize::from(t)];
                 // A module's output is only ever an `in` signal.
-                let kind = if out && kind == 2 { 0 } else { kind };
+                // A screen tile only ever an `out` one.
+                let kind = if (out && kind == 2) || (!out && kind == 3) {
+                    0
+                } else {
+                    kind
+                };
                 let dir = if out { Dir::Out } else { Dir::In };
                 let binding = match kind {
                     0 => Binding::Device { device: dev, point },
                     1 => Binding::Local { channel: point },
-                    _ => Binding::Module { module: point },
+                    2 => Binding::Module { module: point },
+                    _ => Binding::Screen { tile: point },
                 };
-                let poll = poll.filter(|_| !out && kind != 2).map(Duration::from_millis);
+                let poll = poll.filter(|_| !out && kind < 2).map(Duration::from_millis);
                 if out && with_safe {
                     let v = match ty {
                         Ty::Bool => Value::Bool(n % 2 == 0),
@@ -243,4 +249,22 @@ device module modbus-tcp h:1
     let errs = parse(src).unwrap_err();
     let lines: Vec<usize> = errs.iter().map(|(n, _)| *n).collect();
     assert_eq!(lines, (1..=18).collect::<Vec<_>>(), "{errs:#?}");
+}
+
+#[test]
+fn screen_tiles_are_outputs_the_map_declares() {
+    let f = parse("out line1_state int screen line1 safe=0\nout line1_parts int screen line1\n").unwrap();
+    f.map.validate().unwrap();
+    assert_eq!(f.map.signals[0].binding, Binding::Screen { tile: "line1".into() });
+    assert_eq!(f.safe.get("line1_state"), Some(&Value::Int(0)));
+    assert_eq!(parse(&render(&f)).unwrap(), f, "two signals may feed one tile");
+
+    let bad = parse(
+        "in a bool screen t1\nout b bool screen 1t\nout c bool screen t2 poll_ms=5\ndevice screen modbus-tcp h:1\n",
+    );
+    let lines: Vec<usize> = bad.as_ref().unwrap_err().iter().map(|(n, _)| *n).collect();
+    assert_eq!(lines, [3, 4], "{bad:?}");
+    let f = parse("in a bool screen t1\nout b bool screen 1t\nout c real screen t2\n").unwrap();
+    let errs = f.map.validate().unwrap_err();
+    assert_eq!(errs.len(), 2, "an in screen signal and a bad tile id: {errs:?}");
 }
