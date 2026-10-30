@@ -393,3 +393,37 @@ fn a_trace_map_from_another_source_is_refused_not_misread() {
     let e = helmsman_diagram::lower("PROGRAM", &p.trace_map()).unwrap_err();
     assert!(matches!(e, helmsman_diagram::LowerError::Syntax(_)), "{e}");
 }
+
+#[test]
+fn lowering_against_a_statement_table_matches_lowering_against_the_map() {
+    use helmsman_diagram::{StmtPos, lower_table};
+    let src = "FUNCTION_BLOCK m
+VAR_INPUT run : BOOL; END_VAR
+VAR_OUTPUT on : BOOL; END_VAR
+IF run THEN on := TRUE; ELSE on := FALSE; END_IF;
+END_FUNCTION_BLOCK
+PROGRAM t
+VAR a, b : BOOL; n : INT; x : m; t1 : TON; END_VAR
+x(run := a);
+t1(IN := x.on, PT := T#1s);
+CASE n OF 0: b := t1.Q; ELSE b := FALSE; END_CASE;
+FOR n := 0 TO 3 DO a := NOT a; END_FOR;
+END_PROGRAM
+";
+    let (p, from_map) = build(src);
+    let map = p.trace_map();
+    let table: Vec<StmtPos> = map
+        .stmts()
+        .iter()
+        .map(|s| StmtPos {
+            pou: s.pou.clone(),
+            system: s.system,
+            line: s.line,
+            col: s.col,
+        })
+        .collect();
+    assert_eq!(lower_table(src, &table).unwrap(), from_map);
+    // A table from another source does not map this one.
+    let short = &table[..table.len() - 1];
+    assert!(lower_table(src, short).is_err());
+}

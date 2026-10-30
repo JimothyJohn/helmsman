@@ -22,6 +22,7 @@
 //! GET  /api/snapshots/{a}/diff/{b}
 //! POST /api/snapshots/{id}/rollback       token: 501, rollback is the approval policy's (not built)
 //! GET  /api/events                        event stream of live values and module status
+//! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
 //!
 //! **What it cannot do.** There is no route that writes a signal, an
@@ -59,6 +60,7 @@ pub mod proposal;
 pub mod render;
 pub mod store;
 pub mod token;
+pub mod ui;
 
 use std::io::{self, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -140,6 +142,7 @@ struct Ctx {
     traces: Vec<Mutex<Option<Rendered>>>,
     stop: Arc<AtomicBool>,
     streams: AtomicUsize,
+    ui: Option<ui::Ui>,
 }
 
 /// A running API; stops (and joins its acceptor) when dropped. Open
@@ -187,6 +190,14 @@ impl Api {
     /// # Errors
     /// The bind fails.
     pub fn start(cfg: Config, shared: Shared) -> io::Result<Self> {
+        Self::start_with_ui(cfg, shared, None)
+    }
+
+    /// [`Api::start`], also serving the canvas from `ui` at `/`.
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_with_ui(cfg: Config, shared: Shared, ui: Option<ui::Ui>) -> io::Result<Self> {
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -197,6 +208,7 @@ impl Api {
             cfg,
             stop: Arc::clone(&stop),
             streams: AtomicUsize::new(0),
+            ui,
         });
         let thread = thread::Builder::new()
             .name("api".into())
@@ -283,6 +295,8 @@ enum Reply {
     Values,
     /// A module's trace stream.
     Traces(usize),
+    /// A file of the UI.
+    File(ui::Asset),
 }
 
 fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
@@ -299,6 +313,9 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
     match reply {
         Reply::Once(r) => {
             let _ = http::respond(&mut stream, &r);
+        }
+        Reply::File(asset) => {
+            let _ = ui::send(&mut stream, asset);
         }
         Reply::Values | Reply::Traces(_) => {
             let Some(_slot) = take(&ctx.streams, limits.streams) else {
@@ -548,6 +565,18 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
 
 fn get(req: &Request, ctx: &Ctx) -> Reply {
     let c = &ctx.box_.catalog;
+    if req.segments.first().is_none_or(|s| s != "api") {
+        return match &ctx.ui {
+            Some(ui) => match ui.resolve(&req.segments) {
+                Ok(asset) => Reply::File(asset),
+                Err(r) => Reply::Once(r),
+            },
+            None => Reply::Once(Response::error(
+                404,
+                "no such resource (no UI on this box: --ui DIR)",
+            )),
+        };
+    }
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let view = ctx.box_.live.view();
     let module = |name: &str| c.module(name);

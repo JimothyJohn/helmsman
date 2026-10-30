@@ -362,9 +362,9 @@ pub const fn reason(code: u16) -> &'static str {
     }
 }
 
-/// The fixed headers every response carries.
-const COMMON: &str = "Connection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n\
-Referrer-Policy: no-referrer\r\nCache-Control: no-store\r\n";
+/// The fixed headers every response carries, the UI's files too.
+pub const SECURITY: &str = "Connection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n\
+Referrer-Policy: no-referrer\r\n";
 
 /// Writes `r` with a `Content-Length`, within the stream's write timeout.
 ///
@@ -372,7 +372,7 @@ Referrer-Policy: no-referrer\r\nCache-Control: no-store\r\n";
 /// The socket's.
 pub fn respond(stream: &mut TcpStream, r: &Response) -> io::Result<()> {
     let mut head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{COMMON}",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{SECURITY}Cache-Control: no-store\r\n",
         r.status,
         reason(r.status),
         r.content_type,
@@ -398,7 +398,9 @@ pub fn respond(stream: &mut TcpStream, r: &Response) -> io::Result<()> {
 /// # Errors
 /// The socket's.
 pub fn start_stream(stream: &mut TcpStream) -> io::Result<()> {
-    let head = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n{COMMON}\r\n");
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n{SECURITY}Cache-Control: no-store\r\n\r\n"
+    );
     stream.write_all(head.as_bytes())?;
     stream.flush()
 }

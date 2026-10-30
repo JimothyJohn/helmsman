@@ -54,6 +54,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
                        for the LAN), or `off`. Reads are open; anything
                        else needs the token from the state directory.
+  --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
+                       at / on the API's address: a browser on the LAN is
+                       the HMI (read-only, like the API's reads)
   --state-dir DIR      where the API token lives (default $STATE_DIRECTORY,
                        as systemd's StateDirectory= sets it, else
                        ./helmsman-state)
@@ -86,6 +89,7 @@ struct Opts {
     emit_st: bool,
     api: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
+    ui: Option<PathBuf>,
     scan: Duration,
     memory: usize,
     serial: u32,
@@ -113,6 +117,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         state_dir: None,
+        ui: None,
         scan: Duration::from_millis(10),
         memory: 1024,
         serial: 1,
@@ -169,12 +174,16 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--sinks" => once(&mut o.sinks, flag, v)?,
             "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
             "--store" => once(&mut o.store, flag, v)?,
+            "--ui" => once(&mut o.ui, flag, v)?,
             "--encap-port" => o.server.encap_port = port()?,
             "--io-port" => o.server.io_port = port()?,
             "--peer-io-port" => o.server.peer_io_port = port()?,
             other => return Err(format!("unknown flag {other}")),
         }
         i += 2;
+    }
+    if o.ui.is_some() && o.api.is_none() {
+        return Err("--ui is served by the API; it does not go with --api off".into());
     }
     if o.sinks.is_some() != o.sink_dir.is_some() {
         return Err("--sinks and --sink-dir go together".into());
@@ -573,6 +582,10 @@ fn start_api(
     live: &Arc<Live>,
     devices: &Arc<Devices>,
 ) -> Result<Api, String> {
+    let ui =
+        o.ui.as_deref()
+            .map(|d| api::ui::Ui::open(d).map_err(|e| format!("--ui {}: {e}", d.display())))
+            .transpose()?;
     let dir = state_dir(o);
     let token =
         api::token::load_or_create(&dir).map_err(|e| format!("API token in {}: {e}", dir.display()))?;
@@ -598,11 +611,15 @@ fn start_api(
         running,
         snapshots,
     };
-    let server = Api::start(cfg, shared).map_err(|e| format!("--api {bind}: {e}"))?;
+    let has_ui = ui.is_some();
+    let server = Api::start_with_ui(cfg, shared, ui).map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
         "helmsman-plc: API on http://{}/api (reads open; changes need the token)",
         server.addr()
     );
+    if has_ui {
+        eprintln!("helmsman-plc: canvas on http://{}/", server.addr());
+    }
     if token.new {
         eprintln!(
             "helmsman-plc: API token (new, shown once, kept in {}): {}",

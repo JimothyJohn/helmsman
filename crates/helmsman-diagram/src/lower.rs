@@ -127,6 +127,43 @@ impl Module {
 /// # Errors
 /// A syntax error, or a statement `map` does not list.
 pub fn lower(src: &str, map: &TraceMap) -> Result<Module, LowerError> {
+    lower_by(src, |pou| {
+        map.in_pou(pou)
+            .filter_map(|id| map.stmt(id).map(|s| ((s.line, s.col), id)))
+            .collect()
+    })
+}
+
+/// One row of a statement table, as the box API's trace lists it: row
+/// `k` is `StmtId(k)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StmtPos {
+    /// The POU whose body holds it, upper-cased.
+    pub pou: String,
+    /// From the built-in library, not the user's source.
+    pub system: bool,
+    pub line: u32,
+    pub col: u32,
+}
+
+/// [`lower()`] against a statement table instead of a compiled program's
+/// map: what a viewer has that only sees the box's source and traces.
+///
+/// # Errors
+/// A syntax error, or a statement `table` does not list.
+pub fn lower_table(src: &str, table: &[StmtPos]) -> Result<Module, LowerError> {
+    lower_by(src, |pou| {
+        let pou = pou.to_ascii_uppercase();
+        table
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| !s.system && s.pou == pou)
+            .filter_map(|(k, s)| Some(((s.line, s.col), StmtId(u32::try_from(k).ok()?))))
+            .collect()
+    })
+}
+
+fn lower_by(src: &str, ids_of: impl Fn(&str) -> HashMap<(u32, u32), StmtId>) -> Result<Module, LowerError> {
     let unit = ast::parse(src).map_err(LowerError::Syntax)?;
     let mut fbs: HashSet<String> = ast::library()
         .pous
@@ -143,10 +180,7 @@ pub fn lower(src: &str, map: &TraceMap) -> Result<Module, LowerError> {
     let mut pous = Vec::new();
     for p in &unit.pous {
         let vars = vars(p, &fbs);
-        let ids: HashMap<(u32, u32), StmtId> = map
-            .in_pou(&p.name)
-            .filter_map(|id| map.stmt(id).map(|s| ((s.line, s.col), id)))
-            .collect();
+        let ids = ids_of(&p.name);
         let mut l = Lower {
             d: Diagram {
                 pou: p.name.clone(),
