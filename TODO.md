@@ -101,7 +101,7 @@
   answer: report it, as a draft issue
   notes: not filed: already fixed on ruSTy master by PLC-lang/rusty#2015 (merged 2026-10-21, after v1.0.7); repro re-verified against 1.0.7 on 2026-10-28. Follow-up card rusty-bump.
 
-- [ ] **Theme depth: tokens, layout, or custom widgets?** "Want a new theme? Talk to it." You skipped this in the 2026-10-29 interview. Tokens only (colors, fonts, density) is safe and always consistent. Layout adds per-role panel arrangement. Custom widgets (a gauge, a machine mimic) makes visuals a module tier with its own sandbox story.
+- [x] **Theme depth: tokens, layout, or custom widgets?** "Want a new theme? Talk to it." You skipped this in the 2026-10-29 interview. Tokens only (colors, fonts, density) is safe and always consistent. Layout adds per-role panel arrangement. Custom widgets (a gauge, a machine mimic) makes visuals a module tier with its own sandbox story.
   asked: 2026-10-29
   by: claude-session
   needs: your call
@@ -110,8 +110,9 @@
   est: 5m
   difficulty: low
   id: theme-depth
+  answer: Don't allow for customizations like this I changed my mind
 
-- [ ] **Marketplace floor under the AI review.** You picked "AI-reviewed on install". I'd keep that, but not alone: a hostile bundle can carry text aimed at the reviewer (prompt injection), and AI review is non-deterministic. Proposal: signing, a capability manifest, and WASM/ST sandboxing enforced by the host are the mechanical floor; Claude's plain-language review sits on top and can only refuse, never grant.
+- [x] **Marketplace floor under the AI review.** You picked "AI-reviewed on install". I'd keep that, but not alone: a hostile bundle can carry text aimed at the reviewer (prompt injection), and AI review is non-deterministic. Proposal: signing, a capability manifest, and WASM/ST sandboxing enforced by the host are the mechanical floor; Claude's plain-language review sits on top and can only refuse, never grant.
   asked: 2026-10-29
   by: claude-session
   needs: your call
@@ -120,8 +121,9 @@
   est: 5m
   difficulty: low
   id: market-floor
+  answer: floor + AI review (recommended)
 
-- [ ] **Can the operator edit in the canvas, or only watch?** Per your 2026-10-29 note, ST is the source of truth (agent-written, engineer-tweakable) and the canvas is the operator's live view of what the code does. Edit-in-canvas means round-tripping a graph edit back to ST, which is hard to do without mangling the agent's source. View-only plus "ask the agent" keeps one direction.
+- [x] **Can the operator edit in the canvas, or only watch?** Per your 2026-10-29 note, ST is the source of truth (agent-written, engineer-tweakable) and the canvas is the operator's live view of what the code does. Edit-in-canvas means round-tripping a graph edit back to ST, which is hard to do without mangling the agent's source. View-only plus "ask the agent" keeps one direction.
   asked: 2026-10-29
   by: claude-session
   needs: your call
@@ -130,8 +132,9 @@
   est: 10m
   difficulty: med
   id: canvas-edit-scope
+  answer: view-only, change via agent (recommended)
 
-- [ ] **Local fallback model: on the Pi, or nothing until a hub exists?** You chose "runs + local fallback" for offline. A Pi 5 can run a ~1–3B model via llama.cpp, slowly, good enough to change a threshold or explain a node, not to write modules. Costs RAM next to the runtime.
+- [x] **Local fallback model: on the Pi, or nothing until a hub exists?** You chose "runs + local fallback" for offline. A Pi 5 can run a ~1–3B model via llama.cpp, slowly, good enough to change a threshold or explain a node, not to write modules. Costs RAM next to the runtime.
   asked: 2026-10-29
   by: claude-session
   needs: your call
@@ -140,8 +143,9 @@
   est: 10m
   difficulty: med
   id: fallback-model
+  answer: rule-based param edits only (no model)
 
-- [ ] **Relay hosting shape.** The relay holds the Anthropic key, meters per box, and versions prompts/tools. My default: API Gateway + Lambda + DynamoDB (box tokens, usage), streaming via Lambda response streaming. Your AWS account, a new stack.
+- [x] **Relay hosting shape.** The relay holds the Anthropic key, meters per box, and versions prompts/tools. My default: API Gateway + Lambda + DynamoDB (box tokens, usage), streaming via Lambda response streaming. Your AWS account, a new stack.
   asked: 2026-10-29
   by: claude-session
   needs: your call; which AWS account/region
@@ -150,6 +154,7 @@
   est: 10m
   difficulty: low
   id: relay-hosting
+  answer: Lambda + DynamoDB (recommended)
 
 ## Tasks
 
@@ -316,9 +321,9 @@ Working title until naming lands. A small, opinionated controller for factory ed
 
 Agentic first. The agent (Claude, behind our relay) is the primary programmer. Every module is Structured Text the agent writes and an engineer can tweak; the existing parser, checker, interpreter and ruSTy oracle are its feedback loop. The canvas is the operator's window into the code: ST rendered as a live diagram with values on wires and the reason each output is on. The canvas is the app shell; chat lives in its side panel.
 
-Extension tiers: data (params, signals, schedules) → ST modules → WASM (drivers, heavy code; M3). Users are layered: operator (view, ask), engineer (approve, edit ST, PIN), integrator (modules, policy). The approval policy depends on tier and role. Param and theme changes go live with undo; logic changes get a preview; anything that can move an output needs an engineer PIN plus a sim replay.
+Extension tiers: data (params, signals, schedules) → ST modules → WASM (drivers, heavy code; M3). Users are layered: operator (view, ask), engineer (approve, edit ST, PIN), integrator (modules, policy). The approval policy depends on tier and role. No user theming: the look is fixed. Param changes go live with undo; logic changes get a preview; anything that can move an output needs an engineer PIN plus a sim replay.
 
-Hard limits, enforced by the host and never by the prompt: no writes to external PLCs (CIP is read-only toward them); no output change without human approval; modules have no network access (core sinks publish); the agent never touches the Rust core. Offline: everything installed keeps running, chat degrades to a local fallback. Business: open core (runtime + canvas MIT; relay, fleet and verified marketplace paid) plus a preloaded box. Standalone first, fleet-shaped data model from day one.
+Hard limits, enforced by the host and never by the prompt: no writes to external PLCs (CIP is read-only toward them); no output change without human approval; modules have no network access (core sinks publish); the agent never touches the Rust core. Offline: everything installed keeps running, chat degrades to rule-based param edits (no local model). Business: open core (runtime + canvas MIT; relay, fleet and verified marketplace paid) plus a preloaded box. Standalone first, fleet-shaped data model from day one.
 
 ## Roadmap M1: bench demo, talk → module → light
 
@@ -395,7 +400,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: trace-tap
 
 - [ ] **ST → diagram view** — lower a module's ST AST into an FBD-like diagram (blocks for FB calls and expressions, wires for data flow, IF/CASE as gated regions) and lay it out. Live values from trace-tap on wires; outputs show "on because …". Reuses tcpethernet-graph's model and the egui canvas as the renderer.
-  needs: canvas-edit-scope answered
+  notes: view-only (canvas-edit-scope): no graph→ST writer; every change goes through the agent as ST. The tcpethernet-graph editor on feat/node-canvas becomes a read-only renderer
   result: the operator sees what the code is doing
   est: 1w
   difficulty: high
@@ -410,7 +415,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: canvas-web
 
 - [ ] **Relay v0** — the boxes' only path to Claude: per-box token, the Anthropic key server-side, usage metering, versioned system prompt and tool schema. Dev runs against a local relay with a .env key.
-  needs: relay-hosting answered
+  needs: the AWS account/region for the stack
+  notes: API Gateway + Lambda (response streaming) + DynamoDB for box tokens and usage (relay-hosting)
   result: no API keys on boxes; prompts upgrade without reflashing
   est: 3d
   difficulty: med
@@ -496,8 +502,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: st-graph-view, agent-loop
   id: explain-mode
 
-- [ ] **Offline behaviour and local fallback** — relay unreachable: banner, chat in fallback mode; installed modules unaffected.
-  needs: fallback-model answered
+- [ ] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
   est: 3d
   difficulty: med
   depends: agent-loop, fallback-model
@@ -536,13 +541,14 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: wasm-tier
 
 - [ ] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
-  needs: market-floor answered
+  notes: floor = signature + capability manifest + host-enforced sandbox; the AI review on install sits on top and can only refuse (market-floor)
   est: 1w
   difficulty: med
   depends: snapshots, module-format
   id: bundle-format
 
-- [ ] **Theme engine** — scope per theme-depth; themes are data the agent writes, applied live with undo.
+- [x] **Theme engine** — scope per theme-depth; themes are data the agent writes, applied live with undo.
+  notes: dropped 2026-10-29: no user theming (theme-depth)
   est: 3d
   difficulty: med
   depends: theme-depth, canvas-web
