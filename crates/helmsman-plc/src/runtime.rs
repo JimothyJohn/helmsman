@@ -413,7 +413,10 @@ impl Runtime {
     /// of the new set drives (and the box does not claim), module-output
     /// signals no module publishes, and the outputs of a kept module that
     /// was held or faulted (it restarts Running, but its outputs were safe
-    /// and a reload may have changed what safe is).
+    /// and a reload may have changed what safe is). Every module is then due
+    /// at once: the caller's next tick, in the same step, scans them all on
+    /// the new table, so a rebound output is never seen at its safe value
+    /// while a healthy module drives it.
     ///
     /// # Errors
     /// Every problem the new set would have in a fresh load on `table`.
@@ -450,6 +453,15 @@ impl Runtime {
             }
         }
         self.carry(modules, ports);
+        // A reload can rebind outputs, which then sit at their safe values
+        // until their module scans; make every module due at once so the
+        // tick that follows in the same step (under the table lock) runs it
+        // on the new table, and nobody sees the gap. Its period resumes from
+        // that scan.
+        let last = self.last.unwrap_or(Duration::ZERO);
+        for s in &mut self.slots {
+            s.next = s.next.min(last);
+        }
         Ok(())
     }
 
