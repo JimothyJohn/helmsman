@@ -73,6 +73,7 @@ impl Catalog {
                     }
                     Some(Binding::Local { channel }) => json!({ "kind": "box", "channel": channel }),
                     Some(Binding::Module { module }) => json!({ "kind": "module", "module": module }),
+                    Some(Binding::Screen { tile }) => json!({ "kind": "screen", "tile": tile }),
                     None => json!({ "kind": "calendar" }),
                 };
                 let driver = || {

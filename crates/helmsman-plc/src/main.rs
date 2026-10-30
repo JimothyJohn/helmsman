@@ -60,6 +60,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
                        for the LAN), or `off`. Reads are open; anything
                        else needs the token from the state directory.
+  --screen FILE        the floor screen's layout (see helmsman_plc::screen):
+                       tiles showing the I/O map's `screen` outputs, served
+                       at /api/screen and drawn by the canvas at /?andon
   --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
                        at / on the API's address: a browser on the LAN is
                        the HMI (read-only, like the API's reads)
@@ -102,6 +105,7 @@ struct Opts {
     api: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
     ui: Option<PathBuf>,
+    screen: Option<PathBuf>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
     scan: Duration,
@@ -133,6 +137,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         state_dir: None,
         ui: None,
+        screen: None,
         policy: None,
         set_pin: None,
         scan: Duration::from_millis(10),
@@ -198,6 +203,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
             "--store" => once(&mut o.store, flag, v)?,
             "--ui" => once(&mut o.ui, flag, v)?,
+            "--screen" => once(&mut o.screen, flag, v)?,
             "--encap-port" => o.server.encap_port = port()?,
             "--io-port" => o.server.io_port = port()?,
             "--peer-io-port" => o.server.peer_io_port = port()?,
@@ -207,6 +213,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.ui.is_some() && o.api.is_none() {
         return Err("--ui is served by the API; it does not go with --api off".into());
+    }
+    if o.screen.is_some() && o.api.is_none() {
+        return Err("--screen is served by the API; it does not go with --api off".into());
     }
     if o.sinks.is_some() != o.sink_dir.is_some() {
         return Err("--sinks and --sink-dir go together".into());
@@ -433,6 +442,44 @@ fn load_io((path, src): &Text) -> Result<(SignalTable, Vec<Link>, bool, helmsman
     Ok((table, links, uses_box, parsed.map))
 }
 
+/// The floor screen's layout, checked against the I/O map; `None` without
+/// `--screen`. A map with `screen` outputs needs one when the API runs
+/// (without it, nothing would show them).
+fn load_screen(o: &Opts, map: Option<&helmsman_io::IoMap>) -> Result<Option<api::Screen>, String> {
+    let screens = map.is_some_and(|m| {
+        m.signals
+            .iter()
+            .any(|s| matches!(s.binding, helmsman_io::Binding::Screen { .. }))
+    });
+    let Some(path) = &o.screen else {
+        if screens && o.api.is_some() {
+            return Err("the I/O map declares screen tiles: give their layout with --screen FILE".into());
+        }
+        return Ok(None);
+    };
+    let file = path.display();
+    let mut buf = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| {
+            use std::io::Read as _;
+            f.take(helmsman_plc::screen::MAX_FILE as u64 + 1)
+                .read_to_end(&mut buf)
+        })
+        .map_err(|e| format!("{file}: {e}"))?;
+    let source = String::from_utf8(buf).map_err(|_| format!("{file}: not UTF-8"))?;
+    let layout = helmsman_plc::screen::parse(&source).map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
+        format!("{file} is not a valid screen layout:{}", lines.concat())
+    })?;
+    layout
+        .check(map.unwrap_or(&helmsman_io::IoMap::default()))
+        .map_err(|errs| {
+            let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
+            format!("{file} does not fit the I/O map:{}", lines.concat())
+        })?;
+    Ok(Some(api::Screen { source, layout }))
+}
+
 /// The calendar file, bound to `table`.
 fn load_calendar((path, src): &Text, table: &mut SignalTable) -> Result<Source, String> {
     let file = path.display();
@@ -643,6 +690,8 @@ fn load_access(o: &Opts) -> Result<(Policy, Pins), String> {
     Ok((policy, pins))
 }
 
+// What the API serves is that many separate things; a struct for one caller adds nothing.
+#[allow(clippy::too_many_arguments)]
 fn start_api(
     o: &Opts,
     bind: SocketAddr,
@@ -651,6 +700,7 @@ fn start_api(
     live: &Arc<Live>,
     devices: &Arc<Devices>,
     approval: Approval,
+    screen: Option<api::Screen>,
 ) -> Result<Api, String> {
     let ui =
         o.ui.as_deref()
@@ -689,13 +739,18 @@ fn start_api(
         approval: Some(approval),
     };
     let has_ui = ui.is_some();
-    let server = Api::start_with_ui(cfg, shared, ui).map_err(|e| format!("--api {bind}: {e}"))?;
+    let has_screen = screen.is_some();
+    let server =
+        Api::start_with(cfg, shared, api::Extras { ui, screen }).map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
         "helmsman-plc: API on http://{}/api (reads open; changes need the token)",
         server.addr()
     );
     if has_ui {
         eprintln!("helmsman-plc: canvas on http://{}/", server.addr());
+        if has_screen {
+            eprintln!("helmsman-plc: floor screen on http://{}/?andon", server.addr());
+        }
     }
     if token.new {
         eprintln!(
@@ -833,6 +888,7 @@ fn run(o: &Opts) -> Result<(), String> {
         let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
         format!("modules do not fit together:{}", lines.concat())
     })?;
+    let screen = load_screen(o, map.as_ref())?;
     let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
@@ -866,6 +922,7 @@ fn run(o: &Opts) -> Result<(), String> {
                 &live,
                 &devices,
                 approval,
+                screen,
             )
         })
         .transpose()?;
