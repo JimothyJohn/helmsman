@@ -23,7 +23,7 @@ roadmap card, by id).
  │  ┌─ agent loop (planned) ─┐   tools   ┌─ box API (built) ───────────────────┐  │
  │  │ draft → check → sim →  ├──────────►│ signals · modules · proposals ·     │◄─┼── canvas in any
  │  │ propose                │           │ snapshots · outputs · audit         │  │   browser on the
- │  └────────────────────────┘           └──┬────────────┬───────────────┬─────┘  │   LAN (planned:
+ │  └────────────────────────┘           └──┬────────────┬───────────────┬─────┘  │   LAN (built:
  │                                 policy + │ PIN        │ read-only     │        │   canvas-web)
  │                                          ▼            ▼               ▼        │
  │  ┌─ runtime: helmsman-plc (built: N modules, one scheduler thread) ─────────┐  │
@@ -69,7 +69,7 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
 | `helmsman-graph` | Node-graph model and scan simulator behind the canvas's lab editor. | built (lab tool) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
-| `helmsman-canvas` | egui canvas, native and wasm: the live ST view (a module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
+| `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `open-core-split`), the agent loop (behind the box API; the tool surface is the
@@ -457,7 +457,23 @@ and later MCP (`api/`; contract in `tests/api.rs`). Endpoints are listed at
   `Content-Length` only, 5 s for the whole request however slowly it
   arrives, 2 s for any write before a client is dropped, 10 min for an
   event stream (the browser reconnects). Audit log and
-  proposals are bounded and refuse (507) rather than forget.
+  proposals are bounded and refuse (507) rather than forget. A browser
+  watching the box holds two event streams, so the 8-stream cap is four
+  screens at once.
+- **The canvas** (`--ui DIR`, `api/ui.rs`; contract in `tests/ui.rs`):
+  `GET /` and the files beside it are the wasm canvas `make canvas-web`
+  builds, on the API's origin (no CORS). Only `GET`; a path is refused
+  (404) before the file system is asked unless every segment is
+  `[A-Za-z0-9._-]`, not empty, not dot-led (after percent-decoding, so
+  `%2e%2e`, `%2f`, `%5c`, `%00` and any non-ASCII never pass), at most 8
+  segments of 128 bytes, with a served extension (html, js, wasm, css,
+  json, svg, png, ico, woff2, txt); what passes must resolve to exactly
+  itself (no symlink below the directory, no case-folded match) and be a
+  regular file of at most 64 MiB. Files stream in 64 KiB chunks within the
+  write timeout per chunk and 120 s per file. Trunk's content-hashed names
+  are cached a year (`immutable`), everything else revalidates
+  (`no-cache`); HTML carries a CSP of `'self'`, `'wasm-unsafe-eval'` and its
+  own inline scripts by SHA-256.
 
 ## Approval policy (`approval-policy`, built)
 
@@ -619,11 +635,24 @@ agent as ST; nothing here writes ST back).
   out to the caller's argument); library FBs report their inputs. No
   assignment ran: "held", with the closed gate that stopped each. Data, not
   prose: explain-mode phrases it.
-- **Canvas**: "Live ST view" in the top bar. A demo module runs in a
+- **Canvas**: "Live ST view" in the top bar, with two sources. **Box**
+  (`canvas-web`; the default in a browser the box served): the module list
+  and a module's source from the box API, its traces from
+  `/api/modules/{name}/trace/events` and live values and module status
+  from `/api/events`, over `fetch` and `EventSource`. The source is
+  lowered against the statement table each trace carries
+  (`lower_table`); a trace from the wire is a `BoxScan`, and the diagram
+  reads any `live::Scan` (an in-process `Trace` or a `BoxScan`) alike,
+  proven by rendering every scan of a run with the API's own renderer and
+  comparing annotations and explanations. Connection status: connecting,
+  connected, reconnecting, unreachable after 3 failures; a failed stream
+  is closed and reopened after 2 s doubling to 30 s (the canvas's backoff,
+  not the browser's). The decisions (`remote::BoxState`) are free of I/O
+  and tested natively against the real API. **Demo** (`?demo`, native,
+  or the button when the box is unreachable): a module runs in a
   `helmsman_plc::Runtime` on the page clock with a `TraceTap` asked for
   the last scan of every frame; scripted or hand-switched inputs. Pan,
   zoom, click a block for its source line, click an output for why.
-  Native and wasm alike.
 
 ## Trust boundaries
 
@@ -651,8 +680,8 @@ prompt. The agent never touches the Rust core.
   (`GET /api/replays/{n}`), and posts the PIN to `apply`. `box-mcp` wraps
   the same routes; `local-accounts` replaces role PINs with people, keeping
   the role check and the gate.
-- `st-graph-view` → `canvas-web`: the trace tap's samples (built, below)
-  rendered on the ST diagram, served by the box.
+- `canvas-web` (built, above) → `andon-screen`: another page the box
+  serves from the same directory, on the same streams.
 - `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
   compile, check, swap, then `Store::commit` with the approver; the box API
   serves `list`, `diff` and `rollback`. `bundle-format` exports a tree and

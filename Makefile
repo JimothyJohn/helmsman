@@ -55,7 +55,7 @@ test-plcopen-corpus:  ## PLCopen import against Beremiz/OpenPLC Editor example p
 canvas:  ## Run the node canvas as a native window.
 	cargo run --release -p helmsman-canvas
 
-canvas-web:  ## Build the node canvas for the browser into target/canvas-dist.
+canvas-web:  ## Build the canvas for the browser into target/canvas-dist (the box serves it: helmsman-plc --ui).
 	./scripts/canvas-web.sh
 
 canvas-serve:  ## Serve the canvas on :8790 (all interfaces) with live rebuild.

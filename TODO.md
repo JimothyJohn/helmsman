@@ -320,6 +320,17 @@
   difficulty: low
   id: param-apply-role
 
+- [ ] **Pick PC deploys: canvas on the LAN by default?** `scripts/pi-deploy-plc.sh` now builds the canvas and the unit serves it with the API (`--ui`), but on the API's address, which stays 127.0.0.1:8080 unless you deploy with `PLC_API=0.0.0.0:8080` (that also opens 8080/tcp from `PLC_ALLOW` in the perceptronics firewall). So out of the box a tablet cannot see it; from a laptop, `ssh -L 8080:127.0.0.1:8080 nick@<pi>` then http://localhost:8080/. Defaulting to the LAN means every reader on `PLC_ALLOW` sees module source and live values without a token, which is `api-lan-reads`. I kept loopback as the default (reversible: one default in the script).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether a redeploy puts the HMI on the plant LAN without a flag
+  options: loopback default, PLC_API=0.0.0.0:8080 to opt in (recommended for now, built) | LAN by default once api-lan-reads is settled | LAN by default now
+  est: 10m
+  difficulty: low
+  depends: api-lan-reads
+  id: canvas-lan-default
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -601,7 +612,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: trace-tap
   id: st-graph-view
 
-- [ ] **Serve the canvas from the box** — wasm build of tcpethernet-canvas served by the box API, talking to it over HTTP/WebSocket; any browser or tablet on the LAN is the HMI.
+- [x] **Serve the canvas from the box** — wasm build of tcpethernet-canvas served by the box API, talking to it over HTTP/WebSocket; any browser or tablet on the LAN is the HMI.
+  notes: built on feat/canvas-web: `helmsman-plc --ui DIR` serves `make canvas-web`'s build at `/` (api/ui.rs, tests/ui.rs); the canvas watches the box over fetch + EventSource (SSE, not WebSocket: one-way is all it needs), demo at `?demo`; pi-deploy-plc.sh builds and installs it, PLC_API=0.0.0.0:8080 for the LAN (canvas-lan-default)
   result: headless Pi, browser UI
   est: 2d
   difficulty: med

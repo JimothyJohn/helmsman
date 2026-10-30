@@ -14,9 +14,9 @@
 use std::collections::HashMap;
 
 use helmsman_iec::Value;
-use helmsman_iec::trace::{StmtId, Trace};
+use helmsman_iec::trace::StmtId;
 
-use crate::live::{self, Live};
+use crate::live::{self, Live, Scan};
 use crate::lower::{Module, Pou};
 use crate::model::{Diagram, NodeId, NodeKind, Region, RegionId, RegionKind};
 
@@ -106,7 +106,7 @@ pub struct Blocked {
 /// Why `path` (a variable of the program: `LAMP`, `M.ON`) has its value
 /// after the scan `t`, following inputs `depth` levels deep.
 #[must_use]
-pub fn explain(m: &Module, t: &Trace, path: &str, depth: usize) -> Because {
+pub fn explain(m: &Module, t: &dyn Scan, path: &str, depth: usize) -> Because {
     let path: String = path
         .chars()
         .filter(|c| !c.is_whitespace())
@@ -135,7 +135,7 @@ pub fn explain(m: &Module, t: &Trace, path: &str, depth: usize) -> Because {
 
 struct Explainer<'a> {
     m: &'a Module,
-    t: &'a Trace,
+    t: &'a dyn Scan,
     live: HashMap<(usize, String), Live>,
     stack: Vec<String>,
     /// The calls followed into function blocks: (caller POU, caller
@@ -151,7 +151,7 @@ impl Explainer<'_> {
     }
 
     fn line(&self, stmt: StmtId) -> u32 {
-        self.t.map().stmt(stmt).map_or(0, |s| s.line)
+        self.t.line(stmt).unwrap_or(0)
     }
 
     /// `local` in POU `pou` viewed at `prefix`.
