@@ -240,6 +240,26 @@
   difficulty: low
   id: logix-pm020
 
+- [ ] **Where does the relay live?** The relay holds the Anthropic key and meters boxes, which the vision puts on the paid side of open core, and the `open-core-split` card says to decide before paid code lands in this MIT repo. So relay v0 is being built in a NEW local repo `../helmsman-relay` (Rust, SAM template, no remote, nothing deployed). Creating the private GitHub repo and deploying the stack (account 403059190476, us-east-1) are your steps; scripts and cards are in that repo's TODO.md.
+  asked: 2026-10-30
+  by: claude-session
+  needs: your call
+  result: relay-v0 has a home; agent-loop can target its protocol
+  options: private repo JimothyJohn/helmsman-relay (recommended) | relay/ in this repo, split later | private monorepo for all paid code (relay, fleet, market)
+  est: 5m
+  difficulty: low
+  id: relay-repo
+
+- [ ] **Stop parallel PRs breaking dev?** Twice on 2026-10-30 two PRs that were each green merged back to back and broke dev's build (trace-tap + signal-model; fixed by #39). Branch protection on dev doesn't require branches to be up to date. Options: require up-to-date branches (each PR re-runs CI after every merge; slow with many agents), or GitHub's merge queue (tests each PR on top of the ones ahead of it; built for this), or leave it and fix forward.
+  asked: 2026-10-30
+  by: claude-session
+  needs: your call (repo setting)
+  result: dev stays green under parallel agents
+  options: merge queue on dev (recommended) | require up-to-date branches | leave as is, fix forward
+  est: 15m
+  difficulty: low
+  id: dev-merge-safety
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
