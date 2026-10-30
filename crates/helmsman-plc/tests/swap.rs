@@ -867,6 +867,110 @@ proptest! {
     }
 }
 
+// ---- reconfigure: the whole module set at once (what an approved apply runs) ----
+
+#[test]
+fn reconfigure_adds_removes_and_carries_in_one_step() {
+    let mut t = table();
+    t.set_input(0, Some(Value::Bool(true)));
+    let mut rt = plant(&t);
+    for n in 0..3 {
+        rt.tick_with(ms(n * 10), &[], &mut t);
+    }
+    assert_eq!(cmd(&t, "horn"), Value::Bool(false));
+    // horn goes (nobody drives its signal any more), line stays, beacon is new.
+    let beacon = "PROGRAM beacon VAR n : UINT; END_VAR n := n + 1; END_PROGRAM";
+    rt.reconfigure(
+        vec![
+            module("beacon", beacon, 10, Window::new(0, 0)),
+            module("line", LINE, 10, Window::new(0, 0)),
+        ],
+        &mut t,
+    )
+    .unwrap();
+    assert_eq!(rt.names().collect::<Vec<_>>(), ["beacon", "line"]);
+    assert_eq!(
+        cmd(&t, "horn"),
+        Value::Bool(true),
+        "nobody drives horn: safe at once"
+    );
+    assert_eq!(cmd(&t, "lamp"), Value::Bool(true), "kept signals hold");
+    assert_eq!(get(&rt, "line", "n"), Some(St::Int(3)), "line's state carried");
+    assert_eq!(
+        get(&rt, "beacon", "n"),
+        Some(St::Int(0)),
+        "a new module starts cold"
+    );
+    rt.tick_with(ms(30), &[], &mut t);
+    assert_eq!(get(&rt, "beacon", "n"), Some(St::Int(1)), "and is due at once");
+    assert_eq!(get(&rt, "line", "n"), Some(St::Int(4)));
+}
+
+#[test]
+fn a_refused_reconfigure_changes_nothing() {
+    let mut t = table();
+    t.set_input(0, Some(Value::Bool(true)));
+    let mut rt = plant(&t);
+    let mut twin = plant(&t);
+    let mut tt = t.clone();
+    for n in 0..3 {
+        rt.tick_with(ms(n * 10), &[], &mut t);
+        twin.tick_with(ms(n * 10), &[], &mut tt);
+    }
+    let thief = "PROGRAM thief VAR_OUTPUT lamp : BOOL; END_VAR lamp := FALSE; END_PROGRAM";
+    let errs = rt
+        .reconfigure(
+            vec![
+                module("line", LINE, 10, Window::new(0, 0)),
+                module("thief", thief, 10, Window::new(0, 0)),
+                module("wide", MARK, 10, Window::new(7, 2)),
+            ],
+            &mut t,
+        )
+        .unwrap_err();
+    assert!(
+        errs.iter().any(|e| matches!(e, ConfigError::TwoWriters { .. })),
+        "{errs:?}"
+    );
+    assert!(
+        errs.iter().any(|e| matches!(e, ConfigError::OutsideImage { .. })),
+        "{errs:?}"
+    );
+    assert_eq!(rt.names().collect::<Vec<_>>(), ["line", "horn"]);
+    for n in 3..8 {
+        rt.tick_with(ms(n * 10), &[], &mut t);
+        twin.tick_with(ms(n * 10), &[], &mut tt);
+        for s in ["motor", "lamp", "horn"] {
+            assert_eq!(cmd(&t, s), cmd(&tt, s), "{s}");
+        }
+        for m in ["line", "horn"] {
+            assert_eq!(get(&rt, m, "n"), get(&twin, m, "n"), "{m}");
+        }
+    }
+}
+
+#[test]
+fn reconfigure_zeroes_bytes_no_module_covers_and_holds_the_rest() {
+    let mut rt = Runtime::new(IMAGE, IMAGE, pair()).unwrap();
+    rt.tick(ms(0), &[]);
+    assert_eq!(&rt.outputs()[..6], [0xAA, 0xAA, 0, 0, 0xAA, 0xAA]);
+    rt.reconfigure(
+        vec![
+            module("b", MARK, 10, Window::new(4, 2)),
+            module("c", MARK, 10, Window::new(1, 2)),
+        ],
+        &mut SignalTable::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        &rt.outputs()[..6],
+        [0, 0xAA, 0, 0, 0xAA, 0xAA],
+        "byte 0 is nobody's: zero; byte 1 moves to c and holds until c scans"
+    );
+    rt.tick(ms(10), &[]);
+    assert_eq!(&rt.outputs()[..6], [0, 0xAA, 0xAA, 0, 0xAA, 0xAA]);
+}
+
 // ---- threaded links ----
 
 fn rio_map(sim: &Sim) -> IoMap {
