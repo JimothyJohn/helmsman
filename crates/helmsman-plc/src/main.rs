@@ -18,6 +18,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use helmsman_adapter::device::lock_ref;
 use helmsman_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
+use helmsman_agent::relay;
 use helmsman_iec::{ImageSizes, compile, compile_plcopen, plcopen};
 use helmsman_io::local::Channels;
 use helmsman_plc::api::{self, Api, Catalog, Devices, Live, MemAudit, MemProposals, ModuleInfo, Publisher};
@@ -54,6 +55,12 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
                        for the LAN), or `off`. Reads are open; anything
                        else needs the token from the state directory.
+  --relay URL          the relay the chat panel's agent talks to (POST
+                       /api/chat), e.g. https://relay.example.com; without
+                       it the agent is offline and /api/chat answers 503
+  --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
+                       The box never holds an Anthropic key.
+  --relay-agent V      the agent version to ask the relay for (default v1)
   --state-dir DIR      where the API token lives (default $STATE_DIRECTORY,
                        as systemd's StateDirectory= sets it, else
                        ./helmsman-state)
@@ -86,6 +93,9 @@ struct Opts {
     emit_st: bool,
     api: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
+    relay: Option<String>,
+    relay_token: Option<PathBuf>,
+    relay_agent: String,
     scan: Duration,
     memory: usize,
     serial: u32,
@@ -96,6 +106,20 @@ struct Opts {
 fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
     if slot.replace(PathBuf::from(v)).is_some() {
         return Err(format!("one {flag} only"));
+    }
+    Ok(())
+}
+
+/// `--relay`, `--relay-token`, `--relay-agent`.
+fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
+    match flag {
+        "--relay" => {
+            relay::Url::parse(v).map_err(|e| format!("--relay: {e}"))?;
+            o.relay = Some(v.to_string());
+        }
+        "--relay-token" => once(&mut o.relay_token, flag, v)?,
+        _ if relay::version_ok(v) => v.clone_into(&mut o.relay_agent),
+        _ => return Err(format!("--relay-agent: not an agent version: {v:?}")),
     }
     Ok(())
 }
@@ -113,6 +137,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         state_dir: None,
+        relay: None,
+        relay_token: None,
+        relay_agent: "v1".into(),
         scan: Duration::from_millis(10),
         memory: 1024,
         serial: 1,
@@ -162,6 +189,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 );
             }
             "--state-dir" => o.state_dir = Some(PathBuf::from(v)),
+            "--relay" | "--relay-token" | "--relay-agent" => relay_flag(&mut o, flag, v)?,
             "--module" => o.modules.push(v.clone()),
             "--module-dir" => o.module_dirs.push(PathBuf::from(v)),
             "--io-map" => once(&mut o.io_map, flag, v)?,
@@ -175,6 +203,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             other => return Err(format!("unknown flag {other}")),
         }
         i += 2;
+    }
+    if o.relay.is_some() != o.relay_token.is_some() {
+        return Err("--relay and --relay-token go together".into());
     }
     if o.sinks.is_some() != o.sink_dir.is_some() {
         return Err("--sinks and --sink-dir go together".into());
@@ -572,6 +603,7 @@ fn start_api(
     running: Option<ChangeSet>,
     live: &Arc<Live>,
     devices: &Arc<Devices>,
+    replay: api::sim::Source,
 ) -> Result<Api, String> {
     let dir = state_dir(o);
     let token =
@@ -597,6 +629,8 @@ fn start_api(
         proposals: Box::new(MemProposals::new(1000)),
         running,
         snapshots,
+        replay: Some(replay),
+        chat: chat_setup(o)?,
     };
     let server = Api::start(cfg, shared).map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
@@ -613,6 +647,32 @@ fn start_api(
         eprintln!("helmsman-plc: API token in {}", token.path.display());
     }
     Ok(server)
+}
+
+/// The chat route's relay, from `--relay` and `--relay-token`.
+fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
+    let (Some(url), Some(path)) = (&o.relay, &o.relay_token) else {
+        return Ok(None);
+    };
+    let url = relay::Url::parse(url).map_err(|e| format!("--relay: {e}"))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("--relay-token {}: {}", path.display(), e.kind()))?;
+    let token = text.trim();
+    if !relay::token_ok(token) {
+        return Err(format!(
+            "--relay-token {}: not a relay box token (hmr1_ and 64 hex digits)",
+            path.display()
+        ));
+    }
+    eprintln!(
+        "helmsman-plc: chat agent via relay {url} (agent {})",
+        o.relay_agent
+    );
+    Ok(Some(api::chat::Setup::new(relay::Config::new(
+        url,
+        token.to_string(),
+        o.relay_agent.clone(),
+    ))))
 }
 
 /// What the API serves that is fixed once the runtime is built.
@@ -718,6 +778,9 @@ fn run(o: &Opts) -> Result<(), String> {
         map,
         calendar: cal,
     } = load_signals(&content)?;
+    // What sim replay runs against: the modules and table as built.
+    let replay_modules = modules.clone();
+    let replay_table = table.clone();
     let table = Arc::new(Mutex::new(table));
     let bound = Runtime::with_signals(
         i_len,
@@ -736,9 +799,11 @@ fn run(o: &Opts) -> Result<(), String> {
     let live = Arc::new(Live::default());
     let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
     announce(&adapter, &specs, &content, uses_box, cal.as_ref());
+    let mut recorder = recorder(&table);
+    let replay = api::sim::Source::new(recorder.tap(), replay_table, (i_len, q_len), replay_modules, d);
     let server = o
         .api
-        .map(|bind| start_api(o, bind, catalog, content.running.take(), &live, &devices))
+        .map(|bind| start_api(o, bind, catalog, content.running.take(), &live, &devices, replay))
         .transpose()?;
     let mut publisher = server
         .as_ref()
@@ -754,7 +819,6 @@ fn run(o: &Opts) -> Result<(), String> {
     start_io(io_links, &table, &devices);
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
-    let mut recorder = recorder(&table);
     let start = Instant::now();
     loop {
         {

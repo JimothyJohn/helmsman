@@ -9,6 +9,8 @@ repository.workspace = true
 
 [dependencies]
 helmsman-adapter = { path = "../helmsman-adapter" }
+# The chat panel's agent loop (relay client and tools); https follows ours.
+helmsman-agent = { path = "../helmsman-agent", default-features = false }
 helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
 serde = { version = "1.0", features = ["derive"] }
@@ -31,4 +33,4 @@ workspace = true
 # On by default so the Pi build can post to a cloud receiver; build with
 # --no-default-features for an http-only box with no third-party crates.
 default = ["https"]
-https = ["dep:rustls", "dep:webpki-roots"]
+https = ["dep:rustls", "dep:webpki-roots", "helmsman-agent/https"]
