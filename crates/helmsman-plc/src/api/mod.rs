@@ -634,11 +634,10 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
 fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "proposals"] => Some("GET, POST"),
-        ["api", "bundles"] => Some("POST"),
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat"] => Some("POST"),
+        | ["api", "chat" | "bundles"] => Some("POST"),
         ["api"]
         | [
             "api",
