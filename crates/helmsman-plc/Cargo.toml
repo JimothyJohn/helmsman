@@ -9,13 +9,14 @@ repository.workspace = true
 
 [dependencies]
 helmsman-adapter = { path = "../helmsman-adapter" }
-# The chat panel's agent loop (relay client and tools); https follows ours.
-helmsman-agent = { path = "../helmsman-agent", default-features = false }
+# The chat panel's agent loop (relay client and tools), for the box API's
+# /api/chat; https follows ours.
+helmsman-agent = { path = "../helmsman-agent", default-features = false, optional = true }
 helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"], optional = true }
 sha2 = { version = "0.11.1", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"], optional = true }
 webpki-roots = { version = "1.0.11", optional = true }
@@ -29,8 +30,46 @@ proptest = "1.12"
 workspace = true
 
 [features]
-# https:// sinks (rustls with the ring provider, Mozilla roots compiled in).
-# On by default so the Pi build can post to a cloud receiver; build with
-# --no-default-features for an http-only box with no third-party crates.
-default = ["https"]
-https = ["dep:rustls", "dep:webpki-roots", "helmsman-agent/https"]
+# `box`: what only a real box needs: the snapshot store (SQLite, built from
+# C), the HTTP API, and the binary. Without it the crate is the runtime
+# alone (scheduler, signals, links, tap, replay), which the canvas embeds
+# and which builds for wasm32.
+# `https`: https:// sinks (rustls with the ring provider, Mozilla roots
+# compiled in). On by default so the Pi can post to a cloud receiver;
+# `--no-default-features --features box` builds an http-only box.
+default = ["box", "https"]
+box = ["dep:rusqlite", "dep:helmsman-agent"]
+https = ["dep:rustls", "dep:webpki-roots", "helmsman-agent?/https"]
+
+[[bin]]
+name = "helmsman-plc"
+path = "src/main.rs"
+required-features = ["box"]
+
+[[test]]
+name = "api"
+required-features = ["box"]
+
+[[test]]
+name = "bin"
+required-features = ["box"]
+
+[[test]]
+name = "sink_bin"
+required-features = ["box"]
+
+[[test]]
+name = "store"
+required-features = ["box"]
+
+[[test]]
+name = "approval"
+required-features = ["box"]
+
+[[test]]
+name = "policy"
+required-features = ["box"]
+
+[[test]]
+name = "agent"
+required-features = ["box"]
