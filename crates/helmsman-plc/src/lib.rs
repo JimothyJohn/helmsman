@@ -3,12 +3,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod calendar;
 pub mod link;
 pub mod manifest;
 pub mod runtime;
 pub mod signals;
 pub mod spec;
 pub mod store;
+pub mod tap;
 
 pub use runtime::{ConfigError, MAX_PERIOD, Module, Runtime, Stats, Status, Window};
 pub use signals::{BindError, SignalTable, TableError};
+pub use tap::{Sample, TraceTap};

@@ -200,6 +200,16 @@
   id: iomap-format
   answer: keep the line format until box-api, then JSON from the API (recommended)
 
+- [ ] **Shift calendar time zones: fixed offsets, or read the OS tz database?** The shift calendar (feat/shift-calendar) takes `zone +01:00` plus each DST change written out as `zone +02:00 from 2026-03-29T01:00Z`; `zone Europe/Berlin` is refused with a message saying so. No new dependency, and evaluation stays a pure function of the instant, but someone has to add next year's change dates by hand and a forgotten one shifts every shift by an hour. Two ways to accept zone names: hand-parse the TZif files already on the Pi (`/usr/share/zoneinfo`, a few hundred lines, no crate, but the box then depends on the OS tzdata being current), or add `jiff` (well-maintained, bundles or reads tzdata, a sizeable new dependency). I kept fixed offsets for now (reversible: a zone name would only add a parser branch).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether `zone Europe/Berlin` works in a calendar file, and what the box depends on for it
+  options: keep fixed offsets with explicit changes (recommended for now) | hand-parse the OS TZif files, no new crate | add jiff
+  est: 1d
+  difficulty: med
+  id: calendar-timezones
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -429,7 +439,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: arch-note
   id: module-format
 
-- [ ] **Signal model** — named, typed signals with units and poll rates, bound to a source (CIP tag, CIP attribute, GPIO in, another module's output). Modules read signals by name, never raw addresses.
+- [x] **Signal model** — named, typed signals with units and poll rates, bound to a source (CIP tag, CIP attribute, GPIO in, another module's output). Modules read signals by name, never raw addresses.
   result: one vocabulary for the agent, the canvas and the manifest
   est: 2d
   difficulty: med
@@ -464,7 +474,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format
   id: snapshots
 
-- [ ] **Runtime trace tap** — the interpreter exposes per-scan variable values and which statements/branches executed, sampled at UI rates, without slowing the scan.
+- [x] **Runtime trace tap** — the interpreter exposes per-scan variable values and which statements/branches executed, sampled at UI rates, without slowing the scan.
   result: the data the live canvas draws
   est: 3d
   difficulty: high
@@ -581,7 +591,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: m1-demo
   id: stock-counters
 
-- [ ] **Shift calendar and scheduled outputs** — shifts, breaks, planned downtime as box data; modules can ask "in shift?" and the scheduler drives outputs on a calendar (with the output policy applying).
+- [x] **Shift calendar and scheduled outputs** — shifts, breaks, planned downtime as box data; modules can ask "in shift?" and the scheduler drives outputs on a calendar (with the output policy applying).
   est: 3d
   difficulty: med
   depends: multi-module

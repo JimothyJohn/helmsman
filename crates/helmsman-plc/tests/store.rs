@@ -500,6 +500,8 @@ fn sig(name: &str, dir: Dir, binding: Binding) -> Signal {
         ty: Ty::Bool,
         dir,
         binding,
+        unit: None,
+        poll: None,
     }
 }
 

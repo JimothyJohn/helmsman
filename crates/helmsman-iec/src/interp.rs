@@ -27,6 +27,7 @@ use std::fmt;
 
 use crate::check::{Area, Base, Builtin, Call, Ex, Loc, Move, Place, PouCode, PouType, St, StKind};
 use crate::parser::{BinOp, UnOp};
+use crate::trace::Recorder;
 use crate::types::{Ty, Value, round_real};
 
 /// The process image a program reads and writes, one buffer per area.
@@ -56,7 +57,7 @@ impl Image {
 
     /// Raw little-endian bits at `loc`. The checker guaranteed the bounds;
     /// a shorter image reads as zero.
-    fn read(&self, loc: Loc) -> u64 {
+    pub(crate) fn read(&self, loc: Loc) -> u64 {
         let buf = self.area(loc.area);
         if loc.bits == 1 {
             return buf.get(loc.byte).map_or(0, |b| u64::from((b >> loc.bit) & 1));
@@ -151,7 +152,7 @@ fn to_raw(ty: Ty, v: Value) -> u64 {
 
 /// Raw image bits -> value of type `ty`.
 #[allow(clippy::cast_possible_truncation)]
-fn from_raw(ty: Ty, raw: u64) -> Value {
+pub(crate) fn from_raw(ty: Ty, raw: u64) -> Value {
     match ty {
         Ty::Bool => Value::Bool(raw & 1 == 1),
         Ty::Real => Value::Real(f64::from(f32::from_bits(raw as u32))),
@@ -369,11 +370,43 @@ pub struct Machine<'a> {
     pub budget: u64,
     /// Nanoseconds since the program started.
     pub now: i128,
+    /// Records the scan when tracing; `None` for a plain scan, which then
+    /// pays one predictable branch per statement.
+    pub tap: Option<&'a mut Recorder>,
 }
 
 type Res<T> = Result<T, Fault>;
 
 impl Machine<'_> {
+    #[inline]
+    fn enter(&mut self, tr: u32) -> u32 {
+        match &mut self.tap {
+            Some(r) => r.enter(tr),
+            None => 0,
+        }
+    }
+
+    #[inline]
+    fn leave(&mut self, outer: u32) {
+        if let Some(r) = &mut self.tap {
+            r.cur = outer;
+        }
+    }
+
+    #[inline]
+    fn arm(&mut self, tr: u32, k: usize) {
+        if let Some(r) = &mut self.tap {
+            r.arm(tr, k);
+        }
+    }
+
+    #[inline]
+    fn pass(&mut self, tr: u32) {
+        if let Some(r) = &mut self.tap {
+            r.pass(tr);
+        }
+    }
+
     fn at(line: u32) -> impl Fn(FaultKind) -> Fault {
         move |kind| Fault { kind, line }
     }
@@ -573,6 +606,14 @@ impl Machine<'_> {
     }
 
     fn stmt(&mut self, s: &St) -> Res<Flow> {
+        let outer = self.enter(s.tr);
+        let flow = self.exec(s)?;
+        self.leave(outer);
+        Ok(flow)
+    }
+
+    #[inline]
+    fn exec(&mut self, s: &St) -> Res<Flow> {
         let line = s.line;
         self.tick(line)?;
         match &s.kind {
@@ -589,20 +630,24 @@ impl Machine<'_> {
                 self.call(c, line)?;
             }
             StKind::If(arms, other) => {
-                for (c, b) in arms {
+                for (k, (c, b)) in arms.iter().enumerate() {
                     if boolean(self.eval(c, line)?) {
+                        self.arm(s.tr, k);
                         return self.block(b);
                     }
                 }
+                self.arm(s.tr, arms.len());
                 return self.block(other);
             }
             StKind::Case(sel, arms, other) => {
                 let v = int(self.eval(sel, line)?);
-                for (ranges, b) in arms {
+                for (k, (ranges, b)) in arms.iter().enumerate() {
                     if ranges.iter().any(|&(lo, hi)| lo <= v && v <= hi) {
+                        self.arm(s.tr, k);
                         return self.block(b);
                     }
                 }
+                self.arm(s.tr, arms.len());
                 return self.block(other);
             }
             StKind::For {
@@ -622,6 +667,7 @@ impl Machine<'_> {
                 self.mem[slot] = Value::Int(i);
                 while (step >= 0 && i <= end) || (step < 0 && i >= end) {
                     self.tick(line)?;
+                    self.pass(s.tr);
                     if let Some(flow) = self.body(body)? {
                         return Ok(flow);
                     }
@@ -637,6 +683,7 @@ impl Machine<'_> {
             StKind::While(c, b) => {
                 while boolean(self.eval(c, line)?) {
                     self.tick(line)?;
+                    self.pass(s.tr);
                     if let Some(flow) = self.body(b)? {
                         return Ok(flow);
                     }
@@ -644,6 +691,7 @@ impl Machine<'_> {
             }
             StKind::Repeat(b, c) => loop {
                 self.tick(line)?;
+                self.pass(s.tr);
                 if let Some(flow) = self.body(b)? {
                     return Ok(flow);
                 }
@@ -684,6 +732,7 @@ pub fn eval_const(e: &Ex) -> Result<Value, String> {
         base: 0,
         budget: 0,
         now: 0,
+        tap: None,
     };
     m.eval(e, 0).map_err(|f| match f.kind {
         FaultKind::DivisionByZero => "integer division by zero in an initial value".to_string(),
