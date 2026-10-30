@@ -1,0 +1,17 @@
+[package]
+name = "helmsman-diagram"
+version = "0.1.0"
+description = "A module's Structured Text lowered into a read-only FBD-like diagram, laid out, with live values and \"on because\" from a scan trace"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+helmsman-iec = { path = "../helmsman-iec" }
+
+[dev-dependencies]
+proptest = "1.12"
+
+[lints]
+workspace = true
