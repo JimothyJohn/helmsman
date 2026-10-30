@@ -29,6 +29,10 @@ pub enum Error {
     Exception(u8),
     /// Writing a read-only point.
     ReadOnly(String),
+    /// The driver or device refused this one point or its value (a value
+    /// its format can't hold, a tag the controller doesn't know, a reply of
+    /// another type than declared); the connection itself is fine.
+    Point(String),
     /// The driver does not know this device's driver name.
     UnknownDriver(String),
 }
@@ -41,9 +45,20 @@ impl fmt::Display for Error {
             Self::Io(e) => write!(f, "io: {e}"),
             Self::Protocol(m) => write!(f, "protocol: {m}"),
             Self::Exception(c) => write!(f, "device exception {c:#04x}"),
+            Self::Point(m) => write!(f, "point: {m}"),
             Self::ReadOnly(a) => write!(f, "{a} is read-only"),
             Self::UnknownDriver(d) => write!(f, "unknown driver {d:?}"),
         }
+    }
+}
+
+impl Error {
+    /// Whether the error means the link to the device is broken (I/O
+    /// trouble, a reply that isn't valid), as opposed to one point being
+    /// refused. After a link error nothing the device holds can be trusted.
+    #[must_use]
+    pub const fn is_link(&self) -> bool {
+        matches!(self, Self::Io(_) | Self::Protocol(_))
     }
 }
 

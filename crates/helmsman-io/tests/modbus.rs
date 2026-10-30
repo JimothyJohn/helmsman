@@ -96,13 +96,10 @@ fn the_driver_refuses_bad_writes_without_touching_the_device() {
         d.write("coil:0", Value::Int(1)),
         Err(Error::Type { .. })
     ));
-    assert!(matches!(
-        d.write("hr:0", Value::Int(70000)),
-        Err(Error::Protocol(_))
-    ));
+    assert!(matches!(d.write("hr:0", Value::Int(70000)), Err(Error::Point(_))));
     assert!(matches!(
         d.write("hr:0:i16", Value::Int(-40000)),
-        Err(Error::Protocol(_))
+        Err(Error::Point(_))
     ));
     assert!(matches!(
         d.write("hr:0", Value::Real(1.0)),

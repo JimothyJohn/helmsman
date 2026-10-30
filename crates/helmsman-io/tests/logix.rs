@@ -189,10 +189,11 @@ fn a_tag_of_another_type_is_an_error_not_a_reinterpretation() {
         "Temp.3@bool",
         "Run@sint",
     ] {
-        assert!(matches!(d.read(&[addr]), Err(Error::Protocol(_))), "{addr}");
+        let e = d.read(&[addr]).unwrap_err();
+        assert!(matches!(e, Error::Point(_)) && !e.is_link(), "{addr}: {e}");
     }
     // A ULINT above i64::MAX cannot become a signal int.
-    assert!(matches!(d.read(&["Ubig@ulint"]), Err(Error::Protocol(_))));
+    assert!(matches!(d.read(&["Ubig@ulint"]), Err(Error::Point(_))));
     // The connection survived all of that.
     assert_eq!(d.read(&["Count@dint"]).unwrap(), [Value::Int(-7)]);
 }
@@ -203,7 +204,7 @@ fn one_unknown_tag_fails_the_read_and_the_next_read_works() {
     let mut d = open(&a, &[]);
     assert!(matches!(
         d.read(&["Temp@real", "Nope@dint"]),
-        Err(Error::Protocol(_))
+        Err(Error::Point(_))
     ));
     assert_eq!(d.read(&["Temp@real"]).unwrap(), [Value::Real(21.5)]);
 }
