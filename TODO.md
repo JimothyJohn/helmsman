@@ -270,6 +270,16 @@
   difficulty: low
   id: plcopen-fixture-license
 
+- [ ] **Should the canvas open on the live ST view or the lab editor?** st-graph-view added "Live ST view" (a module's ST as a live, read-only diagram, with "on because") as a second mode beside the node editor. Per canvas-edit-scope the live view is the product and the editor a lab tool, so the canvas now opens on the live view (the editor is one click away, "Lab editor", and is unchanged). Reversible: one line in `App::new` in crates/helmsman-canvas/src/app.rs.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: which mode helmsman-canvas starts in, and whether the lab editor stays
+  options: open on the live ST view (recommended, done) | open on the lab editor | drop the lab editor entirely
+  est: 2m
+  difficulty: low
+  id: canvas-default-mode
+
 - [ ] **Sim replay: record at the scan's ticks, or at every link read?** The recorder (feat/sim-replay) samples the signal table just before each runtime tick, stamped with the tick's `now`: exactly what the running modules scanned against, one clock, nothing added to the device links, and replaying the running modules over a recording made from a deterministic run reproduces their outputs exactly (property-tested against the Modbus simulator). The cost: a change that came and went between two ticks is not recorded, so a *proposed* module scanning faster than every running one sees the data at the running modules' tick rate (at most 1 s apart with a calendar loaded). Recording at each link read instead would catch every polled value but needs the links and the scheduler on one clock and puts a handoff in every link thread. Defaults are 10 minutes and 4 MiB of changes (about 100 000); neither is on the command line yet. Reversible: the recording format and replay don't change either way.
   asked: 2026-10-30
   by: claude-agent
@@ -553,8 +563,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: multi-module
   id: trace-tap
 
-- [ ] **ST → diagram view** — lower a module's ST AST into an FBD-like diagram (blocks for FB calls and expressions, wires for data flow, IF/CASE as gated regions) and lay it out. Live values from trace-tap on wires; outputs show "on because …". Reuses tcpethernet-graph's model and the egui canvas as the renderer.
-  notes: view-only (canvas-edit-scope): no graph→ST writer; every change goes through the agent as ST. The tcpethernet-graph editor on feat/node-canvas becomes a read-only renderer
+- [x] **ST → diagram view** — lower a module's ST AST into an FBD-like diagram (blocks for FB calls and expressions, wires for data flow, IF/CASE as gated regions) and lay it out. Live values from trace-tap on wires; outputs show "on because …". Reuses tcpethernet-graph's model and the egui canvas as the renderer.
+  notes: view-only (canvas-edit-scope): no graph→ST writer; every change goes through the agent as ST. Built as its own crate, helmsman-diagram (helmsman-graph's fixed node kinds don't fit arbitrary ST, and it needs StmtIds and the iec AST); the canvas shows it as "Live ST view" beside the lab editor
   result: the operator sees what the code is doing
   est: 1w
   difficulty: high
