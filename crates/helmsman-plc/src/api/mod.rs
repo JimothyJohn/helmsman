@@ -29,6 +29,7 @@
 //! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
+//! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
 //!
@@ -230,6 +231,8 @@ pub struct Api {
     addr: SocketAddr,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// The chat's relay watcher ([`chat::Chat::watch`]).
+    watcher: Option<JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for Api {
@@ -298,6 +301,7 @@ impl Api {
             streams: AtomicUsize::new(0),
             ui,
         });
+        let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
             .name("api".into())
             .spawn(move || accept(&listener, &ctx))?;
@@ -305,6 +309,7 @@ impl Api {
             addr,
             stop,
             thread: Some(thread),
+            watcher,
         })
     }
 
@@ -318,6 +323,9 @@ impl Drop for Api {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+        if let Some(t) = self.watcher.take() {
             let _ = t.join();
         }
     }
@@ -406,7 +414,7 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
         }
         Reply::Chat(taken) => {
             if let Some(chat) = &ctx.chat {
-                chat.serve(&mut stream, taken);
+                chat.serve(&mut stream, taken, &ctx.catalog());
             }
         }
         Reply::File(asset) => {
@@ -476,6 +484,20 @@ fn handle(req: &Request, ctx: &Ctx) -> Reply {
         return start_chat(req, ctx);
     }
     Reply::Once(mutate(req, ctx))
+}
+
+/// `GET /api/chat/status`: `unconfigured` without a relay.
+fn chat_status(ctx: &Ctx) -> Json {
+    ctx.chat.as_ref().map_or_else(
+        || {
+            json!({
+                "state": "unconfigured", "since": null, "kind": null, "reason": null,
+                "seq": 0, "fallback": false,
+                "message": "no relay configured on this box (--relay); the agent is offline",
+            })
+        },
+        chat::Chat::status,
+    )
 }
 
 /// `POST /api/chat`: audited when it starts; the turn itself streams.
@@ -628,6 +650,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ]
         | ["api", "snapshots", _, "diff", _]
         | ["api", "modules", _, "trace"]
+        | ["api", "chat", "status"]
         | ["api", "modules", _, "trace", "events"] => Some("GET"),
         _ => None,
     }
@@ -912,6 +935,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             (Err(r), _) | (_, Err(r)) => r,
         },
         ["api", "events"] => return Reply::Values,
+        ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "policy"] => match &ctx.approval {
             Some(a) => Response::json(200, &approve::policy_json(&a.policy)),
             None => Response::error(404, "no approval path on this box"),
@@ -991,6 +1015,7 @@ fn index() -> Json {
             e("GET", "/api/policy", false, "the approval policy this box enforces"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?}; an event stream of its progress"),
+            e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
         ],
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
     })
@@ -1086,7 +1111,15 @@ fn pump(
 
 fn value_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
     let mut last = None;
+    let mut agent = None;
     pump(stream, ctx, || {
+        if let Some(c) = &ctx.chat {
+            let seq = c.status_seq();
+            if agent != Some(seq) {
+                agent = Some(seq);
+                return Some(("agent", c.status()));
+            }
+        }
         let view = ctx.box_.live.view();
         if last == Some(view.seq) {
             return None;
