@@ -20,7 +20,7 @@ roadmap card, by id).
                                       │ HTTPS, box-initiated
  ┌──────────────────────────── the box (Pi 5) ───────┼────────────────────────────┐
  │                                                   │                            │
- │  ┌─ agent loop (planned) ─┐   tools   ┌─ box API (planned) ─────────────────┐  │
+ │  ┌─ agent loop (planned) ─┐   tools   ┌─ box API (built) ───────────────────┐  │
  │  │ draft → check → sim →  ├──────────►│ signals · modules · proposals ·     │◄─┼── canvas in any
  │  │ propose                │           │ snapshots · outputs · audit         │  │   browser on the
  │  └────────────────────────┘           └──┬────────────┬───────────────┬─────┘  │   LAN (planned:
@@ -349,7 +349,48 @@ the other modules never notice.
   one is next due on its old phase after the last tick (open question
   `hot-swap-faulted-state`).
 
-Not in the binary yet: there is no control channel until `box-api`.
+Not in the binary yet: the box API (below) stores proposals but applying
+one waits for `approval-policy`, which will call the swap.
+
+## Box API (`box-api`, built)
+
+`helmsman-plc --api ADDR` (default `127.0.0.1:8080`, `0.0.0.0:8080` for the
+LAN, `off`): one HTTP/1.1 + JSON surface for the canvas, the agent's tools
+and later MCP (`api/`; contract in `tests/api.rs`). Endpoints are listed at
+`GET /api` and in `api/mod.rs`.
+
+- **Reads** (`GET`) are open: signals with live values and quality, modules
+  (source, manifest, ports, status, stats), a module's latest trace (a
+  `GET` requests the next traced scan; 202 until one lands), output commands
+  and safe values, device links, proposals, the audit log, and snapshots
+  (`--store`: history, a snapshot's files, a diff). Two event streams (SSE:
+  one-way is all the canvas needs, and it is plain HTTP, so the same bounded
+  parser serves it): live values and status, and a module's traces.
+- **Everything else** needs `Authorization: Bearer <token>` (64 hex
+  digits, made on first start in `api-token`, mode 0600, under
+  `--state-dir` or systemd's `StateDirectory=`, printed once to the
+  journal). A token in a query string is refused on any request. Every
+  authenticated call is appended to the audit log whatever its outcome,
+  with the snapshot id it concerns.
+- **No write path.** There is no route that writes a signal, an output, a
+  param or a module. `POST /api/proposals` stores a checked draft (a module
+  directory's two files, or one param's value): parsed, compiled against its
+  windows, held to its manifest, its signals checked against the box, and,
+  when the box runs a change set, carrying the change set applying it would
+  commit, its snapshot id and its diff. `apply` and snapshot `rollback`
+  answer 501 until `approval-policy` exists.
+- **The scan never waits on it.** The scheduler publishes a view (signal
+  values, module status and stats, `%Q`) at most every 100 ms with a
+  `try_lock`, dropping it if a reader holds the slot; the API reads only
+  that, the catalog fixed at startup, the trace taps, and the snapshot
+  store (its own SQLite connection, on API threads only). While the API
+  runs the scan loop wakes at least every 100 ms to publish.
+- **Bounded.** Hand-rolled on `std::net` (no new crates; `serde_json`, already
+  in the workspace, for JSON): one request per connection, 32 at once (503
+  beyond), 8 event streams, 16 KiB head, 64 headers, 1 MiB body,
+  `Content-Length` only, 5 s for the whole request however slowly it
+  arrives, 2 s for any write before a client is dropped. Audit log and
+  proposals are bounded and refuse (507) rather than forget.
 
 ## Trust boundaries
 
@@ -362,7 +403,7 @@ Not in the binary yet: there is no control channel until `box-api`.
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
-| agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | planned (`box-api`, `approval-policy`) |
+| agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | box API built (no write route; mutations need the token and are audited; apply/rollback 501); `approval-policy` planned |
 | text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions, in the agent prompt; the host rules above hold regardless | planned (`agent-loop`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token | planned (`relay-v0`) |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | planned (`bundle-format`, `marketplace`) |
@@ -372,9 +413,10 @@ prompt. The agent never touches the Rust core.
 
 ## Where the planned pieces attach
 
-- `module-format` → `signal-model` → `box-api`: the manifest (signals read,
-  outputs driven, schedule, params) is what the scheduler, the I/O map and
-  the policy check; the box API serves it.
+- `box-api` (built) → `approval-policy`: the policy is the only thing that
+  will answer `POST /api/proposals/{id}/apply` and
+  `/api/snapshots/{id}/rollback` with anything but 501; the stored proposal
+  already holds the change set to commit. `box-mcp` wraps the same routes.
 - `st-graph-view` → `canvas-web`: the trace tap's samples (built, below)
   rendered on the ST diagram, served by the box.
 - `snapshots` (built, above) → `approval-policy` / `box-api`: apply =

@@ -240,6 +240,16 @@
   difficulty: low
   id: logix-pm020
 
+- [ ] **Box API on the LAN: keep reads open?** The box API (feat/box-api) answers `GET` without a token: signals, outputs, modules with their ST source, proposals, the audit log, snapshots. Mutations need the token. The default bind is 127.0.0.1:8080, so this only matters once you run it with `--api 0.0.0.0:8080` for the canvas on a tablet. Open reads mean anyone on the plant LAN can read every module's source and live values (no writes). The alternative is a second, read-only token (or the same one) for reads too, which the canvas would need to be given once per browser. I kept reads open per the brief (reversible: one check in `handle`).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether a tablet on the LAN needs a token to watch the box
+  options: keep reads open, loopback default (recommended for now) | reads need a read-only token when bound off loopback | reads need the full token
+  est: 2h
+  difficulty: low
+  id: api-lan-reads
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -265,7 +275,7 @@
   depends: explicit-messaging
   id: cli-crate
 
-- [ ] **Daemon on the open device (REST/MQTT front for the customer's adapters)** — the second half of "both". Shape undecided; revisit once the CLI exists.
+- [x] **Daemon on the open device (REST/MQTT front for the customer's adapters)** — the second half of "both". Shape undecided; revisit once the CLI exists. Superseded by box-api (2026-10-30): the box's one HTTP + JSON API.
   needs: cli-crate, a decision on REST vs MQTT
   result: design note in `docs/`
   est: 2h
@@ -491,7 +501,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: low
   id: gpio-outputs
 
-- [ ] **Box API** — one local HTTP API on the box: signals (list, live values), modules (list, source, manifest, status), proposals, snapshots, outputs, audit. The canvas, the agent tools and later MCP all go through it. Supersedes the `daemon` card's shape.
+- [x] **Box API** — one local HTTP API on the box: signals (list, live values), modules (list, source, manifest, status), proposals, snapshots, outputs, audit. The canvas, the agent tools and later MCP all go through it. Supersedes the `daemon` card's shape.
   result: single surface, testable without a UI
   est: 4d
   difficulty: med

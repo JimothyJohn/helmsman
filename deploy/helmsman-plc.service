@@ -10,6 +10,13 @@ Wants=network-online.target
 EnvironmentFile=/etc/helmsman-plc/env
 ExecStart=/usr/local/bin/helmsman-plc ${PLC_PROGRAM} --scan-ms ${PLC_SCAN_MS}
 DynamicUser=yes
+# The box API's token (api-token, 0600) lives here: /var/lib/helmsman-plc,
+# writable under ProtectSystem=strict and passed in as $STATE_DIRECTORY.
+# The API listens on 127.0.0.1:8080 (the binary's default); serve the LAN
+# with --api 0.0.0.0:8080 and a firewall rule. First start prints the token
+# once: journalctl -u helmsman-plc | grep 'API token'.
+StateDirectory=helmsman-plc
+StateDirectoryMode=0700
 Restart=on-failure
 RestartSec=2
 # Ports are all >1024: no capabilities needed.
