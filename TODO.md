@@ -200,6 +200,16 @@
   id: iomap-format
   answer: keep the line format until box-api, then JSON from the API (recommended)
 
+- [ ] **Shift calendar time zones: fixed offsets, or read the OS tz database?** The shift calendar (feat/shift-calendar) takes `zone +01:00` plus each DST change written out as `zone +02:00 from 2026-03-29T01:00Z`; `zone Europe/Berlin` is refused with a message saying so. No new dependency, and evaluation stays a pure function of the instant, but someone has to add next year's change dates by hand and a forgotten one shifts every shift by an hour. Two ways to accept zone names: hand-parse the TZif files already on the Pi (`/usr/share/zoneinfo`, a few hundred lines, no crate, but the box then depends on the OS tzdata being current), or add `jiff` (well-maintained, bundles or reads tzdata, a sizeable new dependency). I kept fixed offsets for now (reversible: a zone name would only add a parser branch).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether `zone Europe/Berlin` works in a calendar file, and what the box depends on for it
+  options: keep fixed offsets with explicit changes (recommended for now) | hand-parse the OS TZif files, no new crate | add jiff
+  est: 1d
+  difficulty: med
+  id: calendar-timezones
+
 - [ ] **Hot swap of a faulted module: carry its state, or start it cold?** Built in feat/hot-swap: `Runtime::swap` replaces a module's program between scans, carrying every retained variable whose name and type match. A Faulted (or Held) module may be swapped and restarts Running with the fault cleared, and I chose to carry its state like any other swap: a parts counter survives the fix, as tags do after a Logix online edit and fault clear. The cost: the variables are as the fault left them, so a bad index that caused the fault can fault the new program again on its first scan (outputs are already zero, so that is safe, just noisy). `%M` keeps its bytes over the shared length, as an address means the same byte in both programs. Switching to cold start for faulted modules is one branch in `swap`.
   asked: 2026-10-30
   by: claude-agent
@@ -591,7 +601,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: m1-demo
   id: stock-counters
 
-- [ ] **Shift calendar and scheduled outputs** — shifts, breaks, planned downtime as box data; modules can ask "in shift?" and the scheduler drives outputs on a calendar (with the output policy applying).
+- [x] **Shift calendar and scheduled outputs** — shifts, breaks, planned downtime as box data; modules can ask "in shift?" and the scheduler drives outputs on a calendar (with the output policy applying).
   est: 3d
   difficulty: med
   depends: multi-module

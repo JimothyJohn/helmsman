@@ -468,6 +468,32 @@ fn a_swap_whose_ports_do_not_bind_is_refused() {
 }
 
 #[test]
+fn a_swap_cannot_take_an_output_the_calendar_drives() {
+    let mut t = table();
+    helmsman_plc::calendar::Source::attach(
+        helmsman_plc::calendar::load("drive lamp in_shift").unwrap(),
+        &mut t,
+    )
+    .unwrap();
+    let only_horn =
+        || Runtime::with_signals(0, 0, vec![module("horn", HORN, 10, Window::new(0, 0))], &t).unwrap();
+    let (rt, twin) = (only_horn(), only_horn());
+    let takes_lamp =
+        "PROGRAM horn VAR_OUTPUT horn : BOOL; lamp : BOOL; END_VAR VAR n : UINT; END_VAR END_PROGRAM";
+    assert_refused_changes_nothing(
+        rt,
+        twin,
+        module("horn", takes_lamp, 10, Window::new(0, 0)),
+        &mut t,
+        &[ConfigError::TwoWriters {
+            signal: "LAMP".into(),
+            a: "calendar".into(),
+            b: "horn".into(),
+        }],
+    );
+}
+
+#[test]
 fn a_swap_changes_params_and_refuses_bad_ones() {
     const TUNED: &str = "
 PROGRAM horn

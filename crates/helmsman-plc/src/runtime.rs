@@ -126,7 +126,8 @@ pub enum ConfigError {
         module: String,
         err: BindError,
     },
-    /// Two modules would drive the same output signal; `a` comes first.
+    /// Two modules would drive the same output signal; `a` comes first,
+    /// or is `calendar` for an output the shift calendar drives.
     TwoWriters {
         signal: String,
         a: String,
@@ -494,7 +495,14 @@ fn check(
                     a: modules[prev].name.clone(),
                     b: modules[n].name.clone(),
                 }),
-                None => writers[b.signal] = Some(n),
+                None => match table.writer(b.signal) {
+                    Some(w) => errs.push(ConfigError::TwoWriters {
+                        signal: b.port.clone(),
+                        a: w.into(),
+                        b: modules[n].name.clone(),
+                    }),
+                    None => writers[b.signal] = Some(n),
+                },
             }
         }
     }
