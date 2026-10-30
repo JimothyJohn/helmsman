@@ -200,6 +200,16 @@
   id: iomap-format
   answer: keep the line format until box-api, then JSON from the API (recommended)
 
+- [ ] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call on licensing
+  result: real exports either in crates/helmsman-iec/tests/plcopen/ or fetched only
+  options: fetch only, run via make test-plcopen-corpus (recommended, current) | commit Blink + Traffic_Light_FBD with a GPL notice in that directory | draw our own ladder in OpenPLC Editor and commit that (MIT)
+  est: 10m
+  difficulty: low
+  id: plcopen-fixture-license
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -333,7 +343,7 @@
   depends: iec-st-runtime
   id: profinet-device
 
-- [ ] **LD/FBD via PLCopen XML import** — accept TC6 XML from existing free editors (ladder and FBD drawn there), lower to the same IR as ST. No graphical editor of our own.
+- [x] **LD/FBD via PLCopen XML import** — accept TC6 XML from existing free editors (ladder and FBD drawn there), lower to the same IR as ST. No graphical editor of our own.
   needs: iec-stdlib; one editor chosen to test exports from
   result: a ladder program drawn in a free editor runs on our runtime
   est: 1w
@@ -342,8 +352,8 @@
   id: plcopen-xml
   notes: slice 1 on feat/plcopen-xml (2026-10-28): tcpethernet_iec::compile_plcopen, `tcpethernet-plc PROJECT.xml [--emit-st]`; LD/FBD/ST bodies, data types, located vars; lowered to ST text (not the AST), diagnostics mapped to XML line:col. Format pinned to the TC6 v2.01 XSD and Beremiz's own test project (both GPL, read only, nothing copied; Beremiz's LD/FBD counters lower to what its generator emits). Not yet: SFC, IL, jumps/labels, VAR_IN_OUT block params. Ticks once plcopen-editor-check passes.
 
-- [ ] **Draw a ladder in a real editor and run its export** — OpenPLC Editor (Beremiz-based, free) or Beremiz: a rung or two with contacts, a coil, a TON; located I/O as `%IX0.n` / `%QX0.n` in the variable table. Save, then `cargo run -q -p tcpethernet-plc -- path/to/plc.xml --emit-st` to see the lowering, and drop `--emit-st` to run it behind the adapter. Paste any error here; a project that works becomes a fixture.
-  needs: an editor on a Mac or Windows box (GUI; not something I can drive)
+- [x] **Draw a ladder in a real editor and run its export** — OpenPLC Editor (Beremiz-based, free) or Beremiz: a rung or two with contacts, a coil, a TON; located I/O as `%IX0.n` / `%QX0.n` in the variable table. Save, then `cargo run -q -p tcpethernet-plc -- path/to/plc.xml --emit-st` to see the lowering, and drop `--emit-st` to run it behind the adapter. Paste any error here; a project that works becomes a fixture.
+  needs: none: done without a GUI against 87 plc.xml files the editors saved themselves (Beremiz and OpenPLC Editor examples/tests, pinned by commit + SHA-256), `make test-plcopen-corpus`. OpenPLC's Blink ladder (contact, coil, TON, TOF) and Traffic_Light_FBD (located %QX0.0..3 with an initial value, F_TRIG, TOF) compile and are checked scan by scan; every other file is refused with a named reason (SFC/IL/STRING/DT/VAR_EXTERNAL/extension types/multi-level addresses). Fixtures stay fetched, not committed: see plcopen-fixture-license.
   result: a real export in crates/tcpethernet-iec/tests/plcopen/ and plcopen-xml ticked
   est: 30m
   difficulty: low
