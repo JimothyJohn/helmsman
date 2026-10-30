@@ -163,7 +163,7 @@ const REQUIRED: [&str; 5] = ["name", "author", "scan_ms", "reads", "drives"];
 /// Characters free text may not carry: controls, and the invisible
 /// formatting characters that can make text read differently than it is
 /// (bidi overrides and isolates, zero-width characters, the BOM).
-fn hidden(c: char) -> bool {
+pub(crate) fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(c,
             '\u{00AD}' | '\u{061C}' | '\u{180E}'
@@ -580,7 +580,7 @@ pub struct ModuleDir {
     pub source: String,
 }
 
-fn read_capped(path: &Path) -> Result<String, String> {
+pub(crate) fn read_capped(path: &Path) -> Result<String, String> {
     let file = path.display();
     let f = fs::File::open(path).map_err(|e| format!("{file}: {e}"))?;
     let mut buf = Vec::new();
