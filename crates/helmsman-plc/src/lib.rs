@@ -8,6 +8,7 @@ pub mod api;
 pub mod calendar;
 pub mod link;
 pub mod manifest;
+#[cfg(feature = "box")]
 pub mod policy;
 pub mod record;
 pub mod replay;

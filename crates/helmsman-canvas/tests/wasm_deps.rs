@@ -13,7 +13,6 @@ fn the_wasm_build_pulls_in_no_native_only_crates() {
         .args([
             "tree",
             "--locked",
-            "--offline",
             "-p",
             "helmsman-canvas",
             "--target",
