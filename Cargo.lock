@@ -1148,6 +1148,7 @@ dependencies = [
  "helmsman-io",
  "helmsman-proto",
  "proptest",
+ "ring",
  "rusqlite",
  "rustls",
  "serde",

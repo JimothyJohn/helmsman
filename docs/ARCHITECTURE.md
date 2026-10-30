@@ -371,7 +371,7 @@ module, map or calendar source).
   `module NAME MANIFEST SOURCE` line per module by name, `io-map H`,
   `calendar H`). Same content, same id, in any store. Every read re-hashes
   the tree and each blob, so a corrupted or edited row is an error, never
-  wrong content. A tree plus its blobs is what `bundle-format` will carry.
+  wrong content. A tree plus its blobs is what a bundle carries (below).
 - **History is an append-only log**: one entry per apply or rollback, with
   author, prompt, approver and time (caller's clock), each hashed over its
   fields and the previous entry's hash, so edited history fails `list`.
@@ -599,6 +599,59 @@ serves those per agent version (relay protocol v1).
   The agent holds the API token and nothing else: it has no tool that
   reaches `apply`, `rollback` or a PIN, and the token alone cannot apply.
 
+## Bundles (`bundle-format`, built)
+
+`helmsman_plc::bundle` (format, manifest, signatures, CLI) and
+`api/bundle.rs` (export, import); contract in `tests/bundle.rs`. The trust
+model is `market-floor`'s floor: signing, a capability manifest and
+host-enforced checks; an AI review (`marketplace`) can only refuse on top.
+
+- **One file, hand-framed**: `helmsman-bundle 1\n`, then records of a type
+  byte, a big-endian `u32` length and the bytes: the snapshot tree (`T`),
+  the bundle manifest (`M`), each blob the tree names (`B`, ascending by
+  SHA-256), detached signatures (`S`, 32-byte key + 64-byte Ed25519
+  signature, ascending by key). No archive crate: four record types do not
+  need one, and every byte is accounted for. The tree is the store's, so a
+  bundle's id **is** the snapshot id of the same content.
+- **Refused, with the reason**: over 16 MiB; a record claiming more than
+  its type may hold (tree 256 KiB, manifest 16 KiB, blob 1 MiB, signature
+  96 B) or more than the file has left, checked before any allocation;
+  records missing, repeated, out of order, of an unknown type, or bytes
+  after the last; a blob twice, a blob the tree does not name or a name
+  with no blob (a changed file); a module name that is not a module name
+  (`../`, `/`, non-ASCII lookalikes, invisible characters); a tree or
+  manifest not in canonical form.
+- **Bundle manifest** (`helmsman-bundle-manifest 1`, canonical): name,
+  version, author, description, and the **capability manifest**: modules,
+  signals read, signals driven (modules and calendar `drive` lines), `%Q`
+  bytes, devices and drivers the signal-map template names. It is computed
+  from the content (each module compiled and held to its own manifest, as
+  at load) and must match **exactly**: understated or overstated, refused.
+- **Signatures**: Ed25519 over `helmsman-bundle-signature 1\n` + bundle id
+  + SHA-256 of the manifest, via `ring` (already in the lockfile through
+  rustls; now also under `box`). Every signature on a bundle must verify;
+  at least one must be by a publisher in the box's trust store
+  (`trusted-publishers` in the state directory, mode 0600, refused if
+  others can read it, checked before the box is on the network). With
+  `dev-bundles allow` there (open question `dev-bundles-switch`), unsigned
+  and untrusted bundles import too, marked `DEV BUNDLE` everywhere.
+- **Publishers** use `helmsman-plc bundle keygen | pack | sign | verify`
+  off the box (PKCS#8 keys, mode 0600, never overwritten); integrators use
+  `helmsman-plc bundle trust add NAME KEY`. No key is ever on a box.
+- **Export**: `GET /api/snapshots/{id}/bundle`, unsigned, capability
+  manifest computed, placeholder name and version (`sign` can rename it
+  while unsigned).
+- **Import**: `POST /api/bundles` (token, `application/octet-stream`):
+  verify; bind every signal the bundle reads or drives to this box's by
+  name (missing, a type or direction the template disagrees on, an output
+  another module or the calendar already drives: refused with the whole
+  report); then a **proposal** adding or replacing the bundle's modules in
+  what runs. The bundle's map is a template only (the box's map is never
+  replaced) and its calendar is not imported. From there the approval
+  policy classifies it from the diff like any proposal: a bundle that drives
+  anything is output-affecting (engineer PIN + replay). Every import,
+  refused or not, is audited.
+
 ## Webhook sinks (`sink-webhook`, built)
 
 `helmsman-plc --sinks FILE --sink-dir DIR` publishes signal events over
@@ -772,7 +825,7 @@ file and token in a temporary state directory).
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
 | text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply; the host rules above hold regardless | built (`agent-loop`, `helmsman-plc/tests/agent.rs`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
-| bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | planned (`bundle-format`, `marketplace`) |
+| bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 
 The rule under all of these: limits are enforced by the host, never by the
 prompt. The agent never touches the Rust core.
@@ -788,8 +841,9 @@ prompt. The agent never touches the Rust core.
   serves from the same directory, on the same streams.
 - `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
   compile, check, swap, then `Store::commit` with the approver; the box API
-  serves `list`, `diff` and `rollback`. `bundle-format` exports a tree and
-  its blobs.
+  serves `list`, `diff` and `rollback`. `bundle-format` (built) exports a
+  tree and its blobs; `marketplace` and `fleet-console` move bundles
+  between boxes and put the AI review on top of `bundle::verify`.
 - `sim-replay` (built, above) → `box-api` serves the recorder's tap and
   runs the replay; `proposal-ui` charts it; `approval-policy` requires one
   for logic and output-affecting changes.
