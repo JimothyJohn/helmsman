@@ -30,5 +30,6 @@ pub mod text;
 
 pub use driver::{Driver, Error, PointInfo, open};
 pub use model::{
-    Binding, Device, Dir, IoMap, MAX_POLL, MAX_UNIT, MapError, Signal, Ty, Value, module_name_ok, unit_ok,
+    Binding, Device, Dir, IoMap, MAX_POLL, MAX_UNIT, MapError, Signal, Ty, Value, module_name_ok, tile_ok,
+    unit_ok,
 };

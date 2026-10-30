@@ -73,6 +73,12 @@ pub enum Binding {
     /// module called `module`. An input signal; any other module may read
     /// it, and nothing is polled.
     Module { module: String },
+    /// A tile on the box's floor screen (the andon view the box serves):
+    /// an output no device takes. A module drives it like any output (one
+    /// writer, safe value, approval tier); the screen layout says how the
+    /// tile shows it. Several signals may feed one tile (its state, a
+    /// count).
+    Screen { tile: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +104,12 @@ pub const MAX_POLL: Duration = Duration::from_secs(60);
 #[must_use]
 pub fn unit_ok(u: &str) -> bool {
     (1..=MAX_UNIT).contains(&u.len()) && u.bytes().all(|b| b.is_ascii_graphic() && b != b'#')
+}
+
+/// A screen tile id: 1..=32 of `A-Z a-z 0-9 _`, not starting with a digit.
+#[must_use]
+pub fn tile_ok(t: &str) -> bool {
+    t.len() <= 32 && is_ident(t)
 }
 
 /// A module name as the runtime takes it: 1..=64 of `A-Z a-z 0-9 _ -`.
@@ -189,6 +201,26 @@ pub(crate) fn local_point(channel: &str) -> Result<PointInfo, String> {
         .map_err(|_| format!("bad channel {channel:?} (want do:N, di:N or i2c:BUS:ADDR:REG[:FMT])"))
 }
 
+/// What is wrong with a signal no driver serves (another module's output,
+/// a screen tile), if anything.
+fn undriven(s: &Signal) -> Option<String> {
+    match &s.binding {
+        Binding::Module { module } if !module_name_ok(module) => {
+            Some(format!("{module:?} is not a module name"))
+        }
+        Binding::Module { .. } if s.dir == Dir::Out => {
+            Some("a module's output is an in signal: modules drive it, the map does not".into())
+        }
+        Binding::Screen { tile } if !tile_ok(tile) => {
+            Some(format!("{tile:?} is not a tile id (1..=32 of A-Z a-z 0-9 _)"))
+        }
+        Binding::Screen { .. } if s.dir == Dir::In => {
+            Some("a screen tile is something the box shows: an out signal".into())
+        }
+        _ => None,
+    }
+}
+
 impl IoMap {
     /// Checks everything that can be checked without touching a device.
     /// Returns every problem, not just the first.
@@ -216,7 +248,8 @@ impl IoMap {
             if s.unit.as_deref().is_some_and(|u| !unit_ok(u)) {
                 errs.push(MapError::BadUnit(s.name.clone()));
             }
-            let polled = s.dir == Dir::In && !matches!(s.binding, Binding::Module { .. });
+            let polled =
+                s.dir == Dir::In && !matches!(s.binding, Binding::Module { .. } | Binding::Screen { .. });
             if let Some(p) = s.poll
                 && (!polled || p < Duration::from_millis(1) || p > MAX_POLL)
             {
@@ -252,15 +285,8 @@ impl IoMap {
                         continue;
                     }
                 },
-                Binding::Module { module } => {
-                    let why = if !module_name_ok(module) {
-                        Some(format!("{module:?} is not a module name"))
-                    } else if s.dir == Dir::Out {
-                        Some("a module's output is an in signal: modules drive it, the map does not".into())
-                    } else {
-                        None
-                    };
-                    if let Some(why) = why {
+                Binding::Module { .. } | Binding::Screen { .. } => {
+                    if let Some(why) = undriven(s) {
                         errs.push(MapError::BadPoint {
                             signal: s.name.clone(),
                             why,

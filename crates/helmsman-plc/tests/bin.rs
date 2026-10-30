@@ -1069,3 +1069,59 @@ fn a_policy_that_loosens_the_floor_stops_the_box_before_it_is_on_the_network() {
         );
     }
 }
+
+#[test]
+fn a_bad_screen_layout_is_refused_before_the_adapter_starts() {
+    let prog = program_file(
+        "screen_line",
+        "PROGRAM p VAR_OUTPUT line1_state : INT; END_VAR line1_state := 1; END_PROGRAM",
+    );
+    let map = text_file("screen_line.iomap", "out line1_state int screen line1 safe=0\n");
+    let good = "helmsman-screen 1\ngrid 1 1\ncode s 1 green Running\ntile line1 0,0 s line1_state Line 1\n";
+    for (name, text, want) in [
+        (
+            "syntax.screen",
+            "helmsman-screen 1\ngrid 1 1\ntile\n",
+            "syntax.screen: line 3: tile",
+        ),
+        (
+            "unfit.screen",
+            "helmsman-screen 1\ngrid 1 1\ncode s 1 green Running\ntile line1 0,0 s nosuch Line 1\n",
+            "unfit.screen: tile line1: no signal nosuch in the I/O map",
+        ),
+    ] {
+        let screen = text_file(name, text);
+        let out = plc()
+            .arg(&prog)
+            .arg("--io-map")
+            .arg(&map)
+            .arg("--screen")
+            .arg(&screen)
+            .args(["--encap-port", "0", "--io-port", "0"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(want), "{name}: {err}");
+        assert!(!err.contains("CIP on"), "{name}: {err}");
+    }
+    // Screen tiles in the map need their layout while the API runs.
+    let out = plc()
+        .arg(&prog)
+        .arg("--io-map")
+        .arg(&map)
+        .args(["--encap-port", "0", "--io-port", "0"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--screen FILE"));
+    let screen = text_file("good.screen", good);
+    let out = plc()
+        .arg(&prog)
+        .arg("--screen")
+        .arg(&screen)
+        .args(["--api", "off"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "--screen needs the API");
+}

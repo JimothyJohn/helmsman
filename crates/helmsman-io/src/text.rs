@@ -8,6 +8,7 @@
 //! out motor  bool rio coil:0
 //! out lamp   bool box do:0  safe=true
 //! in  rate   real module conveyor  unit=m/s
+//! out line1  int  screen line1  safe=0
 //! ```
 //!
 //! `device ID DRIVER ENDPOINT [KEY=VALUE ...]` declares a device the box
@@ -16,7 +17,9 @@
 //! device's address syntax; the device `box` is the box's own channels
 //! (`do:N`, `di:N`, `i2c:BUS:ADDR:REG[:FMT]`; see [`crate::board`]). `in NAME TYPE module MODULE` is another module's
 //! output: the `VAR_OUTPUT` called NAME in module MODULE, which any other
-//! module may read as a `VAR_INPUT` called NAME.
+//! module may read as a `VAR_INPUT` called NAME. `out NAME TYPE screen
+//! TILE` is a tile of the box's floor screen: an output no device takes,
+//! which the screen layout shows (see `helmsman_plc::screen`).
 //!
 //! After the binding, in any order, each at most once:
 //! - `unit=U`: the engineering unit (1..=16 printable characters);
@@ -28,7 +31,7 @@
 //! `#` starts a comment. Tokens are separated by spaces or tabs; nothing is
 //! quoted, so no token contains either. Maps written before units and
 //! poll rates read the same as ever; `box` and `module` are reserved
-//! device ids.
+//! device ids, as is `screen`.
 //!
 //! [`parse`] checks only the syntax; [`crate::IoMap::validate`] checks the
 //! map.
@@ -43,6 +46,8 @@ use crate::model::{Binding, Device, Dir, IoMap, MAX_UNIT, Signal, Ty, Value, uni
 pub const BOX: &str = "box";
 /// The device name for another module's outputs.
 pub const MODULE: &str = "module";
+/// The device name for the box's floor screen.
+pub const SCREEN: &str = "screen";
 
 /// A parsed map file: the map and the declared safe values.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -109,9 +114,9 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
     }
     match words {
         ["device", id, driver, endpoint, params @ ..] => {
-            if !is_ident(id) || *id == BOX || *id == MODULE {
+            if !is_ident(id) || [BOX, MODULE, SCREEN].contains(id) {
                 return Err(format!(
-                    "device id {id:?}: an identifier other than {BOX} and {MODULE}"
+                    "device id {id:?}: an identifier other than {BOX}, {MODULE} and {SCREEN}"
                 ));
             }
             let mut map = BTreeMap::new();
@@ -142,6 +147,9 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
                 MODULE => Binding::Module {
                     module: (*point).into(),
                 },
+                SCREEN => Binding::Screen {
+                    tile: (*point).into(),
+                },
                 _ => Binding::Device {
                     device: (*device).into(),
                     point: (*point).into(),
@@ -158,7 +166,7 @@ fn declaration(words: &[&str], out: &mut MapFile) -> Result<(), String> {
                         once(&mut unit, k, v.to_string())?;
                     }
                     "poll_ms" => {
-                        if dir == Dir::Out || *device == MODULE {
+                        if dir == Dir::Out || *device == MODULE || *device == SCREEN {
                             return Err("poll_ms: only an in signal on a device or box is polled".into());
                         }
                         let ms = v
@@ -227,6 +235,7 @@ pub fn render(file: &MapFile) -> String {
             Binding::Device { device, point } => (device.as_str(), point.as_str()),
             Binding::Local { channel } => (BOX, channel.as_str()),
             Binding::Module { module } => (MODULE, module.as_str()),
+            Binding::Screen { tile } => (SCREEN, tile.as_str()),
         };
         let _ = write!(s, "{dir} {} {ty} {dev} {point}", sig.name);
         match file.safe.get(&sig.name) {

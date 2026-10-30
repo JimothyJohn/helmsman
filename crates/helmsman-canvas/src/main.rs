@@ -6,7 +6,8 @@
 //! Native: `cargo run -p helmsman-canvas` (the demo). Web: built by
 //! `make canvas-web` and served by the box (`helmsman-plc --ui`), it
 //! watches that box over its API; `?demo` (or `make canvas-serve`, with
-//! no box behind it) runs the demo in the page instead.
+//! no box behind it) runs the demo in the page instead, and `?andon` is
+//! the box's floor screen, full screen.
 
 // Screen geometry is f32 throughout; counts and sim values convert into it.
 // Drawing code reads best with short geometry names (r, z, p, x, y).
@@ -19,6 +20,9 @@
     clippy::similar_names
 )]
 
+mod andon;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod andon_tests;
 mod app;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_tests;
