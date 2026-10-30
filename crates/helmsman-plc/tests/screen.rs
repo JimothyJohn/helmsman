@@ -359,3 +359,29 @@ fn nothing_polls_or_writes_a_screen_tile() {
     assert_eq!(names, ["box"], "only the box's own channel di:0");
     let _: BTreeMap<String, Value> = m.safe;
 }
+
+/// A tile is an output's point like any other: a map reload carries a tile
+/// signal over when it stays on its tile and treats a move to another tile
+/// as a rebind. (map-reload and andon-screen landed together; the signal
+/// table's binding match had no arm for screen tiles.)
+#[test]
+fn a_tile_is_a_point_across_a_map_reload() {
+    use std::collections::BTreeMap;
+
+    use helmsman_io::text;
+    use helmsman_plc::SignalTable;
+
+    let table = |tile: &str| {
+        let src = format!("out line_state int screen {tile} safe=3\n");
+        let file = text::parse(&src).unwrap();
+        SignalTable::new(&file.map, &BTreeMap::<String, helmsman_io::Value>::new()).unwrap()
+    };
+    let old = table("line1");
+    let i = old.index("line_state").unwrap();
+    assert_eq!(old.point(i), Some(("screen", "line1")));
+
+    let mut same = table("line1");
+    assert_eq!(same.carry_from(&old), vec![Some(i)], "same tile: carried over");
+    let mut moved = table("line2");
+    assert_eq!(moved.carry_from(&old), vec![None], "another tile: a rebind");
+}

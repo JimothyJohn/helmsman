@@ -157,6 +157,10 @@ impl SignalTable {
                         Binding::Device { device, point } => Some((device.clone(), point.clone())),
                         Binding::Local { channel } => Some((helmsman_io::text::BOX.into(), channel.clone())),
                         Binding::Module { .. } => None,
+                        // No link serves `screen` (a reserved device id), so
+                        // this only gives a tile an identity: moving a signal
+                        // to another tile is a rebind across a map reload.
+                        Binding::Screen { tile } => Some((helmsman_io::text::SCREEN.into(), tile.clone())),
                     },
                 }
             })
@@ -335,9 +339,10 @@ impl SignalTable {
         self.claims.get(&i).map(String::as_str)
     }
 
-    /// The device id (`box` for the box's own channels) and point signal
-    /// `i` is polled or written at; `None` for a module output or one of
-    /// the box's own inputs.
+    /// The device id (`box` for the box's own channels, `screen` for an
+    /// andon tile, which no link serves) and point signal `i` is polled or
+    /// written at; `None` for a module output or one of the box's own
+    /// inputs.
     #[must_use]
     pub fn point(&self, i: usize) -> Option<(&str, &str)> {
         self.sigs
