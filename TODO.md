@@ -166,6 +166,16 @@
   difficulty: low
   id: protocol-crate-name
 
+- [ ] **Multi-module: module-relative addresses, private %M?** Built tonight (feat/multi-module) on two calls I made and you may want to reverse. (1) A module's `%I`/`%Q` addresses are relative to its window: `%QX0.0` is bit 0 of *its* outputs, wherever the window sits, so the checker bounds it at compile time and a module can be moved without editing its ST. The cost: the same address means different bytes in different modules, which matters for debugging against the raw assembly. (2) `%M` is private per module; modules can't share memory, and talking between modules waits for signals (io-runtime / signal-model). Both are cheap to change now and expensive after module-format and hot-swap build on them.
+  asked: 2026-10-30
+  by: claude-session
+  needs: your call
+  result: confirms or changes the addressing the module-format manifest and hot-swap inherit
+  options: keep relative + private %M (recommended) | absolute addresses, checked against the window | allow a shared %M window
+  est: 5m
+  difficulty: low
+  id: module-addressing
+
 ## Tasks
 
 - [ ] **Bench sweep against the CompactLogix and FP0H** — `cargo run --example discover <subnet broadcast>`; fill the rows in `docs/INTEROP.md`, keep the first capture.
@@ -379,7 +389,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   id: arch-note
 
-- [ ] **Multiple ST modules in one runtime** — tcpethernet-plc runs one program today. Run N modules as separate tasks, each with its own scan rate, %I/%Q/%M slice and fault isolation (one faulting module zeroes only its own outputs).
+- [x] **Multiple ST modules in one runtime** — tcpethernet-plc runs one program today. Run N modules as separate tasks, each with its own scan rate, %I/%Q/%M slice and fault isolation (one faulting module zeroes only its own outputs).
   needs: nothing
   result: a box runs several independent agent-written modules
   est: 3d
