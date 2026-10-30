@@ -252,6 +252,8 @@ impl SignalTable {
             value: None,
             command: zero(ty),
             safe: zero(ty),
+            source: None,
+            unit: None,
         });
         Ok(self.sigs.len() - 1)
     }
@@ -265,7 +267,7 @@ impl SignalTable {
     /// Marks output `i` as driven by `writer` rather than by a module; a
     /// module binding a `VAR_OUTPUT` to it is then refused.
     pub(crate) fn claim(&mut self, i: usize, writer: &str) {
-        if self.command_mut(i).is_some() {
+        if self.sigs.get(i).is_some_and(|s| s.dir == Dir::Out) {
             self.claims.insert(i, writer.into());
         }
     }
