@@ -14,23 +14,31 @@ use std::process::ExitCode;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use helmsman_adapter::device::lock_ref;
 use helmsman_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
 use helmsman_iec::{ImageSizes, compile, compile_plcopen, plcopen};
 use helmsman_io::local::Channels;
+use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
+use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::spec::{Defaults, Spec};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
 const USAGE: &str = "\
-usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [options]
+usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-dir DIR ...] [options]
   --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
+  --module-dir DIR     one module as a directory: module.st and module.manifest
+                       (see helmsman_plc::manifest), checked against each other
   --io-map FILE        devices and named signals (see helmsman_io::text); a
                        module's VAR_INPUT/VAR_OUTPUT bind to signals by name
+  --calendar FILE      shifts, breaks, planned downtime (see
+                       helmsman_plc::calendar::text): adds the signals in_shift,
+                       on_break, planned_down, working, shift_id, shift_minute,
+                       shift_left, and drives the outputs its `drive` lines name
   --emit-st            print the Structured Text a .xml project lowers to, and exit
   --scan-ms N          default scan period (10, 1..=10000)
   --memory N           default %M area in bytes (1024)
@@ -52,7 +60,9 @@ const OUTPUTS: u16 = 100;
 struct Opts {
     programs: Vec<PathBuf>,
     modules: Vec<String>,
+    module_dirs: Vec<PathBuf>,
     io_map: Option<PathBuf>,
+    calendar: Option<PathBuf>,
     emit_st: bool,
     scan: Duration,
     memory: usize,
@@ -64,7 +74,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     let mut o = Opts {
         programs: Vec::new(),
         modules: Vec::new(),
+        module_dirs: Vec::new(),
         io_map: None,
+        calendar: None,
         emit_st: false,
         scan: Duration::from_millis(10),
         memory: 1024,
@@ -108,9 +120,15 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     .map_err(|_| format!("--bind: not an IPv4 address: {v:?}"))?;
             }
             "--module" => o.modules.push(v.clone()),
+            "--module-dir" => o.module_dirs.push(PathBuf::from(v)),
             "--io-map" => {
                 if o.io_map.replace(PathBuf::from(v)).is_some() {
                     return Err("one --io-map only".into());
+                }
+            }
+            "--calendar" => {
+                if o.calendar.replace(PathBuf::from(v)).is_some() {
+                    return Err("one --calendar only".into());
                 }
             }
             "--encap-port" => o.server.encap_port = port()?,
@@ -120,8 +138,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         }
         i += 2;
     }
-    if o.programs.is_empty() && o.modules.is_empty() {
-        return Err("missing PROGRAM.st, PROJECT.xml or --module".into());
+    if o.programs.is_empty() && o.modules.is_empty() && o.module_dirs.is_empty() {
+        return Err("missing PROGRAM.st, PROJECT.xml, --module or --module-dir".into());
     }
     Ok(o)
 }
@@ -148,23 +166,35 @@ fn is_xml(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("xml"))
 }
 
-fn specs(o: &Opts, cfg: &DeviceConfig) -> Result<Vec<Spec>, String> {
+/// Each module's spec, and its directory when it came from one.
+fn specs(o: &Opts, cfg: &DeviceConfig) -> Result<Vec<(Spec, Option<ModuleDir>)>, String> {
     let d = Defaults {
         period: o.scan,
         i: Window::new(0, assembly_size(cfg, INPUTS)),
         q: Window::new(0, assembly_size(cfg, OUTPUTS)),
         m: o.memory,
     };
-    let mut specs: Vec<Spec> = o.programs.iter().map(|p| Spec::from_path(p, &d)).collect();
+    let mut specs: Vec<(Spec, Option<ModuleDir>)> = o
+        .programs
+        .iter()
+        .map(|p| (Spec::from_path(p, &d), None))
+        .collect();
     for m in &o.modules {
-        specs.push(Spec::parse(m, &d)?);
+        specs.push((Spec::parse(m, &d)?, None));
+    }
+    for dir in &o.module_dirs {
+        let md = ModuleDir::read(dir, &d)?;
+        specs.push((md.spec.clone(), Some(md)));
     }
     Ok(specs)
 }
 
-fn load(spec: &Spec) -> Result<Module, String> {
+fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<Module, String> {
     let file = spec.path.display();
-    let src = fs::read_to_string(&spec.path).map_err(|e| format!("{file}: {e}"))?;
+    let src = match dir {
+        Some(md) => md.source.clone(),
+        None => fs::read_to_string(&spec.path).map_err(|e| format!("{file}: {e}"))?,
+    };
     let sizes = ImageSizes {
         i: spec.i.len,
         q: spec.q.len,
@@ -179,12 +209,16 @@ fn load(spec: &Spec) -> Result<Module, String> {
         let lines: Vec<String> = diags.iter().map(|d| format!("\n  {file}:{d}")).collect();
         format!("{file} does not compile:{}", lines.concat())
     })?;
+    if let Some(md) = dir {
+        return md.module(program);
+    }
     Ok(Module {
         name: spec.name.clone(),
         program,
         period: spec.period,
         i: spec.i,
         q: spec.q,
+        params: Vec::new(),
     })
 }
 
@@ -192,7 +226,7 @@ fn emit_st(o: &Opts) -> Result<(), String> {
     let [path] = o.programs.as_slice() else {
         return Err("--emit-st takes exactly one .xml project".into());
     };
-    if !is_xml(path) || !o.modules.is_empty() {
+    if !is_xml(path) || !o.modules.is_empty() || !o.module_dirs.is_empty() {
         return Err("--emit-st takes exactly one .xml project".into());
     }
     let src = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -227,6 +261,79 @@ fn load_io(path: &Path) -> Result<(SignalTable, Vec<Link>, bool), String> {
     Ok((table, links, uses_box))
 }
 
+/// The calendar file, bound to `table`.
+fn load_calendar(path: &Path, table: &mut SignalTable) -> Result<Source, String> {
+    let file = path.display();
+    let src = fs::read_to_string(path).map_err(|e| format!("{file}: {e}"))?;
+    let cal = calendar::load(&src).map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
+        format!("{file} is not a valid calendar:{}", lines.concat())
+    })?;
+    Source::attach(cal, table).map_err(|errs| {
+        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
+        format!("{file} does not fit the I/O map:{}", lines.concat())
+    })
+}
+
+/// [`load_io`] (or no signals), with the calendar's added.
+fn load_signals(o: &Opts) -> Result<(SignalTable, Vec<Link>, bool, Option<Source>), String> {
+    let (mut table, links, uses_box) = match &o.io_map {
+        Some(path) => load_io(path)?,
+        None => (SignalTable::default(), Vec::new(), false),
+    };
+    let cal = o
+        .calendar
+        .as_deref()
+        .map(|p| load_calendar(p, &mut table))
+        .transpose()?;
+    Ok((table, links, uses_box, cal))
+}
+
+/// Wall-clock seconds since the epoch, or `None` before it.
+fn wall() -> Option<i64> {
+    let d = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+    i64::try_from(d.as_secs()).ok()
+}
+
+/// How long the loop may sleep with a calendar to keep current.
+const CALENDAR_TICK: Duration = Duration::from_secs(1);
+
+fn report_calendar(c: &Source) {
+    let k = c.calendar();
+    eprintln!(
+        "helmsman-plc: calendar: {} shift pattern(s), {} drive(s); clock {}",
+        k.shifts.len(),
+        k.drives.len(),
+        if c.state(wall()).is_some() {
+            "trusted"
+        } else {
+            "NOT SET: calendar signals missing, driven outputs safe"
+        }
+    );
+}
+
+/// Sleeps to the runtime's `next` deadline (from `start`). A late tick
+/// skips missed periods (the runtime counts them), so this never bursts.
+/// With a calendar it wakes at least every [`CALENDAR_TICK`] so the
+/// calendar's signals and outputs stay current, even once every module has
+/// stopped; without one, a runtime with nothing left to run parks for good.
+fn sleep_to(start: Instant, next: Option<Duration>, calendar: bool) {
+    let next = match next {
+        Some(next) => next,
+        None if !calendar => {
+            eprintln!("helmsman-plc: every module has stopped; the adapter stays up");
+            loop {
+                thread::park();
+            }
+        }
+        None => start.elapsed() + CALENDAR_TICK,
+    };
+    let wait = (start + next).checked_duration_since(Instant::now());
+    if let Some(wait) = wait.map(|w| if calendar { w.min(CALENDAR_TICK) } else { w }) {
+        thread::sleep(wait);
+    }
+}
+
 /// Runs each link on its own thread for the life of the process.
 fn start_io(links: Vec<Link>, table: &Arc<Mutex<SignalTable>>) {
     let stop = Arc::new(AtomicBool::new(false));
@@ -248,13 +355,11 @@ fn run(o: &Opts) -> Result<(), String> {
         return emit_st(o);
     }
     let cfg = device_config(o.serial);
-    let specs = specs(o, &cfg)?;
-    let modules = specs.iter().map(load).collect::<Result<Vec<_>, _>>()?;
+    let loaded = specs(o, &cfg)?;
+    let modules = loaded.iter().map(load).collect::<Result<Vec<_>, _>>()?;
+    let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
-    let (table, io_links, uses_box) = match &o.io_map {
-        Some(path) => load_io(path)?,
-        None => (SignalTable::default(), Vec::new(), false),
-    };
+    let (table, io_links, uses_box, cal) = load_signals(o)?;
     let table = Arc::new(Mutex::new(table));
     let bound = Runtime::with_signals(
         i_len,
@@ -292,6 +397,9 @@ fn run(o: &Opts) -> Result<(), String> {
     if uses_box {
         eprintln!("helmsman-plc: box channels (do:N, di:N) are in memory only; no GPIO yet");
     }
+    if let Some(c) = &cal {
+        report_calendar(c);
+    }
     start_io(io_links, &table);
     let dev = adapter.device();
     let mut inputs = vec![0; i_len];
@@ -308,11 +416,13 @@ fn run(o: &Opts) -> Result<(), String> {
             .iter()
             .map(|s| rt.status(&s.name) == Some(Status::Held))
             .collect();
-        let faults = rt.tick_with(
-            start.elapsed(),
-            &inputs,
-            &mut table.lock().unwrap_or_else(PoisonError::into_inner),
-        );
+        let faults = {
+            let mut t = table.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(c) = &cal {
+                c.update(wall(), &mut t);
+            }
+            rt.tick_with(start.elapsed(), &inputs, &mut t)
+        };
         for (s, was) in specs.iter().zip(held) {
             match (was, rt.status(&s.name)) {
                 (false, Some(Status::Held)) => eprintln!(
@@ -333,17 +443,7 @@ fn run(o: &Opts) -> Result<(), String> {
             );
         }
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
-        let Some(next) = rt.next_deadline() else {
-            eprintln!("helmsman-plc: every module has stopped; the adapter stays up");
-            loop {
-                thread::park();
-            }
-        };
-        // A late tick skips missed periods (the runtime counts them), so
-        // sleeping to the next deadline never bursts.
-        if let Some(wait) = (start + next).checked_duration_since(Instant::now()) {
-            thread::sleep(wait);
-        }
+        sleep_to(start, rt.next_deadline(), cal.is_some());
     }
 }
 

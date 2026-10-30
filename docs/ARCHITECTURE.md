@@ -96,8 +96,8 @@ can still be found and diagnosed, even once every module has stopped.
 Built in `helmsman-plc` (`runtime.rs`; contract in `tests/runtime.rs`).
 On the command line a module is `--module PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]`;
 a bare program argument is a module with every default (whole image), so
-existing deploys run unchanged. The `module-format` manifest replaces the
-flag syntax later.
+existing deploys run unchanged. A module can also be a directory
+(`--module-dir DIR`, below), which is what the agent writes.
 
 A module is one compiled ST `PROGRAM` plus a schedule and three windows:
 
@@ -158,8 +158,8 @@ scan; the scheduler bounds how often.
 
 `helmsman-plc --io-map FILE` loads the map; a module names signals by
 declaring them as its PROGRAM's `VAR_INPUT`s and `VAR_OUTPUT`s (matched by
-name, case-insensitively, as ST is). That interface is also what a module
-manifest can be derived from.
+name, case-insensitively, as ST is). That interface is what a module
+manifest declares, and is checked against.
 
 - **`SignalTable`** (`signals.rs`) holds each input's last good read and each
   output's *command*. Outputs start at their safe value.
@@ -178,6 +178,70 @@ manifest can be derived from.
   runs again once every input is back. An output value its signal can't
   carry (a non-finite `REAL`) faults the module (`OutputRange`).
 
+## Module directories (`module-format`, built)
+
+`helmsman-plc --module-dir DIR` (repeatable, alongside `--module`) loads a
+module from a directory: `module.st` and `module.manifest`
+(`manifest.rs`; contract in `tests/manifest.rs`). The manifest is a small
+line format, hand-parsed like the I/O map:
+
+```text
+name     conveyor
+author   Nick <nick@example.com>
+prompt   Run the belt while start is held; stop on the jam sensor.
+scan_ms  50
+q        0+2
+reads    start jam
+drives   motor lamp
+param    speed   real 1.5 min=0 max=10
+param    beacon  bool true
+```
+
+- **Checked against the program, not trusted.** Every `VAR_INPUT` is
+  under `reads` or `param`, every `VAR_OUTPUT` under `drives`, and every
+  declared name is a port facing that way (case-insensitive). A manifest
+  that disagrees is refused before the adapter starts, so policy and the
+  box API can read the manifest instead of the ST.
+- **Params are `VAR_INPUT`s bound to a value instead of a signal.** Typed
+  (`bool`, `int`, `real`), ranged (`min`/`max`, required for numbers, and
+  the whole range must fit the port's ST type), set before every scan. An
+  engineer or the agent changes a param by changing the manifest; the
+  logic is untouched, and the range is the policy line.
+- **Windows** (`i`, `q`, `START+LEN`) are module-relative and only for
+  modules that use `%I`/`%Q`; left out, a module has none. `%M` is private.
+- `author` and `prompt` (one line each, repeatable) are free text: any
+  Unicode except control and invisible formatting characters (no escape
+  sequences or bidi overrides in a log or a review). Files over 1 MiB are
+  refused.
+
+## Shift calendar (`shift-calendar`, built)
+
+`helmsman-plc --calendar FILE` loads shifts, breaks and planned downtime
+(`calendar/`; file format in `calendar/text.rs`, contract in
+`tests/calendar.rs`). Weekly patterns plus dated exceptions (`holiday`,
+a dated `shift` that replaces that day's occurrence), in local time at a
+fixed UTC offset, with daylight saving written as dated offset changes: no
+time zone database (`calendar-timezones` asks about one). Shifts may cross
+midnight; overlapping shifts and breaks outside their shift are refused at
+load.
+
+- **Evaluation** (`Calendar::at`) is a pure, total function of wall-clock
+  seconds: the runtime still has no clock, the binary reads `SystemTime`
+  each loop and wakes at least once a second when a calendar is loaded.
+- **As signals**: `calendar::Source` adds `in_shift`, `on_break`,
+  `planned_down`, `working` (`BOOL`) and `shift_id`, `shift_minute`,
+  `shift_left` (`INT`) to the `SignalTable` as box-provided inputs. A
+  module asks "in shift?" by declaring `VAR_INPUT in_shift : BOOL;`, the
+  same binding as a device signal; a map signal with one of those names is
+  refused.
+- **Scheduled outputs**: `drive SIGNAL [!]COND` makes the calendar the
+  writer of a `bool` output signal. The table records it, and a module
+  binding a `VAR_OUTPUT` to that signal is refused at load
+  (`TwoWriters`, writer `calendar`). Links write it like any command.
+- **Untrusted clock**: before 2024-01-01 (a Pi with no RTC before NTP) the
+  calendar's signals are missing, so modules reading them are held, and
+  driven outputs go to their safe values.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -185,7 +249,7 @@ manifest can be derived from.
 | module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | built |
 | module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault) | built |
 | module ↔ network | nothing | ST has no network primitives; sinks (webhook, OPC UA) are core-owned | built by construction; sinks planned |
-| module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one module per output signal), hold-on-missing-input | built |
+| module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | the box build exposes read services only (no Write Tag, no `Set_Attribute`) | planned (`logix-tag-read`); **today the `helmsman-proto` library and CLI can send any service and drive Class 1 outputs** |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
