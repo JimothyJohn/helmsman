@@ -71,5 +71,9 @@ name = "policy"
 required-features = ["box"]
 
 [[test]]
+name = "ui"
+required-features = ["box"]
+
+[[test]]
 name = "agent"
 required-features = ["box"]

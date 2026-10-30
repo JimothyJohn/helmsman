@@ -29,6 +29,7 @@
 //! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
+//! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
 //!
 //! **What it cannot do.** There is no route that writes a signal, an
@@ -72,6 +73,7 @@ pub mod sim;
 pub mod store;
 pub mod swap;
 pub mod token;
+pub mod ui;
 
 use std::collections::BTreeMap;
 use std::io::{self, Write as _};
@@ -176,6 +178,7 @@ struct Ctx {
     stop: Arc<AtomicBool>,
     streams: AtomicUsize,
     chat: Option<chat::Chat>,
+    ui: Option<ui::Ui>,
 }
 
 impl Ctx {
@@ -264,7 +267,15 @@ impl Api {
     ///
     /// # Errors
     /// The bind fails.
-    pub fn start(cfg: Config, mut shared: Shared) -> io::Result<Self> {
+    pub fn start(cfg: Config, shared: Shared) -> io::Result<Self> {
+        Self::start_with_ui(cfg, shared, None)
+    }
+
+    /// [`Api::start`], also serving the canvas from `ui` at `/`.
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_with_ui(cfg: Config, mut shared: Shared, ui: Option<ui::Ui>) -> io::Result<Self> {
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -285,6 +296,7 @@ impl Api {
             cfg,
             stop: Arc::clone(&stop),
             streams: AtomicUsize::new(0),
+            ui,
         });
         let thread = thread::Builder::new()
             .name("api".into())
@@ -373,6 +385,8 @@ enum Reply {
     Traces(usize),
     /// One chat message, its conversation taken out.
     Chat(chat::Taken),
+    /// A file of the UI.
+    File(ui::Asset),
 }
 
 fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
@@ -395,6 +409,9 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
                 chat.serve(&mut stream, taken);
             }
         }
+        Reply::File(asset) => {
+            let _ = ui::send(&mut stream, asset);
+        }
         Reply::Values | Reply::Traces(_) => {
             let Some(_slot) = take(&ctx.streams, limits.streams) else {
                 let _ = http::respond(&mut stream, &Response::error(503, "too many event streams"));
@@ -403,7 +420,7 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
             let _ = match reply {
                 Reply::Traces(k) => trace_stream(&mut stream, ctx, k),
                 Reply::Values => value_stream(&mut stream, ctx),
-                Reply::Once(_) | Reply::Chat(_) => Ok(()),
+                Reply::Once(_) | Reply::Chat(_) | Reply::File(_) => Ok(()),
             };
         }
     }
@@ -813,6 +830,18 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
 }
 
 fn get(req: &Request, ctx: &Ctx) -> Reply {
+    if req.segments.first().is_none_or(|s| s != "api") {
+        return match &ctx.ui {
+            Some(ui) => match ui.resolve(&req.segments) {
+                Ok(asset) => Reply::File(asset),
+                Err(r) => Reply::Once(r),
+            },
+            None => Reply::Once(Response::error(
+                404,
+                "no such resource (no UI on this box: --ui DIR)",
+            )),
+        };
+    }
     let c = &*ctx.catalog();
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let view = ctx.box_.live.view();

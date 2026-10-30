@@ -320,7 +320,18 @@
   difficulty: low
   id: param-apply-role
 
-- [ ] **Agent drafts: keep them out of the proposal list until proposed?** The agent loop (feat/agent-loop) keeps a module draft in its chat conversation; `check_module` and `simulate_module` call new read-only routes (`POST /api/proposals/check`, `POST /api/proposals/replay`) that store nothing, and only `propose_change` stores a proposal, with the agent's summary as its note. So the proposal list only ever shows drafts that checked clean and were simulated, and a failed attempt leaves no clutter to approve by mistake. The other way (each draft stored as a proposal at once, replayed by id) shows the engineer every attempt but fills the 1000-proposal store with dead drafts. I built the first; `POST /api/proposals/{id}/replay` exists too, for the review UI. Drafts are lost if the box restarts mid-conversation (conversations are in memory).
+- [ ] **Pick PC deploys: canvas on the LAN by default?** `scripts/pi-deploy-plc.sh` now builds the canvas and the unit serves it with the API (`--ui`), but on the API's address, which stays 127.0.0.1:8080 unless you deploy with `PLC_API=0.0.0.0:8080` (that also opens 8080/tcp from `PLC_ALLOW` in the perceptronics firewall). So out of the box a tablet cannot see it; from a laptop, `ssh -L 8080:127.0.0.1:8080 nick@<pi>` then http://localhost:8080/. Defaulting to the LAN means every reader on `PLC_ALLOW` sees module source and live values without a token, which is `api-lan-reads`. I kept loopback as the default (reversible: one default in the script).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether a redeploy puts the HMI on the plant LAN without a flag
+  options: loopback default, PLC_API=0.0.0.0:8080 to opt in (recommended for now, built) | LAN by default once api-lan-reads is settled | LAN by default now
+  est: 10m
+  difficulty: low
+  depends: api-lan-reads
+  id: canvas-lan-default
+
+- [ ] **Agent drafts: keep them out of the proposal list until proposed?** The agent loop (feat/agent-loop) keeps a module draft in its chat conversation; `check_module` and `simulate_module` call new read-only routes (`POST /api/proposals/check`, `POST /api/proposals/replay`) that store nothing, and only `propose_change` stores a proposal, with the agent's summary as its note. So the proposal list only ever shows drafts that checked clean and were simulated, and a failed attempt leaves no clutter to approve by mistake. The other way (each draft stored as a proposal at once, replayed by id) shows the engineer every attempt but fills the 1000-proposal store with dead drafts. I built the first; the evidence an apply needs is still a replay of the stored proposal (`POST /api/proposals/{id}/replay`, approval-policy's), so nothing about apply changes either way. Drafts are lost if the box restarts mid-conversation (conversations are in memory).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -611,7 +622,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: trace-tap
   id: st-graph-view
 
-- [ ] **Serve the canvas from the box** — wasm build of tcpethernet-canvas served by the box API, talking to it over HTTP/WebSocket; any browser or tablet on the LAN is the HMI.
+- [x] **Serve the canvas from the box** — wasm build of tcpethernet-canvas served by the box API, talking to it over HTTP/WebSocket; any browser or tablet on the LAN is the HMI.
+  notes: built on feat/canvas-web: `helmsman-plc --ui DIR` serves `make canvas-web`'s build at `/` (api/ui.rs, tests/ui.rs); the canvas watches the box over fetch + EventSource (SSE, not WebSocket: one-way is all it needs), demo at `?demo`; pi-deploy-plc.sh builds and installs it, PLC_API=0.0.0.0:8080 for the LAN (canvas-lan-default)
   result: headless Pi, browser UI
   est: 2d
   difficulty: med

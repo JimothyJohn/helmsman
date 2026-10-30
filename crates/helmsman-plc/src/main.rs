@@ -67,6 +67,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
                        The box never holds an Anthropic key.
   --relay-agent V      the agent version to ask the relay for (default v1)
+  --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
+                       at / on the API's address: a browser on the LAN is
+                       the HMI (read-only, like the API's reads)
   --state-dir DIR      where the API token and the role PINs live (default
                        $STATE_DIRECTORY, as systemd's StateDirectory= sets
                        it, else ./helmsman-state)
@@ -108,6 +111,7 @@ struct Opts {
     relay: Option<String>,
     relay_token: Option<PathBuf>,
     relay_agent: String,
+    ui: Option<PathBuf>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
     scan: Duration,
@@ -155,6 +159,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay: None,
         relay_token: None,
         relay_agent: "v1".into(),
+        ui: None,
         policy: None,
         set_pin: None,
         scan: Duration::from_millis(10),
@@ -220,6 +225,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--sinks" => once(&mut o.sinks, flag, v)?,
             "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
             "--store" => once(&mut o.store, flag, v)?,
+            "--ui" => once(&mut o.ui, flag, v)?,
             "--encap-port" => o.server.encap_port = port()?,
             "--io-port" => o.server.io_port = port()?,
             "--peer-io-port" => o.server.peer_io_port = port()?,
@@ -229,6 +235,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.relay.is_some() != o.relay_token.is_some() {
         return Err("--relay and --relay-token go together".into());
+    }
+    if o.ui.is_some() && o.api.is_none() {
+        return Err("--ui is served by the API; it does not go with --api off".into());
     }
     if o.sinks.is_some() != o.sink_dir.is_some() {
         return Err("--sinks and --sink-dir go together".into());
@@ -674,6 +683,10 @@ fn start_api(
     devices: &Arc<Devices>,
     approval: Approval,
 ) -> Result<Api, String> {
+    let ui =
+        o.ui.as_deref()
+            .map(|d| api::ui::Ui::open(d).map_err(|e| format!("--ui {}: {e}", d.display())))
+            .transpose()?;
     let dir = state_dir(o);
     let token =
         api::token::load_or_create(&dir).map_err(|e| format!("API token in {}: {e}", dir.display()))?;
@@ -707,11 +720,15 @@ fn start_api(
         approval: Some(approval),
         chat: chat_setup(o)?,
     };
-    let server = Api::start(cfg, shared).map_err(|e| format!("--api {bind}: {e}"))?;
+    let has_ui = ui.is_some();
+    let server = Api::start_with_ui(cfg, shared, ui).map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
         "helmsman-plc: API on http://{}/api (reads open; changes need the token)",
         server.addr()
     );
+    if has_ui {
+        eprintln!("helmsman-plc: canvas on http://{}/", server.addr());
+    }
     if token.new {
         eprintln!(
             "helmsman-plc: API token (new, shown once, kept in {}): {}",

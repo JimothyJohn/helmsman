@@ -13,9 +13,53 @@
 //! counts are totals over every instance (see [`helmsman_iec::trace`]).
 
 use helmsman_iec::Value;
-use helmsman_iec::trace::Trace;
+use helmsman_iec::trace::{StmtId, Trace};
 
 use crate::model::{Diagram, NodeKind, Region, RegionKind};
+
+/// One traced scan, as the diagram reads it: a [`Trace`] taken in-process,
+/// or the same scan rebuilt from the box API's JSON in a browser. Its
+/// [`StmtId`]s index the statement table the diagram was lowered against.
+pub trait Scan {
+    /// Times the statement started this scan (0: it did not run).
+    fn hits(&self, id: StmtId) -> u32;
+    /// How many times each arm of an IF or CASE was taken, the ELSE (or
+    /// none) last; empty for other statements.
+    fn arm_hits(&self, id: StmtId) -> &[u32];
+    /// Passes a loop made through its body; `None` for other statements.
+    fn passes(&self, id: StmtId) -> Option<u32>;
+    /// A scalar's value when the scan ended, by path (case-insensitive).
+    fn get(&self, path: &str) -> Option<Value>;
+    /// The source line the statement starts on.
+    fn line(&self, id: StmtId) -> Option<u32>;
+
+    /// Whether the statement started at least once this scan.
+    fn ran(&self, id: StmtId) -> bool {
+        self.hits(id) > 0
+    }
+}
+
+impl Scan for Trace {
+    fn hits(&self, id: StmtId) -> u32 {
+        Self::hits(self, id)
+    }
+
+    fn arm_hits(&self, id: StmtId) -> &[u32] {
+        Self::arm_hits(self, id)
+    }
+
+    fn passes(&self, id: StmtId) -> Option<u32> {
+        Self::passes(self, id)
+    }
+
+    fn get(&self, path: &str) -> Option<Value> {
+        Self::get(self, path)
+    }
+
+    fn line(&self, id: StmtId) -> Option<u32> {
+        self.map().stmt(id).map(|s| s.line)
+    }
+}
 
 /// What a region's gate did this scan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,7 +100,7 @@ impl Live {
 
 /// How `r`'s gate did in `t`.
 #[must_use]
-pub fn gate(t: &Trace, r: &Region) -> Gate {
+pub fn gate(t: &dyn Scan, r: &Region) -> Gate {
     if !t.ran(r.stmt) {
         return Gate::NotReached;
     }
@@ -69,7 +113,7 @@ pub fn gate(t: &Trace, r: &Region) -> Gate {
 
 /// `d` (the POU at `prefix`) with `t` on it.
 #[must_use]
-pub fn annotate(d: &Diagram, t: &Trace, prefix: &str) -> Live {
+pub fn annotate(d: &Diagram, t: &dyn Scan, prefix: &str) -> Live {
     let get = |path: &str| t.get(&format!("{prefix}{path}"));
     let mut srcs: Vec<[Option<(usize, usize)>; 2]> = vec![[None; 2]; d.nodes.len()];
     for w in &d.wires {

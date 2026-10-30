@@ -364,7 +364,7 @@ mod live {
 
     use super::Harness;
     use crate::app::Mode;
-    use crate::st_view::{DEMO, Pick, StView};
+    use crate::st_view::{DEMO, Pick, StView, Viewer};
 
     fn live() -> Harness {
         let mut h = Harness::new(Project::default());
@@ -374,8 +374,12 @@ mod live {
         h
     }
 
-    fn st(h: &Harness) -> &StView {
+    fn demo(h: &Harness) -> &StView {
         h.app.st.as_ref().unwrap()
+    }
+
+    fn st(h: &Harness) -> &Viewer {
+        &demo(h).view
     }
 
     /// Screen centre of the program's write to `path`.
@@ -394,12 +398,13 @@ mod live {
     fn the_demo_compiles_and_the_view_runs_it_with_a_trace_every_frame() {
         assert!(StView::new(DEMO).is_ok());
         let mut h = live();
-        let first = st(&h).sample.as_ref().unwrap().scan;
+        let first = demo(&h).sample.as_ref().unwrap().scan;
         h.frame(vec![]);
-        let st = st(&h);
-        assert!(st.error.is_none(), "{:?}", st.error);
+        let d = demo(&h);
+        assert!(d.error.is_none(), "{:?}", d.error);
+        let st = &d.view;
         assert!(
-            st.sample.as_ref().unwrap().scan > first,
+            d.sample.as_ref().unwrap().scan > first,
             "a fresh traced scan each frame"
         );
         assert_eq!(
@@ -431,7 +436,7 @@ mod live {
         v.scans(100); // 1 s: started at 0.2 s
         let t = &v.sample.as_ref().unwrap().trace;
         assert_eq!(t.get("conveyor"), Some(Value::Bool(true)));
-        let why = helmsman_diagram::explain(&v.module, t, "conveyor", 4).outline();
+        let why = helmsman_diagram::explain(&v.view.module, t, "conveyor", 4).outline();
         assert!(why[0].starts_with("CONVEYOR = TRUE because line"), "{why:#?}");
         assert!(
             why.iter()
@@ -441,7 +446,7 @@ mod live {
         v.scans(600); // 7 s: jammed
         let t = &v.sample.as_ref().unwrap().trace;
         assert_eq!(t.get("conveyor"), Some(Value::Bool(false)));
-        let why = helmsman_diagram::explain(&v.module, t, "conveyor", 4).outline();
+        let why = helmsman_diagram::explain(&v.view.module, t, "conveyor", 4).outline();
         assert!(why.iter().any(|l| l.contains("JAM = TRUE")), "{why:#?}");
         h.frame(vec![]);
         assert!(matches!(
@@ -471,11 +476,99 @@ mod live {
         assert!(panned.offset.y < before.offset.y, "{before:?} -> {panned:?}");
         h.frame(vec![Event::Zoom(1.5)]);
         assert!(st(&h).cams[0].zoom > panned.zoom);
-        h.app.st.as_mut().unwrap().scope = 1;
+        h.app.st.as_mut().unwrap().view.scope = 1;
         h.frame(vec![]);
         assert_eq!(st(&h).diagram().pou, "MOTOR");
-        assert!(st(&h).live().is_some());
+        assert!(demo(&h).live().is_some());
         h.app.mode = Mode::Lab;
         h.frame(vec![]);
+    }
+}
+
+/// The live ST view of a real box, driven headless: the state a browser
+/// built from the real API, drawn and clicked through egui.
+mod boxed {
+    use helmsman_diagram::NodeKind;
+    use helmsman_graph::Project;
+
+    use super::Harness;
+    use crate::app::{Mode, Source};
+    use crate::box_tests::{Bench, watch};
+    use crate::box_view::BoxView;
+    use crate::remote::{Link, Msg, Stream};
+
+    fn boxed(h: &Harness) -> &BoxView {
+        h.app.boxv.as_ref().unwrap()
+    }
+
+    #[test]
+    fn a_live_box_is_drawn_clicked_and_explained_and_losing_it_offers_the_demo() {
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(Project::default());
+        h.app.mode = Mode::Live;
+        h.app.source = Source::Box;
+        h.frame(vec![]);
+        assert!(boxed(&h).view.is_none());
+        assert_eq!(boxed(&h).waiting(), "Looking for the box…");
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let b = boxed(&h);
+        let v = b.view.as_ref().expect("the module is drawn");
+        assert_eq!(
+            v.because.as_deref(),
+            Some("CONVEYOR"),
+            "the first output is explained"
+        );
+        assert_eq!(b.status(h.time).0, "● connected");
+
+        // Click the conveyor's assignment: its source line comes up.
+        let n = v
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                n.kind
+                    == NodeKind::Write {
+                        path: "CONVEYOR".into(),
+                    }
+            })
+            .unwrap();
+        let at = v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0);
+        h.click(at);
+        let (line, text) = boxed(&h).view.as_ref().unwrap().picked().unwrap();
+        assert_eq!(text, "CONVEYOR := M.ON");
+        assert!(line > 0);
+
+        // The box goes away: reconnecting, then unreachable, still drawn.
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        b.state.apply(Msg::Failed(Stream::Values), t);
+        assert!(
+            b.status(t).0.starts_with("● reconnecting (retry in 2s)"),
+            "{:?}",
+            b.status(t)
+        );
+        for k in 1..3 {
+            b.state.apply(Msg::Failed(Stream::Values), t + f64::from(k));
+        }
+        assert!(matches!(b.state.link(), Link::Unreachable { .. }));
+        assert!(
+            b.status(t + 2.0).0.starts_with("● box unreachable"),
+            "{:?}",
+            b.status(t + 2.0)
+        );
+        h.frame(vec![]);
+        assert!(boxed(&h).view.is_some(), "the last diagram stays up");
+        h.app.boxv.as_mut().unwrap().wants_demo = true;
+        h.frame(vec![]);
+        assert_eq!(
+            h.app.source,
+            Source::Demo,
+            "the operator can fall back to the demo"
+        );
+        h.frame(vec![]);
+        assert!(h.app.st.is_some());
     }
 }
