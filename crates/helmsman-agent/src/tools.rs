@@ -54,6 +54,11 @@ pub const NAMES: [&str; 11] = [
     "compare_plc_tags",
 ];
 
+/// The tools explain mode runs: reads only. Nothing in it drafts,
+/// checks, simulates or proposes, so an explanation can change nothing
+/// on the box, not even the proposal list.
+pub const READ_ONLY: [&str; 4] = ["list_signals", "read_signals", "list_modules", "read_module"];
+
 /// Most names one `compare_plc_tags` result lists per difference.
 pub const MAX_LISTED: usize = 200;
 

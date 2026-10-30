@@ -52,6 +52,9 @@ pub enum Why {
         fb: String,
         call: Option<(StmtId, u32)>,
         inputs: Vec<Because>,
+        /// The instance's ports as the scan left them (`T.IN`, `T.PT`,
+        /// `T.ET`, `T.Q` for a TON), for the blocks [`ports`] knows.
+        ports: Vec<(String, Option<Value>)>,
     },
     /// A function block's input: what the call passed it (the last call of
     /// this instance that ran), followed in the caller.
@@ -311,9 +314,19 @@ impl Explainer<'_> {
             self.stack.push(full.clone());
             let inputs = call.map_or_else(Vec::new, |c| self.upstream(pou, prefix, c, depth));
             self.stack.pop();
+            let instance = format!("{prefix}{inst}");
+            let ports = ports(fb)
+                .iter()
+                .map(|p| {
+                    let path = format!("{instance}.{p}");
+                    let v = self.t.get(&path);
+                    (path, v)
+                })
+                .collect();
             Why::Block {
-                instance: format!("{prefix}{inst}"),
+                instance,
                 fb: fb.to_string(),
+                ports,
                 call: call.map(|c| {
                     let s = d.node(c).stmt;
                     (s, self.line(s))
@@ -411,6 +424,22 @@ impl Explainer<'_> {
     }
 }
 
+/// The ports of a standard library block, inputs first; empty for any
+/// other block.
+#[must_use]
+pub fn ports(fb: &str) -> &'static [&'static str] {
+    match fb {
+        "TON" | "TOF" | "TP" => &["IN", "PT", "Q", "ET"],
+        "CTU" => &["CU", "R", "PV", "Q", "CV"],
+        "CTD" => &["CD", "LD", "PV", "Q", "CV"],
+        "CTUD" => &["CU", "CD", "R", "LD", "PV", "QU", "QD", "CV"],
+        "R_TRIG" | "F_TRIG" => &["CLK", "Q"],
+        "SR" => &["S1", "R", "Q1"],
+        "RS" => &["S", "R1", "Q1"],
+        _ => &[],
+    }
+}
+
 /// The variables a node's inputs read, through operators and functions,
 /// in first-seen order.
 fn leaves(d: &Diagram, n: NodeId) -> Vec<String> {
@@ -500,6 +529,7 @@ impl Because {
                 fb,
                 call,
                 inputs,
+                ..
             } => {
                 match call {
                     Some((_, line)) => {

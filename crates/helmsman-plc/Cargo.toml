@@ -12,6 +12,8 @@ helmsman-adapter = { path = "../helmsman-adapter" }
 # The chat panel's agent loop (relay client and tools), for the box API's
 # /api/chat; https follows ours.
 helmsman-agent = { path = "../helmsman-agent", default-features = false, optional = true }
+# Explain mode: the box explains its own traces (/api/explain).
+helmsman-diagram = { path = "../helmsman-diagram", optional = true }
 helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
 serde = { version = "1.0", features = ["derive"] }
@@ -42,7 +44,7 @@ workspace = true
 # compiled in). On by default so the Pi can post to a cloud receiver;
 # `--no-default-features --features box` builds an http-only box.
 default = ["box", "https"]
-box = ["dep:rusqlite", "dep:ring", "dep:helmsman-agent", "helmsman-io/serial", "helmsman-io/gpio"]
+box = ["dep:rusqlite", "dep:ring", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio"]
 https = ["dep:rustls", "dep:webpki-roots", "helmsman-agent?/https"]
 
 [[bin]]
