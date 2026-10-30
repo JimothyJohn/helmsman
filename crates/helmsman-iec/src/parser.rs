@@ -339,12 +339,35 @@ const RESERVED: &[&str] = &[
     "ARRAY",
 ];
 
+/// Deepest nesting of expressions and statements accepted (parentheses
+/// weigh [`EXPR_COST`]; operators chained into a left-deep tree, `NOT`/`-`
+/// chains, member and index chains and nested blocks weigh 1). The parser,
+/// checker and interpreter walk these trees recursively; the limit keeps
+/// hostile input off the end of a 2 MiB thread stack, in a debug build.
+pub const MAX_NESTING: usize = 200;
+
+/// What entering a (parenthesised) expression counts against
+/// [`MAX_NESTING`]: the parser descends through every precedence level
+/// for it.
+const EXPR_COST: usize = 3;
+
 struct Parser {
     toks: Vec<(Tok, Pos)>,
     i: usize,
+    /// Current nesting, against [`MAX_NESTING`].
+    depth: usize,
 }
 
 impl Parser {
+    /// Enters `n` more levels of nesting.
+    fn deeper(&mut self, n: usize) -> R<()> {
+        self.depth += n;
+        if self.depth > MAX_NESTING {
+            return self.err(format!("nested deeper than {MAX_NESTING} levels"));
+        }
+        Ok(())
+    }
+
     fn tok(&self) -> &Tok {
         &self.toks[self.i].0
     }
@@ -569,6 +592,13 @@ impl Parser {
     }
 
     fn init(&mut self) -> R<Init> {
+        self.deeper(1)?;
+        let i = self.init_inner()?;
+        self.depth -= 1;
+        Ok(i)
+    }
+
+    fn init_inner(&mut self) -> R<Init> {
         let pos = self.pos();
         if self.eat(&Tok::LBracket) {
             let mut items = Vec::new();
@@ -727,6 +757,15 @@ impl Parser {
     }
 
     fn stmt(&mut self) -> R<Stmt> {
+        // A nested statement costs the checker and interpreter more stack
+        // than an operator does.
+        self.deeper(EXPR_COST)?;
+        let s = self.stmt_inner()?;
+        self.depth -= EXPR_COST;
+        Ok(s)
+    }
+
+    fn stmt_inner(&mut self) -> R<Stmt> {
         let pos = self.pos();
         let kind = match self.tok().clone() {
             Tok::Semi => {
@@ -906,7 +945,10 @@ impl Parser {
     // ---- expressions ----
 
     pub fn expr(&mut self) -> R<Expr> {
-        self.binary(0)
+        self.deeper(EXPR_COST)?;
+        let e = self.binary(0)?;
+        self.depth -= EXPR_COST;
+        Ok(e)
     }
 
     /// Binary operator at precedence `level` (0 = loosest), if the current
@@ -938,15 +980,19 @@ impl Parser {
             return self.power();
         }
         let mut lhs = self.binary(level + 1)?;
+        let mut chain = 0;
         while let Some(op) = self.binop(level) {
             let pos = self.pos();
             self.advance();
+            self.deeper(1)?;
+            chain += 1;
             let rhs = self.binary(level + 1)?;
             lhs = Expr {
                 kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)),
                 pos,
             };
         }
+        self.depth -= chain;
         Ok(lhs)
     }
 
@@ -977,17 +1023,24 @@ impl Parser {
                 }
                 _ => {}
             }
+            self.deeper(1)?;
             let e = self.unary()?;
+            self.depth -= 1;
             return Ok(Expr {
                 kind: ExprKind::Unary(UnOp::Neg, Box::new(e)),
                 pos,
             });
         }
         if self.eat(&Tok::Plus) {
-            return self.unary();
+            self.deeper(1)?;
+            let e = self.unary()?;
+            self.depth -= 1;
+            return Ok(e);
         }
         if self.eat_kw("NOT") {
+            self.deeper(1)?;
             let e = self.unary()?;
+            self.depth -= 1;
             return Ok(Expr {
                 kind: ExprKind::Unary(UnOp::Not, Box::new(e)),
                 pos,
@@ -998,15 +1051,19 @@ impl Parser {
 
     fn power(&mut self) -> R<Expr> {
         let mut lhs = self.unary()?;
+        let mut chain = 0;
         while *self.tok() == Tok::Power {
             let pos = self.pos();
             self.advance();
+            self.deeper(1)?;
+            chain += 1;
             let rhs = self.unary()?;
             lhs = Expr {
                 kind: ExprKind::Binary(BinOp::Pow, Box::new(lhs), Box::new(rhs)),
                 pos,
             };
         }
+        self.depth -= chain;
         Ok(lhs)
     }
 
@@ -1048,8 +1105,13 @@ impl Parser {
     /// A primary followed by `.member`, `.bit`, `[index]` and `(args)`.
     fn postfix(&mut self) -> R<Expr> {
         let mut e = self.primary()?;
+        let mut chain = 0;
         loop {
             let pos = self.pos();
+            if matches!(self.tok(), Tok::Dot | Tok::LBracket | Tok::LParen) {
+                self.deeper(1)?;
+                chain += 1;
+            }
             match self.tok().clone() {
                 Tok::Dot => {
                     self.advance();
@@ -1100,7 +1162,10 @@ impl Parser {
                         pos,
                     };
                 }
-                _ => return Ok(e),
+                _ => {
+                    self.depth -= chain;
+                    return Ok(e);
+                }
             }
         }
     }
@@ -1134,13 +1199,13 @@ impl Parser {
 /// Parses a compilation unit. `system` admits `__` names.
 pub fn parse(src: &str, system: bool) -> R<Unit> {
     let toks = lex(src, system)?;
-    Parser { toks, i: 0 }.unit()
+    Parser { toks, i: 0, depth: 0 }.unit()
 }
 
 /// Parses `src` as exactly one expression.
 pub fn parse_expr(src: &str) -> R<Expr> {
     let toks = lex(src, false)?;
-    let mut p = Parser { toks, i: 0 };
+    let mut p = Parser { toks, i: 0, depth: 0 };
     let e = p.expr()?;
     if *p.tok() != Tok::Eof {
         return p.err(format!("expected the end of the expression, found {}", p.tok()));
@@ -1154,7 +1219,7 @@ mod tests {
 
     fn expr(src: &str) -> Expr {
         let toks = lex(src, false).unwrap();
-        let mut p = Parser { toks, i: 0 };
+        let mut p = Parser { toks, i: 0, depth: 0 };
         let e = p.expr().unwrap();
         assert_eq!(*p.tok(), Tok::Eof, "trailing input in {src:?}");
         e

@@ -11,11 +11,16 @@
 //! `R_TRIG`/`F_TRIG` instances, an EN input guards the block's call (or, for
 //! a function, the assignments that use its result), and an `inOutVariable`
 //! is read before it is written, so feedback through a variable works.
+//! Feedback through a function block instance works too: inside the loop,
+//! its outputs are read as the previous scan left them. Ties in position
+//! go by `localId`, so a file always lowers to the same program.
 //!
-//! Not yet: SFC and IL bodies, actions, transitions, jumps and labels,
-//! `VAR_IN_OUT` block parameters, anonymous inline types, and feedback that
-//! does not pass through a variable. `<instances>` (configurations, tasks)
-//! is ignored: the runtime runs the project's one PROGRAM.
+//! Checked against the editors' own example projects
+//! (`scripts/plcopen-corpus.sh`). Not yet: SFC and IL bodies, actions,
+//! transitions, jumps and labels, `VAR_IN_OUT` block parameters, anonymous
+//! inline types, and feedback through functions alone. `<instances>`
+//! (configurations, tasks, global variables) is ignored: the runtime runs
+//! the project's one PROGRAM, so `VAR_EXTERNAL` is refused.
 
 #![allow(clippy::many_single_char_names)]
 
@@ -23,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::check::Diagnostic;
 use crate::lexer::Pos;
-use crate::parser::{ExprKind, parse_expr};
+use crate::parser::{ExprKind, MAX_NESTING, parse_expr};
 use crate::xml::{self, Element};
 
 /// The generated Structured Text and where each of its lines came from.
@@ -609,8 +614,13 @@ impl Val {
 
 #[derive(Debug, Clone)]
 enum Done {
-    /// A function block call: outputs are `instance.OUTPUT`.
-    Fb { inst: String, en: Option<String> },
+    /// A function block call: outputs are `instance.OUTPUT`. `feedback`:
+    /// read inside a loop, before the call is emitted.
+    Fb {
+        inst: String,
+        en: Option<String>,
+        feedback: bool,
+    },
     /// A function: its value, valid under `guards`.
     Func {
         out: String,
@@ -645,6 +655,9 @@ struct Graph {
     busy: HashSet<u64>,
     failed: HashSet<u64>,
     counter: u32,
+    /// Elements being computed, one inside another: bounded so a hostile
+    /// chain cannot exhaust the stack.
+    depth: usize,
 }
 
 /// Elements an LD or FBD network may hold.
@@ -676,6 +689,7 @@ impl Graph {
             busy: HashSet::new(),
             failed: HashSet::new(),
             counter: 0,
+            depth: 0,
         }
     }
 
@@ -819,9 +833,13 @@ impl Graph {
             };
             (c("y"), c("x"))
         };
+        // Ties (no position, or a shared one) go by localId: the nodes come
+        // out of a HashMap, so without it the order would vary run to run.
         let by_xy = |a: &&Element, b: &&Element| {
-            let (a, b) = (xy(a), xy(b));
-            a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1))
+            let (pa, pb) = (xy(a), xy(b));
+            pa.0.total_cmp(&pb.0)
+                .then(pa.1.total_cmp(&pb.1))
+                .then(local_id(a).cmp(&local_id(b)))
         };
         let mut ordered: Vec<&Element> = Vec::new();
         let mut writes: Vec<&Element> = Vec::new();
@@ -938,6 +956,19 @@ impl Graph {
 
     /// The value leaving element `id` at output `port`.
     fn value(&mut self, net: &Net, id: u64, port: Option<&str>, at: Pos) -> L<Val> {
+        if self.depth >= MAX_NESTING {
+            return self.err(
+                at,
+                format!("more than {MAX_NESTING} elements in a row; split the network"),
+            );
+        }
+        self.depth += 1;
+        let r = self.value_inner(net, id, port, at);
+        self.depth -= 1;
+        r
+    }
+
+    fn value_inner(&mut self, net: &Net, id: u64, port: Option<&str>, at: Pos) -> L<Val> {
         let Some(&e) = net.nodes.get(&id) else {
             return self.err(at, format!("connection to localId {id}, which does not exist"));
         };
@@ -1026,6 +1057,12 @@ impl Graph {
             Done::Fb { en, .. } | Done::Func { en, .. } => en.clone(),
         };
         if port.eq_ignore_ascii_case("ENO") {
+            if matches!(done, Done::Fb { feedback: true, .. }) {
+                return self.err(
+                    at,
+                    format!("feedback loop through the ENO of block {id}; route it through a variable"),
+                );
+            }
             return Ok(Val::plain(en.unwrap_or_else(|| "TRUE".into())));
         }
         let Some(out) = e
@@ -1071,6 +1108,15 @@ impl Graph {
             return Err(Failed);
         }
         if !self.busy.insert(id) {
+            // A loop through a function block instance reads the outputs
+            // it left on the previous scan, as Beremiz's generator does.
+            if let Some(inst) = e.attr("instanceName").filter(|n| is_ident(n)) {
+                return Ok(Done::Fb {
+                    inst: inst.to_string(),
+                    en: None,
+                    feedback: true,
+                });
+            }
             return self.err(
                 e.pos,
                 format!("feedback loop through block {id}; route it through a variable"),
@@ -1129,7 +1175,11 @@ impl Graph {
         if let Some(inst) = inst {
             let args: Vec<String> = ins.iter().map(|(f, x, _)| format!("{f} := {x}")).collect();
             self.emit(e.pos, &guards, format!("{inst}({});", args.join(", ")));
-            return Ok(Done::Fb { inst, en });
+            return Ok(Done::Fb {
+                inst,
+                en,
+                feedback: false,
+            });
         }
         let outs: Vec<&Element> = e
             .child("outputVariables")
@@ -1185,9 +1235,17 @@ impl Graph {
         };
         if let Some((op, min, max)) = op {
             if ins.len() < min || ins.len() > max {
+                let need = if max == usize::MAX {
+                    format!("at least {min}")
+                } else if min == max {
+                    min.to_string()
+                } else {
+                    format!("{min}..{max}")
+                };
+                let s = if need == "1" { "" } else { "s" };
                 return self.err(
                     at,
-                    format!("{up} needs {min}..{max} connected inputs, has {}", ins.len()),
+                    format!("{up} needs {need} connected input{s}, has {}", ins.len()),
                 );
             }
             if min == 1 {
@@ -1256,7 +1314,7 @@ impl Net<'_> {
     /// How many times the value leaving `id` is read. Power passing through
     /// a coil is read again by whatever the coil feeds.
     fn uses(&self, id: u64, depth: usize) -> usize {
-        if depth > self.nodes.len() {
+        if depth > self.nodes.len().min(MAX_NESTING) {
             return 2;
         }
         self.readers.get(&id).map_or(0, |rs| {
