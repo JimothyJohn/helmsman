@@ -2,7 +2,8 @@
 //! the devices it talks to, and its logic only ever names *signals*:
 //!
 //! - a [`Device`] is an endpoint the box masters, spoken to by a driver
-//!   (`modbus-tcp` today; agent-written WASM drivers later);
+//!   (`modbus-tcp`, and [`logix`] read-only for controllers the box only
+//!   observes; agent-written WASM drivers later);
 //! - a [`Signal`] is a named, typed point with a direction, bound to a point on
 //!   a device or to one of the box's own channels (a GPIO driving a 24 V
 //!   output stage, say);
@@ -18,10 +19,13 @@
 pub mod driver;
 pub mod harness;
 pub mod local;
+pub mod logix;
 pub mod modbus;
 pub mod model;
 pub mod sim;
 pub mod text;
 
 pub use driver::{Driver, Error, PointInfo, open};
-pub use model::{Binding, Device, Dir, IoMap, MapError, Signal, Ty, Value};
+pub use model::{
+    Binding, Device, Dir, IoMap, MAX_POLL, MAX_UNIT, MapError, Signal, Ty, Value, module_name_ok, unit_ok,
+};

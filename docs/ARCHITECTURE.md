@@ -43,7 +43,7 @@ roadmap card, by id).
      a Logix PLC, our CLI)             drives, sensors
 
   observed controllers (a CompactLogix): read-only, via helmsman-proto (originator)
-  (planned: logix-tag-read; no Write Tag in the box build)
+  (built: logix-tag driver; no Write Tag, no unrestricted session in the box build)
 ```
 
 Three directions of traffic, three different rules:
@@ -61,11 +61,11 @@ Three directions of traffic, three different rules:
 
 | crate | owns | status |
 | --- | --- | --- |
-| `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Class 1 scanner. Byte codecs plus socket-level session, discovery and scanner. | built |
-| `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O. | built |
+| `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Logix tag reads (`logix`: Read Tag, Multiple Service Packet, Read Tag Fragmented, Symbol object browse, backplane routing), Class 1 scanner. Byte codecs plus socket-level session, discovery and scanner. Any-service requests and the scanner sit behind the `unrestricted` feature. | built |
+| `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
-| `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
+| `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
 | `helmsman-graph` | Node-graph model and scan simulator behind the canvas's lab editor. | built (lab tool) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
@@ -130,13 +130,20 @@ scan; the scheduler bounds how often.
   (`modbus-tcp`), `endpoint` (`host:port`), driver params (`unit`,
   `timeout_ms`).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
-  `Real`), a direction (`In`, `Out`) and a **`Binding`**, either a point on a
-  device in that driver's own address syntax (`coil:0`, `hr:100:f32`) or one
-  of the box's own channels (`do:N`, `di:N`).
+  `Real`), a direction (`In`, `Out`), an optional engineering `unit`
+  (metadata, never converted), an optional per-input `poll` period, and a
+  **`Binding`**: a point on a device in that driver's own address syntax
+  (`coil:0`, `hr:100:f32`), one of the box's own channels (`do:N`,
+  `di:N`), or **another module's output** (`Binding::Module`, below). A
+  CIP controller's tags and attributes (`logix-tag-read`) arrive as one
+  more driver behind `Binding::Device`, with its own point syntax, so
+  polling, links and validation apply unchanged.
 - **`IoMap::validate`** checks everything that needs no device: unique
   names, identifiers, known devices, parseable points, signal type matches
-  point type, outputs only on writable points, one writer per point. It
-  returns every problem, not the first.
+  point type, outputs only on writable points, one writer per point, units
+  of 1..=16 printable ASCII characters, poll periods of 1 ms ..= 60 s and
+  only on polled inputs, module outputs as `in` signals naming a valid
+  module. It returns every problem, not the first.
 - **`Driver`**: `parse(addr)`, `read(&[addr]) -> Vec<Value>` (all or
   nothing, batching is the driver's business), `write(addr, value)`. Strings
   and plain values only, so the same contract crosses a WASM boundary
@@ -150,10 +157,17 @@ scan; the scheduler bounds how often.
   only pretends to write fails. `cargo run -p helmsman-io --example
   conformance -- --sim`.
 
+- **`logix`**: `logix-tag`, read-only signals from an observed Logix
+  controller by tag name (`in temp real plc Program:Main.Temp@real`); the
+  `@TYPE` is the tag's Logix type and is checked on every reply. Reads are
+  batched into one Multiple Service Packet per cycle.
+
 - **`local`**: the box's own channels (`do:N`, `di:N`) behind the same
   contract; in memory until `gpio-outputs` adds the Pi backend.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
-  optional `safe=` values for outputs.
+  optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
+  `in NAME TYPE module MODULE` is another module's output. Older maps read
+  unchanged; `box` and `module` are reserved device ids.
 
 ## Signals in the scan (`io-runtime`, built)
 
@@ -170,7 +184,9 @@ manifest declares, and is checked against.
   driving one signal are all refused before the adapter starts.
 - **Links** (`link.rs`), one thread per device plus `box`: each cycle writes
   the commands that changed since the device last took them, then reads
-  every input. Any error marks the link down: its inputs go missing, and it
+  every input that is due. A link cycles at the fastest of its device's
+  `poll_ms` and its inputs' own; an input without one is read at the
+  device's rate. Any error marks the link down: its inputs go missing, and it
   forgets what the device holds, so every output is written again on
   reconnect.
 - **A module never computes on missing data.** If any signal it reads has no
@@ -178,6 +194,18 @@ manifest declares, and is checked against.
   scanned, `%Q` window zeroed, output signals sent to their safe values. It
   runs again once every input is back. An output value its signal can't
   carry (a non-finite `REAL`) faults the module (`OutputRange`).
+- **Module outputs as signals** (`signal-model`). `in rate real module
+  conveyor` is the `VAR_OUTPUT rate` of module `conveyor`, which other
+  modules read as `VAR_INPUT rate`. It has a value only once `conveyor`
+  has scanned, and none while it is held or faulted, so its readers are
+  held too and their outputs go safe. Nothing polls it, and only
+  `conveyor` may drive it. Refused at load: a module reading its own
+  output, a reader whose source isn't loaded or doesn't drive the signal,
+  and modules reading each other in a loop (which would hold them all
+  forever). A reader sees the source's latest completed scan, from the
+  same tick if the source comes first in scan order and from the previous
+  tick otherwise. An `out` signal is still readable through its command,
+  as before.
 
 ## Module directories (`module-format`, built)
 
@@ -265,6 +293,65 @@ load.
   calendar's signals are missing, so modules reading them are held, and
   driven outputs go to their safe values.
 
+## Snapshots (`snapshots`, built)
+
+`helmsman_plc::store` (`store.rs`; contract in `tests/store.rs`) keeps
+every applied change set in one SQLite file, `DIR/snapshots.db`;
+`helmsman-plc --store DIR` runs whatever head is (and takes no other
+module, map or calendar source).
+
+- **A change set is files, byte for byte**: each module's
+  `module.manifest` and `module.st` (params live in the manifest), the I/O
+  map (the bindings) and the calendar. Commit checks that each manifest
+  parses and names its module and that the map parses; it does not compile
+  (whoever applies compiles first).
+- **Content-addressed**: blobs are keyed by SHA-256; a snapshot's id is the
+  SHA-256 of a canonical text tree (`helmsman-snapshot 1`, then one
+  `module NAME MANIFEST SOURCE` line per module by name, `io-map H`,
+  `calendar H`). Same content, same id, in any store. Every read re-hashes
+  the tree and each blob, so a corrupted or edited row is an error, never
+  wrong content. A tree plus its blobs is what `bundle-format` will carry.
+- **History is an append-only log**: one entry per apply or rollback, with
+  author, prompt, approver and time (caller's clock), each hashed over its
+  fields and the previous entry's hash, so edited history fails `list`.
+  Rollback is a new entry pointing at old content. Committing what head
+  already is writes nothing. `diff(a, b)` names modules added, removed or
+  changed (source, manifest, which params), devices and signal bindings
+  changed, and whether the calendar changed.
+- **Guarded**: triggers refuse `UPDATE` and `DELETE` on every table; the
+  file carries an application id and `user_version` (schema 1), and a
+  newer schema is refused rather than misread. Writers take SQLite's write
+  lock up front (`BEGIN IMMEDIATE`, WAL), so concurrent commits never lose
+  an entry. Author and approver are one line, prompt may span lines; none
+  may carry controls or invisible formatting characters (as the manifest).
+
+## Hot swap (`hot-swap`, built)
+
+`Runtime::swap(module, &mut table)` replaces the module of the same name
+between its scans (contract in `tests/swap.rs`). The adapter, the links and
+the other modules never notice.
+
+- **Checked like a fresh load**, by the same code, against the other modules
+  as they run: windows, sizes, period, ports against the `SignalTable`, one
+  writer per `%Q` byte and per output signal. A refused swap changes nothing.
+- **State carries by name and type** (`Program::state` / `Program::restore`
+  in `helmsman-iec`): top-level `VAR`, `VAR_INPUT`, `VAR_OUTPUT`, not
+  `VAR_TEMP`, constants or located variables. A variable carries whole when
+  its type has the same shape in both programs (same elementary type; same
+  enumeration; same array bounds; same struct or function block, by name and
+  members), so a `TON` keeps its elapsed time and a `CTU` its count; a new or
+  retyped variable starts at its initial value. Every copied slot is also
+  checked against the new slot's type, so nothing ill-typed lands in memory.
+  `%M` keeps its bytes over the length both share.
+- **No glitch**: the `%Q` bytes and output signals the module keeps hold their
+  last values until the new program's first scan; bytes it gives up go to
+  zero and signals it stops driving go safe at once.
+- A **faulted or held** module restarts Running, its state carried; a faulted
+  one is next due on its old phase after the last tick (open question
+  `hot-swap-faulted-state`).
+
+Not in the binary yet: there is no control channel until `box-api`.
+
 ## The live ST view (`st-graph-view`, built)
 
 The operator's read-only view of what a module's code is doing
@@ -312,7 +399,7 @@ agent as ST; nothing here writes ST back).
 | module ↔ network | nothing | ST has no network primitives; sinks (webhook, OPC UA) are core-owned | built by construction; sinks planned |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
-| box ↔ observed PLCs | tag reads | the box build exposes read services only (no Write Tag, no `Set_Attribute`) | planned (`logix-tag-read`); **today the `helmsman-proto` library and CLI can send any service and drive Class 1 outputs** |
+| box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | planned (`box-api`, `approval-policy`) |
 | text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions, in the agent prompt; the host rules above hold regardless | planned (`agent-loop`) |
@@ -324,14 +411,14 @@ prompt. The agent never touches the Rust core.
 
 ## Where the planned pieces attach
 
-- `hot-swap`: replace one module's `Program` between its scans; its windows
-  and the adapter connection stay up. Needs `multi-module`.
 - `module-format` → `signal-model` → `box-api`: the manifest (signals read,
   outputs driven, schedule, params) is what the scheduler, the I/O map and
   the policy check; the box API serves it.
 - `st-graph-view` → `canvas-web`: the trace tap's samples (built, below)
   rendered on the ST diagram, served by the box.
-- `snapshots`: each applied change set (modules, params, bindings) is an
-  immutable, content-addressed record in SQLite; rollback is one call.
+- `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
+  compile, check, then `Store::commit` with the approver; the box API
+  serves `list`, `diff` and `rollback`. `bundle-format` exports a tree and
+  its blobs.
 - `sim-replay`: a RAM ring buffer of signal values that a proposed module is
   replayed against before approval.

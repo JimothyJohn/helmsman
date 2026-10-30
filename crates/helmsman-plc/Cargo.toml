@@ -11,9 +11,12 @@ repository.workspace = true
 helmsman-adapter = { path = "../helmsman-adapter" }
 helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+sha2 = { version = "0.11.1", default-features = false }
 
 [dev-dependencies]
-helmsman-proto = { path = "../helmsman-proto" }
+# The box build itself never enables `unrestricted`; its tests play scanner.
+helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
 
 [lints]

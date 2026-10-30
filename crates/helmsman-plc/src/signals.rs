@@ -11,9 +11,15 @@
 //! - A module never computes on missing data: if any signal it reads has no
 //!   value, it is held (not scanned) and its outputs go to their safe values
 //!   until every input is back.
+//! - A signal bound to another module's output ([`Binding::Module`]) has
+//!   the value that module last published: nothing until its first scan,
+//!   and nothing again while it is held or faulted, so the modules reading
+//!   it are held in turn. Only that module drives it, nothing polls it,
+//!   and a module may not read its own output.
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::time::Duration;
 
 use helmsman_iec::{Port, PortDir, Ty as StTy, Value as StValue};
 use helmsman_io::{Binding, Dir, IoMap, MapError, Ty, Value};
@@ -23,8 +29,11 @@ struct Sig {
     name: String,
     ty: Ty,
     dir: Dir,
-    /// Inputs: the last good read.
+    /// Inputs: the last good read, or what the source module published.
     value: Option<Value>,
+    /// The module whose output this is ([`Binding::Module`]).
+    source: Option<String>,
+    unit: Option<String>,
     /// Outputs: what the links write.
     command: Value,
     safe: Value,
@@ -125,6 +134,11 @@ impl SignalTable {
                     ty: s.ty,
                     dir: s.dir,
                     value: None,
+                    source: match &s.binding {
+                        Binding::Module { module } => Some(module.clone()),
+                        _ => None,
+                    },
+                    unit: s.unit.clone(),
                     command: safe,
                     safe,
                 }
@@ -169,27 +183,52 @@ impl SignalTable {
         self.sigs.get(i).filter(|s| s.dir == Dir::Out).map(|s| s.command)
     }
 
+    /// A signal's engineering unit, if the map gives one.
+    #[must_use]
+    pub fn unit(&self, i: usize) -> Option<&str> {
+        self.sigs.get(i)?.unit.as_deref()
+    }
+
+    /// The module whose output signal `i` is, if it is one.
+    #[must_use]
+    pub fn source(&self, i: usize) -> Option<&str> {
+        self.sigs.get(i)?.source.as_deref()
+    }
+
     /// Records a read of an input signal; `None` marks it missing. A value
     /// of the wrong type, or a non-finite real, counts as missing too.
+    /// Ignored for another module's output: only that module sets it.
     pub fn set_input(&mut self, i: usize, v: Option<Value>) {
-        if let Some(s) = self.sigs.get_mut(i).filter(|s| s.dir == Dir::In) {
+        if let Some(s) = self
+            .sigs
+            .get_mut(i)
+            .filter(|s| s.dir == Dir::In && s.source.is_none())
+        {
             s.value = v.filter(|v| v.ty() == s.ty && !matches!(v, Value::Real(x) if !x.is_finite()));
         }
     }
 
-    fn command_mut(&mut self, i: usize) -> Option<&mut Sig> {
-        self.sigs.get_mut(i).filter(|s| s.dir == Dir::Out)
-    }
-
+    /// What a module's `VAR_OUTPUT` drives: an output's command, or the
+    /// published value of a module-output signal.
     pub(crate) fn drive(&mut self, i: usize, v: Value) {
-        if let Some(s) = self.command_mut(i) {
-            s.command = v;
+        if let Some(s) = self.sigs.get_mut(i) {
+            match s.dir {
+                Dir::Out => s.command = v,
+                Dir::In if s.source.is_some() => s.value = Some(v),
+                Dir::In => {}
+            }
         }
     }
 
+    /// The driving module stopped: an output goes to its safe value, a
+    /// module-output signal goes missing.
     pub(crate) fn make_safe(&mut self, i: usize) {
-        if let Some(s) = self.command_mut(i) {
-            s.command = s.safe;
+        if let Some(s) = self.sigs.get_mut(i) {
+            match s.dir {
+                Dir::Out => s.command = s.safe,
+                Dir::In if s.source.is_some() => s.value = None,
+                Dir::In => {}
+            }
         }
     }
 
@@ -213,6 +252,8 @@ impl SignalTable {
             value: None,
             command: zero(ty),
             safe: zero(ty),
+            source: None,
+            unit: None,
         });
         Ok(self.sigs.len() - 1)
     }
@@ -226,7 +267,7 @@ impl SignalTable {
     /// Marks output `i` as driven by `writer` rather than by a module; a
     /// module binding a `VAR_OUTPUT` to it is then refused.
     pub(crate) fn claim(&mut self, i: usize, writer: &str) {
-        if self.command_mut(i).is_some() {
+        if self.sigs.get(i).is_some_and(|s| s.dir == Dir::Out) {
             self.claims.insert(i, writer.into());
         }
     }
@@ -251,8 +292,11 @@ pub(crate) struct PortBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindError {
     UnknownSignal(String),
-    /// A `VAR_OUTPUT` bound to an input signal.
+    /// A `VAR_OUTPUT` bound to an input signal (including another module's
+    /// output).
     DrivesInput(String),
+    /// A `VAR_INPUT` bound to the module's own output.
+    ReadsOwnOutput(String),
     /// The port's ST type cannot carry the signal's type.
     Type {
         port: String,
@@ -266,6 +310,7 @@ impl fmt::Display for BindError {
         match self {
             Self::UnknownSignal(p) => write!(f, "port {p}: no signal of that name"),
             Self::DrivesInput(p) => write!(f, "port {p}: a VAR_OUTPUT cannot drive an input signal"),
+            Self::ReadsOwnOutput(p) => write!(f, "port {p}: a module cannot read its own output"),
             Self::Type { port, signal, st } => {
                 write!(f, "port {port}: {st} cannot carry a {signal:?} signal")
             }
@@ -288,7 +333,8 @@ fn carries(st: StTy, dir: PortDir, ty: Ty) -> bool {
     }
 }
 
-pub(crate) fn bind(ports: &[Port], table: &SignalTable) -> (Vec<PortBinding>, Vec<BindError>) {
+/// Binds `module`'s ports to the table.
+pub(crate) fn bind(module: &str, ports: &[Port], table: &SignalTable) -> (Vec<PortBinding>, Vec<BindError>) {
     let mut out = Vec::new();
     let mut errs = Vec::new();
     for p in ports {
@@ -297,8 +343,13 @@ pub(crate) fn bind(ports: &[Port], table: &SignalTable) -> (Vec<PortBinding>, Ve
             continue;
         };
         let s = &table.sigs[i];
-        if p.dir == PortDir::Output && s.dir == Dir::In {
+        let own = s.source.as_deref() == Some(module);
+        if p.dir == PortDir::Output && s.dir == Dir::In && !own {
             errs.push(BindError::DrivesInput(p.name.clone()));
+            continue;
+        }
+        if p.dir == PortDir::Input && own {
+            errs.push(BindError::ReadsOwnOutput(p.name.clone()));
             continue;
         }
         if !carries(p.ty, p.dir, s.ty) {
@@ -338,16 +389,30 @@ pub(crate) fn from_st(v: StValue, ty: Ty) -> Option<Value> {
     }
 }
 
+/// One signal a link polls or writes.
+pub(crate) struct Polled {
+    pub signal: usize,
+    pub addr: String,
+    pub dir: Dir,
+    pub poll: Option<Duration>,
+}
+
 /// Signals bound to devices, grouped by device id (`None` for the box's
-/// own channels), with their addresses.
-pub(crate) fn by_device(map: &IoMap) -> BTreeMap<Option<String>, Vec<(usize, String, Dir)>> {
-    let mut groups: BTreeMap<Option<String>, Vec<(usize, String, Dir)>> = BTreeMap::new();
+/// own channels), with their addresses. Module outputs are no device's.
+pub(crate) fn by_device(map: &IoMap) -> BTreeMap<Option<String>, Vec<Polled>> {
+    let mut groups: BTreeMap<Option<String>, Vec<Polled>> = BTreeMap::new();
     for (i, s) in map.signals.iter().enumerate() {
         let (dev, addr) = match &s.binding {
             Binding::Device { device, point } => (Some(device.clone()), point.clone()),
             Binding::Local { channel } => (None, channel.clone()),
+            Binding::Module { .. } => continue,
         };
-        groups.entry(dev).or_default().push((i, addr, s.dir));
+        groups.entry(dev).or_default().push(Polled {
+            signal: i,
+            addr,
+            dir: s.dir,
+            poll: s.poll,
+        });
     }
     groups
 }
