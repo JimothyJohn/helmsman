@@ -156,6 +156,16 @@
   id: relay-hosting
   answer: Lambda + DynamoDB (recommended)
 
+- [ ] **Does the EtherNet/IP library keep the `tcpethernet` name?** You picked Helmsman Factory Automation on 2026-10-29 and asked for the crates and project to be renamed, but the roadmap's naming card said "tcpethernet stays the protocol layer". My pick: keep `tcpethernet` (and the adapter) as the protocol library, since it's an accurate, searchable name and a protocol library shouldn't carry a product brand; everything product-shaped becomes helmsman-*. The fresh agent on helmsman-rename needs this before it starts.
+  asked: 2026-10-29
+  by: claude-session
+  needs: your call
+  result: the name map helmsman-rename applies
+  options: keep tcpethernet for the protocol crates (recommended) | rename everything to helmsman-*
+  est: 5m
+  difficulty: low
+  id: protocol-crate-name
+
 ## Tasks
 
 - [ ] **Bench sweep against the CompactLogix and FP0H** — `cargo run --example discover <subnet broadcast>`; fill the rows in `docs/INTEROP.md`, keep the first capture.
@@ -327,6 +337,24 @@
   est: 10m
   difficulty: low
   id: readme-wip-branch
+
+- [ ] **Rename the project to Helmsman Factory Automation** — move crates, binaries, repo, docs and UI off the tcpethernet name. Suggested map (final shape per protocol-crate-name): tcpethernet-plc → helmsman-plc, tcpethernet-iec → helmsman-iec, tcpethernet-cli → helmsman-cli (bin `tcpethernet` → `helmsman`), tcpethernet-canvas/-graph → helmsman-canvas/-graph, tcpethernet-adapter follows the protocol crate. Touches: root Cargo.toml members and the `repository` URL, package names and every `use` path, deploy/tcpethernet-plc.service and scripts/pi-deploy-plc.sh (the new deploy must stop and remove the old unit on the pick PC), the other scripts/ and Makefile targets, CI job names, README and docs, web page titles, env vars TCPETHERNET_OPENER_ADDR / _OPENER_IO / _RUSTY / _RUSTY_CASES / _RUSTY_SEED. The GitHub repo is already JimothyJohn/helmsman (old URL redirects, checked 2026-10-29): point the Cargo `repository` URL and README links at it; local checkouts still have the old origin URL (`git remote set-url origin https://github.com/JimothyJohn/helmsman.git`).
+  needs: protocol-crate-name answered; PR #19 (feat/canvas, adds tcpethernet-canvas and tcpethernet-graph) merged or closed, and no crate edits in flight in sibling worktrees (feat/io-model); this is a mass edit that conflicts with everything open
+  result: one PR into dev, `./scripts/lint.sh` and `cargo test --workspace --locked` green under the new names, interop job green
+  est: 1d
+  difficulty: med
+  depends: protocol-crate-name, naming
+  id: helmsman-rename
+  notes: brand canvas (private) https://claude.ai/artifact/WB1uKtP1NRHHfGoWw95tBt: wordmark Saira Stencil One, descriptor Barlow Condensed 700; palette yellow #FFC20E, black #141414, graphite #3A3A3A, steel #8C8C8C (rules only), white; never yellow on white; mark is the stencil encoder gear. crates.io `helmsman` is taken by an unrelated crate: run `cargo search <name>` on each new name before publishing. Restarting or removing the service on the pick PC asks Nick each time.
+
+- [ ] **GitHub Pages brand gallery for Helmsman** — Pages already serves docs/ from master (legacy build, https://jimothyjohn.github.io/helmsman/, landing page docs/index.html still titled tcpethernet). Rebrand that landing page to Helmsman Factory Automation (stencil wordmark, yellow/black/graphite/white, stencil encoder mark), and add docs/brand/index.html showing every concept from the brand canvas: the marks (round 1 and the round-2 gear set), the wordmarks, all color themes with hex and contrast rules, the in-the-field mockups and the spray-painted stencil-encoder surfaces. Static HTML/CSS and inline SVG only, no build step, no JS framework (the repo ships no JS); fonts from Google Fonts. Also commit the final mark as SVG files under docs/brand/ (full stencil encoder, a heavier small-size variant for 16–20 px, black, yellow and white) so the rename and the UI can reuse them.
+  needs: the brand canvas (private, so the agent needs Nick to share it or the HTML exported into the repo first; the SVG geometry is in its StencilEncoder board); helmsman-rename landed, so the page and the code use the same names
+  result: docs/brand/ with the gallery page and mark SVGs; docs/index.html rebranded; live at /helmsman/brand/ after Nick merges dev → master
+  est: 4h
+  difficulty: low
+  depends: helmsman-rename
+  id: brand-pages
+  notes: GitHub Pages builds from master/docs, so nothing goes live until Nick's own dev → master merge; don't change the Pages source or add a deploy workflow without asking.
 
 
 ## Product vision (interview 2026-10-29)
@@ -617,7 +645,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: relay-v0
   id: open-core-split
 
-- [ ] **Product name** — the app gets its own name; tcpethernet stays the protocol layer.
+- [x] **Product name** — the app gets its own name; tcpethernet stays the protocol layer.
   est: 1h
   difficulty: low
   id: naming
+  notes: decided 2026-10-29: Helmsman Factory Automation. Rename work is helmsman-rename; whether the protocol crate keeps tcpethernet is protocol-crate-name.
