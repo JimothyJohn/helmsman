@@ -129,13 +129,20 @@ scan; the scheduler bounds how often.
   (`modbus-tcp`), `endpoint` (`host:port`), driver params (`unit`,
   `timeout_ms`).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
-  `Real`), a direction (`In`, `Out`) and a **`Binding`**, either a point on a
-  device in that driver's own address syntax (`coil:0`, `hr:100:f32`) or one
-  of the box's own channels (`do:N`, `di:N`).
+  `Real`), a direction (`In`, `Out`), an optional engineering `unit`
+  (metadata, never converted), an optional per-input `poll` period, and a
+  **`Binding`**: a point on a device in that driver's own address syntax
+  (`coil:0`, `hr:100:f32`), one of the box's own channels (`do:N`,
+  `di:N`), or **another module's output** (`Binding::Module`, below). A
+  CIP controller's tags and attributes (`logix-tag-read`) arrive as one
+  more driver behind `Binding::Device`, with its own point syntax, so
+  polling, links and validation apply unchanged.
 - **`IoMap::validate`** checks everything that needs no device: unique
   names, identifiers, known devices, parseable points, signal type matches
-  point type, outputs only on writable points, one writer per point. It
-  returns every problem, not the first.
+  point type, outputs only on writable points, one writer per point, units
+  of 1..=16 printable ASCII characters, poll periods of 1 ms ..= 60 s and
+  only on polled inputs, module outputs as `in` signals naming a valid
+  module. It returns every problem, not the first.
 - **`Driver`**: `parse(addr)`, `read(&[addr]) -> Vec<Value>` (all or
   nothing, batching is the driver's business), `write(addr, value)`. Strings
   and plain values only, so the same contract crosses a WASM boundary
@@ -152,7 +159,9 @@ scan; the scheduler bounds how often.
 - **`local`**: the box's own channels (`do:N`, `di:N`) behind the same
   contract; in memory until `gpio-outputs` adds the Pi backend.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
-  optional `safe=` values for outputs.
+  optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
+  `in NAME TYPE module MODULE` is another module's output. Older maps read
+  unchanged; `box` and `module` are reserved device ids.
 
 ## Signals in the scan (`io-runtime`, built)
 
@@ -169,7 +178,9 @@ manifest declares, and is checked against.
   driving one signal are all refused before the adapter starts.
 - **Links** (`link.rs`), one thread per device plus `box`: each cycle writes
   the commands that changed since the device last took them, then reads
-  every input. Any error marks the link down: its inputs go missing, and it
+  every input that is due. A link cycles at the fastest of its device's
+  `poll_ms` and its inputs' own; an input without one is read at the
+  device's rate. Any error marks the link down: its inputs go missing, and it
   forgets what the device holds, so every output is written again on
   reconnect.
 - **A module never computes on missing data.** If any signal it reads has no
@@ -177,6 +188,18 @@ manifest declares, and is checked against.
   scanned, `%Q` window zeroed, output signals sent to their safe values. It
   runs again once every input is back. An output value its signal can't
   carry (a non-finite `REAL`) faults the module (`OutputRange`).
+- **Module outputs as signals** (`signal-model`). `in rate real module
+  conveyor` is the `VAR_OUTPUT rate` of module `conveyor`, which other
+  modules read as `VAR_INPUT rate`. It has a value only once `conveyor`
+  has scanned, and none while it is held or faulted, so its readers are
+  held too and their outputs go safe. Nothing polls it, and only
+  `conveyor` may drive it. Refused at load: a module reading its own
+  output, a reader whose source isn't loaded or doesn't drive the signal,
+  and modules reading each other in a loop (which would hold them all
+  forever). A reader sees the source's latest completed scan, from the
+  same tick if the source comes first in scan order and from the previous
+  tick otherwise. An `out` signal is still readable through its command,
+  as before.
 
 ## Module directories (`module-format`, built)
 

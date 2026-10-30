@@ -373,6 +373,8 @@ fn sig(name: &str, dir: Dir, channel: &str) -> Signal {
         binding: Binding::Local {
             channel: channel.into(),
         },
+        unit: None,
+        poll: None,
     }
 }
 

@@ -15,7 +15,14 @@
 //! - a module's `VAR_INPUT`s and `VAR_OUTPUT`s are bound to signals by name
 //!   (see [`crate::signals`]); one module drives each output signal, and a
 //!   module whose inputs are missing is held, not scanned, with its outputs
-//!   safe, until they are back.
+//!   safe, until they are back;
+//! - a module may read another module's output through a signal bound to
+//!   it; the module it names must be loaded and drive it
+//!   ([`ConfigError::NoSource`]), and modules may not read each other's
+//!   outputs in a cycle ([`ConfigError::Cycle`]), which would hold them
+//!   all forever. A reader sees the value from its source's latest
+//!   completed scan: within one tick if the source comes first in scan
+//!   order, the tick before otherwise.
 //!
 //! The runtime has no clock of its own: [`Runtime::tick`] takes `now`, so
 //! scheduling is deterministic under test.
@@ -136,6 +143,15 @@ pub enum ConfigError {
         module: String,
         param: String,
     },
+    /// `module` reads `signal`, another module's output, but no loaded
+    /// module of that name drives it.
+    NoSource {
+        module: String,
+        signal: String,
+    },
+    /// Modules that read each other's outputs in a loop, each reading the
+    /// one before it (the first reads the last).
+    Cycle(Vec<String>),
 }
 
 impl fmt::Display for ConfigError {
@@ -158,6 +174,15 @@ impl fmt::Display for ConfigError {
             Self::Param { module, param } => write!(
                 f,
                 "{module}: param {param} names no VAR_INPUT that can hold its value, or is given twice"
+            ),
+            Self::NoSource { module, signal } => write!(
+                f,
+                "{module}: reads {signal}, a module output that no loaded module drives"
+            ),
+            Self::Cycle(names) => write!(
+                f,
+                "modules read each other's outputs in a loop: {}",
+                names.join(" -> ")
             ),
         }
     }
@@ -242,7 +267,7 @@ impl Runtime {
                 .into_iter()
                 .filter(|p| !m.params.iter().any(|(q, _)| q.eq_ignore_ascii_case(&p.name)))
                 .collect();
-            let (bound, bad) = bind(&signal_ports, table);
+            let (bound, bad) = bind(&m.name, &signal_ports, table);
             errs.extend(
                 bad.into_iter()
                     .map(|err| ConfigError::Port { module: name(), err }),
@@ -269,6 +294,7 @@ impl Runtime {
                 }
             }
         }
+        errs.extend(module_links(&modules, &ports, table, &writers));
         for (n, a) in modules.iter().enumerate() {
             for b in &modules[n + 1..] {
                 if a.q.overlaps(b.q) {
@@ -433,6 +459,84 @@ impl Runtime {
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.slots.iter().map(|s| s.module.name.as_str())
     }
+}
+
+/// Checks the signals modules read from each other: each has a loaded
+/// source that drives it, and no loop. `writers[signal]` is the module
+/// driving it.
+fn module_links(
+    modules: &[Module],
+    ports: &[Vec<PortBinding>],
+    table: &SignalTable,
+    writers: &[Option<usize>],
+) -> Vec<ConfigError> {
+    let mut errs = Vec::new();
+    // feeds[a] = modules reading an output of module a.
+    let mut feeds: Vec<Vec<usize>> = vec![Vec::new(); modules.len()];
+    for (n, bound) in ports.iter().enumerate() {
+        for b in bound.iter().filter(|b| b.dir == PortDir::Input) {
+            let Some(source) = table.source(b.signal) else {
+                continue;
+            };
+            match writers[b.signal].filter(|&w| modules[w].name == source) {
+                Some(w) => {
+                    if !feeds[w].contains(&n) {
+                        feeds[w].push(n);
+                    }
+                }
+                None => errs.push(ConfigError::NoSource {
+                    module: modules[n].name.clone(),
+                    signal: b.port.clone(),
+                }),
+            }
+        }
+    }
+    if let Some(cycle) = find_cycle(&feeds) {
+        errs.push(ConfigError::Cycle(
+            cycle.into_iter().map(|n| modules[n].name.clone()).collect(),
+        ));
+    }
+    errs
+}
+
+/// The first loop in the graph `edges`, from the lowest-numbered node a
+/// depth-first search reaches it from; deterministic for a given graph.
+fn find_cycle(edges: &[Vec<usize>]) -> Option<Vec<usize>> {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        New,
+        Open,
+        Done,
+    }
+    let mut mark = vec![Mark::New; edges.len()];
+    for root in 0..edges.len() {
+        if mark[root] != Mark::New {
+            continue;
+        }
+        // (node, next edge to follow); the stack is the current path.
+        let mut stack = vec![(root, 0usize)];
+        mark[root] = Mark::Open;
+        while let Some(&mut (node, ref mut k)) = stack.last_mut() {
+            let Some(&next) = edges[node].get(*k) else {
+                mark[node] = Mark::Done;
+                stack.pop();
+                continue;
+            };
+            *k += 1;
+            match mark[next] {
+                Mark::New => {
+                    mark[next] = Mark::Open;
+                    stack.push((next, 0));
+                }
+                Mark::Open => {
+                    let from = stack.iter().position(|&(n, _)| n == next)?;
+                    return Some(stack[from..].iter().map(|&(n, _)| n).collect());
+                }
+                Mark::Done => {}
+            }
+        }
+    }
+    None
 }
 
 /// Sets every `VAR_INPUT` of the module from its signal. False if any

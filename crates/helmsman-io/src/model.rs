@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::time::Duration;
 
 use crate::driver::{PointInfo, parse_point};
 
@@ -53,6 +54,14 @@ pub struct Device {
     pub params: BTreeMap<String, String>,
 }
 
+/// Where a signal's value comes from (or, for an output, goes).
+///
+/// Extension point: a new kind of *device* (a CIP controller read by
+/// symbolic tag or by class/instance/attribute, say) is a new driver
+/// behind [`Binding::Device`], with its own point syntax, not a new
+/// variant: the link machinery, polling and validation then apply as they
+/// are. A new variant is for a source that is not polled through a
+/// driver, as [`Binding::Module`] is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Binding {
     /// A point on a device, in the device's driver's address syntax.
@@ -60,6 +69,10 @@ pub enum Binding {
     /// One of the box's own channels: `do:N` (digital out, e.g. a GPIO
     /// through a 24 V output stage) or `di:N` (digital in).
     Local { channel: String },
+    /// Another module's output: the `VAR_OUTPUT` of the same name in the
+    /// module called `module`. An input signal; any other module may read
+    /// it, and nothing is polled.
+    Module { module: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +82,30 @@ pub struct Signal {
     pub ty: Ty,
     pub dir: Dir,
     pub binding: Binding,
+    /// Engineering unit, for people and the agent (`degC`, `mm/s`, `%`).
+    /// The runtime does not convert.
+    pub unit: Option<String>,
+    /// How often an input is read; `None` is its device's poll period.
+    pub poll: Option<Duration>,
+}
+
+/// Longest [`Signal::unit`], in bytes.
+pub const MAX_UNIT: usize = 16;
+/// Slowest per-signal poll period.
+pub const MAX_POLL: Duration = Duration::from_secs(60);
+
+/// A unit: 1..=[`MAX_UNIT`] printable ASCII characters, no `#`.
+#[must_use]
+pub fn unit_ok(u: &str) -> bool {
+    (1..=MAX_UNIT).contains(&u.len()) && u.bytes().all(|b| b.is_ascii_graphic() && b != b'#')
+}
+
+/// A module name as the runtime takes it: 1..=64 of `A-Z a-z 0-9 _ -`.
+#[must_use]
+pub fn module_name_ok(m: &str) -> bool {
+    (1..=64).contains(&m.len())
+        && m.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -102,6 +139,11 @@ pub enum MapError {
         a: String,
         b: String,
     },
+    /// A unit that is empty, too long, or not printable ASCII.
+    BadUnit(String),
+    /// A poll period on an output or a module's output, or outside
+    /// 1 ms ..= [`MAX_POLL`].
+    BadPoll(String),
 }
 
 impl fmt::Display for MapError {
@@ -121,6 +163,12 @@ impl fmt::Display for MapError {
             }
             Self::NotWritable(s) => write!(f, "{s}: output bound to a read-only point"),
             Self::TwoWriters { a, b } => write!(f, "{a} and {b} drive the same point"),
+            Self::BadUnit(s) => write!(f, "{s}: unit must be 1..={MAX_UNIT} printable ASCII characters"),
+            Self::BadPoll(s) => write!(
+                f,
+                "{s}: a poll period is for device inputs only, 1 ms ..= {} s",
+                MAX_POLL.as_secs()
+            ),
         }
     }
 }
@@ -177,6 +225,15 @@ impl IoMap {
             if !names.insert(s.name.as_str()) {
                 errs.push(MapError::DuplicateSignal(s.name.clone()));
             }
+            if s.unit.as_deref().is_some_and(|u| !unit_ok(u)) {
+                errs.push(MapError::BadUnit(s.name.clone()));
+            }
+            let polled = s.dir == Dir::In && !matches!(s.binding, Binding::Module { .. });
+            if let Some(p) = s.poll
+                && (!polled || p < Duration::from_millis(1) || p > MAX_POLL)
+            {
+                errs.push(MapError::BadPoll(s.name.clone()));
+            }
             let (info, target) = match &s.binding {
                 Binding::Device { device, point } => {
                     let Some(d) = devices.get(device.as_str()) else {
@@ -207,6 +264,22 @@ impl IoMap {
                         continue;
                     }
                 },
+                Binding::Module { module } => {
+                    let why = if !module_name_ok(module) {
+                        Some(format!("{module:?} is not a module name"))
+                    } else if s.dir == Dir::Out {
+                        Some("a module's output is an in signal: modules drive it, the map does not".into())
+                    } else {
+                        None
+                    };
+                    if let Some(why) = why {
+                        errs.push(MapError::BadPoint {
+                            signal: s.name.clone(),
+                            why,
+                        });
+                    }
+                    continue;
+                }
             };
             if info.ty != s.ty {
                 errs.push(MapError::TypeMismatch {

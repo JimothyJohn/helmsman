@@ -1,6 +1,7 @@
 //! I/O map validation: every inconsistency is reported, by name.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use helmsman_io::{Binding, Device, Dir, IoMap, MapError, Signal, Ty};
 
@@ -19,6 +20,8 @@ fn sig(name: &str, ty: Ty, dir: Dir, binding: Binding) -> Signal {
         ty,
         dir,
         binding,
+        unit: None,
+        poll: None,
     }
 }
 
@@ -136,4 +139,108 @@ fn two_writers_on_the_same_device_point_conflict_across_devices_only_when_same_d
             b: "z".into()
         }])
     );
+}
+
+fn with(mut s: Signal, unit: Option<&str>, poll: Option<Duration>) -> Signal {
+    s.unit = unit.map(Into::into);
+    s.poll = poll;
+    s
+}
+
+#[test]
+fn units_and_poll_rates_are_validated_for_maps_built_without_the_text_format() {
+    let ms = Duration::from_millis;
+    let from_m = Binding::Module { module: "m".into() };
+    let long = "x".repeat(17);
+    let map = IoMap {
+        devices: vec![modbus("rio")],
+        signals: vec![
+            with(
+                sig("ok", Ty::Bool, Dir::In, local("di:0")),
+                Some("mm/s"),
+                Some(ms(1)),
+            ),
+            with(sig("ctl", Ty::Bool, Dir::In, local("di:1")), Some("a\nb"), None),
+            with(
+                sig("esc", Ty::Bool, Dir::In, local("di:2")),
+                Some("\u{1b}[2J"),
+                None,
+            ),
+            with(sig("empty", Ty::Bool, Dir::In, local("di:3")), Some(""), None),
+            with(sig("long", Ty::Bool, Dir::In, local("di:4")), Some(&long), None),
+            with(
+                sig("deg", Ty::Bool, Dir::In, local("di:5")),
+                Some("\u{b0}C"),
+                None,
+            ),
+            with(
+                sig("zero", Ty::Bool, Dir::In, local("di:6")),
+                None,
+                Some(Duration::ZERO),
+            ),
+            with(
+                sig("sub_ms", Ty::Bool, Dir::In, local("di:7")),
+                None,
+                Some(Duration::from_micros(10)),
+            ),
+            with(
+                sig("huge", Ty::Bool, Dir::In, local("di:8")),
+                None,
+                Some(Duration::MAX),
+            ),
+            with(sig("out", Ty::Bool, Dir::Out, local("do:0")), None, Some(ms(10))),
+            with(sig("from_m", Ty::Bool, Dir::In, from_m), None, Some(ms(10))),
+        ],
+    };
+    let errs = map.validate().unwrap_err();
+    assert_eq!(
+        errs,
+        [
+            MapError::BadUnit("ctl".into()),
+            MapError::BadUnit("esc".into()),
+            MapError::BadUnit("empty".into()),
+            MapError::BadUnit("long".into()),
+            MapError::BadUnit("deg".into()),
+            MapError::BadPoll("zero".into()),
+            MapError::BadPoll("sub_ms".into()),
+            MapError::BadPoll("huge".into()),
+            MapError::BadPoll("out".into()),
+            MapError::BadPoll("from_m".into()),
+        ]
+    );
+    for e in &errs {
+        let text = e.to_string();
+        assert!(!text.contains('\n') && !text.contains('\u{1b}'), "{text}");
+    }
+}
+
+#[test]
+fn a_module_output_signal_is_an_input_named_by_a_module_name() {
+    let m = |module: &str| Binding::Module {
+        module: module.into(),
+    };
+    let ok = IoMap {
+        devices: Vec::new(),
+        signals: vec![sig("rate", Ty::Real, Dir::In, m("conveyor-2"))],
+    };
+    assert_eq!(ok.validate(), Ok(()));
+    let bad = IoMap {
+        devices: Vec::new(),
+        signals: vec![
+            sig("a", Ty::Bool, Dir::Out, m("conveyor")),
+            sig("b", Ty::Bool, Dir::In, m("")),
+            sig("c", Ty::Bool, Dir::In, m("has space")),
+            sig("d", Ty::Bool, Dir::In, m("new\nline")),
+            sig("e", Ty::Bool, Dir::In, m(&"x".repeat(65))),
+        ],
+    };
+    let errs = bad.validate().unwrap_err();
+    let names: Vec<&str> = errs
+        .iter()
+        .map(|e| match e {
+            MapError::BadPoint { signal, .. } => signal.as_str(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(names, ["a", "b", "c", "d", "e"]);
 }
