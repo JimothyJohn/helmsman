@@ -2,7 +2,7 @@
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
-.PHONY: help install-dev lint fmt test-unit test-integration test-all test-interop opener-up opener-down opener-logs rusty-image test-oracle canvas canvas-web canvas-serve
+.PHONY: help install-dev lint fmt test-unit test-integration test-all test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-serve
 
 help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -46,6 +46,9 @@ rusty-image:  ## Build the pinned ruSTy compiler image (test oracle only, never 
 
 test-oracle:  ## Differential test of the ST interpreter against ruSTy (needs Docker).
 	./scripts/test-oracle.sh
+
+test-plcopen-corpus:  ## PLCopen import against Beremiz/OpenPLC Editor example projects (fetched, hash-pinned).
+	./scripts/plcopen-corpus.sh
 
 # ---- Node canvas ------------------------------------------------------------
 

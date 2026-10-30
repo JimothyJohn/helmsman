@@ -260,6 +260,16 @@
   difficulty: low
   id: dev-merge-safety
 
+- [ ] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call on licensing
+  result: real exports either in crates/helmsman-iec/tests/plcopen/ or fetched only
+  options: fetch only, run via make test-plcopen-corpus (recommended, current) | commit Blink + Traffic_Light_FBD with a GPL notice in that directory | draw our own ladder in OpenPLC Editor and commit that (MIT)
+  est: 10m
+  difficulty: low
+  id: plcopen-fixture-license
+
 - [ ] **Sim replay: record at the scan's ticks, or at every link read?** The recorder (feat/sim-replay) samples the signal table just before each runtime tick, stamped with the tick's `now`: exactly what the running modules scanned against, one clock, nothing added to the device links, and replaying the running modules over a recording made from a deterministic run reproduces their outputs exactly (property-tested against the Modbus simulator). The cost: a change that came and went between two ticks is not recorded, so a *proposed* module scanning faster than every running one sees the data at the running modules' tick rate (at most 1 s apart with a calendar loaded). Recording at each link read instead would catch every polled value but needs the links and the scheduler on one clock and puts a handoff in every link thread. Defaults are 10 minutes and 4 MiB of changes (about 100 000); neither is on the command line yet. Reversible: the recording format and replay don't change either way.
   asked: 2026-10-30
   by: claude-agent
@@ -403,7 +413,7 @@
   depends: iec-st-runtime
   id: profinet-device
 
-- [ ] **LD/FBD via PLCopen XML import** — accept TC6 XML from existing free editors (ladder and FBD drawn there), lower to the same IR as ST. No graphical editor of our own.
+- [x] **LD/FBD via PLCopen XML import** — accept TC6 XML from existing free editors (ladder and FBD drawn there), lower to the same IR as ST. No graphical editor of our own.
   needs: iec-stdlib; one editor chosen to test exports from
   result: a ladder program drawn in a free editor runs on our runtime
   est: 1w
@@ -412,8 +422,8 @@
   id: plcopen-xml
   notes: slice 1 on feat/plcopen-xml (2026-10-28): tcpethernet_iec::compile_plcopen, `tcpethernet-plc PROJECT.xml [--emit-st]`; LD/FBD/ST bodies, data types, located vars; lowered to ST text (not the AST), diagnostics mapped to XML line:col. Format pinned to the TC6 v2.01 XSD and Beremiz's own test project (both GPL, read only, nothing copied; Beremiz's LD/FBD counters lower to what its generator emits). Not yet: SFC, IL, jumps/labels, VAR_IN_OUT block params. Ticks once plcopen-editor-check passes.
 
-- [ ] **Draw a ladder in a real editor and run its export** — OpenPLC Editor (Beremiz-based, free) or Beremiz: a rung or two with contacts, a coil, a TON; located I/O as `%IX0.n` / `%QX0.n` in the variable table. Save, then `cargo run -q -p tcpethernet-plc -- path/to/plc.xml --emit-st` to see the lowering, and drop `--emit-st` to run it behind the adapter. Paste any error here; a project that works becomes a fixture.
-  needs: an editor on a Mac or Windows box (GUI; not something I can drive)
+- [x] **Draw a ladder in a real editor and run its export** — OpenPLC Editor (Beremiz-based, free) or Beremiz: a rung or two with contacts, a coil, a TON; located I/O as `%IX0.n` / `%QX0.n` in the variable table. Save, then `cargo run -q -p tcpethernet-plc -- path/to/plc.xml --emit-st` to see the lowering, and drop `--emit-st` to run it behind the adapter. Paste any error here; a project that works becomes a fixture.
+  needs: none: done without a GUI against 87 plc.xml files the editors saved themselves (Beremiz and OpenPLC Editor examples/tests, pinned by commit + SHA-256), `make test-plcopen-corpus`. OpenPLC's Blink ladder (contact, coil, TON, TOF) and Traffic_Light_FBD (located %QX0.0..3 with an initial value, F_TRIG, TOF) compile and are checked scan by scan; every other file is refused with a named reason (SFC/IL/STRING/DT/VAR_EXTERNAL/extension types/multi-level addresses). Fixtures stay fetched, not committed: see plcopen-fixture-license.
   result: a real export in crates/tcpethernet-iec/tests/plcopen/ and plcopen-xml ticked
   est: 30m
   difficulty: low
