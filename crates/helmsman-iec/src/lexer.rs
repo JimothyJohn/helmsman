@@ -374,6 +374,9 @@ impl Lexer<'_> {
                 _ => Tok::Lt,
             },
             b'>' => two(self, b'=', Tok::Ge, Tok::Gt),
+            b'\'' | b'"' => {
+                return Err(Self::err(start, "STRING literals are not supported yet"));
+            }
             _ => {
                 return Err(Self::err(
                     start,
@@ -447,6 +450,12 @@ impl Lexer<'_> {
     /// After `TYPE#`: a number, TRUE/FALSE/0/1 for `BOOL#`, a duration for
     /// `T#`/`TIME#`, or a value name for an enumeration.
     fn typed_literal(&mut self, ty: String, start: Pos) -> Result<Tok, LexError> {
+        if matches!(
+            ty.as_str(),
+            "D" | "DATE" | "DT" | "DATE_AND_TIME" | "TOD" | "TIME_OF_DAY" | "LDATE" | "LDT" | "LTOD"
+        ) {
+            return Err(Self::err(start, format!("{ty} literals are not supported yet")));
+        }
         let neg = if self.peek(0) == Some(b'-') {
             self.bump();
             true

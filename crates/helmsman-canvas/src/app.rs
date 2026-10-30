@@ -9,6 +9,7 @@ use helmsman_graph::{BlockId, CmpOp, Kind, MathOp, Node, NodeId, Project, Scope,
 use crate::canvas::{Interaction, View};
 use crate::example;
 use crate::look;
+use crate::st_view::{StView, brand};
 
 const STORAGE_KEY: &str = "helmsman-canvas/project";
 const UNDO_DEPTH: usize = 200;
@@ -40,6 +41,19 @@ pub struct App {
     pub toast: Option<(String, f64, bool)>,
     io_window: Option<String>,
     show_help: bool,
+    pub mode: Mode,
+    /// The live ST view, built the first time it is opened.
+    pub st: Option<StView>,
+}
+
+/// Which view fills the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Mode {
+    /// The node editor (lab tool).
+    #[default]
+    Lab,
+    /// A module's ST as a live, read-only diagram.
+    Live,
 }
 
 impl App {
@@ -50,7 +64,12 @@ impl App {
             .and_then(|s| s.get_string(STORAGE_KEY))
             .and_then(|s| Project::from_json(&s).ok())
             .unwrap_or_else(example::project);
-        Self::with_project(project)
+        // The operator's view first; the editor is a lab tool (TODO.md
+        // canvas-default-mode).
+        Self {
+            mode: Mode::Live,
+            ..Self::with_project(project)
+        }
     }
 
     pub fn with_project(project: Project) -> Self {
@@ -72,6 +91,8 @@ impl App {
             toast: None,
             io_window: None,
             show_help: false,
+            mode: Mode::Lab,
+            st: None,
         }
     }
 
@@ -366,6 +387,14 @@ impl App {
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
+            if ui
+                .button(RichText::new("Live ST view").color(brand::YELLOW))
+                .on_hover_text("a module's Structured Text as a live diagram")
+                .clicked()
+            {
+                self.mode = Mode::Live;
+            }
+            ui.separator();
             ui.menu_button("File", |ui| {
                 if ui.button("New").clicked() {
                     let before = self.project.clone();
@@ -966,6 +995,10 @@ impl App {
     /// One frame of the whole window. Split from [`eframe::App::ui`] so tests
     /// can drive it without a window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        if self.mode == Mode::Live {
+            self.show_live(ui);
+            return;
+        }
         let ctx = ui.ctx().clone();
         self.shortcuts(&ctx);
         egui::Panel::top("top").show(ui, |ui| self.top_bar(ui));
@@ -982,6 +1015,31 @@ impl App {
         self.io_window(&ctx);
         self.help(&ctx);
         self.toast_ui(&ctx);
+    }
+}
+
+impl App {
+    fn show_live(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("st-top").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Lab editor")
+                    .on_hover_text("back to the node editor")
+                    .clicked()
+                {
+                    self.mode = Mode::Lab;
+                }
+                ui.separator();
+                ui.label(RichText::new("HELMSMAN").strong().color(brand::YELLOW));
+                ui.label(
+                    RichText::new("live ST view · read-only: changes go through the agent as ST")
+                        .color(brand::STEEL),
+                );
+            });
+        });
+        if self.mode == Mode::Live {
+            self.st.get_or_insert_with(StView::demo).show(ui);
+        }
     }
 }
 

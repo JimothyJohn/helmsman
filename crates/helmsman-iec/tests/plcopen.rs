@@ -261,6 +261,99 @@ fn chained_comparisons_and_stacked_enables() {
     }
 }
 
+/// Two timers that restart each other, wired the way Beremiz's own
+/// `wxHMI` test project draws its `clock` block: the loop runs through
+/// function block instances, so the first one called reads the other's
+/// output from the previous scan.
+#[test]
+fn feedback_through_function_blocks_reads_the_last_scan() {
+    let ton = |id: u32, inst: &str, from: u32, negated: bool| {
+        format!(
+            "<block localId=\"{id}\" typeName=\"TON\" instanceName=\"{inst}\"><inputVariables>\
+             <variable formalParameter=\"IN\"><connectionPointIn><connection refLocalId=\"{from}\" \
+             formalParameter=\"Q\"/></connectionPointIn></variable>\
+             <variable formalParameter=\"PT\"><connectionPointIn><connection refLocalId=\"3\"/>\
+             </connectionPointIn></variable></inputVariables><inOutVariables/><outputVariables>\
+             <variable formalParameter=\"Q\" negated=\"{negated}\"><connectionPointOut/></variable>\
+             <variable formalParameter=\"ET\"><connectionPointOut/></variable></outputVariables></block>"
+        )
+    };
+    let body = [
+        ton(1, "on", 2, false),
+        ton(2, "off", 1, true),
+        invar(3, "T#100ms"),
+        outvar(4, 1, "Q", "out"),
+    ]
+    .concat();
+    let xml = project(&[("out", "BOOL")], &format!("<FBD>{body}</FBD>")).replace(
+        "<variable name=\"out\">",
+        "<variable name=\"on\"><type><derived name=\"TON\"/></type></variable>\
+         <variable name=\"off\"><type><derived name=\"TON\"/></type></variable>\
+         <variable name=\"out\">",
+    );
+    let mut p = build(&xml);
+    let mut img = Image::new(SIZES);
+    let mut seen = Vec::new();
+    for ms in (0..=400).step_by(10) {
+        p.scan_at(&mut img, Duration::from_millis(ms)).unwrap();
+        seen.push((ms, boolean(&p, "out")));
+    }
+    let at = |ms| seen.iter().find(|(t, _)| *t == ms).map(|(_, v)| *v);
+    assert_eq!(
+        [at(50), at(150), at(250), at(350)],
+        [Some(false), Some(true), Some(false), Some(true)],
+        "{seen:?}"
+    );
+}
+
+/// A loop through functions (no instance to hold last scan's value) is
+/// still refused.
+#[test]
+fn feedback_through_functions_is_refused() {
+    let body = [
+        block(1, "AND", &[("IN1", 2, "OUT"), ("IN2", 3, "")], &["OUT"]),
+        block(2, "NOT", &[("IN", 1, "OUT")], &["OUT"]),
+        invar(3, "a"),
+        outvar(4, 1, "OUT", "b"),
+    ]
+    .concat();
+    let msg = errors(&project(
+        &[("a", "BOOL"), ("b", "BOOL")],
+        &format!("<FBD>{body}</FBD>"),
+    ));
+    assert!(msg.contains("feedback loop"), "{msg}");
+}
+
+/// The `OpenPLC` Editor's `svghmi_v2` test project leaves an ADD input
+/// unconnected; the message says how many inputs ADD needs, in words.
+#[test]
+fn too_few_block_inputs_are_counted_in_words() {
+    let body = [
+        invar(1, "a"),
+        block(2, "ADD", &[("IN2", 1, "")], &["OUT"]),
+        outvar(3, 2, "OUT", "a"),
+    ]
+    .concat();
+    let msg = errors(&project(&[("a", "INT")], &format!("<FBD>{body}</FBD>")));
+    assert!(
+        msg.contains("ADD needs at least 2 connected inputs, has 1"),
+        "{msg}"
+    );
+    let body = [
+        invar(1, "a"),
+        block(
+            2,
+            "SUB",
+            &[("IN1", 1, ""), ("IN2", 1, ""), ("IN3", 1, "")],
+            &["OUT"],
+        ),
+        outvar(3, 2, "OUT", "a"),
+    ]
+    .concat();
+    let msg = errors(&project(&[("a", "INT")], &format!("<FBD>{body}</FBD>")));
+    assert!(msg.contains("SUB needs 2 connected inputs, has 3"), "{msg}");
+}
+
 // ---- errors ----
 
 /// A project holding one program with `vars` (`name: TYPE` pairs, all
@@ -579,4 +672,204 @@ proptest! {
         let _ = plcopen::lower(&s);
         let _ = plcopen::lower(&format!("<project>{s}</project>"));
     }
+
+    /// Soup of the tokens a TC6 project is made of, in any order, with any
+    /// bytes in between: refused or compiled, never a panic.
+    #[test]
+    fn token_soup_never_panics(
+        parts in prop::collection::vec(
+            prop_oneof![
+                prop::sample::select(SOUP).prop_map(str::to_string),
+                prop::collection::vec(any::<u8>(), 0..6)
+                    .prop_map(|b| String::from_utf8_lossy(&b).into_owned()),
+            ],
+            0..60,
+        )
+    ) {
+        let s = parts.concat();
+        let _ = compile_plcopen(&s, SIZES);
+        let _ = compile_plcopen(&format!("<project><types><pous>{s}</pous></types></project>"), SIZES);
+    }
+}
+
+const SOUP: &[&str] = &[
+    "<project>",
+    "</project>",
+    "<types>",
+    "</types>",
+    "<pous>",
+    "</pous>",
+    "<pou name=\"p\" pouType=\"program\">",
+    "<pou name=\"f\" pouType=\"functionBlock\">",
+    "</pou>",
+    "<interface>",
+    "</interface>",
+    "<localVars>",
+    "</localVars>",
+    "<variable name=\"a\" address=\"%QX0.0\">",
+    "<variable name=\"t\">",
+    "</variable>",
+    "<type>",
+    "</type>",
+    "<BOOL/>",
+    "<derived name=\"TON\"/>",
+    "<initialValue>",
+    "</initialValue>",
+    "<simpleValue value=\"TRUE\"/>",
+    "<body>",
+    "</body>",
+    "<LD>",
+    "</LD>",
+    "<FBD>",
+    "</FBD>",
+    "<ST>",
+    "</ST>",
+    "<leftPowerRail localId=\"1\"/>",
+    "<contact localId=\"2\">",
+    "</contact>",
+    "<coil localId=\"3\">",
+    "</coil>",
+    "<block localId=\"4\" typeName=\"TON\" instanceName=\"t\">",
+    "</block>",
+    "<inputVariables>",
+    "</inputVariables>",
+    "<variable formalParameter=\"IN\">",
+    "<connectionPointIn>",
+    "</connectionPointIn>",
+    "<connection refLocalId=\"1\"/>",
+    "<connection refLocalId=\"4\" formalParameter=\"Q\"/>",
+    "<variable>a</variable>",
+    "<expression>a</expression>",
+    "<![CDATA[",
+    "]]>",
+    "<!--",
+    "-->",
+    "<?x ?>",
+    "&amp;",
+    "&#x41;",
+    "&#xD800;",
+    "&#0;",
+    "&",
+    "<",
+    ">",
+    "\"",
+    "'",
+    "\u{0}",
+    "\u{feff}",
+    "\r\n",
+    "é",
+    "(",
+    ")",
+    "NOT ",
+];
+
+/// Hostile documents are refused without a panic and without overflowing
+/// the stack, on a thread with the default 2 MiB test stack.
+#[test]
+fn hostile_documents_are_refused_not_crashed() {
+    let n: u32 = 50_000;
+    let k = usize::try_from(n).unwrap();
+    let chain = |elem: &str| {
+        let mut b = String::from(RAIL);
+        for id in 2..n + 2 {
+            write!(
+                b,
+                "<{elem} localId=\"{id}\"><connectionPointIn><connection refLocalId=\"{}\"/>\
+                 </connectionPointIn><variable>a</variable></{elem}>",
+                id - 1
+            )
+            .unwrap();
+        }
+        ld(&b)
+    };
+    let deep_parens = format!("{}a{}", "(".repeat(k), ")".repeat(k));
+    let cases: Vec<(String, &str)> = vec![
+        (
+            // A rung of n contacts in series into a coil.
+            chain("contact").replace("</LD>", &format!("{}</LD>", coil(n + 2, n + 1, "b", ""))),
+            "elements in a row",
+        ),
+        (chain("coil"), ""),
+        (format!("<project>{}", "<a>".repeat(k)), "nested deeper than"),
+        (
+            ld(&format!("{RAIL}{}", coil(2, 1, &deep_parens, ""))),
+            "nested deeper than",
+        ),
+        (
+            project(&[("a", "BOOL")], &st(&format!("a := {deep_parens};"))),
+            "nested deeper than",
+        ),
+        (
+            project(
+                &[("a", "BOOL")],
+                &format!("<FBD>{}</FBD>", invar(1, &" NOT".repeat(k))),
+            ),
+            "",
+        ),
+        (format!("<project name=\"{}\"/>", "x".repeat(4 << 20)), ""),
+        (format!("<project>{}</project>", "&amp;".repeat(k)), ""),
+        (
+            format!("<project>{}</project>", "&#99999999999999999999;"),
+            "bad character reference",
+        ),
+        (format!("<project>&{}</project>", "a".repeat(k)), "unterminated"),
+        (
+            String::from_utf8_lossy(b"<project name=\"\xff\xfe\xc0\x80\"><types/></project>").into_owned(),
+            "",
+        ),
+    ];
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || {
+            for (xml, want) in cases {
+                let head: String = xml.chars().take(60).collect();
+                match compile_plcopen(&xml, SIZES) {
+                    Ok(_) => assert!(want.is_empty(), "{head}: compiled, wanted {want:?}"),
+                    Err(d) => {
+                        let msg = d.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+                        assert!(msg.contains(want), "{head}: want {want:?}, got {msg}");
+                    }
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+/// Elements without positions (or sharing one) are ordered by localId, so
+/// the same file always lowers to the same program.
+#[test]
+fn ties_in_position_are_broken_by_local_id() {
+    let body = (2..30).fold(String::from(RAIL), |mut b, id| {
+        let neg = if id % 2 == 0 { "negated=\"true\"" } else { "" };
+        b.push_str(&coil(id, 1, "a", neg));
+        b
+    });
+    let xml = ld(&body);
+    let first = plcopen::lower(&xml).unwrap().st().to_string();
+    for _ in 0..20 {
+        assert_eq!(plcopen::lower(&xml).unwrap().st(), first);
+    }
+    let assigns: Vec<&str> = first.lines().filter(|l| l.starts_with("a :=")).collect();
+    assert_eq!(assigns.first(), Some(&"a := (NOT TRUE);"), "{first}");
+    assert_eq!(assigns.last(), Some(&"a := TRUE;"), "{first}");
+}
+
+/// A long rung (40 contacts in series, then a coil) is well inside the
+/// nesting limit.
+#[test]
+fn a_long_rung_lowers() {
+    let mut b = String::from(RAIL);
+    for id in 2..42 {
+        b.push_str(&contact(id, &[id - 1], "%IX0.0"));
+    }
+    b.push_str(&coil(42, 41, "%QX0.0", ""));
+    let mut p = build(&project(&[], &format!("<LD>{b}</LD>")));
+    let mut img = Image::new(SIZES);
+    p.scan(&mut img).unwrap();
+    assert_eq!(img.q[0] & 1, 0);
+    set(&mut img, 0, true);
+    p.scan(&mut img).unwrap();
+    assert_eq!(img.q[0] & 1, 1);
 }

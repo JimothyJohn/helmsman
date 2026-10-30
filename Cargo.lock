@@ -1066,7 +1066,10 @@ name = "helmsman-canvas"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "helmsman-diagram",
  "helmsman-graph",
+ "helmsman-iec",
+ "helmsman-plc",
  "wasm-bindgen-futures",
  "web-sys",
 ]
@@ -1076,6 +1079,14 @@ name = "helmsman-cli"
 version = "0.1.0"
 dependencies = [
  "helmsman-proto",
+]
+
+[[package]]
+name = "helmsman-diagram"
+version = "0.1.0"
+dependencies = [
+ "helmsman-iec",
+ "proptest",
 ]
 
 [[package]]

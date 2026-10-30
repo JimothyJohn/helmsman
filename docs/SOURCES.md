@@ -376,6 +376,37 @@ into the code.
   and cite it per item as `PM020 p.<n>`; real-controller verification
   waits for a CompactLogix on the bench (TODO `logix-tag-read`).
 
+## Test corpora (fetched, not vendored)
+
+### Beremiz and OpenPLC Editor example projects (PLCopen TC6 XML)
+
+- **What:** `plc.xml` files saved by the editors themselves: Beremiz's
+  `exemples/` and `tests/projects/` (44 files) and the OpenPLC Editor's
+  `examples/`, `exemples/` and `tests/projects/` (43 files). Ladder (Blink,
+  Arduino_*, MQTT_*, TCP_socket), FBD (Traffic_Light_FBD, STM32CAN_*), ST,
+  SFC and IL, as real users draw them.
+- **Where, pinned:**
+  - https://github.com/beremiz/beremiz at
+    `d7ddfb7523a53b153d74950c06c0447118f434c0`. License: GPL-2.0 (IDE,
+    `COPYING_for_IDE`) / GPL-3.0 (GitHub's reading of the repo; C runtime
+    `COPYING_for_C_Runtime`). The project files carry no header of their own.
+  - https://github.com/thiagoralves/editor at
+    `6a8e930a914e4421e8fa05966b31eb371b439243`, the `editor` submodule of
+    https://github.com/thiagoralves/OpenPLC_Editor at
+    `2b4add40ec9bdb84d0768503ce26a6b7517268ba`. License: GPL-2.0.
+  - Fetched 2026-10-30; every file's SHA-256 is in
+    `scripts/plcopen-corpus.sh`.
+- **Not vendored:** GPL data in an MIT repository is a question for Nick
+  (TODO.md `plcopen-fixture-license`). `scripts/plcopen-corpus.sh` fetches
+  the files into `target/plcopen-corpus/`, checks their hashes, and runs
+  `crates/helmsman-iec/tests/plcopen_corpus.rs` against them. Nothing in
+  them is executed.
+- **Leaned on by** the PLCopen importer and the ST compiler: 2026-10-30 they
+  exposed a nondeterministic lowering order, `BOOL := 0` refused, feedback
+  through function block instances refused, located initial values refused,
+  and stack overflows on hostile nesting; see the PR that added the script.
+- **How to cite:** `Beremiz <path>@d7ddfb7` or `OpenPLC Editor <path>@6a8e930`.
+
 ## What this means for the project
 
 1. **Role:** build the originator (explicit client + Class 1 scanner), not

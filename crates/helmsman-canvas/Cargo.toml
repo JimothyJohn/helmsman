@@ -1,14 +1,17 @@
 [package]
 name = "helmsman-canvas"
 version = "0.1.0"
-description = "Node canvas for building PLC logic out of nested function blocks (egui; native and web)"
+description = "Live, read-only diagram of a module's Structured Text, plus a lab node editor (egui; native and web)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
+helmsman-diagram = { path = "../helmsman-diagram" }
 helmsman-graph = { path = "../helmsman-graph" }
+helmsman-iec = { path = "../helmsman-iec" }
+helmsman-plc = { path = "../helmsman-plc" }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
