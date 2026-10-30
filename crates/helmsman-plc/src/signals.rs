@@ -156,6 +156,10 @@ impl SignalTable {
                     point: match &s.binding {
                         Binding::Device { device, point } => Some((device.clone(), point.clone())),
                         Binding::Local { channel } => Some((helmsman_io::text::BOX.into(), channel.clone())),
+                        // No link polls or writes it; the tile is still its
+                        // identity across a reload (a link never binds a
+                        // device named `screen`: the id is reserved).
+                        Binding::Screen { tile } => Some((helmsman_io::text::SCREEN.into(), tile.clone())),
                         Binding::Module { .. } => None,
                     },
                 }
@@ -336,8 +340,9 @@ impl SignalTable {
     }
 
     /// The device id (`box` for the box's own channels) and point signal
-    /// `i` is polled or written at; `None` for a module output or one of
-    /// the box's own inputs.
+    /// `i` is polled or written at (`screen` and the tile for a floor
+    /// screen output, which no link touches); `None` for a module output
+    /// or one of the box's own inputs.
     #[must_use]
     pub fn point(&self, i: usize) -> Option<(&str, &str)> {
         self.sigs

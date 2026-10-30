@@ -23,7 +23,8 @@ use helmsman_io::local::Channels;
 use helmsman_io::sim::{Sim, State};
 use helmsman_plc::api::swap::{self, Scene};
 use helmsman_plc::api::{
-    Api, Approval, Config, Devices, Limits, Live, MemAudit, MemProposals, Plant, Publisher, Shared,
+    Api, Approval, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, Plant, Publisher, Screen,
+    Shared,
 };
 use helmsman_plc::layout::Layout;
 use helmsman_plc::link::LinkSet;
@@ -217,8 +218,13 @@ struct Bench {
 }
 
 impl Bench {
-    #[allow(clippy::too_many_lines)]
     fn new(cs: &ChangeSet, wall: i64) -> Self {
+        Self::with_screen(cs, wall, None)
+    }
+
+    /// [`Bench::new`], showing the floor screen layout `screen`.
+    #[allow(clippy::too_many_lines)]
+    fn with_screen(cs: &ChangeSet, wall: i64, screen: Option<&str>) -> Self {
         let d = defaults();
         let layout = Layout::build(cs.io_map.as_deref(), cs.calendar.as_deref()).unwrap();
         let modules = swap::compile_set(cs, &d).unwrap();
@@ -283,7 +289,14 @@ impl Bench {
             approval: Some(approval),
             chat: None,
         };
-        let api = Api::start(cfg, shared).unwrap();
+        let extras = Extras {
+            screen: screen.map(|src| Screen {
+                source: src.into(),
+                layout: helmsman_plc::screen::parse(src).unwrap(),
+            }),
+            ..Extras::default()
+        };
+        let api = Api::start_with(cfg, shared, extras).unwrap();
         let addr = api.addr();
         let stop = Arc::new(AtomicBool::new(false));
         let clock = Arc::new(AtomicI64::new(wall));
@@ -988,4 +1001,58 @@ fn evidence_binds_to_the_map_a_replay_of_another_map_never_counts() {
     assert_eq!(r.status, 428, "{r:?}");
     assert_eq!(bench.head(), cs.id().to_string());
     assert!(coil(&a, 0) && !coil(&a, 2));
+}
+
+const SCREEN: &str = "\
+helmsman-screen 1
+grid   1 1
+code   line 0 grey  Idle
+code   line 1 green Running
+tile   line1 0,0 line line_state Line 1
+";
+
+#[test]
+fn a_reload_the_floor_screen_does_not_fit_is_refused_and_one_it_fits_lands() {
+    let (a, b) = (Arc::new(sim()), Arc::new(sim()));
+    let shown = format!("{}out line_state int screen line1 safe=1\n", map(&a, &b));
+    let cs = change(&[CTL], &shown, None);
+    let bench = Bench::with_screen(&cs, MONDAY, Some(SCREEN));
+    wait("valve on", || coil(&a, 0));
+    let refused = [
+        // The tile's signal gone, moved to a tile the layout lacks, retyped.
+        map(&a, &b),
+        shown.replace("screen line1", "screen line2"),
+        shown.replace(
+            "line_state int screen line1 safe=1",
+            "line_state real screen line1 safe=1.0",
+        ),
+        // Another screen output no tile shows.
+        format!("{shown}out spare_state int screen line1\n"),
+    ];
+    for text in refused {
+        let target = bench.stage(&change(&[CTL], &text, None));
+        let r = bench.rollback(&target);
+        assert_eq!(r.status, 409, "{text}: {r:?}");
+        assert!(r.error().contains("floor screen"), "{r:?}");
+        assert_eq!(r.json()["changed"], false);
+        assert_eq!(bench.head(), cs.id().to_string());
+        assert_eq!(bench.value("line_state"), Some(Value::Int(1)));
+    }
+    // A change the layout still fits: the screen output is carried.
+    let moved = shown.replace("valve bool a coil:0", "valve bool a coil:1");
+    let r = bench.apply(bench.propose(&json!({ "kind": "io_map", "text": moved })));
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(bench.value("line_state"), Some(Value::Int(1)));
+    wait("moved", || coil(&a, 1) && !coil(&a, 0));
+}
+
+#[test]
+fn a_box_without_a_floor_screen_refuses_a_map_with_screen_outputs() {
+    let (a, b) = (Arc::new(sim()), Arc::new(sim()));
+    let (cs, bench) = running(&a, &b);
+    let shown = format!("{}out line_state int screen line1\n", map(&a, &b));
+    let r = bench.apply(bench.propose(&json!({ "kind": "io_map", "text": shown })));
+    assert_eq!(r.status, 409, "{r:?}");
+    assert!(r.error().contains("floor screen"), "{r:?}");
+    assert_eq!(bench.head(), cs.id().to_string());
 }
