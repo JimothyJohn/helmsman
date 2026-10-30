@@ -73,11 +73,11 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        it the agent is offline and /api/chat answers 503
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
                        The box never holds an Anthropic key.
-  --relay-agent V      the agent version to ask the relay for (default v1)
+  --relay-agent V      the agent version to ask the relay for (default v3)
   --relay-explain-agent V
                        the agent version POST /api/explain asks for (an
-                       explain profile; default: --relay-agent's). The box
-                       runs only read-only tools for it either way.
+                       explain profile; default explain-v1). The box runs
+                       only read-only tools for it either way.
   --screen FILE        the floor screen's layout (see helmsman_plc::screen):
                        tiles showing the I/O map's `screen` outputs, served
                        at /api/screen and drawn by the canvas at /?andon
@@ -178,7 +178,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         state_dir: None,
         relay: None,
         relay_token: None,
-        relay_agent: "v1".into(),
+        relay_agent: "v3".into(),
         relay_explain_agent: None,
         ui: None,
         screen: None,
@@ -893,7 +893,11 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
         o.relay_agent
     );
     let mut setup = api::chat::Setup::new(relay::Config::new(url, token.to_string(), o.relay_agent.clone()));
-    setup.explain_agent.clone_from(&o.relay_explain_agent);
+    setup.explain_agent = Some(
+        o.relay_explain_agent
+            .clone()
+            .unwrap_or_else(|| "explain-v1".into()),
+    );
     Ok(Some(setup))
 }
 
