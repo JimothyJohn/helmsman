@@ -544,3 +544,90 @@ fn project_errors_exit_1_with_xml_positions() {
         "{err}"
     );
 }
+
+#[test]
+fn a_module_sees_the_shift_calendar_through_the_scan() {
+    let cal = text_file("allday.cal", "zone UTC\nshift 7 daily 00:00-24:00\n");
+    let prog = program_file(
+        "cal_reader",
+        "PROGRAM shifts
+         VAR_INPUT in_shift : BOOL; shift_id : INT; END_VAR
+         VAR on AT %QX0.0 : BOOL; id AT %QW1 : INT; END_VAR
+           on := in_shift;
+           id := shift_id;
+         END_PROGRAM",
+    );
+    let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let args = [prog.as_os_str(), "--calendar".as_ref(), cal.as_os_str()];
+    let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
+    let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
+    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
+    wait_for(&conn, "in shift 7 all day", |i| {
+        i.data[0] & 1 == 1 && i.data[2..4] == 7u16.to_le_bytes()
+    });
+    conn.close(&mut s).unwrap();
+    s.close();
+    let log = plc.finish();
+    let want = "calendar: 1 shift pattern(s), 0 drive(s); clock trusted";
+    assert!(log.contains(want), "missing {want:?} in:\n{log}");
+}
+
+#[test]
+fn a_bad_calendar_is_refused_before_the_adapter_starts() {
+    let prog = program_file(
+        "cal_lamp",
+        "PROGRAM p VAR_INPUT in_shift : BOOL; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR lamp := in_shift; END_PROGRAM",
+    );
+    let map = text_file(
+        "cal_lamp.iomap",
+        "out lamp bool box do:0\nout horn bool box do:1\n",
+    );
+    for (name, text, want) in [
+        (
+            "syntax.cal",
+            "zone UTC\nshift 1 mon 6:00-14:00\n",
+            "syntax.cal: line 2: \"6:00-14:00\"",
+        ),
+        ("tz.cal", "zone Europe/Berlin\n", "time zone database"),
+        (
+            "overlap.cal",
+            "zone UTC\nshift 1 mon 06:00-14:00\nshift 2 mon 13:00-22:00\n",
+            "shifts 1 and 2 overlap",
+        ),
+        (
+            "drive.cal",
+            "drive lamp in_shift\n",
+            "calendar and cal_lamp both drive signal LAMP",
+        ),
+        (
+            "drive_none.cal",
+            "drive nothing in_shift\n",
+            "drive nothing: no signal of that name",
+        ),
+    ] {
+        let cal = text_file(name, text);
+        let out = plc()
+            .arg(&prog)
+            .arg("--io-map")
+            .arg(&map)
+            .arg("--calendar")
+            .arg(&cal)
+            .args(["--encap-port", "0", "--io-port", "0"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{name}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(want), "{name}: {err}");
+        assert!(
+            !err.contains("CIP on"),
+            "{name}: refused before going on the network: {err}"
+        );
+    }
+    let out = plc()
+        .arg(&prog)
+        .args(["--calendar", "a", "--calendar", "b"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(2), "one --calendar only");
+}
