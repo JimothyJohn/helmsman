@@ -644,6 +644,8 @@ fn out(name: &str, ty: Ty, channel: &str) -> Signal {
         binding: Binding::Local {
             channel: channel.into(),
         },
+        unit: None,
+        poll: None,
     }
 }
 
@@ -660,6 +662,8 @@ fn table(safe: &[(&str, Value)]) -> SignalTable {
                 binding: Binding::Local {
                     channel: "di:0".into(),
                 },
+                unit: None,
+                poll: None,
             },
         ],
     };
@@ -798,6 +802,8 @@ fn drives_must_name_bool_outputs_and_calendar_names_must_be_free() {
                 binding: Binding::Local {
                     channel: "di:0".into(),
                 },
+                unit: None,
+                poll: None,
             },
         ],
     };

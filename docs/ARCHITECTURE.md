@@ -32,8 +32,8 @@ roadmap card, by id).
  │  │  ── interpreter + checker: helmsman-iec (built) ─────────────────────────│  │
  │  └───────┬───────────────────────────────┬──────────────────────────┬───────┘  │
  │          │ process image (built)         │ signals by name          │ trace    │
- │          ▼                               ▼ (built)                  ▼ (plan-   │
- │  ┌─ CIP adapter ───────────┐   ┌─ I/O map + drivers: helmsman-io ────┐  ned)   │
+ │          ▼                               ▼ (built)                  ▼ (built)  │
+ │  ┌─ CIP adapter ───────────┐   ┌─ I/O map + drivers: helmsman-io ────┐         │
  │  │ helmsman-adapter        │   │ IoMap · Driver · modbus-tcp (built) │         │
  │  │ assembly 150 in, 100 out│   │ WASM drivers (planned: wasm-driver) │         │
  │  └───────▲─────────────────┘   └───────┬──────────────┬──────────────┘         │
@@ -129,13 +129,20 @@ scan; the scheduler bounds how often.
   (`modbus-tcp`), `endpoint` (`host:port`), driver params (`unit`,
   `timeout_ms`).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
-  `Real`), a direction (`In`, `Out`) and a **`Binding`**, either a point on a
-  device in that driver's own address syntax (`coil:0`, `hr:100:f32`) or one
-  of the box's own channels (`do:N`, `di:N`).
+  `Real`), a direction (`In`, `Out`), an optional engineering `unit`
+  (metadata, never converted), an optional per-input `poll` period, and a
+  **`Binding`**: a point on a device in that driver's own address syntax
+  (`coil:0`, `hr:100:f32`), one of the box's own channels (`do:N`,
+  `di:N`), or **another module's output** (`Binding::Module`, below). A
+  CIP controller's tags and attributes (`logix-tag-read`) arrive as one
+  more driver behind `Binding::Device`, with its own point syntax, so
+  polling, links and validation apply unchanged.
 - **`IoMap::validate`** checks everything that needs no device: unique
   names, identifiers, known devices, parseable points, signal type matches
-  point type, outputs only on writable points, one writer per point. It
-  returns every problem, not the first.
+  point type, outputs only on writable points, one writer per point, units
+  of 1..=16 printable ASCII characters, poll periods of 1 ms ..= 60 s and
+  only on polled inputs, module outputs as `in` signals naming a valid
+  module. It returns every problem, not the first.
 - **`Driver`**: `parse(addr)`, `read(&[addr]) -> Vec<Value>` (all or
   nothing, batching is the driver's business), `write(addr, value)`. Strings
   and plain values only, so the same contract crosses a WASM boundary
@@ -152,7 +159,9 @@ scan; the scheduler bounds how often.
 - **`local`**: the box's own channels (`do:N`, `di:N`) behind the same
   contract; in memory until `gpio-outputs` adds the Pi backend.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
-  optional `safe=` values for outputs.
+  optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
+  `in NAME TYPE module MODULE` is another module's output. Older maps read
+  unchanged; `box` and `module` are reserved device ids.
 
 ## Signals in the scan (`io-runtime`, built)
 
@@ -169,7 +178,9 @@ manifest declares, and is checked against.
   driving one signal are all refused before the adapter starts.
 - **Links** (`link.rs`), one thread per device plus `box`: each cycle writes
   the commands that changed since the device last took them, then reads
-  every input. Any error marks the link down: its inputs go missing, and it
+  every input that is due. A link cycles at the fastest of its device's
+  `poll_ms` and its inputs' own; an input without one is read at the
+  device's rate. Any error marks the link down: its inputs go missing, and it
   forgets what the device holds, so every output is written again on
   reconnect.
 - **A module never computes on missing data.** If any signal it reads has no
@@ -177,6 +188,18 @@ manifest declares, and is checked against.
   scanned, `%Q` window zeroed, output signals sent to their safe values. It
   runs again once every input is back. An output value its signal can't
   carry (a non-finite `REAL`) faults the module (`OutputRange`).
+- **Module outputs as signals** (`signal-model`). `in rate real module
+  conveyor` is the `VAR_OUTPUT rate` of module `conveyor`, which other
+  modules read as `VAR_INPUT rate`. It has a value only once `conveyor`
+  has scanned, and none while it is held or faulted, so its readers are
+  held too and their outputs go safe. Nothing polls it, and only
+  `conveyor` may drive it. Refused at load: a module reading its own
+  output, a reader whose source isn't loaded or doesn't drive the signal,
+  and modules reading each other in a loop (which would hold them all
+  forever). A reader sees the source's latest completed scan, from the
+  same tick if the source comes first in scan order and from the previous
+  tick otherwise. An `out` signal is still readable through its command,
+  as before.
 
 ## Module directories (`module-format`, built)
 
@@ -213,6 +236,28 @@ param    beacon  bool true
   Unicode except control and invisible formatting characters (no escape
   sequences or bidi overrides in a log or a review). Files over 1 MiB are
   refused.
+
+## The trace tap (`trace-tap`, built)
+
+What the live canvas draws: one scan of one module, as it ran.
+
+- **`helmsman_iec::trace`**. `Program::scan_traced` runs a scan and returns
+  a `Trace`: per statement (a `StmtId`, with POU, line, column, shape and
+  parent arm in the shared `TraceMap`) how many times it started; for each
+  IF/CASE the arm taken (last) and per-arm counts; for each loop its
+  passes; the fault and the innermost statement running when it struck;
+  every scalar of the program at the end of the scan, FB internals
+  included (`s.hold.ET`), plus the module image. Statements of FB and
+  function bodies count over every instance and call; each instance's state
+  is in the values.
+- **Cost.** A plain `scan_at` pays one predictable branch per statement
+  (about 2% on `examples/trace_bench.rs`); a traced scan about 1% more.
+- **`helmsman_plc::TraceTap`** (`Runtime::tap(name)`): sampling on demand.
+  A viewer calls `request()`, that module's next scan is traced, the
+  `Sample { scan, fault, trace }` lands in a one-slot mailbox that `take()`
+  empties. The scheduler thread never waits on it (one atomic load per
+  untraced scan; a `try_lock` to post). A UI at 30 Hz traces at most 30
+  scans a second however fast the module runs. The tap survives a swap.
 
 ## Shift calendar (`shift-calendar`, built)
 
@@ -268,8 +313,8 @@ prompt. The agent never touches the Rust core.
 - `module-format` → `signal-model` → `box-api`: the manifest (signals read,
   outputs driven, schedule, params) is what the scheduler, the I/O map and
   the policy check; the box API serves it.
-- `trace-tap` → `st-graph-view` → `canvas-web`: per-scan values from the
-  interpreter, rendered on the ST diagram, served by the box.
+- `st-graph-view` → `canvas-web`: the trace tap's samples (built, below)
+  rendered on the ST diagram, served by the box.
 - `snapshots`: each applied change set (modules, params, bindings) is an
   immutable, content-addressed record in SQLite; rollback is one call.
 - `sim-replay`: a RAM ring buffer of signal values that a proposed module is
