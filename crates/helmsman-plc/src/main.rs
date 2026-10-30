@@ -861,6 +861,34 @@ fn report_changes(
     }
 }
 
+/// Lets the box API browse each observed Logix controller in the map
+/// (`POST /api/devices/{name}/browse`), read-only, over a session of its own.
+fn browsers(map: Option<&helmsman_io::IoMap>, devices: &Devices) {
+    for d in map.map_or(&[][..], |m| m.devices.as_slice()) {
+        if d.driver != helmsman_io::logix::DRIVER {
+            continue;
+        }
+        let Ok(driver) = helmsman_io::logix::LogixDriver::from_params(&d.endpoint, &d.params) else {
+            continue;
+        };
+        let browse = move || {
+            driver
+                .browse()
+                .map(|tags| {
+                    tags.into_iter()
+                        .map(|t| api::catalog::BrowsedTag {
+                            name: t.name,
+                            ty: t.ty,
+                            dims: t.dims,
+                        })
+                        .collect()
+                })
+                .map_err(|e| e.to_string())
+        };
+        devices.set_browser(&d.id, Arc::new(browse));
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn run(o: &Opts) -> Result<(), String> {
     if o.emit_st {
@@ -903,6 +931,7 @@ fn run(o: &Opts) -> Result<(), String> {
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
     let devices = Arc::new(Devices::new(io_links.iter().map(|l| l.name.clone())));
+    browsers(map.as_ref(), &devices);
     let live = Arc::new(Live::default());
     let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
     announce(&adapter, &specs, &content, uses_box, cal.as_ref());

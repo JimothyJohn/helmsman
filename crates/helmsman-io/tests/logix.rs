@@ -233,6 +233,38 @@ fn writes_are_refused_without_touching_the_controller() {
 }
 
 #[test]
+fn browse_lists_controller_and_program_tags_and_only_reads() {
+    let a = start(plant());
+    let d = LogixDriver::from_params(&a.encap_addr().to_string(), &BTreeMap::new()).unwrap();
+    let mut got: Vec<(String, String, Vec<u32>)> = d
+        .browse()
+        .unwrap()
+        .into_iter()
+        .map(|b| (b.name, b.ty, b.dims))
+        .collect();
+    got.sort();
+    let want = [
+        ("Big", "LINT", vec![]),
+        ("Count", "DINT", vec![]),
+        ("Log", "UINT", vec![10]),
+        ("Program:Main.Temp", "LREAL", vec![]),
+        ("Run", "BOOL", vec![]),
+        ("Status", "DINT", vec![]),
+        ("Temp", "REAL", vec![]),
+        ("Ubig", "ULINT", vec![]),
+    ];
+    let want: Vec<(String, String, Vec<u32>)> = want
+        .into_iter()
+        .map(|(n, t, d)| (n.to_string(), t.to_string(), d))
+        .collect();
+    assert_eq!(got, want);
+    let dev = a.device();
+    let target = dev.lock().unwrap();
+    let seen = target.logix().unwrap().services_seen();
+    assert!(seen.keys().all(|s| *s == 0x55), "{seen:02X?}");
+}
+
+#[test]
 fn slot_param_routes_through_the_backplane() {
     let mut c = plant();
     c.slot = 1;

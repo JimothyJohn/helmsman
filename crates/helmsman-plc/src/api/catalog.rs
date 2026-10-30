@@ -3,7 +3,8 @@
 //! source, manifest, schedule, windows and trace tap; the device links.
 //! Built once at startup, before the scheduler takes the runtime.
 
-use std::sync::{Mutex, PoisonError};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use helmsman_iec::{Port, PortDir};
@@ -146,10 +147,33 @@ impl ModuleInfo {
 /// A link's last state: up (`Ok`), down with why, or `None` before it reports.
 pub type LinkState = Option<Result<(), String>>;
 
-/// Each device link's last state, set by the link threads.
-#[derive(Debug, Default)]
+/// One tag a controller's symbol table lists: name (`Program:P.T` for a
+/// program tag), Logix type (`struct` for anything not atomic), dimensions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowsedTag {
+    pub name: String,
+    pub ty: String,
+    pub dims: Vec<u32>,
+}
+
+/// Reads an observed controller's symbol table, read-only (see
+/// `helmsman_io::logix::LogixDriver::browse`).
+pub type Browser = Arc<dyn Fn() -> Result<Vec<BrowsedTag>, String> + Send + Sync>;
+
+/// Each device link's last state, set by the link threads, and how to
+/// browse the observed controllers among them.
+#[derive(Default)]
 pub struct Devices {
     links: Mutex<Vec<(String, LinkState)>>,
+    browsers: Mutex<BTreeMap<String, Browser>>,
+}
+
+impl std::fmt::Debug for Devices {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Devices")
+            .field("links", &self.list())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Devices {
@@ -158,7 +182,27 @@ impl Devices {
     pub fn new(names: impl IntoIterator<Item = String>) -> Self {
         Self {
             links: Mutex::new(names.into_iter().map(|n| (n, None)).collect()),
+            browsers: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    /// Lets the box API browse device `name`'s tags (a controller it only
+    /// observes) with `browse`.
+    pub fn set_browser(&self, name: &str, browse: Browser) {
+        self.browsers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_string(), browse);
+    }
+
+    /// How to browse device `name`, if it can be browsed.
+    #[must_use]
+    pub fn browser(&self, name: &str) -> Option<Browser> {
+        self.browsers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 
     /// Records a link going up (`None`) or down with its error.

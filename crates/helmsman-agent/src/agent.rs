@@ -340,8 +340,19 @@ impl Agent {
 
     /// Runs the loop for one user message.
     pub fn chat(&self, conv: &mut Conversation, text: &str, on: &mut dyn FnMut(Progress)) -> Outcome {
+        self.chat_blocks(conv, vec![json!({ "type": "text", "text": text })], on)
+    }
+
+    /// [`Agent::chat`] for a user message of several content blocks (the
+    /// user's text, then the box's notes about attached drop-ins).
+    pub fn chat_blocks(
+        &self,
+        conv: &mut Conversation,
+        blocks: Vec<Json>,
+        on: &mut dyn FnMut(Progress),
+    ) -> Outcome {
         let until = Instant::now() + self.budget.time;
-        conv.push_user(vec![json!({ "type": "text", "text": text })]);
+        conv.push_user(blocks);
         let mut out = Outcome {
             stop: Stop::Done,
             steps: 0,
