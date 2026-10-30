@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end check of an OpENer-sample-compatible adapter (OpENer itself or
-# tcpethernet-adapter) from this machine: discover it, read its identity,
+# helmsman-adapter) from this machine: discover it, read its identity,
 # open a Class 1 exclusive-owner connection and confirm the output comes back
 # as input (both copy assembly 150 into 100).
 #
-# Needs: the release CLI (`cargo build --release -p tcpethernet-cli`), UDP
+# Needs: the release CLI (`cargo build --release -p helmsman-cli`), UDP
 # 2222 free here and reachable from the target (macOS may ask to allow
 # incoming connections for the binary the first time).
 #
@@ -12,8 +12,8 @@
 set -euo pipefail
 host="${1:?usage: $0 HOST}"
 cd "$(dirname "$0")/.."
-bin=target/release/tcpethernet
-[ -x "$bin" ] || cargo build --release -q -p tcpethernet-cli
+bin=target/release/helmsman
+[ -x "$bin" ] || cargo build --release -q -p helmsman-cli
 
 echo "==> discover"
 "$bin" discover "$host" --window 1500 | tee /dev/stderr | grep -q . || { echo "no ListIdentity reply from $host" >&2; exit 1; }

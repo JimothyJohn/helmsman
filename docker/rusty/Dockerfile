@@ -1,5 +1,5 @@
 # ruSTy (PLC-lang/rusty, LGPL-3.0): an independent IEC 61131-3 Structured
-# Text compiler, used ONLY as a test oracle for crates/tcpethernet-iec
+# Text compiler, used ONLY as a test oracle for crates/helmsman-iec
 # (tests/oracle.rs). Nothing from it is linked into or shipped with this repo.
 # Pinned release; packages verified against the SHA-256 digests GitHub
 # publishes for the v1.0.7 assets. Bump deliberately.

@@ -1014,6 +1014,72 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-adapter"
+version = "0.1.0"
+dependencies = [
+ "helmsman-proto",
+ "proptest",
+]
+
+[[package]]
+name = "helmsman-canvas"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "helmsman-graph",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "helmsman-cli"
+version = "0.1.0"
+dependencies = [
+ "helmsman-proto",
+]
+
+[[package]]
+name = "helmsman-graph"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "helmsman-iec"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
+name = "helmsman-io"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
+name = "helmsman-plc"
+version = "0.1.0"
+dependencies = [
+ "helmsman-adapter",
+ "helmsman-iec",
+ "helmsman-io",
+ "helmsman-proto",
+ "proptest",
+]
+
+[[package]]
+name = "helmsman-proto"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2295,72 +2361,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "tcpethernet"
-version = "0.1.0"
-dependencies = [
- "proptest",
-]
-
-[[package]]
-name = "tcpethernet-adapter"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "tcpethernet",
-]
-
-[[package]]
-name = "tcpethernet-canvas"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "tcpethernet-graph",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "tcpethernet-cli"
-version = "0.1.0"
-dependencies = [
- "tcpethernet",
-]
-
-[[package]]
-name = "tcpethernet-graph"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "tcpethernet-iec"
-version = "0.1.0"
-dependencies = [
- "proptest",
-]
-
-[[package]]
-name = "tcpethernet-io"
-version = "0.1.0"
-dependencies = [
- "proptest",
-]
-
-[[package]]
-name = "tcpethernet-plc"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "tcpethernet",
- "tcpethernet-adapter",
- "tcpethernet-iec",
- "tcpethernet-io",
 ]
 
 [[package]]

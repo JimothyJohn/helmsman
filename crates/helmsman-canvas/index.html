@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Helmsman canvas</title>
+    <!-- trunk builds the crate to wasm and injects the loader here -->
+    <link data-trunk rel="rust" data-wasm-opt="z">
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; background: #16181d; }
+        canvas { display: block; width: 100%; height: 100%; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+</body>
+</html>

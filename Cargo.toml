@@ -1,12 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/tcpethernet", "crates/tcpethernet-adapter", "crates/tcpethernet-canvas", "crates/tcpethernet-cli", "crates/tcpethernet-graph", "crates/tcpethernet-iec", "crates/tcpethernet-io", "crates/tcpethernet-plc"]
+members = ["crates/helmsman-proto", "crates/helmsman-adapter", "crates/helmsman-canvas", "crates/helmsman-cli", "crates/helmsman-graph", "crates/helmsman-iec", "crates/helmsman-io", "crates/helmsman-plc"]
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/JimothyJohn/tcpethernet"
+repository = "https://github.com/JimothyJohn/helmsman"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -12,7 +12,7 @@ Adapter. The useful pairing is:
 | Box | Role | Software |
 |---|---|---|
 | Pi 5 | EtherNet/IP **adapter** (target) | CODESYS Control for Raspberry Pi 64 SL, EtherNet/IP Adapter device in the project |
-| Mac Studio / CI / any Linux box | **originator** | `tcpethernet` (this repo) |
+| Mac Studio / CI / any Linux box | **originator** | `helmsman-proto` (this repo) |
 
 CODESYS as the adapter gives a second independent target next to OpENer,
 from a vendor whose stack is conformance-tested. If you later want the

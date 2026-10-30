@@ -4,15 +4,15 @@
 services:
   opener:
     build: ./docker/opener
-    image: tcpethernet/opener:0e1ab7e
+    image: helmsman/opener:0e1ab7e
     ports:
       - "44818:44818/tcp"
       - "44818:44818/udp"
-  # Our own adapter (crates/tcpethernet-adapter) mimicking OpENer's sample, so
+  # Our own adapter (crates/helmsman-adapter) mimicking OpENer's sample, so
   # the same interop suite runs against it. Nothing is published (it would
   # clash with opener); address the container IP.
   adapter:
     build:
       context: .
       dockerfile: docker/adapter/Dockerfile
-    image: tcpethernet/adapter:dev
+    image: helmsman/adapter:dev

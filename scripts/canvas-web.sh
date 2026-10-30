@@ -6,5 +6,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v trunk >/dev/null || { echo "needs trunk: cargo install trunk --locked" >&2; exit 1; }
 rustup target add wasm32-unknown-unknown >/dev/null
-cd crates/tcpethernet-canvas
+cd crates/helmsman-canvas
 trunk build --release --dist ../../target/canvas-dist
