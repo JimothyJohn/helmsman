@@ -278,6 +278,8 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
                 "proposed": summary(&d.proposed),
                 "identical": d.identical,
                 "extra_rises": d.extra_rises(),
+                "current_track": track_json(current.track(&d.signal)),
+                "proposed_track": track_json(proposed.track(&d.signal)),
             })
         })
         .collect();
@@ -323,6 +325,32 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
         Some(_) => Response::json(201, &ev.json).with("Location", format!("/api/replays/{}", ev.id)),
         None => audit_full(),
     }
+}
+
+/// Most steps of one signal's track a replay's JSON carries; the
+/// summaries are exact however long the track.
+pub const MAX_TRACK: usize = 2000;
+
+/// A replayed output as the chart draws it: its type and the value after
+/// each tick at which it changed (`[at_ms, value]`, the first tick
+/// included; `null` while its module was held or faulted), at most
+/// [`MAX_TRACK`] of them (`truncated` past that). `null` when the replay
+/// does not drive the signal.
+fn track_json(t: Option<&replay::Track>) -> Json {
+    let Some(t) = t else { return Json::Null };
+    let ms = |d: Duration| u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+    let steps: Vec<Json> = t
+        .changes
+        .iter()
+        .take(MAX_TRACK)
+        .map(|(at, v)| json!([ms(*at), super::render::value(*v)]))
+        .collect();
+    json!({
+        "module": t.module,
+        "type": super::render::ty(t.ty),
+        "steps": steps,
+        "truncated": t.changes.len() > MAX_TRACK,
+    })
 }
 
 /// Who approved, for the store's history.

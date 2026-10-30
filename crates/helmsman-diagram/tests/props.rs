@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use common::{SIZES, check};
-use helmsman_diagram::{annotate, explain, lower};
+use helmsman_diagram::{annotate, diff, explain, lower};
 use helmsman_iec::{Image, compile};
 use proptest::prelude::*;
 
@@ -142,4 +142,198 @@ proptest! {
             }
         }
     }
+}
+
+/// Every signature of every POU of `m`, sorted: a multiset.
+fn sigs(m: &helmsman_diagram::Module) -> Vec<diff::Sig> {
+    let mut v: Vec<diff::Sig> = m
+        .pous
+        .iter()
+        .flat_map(|p| diff::signatures(&p.name, &p.diagram))
+        .collect();
+    v.sort();
+    v
+}
+
+fn lowered(src: &str) -> Result<helmsman_diagram::Module, TestCaseError> {
+    let p = compile(src, SIZES).map_err(|e| TestCaseError::fail(format!("{e:?}\n{src}")))?;
+    lower(src, &p.trace_map()).map_err(|e| TestCaseError::fail(format!("{e}\n{src}")))
+}
+
+fn line() -> impl Strategy<Value = &'static str> {
+    prop_oneof![Just("a"), Just("b"), Just("c"), Just("END_IF;"), Just("")]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(150))]
+
+    /// A source diff is a merge of both sources: its kept and removed lines
+    /// are the old source in order, its kept and added lines the new one,
+    /// with consecutive line numbers; nothing differs between a source and
+    /// itself; and it keeps as many lines as the longest common
+    /// subsequence (checked against a plain recursive one).
+    #[test]
+    fn a_line_diff_reproduces_both_sides_and_keeps_the_most(
+        old in proptest::collection::vec(line(), 0..10),
+        new in proptest::collection::vec(line(), 0..10),
+        crlf in any::<bool>(),
+    ) {
+        let sep = if crlf { "\r\n" } else { "\n" };
+        let (a, b) = (old.join(sep), new.join("\n"));
+        let d = diff::lines(&a, &b);
+        prop_assert_eq!(&d, &diff::lines(&a, &b), "deterministic");
+        let mut back_old = Vec::new();
+        let mut back_new = Vec::new();
+        for l in &d {
+            match l {
+                diff::Line::Same { old, new, text } => {
+                    prop_assert_eq!(*old, back_old.len() + 1);
+                    prop_assert_eq!(*new, back_new.len() + 1);
+                    back_old.push(text.as_str());
+                    back_new.push(text.as_str());
+                }
+                diff::Line::Removed { old, text } => {
+                    prop_assert_eq!(*old, back_old.len() + 1);
+                    back_old.push(text.as_str());
+                }
+                diff::Line::Added { new, text } => {
+                    prop_assert_eq!(*new, back_new.len() + 1);
+                    back_new.push(text.as_str());
+                }
+            }
+        }
+        let al: Vec<&str> = a.lines().collect();
+        let bl: Vec<&str> = b.lines().collect();
+        prop_assert_eq!(&back_old, &al);
+        prop_assert_eq!(&back_new, &bl);
+        prop_assert!(diff::lines(&a, &a).iter().all(|l| !l.is_change()));
+        let kept = d.iter().filter(|l| !l.is_change()).count();
+        prop_assert_eq!(kept, naive_lcs(&al, &bl));
+    }
+
+    /// Diagram diffs: a module against itself differs nowhere; against any
+    /// other, the old blocks less the removed and changed ones plus the
+    /// added and the changed ones' new versions are exactly the new
+    /// blocks, every id is a real block of its POU, and the same pair
+    /// always gives the same diff.
+    #[test]
+    fn a_diagram_diff_is_empty_on_itself_and_rebuilds_the_target(
+        a in proptest::collection::vec(stmt(), 1..5),
+        b in proptest::collection::vec(stmt(), 0..4),
+        keep in 0usize..5,
+        early_return in any::<bool>(),
+    ) {
+        // Share a prefix, so edits look like edits.
+        let k = keep.min(a.len());
+        let mut b2: Vec<String> = a[..k].to_vec();
+        b2.extend(b);
+        if b2.is_empty() {
+            b2.push("y := NOT y;".into());
+        }
+        let (sa, sb) = (program(&a, early_return), program(&b2, false));
+        let (ma, mb) = (lowered(&sa)?, lowered(&sb)?);
+        let same = diff::modules(&ma, &ma);
+        prop_assert!(same.is_empty(), "{:?}", same);
+        let d = diff::modules(&ma, &mb);
+        prop_assert_eq!(&d, &diff::modules(&ma, &mb), "deterministic");
+        let mut rebuilt = sigs(&ma);
+        for c in &d.nodes {
+            if let Some((id, s)) = &c.old {
+                let pou = ma.pou(&c.pou).unwrap();
+                prop_assert_eq!(&diff::signatures(&pou.name, &pou.diagram)[id.0 as usize], s);
+                let at = rebuilt.iter().position(|x| x == s);
+                prop_assert!(at.is_some(), "a removed or changed block was in the old set: {:?}", s);
+                rebuilt.remove(at.unwrap());
+            }
+        }
+        for c in &d.nodes {
+            if let Some((id, s)) = &c.new {
+                let pou = mb.pou(&c.pou).unwrap();
+                prop_assert_eq!(&diff::signatures(&pou.name, &pou.diagram)[id.0 as usize], s);
+                rebuilt.push(s.clone());
+            }
+            match c.change {
+                diff::Change::Added => prop_assert!(c.old.is_none() && c.new.is_some()),
+                diff::Change::Removed => prop_assert!(c.old.is_some() && c.new.is_none()),
+                diff::Change::Changed => {
+                    let (o, n) = (&c.old.as_ref().unwrap().1, &c.new.as_ref().unwrap().1);
+                    prop_assert_eq!(&o.key, &n.key);
+                    prop_assert!(o != n);
+                }
+            }
+        }
+        rebuilt.sort();
+        prop_assert_eq!(rebuilt, sigs(&mb));
+        if sa == sb {
+            prop_assert!(d.is_empty());
+        }
+    }
+}
+
+fn naive_lcs(a: &[&str], b: &[&str]) -> usize {
+    match (a.split_first(), b.split_first()) {
+        (Some((x, ar)), Some((y, br))) if x == y => 1 + naive_lcs(ar, br),
+        (Some((_, ar)), Some((_, br))) => naive_lcs(ar, b).max(naive_lcs(a, br)),
+        _ => 0,
+    }
+}
+
+#[test]
+fn a_changed_condition_is_one_changed_write_not_a_new_block_set() {
+    let old = program(&["x := a > 1;".into(), "y := NOT y;".into()], false);
+    let new = program(
+        &["x := a > 2;".into(), "y := NOT y;".into(), "c := c + 1;".into()],
+        false,
+    );
+    let (mo, mn) = (lowered(&old).unwrap(), lowered(&new).unwrap());
+    let d = diff::modules(&mo, &mn);
+    let t = |c: &diff::NodeChange| {
+        let s = c.new.as_ref().or(c.old.as_ref()).unwrap();
+        format!("{:?} {} | {}", c.change, s.1.key.what, s.1.text)
+    };
+    let got: Vec<String> = d.nodes.iter().map(t).collect();
+    assert_eq!(d.counts(), (3, 0, 3), "{got:#?}");
+    assert!(
+        got.contains(&"Changed op + | A + B + C".to_string()),
+        "the read of C now comes from the new write: {got:#?}"
+    );
+    assert!(
+        got.contains(&"Changed write X := | X := A > 2".to_string()),
+        "{got:#?}"
+    );
+    assert!(
+        got.contains(&"Added write C := | C := C + 1".to_string()),
+        "{got:#?}"
+    );
+    assert_eq!(d.pous(), ["T"]);
+    // Back the other way: the new statement's blocks are removed, the
+    // changed ones change back; removed blocks are ghosted below.
+    let back = diff::modules(&mn, &mo);
+    assert_eq!(back.counts(), (0, 3, 3));
+    let pou = mn.pou("T").unwrap();
+    let removed = back.removed_nodes("T");
+    let (rects, _) = diff::ghosts(&pou.diagram, &removed, 500.0, 40.0);
+    assert_eq!(rects.len(), 3);
+    let top = rects.iter().map(|(_, r)| r.y).fold(f32::INFINITY, f32::min);
+    assert!(
+        (top - 540.0).abs() < 1e-3,
+        "ghosts start below the diagram: {top}"
+    );
+}
+
+#[test]
+fn a_changed_if_condition_changes_the_region_and_keeps_its_body() {
+    let old = program(&["IF x THEN\nb := 1;\nEND_IF;".into()], false);
+    let new = program(&["IF y THEN\nb := 1;\nEND_IF;".into()], false);
+    let (mo, mn) = (lowered(&old).unwrap(), lowered(&new).unwrap());
+    let d = diff::modules(&mo, &mn);
+    assert_eq!(d.regions.len(), 1, "{d:#?}");
+    assert_eq!(d.regions[0].change, diff::Change::Changed);
+    assert!(
+        d.nodes.iter().all(|c| !c
+            .new
+            .as_ref()
+            .is_some_and(|(_, s)| s.key.what.starts_with("write B"))),
+        "the body is unchanged: {d:#?}"
+    );
 }

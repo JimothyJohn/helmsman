@@ -1,7 +1,9 @@
 //! `helmsman-canvas`: the operator's live view of a module's Structured
 //! Text, drawn as a diagram with a traced scan on it every frame (opens on
-//! it), and a lab node editor for building logic out of inputs, outputs,
-//! timers, counters and latches, grouped into nested function blocks.
+//! it), the review screen for the agent's proposals (diffs, sim replay,
+//! approve with a PIN), and a lab node editor for building logic out of
+//! inputs, outputs, timers, counters and latches, grouped into nested
+//! function blocks.
 //!
 //! Native: `cargo run -p helmsman-canvas` (the demo). Web: built by
 //! `make canvas-web` and served by the box (`helmsman-plc --ui`), it
@@ -27,6 +29,10 @@ mod canvas;
 mod example;
 mod look;
 mod remote;
+mod review;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod review_tests;
+mod review_view;
 mod st_view;
 #[cfg(test)]
 mod ui_tests;

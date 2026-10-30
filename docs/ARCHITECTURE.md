@@ -654,6 +654,52 @@ agent as ST; nothing here writes ST back).
   the last scan of every frame; scripted or hand-switched inputs. Pan,
   zoom, click a block for its source line, click an output for why.
 
+## Proposal review (`proposal-ui`, built)
+
+The screen an engineer approves on: "Proposals" in the canvas top bar
+(`review.rs` decides, `review_view.rs` draws, `web::Http` fetches; contract
+in `review.rs`'s tests and `review_tests.rs`, which runs the screen's own
+requests against a real box: runtime, recorder, store, floor policy, PIN
+file and token in a temporary state directory).
+
+- **What it shows.** The drafts, newest first, each with the box's tier
+  badge (`param`, `logic`, `output-affecting`: read from the draft's
+  `approval`, never worked out in the browser), its reasons and what the
+  policy needs. For a module draft: the manifest old against new (driven
+  signals and the `%Q` window first, anything new that can move an output
+  in the hazard colours), the source as a line diff with context, and the
+  diagram diff. For a param draft: old → new and the declared range.
+- **Diffs** (`helmsman_diagram::diff`, pure and deterministic). Lines: a
+  longest common subsequence after trimming the common head and tail
+  (middles past 4 M cells fall back to all-removed-then-added). Blocks: both
+  versions are lowered; a block's identity is its POU, the kind and arm of
+  each region around it, its kind and header; its signature adds the text
+  it computes and what feeds each input. Equal signatures pair first, then
+  equal identity and text, then equal identity (`changed`); the rest are
+  added or removed. Regions pair the same way on their label, so a changed
+  IF condition is one changed region, not a new body. Property-tested: a
+  module against itself differs nowhere, and the old blocks less the
+  removed and changed plus the added and the changed ones' new versions
+  are exactly the new blocks. Removed blocks are drawn as dashed ghosts in
+  their old layout below the proposed diagram.
+- **Sim replay chart.** "Run the sim replay" posts `.../replay`; the
+  answer now carries, per driven signal, both step tracks
+  (`current_track`, `proposed_track`: type and `[at_ms, value]` steps, at
+  most 2000 each, `truncated` past that; the summaries stay exact). Drawn
+  in egui, no charting crate: what runs in steel, the proposal in yellow,
+  rises marked, and the box's `extra_rises` as "would have fired N more /
+  fewer times"; differences first.
+- **Approve and undo.** Role picker, a masked PIN field, and the API
+  token typed once per page load (memory only; `canvas-token` asks about a
+  login exchange). Submitting moves the PIN into the request body and
+  empties the field whatever happens; neither secret shows in a `Debug`
+  output or a log. The box's refusals are shown verbatim with what to do:
+  401 token (and the token is dropped), 403 role or wrong PIN, 428 replay
+  missing or stale, 429 locked with a countdown from `Retry-After` (nothing
+  is sent until it ends), 409 stale draft. After an apply: the new snapshot
+  and the history head, and an undo (`/api/snapshots/{previous}/rollback`)
+  through the same replay and PIN flow.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -675,9 +721,9 @@ prompt. The agent never touches the Rust core.
 
 ## Where the planned pieces attach
 
-- `approval-policy` (built, above) → `proposal-ui`: the canvas shows a
-  draft's `approval` (tier, reasons, what it needs), charts its replay
-  (`GET /api/replays/{n}`), and posts the PIN to `apply`. `box-mcp` wraps
+- `approval-policy` (built, above) → `proposal-ui` (built, above): the
+  canvas shows a draft's `approval` (tier, reasons, what it needs), charts
+  its replay, and posts the PIN to `apply`. `box-mcp` wraps
   the same routes; `local-accounts` replaces role PINs with people, keeping
   the role check and the gate.
 - `canvas-web` (built, above) → `andon-screen`: another page the box
