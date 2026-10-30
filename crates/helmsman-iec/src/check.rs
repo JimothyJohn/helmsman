@@ -334,6 +334,10 @@ pub type CaseArm = (Vec<(i128, i128)>, Vec<St>);
 pub struct St {
     pub kind: StKind,
     pub line: u32,
+    pub col: u32,
+    /// First trace counter of this statement (see `trace`), numbered once
+    /// the whole unit is checked.
+    pub tr: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -366,6 +370,10 @@ pub struct Checked {
     /// Enumerations by id (what [`Type::Enum`] indexes).
     pub enums: Vec<EnumInfo>,
     pub program: usize,
+    /// POUs `0..library` are the built-in library's (they come first).
+    /// Kept out of [`PouCode`]: widening that struct slowed scans by a
+    /// quarter on the trace bench (`examples/trace_bench.rs`).
+    pub library: usize,
     /// Initial contents of the whole slot array.
     pub mem_init: Vec<Value>,
 }
@@ -2268,6 +2276,8 @@ impl<'a> Ck<'a> {
         Some(St {
             kind,
             line: s.pos.line,
+            col: s.pos.col,
+            tr: 0,
         })
     }
 
@@ -2518,6 +2528,7 @@ pub fn check(
             aggs: ck.aggs,
             enums: ck.enums,
             program,
+            library: ck.srcs.iter().take_while(|s| s.system).count(),
             mem_init,
         }),
         _ => {

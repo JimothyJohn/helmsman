@@ -449,7 +449,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: arch-note
   id: module-format
 
-- [ ] **Signal model** — named, typed signals with units and poll rates, bound to a source (CIP tag, CIP attribute, GPIO in, another module's output). Modules read signals by name, never raw addresses.
+- [x] **Signal model** — named, typed signals with units and poll rates, bound to a source (CIP tag, CIP attribute, GPIO in, another module's output). Modules read signals by name, never raw addresses.
   result: one vocabulary for the agent, the canvas and the manifest
   est: 2d
   difficulty: med
@@ -484,7 +484,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format
   id: snapshots
 
-- [ ] **Runtime trace tap** — the interpreter exposes per-scan variable values and which statements/branches executed, sampled at UI rates, without slowing the scan.
+- [x] **Runtime trace tap** — the interpreter exposes per-scan variable values and which statements/branches executed, sampled at UI rates, without slowing the scan.
   result: the data the live canvas draws
   est: 3d
   difficulty: high

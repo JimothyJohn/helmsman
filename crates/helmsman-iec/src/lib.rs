@@ -44,10 +44,11 @@ mod lexer;
 mod parser;
 pub mod plcopen;
 mod state;
+pub mod trace;
 mod types;
 mod xml;
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 pub use check::{Area, Diagnostic, ImageSizes};
@@ -59,6 +60,7 @@ pub use types::{Ty, Value};
 use check::{AggKind, Checked, Type};
 use interp::Machine;
 use parser::Section;
+use trace::{Recorder, Trace, TraceMap};
 
 /// Instructions one scan may execute before it faults (see [`FaultKind::Watchdog`]).
 pub const DEFAULT_BUDGET: u64 = 1_000_000;
@@ -93,6 +95,10 @@ pub struct Program {
     mem: Vec<Value>,
     budget: u64,
     started: Option<Instant>,
+    /// Trace counters per scan (see [`trace`]).
+    counters: u32,
+    /// Built on the first traced scan; shared by its clones.
+    map: OnceLock<Arc<TraceMap>>,
 }
 
 /// Compiles a unit holding one `PROGRAM` (plus any FUNCTIONs,
@@ -107,13 +113,16 @@ pub fn compile(src: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>>
             msg: e.msg,
         }]
     })?;
-    let code = check::check(library(), &unit, sizes)?;
+    let mut code = check::check(library(), &unit, sizes)?;
+    let counters = trace::number(&mut code);
     Ok(Program {
         sizes,
         mem: code.mem_init.clone(),
         code,
         budget: DEFAULT_BUDGET,
         started: None,
+        counters,
+        map: OnceLock::new(),
     })
 }
 
@@ -169,6 +178,31 @@ impl Program {
     /// # Errors
     /// A [`Fault`]: division by zero, an index out of range, or the watchdog.
     pub fn scan_at(&mut self, image: &mut Image, now: Duration) -> Result<(), Fault> {
+        self.run(image, now, None)
+    }
+
+    /// [`Program::scan_at`], recording what the scan did. The result and
+    /// every variable are exactly what the untraced scan would leave; the
+    /// trace is the scan up to its end or its fault.
+    pub fn scan_traced(&mut self, image: &mut Image, now: Duration) -> (Result<(), Fault>, Trace) {
+        let mut rec = Recorder::new(self.counters);
+        let r = self.run(image, now, Some(&mut rec));
+        let prog = &self.code.pous[self.code.program];
+        let frame = self.mem[prog.base..prog.base + prog.size].to_vec();
+        let trace = Trace::new(self.trace_map(), now, rec, frame, image.clone(), r.err());
+        (r, trace)
+    }
+
+    /// The statement table and variable list every trace of this program
+    /// shares; built on first use.
+    #[must_use]
+    pub fn trace_map(&self) -> Arc<TraceMap> {
+        self.map
+            .get_or_init(|| Arc::new(TraceMap::build(&self.code)))
+            .clone()
+    }
+
+    fn run(&mut self, image: &mut Image, now: Duration, tap: Option<&mut Recorder>) -> Result<(), Fault> {
         let program = &self.code.pous[self.code.program];
         let mut m = Machine {
             mem: &mut self.mem,
@@ -179,6 +213,7 @@ impl Program {
             now: i128::try_from(now.as_nanos())
                 .unwrap_or(i128::MAX)
                 .min(i128::from(i64::MAX)),
+            tap,
         };
         m.run(program)
     }

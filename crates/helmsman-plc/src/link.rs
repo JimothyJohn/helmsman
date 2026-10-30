@@ -5,8 +5,13 @@
 //! are held and their outputs go safe) and it forgets what the device holds,
 //! so every output is written again once the device answers.
 //!
+//! An input may have its own poll period (`poll_ms=` on its map line);
+//! the link then cycles at the fastest of its device's and its inputs'
+//! periods and [`Link::cycle_at`] reads only the inputs that are due.
+//! Outputs are written on every cycle in which they changed.
+//!
 //! [`spawn`] runs a link on its own thread at its poll period; tests call
-//! [`Link::cycle`] directly.
+//! [`Link::cycle`] / [`Link::cycle_at`] directly.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -15,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use helmsman_io::{Dir, Driver, Error, IoMap, Value};
 
-use crate::signals::{SignalTable, by_device};
+use crate::signals::{Polled, SignalTable, by_device};
 
 /// Poll period when a device sets no `poll_ms`.
 pub const DEFAULT_POLL: Duration = Duration::from_millis(50);
@@ -27,13 +32,23 @@ struct Out {
     written: Option<Value>,
 }
 
+struct In {
+    signal: usize,
+    addr: String,
+    poll: Duration,
+    /// When it is next due, on the [`Link::cycle_at`] clock.
+    next: Duration,
+}
+
 /// One device's inputs and outputs, and the driver that reaches it.
 pub struct Link {
     /// The device id, or `box` for the box's own channels.
     pub name: String,
+    /// How often the link cycles: the fastest of the device's poll period
+    /// and its inputs' own.
     pub poll: Duration,
     driver: Box<dyn Driver + Send>,
-    inputs: Vec<(usize, String)>,
+    inputs: Vec<In>,
     outputs: Vec<Out>,
     up: bool,
 }
@@ -49,20 +64,36 @@ impl Link {
         self.up
     }
 
-    /// One poll: changed outputs out, every input in.
+    /// One poll: changed outputs out, every input in, whatever its period.
     ///
     /// # Errors
     /// The first driver error; the link is down until a cycle succeeds.
     pub fn cycle(&mut self, table: &Mutex<SignalTable>) -> Result<(), Error> {
-        let r = self.exchange(table);
+        self.run(table, None)
+    }
+
+    /// One poll at `now` (time since the link started): changed outputs
+    /// out, then the inputs whose period has come round. An input read at
+    /// `now` is next due one period later; a late cycle skips the periods
+    /// it missed rather than bursting.
+    ///
+    /// # Errors
+    /// As [`Link::cycle`]; after an error every input is due again.
+    pub fn cycle_at(&mut self, table: &Mutex<SignalTable>, now: Duration) -> Result<(), Error> {
+        self.run(table, Some(now))
+    }
+
+    fn run(&mut self, table: &Mutex<SignalTable>, now: Option<Duration>) -> Result<(), Error> {
+        let r = self.exchange(table, now);
         if r.is_err() {
             self.up = false;
             for o in &mut self.outputs {
                 o.written = None;
             }
             let mut t = lock(table);
-            for (i, _) in &self.inputs {
-                t.set_input(*i, None);
+            for i in &mut self.inputs {
+                t.set_input(i.signal, None);
+                i.next = Duration::ZERO;
             }
         } else {
             self.up = true;
@@ -70,7 +101,7 @@ impl Link {
         r
     }
 
-    fn exchange(&mut self, table: &Mutex<SignalTable>) -> Result<(), Error> {
+    fn exchange(&mut self, table: &Mutex<SignalTable>, now: Option<Duration>) -> Result<(), Error> {
         let due: Vec<(usize, Value)> = {
             let t = lock(table);
             self.outputs
@@ -87,14 +118,21 @@ impl Link {
             self.driver.write(&o.addr, cmd)?;
             o.written = Some(cmd);
         }
-        if self.inputs.is_empty() {
+        let due: Vec<usize> = (0..self.inputs.len())
+            .filter(|&k| now.is_none_or(|now| self.inputs[k].next <= now))
+            .collect();
+        if due.is_empty() {
             return Ok(());
         }
-        let addrs: Vec<&str> = self.inputs.iter().map(|(_, a)| a.as_str()).collect();
+        let addrs: Vec<&str> = due.iter().map(|&k| self.inputs[k].addr.as_str()).collect();
         let values = self.driver.read(&addrs)?;
         let mut t = lock(table);
-        for ((i, _), v) in self.inputs.iter().zip(values) {
-            t.set_input(*i, Some(v));
+        for (&k, v) in due.iter().zip(values) {
+            let i = &mut self.inputs[k];
+            t.set_input(i.signal, Some(v));
+            if let Some(now) = now {
+                i.next = now.saturating_add(i.poll);
+            }
         }
         Ok(())
     }
@@ -107,7 +145,8 @@ impl Link {
 ///
 /// # Errors
 /// A device whose driver will not open, or whose `poll_ms` is not
-/// 1..=60000, with the device id.
+/// 1..=60000, with the device id. (A signal's own poll period is checked
+/// by [`IoMap::validate`].)
 pub fn links(
     map: &IoMap,
     mut open: impl FnMut(&helmsman_io::Device) -> Result<Box<dyn Driver + Send>, Error>,
@@ -144,9 +183,24 @@ pub fn links(
             outputs: Vec::new(),
             up: false,
         };
-        for (signal, addr, dir) in sigs {
+        for Polled {
+            signal,
+            addr,
+            dir,
+            poll: own,
+        } in sigs
+        {
             match dir {
-                Dir::In => link.inputs.push((signal, addr)),
+                Dir::In => {
+                    let p = own.unwrap_or(poll);
+                    link.poll = link.poll.min(p);
+                    link.inputs.push(In {
+                        signal,
+                        addr,
+                        poll: p,
+                        next: Duration::ZERO,
+                    });
+                }
                 Dir::Out => link.outputs.push(Out {
                     signal,
                     addr,
@@ -169,9 +223,10 @@ pub fn spawn(
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut was_up = None;
-        let mut next = Instant::now();
+        let start = Instant::now();
+        let mut next = start;
         while !stop.load(Ordering::Relaxed) {
-            let r = link.cycle(&table);
+            let r = link.cycle_at(&table, start.elapsed());
             if was_up != Some(r.is_ok()) {
                 report(&link.name, r.as_ref().err());
                 was_up = Some(r.is_ok());

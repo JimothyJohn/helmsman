@@ -360,6 +360,8 @@ fn local(name: &str, ty: Ty, dir: Dir, channel: &str) -> Signal {
         binding: Binding::Local {
             channel: channel.into(),
         },
+        unit: None,
+        poll: None,
     }
 }
 
@@ -601,6 +603,119 @@ fn a_held_module_swapped_is_running_and_holds_again_if_its_input_is_still_missin
     assert_eq!(cmd(&t, "motor"), Value::Bool(true));
 }
 
+// ---- module outputs as signals, trace taps ----
+
+fn from_module(name: &str, module: &str) -> Signal {
+    Signal {
+        name: name.into(),
+        ty: Ty::Bool,
+        dir: Dir::In,
+        binding: Binding::Module {
+            module: module.into(),
+        },
+        unit: None,
+        poll: None,
+    }
+}
+
+/// `a` drives `ready`, which `b` reads; `b` drives `done`.
+fn chain_table() -> SignalTable {
+    let map = IoMap {
+        devices: vec![],
+        signals: vec![from_module("ready", "a"), from_module("done", "b")],
+    };
+    SignalTable::new(&map, &BTreeMap::new()).unwrap()
+}
+
+const A: &str =
+    "PROGRAM a VAR_OUTPUT ready : BOOL; END_VAR VAR n : UINT; END_VAR n := n + 1; ready := TRUE; END_PROGRAM";
+const B: &str = "
+PROGRAM b
+VAR_INPUT ready : BOOL; END_VAR
+VAR_OUTPUT done : BOOL; END_VAR
+VAR n : UINT; END_VAR
+  n := n + 1; done := ready;
+END_PROGRAM";
+
+fn chain(t: &SignalTable) -> Runtime {
+    Runtime::with_signals(
+        0,
+        0,
+        vec![
+            module("a", A, 10, Window::new(0, 0)),
+            module("b", B, 10, Window::new(0, 0)),
+        ],
+        t,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_swap_reruns_the_module_source_and_cycle_checks() {
+    let mut t = chain_table();
+    let no_ready = "PROGRAM a VAR n : UINT; END_VAR n := n + 1; END_PROGRAM";
+    let reads_done = "PROGRAM a VAR_INPUT done : BOOL; END_VAR VAR_OUTPUT ready : BOOL; END_VAR VAR n : UINT; END_VAR ready := done; END_PROGRAM";
+    for src in [no_ready, reads_done] {
+        // The same errors a fresh load of the swapped set reports.
+        let fresh = Runtime::with_signals(
+            0,
+            0,
+            vec![
+                module("a", src, 10, Window::new(0, 0)),
+                module("b", B, 10, Window::new(0, 0)),
+            ],
+            &t,
+        )
+        .unwrap_err();
+        assert!(
+            fresh
+                .iter()
+                .any(|e| matches!(e, ConfigError::NoSource { .. } | ConfigError::Cycle(_))),
+            "{fresh:?}"
+        );
+        assert_refused_changes_nothing(
+            chain(&t),
+            chain(&t),
+            module("a", src, 10, Window::new(0, 0)),
+            &mut t,
+            &fresh,
+        );
+    }
+    // Dropping the reader is fine; so is a new body for the source.
+    let mut rt = chain(&t);
+    rt.swap(
+        module(
+            "b",
+            "PROGRAM b VAR n : UINT; END_VAR END_PROGRAM",
+            10,
+            Window::new(0, 0),
+        ),
+        &mut t,
+    )
+    .unwrap();
+    rt.swap(module("a", no_ready, 10, Window::new(0, 0)), &mut t)
+        .unwrap();
+}
+
+#[test]
+fn a_swap_keeps_the_modules_trace_tap() {
+    let mut t = chain_table();
+    let mut rt = chain(&t);
+    let tap = rt.tap("a").unwrap();
+    rt.tick_with(ms(0), &[], &mut t);
+    tap.request();
+    rt.swap(module("a", A, 10, Window::new(0, 0)), &mut t).unwrap();
+    assert!(tap.pending(), "a swap leaves the request open");
+    rt.tick_with(ms(10), &[], &mut t);
+    let sample = tap.take().expect("the new program's first scan is traced");
+    assert_eq!(sample.scan, 2);
+    assert_eq!(
+        sample.trace.get("n"),
+        Some(St::Int(2)),
+        "and saw the carried count"
+    );
+}
+
 // ---- property: random swap sequences ----
 
 /// A generated replacement: which module, its `%Q` window, and which
@@ -771,6 +886,8 @@ fn rio_map(sim: &Sim) -> IoMap {
                     device: "rio".into(),
                     point: "di:1".into(),
                 },
+                unit: None,
+                poll: None,
             },
             Signal {
                 name: "motor".into(),
@@ -780,6 +897,8 @@ fn rio_map(sim: &Sim) -> IoMap {
                     device: "rio".into(),
                     point: "coil:0".into(),
                 },
+                unit: None,
+                poll: None,
             },
             local("lamp", Ty::Bool, Dir::Out, "do:0"),
         ],

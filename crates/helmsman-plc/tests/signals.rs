@@ -49,6 +49,8 @@ fn sig(name: &str, ty: Ty, dir: Dir, device: &str, point: &str) -> Signal {
         ty,
         dir,
         binding,
+        unit: None,
+        poll: None,
     }
 }
 
