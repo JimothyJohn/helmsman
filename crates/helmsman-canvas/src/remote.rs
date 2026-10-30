@@ -41,6 +41,8 @@ pub fn backoff(failures: u32) -> f64 {
 pub enum Fetch {
     Modules,
     Module(String),
+    /// `GET /api/screen`: the floor screen's layout.
+    Screen,
 }
 
 /// An event stream.
@@ -268,7 +270,7 @@ pub struct SignalRow {
 }
 
 impl SignalRow {
-    fn parse(j: &Json) -> Option<Self> {
+    pub(crate) fn parse(j: &Json) -> Option<Self> {
         Some(Self {
             name: j["name"].as_str()?.to_string(),
             dir: j["dir"].as_str().unwrap_or("?").to_string(),
@@ -280,7 +282,7 @@ impl SignalRow {
     }
 }
 
-fn rows<T>(j: &Json, parse: impl Fn(&Json) -> Option<T>) -> Option<Vec<T>> {
+pub(crate) fn rows<T>(j: &Json, parse: impl Fn(&Json) -> Option<T>) -> Option<Vec<T>> {
     j.as_array().map(|a| a.iter().filter_map(parse).collect())
 }
 
@@ -296,22 +298,22 @@ pub struct Lowered {
 
 /// One retried thing: failures in a row and when to try again.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-struct Retry {
-    failures: u32,
-    at: Option<f64>,
+pub(crate) struct Retry {
+    pub failures: u32,
+    pub at: Option<f64>,
 }
 
 impl Retry {
-    fn failed(&mut self, now: f64) {
+    pub(crate) fn failed(&mut self, now: f64) {
         self.failures += 1;
         self.at = Some(now + backoff(self.failures));
     }
 
-    fn ok(&mut self) {
+    pub(crate) fn ok(&mut self) {
         *self = Self::default();
     }
 
-    fn due(&mut self, now: f64) -> bool {
+    pub(crate) fn due(&mut self, now: f64) -> bool {
         if self.at.is_some_and(|t| now >= t) {
             self.at = None;
             return true;
@@ -544,7 +546,8 @@ impl BoxState {
                 self.scan = Some(scan);
                 self.relower();
             }
-            Msg::Event(..) => {}
+            // The floor screen's fetch is not this view's.
+            Msg::Got(Fetch::Screen, _) | Msg::Event(..) => {}
         }
     }
 
@@ -596,7 +599,7 @@ impl BoxState {
     }
 }
 
-fn parse(body: &str) -> Option<Json> {
+pub(crate) fn parse(body: &str) -> Option<Json> {
     serde_json::from_str(body).ok()
 }
 

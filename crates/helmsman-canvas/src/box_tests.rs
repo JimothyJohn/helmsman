@@ -151,7 +151,7 @@ impl Bench {
 /// Complete events in an event-stream body (after its HTTP head): blocks
 /// separated by a blank line, `event:` and `data:` fields; comments and
 /// `retry:` skipped.
-fn sse(raw: &str) -> Vec<(String, String)> {
+pub fn sse(raw: &str) -> Vec<(String, String)> {
     let body = raw.split_once("\r\n\r\n").map_or("", |(_, b)| b);
     let mut out = Vec::new();
     let mut blocks: Vec<&str> = body.split("\n\n").collect();

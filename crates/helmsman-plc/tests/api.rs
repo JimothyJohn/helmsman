@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use helmsman_iec::{ImageSizes, compile};
 use helmsman_io::Value;
 use helmsman_plc::api::{
-    Api, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, ModuleInfo, Publisher, Screen, Shared, http,
-    token,
+    Api, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, ModuleInfo, Publisher,
+    Screen, Shared, http, token,
 };
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::spec::Defaults;
@@ -1377,24 +1377,44 @@ fn the_screen_layout_is_served_read_only() {
     assert_eq!(j["layout"]["title"], "Hall 2 andon");
     assert_eq!(j["layout"]["tiles"][0]["state"], "line1_state");
     assert_eq!(j["layout"]["sets"]["line"]["3"]["colour"], "red");
-    assert_eq!(j["palette"]["yellow"]["fill"], "#FFC20E", "the brand's safety yellow");
+    assert_eq!(
+        j["palette"]["yellow"]["fill"], "#FFC20E",
+        "the brand's safety yellow"
+    );
     assert_eq!(j["palette"]["yellow"]["ink"], "#141414");
     assert_eq!(
         helmsman_plc::screen::parse(j["source"].as_str().unwrap()).unwrap(),
         helmsman_plc::screen::parse(LAYOUT).unwrap()
     );
     let index = get(b.addr, "/api").json();
-    assert!(index["endpoints"].as_array().unwrap().iter().any(|e| e["path"] == "/api/screen"));
+    assert!(
+        index["endpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["path"] == "/api/screen")
+    );
 
     // No method but GET, with or without the token; refusals are audited.
     for method in ["POST", "PUT", "DELETE", "PATCH"] {
-        let r = request(b.addr, method, "/api/screen", Some(&bearer()), "application/json", "{}");
+        let r = request(
+            b.addr,
+            method,
+            "/api/screen",
+            Some(&bearer()),
+            "application/json",
+            "{}",
+        );
         assert_eq!(r.status, 405, "{method}: {r:?}");
         assert!(r.head.contains("Allow: GET"), "{r:?}");
         let r = request(b.addr, method, "/api/screen", None, "application/json", "{}");
         assert_eq!(r.status, 401, "{method}: {r:?}");
     }
-    assert!(audit(b.addr).iter().any(|e| e["path"] == "/api/screen" && e["status"] == 405));
+    assert!(
+        audit(b.addr)
+            .iter()
+            .any(|e| e["path"] == "/api/screen" && e["status"] == 405)
+    );
     assert_eq!(get(b.addr, "/api/screen").json()["source"], LAYOUT, "unchanged");
     assert_eq!(get(b.addr, "/api/screen/x").status, 404);
 }
