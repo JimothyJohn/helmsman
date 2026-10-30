@@ -35,7 +35,16 @@ fn the_wasm_build_pulls_in_no_native_only_crates() {
         tree.contains("helmsman-plc"),
         "the canvas embeds the runtime:\n{tree}"
     );
-    for native in ["ring ", "rusqlite ", "libsqlite3-sys ", "rustls "] {
+    for native in [
+        "ring ",
+        "rusqlite ",
+        "libsqlite3-sys ",
+        "rustls ",
+        "rustix ",
+        "gpiocdev ",
+        "i2cdev ",
+        "nix ",
+    ] {
         assert!(
             !tree.lines().any(|l| l.starts_with(native)),
             "{} is in the canvas's wasm build:\n{tree}",

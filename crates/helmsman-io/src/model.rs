@@ -193,24 +193,12 @@ fn is_ident(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Parses a box channel: `do:N` is a writable output, `di:N` an input.
+/// Parses a box channel: `do:N` is a writable output, `di:N` an input,
+/// `i2c:BUS:ADDR:REG[:FMT]` an integer input (see [`crate::board`]).
 pub(crate) fn local_point(channel: &str) -> Result<PointInfo, String> {
-    let (kind, n) = channel
-        .split_once(':')
-        .ok_or_else(|| format!("bad channel {channel:?}"))?;
-    n.parse::<u16>()
-        .map_err(|_| format!("bad channel number in {channel:?}"))?;
-    match kind {
-        "do" => Ok(PointInfo {
-            ty: Ty::Bool,
-            writable: true,
-        }),
-        "di" => Ok(PointInfo {
-            ty: Ty::Bool,
-            writable: false,
-        }),
-        _ => Err(format!("bad channel kind in {channel:?} (want do:N or di:N)")),
-    }
+    crate::board::Channel::parse(channel)
+        .map(crate::board::Channel::info)
+        .map_err(|_| format!("bad channel {channel:?} (want do:N, di:N or i2c:BUS:ADDR:REG[:FMT])"))
 }
 
 /// What is wrong with a signal no driver serves (another module's output,

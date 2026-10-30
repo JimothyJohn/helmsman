@@ -351,6 +351,16 @@
   difficulty: low
   id: dev-bundles-switch
 
+- [ ] **Canvas approvals: how does the browser get the API token?** The review screen (feat/proposal-ui) needs the box's bearer token to replay and apply, on top of the role PIN. The token lives in `api-token` in the box's state directory and is printed once to the journal. Built: the operator pastes it once per page load into a masked field; it is held in the page's memory only (never localStorage, never egui's persisted state), dropped on "Forget", a reload, or a 401, and sent only in the `Authorization` header. Trade-off: 64 hex digits is awkward on a tablet, and anyone who can read the journal or state dir can hand it out; but nothing new is stored in the browser and no API change was needed. The better long-term shape is a login exchange: `POST /api/session` with role + PIN returns a short-lived, role-scoped session token (memory only), so operators never see the box token; that is an API change under the same lockout, and overlaps `local-accounts`. Reversible: the token only enters through `Review::set_token` in crates/helmsman-canvas/src/review.rs.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: how an operator authenticates the canvas to the box before approving
+  options: paste the box token once per page load, memory only (recommended for now, built) | PIN login exchange for a short-lived session token (API change) | the box injects the token into the page it serves on loopback only
+  est: 1d
+  difficulty: med
+  id: canvas-token
+
 - [ ] **Floor screen layout: a startup file, or part of the snapshot?** The andon view (feat/andon-screen) reads its layout from `--screen FILE` at startup, like the sinks file: tile titles, which signal each tile shows, and the state code → colour/message table. It is not in the snapshot store, so changing a message is a file edit plus a restart, outside the approval path and the history. What the tiles *are* (the `screen` outputs and their safe states) is in the I/O map, which is snapshotted and output-affecting, so nothing that drives a tile bypasses approval; only the words and colours do. Putting the layout in a change set means a store schema bump (a `screen` blob beside `io-map` and `calendar`), a tier for it (I'd say `param`: it moves no output), and a live reload in the canvas. I kept it a startup file (reversible: the API already serves it by content).
   asked: 2026-10-30
   by: claude-agent
@@ -391,6 +401,16 @@
   est: 1h
   difficulty: low
   id: offline-without-relay
+
+- [ ] **Modbus RTU: enforce the t1.5 inter-character rule by default?** Serial §2.5.1.1 p.13 says a frame with a silence over 1.5 character times inside it is discarded. `modbus-rtu` (feat/sources-modbus-rtu) applies that only with `timing=strict` on the device line; by default it frames by CRC and by hunting for the expected unit and function. Reason: a USB-RS485 adapter's latency timer (1-16 ms on FTDI) delivers a reply in bursts the host sees milliseconds apart, so strict timing would throw good replies away; a native UART (the Pi's ttyAMA*) can take strict. The transmit side keeps t3.5 either way. Reversible: one default in `rtu::Params`.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call (and which adapter the bench uses)
+  result: whether a plain `device x modbus-rtu /dev/ttyUSB0` line discards gappy frames
+  options: relaxed by default, timing=strict opt-in (recommended, built) | strict by default, timing=relaxed for USB adapters | strict on /dev/ttyAMA*, relaxed on /dev/ttyUSB*
+  est: 15m
+  difficulty: low
+  id: rtu-strict-timing
 
 - [ ] **Drop-ins: PDF through the relay as a document block, or text only?** `POST /api/dropins` refuses PDF (415, "paste the text"): a pure-Rust PDF text extractor is either heavy (`pdf-extract` pulls `lopdf` and font tables) or poor on real SOPs, and the box would be parsing the most hostile file format there is. The Messages API reads PDFs itself as `document` content blocks, so the box could pass the bytes through the relay untouched (the relay would need to accept a document block from a box and cap its size). Built: text only.
   asked: 2026-10-30
@@ -497,6 +517,15 @@
   difficulty: med
   depends: pi-prep
   id: pi-deploy-iec
+
+- [ ] **Check the board backend on the Pi** — run the GPIO / I2C check against the pick PC: finds the header's GPIO chip (gpiochip0 or gpiochip4 on a Pi 5, by kernel), lists /dev/i2c-1, builds and runs `board_check` (helmsman-io's Linux backend, the code behind `helmsman-plc --gpio-chip`) reading `di:4` by default. Add `READ="di:4 i2c:1:0x48:0:i16"` for a sensor, and `LOOP="do:17=di:27"` only with a jumper from that output to that input (it drives the output).
+  needs: on the Pi `sudo apt install gpiod i2c-tools`, `dtparam=i2c_arm=on` and a reboot, the SSH user in the gpio and i2c groups; Docker here
+  result: the board backend proven on real GPIO (and I2C if a sensor is wired); then `--gpio-chip` goes into the deploy unit
+  notes: `! scripts/pi-gpio-check.sh nick@192.168.3.20` (runs here, not in the native terminal; read-only unless LOOP is set)
+  est: 30m
+  difficulty: low
+  depends: pi-deploy-iec, sources-modbus-gpio
+  id: pi-gpio-check
 
 - [x] **Deploy tcpethernet-plc to the Pi and smoke it from the Studio** — our own adapter + soft PLC as a systemd service (web page on :8080, token printed by the script). Alternative or complement to CODESYS; needs no Windows. Runs here.
   needs: pi-prep done (key SSH, passwordless sudo)
@@ -668,6 +697,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 
 - [ ] **Box outputs: GPIO stack light** — Pi GPIO (or a relay hat) as box-owned outputs with named channels; blink patterns as a stdlib FB.
   needs: a relay hat or 24 V stack light + driver on the bench
+  notes: the GPIO backend is in (feat/sources-modbus-rtu: `do:N` is line N of `--gpio-chip`); left: the hardware, the blink FB, and pi-gpio-check on the Pi
   result: the demo's light
   est: 1d
   difficulty: low
@@ -744,10 +774,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: built on feat/approval-policy: helmsman-plc `policy` (classify from the diff, policy file with a floor in code, PBKDF2 PINs + lockout) and `api/approve.rs` (replay evidence bound to content hashes; apply/rollback = check, scan-thread reconfigure, commit); docs/ARCHITECTURE.md "Approval policy"
   id: approval-policy
 
-- [ ] **Proposal review UI** — in the canvas: ST diff, diagram diff (ghost blocks), sim replay chart, manifest changes (new outputs/signals highlighted), approve with PIN.
+- [x] **Proposal review UI** — in the canvas: ST diff, diagram diff (ghost blocks), sim replay chart, manifest changes (new outputs/signals highlighted), approve with PIN.
   est: 4d
   difficulty: med
   depends: st-graph-view, approval-policy, sim-replay
+  notes: built on feat/proposal-ui: "Proposals" in the canvas top bar (review.rs decides, review_view.rs draws, web::Http fetches); helmsman_diagram::diff (line diff, block diff with ghosts); the replay JSON now carries each signal's step track; the API token is typed once per page load (canvas-token asks)
   id: proposal-ui
 
 - [ ] **M1 demo run** — the sentence at the top of this section, on the bench, recorded. scripts/m1-demo.sh brings the box up from a clean deploy.
@@ -835,7 +866,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: signal-model
   id: sink-opcua
 
-- [ ] **More sources: Modbus TCP/RTU, GPIO/I2C inputs** — signal sources beyond CIP, so a dumb machine plus a sensor is a valid install.
+- [x] **More sources: Modbus TCP/RTU, GPIO/I2C inputs** — signal sources beyond CIP, so a dumb machine plus a sensor is a valid install.
+  notes: built on feat/sources-modbus-rtu: `modbus-rtu` driver (helmsman-io `rtu`, shared app layer with TCP, RTU simulator, conformance `--sim-rtu`), box channels `di:N`/`do:N`/`i2c:BUS:ADDR:REG[:FMT]` on the board via `helmsman-plc --gpio-chip` (helmsman-io `board`). Verified against the simulator and fakes only: on-Pi check is `pi-gpio-check`, a real RTU device waits for the bench
   est: 1w
   difficulty: med
   depends: signal-model

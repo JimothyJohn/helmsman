@@ -127,8 +127,9 @@ scan; the scheduler bounds how often.
 ## The I/O layer, as built (`helmsman-io`)
 
 - **`Device`**: an endpoint the box is master of: `id`, `driver` name
-  (`modbus-tcp`), `endpoint` (`host:port`), driver params (`unit`,
-  `timeout_ms`).
+  (`modbus-tcp`, `modbus-rtu`, `logix-tag`), `endpoint` (`host:port`, or a
+  serial port's path for `modbus-rtu`), driver params (`unit`,
+  `timeout_ms`, and the serial settings).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
   `Real`), a direction (`In`, `Out`), an optional engineering `unit`
   (metadata, never converted), an optional per-input `poll` period, and a
@@ -148,22 +149,47 @@ scan; the scheduler bounds how often.
   nothing, batching is the driver's business), `write(addr, value)`. Strings
   and plain values only, so the same contract crosses a WASM boundary
   unchanged.
-- **`modbus`**: the Modbus TCP client and driver, from the spec (citations
-  in `docs/SOURCES.md`).
+- **`modbus`**: the Modbus application layer (points, PDUs, reply checks,
+  `app`) over a `Transport`, and the TCP client; the driver is generic over
+  the transport. From the spec (citations in `docs/SOURCES.md`).
+- **`rtu`**: `modbus-rtu`, the same application layer on a serial line:
+  RTU framing and CRC-16, t3.5 silence before each request, the response
+  time-out, broadcast (unit 0: writes only, no reply, then the turnaround
+  delay), units 1..=247. The receiver hunts for the expected unit and
+  function and takes the first frame whose CRC checks, so noise and other
+  units' replies are skipped; after a link error the line is drained until
+  quiet for a whole time-out, so a late reply is never taken for the next
+  answer (RTU has no transaction id; a reply later than about two time-outs
+  still could be). CRC errors, truncated frames and time-outs are link
+  errors; exceptions are point errors. The serial port is a `Line` trait:
+  `rtu::serial` (termios through rustix, the `serial` feature) on the box,
+  `rtu::pipe` (in memory) in tests.
 - **`sim`**: a Modbus device with cross-wires (a coil driving a discrete
-  input, like a wire on the bench) and injectable faults.
+  input, like a wire on the bench) and injectable faults, over TCP; and
+  `rtu::sim`, the same tables as an RTU unit on a pipe, with the serial
+  faults (bad CRC, truncated frame, another unit answering, noise, a reply
+  in pieces, late replies).
 - **`harness`**: driver conformance, reported as `PASS`/`FAIL`/`SKIP` lines.
   Writes are proven through loops (output wired to input), so a driver that
-  only pretends to write fails. `cargo run -p helmsman-io --example
-  conformance -- --sim`.
+  only pretends to write fails. Each simulator lists the faults that mean
+  something on its transport. `cargo run -p helmsman-io --example
+  conformance -- --sim` (TCP) or `-- --sim-rtu`.
 
 - **`logix`**: `logix-tag`, read-only signals from an observed Logix
   controller by tag name (`in temp real plc Program:Main.Temp@real`); the
   `@TYPE` is the tag's Logix type and is checked on every reply. Reads are
   batched into one Multiple Service Packet per cycle.
 
-- **`local`**: the box's own channels (`do:N`, `di:N`) behind the same
-  contract; in memory until `gpio-outputs` adds the Pi backend.
+- **`local`**: the box's own channels (`do:N`, `di:N`, and
+  `i2c:BUS:ADDR:REG[:FMT]` integer inputs from a sensor register) in
+  memory, the default. **`board`**: the same channels on the board: a
+  `Board` driver over `Gpio` and `I2c` traits (direction rules, formats,
+  errors: a line that won't request or a sensor that doesn't answer is a
+  point error), and `board::linux` (Linux, the `gpio` feature): GPIO lines
+  through the character device's uAPI v2 (gpiocdev) and `/dev/i2c-N` with a
+  combined write-then-read (i2cdev). `helmsman-plc --gpio-chip
+  /dev/gpiochipN` picks it; the chip is checked at start. Both features are
+  in helmsman-plc's `box`, so the canvas's wasm build has neither.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
@@ -625,6 +651,11 @@ threads, the Modbus simulator over TCP).
   dropped; if the device does not answer that cannot happen (the box only
   reaches a device through its link), and the apply says so in
   `reload.notes`: the device's own comm watchdog is the backstop.
+- **The floor screen** (`--screen`) must fit the new map as it must at
+  startup (`screen::Layout::check`: every tile's signals are screen
+  outputs on it, every screen output is on a tile; no screen, no screen
+  outputs); if not, 409 and the old map keeps running. A screen output's
+  tile is part of its binding, so it carries like any other signal.
 - **Around it.** Sinks rebind their emits by name; the API's catalog,
   device list and replay table follow. The recording restarts, so the
   next replay's window starts at the reload. A published live view from
@@ -969,6 +1000,52 @@ agent as ST; nothing here writes ST back).
   the last scan of every frame; scripted or hand-switched inputs. Pan,
   zoom, click a block for its source line, click an output for why.
 
+## Proposal review (`proposal-ui`, built)
+
+The screen an engineer approves on: "Proposals" in the canvas top bar
+(`review.rs` decides, `review_view.rs` draws, `web::Http` fetches; contract
+in `review.rs`'s tests and `review_tests.rs`, which runs the screen's own
+requests against a real box: runtime, recorder, store, floor policy, PIN
+file and token in a temporary state directory).
+
+- **What it shows.** The drafts, newest first, each with the box's tier
+  badge (`param`, `logic`, `output-affecting`: read from the draft's
+  `approval`, never worked out in the browser), its reasons and what the
+  policy needs. For a module draft: the manifest old against new (driven
+  signals and the `%Q` window first, anything new that can move an output
+  in the hazard colours), the source as a line diff with context, and the
+  diagram diff. For a param draft: old → new and the declared range.
+- **Diffs** (`helmsman_diagram::diff`, pure and deterministic). Lines: a
+  longest common subsequence after trimming the common head and tail
+  (middles past 4 M cells fall back to all-removed-then-added). Blocks: both
+  versions are lowered; a block's identity is its POU, the kind and arm of
+  each region around it, its kind and header; its signature adds the text
+  it computes and what feeds each input. Equal signatures pair first, then
+  equal identity and text, then equal identity (`changed`); the rest are
+  added or removed. Regions pair the same way on their label, so a changed
+  IF condition is one changed region, not a new body. Property-tested: a
+  module against itself differs nowhere, and the old blocks less the
+  removed and changed plus the added and the changed ones' new versions
+  are exactly the new blocks. Removed blocks are drawn as dashed ghosts in
+  their old layout below the proposed diagram.
+- **Sim replay chart.** "Run the sim replay" posts `.../replay`; the
+  answer now carries, per driven signal, both step tracks
+  (`current_track`, `proposed_track`: type and `[at_ms, value]` steps, at
+  most 2000 each, `truncated` past that; the summaries stay exact). Drawn
+  in egui, no charting crate: what runs in steel, the proposal in yellow,
+  rises marked, and the box's `extra_rises` as "would have fired N more /
+  fewer times"; differences first.
+- **Approve and undo.** Role picker, a masked PIN field, and the API
+  token typed once per page load (memory only; `canvas-token` asks about a
+  login exchange). Submitting moves the PIN into the request body and
+  empties the field whatever happens; neither secret shows in a `Debug`
+  output or a log. The box's refusals are shown verbatim with what to do:
+  401 token (and the token is dropped), 403 role or wrong PIN, 428 replay
+  missing or stale, 429 locked with a countdown from `Retry-After` (nothing
+  is sent until it ends), 409 stale draft. After an apply: the new snapshot
+  and the history head, and an undo (`/api/snapshots/{previous}/rollback`)
+  through the same replay and PIN flow.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -990,9 +1067,9 @@ prompt. The agent never touches the Rust core.
 
 ## Where the planned pieces attach
 
-- `approval-policy` (built, above) → `proposal-ui`: the canvas shows a
-  draft's `approval` (tier, reasons, what it needs), charts its replay
-  (`GET /api/replays/{n}`), and posts the PIN to `apply`. `box-mcp` wraps
+- `approval-policy` (built, above) → `proposal-ui` (built, above): the
+  canvas shows a draft's `approval` (tier, reasons, what it needs), charts
+  its replay, and posts the PIN to `apply`. `box-mcp` wraps
   the same routes; `local-accounts` replaces role PINs with people, keeping
   the role check and the gate.
 - `canvas-web` (built, above) → `andon-screen`: another page the box

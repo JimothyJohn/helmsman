@@ -20,6 +20,7 @@ use helmsman_adapter::device::lock_ref;
 use helmsman_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
 use helmsman_agent::relay;
 use helmsman_iec::{ImageSizes, compile, compile_plcopen, plcopen};
+use helmsman_io::Driver;
 use helmsman_io::local::Channels;
 use helmsman_plc::api::swap::Scene;
 use helmsman_plc::api::{
@@ -48,6 +49,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        (see helmsman_plc::manifest), checked against each other
   --io-map FILE        devices and named signals (see helmsman_io::text); a
                        module's VAR_INPUT/VAR_OUTPUT bind to signals by name
+  --gpio-chip PATH     the box's own channels on this board (Linux): di:N and
+                       do:N are lines N of PATH (/dev/gpiochip4 on a Pi 5
+                       before kernel 6.6.45, /dev/gpiochip0 after), and
+                       i2c:BUS:... reads /dev/i2c-BUS. Default: in memory
   --calendar FILE      shifts, breaks, planned downtime (see
                        helmsman_plc::calendar::text): adds the signals in_shift,
                        on_break, planned_down, working, shift_id, shift_minute,
@@ -107,6 +112,7 @@ struct Opts {
     modules: Vec<String>,
     module_dirs: Vec<PathBuf>,
     io_map: Option<PathBuf>,
+    gpio_chip: Option<PathBuf>,
     calendar: Option<PathBuf>,
     sinks: Option<PathBuf>,
     sink_dir: Option<PathBuf>,
@@ -156,6 +162,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         modules: Vec::new(),
         module_dirs: Vec::new(),
         io_map: None,
+        gpio_chip: None,
         calendar: None,
         sinks: None,
         sink_dir: None,
@@ -229,6 +236,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--module" => o.modules.push(v.clone()),
             "--module-dir" => o.module_dirs.push(PathBuf::from(v)),
             "--io-map" => once(&mut o.io_map, flag, v)?,
+            "--gpio-chip" => once(&mut o.gpio_chip, flag, v)?,
             "--calendar" => once(&mut o.calendar, flag, v)?,
             "--sinks" => once(&mut o.sinks, flag, v)?,
             "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
@@ -524,6 +532,49 @@ fn load_calendar((path, src): &Text, table: &mut SignalTable) -> Result<Source, 
     })
 }
 
+/// One driver shared by every link that asks for it: the board's GPIO
+/// lines stay requested once, across map reloads.
+struct Shared(Arc<Mutex<Box<dyn Driver + Send>>>);
+
+impl Driver for Shared {
+    fn parse(&self, addr: &str) -> Result<helmsman_io::PointInfo, helmsman_io::Error> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).parse(addr)
+    }
+
+    fn read(&mut self, addrs: &[&str]) -> Result<Vec<helmsman_io::Value>, helmsman_io::Error> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).read(addrs)
+    }
+
+    fn write(&mut self, addr: &str, value: helmsman_io::Value) -> Result<(), helmsman_io::Error> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .write(addr, value)
+    }
+}
+
+/// The box's own channels: the board's GPIO and I2C with `--gpio-chip`
+/// (the chip is checked here, at start), in memory without.
+fn box_channels(chip: Option<&Path>) -> Result<helmsman_plc::link::Channels, String> {
+    let Some(p) = chip else {
+        return Ok(Arc::new(|| Box::new(Channels::new())));
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let board = helmsman_io::board::linux::open(p).map_err(|e| format!("--gpio-chip: {e}"))?;
+        let shared: Arc<Mutex<Box<dyn Driver + Send>>> = Arc::new(Mutex::new(Box::new(board)));
+        Ok(Arc::new(move || Box::new(Shared(Arc::clone(&shared)))))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = Shared;
+        Err(format!(
+            "--gpio-chip {}: the GPIO backend is Linux only",
+            p.display()
+        ))
+    }
+}
+
 /// [`load_io`] (or no signals), with the calendar's added.
 fn load_signals(c: &Content) -> Result<Signals, String> {
     let (mut table, uses_box, map) = match &c.io_map {
@@ -642,12 +693,13 @@ fn plan_io(
     map: Option<&helmsman_io::IoMap>,
     table: &Arc<Mutex<SignalTable>>,
     devices: &Arc<Devices>,
+    channels: helmsman_plc::link::Channels,
 ) -> Result<(LinkSet, Plan), String> {
     let devices = Arc::clone(devices);
     let set = LinkSet::new(
         Arc::clone(table),
         Arc::new(helmsman_io::open),
-        Arc::new(|| Box::new(Channels::new())),
+        channels,
         Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
             match err {
                 None => eprintln!("helmsman-plc: device {name} up"),
@@ -875,7 +927,14 @@ fn catalog(
 
 /// The startup lines: the CIP banner (tests read its addresses from the
 /// first line), where the content came from, what is simulated.
-fn announce(adapter: &Adapter, specs: &[Spec], content: &Content, uses_box: bool, cal: Option<&Source>) {
+fn announce(
+    adapter: &Adapter,
+    specs: &[Spec],
+    content: &Content,
+    uses_box: bool,
+    chip: Option<&Path>,
+    cal: Option<&Source>,
+) {
     let listed: Vec<String> = specs.iter().map(describe).collect();
     eprintln!(
         "helmsman-plc: CIP on {} (I/O {}), {} module(s): {}",
@@ -887,8 +946,15 @@ fn announce(adapter: &Adapter, specs: &[Spec], content: &Content, uses_box: bool
     if let Some(origin) = &content.origin {
         eprintln!("helmsman-plc: {origin}");
     }
-    if uses_box {
-        eprintln!("helmsman-plc: box channels (do:N, di:N) are in memory only; no GPIO yet");
+    match (uses_box, chip) {
+        (true, None) => eprintln!(
+            "helmsman-plc: box channels (do:N, di:N, i2c:...) are in memory only; --gpio-chip puts them on the board"
+        ),
+        (true, Some(c)) => eprintln!(
+            "helmsman-plc: box channels on {} (di:N, do:N) and /dev/i2c-N (i2c:...)",
+            c.display()
+        ),
+        (false, _) => {}
     }
     if let Some(c) = cal {
         report_calendar(c);
@@ -994,7 +1060,12 @@ fn run(o: &Opts) -> Result<(), String> {
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
     let devices = Arc::new(Devices::new(Vec::new()));
-    let (link_set, io_plan) = plan_io(map.as_ref(), &table, &devices)?;
+    let (link_set, io_plan) = plan_io(
+        map.as_ref(),
+        &table,
+        &devices,
+        box_channels(o.gpio_chip.as_deref())?,
+    )?;
     for name in io_plan.starts() {
         devices.add(name);
     }
@@ -1002,7 +1073,14 @@ fn run(o: &Opts) -> Result<(), String> {
     let link_set = Arc::new(Mutex::new(link_set));
     let live = Arc::new(Live::default());
     let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
-    announce(&adapter, &specs, &content, uses_box, cal.as_ref());
+    announce(
+        &adapter,
+        &specs,
+        &content,
+        uses_box,
+        o.gpio_chip.as_deref(),
+        cal.as_ref(),
+    );
     let recorder = recorder(&table);
     let (swap, swapper) = api::swap::channel(Duration::from_secs(5));
     let swap = swap.with_links(Arc::clone(&link_set));
