@@ -70,6 +70,8 @@ fn map(dir: Dir, ty: Ty, point: &str) -> IoMap {
                 device: "plc".into(),
                 point: point.into(),
             },
+            unit: None,
+            poll: None,
         }],
     }
 }
