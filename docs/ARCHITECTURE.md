@@ -65,7 +65,7 @@ Three directions of traffic, three different rules:
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O. | built |
 | `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
-| `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
+| `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
 | `helmsman-graph` | Node-graph model and scan simulator behind the canvas; the model `st-graph-view` will lower ST into. | built (lab tool) |
 | `helmsman-canvas` | egui canvas, native and wasm. Today an editor over `helmsman-graph`; per `canvas-edit-scope` it becomes the read-only ST view. | built (lab tool) |
@@ -287,6 +287,38 @@ load.
   calendar's signals are missing, so modules reading them are held, and
   driven outputs go to their safe values.
 
+## Snapshots (`snapshots`, built)
+
+`helmsman_plc::store` (`store.rs`; contract in `tests/store.rs`) keeps
+every applied change set in one SQLite file, `DIR/snapshots.db`;
+`helmsman-plc --store DIR` runs whatever head is (and takes no other
+module, map or calendar source).
+
+- **A change set is files, byte for byte**: each module's
+  `module.manifest` and `module.st` (params live in the manifest), the I/O
+  map (the bindings) and the calendar. Commit checks that each manifest
+  parses and names its module and that the map parses; it does not compile
+  (whoever applies compiles first).
+- **Content-addressed**: blobs are keyed by SHA-256; a snapshot's id is the
+  SHA-256 of a canonical text tree (`helmsman-snapshot 1`, then one
+  `module NAME MANIFEST SOURCE` line per module by name, `io-map H`,
+  `calendar H`). Same content, same id, in any store. Every read re-hashes
+  the tree and each blob, so a corrupted or edited row is an error, never
+  wrong content. A tree plus its blobs is what `bundle-format` will carry.
+- **History is an append-only log**: one entry per apply or rollback, with
+  author, prompt, approver and time (caller's clock), each hashed over its
+  fields and the previous entry's hash, so edited history fails `list`.
+  Rollback is a new entry pointing at old content. Committing what head
+  already is writes nothing. `diff(a, b)` names modules added, removed or
+  changed (source, manifest, which params), devices and signal bindings
+  changed, and whether the calendar changed.
+- **Guarded**: triggers refuse `UPDATE` and `DELETE` on every table; the
+  file carries an application id and `user_version` (schema 1), and a
+  newer schema is refused rather than misread. Writers take SQLite's write
+  lock up front (`BEGIN IMMEDIATE`, WAL), so concurrent commits never lose
+  an entry. Author and approver are one line, prompt may span lines; none
+  may carry controls or invisible formatting characters (as the manifest).
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -315,7 +347,9 @@ prompt. The agent never touches the Rust core.
   the policy check; the box API serves it.
 - `st-graph-view` → `canvas-web`: the trace tap's samples (built, below)
   rendered on the ST diagram, served by the box.
-- `snapshots`: each applied change set (modules, params, bindings) is an
-  immutable, content-addressed record in SQLite; rollback is one call.
+- `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
+  compile, check, then `Store::commit` with the approver; the box API
+  serves `list`, `diff` and `rollback`. `bundle-format` exports a tree and
+  its blobs.
 - `sim-replay`: a RAM ring buffer of signal values that a proposed module is
   replayed against before approval.
