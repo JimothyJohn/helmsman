@@ -286,7 +286,7 @@ into the code.
   Protocol Specification"). Fetched 2026-10-29, sha256
   `f80d0d7132fd035104c3f21b01026470e3310ca3d8d493d9a9737d0d32ad2eb1`. Not
   vendored: Modbus Organization copyright.
-- **Leaned on by** `crates/tcpethernet-io/src/modbus.rs` and `sim.rs`: PDU
+- **Leaned on by** `crates/helmsman-io/src/modbus.rs` and `sim.rs`: PDU
   limit of 253 bytes (§4.1 p.3), 0-based PDU addressing (§4.4), function codes
   0x01-0x06 (§6.1-6.6 pp.11-19) with their quantity limits (2000 bits, 125
   registers) and coil encoding (0xFF00/0x0000, §6.5 p.17), LSB-first bit

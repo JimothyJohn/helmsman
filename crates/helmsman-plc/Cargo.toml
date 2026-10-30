@@ -1,0 +1,20 @@
+[package]
+name = "helmsman-plc"
+version = "0.1.0"
+description = "Soft PLC: an IEC 61131-3 Structured Text program behind the CIP adapter"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+helmsman-adapter = { path = "../helmsman-adapter" }
+helmsman-iec = { path = "../helmsman-iec" }
+helmsman-io = { path = "../helmsman-io" }
+
+[dev-dependencies]
+helmsman-proto = { path = "../helmsman-proto" }
+proptest = "1.12"
+
+[lints]
+workspace = true

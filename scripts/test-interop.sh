@@ -3,5 +3,5 @@
 # OpENer container published on localhost by docker-compose.yml.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-export TCPETHERNET_OPENER_ADDR="${TCPETHERNET_OPENER_ADDR:-127.0.0.1}"
+export HELMSMAN_OPENER_ADDR="${HELMSMAN_OPENER_ADDR:-127.0.0.1}"
 cargo test --workspace --locked --test opener_interop -- --nocapture

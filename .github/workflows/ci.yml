@@ -65,9 +65,9 @@ jobs:
         run: |
           ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose ps -q opener)")
           echo "OpENer at $ip"
-          TCPETHERNET_OPENER_ADDR="$ip" ./scripts/test-interop.sh
+          HELMSMAN_OPENER_ADDR="$ip" ./scripts/test-interop.sh
         env:
-          TCPETHERNET_OPENER_IO: '1'
+          HELMSMAN_OPENER_IO: '1'
       - name: OpENer logs
         if: always()
         run: docker compose logs opener
@@ -75,7 +75,7 @@ jobs:
         if: always()
         run: docker compose down
 
-  # The same interop suite against our own adapter (tcpethernet-adapter, which
+  # The same interop suite against our own adapter (helmsman-adapter, which
   # mimics OpENer's sample). Not a required check until it has a green history.
   interop-adapter:
     runs-on: ubuntu-latest
@@ -84,7 +84,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
         with:
           toolchain: stable
-      - name: Start tcpethernet-adapter
+      - name: Start helmsman-adapter
         run: docker compose up -d --build adapter
       - name: Wait for it to listen
         run: |
@@ -95,10 +95,10 @@ jobs:
           done
           docker compose logs adapter
           exit 1
-      - name: Interop suite against tcpethernet-adapter
-        run: TCPETHERNET_OPENER_ADDR="$ADAPTER_IP" ./scripts/test-interop.sh
+      - name: Interop suite against helmsman-adapter
+        run: HELMSMAN_OPENER_ADDR="$ADAPTER_IP" ./scripts/test-interop.sh
         env:
-          TCPETHERNET_OPENER_IO: '1'
+          HELMSMAN_OPENER_IO: '1'
       - name: Adapter logs
         if: always()
         run: docker compose logs adapter

@@ -9,5 +9,5 @@ cd "$(dirname "$0")/.."
 port="${1:-8790}"
 command -v trunk >/dev/null || { echo "needs trunk: cargo install trunk --locked" >&2; exit 1; }
 rustup target add wasm32-unknown-unknown >/dev/null
-cd crates/tcpethernet-canvas
+cd crates/helmsman-canvas
 exec trunk serve --release --address 0.0.0.0 --port "$port" --dist ../../target/canvas-dist

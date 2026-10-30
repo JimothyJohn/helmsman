@@ -1,0 +1,34 @@
+# helmsman-plc: one IEC 61131-3 program behind the CIP adapter.
+# Installed by scripts/pi-deploy-plc.sh, which also writes the program to
+# /etc/helmsman-plc/ and its path to /etc/helmsman-plc/env.
+[Unit]
+Description=Helmsman soft PLC (IEC 61131-3, CIP adapter on 44818/2222)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/helmsman-plc/env
+ExecStart=/usr/local/bin/helmsman-plc ${PLC_PROGRAM} --scan-ms ${PLC_SCAN_MS}
+DynamicUser=yes
+Restart=on-failure
+RestartSec=2
+# Ports are all >1024: no capabilities needed.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# Scan timing: ahead of ordinary processes, never real-time.
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

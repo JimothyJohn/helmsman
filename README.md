@@ -1,26 +1,30 @@
-# tcpethernet
+# Helmsman Factory Automation
 
-An open-source originator (explicit-message client and I/O scanner) for CIP
-over TCP/UDP on Ethernet, so an open device can discover, configure, and
-exchange I/O with industrial devices that run a conformant adapter stack.
+A small soft PLC for factory edge boxes (a Raspberry Pi 5 is the reference):
+Structured Text modules that an agent drafts and an engineer approves, run
+against named signals on the devices the box masters, plus an open-source
+CIP-over-Ethernet originator and adapter. `docs/ARCHITECTURE.md` is the map
+of the code; `TODO.md` is the plan.
 
-Status: early. Rust cargo workspace; `crates/tcpethernet` has the encapsulation
-header codec, `ListIdentity` discovery over UDP, and property tests. `make help`
-lists the dev targets. See `docs/SOURCES.md` for the review of the reference
-stacks and ODVA documents this project draws on, and `TODO.md` for the open
-decisions.
+Status: early. Rust cargo workspace, crates under `crates/helmsman-*`:
+`helmsman-proto` (CIP originator), `helmsman-adapter` (CIP target),
+`helmsman-cli` (the `helmsman` command), `helmsman-iec` (ST compiler and
+interpreter, PLCopen XML), `helmsman-io` (I/O map, drivers, Modbus TCP),
+`helmsman-plc` (the runtime), `helmsman-graph` / `helmsman-canvas` (the node
+canvas). `make help` lists the dev targets. See `docs/SOURCES.md` for the
+reference stacks and ODVA documents this project draws on.
 
 ## Command line
 
 ```
 cargo build --release
-target/release/tcpethernet discover                     # ListIdentity broadcast
-target/release/tcpethernet identity 10.0.0.50           # Identity attributes 1-7
-target/release/tcpethernet get 10.0.0.50 0xF5.1.5       # any attribute, as hex
-target/release/tcpethernet io 10.0.0.50 --config 151 --out 150 --in 100 \
+target/release/helmsman discover                     # ListIdentity broadcast
+target/release/helmsman identity 10.0.0.50           # Identity attributes 1-7
+target/release/helmsman get 10.0.0.50 0xF5.1.5       # any attribute, as hex
+target/release/helmsman io 10.0.0.50 --config 151 --out 150 --in 100 \
     --out-len 32 --in-len 32 --rpi 50 --set 0102...     # Class 1 exclusive owner
 ```
 
-`tcpethernet help` lists every flag. `io` binds UDP 2222 locally because
+`helmsman help` lists every flag. `io` binds UDP 2222 locally because
 targets send input there.
 

@@ -11,7 +11,7 @@ the store page is the source of truth.
 | Pi runtime on the bench, unlicensed (demo mode) | Free | Stops after **2 hours**. You restart it by hand. Otherwise fully functional, EtherNet/IP included. |
 | Pi runtime, licensed | €55 + VAT (EU store) / $66 (US store), per device | It's a **private licence**. "Commercial use is not permitted" on Pi + CODESYS. |
 | CODESYS on anything you sell or deploy for a customer | Paid, every device | Application-based licences: Basic S €29 up to Standard L €199, plus extra tiers for communication, visualisation and motion. |
-| Our own stack (`tcpethernet`, `tcpethernet-plc`) plus OpENer | Free | MIT (ours) and adapted BSD (OpENer). ODVA riders apply to products, see below. |
+| Our own stack (`helmsman-proto`, `helmsman-plc`) plus OpENer | Free | MIT (ours) and adapted BSD (OpENer). ODVA riders apply to products, see below. |
 
 If you don't want to pay anyone, here's how: use CODESYS only as a bench
 interop target in demo mode, and ship our own code.
@@ -57,7 +57,7 @@ Check the store before quoting a customer.
    `codesys-pi.md` describes. Two hours is longer than any interop run we
    have. Restart the runtime when it stops.
 2. **Skip CODESYS.** `make opener-up` gives an adapter in CI for free, and
-   `tcpethernet-plc` is our own soft PLC and adapter, MIT. Anything a customer
+   `helmsman-plc` is our own soft PLC and adapter, MIT. Anything a customer
    runs should be this, not CODESYS.
 3. **Don't automate around the demo limit.** You could put a watchdog on the
    Pi that restarts the runtime every two hours. I haven't read the runtime

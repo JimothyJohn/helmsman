@@ -9,8 +9,7 @@ boundaries sit. Product intent lives in `TODO.md` ("Product vision",
 "Roadmap M1..M4"); this page is how the code is shaped to deliver it.
 
 Every part below is tagged **built** (on `dev`, tested) or **planned** (a
-roadmap card, by id). Crates still carry the `tcpethernet-*` names until
-`helmsman-rename` lands.
+roadmap card, by id).
 
 ## The picture
 
@@ -27,15 +26,15 @@ roadmap card, by id). Crates still carry the `tcpethernet-*` names until
  │  └────────────────────────┘           └──┬────────────┬───────────────┬─────┘  │   LAN (planned:
  │                                 policy + │ PIN        │ read-only     │        │   canvas-web)
  │                                          ▼            ▼               ▼        │
- │  ┌─ runtime: tcpethernet-plc (built: N modules, one scheduler thread) ──────┐  │
+ │  ┌─ runtime: helmsman-plc (built: N modules, one scheduler thread) ─────────┐  │
  │  │  module A (ST, 10 ms)   module B (ST, 100 ms)   module C (ST, 1 s)       │  │
  │  │     own %I/%Q/%M window, own scan rate, faults stop only itself          │  │
- │  │  ── interpreter + checker: tcpethernet-iec (built) ──────────────────────│  │
+ │  │  ── interpreter + checker: helmsman-iec (built) ─────────────────────────│  │
  │  └───────┬───────────────────────────────┬──────────────────────────┬───────┘  │
  │          │ process image (built)         │ signals by name          │ trace    │
  │          ▼                               ▼ (built)                  ▼ (plan-   │
- │  ┌─ CIP adapter ───────────┐   ┌─ I/O map + drivers: tcpethernet-io ─┐  ned)   │
- │  │ tcpethernet-adapter     │   │ IoMap · Driver · modbus-tcp (built) │         │
+ │  ┌─ CIP adapter ───────────┐   ┌─ I/O map + drivers: helmsman-io ────┐  ned)   │
+ │  │ helmsman-adapter        │   │ IoMap · Driver · modbus-tcp (built) │         │
  │  │ assembly 150 in, 100 out│   │ WASM drivers (planned: wasm-driver) │         │
  │  └───────▲─────────────────┘   └───────┬──────────────┬──────────────┘         │
  └──────────┼─────────────────────────────┼──────────────┼────────────────────────┘
@@ -43,7 +42,7 @@ roadmap card, by id). Crates still carry the `tcpethernet-*` names until
      a scanner (CODESYS,               remote I/O,      stack light, relays
      a Logix PLC, our CLI)             drives, sensors
 
-  observed controllers (a CompactLogix): read-only, via tcpethernet (originator)
+  observed controllers (a CompactLogix): read-only, via helmsman-proto (originator)
   (planned: logix-tag-read; no Write Tag in the box build)
 ```
 
@@ -62,14 +61,14 @@ Three directions of traffic, three different rules:
 
 | crate | owns | status |
 | --- | --- | --- |
-| `tcpethernet` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Class 1 scanner. Byte codecs plus socket-level session, discovery and scanner. | built |
-| `tcpethernet-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O. | built |
-| `tcpethernet-cli` | `tcpethernet discover / get / io`: the originator from a shell. | built |
-| `tcpethernet-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
-| `tcpethernet-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
-| `tcpethernet-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
-| `tcpethernet-graph` | Node-graph model and scan simulator behind the canvas; the model `st-graph-view` will lower ST into. | built (lab tool) |
-| `tcpethernet-canvas` | egui canvas, native and wasm. Today an editor over `tcpethernet-graph`; per `canvas-edit-scope` it becomes the read-only ST view. | built (lab tool) |
+| `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Class 1 scanner. Byte codecs plus socket-level session, discovery and scanner. | built |
+| `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O. | built |
+| `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
+| `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
+| `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
+| `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
+| `helmsman-graph` | Node-graph model and scan simulator behind the canvas; the model `st-graph-view` will lower ST into. | built (lab tool) |
+| `helmsman-canvas` | egui canvas, native and wasm. Today an editor over `helmsman-graph`; per `canvas-edit-scope` it becomes the read-only ST view. | built (lab tool) |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `open-core-split`), the agent loop (behind the box API; the tool surface is the
@@ -94,7 +93,7 @@ can still be found and diagnosed, even once every module has stopped.
 
 ## Many modules in one runtime (`multi-module`)
 
-Built in `tcpethernet-plc` (`runtime.rs`; contract in `tests/runtime.rs`).
+Built in `helmsman-plc` (`runtime.rs`; contract in `tests/runtime.rs`).
 On the command line a module is `--module PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]`;
 a bare program argument is a module with every default (whole image), so
 existing deploys run unchanged. The `module-format` manifest replaces the
@@ -124,7 +123,7 @@ deadline skips the missed periods and counts an overrun, so a slow module
 cannot starve the others into a burst. The instruction budget bounds each
 scan; the scheduler bounds how often.
 
-## The I/O layer, as built (`tcpethernet-io`)
+## The I/O layer, as built (`helmsman-io`)
 
 - **`Device`**: an endpoint the box is master of: `id`, `driver` name
   (`modbus-tcp`), `endpoint` (`host:port`), driver params (`unit`,
@@ -147,7 +146,7 @@ scan; the scheduler bounds how often.
   input, like a wire on the bench) and injectable faults.
 - **`harness`**: driver conformance, reported as `PASS`/`FAIL`/`SKIP` lines.
   Writes are proven through loops (output wired to input), so a driver that
-  only pretends to write fails. `cargo run -p tcpethernet-io --example
+  only pretends to write fails. `cargo run -p helmsman-io --example
   conformance -- --sim`.
 
 - **`local`**: the box's own channels (`do:N`, `di:N`) behind the same
@@ -157,7 +156,7 @@ scan; the scheduler bounds how often.
 
 ## Signals in the scan (`io-runtime`, built)
 
-`tcpethernet-plc --io-map FILE` loads the map; a module names signals by
+`helmsman-plc --io-map FILE` loads the map; a module names signals by
 declaring them as its PROGRAM's `VAR_INPUT`s and `VAR_OUTPUT`s (matched by
 name, case-insensitively, as ST is). That interface is also what a module
 manifest can be derived from.
@@ -188,7 +187,7 @@ manifest can be derived from.
 | module ↔ network | nothing | ST has no network primitives; sinks (webhook, OPC UA) are core-owned | built by construction; sinks planned |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one module per output signal), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
-| box ↔ observed PLCs | tag reads | the box build exposes read services only (no Write Tag, no `Set_Attribute`) | planned (`logix-tag-read`); **today the `tcpethernet` library and CLI can send any service and drive Class 1 outputs** |
+| box ↔ observed PLCs | tag reads | the box build exposes read services only (no Write Tag, no `Set_Attribute`) | planned (`logix-tag-read`); **today the `helmsman-proto` library and CLI can send any service and drive Class 1 outputs** |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | planned (`box-api`, `approval-policy`) |
 | text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions, in the agent prompt; the host rules above hold regardless | planned (`agent-loop`) |

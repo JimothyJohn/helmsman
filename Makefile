@@ -1,4 +1,4 @@
-# Common dev tasks for tcpethernet (Rust, cargo workspace). `make help` lists them.
+# Common dev tasks for Helmsman (Rust, cargo workspace). `make help` lists them.
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
@@ -36,13 +36,13 @@ opener-down:  ## Stop and remove the OpENer container.
 opener-logs:  ## Tail the OpENer container.
 	docker compose logs -f opener
 
-test-interop:  ## Interop suite against TCPETHERNET_OPENER_ADDR (default 127.0.0.1, i.e. the container).
+test-interop:  ## Interop suite against HELMSMAN_OPENER_ADDR (default 127.0.0.1, i.e. the container).
 	./scripts/test-interop.sh
 
 # ---- Structured Text oracle -------------------------------------------------
 
 rusty-image:  ## Build the pinned ruSTy compiler image (test oracle only, never linked).
-	docker build -t tcpethernet/rusty:1.0.7 docker/rusty
+	docker build -t helmsman/rusty:1.0.7 docker/rusty
 
 test-oracle:  ## Differential test of the ST interpreter against ruSTy (needs Docker).
 	./scripts/test-oracle.sh
@@ -50,7 +50,7 @@ test-oracle:  ## Differential test of the ST interpreter against ruSTy (needs Do
 # ---- Node canvas ------------------------------------------------------------
 
 canvas:  ## Run the node canvas as a native window.
-	cargo run --release -p tcpethernet-canvas
+	cargo run --release -p helmsman-canvas
 
 canvas-web:  ## Build the node canvas for the browser into target/canvas-dist.
 	./scripts/canvas-web.sh

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Build tcpethernet-plc (IEC 61131-3 runtime + CIP adapter) for a 64-bit ARM
+# Build helmsman-plc (IEC 61131-3 runtime + CIP adapter) for a 64-bit ARM
 # Pi on this machine and run it there as a systemd service with one program.
 # Safe to re-run: rebuilds, reinstalls the binary, program and unit, restarts.
+# Also retires the pre-rename tcpethernet-plc unit and its firewall rules.
 #
 # Needs: Docker here (the build runs in the pinned rust:*-slim-trixie image as
 # linux/arm64: native on the Studio, emulated on x86), key SSH and
@@ -10,17 +11,17 @@
 # Then smoke it from here: scripts/adapter-smoke.sh <pi-ip> (needs echo.st).
 #
 # Usage: scripts/pi-deploy-plc.sh user@host [PROGRAM.st|PROJECT.xml]
-#        default program: crates/tcpethernet-plc/programs/echo.st
+#        default program: crates/helmsman-plc/programs/echo.st
 #        PLC_SCAN_MS=5     scan period in ms (default 10)
 #        PLC_ALLOW=10.0.0.0/24   firewall source (default 192.168.3.0/24)
-# Undo: sudo systemctl disable --now tcpethernet-plc, remove the unit,
-#       /usr/local/bin/tcpethernet-plc and /etc/tcpethernet-plc; the firewall
+# Undo: sudo systemctl disable --now helmsman-plc, remove the unit,
+#       /usr/local/bin/helmsman-plc and /etc/helmsman-plc; the firewall
 #       rules are runtime-only and go with a reboot or perceptronics reload.
 set -euo pipefail
 
 target="${1:?usage: $0 user@host [PROGRAM.st|PROJECT.xml]}"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
-program="${2:-$repo/crates/tcpethernet-plc/programs/echo.st}"
+program="${2:-$repo/crates/helmsman-plc/programs/echo.st}"
 scan_ms="${PLC_SCAN_MS:-10}"
 allow="${PLC_ALLOW:-192.168.3.0/24}"
 image="$(sed -n 's#^FROM \(rust:[^ ]*\) AS build$#\1#p' "$repo/docker/adapter/Dockerfile")"
@@ -48,32 +49,53 @@ echo "==> build linux/arm64 in $image"
 # the image's toolchain; rust-toolchain.toml's "stable" would download another.
 docker run --rm --platform linux/arm64 \
     -v "$repo:/src" -w /src \
-    -v tcpethernet-cargo-registry:/usr/local/cargo/registry \
+    -v helmsman-cargo-registry:/usr/local/cargo/registry \
     -e CARGO_TARGET_DIR=/src/target/pi \
     -e RUSTUP_TOOLCHAIN="$toolchain" \
-    "$image" cargo build --release --locked -q -p tcpethernet-plc
-bin="$repo/target/pi/release/tcpethernet-plc"
+    "$image" cargo build --release --locked -q -p helmsman-plc
+bin="$repo/target/pi/release/helmsman-plc"
 file "$bin" | grep -q 'ARM aarch64' || { echo "build did not produce an aarch64 binary: $(file "$bin")" >&2; exit 1; }
 
 echo "==> copy"
-ssh "$target" 'mkdir -p ~/.tcpethernet-plc'
-scp -q "$bin" "$repo/deploy/tcpethernet-plc.service" "$target:.tcpethernet-plc/"
-scp -q "$program" "$target:.tcpethernet-plc/program.$ext"
+ssh "$target" 'mkdir -p ~/.helmsman-plc'
+scp -q "$bin" "$repo/deploy/helmsman-plc.service" "$target:.helmsman-plc/"
+scp -q "$program" "$target:.helmsman-plc/program.$ext"
+
+echo "==> retire the pre-rename tcpethernet-plc, if present"
+# Before the Helmsman rename the same runtime ran as tcpethernet-plc. Both
+# bind 44818/2222, so the old unit must be gone before the new one starts.
+ssh "$target" "set -e
+if systemctl list-unit-files tcpethernet-plc.service >/dev/null 2>&1 \
+    && systemctl list-unit-files tcpethernet-plc.service | grep -q tcpethernet-plc; then
+    sudo systemctl disable --now tcpethernet-plc >/dev/null 2>&1 || true
+    sudo rm -f /etc/systemd/system/tcpethernet-plc.service /usr/local/bin/tcpethernet-plc
+    sudo rm -rf /etc/tcpethernet-plc
+    rm -rf ~/.tcpethernet-plc
+    sudo systemctl daemon-reload
+    echo 'removed tcpethernet-plc'
+else
+    echo 'none'
+fi
+if sudo nft list table inet perceptronics >/dev/null 2>&1; then
+    for h in \$(sudo nft -a list chain inet perceptronics input | sed -n 's/.*comment \"tcpethernet-plc\".*# handle \([0-9]*\)/\1/p'); do
+        sudo nft delete rule inet perceptronics input handle \$h
+    done
+fi"
 
 echo "==> install + restart"
 # shellcheck disable=SC2029 # $ext and $scan_ms are meant to expand here.
 ssh "$target" "set -e
-cd ~/.tcpethernet-plc
-sudo install -m 755 tcpethernet-plc /usr/local/bin/tcpethernet-plc
-sudo install -d -m 755 /etc/tcpethernet-plc
-sudo rm -f /etc/tcpethernet-plc/program.st /etc/tcpethernet-plc/program.xml
-sudo install -m 644 program.$ext /etc/tcpethernet-plc/program.$ext
-printf 'PLC_PROGRAM=/etc/tcpethernet-plc/program.%s\nPLC_SCAN_MS=%s\n' $ext $scan_ms \
-    | sudo tee /etc/tcpethernet-plc/env >/dev/null
-sudo install -m 644 tcpethernet-plc.service /etc/systemd/system/tcpethernet-plc.service
+cd ~/.helmsman-plc
+sudo install -m 755 helmsman-plc /usr/local/bin/helmsman-plc
+sudo install -d -m 755 /etc/helmsman-plc
+sudo rm -f /etc/helmsman-plc/program.st /etc/helmsman-plc/program.xml
+sudo install -m 644 program.$ext /etc/helmsman-plc/program.$ext
+printf 'PLC_PROGRAM=/etc/helmsman-plc/program.%s\nPLC_SCAN_MS=%s\n' $ext $scan_ms \
+    | sudo tee /etc/helmsman-plc/env >/dev/null
+sudo install -m 644 helmsman-plc.service /etc/systemd/system/helmsman-plc.service
 sudo systemctl daemon-reload
-sudo systemctl enable tcpethernet-plc >/dev/null 2>&1
-sudo systemctl restart tcpethernet-plc"
+sudo systemctl enable helmsman-plc >/dev/null 2>&1
+sudo systemctl restart helmsman-plc"
 
 echo "==> firewall"
 # A pick PC carries perceptronics' nftables table (input policy drop). Accept
@@ -83,11 +105,11 @@ echo "==> firewall"
 # shellcheck disable=SC2029 # $allow is meant to expand here.
 ssh "$target" "set -e
 if sudo nft list table inet perceptronics >/dev/null 2>&1; then
-    if sudo nft list chain inet perceptronics input | grep -q 'comment \"tcpethernet-plc\"'; then
+    if sudo nft list chain inet perceptronics input | grep -q 'comment \"helmsman-plc\"'; then
         echo 'rules already present'
     else
-        sudo nft add rule inet perceptronics input ip saddr $allow tcp dport 44818 accept comment '\"tcpethernet-plc\"'
-        sudo nft add rule inet perceptronics input ip saddr $allow udp dport '{ 44818, 2222 }' accept comment '\"tcpethernet-plc\"'
+        sudo nft add rule inet perceptronics input ip saddr $allow tcp dport 44818 accept comment '\"helmsman-plc\"'
+        sudo nft add rule inet perceptronics input ip saddr $allow udp dport '{ 44818, 2222 }' accept comment '\"helmsman-plc\"'
         echo 'opened 44818 tcp+udp, 2222 udp from $allow'
     fi
 else
@@ -97,14 +119,14 @@ fi"
 echo "==> verify"
 up=
 for _ in $(seq 1 20); do
-    if ssh "$target" 'systemctl is-active --quiet tcpethernet-plc && ss -ltn | grep -q ":44818 "'; then
+    if ssh "$target" 'systemctl is-active --quiet helmsman-plc && ss -ltn | grep -q ":44818 "'; then
         up=1
         break
     fi
     sleep 1
 done
-ssh "$target" 'systemctl is-active tcpethernet-plc; journalctl -u tcpethernet-plc -n 5 --no-pager' || true
-[ -n "$up" ] || { echo "FAIL: tcpethernet-plc is not listening on 44818 (journal above)" >&2; exit 1; }
+ssh "$target" 'systemctl is-active helmsman-plc; journalctl -u helmsman-plc -n 5 --no-pager' || true
+[ -n "$up" ] || { echo "FAIL: helmsman-plc is not listening on 44818 (journal above)" >&2; exit 1; }
 host="${target#*@}"
 echo
 echo "PLC is up on $host running $(basename "$program") every ${scan_ms} ms"
