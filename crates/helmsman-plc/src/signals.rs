@@ -183,6 +183,18 @@ impl SignalTable {
         self.sigs.get(i).filter(|s| s.dir == Dir::Out).map(|s| s.command)
     }
 
+    /// A signal's name, as the map spells it.
+    #[must_use]
+    pub fn name(&self, i: usize) -> Option<&str> {
+        self.sigs.get(i).map(|s| s.name.as_str())
+    }
+
+    /// An output's safe value; `None` for inputs and unknown indices.
+    #[must_use]
+    pub fn safe(&self, i: usize) -> Option<Value> {
+        self.sigs.get(i).filter(|s| s.dir == Dir::Out).map(|s| s.safe)
+    }
+
     /// A signal's engineering unit, if the map gives one.
     #[must_use]
     pub fn unit(&self, i: usize) -> Option<&str> {

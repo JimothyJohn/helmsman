@@ -1070,6 +1070,8 @@ dependencies = [
  "helmsman-io",
  "helmsman-proto",
  "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
