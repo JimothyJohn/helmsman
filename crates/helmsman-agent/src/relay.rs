@@ -111,6 +111,18 @@ impl Error {
         }
     }
 
+    /// Whether it means the agent is offline for this box (the relay
+    /// unreachable, silent, failing, or refusing the box token), as
+    /// opposed to one turn going wrong.
+    #[must_use]
+    pub fn offline(&self) -> bool {
+        match self {
+            Self::Unreachable(_) | Self::Timeout => true,
+            Self::Status { status, .. } => *status >= 500 || *status == 401 || *status == 403,
+            Self::Stream(_) | Self::CutOff | Self::Malformed(_) => false,
+        }
+    }
+
     /// A short machine word for the chat panel.
     #[must_use]
     pub fn kind(&self) -> &str {
@@ -154,6 +166,49 @@ fn from_http(e: http::Error) -> Error {
         http::Error::Protocol(why) => Error::Malformed(why.into()),
         http::Error::Io(k) => Error::Unreachable(format!("connection failed: {k}")),
     }
+}
+
+/// Longest a [`probe`] may take, whatever the turn timeouts are.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Whether the relay answers: `GET {prefix}/v1/health` with the box
+/// token. Any HTTP answer below 500 other than 401/403 counts (a relay
+/// without the route answers 404, which still means it is there); the
+/// body is never read. Never sends a conversation and costs no tokens.
+///
+/// # Errors
+/// [`Error::Unreachable`] or [`Error::Timeout`] when nothing answers;
+/// [`Error::Status`] for a 5xx, 401 or 403.
+pub fn probe(cfg: &Config) -> Result<(), Error> {
+    let path = format!("{}/v1/health", cfg.url.prefix);
+    let auth = format!("Bearer {}", cfg.token);
+    let req = http::Request {
+        method: "GET",
+        path: &path,
+        headers: &[("Authorization", &auth)],
+        json: None,
+    };
+    let t = Timeouts {
+        connect: cfg.timeouts.connect.min(PROBE_TIMEOUT),
+        idle: cfg.timeouts.idle.min(PROBE_TIMEOUT),
+        total: cfg.timeouts.total.min(PROBE_TIMEOUT),
+    };
+    let resp = http::send(&cfg.url, &req, t).map_err(from_http)?;
+    let status = resp.status;
+    if status >= 500 || status == 401 || status == 403 {
+        return Err(Error::Status {
+            status,
+            kind: if status >= 500 {
+                "relay_unavailable"
+            } else {
+                "relay_refused_token"
+            }
+            .into(),
+            message: format!("the relay answered {status} to a health check"),
+            retryable: status >= 500,
+        });
+    }
+    Ok(())
 }
 
 /// Runs one model turn over `messages`, calling `on` as text and tool

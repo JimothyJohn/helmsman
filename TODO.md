@@ -351,6 +351,16 @@
   difficulty: low
   id: dev-bundles-switch
 
+- [ ] **Canvas approvals: how does the browser get the API token?** The review screen (feat/proposal-ui) needs the box's bearer token to replay and apply, on top of the role PIN. The token lives in `api-token` in the box's state directory and is printed once to the journal. Built: the operator pastes it once per page load into a masked field; it is held in the page's memory only (never localStorage, never egui's persisted state), dropped on "Forget", a reload, or a 401, and sent only in the `Authorization` header. Trade-off: 64 hex digits is awkward on a tablet, and anyone who can read the journal or state dir can hand it out; but nothing new is stored in the browser and no API change was needed. The better long-term shape is a login exchange: `POST /api/session` with role + PIN returns a short-lived, role-scoped session token (memory only), so operators never see the box token; that is an API change under the same lockout, and overlaps `local-accounts`. Reversible: the token only enters through `Review::set_token` in crates/helmsman-canvas/src/review.rs.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: how an operator authenticates the canvas to the box before approving
+  options: paste the box token once per page load, memory only (recommended for now, built) | PIN login exchange for a short-lived session token (API change) | the box injects the token into the page it serves on loopback only
+  est: 1d
+  difficulty: med
+  id: canvas-token
+
 - [ ] **Floor screen layout: a startup file, or part of the snapshot?** The andon view (feat/andon-screen) reads its layout from `--screen FILE` at startup, like the sinks file: tile titles, which signal each tile shows, and the state code → colour/message table. It is not in the snapshot store, so changing a message is a file edit plus a restart, outside the approval path and the history. What the tiles *are* (the `screen` outputs and their safe states) is in the I/O map, which is snapshotted and output-affecting, so nothing that drives a tile bypasses approval; only the words and colours do. Putting the layout in a change set means a store schema bump (a `screen` blob beside `io-map` and `calendar`), a tier for it (I'd say `param`: it moves no output), and a live reload in the canvas. I kept it a startup file (reversible: the API already serves it by content).
   asked: 2026-10-30
   by: claude-agent
@@ -371,6 +381,36 @@
   est: 1d
   difficulty: med
   id: canvas-token
+
+- [ ] **Param units: a `unit=` key on manifest param lines?** The offline chat (feat/local-fallback) checks a typed unit ("80 %", "5 s") against the param's, but params had no unit; signals did. I added an optional `unit=U` to `param` lines for int/real (same rule as a signal's unit: 1..=16 printable ASCII, no `#`), parsed, rendered, served in the API's manifest and param-proposal JSON, metadata only, never converted. A unit change counts as a manifest change, so it is logic tier, not param. Without it the offline chat would accept bare numbers only. The agent's `draft_module` does not write units yet (the relay's tool schema would need a `unit` field).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether manifests carry param units (format change, additive; old manifests read unchanged)
+  options: unit= on param lines (recommended, built) | no param units, bare numbers only offline | units only from a bound signal
+  est: 10m
+  difficulty: low
+  id: param-units
+
+- [ ] **Relay health route for the offline probe?** While the agent is offline the box probes `GET {relay}/v1/health` with its box token every 15 s and on each chat message. Today any answer below 500 except 401/403 counts as "online", so a relay without the route (404) still counts as up. If the relay's upstream (the model API) is down but the relay itself answers, the box flips online, the next turn fails, and it goes offline again: one failed message per flap. A real `/v1/health` on the relay that reflects its upstream (503 when it cannot serve turns) closes that.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call, then a relay change in the relay repo
+  result: how accurately the banner tracks a relay whose upstream is down
+  options: add GET /v1/health to the relay, 200/503 by upstream (recommended) | keep any-answer-is-up | probe with a real one-token turn
+  est: 1h
+  difficulty: low
+  id: relay-health
+
+- [ ] **No relay configured: should chat still take param edits by rule?** A box started without `--relay` answers `POST /api/chat` with 503 ("no relay configured"), as before; `GET /api/chat/status` says `unconfigured`. The rule-based param edits only run for a box that has a relay and lost it. An air-gapped box could use them too, but then "chat" exists on a box that never has an agent. Kept as is (reversible: the chat route would be built without a relay).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether an air-gapped box gets the rule-based chat
+  options: only boxes with a relay (recommended for now, built) | every box, rules when no relay
+  est: 1h
+  difficulty: low
+  id: offline-without-relay
 
 ## Tasks
 
@@ -694,10 +734,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: built on feat/approval-policy: helmsman-plc `policy` (classify from the diff, policy file with a floor in code, PBKDF2 PINs + lockout) and `api/approve.rs` (replay evidence bound to content hashes; apply/rollback = check, scan-thread reconfigure, commit); docs/ARCHITECTURE.md "Approval policy"
   id: approval-policy
 
-- [ ] **Proposal review UI** — in the canvas: ST diff, diagram diff (ghost blocks), sim replay chart, manifest changes (new outputs/signals highlighted), approve with PIN.
+- [x] **Proposal review UI** — in the canvas: ST diff, diagram diff (ghost blocks), sim replay chart, manifest changes (new outputs/signals highlighted), approve with PIN.
   est: 4d
   difficulty: med
   depends: st-graph-view, approval-policy, sim-replay
+  notes: built on feat/proposal-ui: "Proposals" in the canvas top bar (review.rs decides, review_view.rs draws, web::Http fetches); helmsman_diagram::diff (line diff, block diff with ghosts); the replay JSON now carries each signal's step track; the API token is typed once per page load (canvas-token asks)
   id: proposal-ui
 
 - [ ] **M1 demo run** — the sentence at the top of this section, on the bench, recorded. scripts/m1-demo.sh brings the box up from a clean deploy.
@@ -798,7 +839,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: explain-mode
   notes: done 2026-10-30 (feat/explain-mode). Layer 1: helmsman_diagram::phrase (templates, offline). Layer 2: POST /api/explain on READ_ONLY tools, --relay-explain-agent. The relay needs an explain profile (prompt + the four read tools); see docs/ARCHITECTURE.md "Explain mode".
 
-- [ ] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
+- [x] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
   est: 3d
   difficulty: med
   depends: agent-loop, fallback-model

@@ -32,6 +32,7 @@
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
+//! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
 //! GET  /api/screen                        the floor screen's layout (with --screen FILE; see [`crate::screen`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
@@ -317,6 +318,8 @@ pub struct Api {
     addr: SocketAddr,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    /// The chat's relay watcher ([`chat::Chat::watch`]).
+    watcher: Option<JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for Api {
@@ -423,6 +426,7 @@ impl Api {
             screen: screen.map(|s| screen_json(&s)),
             trust,
         });
+        let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
             .name("api".into())
             .spawn(move || accept(&listener, &ctx))?;
@@ -430,6 +434,7 @@ impl Api {
             addr,
             stop,
             thread: Some(thread),
+            watcher,
         })
     }
 
@@ -443,6 +448,9 @@ impl Drop for Api {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+        if let Some(t) = self.watcher.take() {
             let _ = t.join();
         }
     }
@@ -538,7 +546,7 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
         }
         Reply::Chat(taken) => {
             if let Some(chat) = &ctx.chat {
-                chat.serve(&mut stream, taken);
+                chat.serve(&mut stream, taken, &ctx.catalog());
             }
         }
         Reply::File(asset) => {
@@ -615,6 +623,20 @@ fn handle(req: &Request, ctx: &Ctx) -> Reply {
         return start_explain(req, ctx);
     }
     Reply::Once(mutate(req, ctx))
+}
+
+/// `GET /api/chat/status`: `unconfigured` without a relay.
+fn chat_status(ctx: &Ctx) -> Json {
+    ctx.chat.as_ref().map_or_else(
+        || {
+            json!({
+                "state": "unconfigured", "since": null, "kind": null, "reason": null,
+                "seq": 0, "fallback": false,
+                "message": "no relay configured on this box (--relay); the agent is offline",
+            })
+        },
+        chat::Chat::status,
+    )
 }
 
 /// `POST /api/chat`: audited when it starts; the turn itself streams.
@@ -840,6 +862,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "snapshots", _, "diff", _]
         | ["api", "snapshots", _, "bundle"]
         | ["api", "modules", _, "trace"]
+        | ["api", "chat", "status"]
         | ["api", "modules", _, "trace", "events"] => Some("GET"),
         _ => None,
     }
@@ -1125,6 +1148,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             (Err(r), _) | (_, Err(r)) => r,
         },
         ["api", "events"] => return Reply::Values,
+        ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "screen"] => match &ctx.screen {
             Some(j) => Response::json(200, j),
             None => Response::error(404, "no floor screen on this box (--screen FILE)"),
@@ -1211,6 +1235,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/events", false, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?}; an event stream of its progress"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
+            e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
             e("GET", "/api/screen", false, "the floor screen's layout: tiles, state codes, colours (with --screen)"),
         ],
         "agent": agent,
@@ -1317,7 +1342,15 @@ fn pump(
 
 fn value_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
     let mut last = None;
+    let mut agent = None;
     pump(stream, ctx, || {
+        if let Some(c) = &ctx.chat {
+            let seq = c.status_seq();
+            if agent != Some(seq) {
+                agent = Some(seq);
+                return Some(("agent", c.status()));
+            }
+        }
         let view = ctx.box_.live.view();
         if last == Some(view.seq) {
             return None;

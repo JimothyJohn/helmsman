@@ -226,7 +226,7 @@ scan_ms  50
 q        0+2
 reads    start jam
 drives   motor lamp
-param    speed   real 1.5 min=0 max=10
+param    speed   real 1.5 min=0 max=10 unit=m/s
 param    beacon  bool true
 ```
 
@@ -689,6 +689,52 @@ serves those per agent version (relay protocol v1).
   The agent holds the API token and nothing else: it has no tool that
   reaches `apply`, `rollback` or a PIN, and the token alone cannot apply.
 
+## Offline chat (`local-fallback`, built)
+
+Relay unreachable: installed modules keep running and the chat degrades
+to rule-based param edits, with no model on the box (`fallback.rs`,
+`api/chat.rs`; contracts in `tests/fallback.rs` and `tests/agent.rs`).
+
+- **State, explicit.** The chat route keeps the agent's state: `unknown`
+  until the relay is first asked, `online`, or `offline` since a time
+  (unix seconds) with the reason (the relay error's kind and message, of
+  the failure that started the outage). `GET /api/chat/status` serves it
+  (`unconfigured` without `--relay`); `GET /api/events` sends an `agent`
+  event with it on connect and on every change (the canvas's banner); a
+  chat turn that takes the agent offline ends with a `status` event, and
+  every message read offline starts with one.
+- **Detection.** A turn that fails because the relay is unreachable,
+  times out, answers 5xx, or refuses the box token (401/403) takes the
+  agent offline; any other relay answer counts as online. A turn failing
+  in its own way (a stream error, a malformed stream) does not.
+- **Recovery, automatic.** While the agent is not online, a watcher thread
+  probes the relay every 15 s (`GET {relay}/v1/health` with the box token;
+  any answer below 500 except 401/403 counts, the body is never read, no
+  conversation is sent, no tokens are spent), at once on start. Each chat
+  message also probes once before it is read offline, so a reply goes
+  back to the model as soon as the relay answers.
+- **The grammar** (`fallback::parse`, hand-written, no regex): one command
+  per message on one line, `set REF to VALUE`, `set REF = VALUE` or
+  `REF = VALUE`; REF is `PARAM`, `MODULE PARAM` or `MODULE.PARAM`, a
+  param's words joined by `_`; VALUE a number (`[+-]D[.D]`, no exponent,
+  hex, inf or NaN) with an optional unit, or `on/off/true/false/
+  enable(d)/disable(d)`. Names match exactly (ASCII case aside); a ref that
+  reads as two params is refused with both, never guessed; near names
+  (edit distance, prefixes) are only suggested. Ints take whole numbers,
+  values must be in the manifest's range and differ from the current one,
+  and a unit must be the param's own `unit=` (a few spellings accepted,
+  never converted). Anything else, including more than 200 bytes, a
+  second line, a character outside ASCII letters, digits, blanks and
+  `_ . - + % = /`, or any trailing word, is refused whole with the reason
+  and the editable params with their ranges.
+- **Only a proposal.** An accepted command is posted to
+  `POST /api/proposals` (`kind: param`) with the API token, like the
+  agent's, so it is checked, stored as a draft, audited, and applied only
+  by `apply` with whatever role and PIN the policy's `param` tier asks.
+  The offline path applies nothing, and a param proposal cannot touch
+  logic or an output's wiring. Offline messages do not enter the
+  conversation; the model sees their proposals through its tools later.
+
 ## Bundles (`bundle-format`, built)
 
 `helmsman_plc::bundle` (format, manifest, signatures, CLI) and
@@ -892,6 +938,52 @@ is in its state right now, in two layers.
   relay, no token) and the first layer stays up. The canvas holds the
   API token the operator typed in memory only.
 
+## Proposal review (`proposal-ui`, built)
+
+The screen an engineer approves on: "Proposals" in the canvas top bar
+(`review.rs` decides, `review_view.rs` draws, `web::Http` fetches; contract
+in `review.rs`'s tests and `review_tests.rs`, which runs the screen's own
+requests against a real box: runtime, recorder, store, floor policy, PIN
+file and token in a temporary state directory).
+
+- **What it shows.** The drafts, newest first, each with the box's tier
+  badge (`param`, `logic`, `output-affecting`: read from the draft's
+  `approval`, never worked out in the browser), its reasons and what the
+  policy needs. For a module draft: the manifest old against new (driven
+  signals and the `%Q` window first, anything new that can move an output
+  in the hazard colours), the source as a line diff with context, and the
+  diagram diff. For a param draft: old → new and the declared range.
+- **Diffs** (`helmsman_diagram::diff`, pure and deterministic). Lines: a
+  longest common subsequence after trimming the common head and tail
+  (middles past 4 M cells fall back to all-removed-then-added). Blocks: both
+  versions are lowered; a block's identity is its POU, the kind and arm of
+  each region around it, its kind and header; its signature adds the text
+  it computes and what feeds each input. Equal signatures pair first, then
+  equal identity and text, then equal identity (`changed`); the rest are
+  added or removed. Regions pair the same way on their label, so a changed
+  IF condition is one changed region, not a new body. Property-tested: a
+  module against itself differs nowhere, and the old blocks less the
+  removed and changed plus the added and the changed ones' new versions
+  are exactly the new blocks. Removed blocks are drawn as dashed ghosts in
+  their old layout below the proposed diagram.
+- **Sim replay chart.** "Run the sim replay" posts `.../replay`; the
+  answer now carries, per driven signal, both step tracks
+  (`current_track`, `proposed_track`: type and `[at_ms, value]` steps, at
+  most 2000 each, `truncated` past that; the summaries stay exact). Drawn
+  in egui, no charting crate: what runs in steel, the proposal in yellow,
+  rises marked, and the box's `extra_rises` as "would have fired N more /
+  fewer times"; differences first.
+- **Approve and undo.** Role picker, a masked PIN field, and the API
+  token typed once per page load (memory only; `canvas-token` asks about a
+  login exchange). Submitting moves the PIN into the request body and
+  empties the field whatever happens; neither secret shows in a `Debug`
+  output or a log. The box's refusals are shown verbatim with what to do:
+  401 token (and the token is dropped), 403 role or wrong PIN, 428 replay
+  missing or stale, 429 locked with a countdown from `Retry-After` (nothing
+  is sent until it ends), 409 stale draft. After an apply: the new snapshot
+  and the history head, and an undo (`/api/snapshots/{previous}/rollback`)
+  through the same replay and PIN flow.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -913,9 +1005,9 @@ prompt. The agent never touches the Rust core.
 
 ## Where the planned pieces attach
 
-- `approval-policy` (built, above) → `proposal-ui`: the canvas shows a
-  draft's `approval` (tier, reasons, what it needs), charts its replay
-  (`GET /api/replays/{n}`), and posts the PIN to `apply`. `box-mcp` wraps
+- `approval-policy` (built, above) → `proposal-ui` (built, above): the
+  canvas shows a draft's `approval` (tier, reasons, what it needs), charts
+  its replay, and posts the PIN to `apply`. `box-mcp` wraps
   the same routes; `local-accounts` replaces role PINs with people, keeping
   the role check and the gate.
 - `canvas-web` (built, above) → `andon-screen`: another page the box
@@ -932,3 +1024,8 @@ prompt. The agent never touches the Rust core.
   when the relay is unreachable (today: an `error` event); `explain-mode`
   (built, above) runs the same loop on read-only tools; `dropin-prose` is
   a prompt over the full set.
+
+- `agent-loop` (built, above) → `local-fallback` (built, above) answers
+  the chat route by rule when the relay is unreachable; `explain-mode`
+  and `dropin-prose` are prompts over the same tools, plus a trace tool
+  for explain mode.

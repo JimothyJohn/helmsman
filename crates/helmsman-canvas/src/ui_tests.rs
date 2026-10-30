@@ -12,6 +12,8 @@ struct Harness {
     app: App,
     time: f64,
     mods: Modifiers,
+    /// The window, in points.
+    size: Vec2,
 }
 
 impl Harness {
@@ -21,6 +23,7 @@ impl Harness {
             app: App::with_project(project),
             time: 0.0,
             mods: Modifiers::NONE,
+            size: Vec2::new(1400.0, 860.0),
         };
         h.app.running = false;
         // Two frames: panels settle their sizes, the view fits the graph.
@@ -31,7 +34,7 @@ impl Harness {
 
     fn frame(&mut self, events: Vec<Event>) {
         let input = RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 860.0))),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
             time: Some(self.time),
             events: std::iter::once(Event::ModifiersChanged(self.mods))
                 .chain(events)
@@ -763,5 +766,161 @@ mod explained {
         assert!(b.blocked().unwrap().contains("offline"));
         h.frame(vec![]);
         assert!(h.app.boxv.as_ref().unwrap().ask.is_some());
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod reviewing {
+    use eframe::egui::{Event, Pos2, Rect, Vec2};
+    use helmsman_graph::Project;
+
+    use super::Harness;
+    use crate::app::Mode;
+    use crate::review::{Answer, Phase, Replay, Target};
+    use crate::review_tests::Bench;
+    use crate::review_view::ReviewView;
+
+    fn rv(h: &mut Harness) -> &mut ReviewView {
+        h.app.review.as_mut().unwrap()
+    }
+
+    /// Carries out what the screen sent, feeds the answers back, draws.
+    fn pump(h: &mut Harness, b: &Bench) {
+        for _ in 0..20 {
+            // A click's request goes out on the frame after it.
+            h.frame(vec![]);
+            let sent = std::mem::take(&mut rv(h).sent);
+            if sent.is_empty() {
+                return;
+            }
+            let answers: Vec<_> = sent.iter().map(|q| (q.call.clone(), b.send(q))).collect();
+            let (ctx, t) = (h.ctx.clone(), h.time);
+            rv(h).step(&ctx, answers, t);
+            h.frame(vec![]);
+        }
+        panic!("the screen never went quiet");
+    }
+
+    fn rect(h: &mut Harness, key: &str) -> Rect {
+        let rects = &rv(h).rects;
+        let keys: Vec<&String> = rects.iter().map(|(k, _)| k).collect();
+        rects
+            .iter()
+            .find(|(k, _)| k == key)
+            .map_or_else(|| panic!("no {key} on screen: {keys:?}"), |(_, r)| *r)
+    }
+
+    fn click(h: &mut Harness, key: &str) {
+        let at = rect(h, key).center();
+        h.click(at);
+    }
+
+    fn type_into(h: &mut Harness, key: &str, text: &str) {
+        click(h, key);
+        h.frame(vec![Event::Text(text.into())]);
+        h.frame(vec![]);
+    }
+
+    /// Everything drawn fits the window's width: nothing to scroll sideways
+    /// for on a tablet.
+    fn fits(h: &mut Harness) {
+        let w = h.size.x;
+        let rects = rv(h).rects.clone();
+        assert!(rects.len() > 3, "{rects:?}");
+        for (k, r) in rects {
+            assert!(r.right() <= w + 0.5, "{k} at {r:?} is past the {w} pt window");
+        }
+    }
+
+    #[test]
+    fn an_engineer_reviews_replays_and_approves_with_a_pin_by_clicking() {
+        let b = Bench::new();
+        let id = b.horn();
+        let mut h = Harness::new(Project::default());
+        // Tall enough that the whole review is on screen without scrolling.
+        h.size = Vec2::new(1400.0, 4000.0);
+        h.app.mode = Mode::Review;
+        h.frame(vec![]);
+        pump(&mut h, &b);
+        click(&mut h, &format!("row {id}"));
+        pump(&mut h, &b);
+        assert_eq!(rv(&mut h).state.open.as_ref().map(|o| o.id), Some(id));
+
+        type_into(&mut h, "token", &b.token);
+        click(&mut h, "use");
+        assert!(rv(&mut h).state.has_token());
+        assert_eq!(rv(&mut h).token_input, "", "the field does not keep it");
+
+        let t = Target::Proposal(id);
+        click(&mut h, &format!("replay {t:?}"));
+        pump(&mut h, &b);
+        let replay = rv(&mut h).state.open.as_ref().unwrap().step.replay.clone();
+        assert!(matches!(replay, Replay::Done(_)), "{replay:?}");
+
+        // Engineer is already picked (the tier needs it); type the PIN, click.
+        type_into(&mut h, &format!("pin {t:?}"), "eng-135797");
+        assert_eq!(rv(&mut h).state.open.as_ref().unwrap().step.pin, "eng-135797");
+        click(&mut h, &format!("go {t:?}"));
+        h.frame(vec![]);
+        let sent = rv(&mut h).sent.clone();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(sent[0].body.as_deref().unwrap().contains("eng-135797"));
+        assert_eq!(
+            rv(&mut h).state.open.as_ref().unwrap().step.pin,
+            "",
+            "cleared on submit"
+        );
+        pump(&mut h, &b);
+        let phase = rv(&mut h).state.open.as_ref().unwrap().step.phase.clone();
+        assert!(matches!(phase, Phase::Applied(_)), "{phase:?}");
+        assert!(
+            rv(&mut h).state.open.as_ref().unwrap().undo.is_some(),
+            "the undo is offered"
+        );
+
+        // Readable on a tablet either way up, and on a small laptop.
+        for size in [
+            Vec2::new(800.0, 1280.0),
+            Vec2::new(1280.0, 800.0),
+            Vec2::new(1024.0, 768.0),
+        ] {
+            h.size = size;
+            h.frame(vec![]);
+            h.frame(vec![]);
+            fits(&mut h);
+        }
+    }
+
+    #[test]
+    fn the_screen_without_a_box_says_so_and_survives_clicks_everywhere() {
+        let mut h = Harness::new(Project::default());
+        h.app.mode = Mode::Review;
+        h.frame(vec![]);
+        let calls: Vec<_> = rv(&mut h).sent.iter().map(|q| q.call.clone()).collect();
+        assert_eq!(calls.len(), 3, "the list, the outputs and the policy: {calls:?}");
+        let ctx = h.ctx.clone();
+        let answers = std::mem::take(&mut rv(&mut h).sent)
+            .into_iter()
+            .map(|q| {
+                let a = Answer {
+                    status: 0,
+                    retry_after: None,
+                    body: "connection refused".into(),
+                };
+                (q.call, a)
+            })
+            .collect();
+        rv(&mut h).step(&ctx, answers, 0.0);
+        h.frame(vec![]);
+        let e = rv(&mut h).state.list_error.clone().unwrap();
+        assert!(e.contains("connection refused"), "{e}");
+        for x in (0..1400u16).step_by(97) {
+            // Below the top bar (its buttons leave this screen, as they should).
+            for y in (40..860u16).step_by(83) {
+                h.click(Pos2::new(f32::from(x), f32::from(y)));
+            }
+        }
+        assert!(rv(&mut h).state.open.is_none());
+        assert_eq!(h.app.mode, Mode::Review, "{:?}", h.app.mode);
     }
 }

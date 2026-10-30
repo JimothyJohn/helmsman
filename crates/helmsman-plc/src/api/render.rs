@@ -193,6 +193,7 @@ pub fn manifest(m: &Manifest) -> Json {
                 "value": value(Some(p.value)),
                 "min": value(p.range.map(|r| r.0)),
                 "max": value(p.range.map(|r| r.1)),
+                "unit": p.unit,
             })
         })
         .collect();
