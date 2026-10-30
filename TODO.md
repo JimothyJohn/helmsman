@@ -546,6 +546,13 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: io-map, multi-module
   id: io-runtime
 
+- [ ] **Split point errors from link errors in the I/O links** — today any failed write marks the whole device link down (crates/tcpethernet-plc/src/link.rs), so a module commanding a value the point can't hold (70000 into a u16 `hr:N`) or a device exception on one point holds every module that reads that device. Give the driver `Error` a way to tell an encode/point failure from a transport failure (Modbus `Format::encode` reuses `Error::Protocol` today), keep the link up on point errors, retry that output each cycle, and surface the point error where the box API can show it.
+  result: one bad output point no longer takes its whole device offline
+  est: 3h
+  difficulty: med
+  depends: io-runtime
+  id: io-point-errors
+
 - [ ] **Tabletop I/O bench** — one Modbus TCP remote I/O block with 24 V DI/DO on the Studio link (192.168.3.x), outputs DO0-3 wired back to inputs DI0-3, a 24 V supply, and a Pi GPIO to 24 V output stage for do:N. Then `conformance --endpoint <ip>:502 --loop coil:0=di:0 ...` against it.
   needs: hardware bought and wired (any Modbus TCP 8DI/8DO block; note its manual's register map and whether it numbers from 0 or 1)
   result: the harness passes on real hardware, and agents have a bench that proves writes physically
