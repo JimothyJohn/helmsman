@@ -231,6 +231,8 @@ struct Ctx {
     ui: Option<ui::Ui>,
     /// `GET /api/screen`'s body, rendered once.
     screen: Option<Json>,
+    /// The floor screen's layout, which a reloaded I/O map must still fit.
+    screen_layout: Option<crate::screen::Layout>,
     /// Publishers whose bundles import; `None`: import answers 501.
     trust: Option<TrustStore>,
 }
@@ -251,6 +253,29 @@ impl Ctx {
         *self.running.lock().unwrap_or_else(PoisonError::into_inner) = Some(cs);
         *self.catalog.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(catalog);
         self.traces.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+
+    /// Whether the floor screen (or its absence) fits `map`, as the box
+    /// checks at startup: every tile's signals are screen outputs on it and
+    /// every screen output is on a tile; without a screen, the map has no
+    /// screen outputs.
+    fn screen_fits(&self, map: Option<&helmsman_io::IoMap>) -> Result<(), Vec<String>> {
+        let empty = helmsman_io::IoMap::default();
+        let map = map.unwrap_or(&empty);
+        match &self.screen_layout {
+            Some(l) => l.check(map),
+            None if map
+                .signals
+                .iter()
+                .any(|s| matches!(s.binding, helmsman_io::Binding::Screen { .. })) =>
+            {
+                Err(vec![
+                    "the I/O map declares screen tiles, but this box shows no floor screen (--screen FILE)"
+                        .into(),
+                ])
+            }
+            None => Ok(()),
+        }
     }
 
     fn shape(&self) -> approve::Shape {
@@ -413,6 +438,7 @@ impl Api {
             stop: Arc::clone(&stop),
             streams: AtomicUsize::new(0),
             ui,
+            screen_layout: screen.as_ref().map(|s| s.layout.clone()),
             screen: screen.map(|s| screen_json(&s)),
             trust,
         });

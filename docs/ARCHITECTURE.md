@@ -625,6 +625,11 @@ threads, the Modbus simulator over TCP).
   dropped; if the device does not answer that cannot happen (the box only
   reaches a device through its link), and the apply says so in
   `reload.notes`: the device's own comm watchdog is the backstop.
+- **The floor screen** (`--screen`) must fit the new map as it must at
+  startup (`screen::Layout::check`: every tile's signals are screen
+  outputs on it, every screen output is on a tile; no screen, no screen
+  outputs); if not, 409 and the old map keeps running. A screen output's
+  tile is part of its binding, so it carries like any other signal.
 - **Around it.** Sinks rebind their emits by name; the API's catalog,
   device list and replay table follow. The recording restarts, so the
   next replay's window starts at the reload. A published live view from
