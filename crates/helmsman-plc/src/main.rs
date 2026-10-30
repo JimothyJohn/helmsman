@@ -884,12 +884,7 @@ fn run(o: &Opts) -> Result<(), String> {
         .as_ref()
         .map(|_| Publisher::new(Arc::clone(&live), api::PUBLISH_EVERY));
     let every = publisher.as_ref().map(|p| p.every);
-    let cap = |cal: Option<&Source>| {
-        [cal.map(|_| CALENDAR_TICK), every]
-            .into_iter()
-            .flatten()
-            .min()
-    };
+    let cap = |cal: Option<&Source>| [cal.map(|_| CALENDAR_TICK), every].into_iter().flatten().min();
     let mut said = false;
     {
         let mut set = link_set.lock().unwrap_or_else(PoisonError::into_inner);
@@ -917,15 +912,15 @@ fn run(o: &Opts) -> Result<(), String> {
             let mut t = table.lock().unwrap_or_else(PoisonError::into_inner);
             scene.wall = wall();
             if let Some(sw) = &swapper {
-                let served = sw.serve_scene(&mut rt, &mut t, Some(&mut scene));
-                if served.modules {
+                let did = sw.serve_scene(&mut rt, &mut t, Some(&mut scene));
+                if did.modules {
                     names = rt.names().map(str::to_string).collect();
                     eprintln!(
                         "helmsman-plc: approved change applied; modules now: {}",
                         names.join(", ")
                     );
                 }
-                if served.reloaded {
+                if did.reloaded {
                     eprintln!(
                         "helmsman-plc: I/O map and calendar reloaded: {} signal(s)",
                         t.len()

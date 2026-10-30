@@ -269,7 +269,10 @@ fn param(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(J
 fn file(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(Json, Option<Edit>), Refusal> {
     only(new, &["text"])?;
     let Some(text) = &new.text else {
-        return Err((400, json!({ "error": "an io_map or calendar proposal needs text" })));
+        return Err((
+            400,
+            json!({ "error": "an io_map or calendar proposal needs text" }),
+        ));
     };
     let cap = usize::try_from(manifest::MAX_FILE).unwrap_or(usize::MAX);
     if text.len() > cap {

@@ -442,6 +442,28 @@ fn groups(map: &IoMap) -> Vec<(Group, Vec<Polled>)> {
         .collect()
 }
 
+/// Whether two device lines reach the same device: the same id, driver,
+/// endpoint and driver params, but for how often and how patiently the
+/// link polls it (`poll_ms`, `timeout_ms`). The box's own channels are
+/// one place.
+fn same_place(a: Option<&Device>, b: Option<&Device>) -> bool {
+    const PACE: [&str; 2] = ["poll_ms", "timeout_ms"];
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            let params = |d: &Device| {
+                d.params
+                    .iter()
+                    .filter(|(k, _)| !PACE.contains(&k.as_str()))
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>()
+            };
+            a.id == b.id && a.driver == b.driver && a.endpoint == b.endpoint && params(a) == params(b)
+        }
+        _ => false,
+    }
+}
+
 struct Running {
     group: Group,
     stop: Arc<AtomicBool>,
@@ -487,8 +509,11 @@ impl std::fmt::Debug for Plan {
 /// Links [`LinkSet::stop`] stopped and joined, each with the safe value
 /// of each of its outputs as the table had them when it stopped.
 pub struct Stopped {
-    links: Vec<(Group, Link, Vec<(String, Option<Value>)>)>,
+    links: Vec<(Group, Link, Safes)>,
 }
+
+/// Each output point's address and safe value.
+type Safes = Vec<(String, Option<Value>)>;
 
 impl std::fmt::Debug for Stopped {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -669,14 +694,16 @@ impl LinkSet {
     pub fn finish(&mut self, plan: Plan, stopped: Stopped) -> Finished {
         let mut done = Finished::default();
         let mut start = plan.start;
+        let was: Vec<String> = stopped.links.iter().map(|(g, _, _)| g.name.clone()).collect();
         for (group, mut link, safes) in stopped.links {
             let next = start
                 .iter_mut()
-                .find(|(g, _)| g.name == group.name && g.device == group.device);
+                .find(|(g, _)| g.name == group.name && same_place(g.device.as_ref(), group.device.as_ref()));
             let mut down = false;
             for (addr, safe) in safes {
                 // The same device still has an output there: its new link
-                // writes it at once, with whatever the new map says.
+                // writes it at once, with whatever the new map says (for a
+                // signal the reload kept, the command it had: no glitch).
                 if next
                     .as_ref()
                     .is_some_and(|(g, _)| g.outputs.iter().any(|(_, a)| *a == addr))
@@ -701,7 +728,10 @@ impl LinkSet {
                 }
             }
             match next {
-                Some((_, fresh)) => fresh.driver = link.driver,
+                // Same device line: the connection (for `box`, the
+                // channels themselves) carries over.
+                Some((g, fresh)) if g.device == group.device => fresh.driver = link.driver,
+                Some(_) => {}
                 None => {
                     if !start.iter().any(|(g, _)| g.name == group.name) {
                         done.removed.push(group.name);
@@ -710,8 +740,7 @@ impl LinkSet {
             }
         }
         for (group, link) in start {
-            if !self.running.iter().any(|r| r.group.name == group.name) && !done.removed.contains(&group.name)
-            {
+            if !was.contains(&group.name) {
                 done.added.push(group.name.clone());
             }
             self.run(group, link);

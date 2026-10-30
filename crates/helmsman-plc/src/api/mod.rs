@@ -13,7 +13,7 @@
 //! GET  /api/devices                       device links: up, down (why), unknown
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
-//! POST /api/proposals                     token: a module draft or a param change, checked, stored as a draft
+//! POST /api/proposals                     token: a module draft, a param change, or a new io_map / calendar file, checked, stored as a draft
 //! POST /api/proposals/{id}/replay         token: sim replay of the draft against what runs; evidence for apply
 //! POST /api/proposals/{id}/apply          token + {role, pin, replay?}: apply through the approval policy
 //! GET  /api/audit?after=N&limit=M         every mutating call, append-only, naming snapshot ids
@@ -822,7 +822,7 @@ fn index() -> Json {
             e("GET", "/api/devices", false, "device links up or down"),
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
-            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source} or {kind: param, module, param, value}"),
+            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
             e("POST", "/api/proposals/{id}/apply", true, "apply: {role, pin, replay?}, checked against the policy"),
             e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),

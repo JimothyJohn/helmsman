@@ -517,7 +517,11 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
 - **Evidence bound to content.** `POST /api/proposals/{id}/replay` (or
   `/api/snapshots/{id}/replay` for a rollback) replays what runs and the
   target over the recorder's window (`replay::replay` twice, then
-  `compare`) and keeps the result with both snapshot ids. An apply that
+  `compare`) and keeps the result with both snapshot ids. A target with
+  another map or calendar runs against its own (`replay::propose_change`):
+  a signal the recording lacks is missing there, its readers held, and
+  the evidence's `reload` says which (`unrecorded`, `complete`, `note`).
+  The ids hash the map and calendar, so evidence binds to them too. An apply that
   needs one names it (`"replay": N`) and is refused (428) unless its base
   is exactly what runs and its content exactly the target, over at least
   `min-replay`: an old replay, or one of other content, never counts.
@@ -525,10 +529,10 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   `POST /api/snapshots/{id}/rollback` take the token and `{role, pin,
   replay?}`; in order: target known; draft not stale (its base is what
   runs, else 409); tier and rule; role at least the rule's (403, no PIN
-  spent); evidence (428); map and calendar unchanged (a live map or
-  calendar reload is not built: 409, card `map-reload`); PIN (403/429);
-  every module compiles (422). Then the scan thread runs
-  `Runtime::reconfigure` between ticks (refused: nothing changed, 409; not
+  spent); evidence (428); PIN (403/429); every module compiles (422); another map or calendar
+  loads (422) and the modules bind to it (409). Then the scan thread runs
+  `Runtime::reconfigure` between ticks (or, with another map or calendar,
+  the reload below) (refused: nothing changed, 409; not
   taken within 5 s: the job is withdrawn and can never land later), the
   store commits the target with author, prompt, approver (`ROLE (PIN)`) and
   time, and the API's view of the box moves to it; if the commit fails the
@@ -540,6 +544,51 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   not, is an audit entry with time, status, role (once the body parsed),
   target and base snapshot ids; an apply that acts writes one entry before
   (so a full log stops it) and one after.
+
+## Map and calendar reload (`map-reload`, built)
+
+An apply or rollback whose I/O map or calendar differs from what runs
+reloads them on the running box, through the same approval path
+(always `output-affecting` for a map, `logic` for a calendar with the same
+`drive` lines). `POST /api/proposals` takes `{kind: io_map|calendar, text}`;
+any snapshot can be rolled back to. Contract in `tests/reload.rs` (real
+threads, the Modbus simulator over TCP).
+
+- **Sequence** (`api/swap.rs`): load the new `Layout` (table + calendar)
+  and bind the modules to it, both before anything moves; `LinkSet::plan`
+  builds the links the new map needs with their drivers opened (one that
+  will not open: 409, nothing changed); stop and join the links of
+  removed or changed devices; the scan thread, between two ticks with the
+  table locked, carries every unchanged signal into the new table
+  (`SignalTable::carry_from`), rebinds the modules (`Runtime::rebind`),
+  evaluates the new calendar, swaps the table and restarts the recorder
+  on it, as one step; then (refused: the stopped links resume as they
+  were) every output point the new map dropped from its device is written
+  to its safe value through the stopped link's own driver, and the new
+  links start. Then the store commits; if that fails the old change set
+  is reloaded the same way (500).
+- **No glitch.** A signal whose name, type, direction and binding are
+  unchanged keeps its value, command and point error; a link whose device
+  line and points are unchanged never stops (links find their points by
+  name, device and address whenever the table's epoch changes, and never
+  touch a point the table no longer binds to them). A restarted link
+  rewrites the carried command, the value the device already holds; a
+  driver with the same device line is carried into it (connection, `box`
+  channels). An unchanged signal's point is never sent to safe on the way
+  (pace params `poll_ms`/`timeout_ms` do not make it another device).
+  Property-checked over 50 reloads across four map/calendar variants.
+- **Safe.** What no healthy module drives takes the new map's safe value
+  in the reload step: undriven outputs, and outputs of held or faulted
+  modules (so a new safe value reaches the device at once). Added outputs
+  start safe. Removed outputs are written safe before their link is
+  dropped; if the device does not answer that cannot happen (the box only
+  reaches a device through its link), and the apply says so in
+  `reload.notes`: the device's own comm watchdog is the backstop.
+- **Around it.** Sinks rebind their emits by name; the API's catalog,
+  device list and replay table follow. The recording restarts, so the
+  next replay's window starts at the reload. A published live view from
+  just before the catalog moves can be read against the other one for a
+  moment (display only).
 
 ## Webhook sinks (`sink-webhook`, built)
 

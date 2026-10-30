@@ -13,11 +13,14 @@
 //!    (`POST .../replay`) whose base and content hashes are exactly what
 //!    runs and the target, covering at least the policy's window (else 428).
 //! 5. The role's PIN (else 403, or 429 while entry is locked).
-//! 6. Every module of the target compiles (else 422); the I/O map and
-//!    calendar are the running ones (a map or calendar reload is not built:
-//!    409).
+//! 6. Every module of the target compiles (else 422). If the target
+//!    brings another I/O map or calendar, they load (else 422) and the
+//!    modules bind to them (else 409).
 //! 7. The scan thread swaps the whole module set between ticks
-//!    ([`super::swap`]); if it refuses, nothing changed (409).
+//!    ([`super::swap`]), and with another map or calendar reloads the
+//!    table, the calendar and the device links around it
+//!    ([`super::swap::SwapHandle::reload`]); a link that will not start or
+//!    a refusal there changes nothing (409).
 //! 8. The snapshot store commits the target with author, prompt, approver
 //!    and time; if that fails the scan thread is swapped back (500).
 //!
@@ -37,9 +40,9 @@ use serde_json::{Value as Json, json};
 use super::store::Stored;
 use super::swap::{Plant, Reloaded, SwapHandle, compile_set};
 use super::{Ctx, Note, Request, Response, audit_full, record, wall};
+use crate::layout::Layout;
 use crate::policy::pin::{Gate, Refused};
 use crate::policy::{Policy, Role, Tier, classify};
-use crate::layout::Layout;
 use crate::replay;
 use crate::store::{ChangeSet, Meta, SnapshotId};
 
@@ -268,15 +271,14 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
     };
     let rec = tap.snapshot();
     let plant = &appr.plant;
-    let replayed = match &layout {
+    let replayed = if let Some(l) = &layout {
         // What runs, against what runs, and the target against its own
         // map and calendar: a signal the recording lacks is missing there.
-        Some(l) => replay::propose_change(&shape.table, cur, &l.table, new, (plant.i_len, plant.q_len), &rec)
-            .map(|(p, cov)| (p.current, p.proposed, Some(cov))),
-        None => {
-            let run = |m| replay::replay(&shape.table, plant.i_len, plant.q_len, m, &rec);
-            run(cur).and_then(|c| run(new).map(|n| (c, n, None)))
-        }
+        replay::propose_change(&shape.table, cur, &l.table, new, (plant.i_len, plant.q_len), &rec)
+            .map(|(p, cov)| (p.current, p.proposed, Some(cov)))
+    } else {
+        let run = |m| replay::replay(&shape.table, plant.i_len, plant.q_len, m, &rec);
+        run(cur).and_then(|c| run(new).map(|n| (c, n, None)))
     };
     let (current, proposed, coverage) = match replayed {
         Ok(x) => x,
@@ -680,7 +682,12 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     let mut detail = format!("{label}: applied ({tier}) by {role}, {base} -> {content}");
     if let Some(r) = &reload {
         let _ = write!(detail, "; I/O map or calendar reloaded");
-        for n in r["notes"].as_array().into_iter().flatten().filter_map(Json::as_str) {
+        for n in r["notes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+        {
             let _ = write!(detail, "; {n}");
         }
     }
@@ -703,11 +710,22 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
 /// The commit failed after the box took the change: puts `running` back
 /// (modules `old`, compiled from it), reloading its map and calendar too
 /// if the change had reloaded them.
-fn swap_back(appr: &Approval, ctx: &Ctx, old: Vec<crate::Module>, running: &ChangeSet, reloaded: bool) -> Result<(), String> {
+fn swap_back(
+    appr: &Approval,
+    ctx: &Ctx,
+    old: Vec<crate::Module>,
+    running: &ChangeSet,
+    reloaded: bool,
+) -> Result<(), String> {
     if !reloaded {
-        return appr.swap.run(old, running.clone()).map(drop).map_err(|e| e.to_string());
+        return appr
+            .swap
+            .run(old, running.clone())
+            .map(drop)
+            .map_err(|e| e.to_string());
     }
-    let layout = Layout::build(running.io_map.as_deref(), running.calendar.as_deref()).map_err(|e| e.join("; "))?;
+    let layout =
+        Layout::build(running.io_map.as_deref(), running.calendar.as_deref()).map_err(|e| e.join("; "))?;
     let r = appr
         .swap
         .reload(old, running.clone(), layout)
