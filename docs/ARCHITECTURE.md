@@ -20,7 +20,7 @@ roadmap card, by id).
                                       │ HTTPS, box-initiated
  ┌──────────────────────────── the box (Pi 5) ───────┼────────────────────────────┐
  │                                                   │                            │
- │  ┌─ agent loop (planned) ─┐   tools   ┌─ box API (built) ───────────────────┐  │
+ │  ┌─ agent loop (built) ───┐   tools   ┌─ box API (built) ───────────────────┐  │
  │  │ draft → check → sim →  ├──────────►│ signals · modules · proposals ·     │◄─┼── canvas in any
  │  │ propose                │           │ snapshots · outputs · audit         │  │   browser on the
  │  └────────────────────────┘           └──┬────────────┬───────────────┬─────┘  │   LAN (built:
@@ -69,11 +69,11 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
 | `helmsman-graph` | Node-graph model and scan simulator behind the canvas's lab editor. | built (lab tool) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
+| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. | built |
 | `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
-`open-core-split`), the agent loop (behind the box API; the tool surface is the
-box API, so it can run on the box or the relay), the WASM host (`wasm-tier`).
+`relay-repo`, in `../helmsman-relay`), the WASM host (`wasm-tier`).
 
 ## One scan, as built
 
@@ -582,6 +582,64 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   target and base snapshot ids; an apply that acts writes one entry before
   (so a full log stops it) and one after.
 
+## Agent loop (`agent-loop`, built)
+
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v1]` turns on
+`POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
+`helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
+an Anthropic key, and names no model, prompt or tool schema: the relay
+serves those per agent version (relay protocol v1).
+
+- **The loop.** One user message: send the conversation to
+  `POST /v1/agents/{version}/messages`, assemble the streamed assistant
+  turn (text, `thinking` with its signature, `tool_use` from its
+  `input_json_delta` fragments), run its tool calls in order, send every
+  result back in one user message, repeat until `end_turn`. History is
+  append-only and assistant turns go back exactly as streamed. A turn that
+  fails (`relay_error`, the model API's `error`, a stream that ends without
+  `relay_usage`, malformed events, a timeout) is discarded whole and none
+  of its tools run; `refusal` runs nothing; a `max_tokens` turn's tool
+  calls are answered unrun. Retryable failures are retried (2 s doubling,
+  jittered). Budgets per message: 24 model turns, 200k output tokens, 16
+  tool calls per turn, 15 minutes; a spent budget leaves the tool results
+  last, so the next message continues.
+- **Tools** (the relay's `tools.json` names): `list_signals`,
+  `read_signals` (`GET /api/signals`), `list_modules` (`GET /api/modules`),
+  `read_module` (`GET /api/modules/{name}` and its `trace`),
+  `draft_module` (kept in the conversation, the manifest object rendered to
+  manifest text with every value checked so none can start a line),
+  `check_module` (`POST /api/proposals/check`), `simulate_module`
+  (`POST /api/proposals/replay`), `propose_change` (`POST /api/proposals`,
+  only for a draft that checks clean and has been simulated; param changes
+  as param proposals). A draft reaches the proposal list only when
+  proposed, so the agent iterates on checker and simulator results before
+  a human sees anything. Every input is parsed strictly and validated
+  (unknown fields refused); a bad one is answered `INVALID_JSON` unrun.
+- **Data, not instructions.** Every tool result is plant data (tag names,
+  ST comments, manifest prompt lines, diagnostics quoting them) and goes
+  back inside a `<box-data>` envelope that says so, as JSON with `<`, `>`
+  and `&` escaped, so nothing inside can close it. A tool name the model
+  makes up is answered "no such tool", unrun. No tool reaches `apply`,
+  `rollback` or any write, and the box API enforces token, limits and
+  audit on every call the tools make.
+- **Chat route.** `POST /api/chat` (token, audited) takes
+  `{message, session?}` and streams `session`, `text`, `tool_call`,
+  `tool_result`, `proposal`, `retrying`, then `done` or `error` (relay
+  unreachable: "the agent is offline, installed modules keep running").
+  Conversations are in memory: 16 at most (idle ones dropped after an
+  hour, oldest first when full), one message at a time each (409), two
+  running at once (503 beyond), 900 KiB of history.
+- **Draft routes.** `POST /api/proposals/check` (the checks
+  `POST /api/proposals` runs, nothing stored) and
+  `POST /api/proposals/replay` (`{draft, minutes}`: what runs and the draft's
+  change set replayed over the last 1..=1440 minutes of the recorder's tap,
+  on the approval path's plant, in the same JSON shape as the evidence
+  replay): read-only, token-gated and audited like every other POST. A
+  draft replay is never evidence; an apply cites a replay of the stored
+  proposal (`POST /api/proposals/{id}/replay`), and only a role PIN applies.
+  The agent holds the API token and nothing else: it has no tool that
+  reaches `apply`, `rollback` or a PIN, and the token alone cannot apply.
+
 ## Webhook sinks (`sink-webhook`, built)
 
 `helmsman-plc --sinks FILE --sink-dir DIR` publishes signal events over
@@ -707,8 +765,8 @@ agent as ST; nothing here writes ST back).
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
-| text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions, in the agent prompt; the host rules above hold regardless | planned (`agent-loop`) |
-| box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token | planned (`relay-v0`) |
+| text ↔ agent | tag names, comments, bundle text, manuals | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply; the host rules above hold regardless | built (`agent-loop`, `helmsman-plc/tests/agent.rs`) |
+| box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | planned (`bundle-format`, `marketplace`) |
 
 The rule under all of these: limits are enforced by the host, never by the
@@ -730,3 +788,7 @@ prompt. The agent never touches the Rust core.
 - `sim-replay` (built, above) → `box-api` serves the recorder's tap and
   runs the replay; `proposal-ui` charts it; `approval-policy` requires one
   for logic and output-affecting changes.
+- `agent-loop` (built, above) → `local-fallback` answers the chat route
+  when the relay is unreachable (today: an `error` event); `explain-mode`
+  and `dropin-prose` are prompts over the same tools, plus a trace tool
+  for explain mode.

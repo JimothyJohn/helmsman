@@ -473,6 +473,7 @@ impl Bench {
             running: None,
             snapshots: None,
             approval: None,
+            chat: None,
         };
         let extras = Extras {
             ui: None,

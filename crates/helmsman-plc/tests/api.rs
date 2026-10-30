@@ -176,6 +176,7 @@ impl Bench {
             running: setup.running,
             snapshots: setup.store.map(|d| Mutex::new(Store::open(&d).unwrap())),
             approval: None,
+            chat: None,
         };
         let extras = Extras {
             ui: None,

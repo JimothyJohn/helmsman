@@ -79,6 +79,7 @@ impl Bench {
             running: None,
             snapshots: None,
             approval: None,
+            chat: None,
         };
         let api = Api::start(cfg, shared).unwrap();
         let addr = api.addr();
