@@ -165,8 +165,9 @@
   est: 5m
   difficulty: low
   id: protocol-crate-name
+  answer: rename everything to helmsman-*
 
-- [ ] **Multi-module: module-relative addresses, private %M?** Built tonight (feat/multi-module) on two calls I made and you may want to reverse. (1) A module's `%I`/`%Q` addresses are relative to its window: `%QX0.0` is bit 0 of *its* outputs, wherever the window sits, so the checker bounds it at compile time and a module can be moved without editing its ST. The cost: the same address means different bytes in different modules, which matters for debugging against the raw assembly. (2) `%M` is private per module; modules can't share memory, and talking between modules waits for signals (io-runtime / signal-model). Both are cheap to change now and expensive after module-format and hot-swap build on them.
+- [x] **Multi-module: module-relative addresses, private %M?** Built tonight (feat/multi-module) on two calls I made and you may want to reverse. (1) A module's `%I`/`%Q` addresses are relative to its window: `%QX0.0` is bit 0 of *its* outputs, wherever the window sits, so the checker bounds it at compile time and a module can be moved without editing its ST. The cost: the same address means different bytes in different modules, which matters for debugging against the raw assembly. (2) `%M` is private per module; modules can't share memory, and talking between modules waits for signals (io-runtime / signal-model). Both are cheap to change now and expensive after module-format and hot-swap build on them.
   asked: 2026-10-30
   by: claude-session
   needs: your call
@@ -175,8 +176,9 @@
   est: 5m
   difficulty: low
   id: module-addressing
+  answer: keep relative + private %M (recommended)
 
-- [ ] **A device drops: hold the modules that read it?** Built tonight (feat/io-runtime): a module never computes on missing data. If any signal it reads has no value (its device is down, or the value doesn't fit the port, e.g. 40000 into an INT), it is *held*: not scanned, its %Q window zeroed, its output signals sent to their safe values; it resumes when every input is back. The alternative most PLCs offer is holding the last good value with a quality bit the logic can test, which keeps unrelated logic in the same module running but lets a stale "tag X is high" keep a light on. Held is the conservative call for a box whose outputs need a human's approval to move.
+- [x] **A device drops: hold the modules that read it?** Built tonight (feat/io-runtime): a module never computes on missing data. If any signal it reads has no value (its device is down, or the value doesn't fit the port, e.g. 40000 into an INT), it is *held*: not scanned, its %Q window zeroed, its output signals sent to their safe values; it resumes when every input is back. The alternative most PLCs offer is holding the last good value with a quality bit the logic can test, which keeps unrelated logic in the same module running but lets a stale "tag X is high" keep a light on. Held is the conservative call for a box whose outputs need a human's approval to move.
   asked: 2026-10-30
   by: claude-session
   needs: your call
@@ -185,8 +187,9 @@
   est: 5m
   difficulty: low
   id: missing-input-policy
+  answer: hold the module, outputs safe (recommended)
 
-- [ ] **I/O map file: keep the line format?** `--io-map FILE` reads a small line format (`device rio modbus-tcp 192.168.3.50:502 unit=1`, `out lamp bool box do:0 safe=true`; parser in tcpethernet-io `text.rs`, round-trip proptested). I didn't pull serde into the runtime for it: the repo parses its own formats and the module-format manifest and box API (JSON over HTTP) will decide the long-term shape. Switching later is one parser; nothing deployed reads it yet.
+- [x] **I/O map file: keep the line format?** `--io-map FILE` reads a small line format (`device rio modbus-tcp 192.168.3.50:502 unit=1`, `out lamp bool box do:0 safe=true`; parser in tcpethernet-io `text.rs`, round-trip proptested). I didn't pull serde into the runtime for it: the repo parses its own formats and the module-format manifest and box API (JSON over HTTP) will decide the long-term shape. Switching later is one parser; nothing deployed reads it yet.
   asked: 2026-10-30
   by: claude-session
   needs: your call
@@ -195,16 +198,9 @@
   est: 5m
   difficulty: low
   id: iomap-format
+  answer: keep the line format until box-api, then JSON from the API (recommended)
 
 ## Tasks
-
-- [ ] **Bench sweep against the CompactLogix and FP0H** — `cargo run --example discover <subnet broadcast>`; fill the rows in `docs/INTEROP.md`, keep the first capture.
-  needs: devices powered and on a Studio-reachable subnet (answer on 2026-10-26: not hooked up yet)
-  result: first real ListIdentity from each device
-  est: 30m
-  difficulty: low
-  status: blocked
-  id: bench-sweep
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
   needs: nothing
@@ -353,6 +349,7 @@
   difficulty: low
   depends: plcopen-xml
   id: plcopen-editor-check
+  notes: Why can't you do this?
 
 - [x] **Consolidate the canvas work into dev** — on 2026-10-29 the node canvas existed in two places, both outside dev: (1) the main checkout /Users/nick/github/tcpethernet on `feat/node-canvas` (4591603), about 20 files staged, never committed: crates/tcpethernet-canvas (app, canvas, example, look, main, ui_tests, index.html), crates/tcpethernet-graph (edit, model, sim + proptests), scripts/canvas-serve.sh, scripts/canvas-web.sh, Cargo.toml/Cargo.lock/Makefile edits; (2) worktree /Users/nick/github/tcpethernet-canvas on `feat/canvas` (98f4afb), draft PR #19, three commits (7ca5b1e canvas + sim, 5d8eae8 todo card, merge of dev). Steps: confirm both sessions are stopped; commit (1) to `wip/recovered-node-canvas-20261029`; diff it against `feat/canvas` and keep the newer/fuller one, cherry-picking anything only the other has; land it via PR #19 into dev; remove the spent worktree and branches. Per canvas-edit-scope the canvas becomes the read-only ST view (st-graph-view), so the editing paths (edit.rs, canvas edit UI) can stay as-is for now but aren't the direction.
   needs: the two agents in /Users/nick/github/tcpethernet and /Users/nick/github/tcpethernet-canvas wound down
@@ -384,7 +381,7 @@
   difficulty: low
   depends: helmsman-rename
   id: brand-pages
-  notes: GitHub Pages builds from master/docs, so nothing goes live until Nick's own dev → master merge; don't change the Pages source or add a deploy workflow without asking.
+  notes: GitHub Pages builds from master/docs, so nothing goes live until Nick's own dev → master merge; don't change the Pages source or add a deploy workflow without asking. Helmsmand brand guide is here bt that should be in another corktree already: https://claude.ai/artifact/WB1uKtP1NRHHfGoWw95tBt#page-dcb81aee8d83
 
 
 ## Product vision (interview 2026-10-29)
@@ -438,11 +435,10 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: signal-model
 
 - [ ] **Logix symbolic tag read** — Read Tag (0x4C) and multi-service packets over the existing explicit session; tag list browse (Symbol object 0x6B) so the agent can see what's on the PLC. Read-only by construction: no Write Tag in the box build.
-  needs: bench-sweep for real-device verification; OpENer can't serve symbolic tags, so a fixture server for tests
+  needs: a fixture server for tests (OpENer can't serve symbolic tags); real-device verification waits for an EtherNet/IP target device on the bench
   result: CompactLogix tags become signals
   est: 4d
   difficulty: high
-  depends: bench-sweep
   id: logix-tag-read
 
 - [ ] **Box outputs: GPIO stack light** — Pi GPIO (or a relay hat) as box-owned outputs with named channels; blink patterns as a stdlib FB.
