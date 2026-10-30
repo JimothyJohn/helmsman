@@ -240,6 +240,26 @@
   difficulty: low
   id: logix-pm020
 
+- [ ] **Where does the relay live?** The relay holds the Anthropic key and meters boxes, which the vision puts on the paid side of open core, and the `open-core-split` card says to decide before paid code lands in this MIT repo. So relay v0 is being built in a NEW local repo `../helmsman-relay` (Rust, SAM template, no remote, nothing deployed). Creating the private GitHub repo and deploying the stack (account 403059190476, us-east-1) are your steps; scripts and cards are in that repo's TODO.md.
+  asked: 2026-10-30
+  by: claude-session
+  needs: your call
+  result: relay-v0 has a home; agent-loop can target its protocol
+  options: private repo JimothyJohn/helmsman-relay (recommended) | relay/ in this repo, split later | private monorepo for all paid code (relay, fleet, market)
+  est: 5m
+  difficulty: low
+  id: relay-repo
+
+- [ ] **Stop parallel PRs breaking dev?** Twice on 2026-10-30 two PRs that were each green merged back to back and broke dev's build (trace-tap + signal-model; fixed by #39). Branch protection on dev doesn't require branches to be up to date. Options: require up-to-date branches (each PR re-runs CI after every merge; slow with many agents), or GitHub's merge queue (tests each PR on top of the ones ahead of it; built for this), or leave it and fix forward.
+  asked: 2026-10-30
+  by: claude-session
+  needs: your call (repo setting)
+  result: dev stays green under parallel agents
+  options: merge queue on dev (recommended) | require up-to-date branches | leave as is, fix forward
+  est: 15m
+  difficulty: low
+  id: dev-merge-safety
+
 - [ ] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
   asked: 2026-10-30
   by: claude-agent
