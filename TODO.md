@@ -341,6 +341,16 @@
   difficulty: low
   id: agent-drafts
 
+- [ ] **Dev bundles: switch in the trust store, not the policy file?** Bundle import (feat/bundle-format) refuses unsigned bundles and bundles signed by no trusted publisher. The brief said "unless policy explicitly allows local dev bundles"; I put that switch in the box's trust store (`dev-bundles allow` in `trusted-publishers`, state dir, 0600, set with `helmsman-plc bundle trust dev-bundles allow`) rather than the `--policy` file, because the policy file's rule is that it can only be stricter than the floor, and allowing dev bundles loosens. Dev bundles are marked `DEV BUNDLE` in the proposal, its note and the audit log, and still go through the approval policy like any proposal. A broken signature is refused either way.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: where an integrator turns dev bundles on, and whether the policy file stays strictly "only stricter"
+  options: trust store `dev-bundles allow` (recommended, built) | a `bundles dev` line in the policy file (breaks only-stricter) | a `--dev-bundles` command-line flag
+  est: 30m
+  difficulty: low
+  id: dev-bundles-switch
+
 - [ ] **Param units: a `unit=` key on manifest param lines?** The offline chat (feat/local-fallback) checks a typed unit ("80 %", "5 s") against the param's, but params had no unit; signals did. I added an optional `unit=U` to `param` lines for int/real (same rule as a signal's unit: 1..=16 printable ASCII, no `#`), parsed, rendered, served in the API's manifest and param-proposal JSON, metadata only, never converted. A unit change counts as a manifest change, so it is logic tier, not param. Without it the offline chat would accept bare numbers only. The agent's `draft_module` does not write units yet (the relay's tool schema would need a `unit` field).
   asked: 2026-10-30
   by: claude-agent
@@ -840,8 +850,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format
   id: wasm-tier
 
-- [ ] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
-  notes: floor = signature + capability manifest + host-enforced sandbox; the AI review on install sits on top and can only refuse (market-floor)
+- [x] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
+  notes: floor = signature + capability manifest + host-enforced sandbox; the AI review on install sits on top and can only refuse (market-floor). Built: `bundle` module (format, Ed25519 via ring, trust store), `helmsman-plc bundle keygen/pack/sign/verify/trust`, `GET /api/snapshots/{id}/bundle`, `POST /api/bundles` (proposal only); see ARCHITECTURE "Bundles".
   est: 1w
   difficulty: med
   depends: snapshots, module-format
