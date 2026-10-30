@@ -600,3 +600,43 @@ fn rebinding_onto_a_reloaded_table_makes_what_nothing_healthy_drives_safe_or_ref
     assert_eq!(new.command(new.index("valve").unwrap()), Some(Value::Bool(true)));
     assert_eq!(new.command(new.index("spare").unwrap()), Some(Value::Bool(true)));
 }
+
+/// A reload that moves an output to another point starts it at its safe
+/// value (it is a rebind), but the module that drives it must have run on
+/// the new table before anyone else sees it: the reload and that scan are
+/// one step under the table lock. Before the fix the module scanned only
+/// at its next deadline, so links and readers saw the safe value for up
+/// to a period (tests/reload.rs saw it as an intermittent glitch).
+#[test]
+fn after_a_reload_every_module_scans_on_the_very_next_tick() {
+    let src = "device a modbus-tcp 127.0.0.1:1\n\
+               in  run   bool a di:0\n\
+               out valve bool a coil:0 safe=false\n";
+    let m = || {
+        let mut m = module(
+            "m",
+            "PROGRAM m VAR_INPUT run : BOOL; END_VAR VAR_OUTPUT valve : BOOL; END_VAR valve := run; END_PROGRAM",
+        );
+        m.period = ms(100);
+        m
+    };
+    let mut old = table_of(src);
+    let mut rt = Runtime::with_signals(0, 0, vec![m()], &old).unwrap();
+    old.set_input(old.index("run").unwrap(), Some(Value::Bool(true)));
+    rt.tick_with(ms(0), &[], &mut old);
+    let valve = |t: &SignalTable| t.command(t.index("valve").unwrap());
+    assert_eq!(valve(&old), Some(Value::Bool(true)));
+
+    // Move valve to coil:1 mid-period; the module is next due at 100 ms.
+    let mut new = table_of(&src.replace("coil:0", "coil:1"));
+    new.carry_from(&old);
+    rt.rebind(vec![m()], &mut new).unwrap();
+    rt.tick_with(ms(1), &[], &mut new);
+    assert_eq!(
+        valve(&new),
+        Some(Value::Bool(true)),
+        "the reload step's tick scanned the module on the new table"
+    );
+    // And it keeps its period from there, without counting an overrun.
+    assert_eq!(rt.stats("m").unwrap().overruns, 0);
+}
