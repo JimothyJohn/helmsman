@@ -2346,6 +2346,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tcpethernet-io"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "tcpethernet-plc"
 version = "0.1.0"
 dependencies = [

@@ -279,6 +279,33 @@ Verdict: trash as a reference. Cite only §V.D if you want a quotable
 explanation of the heartbeat connection. Don't let its 2001 vocabulary leak
 into the code.
 
+### Modbus Organization, MODBUS Application Protocol Specification V1.1b3 (2012-04-26, 50 pp)
+
+- **Where:** https://www.modbus.org/file/secure/modbusprotocolspecification.pdf
+  (linked from https://www.modbus.org/modbus-specifications as "Modbus
+  Protocol Specification"). Fetched 2026-10-29, sha256
+  `f80d0d7132fd035104c3f21b01026470e3310ca3d8d493d9a9737d0d32ad2eb1`. Not
+  vendored: Modbus Organization copyright.
+- **Leaned on by** `crates/tcpethernet-io/src/modbus.rs` and `sim.rs`: PDU
+  limit of 253 bytes (§4.1 p.3), 0-based PDU addressing (§4.4), function codes
+  0x01-0x06 (§6.1-6.6 pp.11-19) with their quantity limits (2000 bits, 125
+  registers) and coil encoding (0xFF00/0x0000, §6.5 p.17), LSB-first bit
+  packing with zero padding (§6.1 p.11), 0x10 Write Multiple Registers (§6.12
+  p.30, 1-123 registers), exception replies and codes (§7 p.47).
+- **How to cite:** `App §<x> p.<n>` in the module, after the module docs name
+  the document once.
+
+### Modbus Organization, MODBUS Messaging on TCP/IP Implementation Guide V1.0b (2006-10-24, 46 pp)
+
+- **Where:** https://www.modbus.org/file/secure/messagingimplementationguide.pdf
+  (linked as "Modbus TCP/IP"). Fetched 2026-10-29, sha256
+  `065d71170475642e82f370c648bf5135263cb20f61ce92c921add975fab6f669`. Not
+  vendored.
+- **Leaned on by** `modbus.rs` and `sim.rs`: the 7-byte MBAP header
+  (transaction id, protocol id 0, length counting unit id + PDU, unit id;
+  §3.1.3 p.5) and port 502 (p.5).
+- **How to cite:** `TCP §<x> p.<n>`.
+
 ## What this means for the project
 
 1. **Role:** build the originator (explicit client + Class 1 scanner), not

@@ -101,7 +101,7 @@
   answer: report it, as a draft issue
   notes: not filed: already fixed on ruSTy master by PLC-lang/rusty#2015 (merged 2026-10-21, after v1.0.7); repro re-verified against 1.0.7 on 2026-10-28. Follow-up card rusty-bump.
 
-- [ ] **Theme depth: tokens, layout, or custom widgets?** "Want a new theme? Talk to it." You skipped this in the 2026-10-29 interview. Tokens only (colors, fonts, density) is safe and always consistent. Layout adds per-role panel arrangement. Custom widgets (a gauge, a machine mimic) makes visuals a module tier with its own sandbox story.
+- [x] **Theme depth: tokens, layout, or custom widgets?** "Want a new theme? Talk to it." You skipped this in the 2026-10-29 interview. Tokens only (colors, fonts, density) is safe and always consistent. Layout adds per-role panel arrangement. Custom widgets (a gauge, a machine mimic) makes visuals a module tier with its own sandbox story.
   asked: 2026-10-29
   by: claude-session
   needs: your call
@@ -110,8 +110,9 @@
   est: 5m
   difficulty: low
   id: theme-depth
+  answer: Don't allow for customizations like this I changed my mind
 
-- [ ] **Marketplace floor under the AI review.** You picked "AI-reviewed on install". I'd keep that, but not alone: a hostile bundle can carry text aimed at the reviewer (prompt injection), and AI review is non-deterministic. Proposal: signing, a capability manifest, and WASM/ST sandboxing enforced by the host are the mechanical floor; Claude's plain-language review sits on top and can only refuse, never grant.
+- [x] **Marketplace floor under the AI review.** You picked "AI-reviewed on install". I'd keep that, but not alone: a hostile bundle can carry text aimed at the reviewer (prompt injection), and AI review is non-deterministic. Proposal: signing, a capability manifest, and WASM/ST sandboxing enforced by the host are the mechanical floor; Claude's plain-language review sits on top and can only refuse, never grant.
   asked: 2026-10-29
   by: claude-session
   needs: your call
@@ -120,8 +121,9 @@
   est: 5m
   difficulty: low
   id: market-floor
+  answer: floor + AI review (recommended)
 
-- [ ] **Can the operator edit in the canvas, or only watch?** Per your 2026-10-29 note, ST is the source of truth (agent-written, engineer-tweakable) and the canvas is the operator's live view of what the code does. Edit-in-canvas means round-tripping a graph edit back to ST, which is hard to do without mangling the agent's source. View-only plus "ask the agent" keeps one direction.
+- [x] **Can the operator edit in the canvas, or only watch?** Per your 2026-10-29 note, ST is the source of truth (agent-written, engineer-tweakable) and the canvas is the operator's live view of what the code does. Edit-in-canvas means round-tripping a graph edit back to ST, which is hard to do without mangling the agent's source. View-only plus "ask the agent" keeps one direction.
   asked: 2026-10-29
   by: claude-session
   needs: your call
@@ -130,8 +132,9 @@
   est: 10m
   difficulty: med
   id: canvas-edit-scope
+  answer: view-only, change via agent (recommended)
 
-- [ ] **Local fallback model: on the Pi, or nothing until a hub exists?** You chose "runs + local fallback" for offline. A Pi 5 can run a ~1–3B model via llama.cpp, slowly, good enough to change a threshold or explain a node, not to write modules. Costs RAM next to the runtime.
+- [x] **Local fallback model: on the Pi, or nothing until a hub exists?** You chose "runs + local fallback" for offline. A Pi 5 can run a ~1–3B model via llama.cpp, slowly, good enough to change a threshold or explain a node, not to write modules. Costs RAM next to the runtime.
   asked: 2026-10-29
   by: claude-session
   needs: your call
@@ -140,8 +143,9 @@
   est: 10m
   difficulty: med
   id: fallback-model
+  answer: rule-based param edits only (no model)
 
-- [ ] **Relay hosting shape.** The relay holds the Anthropic key, meters per box, and versions prompts/tools. My default: API Gateway + Lambda + DynamoDB (box tokens, usage), streaming via Lambda response streaming. Your AWS account, a new stack.
+- [x] **Relay hosting shape.** The relay holds the Anthropic key, meters per box, and versions prompts/tools. My default: API Gateway + Lambda + DynamoDB (box tokens, usage), streaming via Lambda response streaming. Your AWS account, a new stack.
   asked: 2026-10-29
   by: claude-session
   needs: your call; which AWS account/region
@@ -150,6 +154,17 @@
   est: 10m
   difficulty: low
   id: relay-hosting
+  answer: Lambda + DynamoDB (recommended)
+
+- [ ] **Does the EtherNet/IP library keep the `tcpethernet` name?** You picked Helmsman Factory Automation on 2026-10-29 and asked for the crates and project to be renamed, but the roadmap's naming card said "tcpethernet stays the protocol layer". My pick: keep `tcpethernet` (and the adapter) as the protocol library, since it's an accurate, searchable name and a protocol library shouldn't carry a product brand; everything product-shaped becomes helmsman-*. The fresh agent on helmsman-rename needs this before it starts.
+  asked: 2026-10-29
+  by: claude-session
+  needs: your call
+  result: the name map helmsman-rename applies
+  options: keep tcpethernet for the protocol crates (recommended) | rename everything to helmsman-*
+  est: 5m
+  difficulty: low
+  id: protocol-crate-name
 
 ## Tasks
 
@@ -309,6 +324,38 @@
   depends: plcopen-xml
   id: plcopen-editor-check
 
+- [ ] **Consolidate the canvas work into dev** — on 2026-10-29 the node canvas existed in two places, both outside dev: (1) the main checkout /Users/nick/github/tcpethernet on `feat/node-canvas` (4591603), about 20 files staged, never committed: crates/tcpethernet-canvas (app, canvas, example, look, main, ui_tests, index.html), crates/tcpethernet-graph (edit, model, sim + proptests), scripts/canvas-serve.sh, scripts/canvas-web.sh, Cargo.toml/Cargo.lock/Makefile edits; (2) worktree /Users/nick/github/tcpethernet-canvas on `feat/canvas` (98f4afb), draft PR #19, three commits (7ca5b1e canvas + sim, 5d8eae8 todo card, merge of dev). Steps: confirm both sessions are stopped; commit (1) to `wip/recovered-node-canvas-20261029`; diff it against `feat/canvas` and keep the newer/fuller one, cherry-picking anything only the other has; land it via PR #19 into dev; remove the spent worktree and branches. Per canvas-edit-scope the canvas becomes the read-only ST view (st-graph-view), so the editing paths (edit.rs, canvas edit UI) can stay as-is for now but aren't the direction.
+  needs: the two agents in /Users/nick/github/tcpethernet and /Users/nick/github/tcpethernet-canvas wound down
+  result: one canvas branch in dev; main checkout back on dev; no stray worktrees
+  notes: also stale: /Users/nick/github/tcpethernet/.claude/handoff.md (says main is on dev, pi-deploy-iec pending; both untrue). Replace it with /Users/nick/github/tcpethernet-dev/.claude/handoff.md, then remove the tcpethernet-dev worktree (its branches are all merged). Worktree /Users/nick/github/tcpethernet-io (`feat/io-model`) was clean at dev on 2026-10-29; check it before removing.
+  est: 1h
+  difficulty: med
+  id: consolidate-canvas
+
+- [ ] **Decide the leftover README branch** — `wip/recovered-readme-odva-20261028` holds a README edit reverted off the main checkout on 2026-10-28 and never merged. Read it (`git log -p dev..wip/recovered-readme-odva-20261028`), then PR it into dev or delete the branch.
+  result: no unmerged wip branches
+  est: 10m
+  difficulty: low
+  id: readme-wip-branch
+
+- [ ] **Rename the project to Helmsman Factory Automation** — move crates, binaries, repo, docs and UI off the tcpethernet name. Suggested map (final shape per protocol-crate-name): tcpethernet-plc → helmsman-plc, tcpethernet-iec → helmsman-iec, tcpethernet-cli → helmsman-cli (bin `tcpethernet` → `helmsman`), tcpethernet-canvas/-graph → helmsman-canvas/-graph, tcpethernet-adapter follows the protocol crate. Touches: root Cargo.toml members and the `repository` URL, package names and every `use` path, deploy/tcpethernet-plc.service and scripts/pi-deploy-plc.sh (the new deploy must stop and remove the old unit on the pick PC), the other scripts/ and Makefile targets, CI job names, README and docs, web page titles, env vars TCPETHERNET_OPENER_ADDR / _OPENER_IO / _RUSTY / _RUSTY_CASES / _RUSTY_SEED. The GitHub repo is already JimothyJohn/helmsman (old URL redirects, checked 2026-10-29): point the Cargo `repository` URL and README links at it; local checkouts still have the old origin URL (`git remote set-url origin https://github.com/JimothyJohn/helmsman.git`).
+  needs: protocol-crate-name answered; PR #19 (feat/canvas, adds tcpethernet-canvas and tcpethernet-graph) merged or closed, and no crate edits in flight in sibling worktrees (feat/io-model); this is a mass edit that conflicts with everything open
+  result: one PR into dev, `./scripts/lint.sh` and `cargo test --workspace --locked` green under the new names, interop job green
+  est: 1d
+  difficulty: med
+  depends: protocol-crate-name, naming
+  id: helmsman-rename
+  notes: brand canvas (private) https://claude.ai/artifact/WB1uKtP1NRHHfGoWw95tBt: wordmark Saira Stencil One, descriptor Barlow Condensed 700; palette yellow #FFC20E, black #141414, graphite #3A3A3A, steel #8C8C8C (rules only), white; never yellow on white; mark is the stencil encoder gear. crates.io `helmsman` is taken by an unrelated crate: run `cargo search <name>` on each new name before publishing. Restarting or removing the service on the pick PC asks Nick each time.
+
+- [ ] **GitHub Pages brand gallery for Helmsman** — Pages already serves docs/ from master (legacy build, https://jimothyjohn.github.io/helmsman/, landing page docs/index.html still titled tcpethernet). Rebrand that landing page to Helmsman Factory Automation (stencil wordmark, yellow/black/graphite/white, stencil encoder mark), and add docs/brand/index.html showing every concept from the brand canvas: the marks (round 1 and the round-2 gear set), the wordmarks, all color themes with hex and contrast rules, the in-the-field mockups and the spray-painted stencil-encoder surfaces. Static HTML/CSS and inline SVG only, no build step, no JS framework (the repo ships no JS); fonts from Google Fonts. Also commit the final mark as SVG files under docs/brand/ (full stencil encoder, a heavier small-size variant for 16–20 px, black, yellow and white) so the rename and the UI can reuse them.
+  needs: the brand canvas (private, so the agent needs Nick to share it or the HTML exported into the repo first; the SVG geometry is in its StencilEncoder board); helmsman-rename landed, so the page and the code use the same names
+  result: docs/brand/ with the gallery page and mark SVGs; docs/index.html rebranded; live at /helmsman/brand/ after Nick merges dev → master
+  est: 4h
+  difficulty: low
+  depends: helmsman-rename
+  id: brand-pages
+  notes: GitHub Pages builds from master/docs, so nothing goes live until Nick's own dev → master merge; don't change the Pages source or add a deploy workflow without asking.
+
 
 ## Product vision (interview 2026-10-29)
 
@@ -316,9 +363,11 @@ Working title until naming lands. A small, opinionated controller for factory ed
 
 Agentic first. The agent (Claude, behind our relay) is the primary programmer. Every module is Structured Text the agent writes and an engineer can tweak; the existing parser, checker, interpreter and ruSTy oracle are its feedback loop. The canvas is the operator's window into the code: ST rendered as a live diagram with values on wires and the reason each output is on. The canvas is the app shell; chat lives in its side panel.
 
-Extension tiers: data (params, signals, schedules) → ST modules → WASM (drivers, heavy code; M3). Users are layered: operator (view, ask), engineer (approve, edit ST, PIN), integrator (modules, policy). The approval policy depends on tier and role. Param and theme changes go live with undo; logic changes get a preview; anything that can move an output needs an engineer PIN plus a sim replay.
+Extension tiers: data (params, signals, schedules) → ST modules → WASM (drivers, heavy code; M3). Users are layered: operator (view, ask), engineer (approve, edit ST, PIN), integrator (modules, policy). The approval policy depends on tier and role. No user theming: the look is fixed. Param changes go live with undo; logic changes get a preview; anything that can move an output needs an engineer PIN plus a sim replay.
 
-Hard limits, enforced by the host and never by the prompt: no writes to external PLCs (CIP is read-only toward them); no output change without human approval; modules have no network access (core sinks publish); the agent never touches the Rust core. Offline: everything installed keeps running, chat degrades to a local fallback. Business: open core (runtime + canvas MIT; relay, fleet and verified marketplace paid) plus a preloaded box. Standalone first, fleet-shaped data model from day one.
+Hard limits, enforced by the host and never by the prompt: no writes to external PLCs (CIP is read-only toward them); no output change without human approval; modules have no network access (core sinks publish); the agent never touches the Rust core. Offline: everything installed keeps running, chat degrades to rule-based param edits (no local model). Business: open core (runtime + canvas MIT; relay, fleet and verified marketplace paid) plus a preloaded box. Standalone first, fleet-shaped data model from day one.
+
+Update 2026-10-29 (I/O mapping): "This device is the PLC, it just may talk to other slave/client devices. This will be a master/server." The box masters its devices and writes to them through the I/O map; read-only stays the rule for other controllers it only observes (a CompactLogix it reads tags from). Agent-written drivers run in the WASM tier with one extra capability: a socket to their own device's endpoint.
 
 ## Roadmap M1: bench demo, talk → module → light
 
@@ -395,7 +444,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: trace-tap
 
 - [ ] **ST → diagram view** — lower a module's ST AST into an FBD-like diagram (blocks for FB calls and expressions, wires for data flow, IF/CASE as gated regions) and lay it out. Live values from trace-tap on wires; outputs show "on because …". Reuses tcpethernet-graph's model and the egui canvas as the renderer.
-  needs: canvas-edit-scope answered
+  notes: view-only (canvas-edit-scope): no graph→ST writer; every change goes through the agent as ST. The tcpethernet-graph editor on feat/node-canvas becomes a read-only renderer
   result: the operator sees what the code is doing
   est: 1w
   difficulty: high
@@ -410,7 +459,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: canvas-web
 
 - [ ] **Relay v0** — the boxes' only path to Claude: per-box token, the Anthropic key server-side, usage metering, versioned system prompt and tool schema. Dev runs against a local relay with a .env key.
-  needs: relay-hosting answered
+  needs: the AWS account/region for the stack
+  notes: API Gateway + Lambda (response streaming) + DynamoDB for box tokens and usage (relay-hosting)
   result: no API keys on boxes; prompts upgrade without reflashing
   est: 3d
   difficulty: med
@@ -451,6 +501,42 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   depends: logix-tag-read, gpio-outputs, agent-loop, proposal-ui, hot-swap, canvas-web
   id: m1-demo
+
+- [ ] **I/O map, driver contract, Modbus TCP, conformance harness** — crates/tcpethernet-io: devices the box masters, named signals bound to device points or box channels (do:N / di:N), validation, the string-addressed driver contract, a Modbus TCP driver from the spec, a simulator with cross-wires and faults, and the PASS/FAIL harness (`cargo run -p tcpethernet-io --example conformance -- --sim`).
+  result: the vocabulary for signal-model, and the loop an agent's driver is judged by
+  notes: branch feat/io-model; the first slice of signal-model (no units or poll rates yet)
+  est: 1d
+  difficulty: med
+  id: io-map
+
+- [ ] **Signals in the scan** — tcpethernet-plc reads its I/O map: a poll task per device fills input signals, programs read and write signals by name instead of %I/%Q, outputs are written on change, and a device that drops sends its outputs to a declared safe state.
+  result: an ST program drives a Modbus coil and a box output by name
+  est: 3d
+  difficulty: high
+  depends: io-map, multi-module
+  id: io-runtime
+
+- [ ] **Tabletop I/O bench** — one Modbus TCP remote I/O block with 24 V DI/DO on the Studio link (192.168.3.x), outputs DO0-3 wired back to inputs DI0-3, a 24 V supply, and a Pi GPIO to 24 V output stage for do:N. Then `conformance --endpoint <ip>:502 --loop coil:0=di:0 ...` against it.
+  needs: hardware bought and wired (any Modbus TCP 8DI/8DO block; note its manual's register map and whether it numbers from 0 or 1)
+  result: the harness passes on real hardware, and agents have a bench that proves writes physically
+  est: 4h
+  difficulty: low
+  depends: io-map
+  id: io-bench
+
+- [ ] **Drivers in the WASM tier** — the driver contract across the sandbox: parse/read/write by address string, one capability (a socket to its own device's endpoint), fuel and memory limits. The Modbus driver ported as the first guest, passing the same harness.
+  result: drivers the agent writes can't touch anything but their device
+  est: 1w
+  difficulty: high
+  depends: wasm-tier, io-map
+  id: wasm-driver
+
+- [ ] **Agent writes a driver from the manual** — give the agent a device's documentation (PDF to text, as done for the Modbus spec); it writes the point map and, for a new protocol, a WASM driver, and iterates on harness output: simulator first, then the bench. Engineer approves the map before any output is bound.
+  result: a new device or protocol without hand-written driver code
+  est: 1w
+  difficulty: high
+  depends: wasm-driver, io-bench, agent-loop
+  id: driver-agent
 
 ## Roadmap M2: floor-ready core
 
@@ -496,8 +582,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: st-graph-view, agent-loop
   id: explain-mode
 
-- [ ] **Offline behaviour and local fallback** — relay unreachable: banner, chat in fallback mode; installed modules unaffected.
-  needs: fallback-model answered
+- [ ] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
   est: 3d
   difficulty: med
   depends: agent-loop, fallback-model
@@ -536,13 +621,14 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: wasm-tier
 
 - [ ] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
-  needs: market-floor answered
+  notes: floor = signature + capability manifest + host-enforced sandbox; the AI review on install sits on top and can only refuse (market-floor)
   est: 1w
   difficulty: med
   depends: snapshots, module-format
   id: bundle-format
 
-- [ ] **Theme engine** — scope per theme-depth; themes are data the agent writes, applied live with undo.
+- [x] **Theme engine** — scope per theme-depth; themes are data the agent writes, applied live with undo.
+  notes: dropped 2026-10-29: no user theming (theme-depth)
   est: 3d
   difficulty: med
   depends: theme-depth, canvas-web
@@ -597,15 +683,16 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: relay-v0
   id: open-core-split
 
-- [ ] **Product name** — the app gets its own name; tcpethernet stays the protocol layer.
+- [x] **Product name** — the app gets its own name; tcpethernet stays the protocol layer.
   est: 1h
   difficulty: low
   id: naming
+  notes: decided 2026-10-29: Helmsman Factory Automation. Rename work is helmsman-rename; whether the protocol crate keeps tcpethernet is protocol-crate-name.
 
-- [ ] **Try the node canvas (PR #19)** — ComfyUI/Node-RED style editor in Rust (egui, wasm): nested function blocks, live scan sim, not wired to the PLC yet. Open http://10.0.0.41:8790/ from the Air; hold a start button, double-click a motor to go inside, select nodes + Cmd+G to make your own block, `?` lists the controls.
-  needs: your eyes on the UI; and the canvas-edit-scope answer, since this toy is a full graph editor while the roadmap reads the canvas as a live view of ST
-  result: PR #19 out of draft, or a list of changes
-  notes: served by python3 http.server from the tcpethernet-canvas worktree (pid in target/canvas-http.pid). Stop: `kill $(lsof -tiTCP:8790 -sTCP:LISTEN)`. Rebuild: `make canvas-web`. `make canvas-serve` (trunk, live reload) only answers on localhost here: macOS's firewall holds the unsigned trunk binary's incoming connections behind a GUI prompt
+- [ ] **Try the node canvas** — ComfyUI/Node-RED style editor in Rust (egui, wasm): nested function blocks, live scan sim, not wired to the PLC. Kept as a lab tool (2026-10-29); per canvas-edit-scope the operator canvas is the read-only ST view (st-graph-view), which reuses tcpethernet-graph and this renderer. Serve it: `make canvas-web`, then `python3 -m http.server 8790 --bind 0.0.0.0 --directory target/canvas-dist` and open http://10.0.0.41:8790/ from the Air (stop: `kill $(lsof -tiTCP:8790 -sTCP:LISTEN)`). In it: hold a start button, double-click a motor to go inside, select nodes + Cmd+G to make a block, `?` lists the controls.
+  needs: your eyes on the UI
+  result: a list of changes, or none
+  notes: `make canvas-serve` (trunk, live reload) only answers on localhost on the Studio: macOS's firewall holds the unsigned trunk binary's incoming connections behind a GUI prompt; python3 is allowed
   est: 15m
   difficulty: low
   id: canvas-try
