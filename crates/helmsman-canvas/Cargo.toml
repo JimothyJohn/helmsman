@@ -11,7 +11,8 @@ repository.workspace = true
 helmsman-diagram = { path = "../helmsman-diagram" }
 helmsman-graph = { path = "../helmsman-graph" }
 helmsman-iec = { path = "../helmsman-iec" }
-helmsman-plc = { path = "../helmsman-plc" }
+# The runtime only: no SQLite store, HTTP API or TLS, so it builds for wasm32.
+helmsman-plc = { path = "../helmsman-plc", default-features = false }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
