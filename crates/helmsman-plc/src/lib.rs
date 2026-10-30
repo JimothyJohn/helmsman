@@ -8,6 +8,7 @@ pub mod api;
 pub mod calendar;
 pub mod link;
 pub mod manifest;
+pub mod policy;
 pub mod record;
 pub mod replay;
 pub mod runtime;

@@ -14,20 +14,26 @@
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
 //! POST /api/proposals                     token: a module draft or a param change, checked, stored as a draft
-//! POST /api/proposals/{id}/apply          token: 501, applying is the approval policy's (not built)
+//! POST /api/proposals/{id}/replay         token: sim replay of the draft against what runs; evidence for apply
+//! POST /api/proposals/{id}/apply          token + {role, pin, replay?}: apply through the approval policy
 //! GET  /api/audit?after=N&limit=M         every mutating call, append-only, naming snapshot ids
 //! GET  /api/snapshots                     snapshot history (with --store), head, the running change set's id
 //! GET  /api/snapshots/head
 //! GET  /api/snapshots/{id}                a snapshot's files
 //! GET  /api/snapshots/{a}/diff/{b}
-//! POST /api/snapshots/{id}/rollback       token: 501, rollback is the approval policy's (not built)
+//! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
+//! POST /api/snapshots/{id}/rollback       token + {role, pin, replay?}: roll back through the approval policy
+//! GET  /api/replays/{n}                   a replay kept as evidence
+//! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
 //! ```
 //!
 //! **What it cannot do.** There is no route that writes a signal, an
 //! output, a param or a module, with or without the token. Proposals are
-//! stored drafts; applying one answers 501 until the approval policy
-//! (`approval-policy`) exists and is the only path to apply. Limits are
+//! stored drafts; the only way one runs is `apply` (and the only way back
+//! is `rollback`), both through [`approve`]: tier, policy, role, PIN and
+//! sim evidence, checked by the host ([`crate::policy`]). The token alone
+//! (what the agent holds) can draft and replay, never apply. Limits are
 //! enforced here, by the host, never by whatever is calling.
 //!
 //! **Auth.** Reads (`GET`) are open to whoever can reach the socket (the
@@ -52,29 +58,35 @@
 //! [`Limits::stream_life`] (the browser reconnects). Sizes are capped
 //! ([`Limits`]).
 
+pub mod approve;
 pub mod catalog;
 pub mod http;
 pub mod live;
 pub mod proposal;
 pub mod render;
 pub mod store;
+pub mod swap;
 pub mod token;
 
+use std::collections::BTreeMap;
 use std::io::{self, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value as Json, json};
 
+use crate::policy::Role;
 use crate::store::{self as snapshots, ChangeSet, SnapshotId, Store};
 
+pub use approve::{Approval, Replays};
 pub use catalog::{Catalog, Devices, ModuleInfo, SignalInfo};
 pub use http::{Limits, Request, Response};
 pub use live::{Live, ModuleLive, Publisher, View};
 pub use store::{Audit, AuditEntry, MemAudit, MemProposals, Proposals};
+pub use swap::{Plant, SwapHandle, Swapper};
 
 /// How often the scheduler publishes a view while the API runs, and so
 /// the longest it sleeps between ticks.
@@ -125,9 +137,14 @@ pub struct Shared {
     /// when bare programs or `--module` specs are part of it (they are not
     /// module directories, so no snapshot can hold them).
     pub running: Option<ChangeSet>,
-    /// The snapshot store, read-only here (`--store`). Its calls block on
-    /// `SQLite`, so only API worker threads make them.
+    /// The snapshot store (`--store`): read here, and committed to by an
+    /// approved apply or rollback. Its calls block on `SQLite`, so only API
+    /// worker threads make them.
     pub snapshots: Option<Mutex<Store>>,
+    /// The approval path: policy, PINs, the box's shape for replays, and
+    /// the scan thread's swap channel. `None`: apply and rollback answer
+    /// 501.
+    pub approval: Option<Approval>,
 }
 
 /// A traced scan's number and its JSON.
@@ -135,11 +152,64 @@ type Rendered = (u64, Arc<Json>);
 
 struct Ctx {
     cfg: Config,
+    /// Its `catalog`, `running` and `approval` are moved out to the fields
+    /// below at start.
     box_: Shared,
-    /// Per module: the newest traced scan, rendered, and its scan number.
-    traces: Vec<Mutex<Option<Rendered>>>,
+    /// What the API describes; replaced when an apply lands.
+    catalog: RwLock<Arc<Catalog>>,
+    /// The change set the box runs; replaced when an apply lands.
+    running: Mutex<Option<ChangeSet>>,
+    approval: Option<Approval>,
+    replays: Replays,
+    /// Held for the whole of an apply or rollback.
+    applying: Mutex<()>,
+    /// Per module name: the newest traced scan, rendered, and its scan
+    /// number.
+    traces: Mutex<BTreeMap<String, Rendered>>,
     stop: Arc<AtomicBool>,
     streams: AtomicUsize,
+}
+
+impl Ctx {
+    fn catalog(&self) -> Arc<Catalog> {
+        Arc::clone(&self.catalog.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    fn running(&self) -> Option<ChangeSet> {
+        self.running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_running(&self, cs: ChangeSet, catalog: Catalog) {
+        *self.running.lock().unwrap_or_else(PoisonError::into_inner) = Some(cs);
+        *self.catalog.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(catalog);
+        self.traces.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+}
+
+/// What an audit entry names beside the call itself.
+#[derive(Clone, Copy, Debug, Default)]
+struct Note {
+    snapshot: Option<SnapshotId>,
+    base: Option<SnapshotId>,
+    role: Option<Role>,
+}
+
+impl Note {
+    const fn target(snapshot: SnapshotId, base: Option<SnapshotId>) -> Self {
+        Self {
+            snapshot: Some(snapshot),
+            base,
+            role: None,
+        }
+    }
+
+    const fn by(mut self, role: Role) -> Self {
+        self.role = Some(role);
+        self
+    }
 }
 
 /// A running API; stops (and joins its acceptor) when dropped. Open
@@ -186,13 +256,18 @@ impl Api {
     ///
     /// # Errors
     /// The bind fails.
-    pub fn start(cfg: Config, shared: Shared) -> io::Result<Self> {
+    pub fn start(cfg: Config, mut shared: Shared) -> io::Result<Self> {
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let ctx = Arc::new(Ctx {
-            traces: shared.catalog.modules.iter().map(|_| Mutex::new(None)).collect(),
+            catalog: RwLock::new(Arc::new(std::mem::take(&mut shared.catalog))),
+            running: Mutex::new(shared.running.take()),
+            approval: shared.approval.take(),
+            replays: Replays::new(1000),
+            applying: Mutex::new(()),
+            traces: Mutex::new(BTreeMap::new()),
             box_: shared,
             cfg,
             stop: Arc::clone(&stop),
@@ -366,6 +441,31 @@ fn audit(ctx: &Ctx, req: &Request, status: u16, detail: &str) -> Option<u64> {
 
 /// [`audit`], naming the snapshot the call concerns.
 fn audit_with(ctx: &Ctx, req: &Request, status: u16, detail: &str, snapshot: Option<String>) -> Option<u64> {
+    append(ctx, req, status, detail, snapshot, None, None)
+}
+
+/// [`audit`] with a [`Note`]: the snapshots and the role.
+fn record(ctx: &Ctx, req: &Request, status: u16, detail: &str, note: Note) -> Option<u64> {
+    append(
+        ctx,
+        req,
+        status,
+        detail,
+        note.snapshot.map(|s| s.to_string()),
+        note.base.map(|s| s.to_string()),
+        note.role,
+    )
+}
+
+fn append(
+    ctx: &Ctx,
+    req: &Request,
+    status: u16,
+    detail: &str,
+    snapshot: Option<String>,
+    base: Option<String>,
+    role: Option<Role>,
+) -> Option<u64> {
     let seq = ctx
         .box_
         .audit
@@ -377,6 +477,8 @@ fn audit_with(ctx: &Ctx, req: &Request, status: u16, detail: &str, snapshot: Opt
             status,
             detail: detail.into(),
             snapshot,
+            base,
+            role: role.map(|r| r.as_str().to_string()),
         })
         .ok();
     (ctx.cfg.log)(&format!(
@@ -399,48 +501,17 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "proposals", id, "apply"]) => {
-            match proposal_id(id).and_then(|id| ctx.box_.proposals.get(id)) {
-                None => (
-                    Response::error(404, "no such proposal"),
-                    "apply: no such proposal".to_string(),
-                ),
-                Some(p) => {
-                    let snap = p.json["snapshot"].as_str().map(str::to_string);
-                    let r = Response::json(
-                        501,
-                        &json!({
-                            "error": "applying a proposal needs the approval policy (card approval-policy), which is not built; nothing was changed",
-                            "proposal": p.id,
-                        }),
-                    );
-                    let d = format!("apply proposal {} refused: needs approval-policy", p.id);
-                    return match audit_with(ctx, req, 501, &d, snap) {
-                        Some(_) => r,
-                        None => audit_full(),
-                    };
-                }
-            }
+            return approve::apply(req, ctx, approve::Target::Proposal(id));
         }
-        ("POST", ["api", "snapshots", id, "rollback"]) => match snapshot(ctx, id) {
-            Err(r) => {
-                let d = format!("rollback refused: {}", r.status);
-                (r, d)
-            }
-            Ok(cs) => {
-                let id = cs.id().to_string();
-                let r = Response::json(
-                    501,
-                    &json!({
-                        "error": "rolling back needs the approval policy (card approval-policy), which is not built; nothing was changed",
-                        "snapshot": id,
-                    }),
-                );
-                return match audit_with(ctx, req, 501, "rollback refused: needs approval-policy", Some(id)) {
-                    Some(_) => r,
-                    None => audit_full(),
-                };
-            }
-        },
+        ("POST", ["api", "proposals", id, "replay"]) => {
+            return approve::replay(req, ctx, approve::Target::Proposal(id));
+        }
+        ("POST", ["api", "snapshots", id, "rollback"]) => {
+            return approve::apply(req, ctx, approve::Target::Snapshot(id));
+        }
+        ("POST", ["api", "snapshots", id, "replay"]) => {
+            return approve::replay(req, ctx, approve::Target::Snapshot(id));
+        }
         (_, path) => match allowed(path) {
             Some(allow) => (
                 Response::error(405, "method not allowed").with("Allow", allow.into()),
@@ -462,13 +533,19 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
 fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "proposals"] => Some("GET, POST"),
-        ["api", "proposals" | "snapshots", _, "apply" | "rollback"] => Some("POST"),
+        ["api", "proposals", _, "apply" | "replay"] | ["api", "snapshots", _, "rollback" | "replay"] => {
+            Some("POST")
+        }
         ["api"]
         | [
             "api",
-            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots",
+            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy",
         ]
-        | ["api", "signals" | "modules" | "proposals" | "snapshots", _]
+        | [
+            "api",
+            "signals" | "modules" | "proposals" | "snapshots" | "replays",
+            _,
+        ]
         | ["api", "snapshots", _, "diff", _]
         | ["api", "modules", _, "trace"]
         | ["api", "modules", _, "trace", "events"] => Some("GET"),
@@ -509,7 +586,8 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
             );
         }
     };
-    let checked = proposal::check(&new, &ctx.box_.catalog, ctx.cfg.memory, ctx.box_.running.as_ref());
+    let running = ctx.running();
+    let checked = proposal::check(&new, &ctx.catalog(), ctx.cfg.memory, running.as_ref());
     let (mut p, change) = match checked {
         Ok(p) => p,
         Err((status, body)) => return refused(status, body, "proposal refused by the checks"),
@@ -529,7 +607,10 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
     p["id"] = json!(id);
     p["status"] = json!("draft");
     p["at"] = json!(wall());
-    p["apply"] = json!("needs approval-policy");
+    p["approval"] = match (&running, &change) {
+        (Some(base), Some(cs)) => approve::tier_json(base, cs, ctx.approval.as_ref().map(|a| &a.policy)),
+        _ => Json::Null,
+    };
     let snap = change.as_ref().map(|cs| cs.id().to_string());
     let what = match (&snap, p["base"].as_str()) {
         (Some(to), Some(base)) => format!("{what}: snapshot {base} -> {to}"),
@@ -547,7 +628,7 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
 }
 
 fn get(req: &Request, ctx: &Ctx) -> Reply {
-    let c = &ctx.box_.catalog;
+    let c = &*ctx.catalog();
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let view = ctx.box_.live.view();
     let module = |name: &str| c.module(name);
@@ -601,7 +682,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             let head = entries.first().map(|e| e.id.to_string());
             Ok(json!({
                 "head": head,
-                "running": ctx.box_.running.as_ref().map(|cs| cs.id().to_string()),
+                "running": ctx.running().map(|cs| cs.id().to_string()),
                 "log": entries.iter().map(render::entry).collect::<Vec<_>>(),
             }))
         }),
@@ -617,6 +698,14 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             (Err(r), _) | (_, Err(r)) => r,
         },
         ["api", "events"] => return Reply::Values,
+        ["api", "policy"] => match &ctx.approval {
+            Some(a) => Response::json(200, &approve::policy_json(&a.policy)),
+            None => Response::error(404, "no approval path on this box"),
+        },
+        ["api", "replays", id] => match proposal_id(id).and_then(|id| ctx.replays.get(id)) {
+            Some(e) => Response::json(200, &e.json),
+            None => Response::error(404, "no such replay"),
+        },
         _ => Response::error(404, "no such resource"),
     };
     Reply::Once(r)
@@ -647,8 +736,8 @@ fn snapshot(ctx: &Ctx, id: &str) -> Result<ChangeSet, Response> {
     let Some(id) = SnapshotId::parse(id) else {
         return Err(Response::error(404, "no such snapshot"));
     };
-    if let Some(cs) = ctx.box_.running.as_ref().filter(|cs| cs.id() == id) {
-        return Ok(cs.clone());
+    if let Some(cs) = ctx.running().filter(|cs| cs.id() == id) {
+        return Ok(cs);
     }
     let Some(store) = &ctx.box_.snapshots else {
         return Err(Response::error(404, "no such snapshot"));
@@ -673,16 +762,20 @@ fn index() -> Json {
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source} or {kind: param, module, param, value}"),
-            e("POST", "/api/proposals/{id}/apply", true, "501: needs the approval policy"),
+            e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
+            e("POST", "/api/proposals/{id}/apply", true, "apply: {role, pin, replay?}, checked against the policy"),
             e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),
             e("GET", "/api/snapshots", false, "snapshot history (needs --store), head, and the running change set's id"),
             e("GET", "/api/snapshots/head", false, "the head entry"),
             e("GET", "/api/snapshots/{id}", false, "a snapshot's files"),
             e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
-            e("POST", "/api/snapshots/{id}/rollback", true, "501: needs the approval policy"),
+            e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
+            e("POST", "/api/snapshots/{id}/rollback", true, "roll back: {role, pin, replay?}, checked against the policy"),
+            e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
+            e("GET", "/api/policy", false, "the approval policy this box enforces"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
         ],
-        "writes": "no endpoint writes a signal, an output or a module; applying a proposal needs the approval policy",
+        "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
     })
 }
 
@@ -722,6 +815,7 @@ fn audit_list(req: &Request, ctx: &Ctx) -> Response {
             json!({
                 "seq": e.seq, "at": e.at, "method": e.method, "path": e.path,
                 "status": e.status, "detail": e.detail, "snapshot": e.snapshot,
+                "base": e.base, "role": e.role,
             })
         })
         .collect();
@@ -730,15 +824,16 @@ fn audit_list(req: &Request, ctx: &Ctx) -> Response {
 
 /// Asks module `k` for a traced scan and returns the newest one seen.
 fn latest_trace(ctx: &Ctx, k: usize) -> Option<Rendered> {
-    let m = &ctx.box_.catalog.modules[k];
+    let c = ctx.catalog();
+    let m = c.modules.get(k)?;
     let tap = m.tap.as_ref()?;
     tap.request();
     let fresh = tap.take().map(|s| (s.scan, Arc::new(render::trace(&m.name, &s))));
-    let mut slot = ctx.traces[k].lock().unwrap_or_else(PoisonError::into_inner);
+    let mut traces = ctx.traces.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(f) = fresh {
-        *slot = Some(f);
+        traces.insert(m.name.clone(), f);
     }
-    slot.clone()
+    traces.get(&m.name).cloned()
 }
 
 fn event(stream: &mut TcpStream, name: &str, data: &Json) -> io::Result<()> {
@@ -780,7 +875,7 @@ fn value_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
             return None;
         }
         last = Some(view.seq);
-        let c = &ctx.box_.catalog;
+        let c = &*ctx.catalog();
         Some((
             "values",
             json!({
