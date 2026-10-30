@@ -29,6 +29,7 @@
 //! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
+//! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
 //!
@@ -65,6 +66,7 @@
 pub mod approve;
 pub mod catalog;
 pub mod chat;
+pub mod explain;
 pub mod http;
 pub mod live;
 pub mod proposal;
@@ -175,6 +177,9 @@ struct Ctx {
     /// Per module name: the newest traced scan, rendered, and its scan
     /// number.
     traces: Mutex<BTreeMap<String, Rendered>>,
+    /// Per module name: the newest traced scan itself (explain mode
+    /// explains from it).
+    samples: Mutex<BTreeMap<String, Arc<crate::Sample>>>,
     stop: Arc<AtomicBool>,
     streams: AtomicUsize,
     chat: Option<chat::Chat>,
@@ -197,6 +202,10 @@ impl Ctx {
         *self.running.lock().unwrap_or_else(PoisonError::into_inner) = Some(cs);
         *self.catalog.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(catalog);
         self.traces.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        self.samples
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
     }
 }
 
@@ -292,6 +301,7 @@ impl Api {
             replays: Replays::new(1000),
             applying: Mutex::new(()),
             traces: Mutex::new(BTreeMap::new()),
+            samples: Mutex::new(BTreeMap::new()),
             box_: shared,
             cfg,
             stop: Arc::clone(&stop),
@@ -385,6 +395,8 @@ enum Reply {
     Traces(usize),
     /// One chat message, its conversation taken out.
     Chat(chat::Taken),
+    /// One explanation for the agent.
+    Explain(explain::Job),
     /// A file of the UI.
     File(ui::Asset),
 }
@@ -404,6 +416,11 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
         Reply::Once(r) => {
             let _ = http::respond(&mut stream, &r);
         }
+        Reply::Explain(job) => {
+            if let Some(chat) = &ctx.chat {
+                explain::serve(chat, &mut stream, job);
+            }
+        }
         Reply::Chat(taken) => {
             if let Some(chat) = &ctx.chat {
                 chat.serve(&mut stream, taken);
@@ -420,7 +437,7 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
             let _ = match reply {
                 Reply::Traces(k) => trace_stream(&mut stream, ctx, k),
                 Reply::Values => value_stream(&mut stream, ctx),
-                Reply::Once(_) | Reply::Chat(_) | Reply::File(_) => Ok(()),
+                Reply::Once(_) | Reply::Chat(_) | Reply::Explain(_) | Reply::File(_) => Ok(()),
             };
         }
     }
@@ -475,6 +492,13 @@ fn handle(req: &Request, ctx: &Ctx) -> Reply {
     {
         return start_chat(req, ctx);
     }
+    if req.method == "POST"
+        && req.segments.len() == 2
+        && req.segments[0] == "api"
+        && req.segments[1] == "explain"
+    {
+        return start_explain(req, ctx);
+    }
     Reply::Once(mutate(req, ctx))
 }
 
@@ -508,6 +532,76 @@ fn start_chat(req: &Request, ctx: &Ctx) -> Reply {
             Reply::Chat(taken)
         }
     }
+}
+
+/// `POST /api/explain`: checked and built here (so a bad request is a
+/// plain 4xx), audited, then streamed like a chat.
+fn start_explain(req: &Request, ctx: &Ctx) -> Reply {
+    let refuse = |r: Response, detail: &str| {
+        Reply::Once(match audit(ctx, req, r.status, detail) {
+            Some(_) => r,
+            None => audit_full(),
+        })
+    };
+    let ask = match explain::parse(&req.body) {
+        Ok(a) => a,
+        Err((r, detail)) => return refuse(r, &detail),
+    };
+    let c = ctx.catalog();
+    let Some(k) = c.module(&ask.module) else {
+        return refuse(Response::error(404, "no such module"), "explain: no such module");
+    };
+    if ctx.chat.is_none() {
+        return refuse(
+            Response::error(
+                503,
+                "no relay configured on this box (--relay); the agent is offline. The box's own explanation still works.",
+            ),
+            "explain: no relay configured",
+        );
+    }
+    let Some(sample) = sample(ctx, k) else {
+        return refuse(
+            Response::error(503, "no traced scan of this module yet; ask again"),
+            "explain: no trace yet",
+        );
+    };
+    let m = &c.modules[k];
+    let job = match explain::build(&m.name, &m.source, &sample, &ask.path, &c) {
+        Ok(j) => j,
+        Err(e) => {
+            return refuse(
+                Response::error(
+                    409,
+                    &format!("the module changed under its trace ({e}); ask again"),
+                ),
+                "explain: source and trace differ",
+            );
+        }
+    };
+    let detail = format!("explain: module {}, scan {}", m.name, sample.scan);
+    if audit(ctx, req, 200, &detail).is_none() {
+        return Reply::Once(audit_full());
+    }
+    Reply::Explain(job)
+}
+
+/// The newest traced scan of module `k`, waiting up to a second for one.
+fn sample(ctx: &Ctx, k: usize) -> Option<Arc<crate::Sample>> {
+    let name = ctx.catalog().modules.get(k)?.name.clone();
+    for _ in 0..50 {
+        latest_trace(ctx, k);
+        if let Some(s) = ctx
+            .samples
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&name)
+        {
+            return Some(Arc::clone(s));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    None
 }
 
 /// Records a mutating call; `None` if the log is full (the call must not
@@ -615,7 +709,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat"] => Some("POST"),
+        | ["api", "chat" | "explain"] => Some("POST"),
         ["api"]
         | [
             "api",
@@ -847,7 +941,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
     let view = ctx.box_.live.view();
     let module = |name: &str| c.module(name);
     let r = match segs.as_slice() {
-        ["api"] => Response::json(200, &index()),
+        ["api"] => Response::json(200, &index(ctx.chat.is_some())),
         ["api", "signals"] => Response::json(200, &render::signals(c, &view)),
         ["api", "signals", name] => match c.signal(name) {
             Some(i) => Response::json(
@@ -960,7 +1054,7 @@ fn snapshot(ctx: &Ctx, id: &str) -> Result<ChangeSet, Response> {
     store.get(&id).map_err(|e| store_error(&e))
 }
 
-fn index() -> Json {
+fn index(agent: bool) -> Json {
     let e = |method: &str, path: &str, token: bool, what: &str| json!({ "method": method, "path": path, "token": token, "what": what });
     json!({
         "service": "helmsman box API",
@@ -991,7 +1085,9 @@ fn index() -> Json {
             e("GET", "/api/policy", false, "the approval policy this box enforces"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?}; an event stream of its progress"),
+            e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
         ],
+        "agent": agent,
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
     })
 }
@@ -1045,7 +1141,16 @@ fn latest_trace(ctx: &Ctx, k: usize) -> Option<Rendered> {
     let m = c.modules.get(k)?;
     let tap = m.tap.as_ref()?;
     tap.request();
-    let fresh = tap.take().map(|s| (s.scan, Arc::new(render::trace(&m.name, &s))));
+    let sample = tap.take();
+    let fresh = sample
+        .as_ref()
+        .map(|s| (s.scan, Arc::new(render::trace(&m.name, s))));
+    if let Some(s) = sample {
+        ctx.samples
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(m.name.clone(), Arc::new(s));
+    }
     let mut traces = ctx.traces.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(f) = fresh {
         traces.insert(m.name.clone(), f);

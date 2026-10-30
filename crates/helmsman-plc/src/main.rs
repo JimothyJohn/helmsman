@@ -67,6 +67,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
                        The box never holds an Anthropic key.
   --relay-agent V      the agent version to ask the relay for (default v1)
+  --relay-explain-agent V
+                       the agent version POST /api/explain asks for (an
+                       explain profile; default: --relay-agent's). The box
+                       runs only read-only tools for it either way.
   --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
                        at / on the API's address: a browser on the LAN is
                        the HMI (read-only, like the API's reads)
@@ -111,6 +115,7 @@ struct Opts {
     relay: Option<String>,
     relay_token: Option<PathBuf>,
     relay_agent: String,
+    relay_explain_agent: Option<String>,
     ui: Option<PathBuf>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
@@ -128,7 +133,7 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `--relay`, `--relay-token`, `--relay-agent`.
+/// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`.
 fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
     match flag {
         "--relay" => {
@@ -136,8 +141,9 @@ fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
             o.relay = Some(v.to_string());
         }
         "--relay-token" => once(&mut o.relay_token, flag, v)?,
-        _ if relay::version_ok(v) => v.clone_into(&mut o.relay_agent),
-        _ => return Err(format!("--relay-agent: not an agent version: {v:?}")),
+        _ if !relay::version_ok(v) => return Err(format!("{flag}: not an agent version: {v:?}")),
+        "--relay-explain-agent" => o.relay_explain_agent = Some(v.to_string()),
+        _ => v.clone_into(&mut o.relay_agent),
     }
     Ok(())
 }
@@ -159,6 +165,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay: None,
         relay_token: None,
         relay_agent: "v1".into(),
+        relay_explain_agent: None,
         ui: None,
         policy: None,
         set_pin: None,
@@ -211,7 +218,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 );
             }
             "--state-dir" => o.state_dir = Some(PathBuf::from(v)),
-            "--relay" | "--relay-token" | "--relay-agent" => relay_flag(&mut o, flag, v)?,
+            "--relay" | "--relay-token" | "--relay-agent" | "--relay-explain-agent" => {
+                relay_flag(&mut o, flag, v)?;
+            }
             "--policy" => once(&mut o.policy, flag, v)?,
             "--set-pin" => {
                 o.set_pin = Some(Role::parse(v).ok_or_else(|| {
@@ -760,11 +769,9 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
         "helmsman-plc: chat agent via relay {url} (agent {})",
         o.relay_agent
     );
-    Ok(Some(api::chat::Setup::new(relay::Config::new(
-        url,
-        token.to_string(),
-        o.relay_agent.clone(),
-    ))))
+    let mut setup = api::chat::Setup::new(relay::Config::new(url, token.to_string(), o.relay_agent.clone()));
+    setup.explain_agent.clone_from(&o.relay_explain_agent);
+    Ok(Some(setup))
 }
 
 /// What the API serves that is fixed once the runtime is built.

@@ -39,6 +39,11 @@ pub const NAMES: [&str; 8] = [
     "propose_change",
 ];
 
+/// The tools explain mode runs: reads only. Nothing in it drafts,
+/// checks, simulates or proposes, so an explanation can change nothing
+/// on the box, not even the proposal list.
+pub const READ_ONLY: [&str; 4] = ["list_signals", "read_signals", "list_modules", "read_module"];
+
 /// Largest box API response read.
 const MAX_BODY: usize = 4 << 20;
 /// Most drafts one conversation keeps.
