@@ -41,6 +41,7 @@ pub enum BinOp {
 }
 
 impl BinOp {
+    #[must_use]
     pub const fn symbol(self) -> &'static str {
         match self {
             Self::Or => "OR",
@@ -61,6 +62,7 @@ impl BinOp {
         }
     }
 
+    #[must_use]
     pub const fn is_comparison(self) -> bool {
         matches!(
             self,
@@ -161,6 +163,7 @@ pub enum TypeRef {
 }
 
 impl TypeRef {
+    #[must_use]
     pub const fn pos(&self) -> Pos {
         match self {
             Self::Named(_, p) | Self::Array { pos: p, .. } => *p,
@@ -179,6 +182,7 @@ pub enum Init {
 }
 
 impl Init {
+    #[must_use]
     pub const fn pos(&self) -> Pos {
         match self {
             Self::Expr(e) => e.pos,
