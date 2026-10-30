@@ -737,6 +737,37 @@ pub(super) fn browse(req: &Request, ctx: &Ctx, device: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Whatever bytes arrive, as whatever kind, the body is refused or
+        /// read; reading never panics, and what is kept has no control
+        /// characters but line breaks and tabs.
+        #[test]
+        fn any_body_is_read_or_refused(
+            body in prop::collection::vec(any::<u8>(), 0..2048),
+            kind in prop::option::of(prop::sample::select(vec![Kind::Prose, Kind::L5x, Kind::Plcopen, Kind::St])),
+        ) {
+            if let Ok((text, _, _)) = read_body(&body, kind) {
+                prop_assert!(!text.chars().any(|c| c.is_control() && c != '\n' && c != '\t'));
+                let c = chunks(&text);
+                prop_assert_eq!(c[0], 0);
+            }
+        }
+
+        /// Markup-shaped text as an L5X, PLCopen or ST drop-in never panics.
+        #[test]
+        fn markup_noise_is_read_or_refused(parts in prop::collection::vec(prop::sample::select(vec![
+            "<RSLogix5000Content>", "<Controller Name=\"C\">", "<Tags>", "<Tag Name=\"A\" DataType=\"BOOL\"/>",
+            "</Tags>", "</Controller>", "</RSLogix5000Content>", "<project>", "</project>", "PROGRAM p",
+            "END_PROGRAM", "VAR", "END_VAR", "x : BOOL;", "<![CDATA[", "]]>", "&amp;", "&", "<", ">", "\n",
+        ]), 0..60)) {
+            let s = parts.concat();
+            for kind in [None, Some(Kind::L5x), Some(Kind::Plcopen), Some(Kind::St)] {
+                let _ = read_body(s.as_bytes(), kind);
+            }
+        }
+    }
 
     #[test]
     fn chunks_cover_the_text_at_char_boundaries() {
