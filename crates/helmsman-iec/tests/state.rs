@@ -46,6 +46,38 @@ VAR t : TON; c : CTU; n : INT; level : REAL; label : BOOL; extra : DINT := 5; EN
   n := n + 2;
 END_PROGRAM";
 
+/// Located initial values are a cold start's: a program that takes over a
+/// running one's state leaves the image as the old program left it; one
+/// restored from a program that never scanned still starts cold.
+#[test]
+fn a_swap_does_not_rewrite_located_initial_values() {
+    let src = "PROGRAM p VAR first AT %QX0.0 : BOOL := TRUE; seen : BOOL; END_VAR
+               seen := first; first := FALSE; END_PROGRAM";
+    let mut old = prog(src);
+    let mut img = Image::new(SIZES);
+    run(&mut old, &mut img, 0, 30);
+    assert_eq!(img.q[0] & 1, 0, "cleared after the first scan");
+
+    let mut new = prog(src);
+    new.restore(&old.state());
+    new.scan_at(&mut img, ms(30)).unwrap();
+    assert_eq!(
+        new.get("seen"),
+        Some(Value::Bool(false)),
+        "not rewritten by the swap"
+    );
+
+    let mut cold = prog(src);
+    cold.restore(&prog(src).state());
+    let mut img = Image::new(SIZES);
+    cold.scan_at(&mut img, ms(0)).unwrap();
+    assert_eq!(
+        cold.get("seen"),
+        Some(Value::Bool(true)),
+        "never-scanned state: cold start"
+    );
+}
+
 #[test]
 fn a_timer_keeps_its_elapsed_time_and_a_counter_its_count() {
     let mut old = prog(OLD);
