@@ -571,11 +571,11 @@ fn generated(s: &Swap) -> Module {
         .map(|(o, _)| *o)
         .collect();
     if !outs.is_empty() {
-        src.push_str(&format!("VAR_OUTPUT {} : BOOL; END_VAR\n", outs.join(", ")));
+        src += &["VAR_OUTPUT ", &outs.join(", "), " : BOOL; END_VAR\n"].concat();
     }
     src.push_str("VAR n : UINT; END_VAR\n  n := n + 1;\n");
     for o in &outs {
-        src.push_str(&format!("  {o} := TRUE;\n"));
+        src += &["  ", o, " := TRUE;\n"].concat();
     }
     if s.len > 0 {
         src.push_str("  %QB0 := 16#5A;\n");
@@ -598,9 +598,9 @@ fn check_invariants(rt: &Runtime, t: &SignalTable) -> Result<(), TestCaseError> 
     let mods: Vec<&Module> = rt.names().map(|n| rt.module(n).unwrap()).collect();
     let mut owner = [None; IMAGE];
     for (k, m) in mods.iter().enumerate() {
-        for b in m.q.start..m.q.start + m.q.len {
-            prop_assert!(owner[b].is_none(), "byte {} driven twice", b);
-            owner[b] = Some(k);
+        for (b, o) in owner.iter_mut().enumerate().skip(m.q.start).take(m.q.len) {
+            prop_assert!(o.is_none(), "byte {} driven twice", b);
+            *o = Some(k);
         }
     }
     for (b, o) in owner.iter().enumerate() {
