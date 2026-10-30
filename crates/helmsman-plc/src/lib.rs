@@ -8,6 +8,8 @@ pub mod manifest;
 pub mod runtime;
 pub mod signals;
 pub mod spec;
+pub mod tap;
 
 pub use runtime::{ConfigError, MAX_PERIOD, Module, Runtime, Stats, Status, Window};
 pub use signals::{BindError, SignalTable, TableError};
+pub use tap::{Sample, TraceTap};
