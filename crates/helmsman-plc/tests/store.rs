@@ -491,6 +491,7 @@ fn speed(v: f64) -> Param {
         name: "speed".into(),
         value: Value::Real(v),
         range: Some((Value::Real(0.0), Value::Real(10.0))),
+        unit: None,
     }
 }
 
@@ -558,6 +559,7 @@ fn diff_names_modules_params_and_bindings() {
         name: "beacon".into(),
         value: Value::Bool(true),
         range: None,
+        unit: None,
     };
     let want = Diff {
         modules: vec![

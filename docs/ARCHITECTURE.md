@@ -252,7 +252,7 @@ scan_ms  50
 q        0+2
 reads    start jam
 drives   motor lamp
-param    speed   real 1.5 min=0 max=10
+param    speed   real 1.5 min=0 max=10 unit=m/s
 param    beacon  bool true
 ```
 
@@ -715,6 +715,52 @@ serves those per agent version (relay protocol v1).
   The agent holds the API token and nothing else: it has no tool that
   reaches `apply`, `rollback` or a PIN, and the token alone cannot apply.
 
+## Offline chat (`local-fallback`, built)
+
+Relay unreachable: installed modules keep running and the chat degrades
+to rule-based param edits, with no model on the box (`fallback.rs`,
+`api/chat.rs`; contracts in `tests/fallback.rs` and `tests/agent.rs`).
+
+- **State, explicit.** The chat route keeps the agent's state: `unknown`
+  until the relay is first asked, `online`, or `offline` since a time
+  (unix seconds) with the reason (the relay error's kind and message, of
+  the failure that started the outage). `GET /api/chat/status` serves it
+  (`unconfigured` without `--relay`); `GET /api/events` sends an `agent`
+  event with it on connect and on every change (the canvas's banner); a
+  chat turn that takes the agent offline ends with a `status` event, and
+  every message read offline starts with one.
+- **Detection.** A turn that fails because the relay is unreachable,
+  times out, answers 5xx, or refuses the box token (401/403) takes the
+  agent offline; any other relay answer counts as online. A turn failing
+  in its own way (a stream error, a malformed stream) does not.
+- **Recovery, automatic.** While the agent is not online, a watcher thread
+  probes the relay every 15 s (`GET {relay}/v1/health` with the box token;
+  any answer below 500 except 401/403 counts, the body is never read, no
+  conversation is sent, no tokens are spent), at once on start. Each chat
+  message also probes once before it is read offline, so a reply goes
+  back to the model as soon as the relay answers.
+- **The grammar** (`fallback::parse`, hand-written, no regex): one command
+  per message on one line, `set REF to VALUE`, `set REF = VALUE` or
+  `REF = VALUE`; REF is `PARAM`, `MODULE PARAM` or `MODULE.PARAM`, a
+  param's words joined by `_`; VALUE a number (`[+-]D[.D]`, no exponent,
+  hex, inf or NaN) with an optional unit, or `on/off/true/false/
+  enable(d)/disable(d)`. Names match exactly (ASCII case aside); a ref that
+  reads as two params is refused with both, never guessed; near names
+  (edit distance, prefixes) are only suggested. Ints take whole numbers,
+  values must be in the manifest's range and differ from the current one,
+  and a unit must be the param's own `unit=` (a few spellings accepted,
+  never converted). Anything else, including more than 200 bytes, a
+  second line, a character outside ASCII letters, digits, blanks and
+  `_ . - + % = /`, or any trailing word, is refused whole with the reason
+  and the editable params with their ranges.
+- **Only a proposal.** An accepted command is posted to
+  `POST /api/proposals` (`kind: param`) with the API token, like the
+  agent's, so it is checked, stored as a draft, audited, and applied only
+  by `apply` with whatever role and PIN the policy's `param` tier asks.
+  The offline path applies nothing, and a param proposal cannot touch
+  logic or an output's wiring. Offline messages do not enter the
+  conversation; the model sees their proposals through its tools later.
+
 ## Bundles (`bundle-format`, built)
 
 `helmsman_plc::bundle` (format, manifest, signatures, CLI) and
@@ -917,7 +963,7 @@ prompt. The agent never touches the Rust core.
 - `sim-replay` (built, above) → `box-api` serves the recorder's tap and
   runs the replay; `proposal-ui` charts it; `approval-policy` requires one
   for logic and output-affecting changes.
-- `agent-loop` (built, above) → `local-fallback` answers the chat route
-  when the relay is unreachable (today: an `error` event); `explain-mode`
+- `agent-loop` (built, above) → `local-fallback` (built, above) answers
+  the chat route by rule when the relay is unreachable; `explain-mode`
   and `dropin-prose` are prompts over the same tools, plus a trace tool
   for explain mode.
