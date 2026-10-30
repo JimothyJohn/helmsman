@@ -89,3 +89,7 @@ required-features = ["box"]
 [[test]]
 name = "agent"
 required-features = ["box"]
+
+[[test]]
+name = "dropins"
+required-features = ["box"]

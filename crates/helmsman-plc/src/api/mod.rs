@@ -33,6 +33,11 @@
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
 //! GET  /api/screen                        the floor screen's layout (with --screen FILE; see [`crate::screen`])
+//! POST /api/dropins?name=N&kind=K         token: a document for the agent, stored in memory (see [`dropin`])
+//! GET  /api/dropins                       the drop-ins held
+//! GET  /api/dropins/{id}?chunk=K          one chunk of a drop-in's text
+//! GET  /api/dropins/{id}/plc?view=V...    a PLC drop-in's inventory (overview, tags, routine, names)
+//! POST /api/devices/{name}/browse         token: an observed controller's tag list, read-only
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
 //!
@@ -70,6 +75,7 @@ pub mod approve;
 pub mod bundle;
 pub mod catalog;
 pub mod chat;
+pub mod dropin;
 pub mod http;
 pub mod live;
 pub mod proposal;
@@ -84,7 +90,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -235,11 +241,19 @@ struct Ctx {
     screen_layout: Option<crate::screen::Layout>,
     /// Publishers whose bundles import; `None`: import answers 501.
     trust: Option<TrustStore>,
+    /// Drop-in documents (see [`dropin`]).
+    dropins: Mutex<dropin::Store>,
+    /// Held while a device browse runs (one at a time).
+    browsing: Mutex<()>,
 }
 
 impl Ctx {
     fn catalog(&self) -> Arc<Catalog> {
         Arc::clone(&self.catalog.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    fn dropins(&self) -> MutexGuard<'_, dropin::Store> {
+        self.dropins.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn running(&self) -> Option<ChangeSet> {
@@ -441,6 +455,8 @@ impl Api {
             screen_layout: screen.as_ref().map(|s| s.layout.clone()),
             screen: screen.map(|s| screen_json(&s)),
             trust,
+            dropins: Mutex::new(dropin::Store::default()),
+            browsing: Mutex::new(()),
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
@@ -653,7 +669,14 @@ fn start_chat(req: &Request, ctx: &Ctx) -> Reply {
             None => audit_full(),
         });
     };
-    match chat.take(&req.body) {
+    let taken = chat.take(&req.body).and_then(|t| {
+        chat.attach(t, |id| {
+            ctx.dropins()
+                .describe(id)
+                .map(|(kind, chunks)| (kind.name(), chunks))
+        })
+    });
+    match taken {
         Err((r, detail)) => Reply::Once(match audit(ctx, req, r.status, &detail) {
             Some(_) => r,
             None => audit_full(),
@@ -741,6 +764,8 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
+        ("POST", ["api", "dropins"]) => return dropin::post(req, ctx),
+        ("POST", ["api", "devices", name, "browse"]) => return dropin::browse(req, ctx, name),
         ("POST", ["api", "proposals", "check"]) => return check_only(req, ctx),
         ("POST", ["api", "proposals", "replay"]) => return replay_draft(req, ctx),
         ("POST", ["api", "proposals", id, "apply"]) => {
@@ -775,11 +800,12 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
 /// The methods a known path takes.
 fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
-        ["api", "proposals"] => Some("GET, POST"),
+        ["api", "proposals" | "dropins"] => Some("GET, POST"),
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat" | "bundles"] => Some("POST"),
+        | ["api", "chat" | "bundles"]
+        | ["api", "devices", _, "browse"] => Some("POST"),
         ["api"]
         | [
             "api",
@@ -788,11 +814,12 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ]
         | [
             "api",
-            "signals" | "modules" | "proposals" | "snapshots" | "replays",
+            "signals" | "modules" | "proposals" | "snapshots" | "replays" | "dropins",
             _,
         ]
         | ["api", "snapshots", _, "diff", _]
         | ["api", "snapshots", _, "bundle"]
+        | ["api", "dropins", _, "plc"]
         | ["api", "modules", _, "trace"]
         | ["api", "chat", "status"]
         | ["api", "modules", _, "trace", "events"] => Some("GET"),
@@ -846,13 +873,49 @@ fn check_only(req: &Request, ctx: &Ctx) -> Response {
         }
     };
     let running = ctx.running();
-    match proposal::check(&new, &ctx.catalog(), ctx.cfg.memory, running.as_ref()) {
+    match checked(ctx, &new, running.as_ref()) {
         Ok((mut p, _)) => {
             p["stored"] = json!(false);
             audited(ctx, req, 200, &p, "check: clean, not stored")
         }
         Err((status, body)) => audited(ctx, req, status, &body, "check: refused by the checks"),
     }
+}
+
+/// [`proposal::check`], after the drop-in rule: a proposal that names a
+/// PLC drop-in, or one the box no longer holds, must be a watch module
+/// (see [`dropin`]).
+fn checked(
+    ctx: &Ctx,
+    new: &proposal::New,
+    running: Option<&ChangeSet>,
+) -> Result<(Json, Option<ChangeSet>), proposal::Refusal> {
+    let cited = new.dropins.as_deref().unwrap_or_default();
+    if cited.len() > 64 {
+        return Err((400, json!({ "error": "a proposal names at most 64 drop-ins" })));
+    }
+    let plc: Vec<u64> = {
+        let store = ctx.dropins();
+        cited
+            .iter()
+            .copied()
+            .filter(|id| store.kind(*id).is_none_or(dropin::Kind::is_plc))
+            .collect()
+    };
+    if !plc.is_empty() && (new.kind != "module" || new.watch != Some(true)) {
+        let problems: Vec<String> = plc
+            .iter()
+            .map(|id| format!("drop-in {id} is an existing PLC program (or no longer on the box)"))
+            .collect();
+        return Err((
+            422,
+            json!({
+                "error": "a proposal drawn from an existing PLC program must be a watch module (kind module, watch: true): it reads and reports, and drives no output",
+                "problems": problems,
+            }),
+        ));
+    }
+    proposal::check(new, &ctx.catalog(), ctx.cfg.memory, running)
 }
 
 /// Minutes of recording a draft replay covers when the request does not say.
@@ -900,7 +963,7 @@ fn replay_draft(req: &Request, ctx: &Ctx) -> Response {
         return audited(ctx, req, 400, &body, "replay of a draft: not a module");
     }
     let running = ctx.running();
-    let target = match proposal::check(&r.draft, &ctx.catalog(), ctx.cfg.memory, running.as_ref()) {
+    let target = match checked(ctx, &r.draft, running.as_ref()) {
         Ok((_, target)) => target,
         Err((status, body)) => {
             return audited(
@@ -956,7 +1019,7 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
         }
     };
     let running = ctx.running();
-    let checked = proposal::check(&new, &ctx.catalog(), ctx.cfg.memory, running.as_ref());
+    let checked = checked(ctx, &new, running.as_ref());
     let (mut p, change) = match checked {
         Ok(p) => p,
         Err((status, body)) => return refused(status, body, "proposal refused by the checks"),
@@ -1080,6 +1143,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             (Err(r), _) | (_, Err(r)) => r,
         },
         ["api", "events"] => return Reply::Values,
+        ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "screen"] => match &ctx.screen {
             Some(j) => Response::json(200, j),
@@ -1165,8 +1229,13 @@ fn index() -> Json {
             e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
             e("GET", "/api/policy", false, "the approval policy this box enforces"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
-            e("POST", "/api/chat", true, "one message to the agent {message, session?}; an event stream of its progress"),
-            e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
+            e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
+            e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB): stored in memory, 201 with its id"),
+            e("GET", "/api/dropins", false, "the drop-ins held: id, name, kind, size, chunks"),
+            e("GET", "/api/dropins/{id}?chunk=K", false, "one chunk of a drop-in's text"),
+            e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", false, "a PLC drop-in's inventory: overview, tags, routine, names"),
+            e("POST", "/api/devices/{name}/browse", true, "an observed Logix controller's tag list, read-only"),
+                        e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
             e("GET", "/api/screen", false, "the floor screen's layout: tiles, state codes, colours (with --screen)"),
         ],
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",

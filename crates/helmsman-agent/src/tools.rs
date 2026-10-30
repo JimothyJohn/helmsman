@@ -11,6 +11,17 @@
 //! reach applies, rolls back or writes anything but a stored draft; the
 //! box API enforces the token, limits and audit on each of them.
 //!
+//! **Drop-ins** (agent v3): `read_dropin` (`GET /api/dropins/{id}`, one
+//! chunk), `read_plc_program` (`GET /api/dropins/{id}/plc`, an inventory
+//! page) and `compare_plc_tags` (`GET /api/dropins/{id}/plc?view=names` and
+//! `POST /api/devices/{name}/browse`, read-only). A conversation that read
+//! an existing PLC program is **watch-only** from then on: every draft it
+//! checks, simulates or proposes goes to the box as `watch: true`, so the
+//! box refuses it if it drives any output, and it can propose no param
+//! change. Every proposal names the drop-ins its conversation read; the
+//! box holds a proposal citing a PLC drop-in to the watch rule whatever
+//! the request says.
+//!
 //! **Data, not instructions.** Everything a tool returns comes from the
 //! plant: tag names, units, ST source and its comments, manifests and
 //! their prompt lines, diagnostics quoting them. It goes back to the model
@@ -18,6 +29,7 @@
 //! `&` escaped, so nothing inside can close the envelope or pass for the
 //! box's own words. See [`envelope`].
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -28,7 +40,7 @@ use serde_json::{Map, Value as Json, json};
 use crate::http::{self, Timeouts, Url};
 
 /// The tools the box runs, as named in the relay's `tools.json`.
-pub const NAMES: [&str; 8] = [
+pub const NAMES: [&str; 11] = [
     "list_signals",
     "read_signals",
     "list_modules",
@@ -37,7 +49,13 @@ pub const NAMES: [&str; 8] = [
     "check_module",
     "simulate_module",
     "propose_change",
+    "read_dropin",
+    "read_plc_program",
+    "compare_plc_tags",
 ];
+
+/// Most names one `compare_plc_tags` result lists per difference.
+pub const MAX_LISTED: usize = 200;
 
 /// Largest box API response read.
 const MAX_BODY: usize = 4 << 20;
@@ -131,14 +149,41 @@ pub struct Draft {
     pub simulated: bool,
 }
 
-/// One conversation's drafts.
+/// One conversation's drafts, and what it has read that binds them.
 #[derive(Debug, Clone, Default)]
 pub struct Drafts {
     list: Vec<Draft>,
     next: u32,
+    /// Drop-ins this conversation read; every proposal names them.
+    dropins: BTreeSet<u64>,
+    /// It read an existing PLC program: watch modules only from now on.
+    watch_only: bool,
 }
 
 impl Drafts {
+    /// Whether the conversation read an existing PLC program, so its
+    /// drafts go to the box as watch modules.
+    #[must_use]
+    pub const fn watch_only(&self) -> bool {
+        self.watch_only
+    }
+
+    /// The drop-ins the conversation read.
+    #[must_use]
+    pub const fn dropins(&self) -> &BTreeSet<u64> {
+        &self.dropins
+    }
+
+    fn read(&mut self, id: u64, plc: bool) {
+        self.dropins.insert(id);
+        self.watch_only |= plc;
+    }
+
+    /// What every draft body carries for the box: watch, provenance.
+    fn binding(&self) -> (bool, Vec<u64>) {
+        (self.watch_only, self.dropins.iter().copied().collect())
+    }
+
     #[must_use]
     pub fn get(&self, id: &str) -> Option<&Draft> {
         self.list.iter().find(|d| d.id == id)
@@ -230,6 +275,9 @@ pub fn validate(name: &str, input: &Json) -> Result<(), String> {
         "check_module" => parse::<DraftRef>(input).map(drop),
         "simulate_module" => parse::<Simulate>(input).map(drop),
         "propose_change" => parse::<Propose>(input).map(drop),
+        "read_dropin" => parse::<ReadDropin>(input).map(drop),
+        "read_plc_program" => parse::<ReadPlc>(input).map(drop),
+        "compare_plc_tags" => parse::<ComparePlc>(input).map(drop),
         _ => Err(format!("no tool named {name:?}")),
     }
 }
@@ -293,6 +341,29 @@ struct Propose {
     params: Vec<ParamChange>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadDropin {
+    dropin_id: u64,
+    chunk: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadPlc {
+    dropin_id: u64,
+    view: String,
+    name: String,
+    offset: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComparePlc {
+    dropin_id: u64,
+    device: String,
+}
+
 /// A module name as the box takes it: 1..=64 of `A-Z a-z 0-9 _ -`.
 #[must_use]
 pub fn module_name_ok(n: &str) -> bool {
@@ -312,6 +383,9 @@ pub fn run(api: &BoxApi, drafts: &mut Drafts, name: &str, input: &Json) -> Outco
         "check_module" => parse(input).map(|i| check_module(api, drafts, &i)),
         "simulate_module" => parse(input).map(|i| simulate_module(api, drafts, &i)),
         "propose_change" => parse(input).map(|i| propose_change(api, drafts, &i)),
+        "read_dropin" => parse(input).map(|i| read_dropin(api, drafts, &i)),
+        "read_plc_program" => parse(input).map(|i| read_plc_program(api, drafts, &i)),
+        "compare_plc_tags" => parse(input).map(|i| compare_plc_tags(api, drafts, &i)),
         _ => {
             return fail(format!(
                 "no tool named {name:?}; the tools are {}",
@@ -578,15 +652,19 @@ fn draft_module(drafts: &mut Drafts, i: DraftModule) -> Outcome {
     )
 }
 
-fn module_body(d: &Draft) -> Json {
-    json!({ "kind": "module", "manifest": d.manifest, "source": d.source })
+fn module_body(d: &Draft, binding: &(bool, Vec<u64>)) -> Json {
+    json!({
+        "kind": "module", "manifest": d.manifest, "source": d.source,
+        "watch": binding.0, "dropins": binding.1,
+    })
 }
 
 fn check_module(api: &BoxApi, drafts: &mut Drafts, i: &DraftRef) -> Outcome {
+    let binding = drafts.binding();
     let Some(d) = drafts.get_mut(&i.draft_id) else {
         return fail(format!("no draft {:?} in this conversation", i.draft_id));
     };
-    match api.post("/api/proposals/check", &module_body(d)) {
+    match api.post("/api/proposals/check", &module_body(d, &binding)) {
         Ok((200, p)) => {
             d.checked = Some(true);
             d.simulated = false;
@@ -594,6 +672,7 @@ fn check_module(api: &BoxApi, drafts: &mut Drafts, i: &DraftRef) -> Outcome {
                 json!({
                     "draft_id": d.id, "clean": true, "diagnostics": [],
                     "replaces": p["replaces"], "touches_outputs": p["touches_outputs"],
+                    "watch": binding.0,
                 }),
                 format!("draft {} checks clean", d.id),
             )
@@ -620,13 +699,14 @@ fn simulate_module(api: &BoxApi, drafts: &mut Drafts, i: &Simulate) -> Outcome {
     if !(1..=1440).contains(&i.minutes) {
         return fail("minutes must be 1 to 1440");
     }
+    let binding = drafts.binding();
     let Some(d) = drafts.get_mut(&i.draft_id) else {
         return fail(format!("no draft {:?} in this conversation", i.draft_id));
     };
     if d.checked != Some(true) {
         return fail(format!("draft {} must check clean before it is simulated", d.id));
     }
-    let body = json!({ "draft": module_body(d), "minutes": i.minutes });
+    let body = json!({ "draft": module_body(d, &binding), "minutes": i.minutes });
     match api.post("/api/proposals/replay", &body) {
         Ok((200, r)) => {
             d.simulated = true;
@@ -673,6 +753,12 @@ fn propose_change(api: &BoxApi, drafts: &mut Drafts, i: &Propose) -> Outcome {
     if i.draft_id.is_empty() && i.params.is_empty() {
         return fail("nothing to propose: no draft and no params");
     }
+    if drafts.watch_only() && !i.params.is_empty() {
+        return fail(
+            "this conversation read an existing PLC program, so it proposes watch modules only (no param changes); start a new chat for other changes",
+        );
+    }
+    let binding = drafts.binding();
     let mut stored = Vec::new();
     let mut refused = Vec::new();
     if !i.draft_id.is_empty() {
@@ -685,7 +771,7 @@ fn propose_change(api: &BoxApi, drafts: &mut Drafts, i: &Propose) -> Outcome {
                 d.id
             ));
         }
-        let mut body = module_body(d);
+        let mut body = module_body(d, &binding);
         body["note"] = json!(summary);
         match api.post("/api/proposals", &body) {
             Ok((201, p)) => stored.push(p),
@@ -698,7 +784,7 @@ fn propose_change(api: &BoxApi, drafts: &mut Drafts, i: &Propose) -> Outcome {
     for c in &i.params {
         let body = json!({
             "kind": "param", "module": c.module, "param": c.param,
-            "value": param_value(&c.value), "note": summary,
+            "value": param_value(&c.value), "note": summary, "dropins": binding.1,
         });
         match api.post("/api/proposals", &body) {
             Ok((201, p)) => stored.push(p),
@@ -722,4 +808,155 @@ fn propose_change(api: &BoxApi, drafts: &mut Drafts, i: &Propose) -> Outcome {
         summary: summary_line,
         proposals: ids,
     }
+}
+
+fn read_dropin(api: &BoxApi, drafts: &mut Drafts, i: &ReadDropin) -> Outcome {
+    match api.get(&format!("/api/dropins/{}?chunk={}", i.dropin_id, i.chunk)) {
+        Ok((200, d)) => {
+            let plc = d["kind"].as_str() != Some("prose");
+            drafts.read(i.dropin_id, plc);
+            let chunks = d["chunks"].as_u64().unwrap_or(0);
+            let summary = format!("drop-in {} chunk {} of {chunks}", i.dropin_id, i.chunk + 1);
+            ok(
+                json!({
+                    "dropin_id": i.dropin_id, "name": d["name"], "kind": d["kind"],
+                    "chunk": i.chunk, "chunks": chunks, "text": d["text"],
+                }),
+                summary,
+            )
+        }
+        Ok((404, b)) => fail(format!(
+            "drop-in {}: {}",
+            i.dropin_id,
+            b["error"].as_str().unwrap_or("not found")
+        )),
+        Ok((s, b)) => unexpected("reading the drop-in", s, &b),
+        Err(e) => fail(e),
+    }
+}
+
+fn read_plc_program(api: &BoxApi, drafts: &mut Drafts, i: &ReadPlc) -> Outcome {
+    if !matches!(i.view.as_str(), "overview" | "tags" | "routine") {
+        return fail("view is overview, tags or routine");
+    }
+    if i.name.chars().count() > 100 {
+        return fail("name is at most 100 characters");
+    }
+    let path = format!(
+        "/api/dropins/{}/plc?view={}&name={}&offset={}",
+        i.dropin_id,
+        i.view,
+        http::segment(&i.name),
+        i.offset
+    );
+    match api.get(&path) {
+        Ok((200, d)) => {
+            drafts.read(i.dropin_id, true);
+            let summary = format!("drop-in {}: {} {}", i.dropin_id, i.view, i.name);
+            ok(d, summary.trim_end().to_string())
+        }
+        Ok((s @ (400 | 404), b)) => fail(format!(
+            "drop-in {} ({s}): {}",
+            i.dropin_id,
+            b["error"].as_str().unwrap_or("refused")
+        )),
+        Ok((s, b)) => unexpected("reading the PLC program", s, &b),
+        Err(e) => fail(e),
+    }
+}
+
+/// An atomic Logix type name, upper case; `None` for anything else.
+fn atomic(t: &str) -> Option<String> {
+    const ATOMIC: [&str; 15] = [
+        "BOOL", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "REAL", "LREAL", "BYTE",
+        "WORD", "DWORD", "LWORD",
+    ];
+    let u = t.to_ascii_uppercase();
+    ATOMIC.contains(&u.as_str()).then_some(u)
+}
+
+fn compare_plc_tags(api: &BoxApi, drafts: &mut Drafts, i: &ComparePlc) -> Outcome {
+    if !module_name_ok(&i.device) {
+        return fail("not a device name (1-64 of A-Z a-z 0-9 _ -)");
+    }
+    let file = match api.get(&format!("/api/dropins/{}/plc?view=names", i.dropin_id)) {
+        Ok((200, d)) => d["tags"].as_array().cloned().unwrap_or_default(),
+        Ok((s @ (400 | 404), b)) => {
+            return fail(format!(
+                "drop-in {} ({s}): {}",
+                i.dropin_id,
+                b["error"].as_str().unwrap_or("refused")
+            ));
+        }
+        Ok((s, b)) => return unexpected("reading the PLC program", s, &b),
+        Err(e) => return fail(e),
+    };
+    drafts.read(i.dropin_id, true);
+    let live = match api.post(
+        &format!("/api/devices/{}/browse", http::segment(&i.device)),
+        &json!({}),
+    ) {
+        Ok((200, d)) => d["tags"].as_array().cloned().unwrap_or_default(),
+        Ok((s, b)) => return unexpected("browsing the controller", s, &b),
+        Err(e) => return fail(e),
+    };
+    let key = |t: &Json| t["name"].as_str().unwrap_or_default().to_ascii_lowercase();
+    let on_plc: std::collections::BTreeMap<String, &Json> = live.iter().map(|t| (key(t), t)).collect();
+    let in_file: BTreeSet<String> = file.iter().map(key).collect();
+    let mut matched = 0usize;
+    let mut aliases = 0usize;
+    let mut mismatched = Vec::new();
+    let mut only_file = Vec::new();
+    for t in &file {
+        let Some(p) = on_plc.get(&key(t)) else {
+            only_file.push(t["name"].clone());
+            continue;
+        };
+        if t["kind"] == "alias" {
+            aliases += 1;
+            continue;
+        }
+        let want = t["type"].as_str().map(atomic);
+        let got = p["type"].as_str().unwrap_or_default();
+        let same_type = match want {
+            Some(Some(a)) => a == got.to_ascii_uppercase(),
+            // A structure in the file: the controller says `struct`.
+            Some(None) => got == "struct",
+            None => true,
+        };
+        if same_type && t["dims"] == p["dims"] {
+            matched += 1;
+        } else {
+            mismatched.push(json!({
+                "name": t["name"], "file": { "type": t["type"], "dims": t["dims"] },
+                "controller": { "type": p["type"], "dims": p["dims"] },
+            }));
+        }
+    }
+    let only_plc: Vec<Json> = live
+        .iter()
+        .filter(|t| !in_file.contains(&key(t)))
+        .map(|t| t["name"].clone())
+        .collect();
+    let summary = format!(
+        "{matched} tag(s) match, {} differ, {} only in the file, {} only on {}",
+        mismatched.len(),
+        only_file.len(),
+        only_plc.len(),
+        i.device
+    );
+    let cut = |v: Vec<Json>| -> (usize, Vec<Json>) { (v.len(), v.into_iter().take(MAX_LISTED).collect()) };
+    let (n_mis, mismatched) = cut(mismatched);
+    let (n_file, only_file) = cut(only_file);
+    let (n_plc, only_plc) = cut(only_plc);
+    ok(
+        json!({
+            "dropin_id": i.dropin_id, "device": i.device, "matched": matched, "aliases_not_compared": aliases,
+            "differ": { "total": n_mis, "tags": mismatched },
+            "only_in_file": { "total": n_file, "names": only_file },
+            "only_on_controller": { "total": n_plc, "names": only_plc },
+            "read_only": "the controller was only browsed; nothing was written to it",
+        }),
+        summary,
+    )
 }

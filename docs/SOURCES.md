@@ -441,6 +441,27 @@ into the code.
   and cite it per item as `PM020 p.<n>`; real-controller verification
   waits for a CompactLogix on the bench (TODO `logix-tag-read`).
 
+### Logix 5000 Controllers Import/Export, reference manual (publication 1756-RM014)
+
+- **Where:** the controller vendor's literature library,
+  `literature.rockwellautomation.com/idc/groups/literature/documents/rm/1756-rm014_-en-p.pdf`.
+  **Not read:** the fetch on 2026-10-30 returned HTTP 403, as for PM020.
+  It is the primary reference for the L5X format.
+- **Used instead:** the open-source `l5x` Python package
+  (https://github.com/jvalenzuela/l5x, `l5x/project.py` and `l5x/tag.py`,
+  read 2026-10-30) for `RSLogix5000Content` > `Controller` > `Programs` /
+  `Tags`, tag `Name`, `TagType` (`Alias`, `Consumed`), `DataType`,
+  `Dimensions`, `AliasFor` and `Data Format`. The rest of what
+  `helmsman_iec::l5x` reads (`DataTypes`/`Members`, `Routines`/`Routine
+  Type`, `RLLContent`/`Rung`/`Text`/`Comment`, `STContent`/`Line`,
+  `Tasks`/`ScheduledPrograms`, `Usage`, `ExternalAccess`) is the export
+  shape as the agent remembers Studio 5000 writing it, **not verified**
+  against the manual or a real export: the fixtures in
+  `helmsman-iec/tests/fixtures/l5x/` are hand-written in that shape.
+- **Status:** check the reader against RM014 and against a real Studio
+  5000 export once one is on the bench (TODO `l5x-real-export`), and cite
+  it per element as `RM014 p.<n>`.
+
 ## Test corpora (fetched, not vendored)
 
 ### Beremiz and OpenPLC Editor example projects (PLCopen TC6 XML)
