@@ -362,6 +362,36 @@
   depends: map-reload
   id: screen-layout-snapshot
 
+- [ ] **Param units: a `unit=` key on manifest param lines?** The offline chat (feat/local-fallback) checks a typed unit ("80 %", "5 s") against the param's, but params had no unit; signals did. I added an optional `unit=U` to `param` lines for int/real (same rule as a signal's unit: 1..=16 printable ASCII, no `#`), parsed, rendered, served in the API's manifest and param-proposal JSON, metadata only, never converted. A unit change counts as a manifest change, so it is logic tier, not param. Without it the offline chat would accept bare numbers only. The agent's `draft_module` does not write units yet (the relay's tool schema would need a `unit` field).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether manifests carry param units (format change, additive; old manifests read unchanged)
+  options: unit= on param lines (recommended, built) | no param units, bare numbers only offline | units only from a bound signal
+  est: 10m
+  difficulty: low
+  id: param-units
+
+- [ ] **Relay health route for the offline probe?** While the agent is offline the box probes `GET {relay}/v1/health` with its box token every 15 s and on each chat message. Today any answer below 500 except 401/403 counts as "online", so a relay without the route (404) still counts as up. If the relay's upstream (the model API) is down but the relay itself answers, the box flips online, the next turn fails, and it goes offline again: one failed message per flap. A real `/v1/health` on the relay that reflects its upstream (503 when it cannot serve turns) closes that.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call, then a relay change in the relay repo
+  result: how accurately the banner tracks a relay whose upstream is down
+  options: add GET /v1/health to the relay, 200/503 by upstream (recommended) | keep any-answer-is-up | probe with a real one-token turn
+  est: 1h
+  difficulty: low
+  id: relay-health
+
+- [ ] **No relay configured: should chat still take param edits by rule?** A box started without `--relay` answers `POST /api/chat` with 503 ("no relay configured"), as before; `GET /api/chat/status` says `unconfigured`. The rule-based param edits only run for a box that has a relay and lost it. An air-gapped box could use them too, but then "chat" exists on a box that never has an agent. Kept as is (reversible: the chat route would be built without a relay).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether an air-gapped box gets the rule-based chat
+  options: only boxes with a relay (recommended for now, built) | every box, rules when no relay
+  est: 1h
+  difficulty: low
+  id: offline-without-relay
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -787,7 +817,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: st-graph-view, agent-loop
   id: explain-mode
 
-- [ ] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
+- [x] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
   est: 3d
   difficulty: med
   depends: agent-loop, fallback-model

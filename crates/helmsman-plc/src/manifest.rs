@@ -11,8 +11,8 @@
 //! q        0+2
 //! reads    start jam
 //! drives   motor lamp
-//! param    speed   real 1.5 min=0 max=10
-//! param    ramp_ms int  500 min=0 max=5000
+//! param    speed   real 1.5 min=0 max=10 unit=m/s
+//! param    ramp_ms int  500 min=0 max=5000 unit=ms
 //! param    beacon  bool true
 //! ```
 //!
@@ -29,9 +29,12 @@
 //!   relative addressing as with `--module`; a module that leaves one out
 //!   has none (zero bytes). `m` sizes the private `%M` (default as
 //!   `--memory`).
-//! - `param NAME TYPE VALUE [min=X max=Y]`: a typed value the engineer or
-//!   the agent may change without touching the logic. `int` and `real`
-//!   need both bounds and `min <= VALUE <= max`; `bool` takes none.
+//! - `param NAME TYPE VALUE [min=X max=Y] [unit=U]`: a typed value the
+//!   engineer or the agent may change without touching the logic. `int`
+//!   and `real` need both bounds and `min <= VALUE <= max`; `bool` takes
+//!   none. `unit` (numbers only, 1..=16 printable ASCII, as a signal's) is
+//!   metadata, never converted: the offline chat checks a typed unit
+//!   against it ([`crate::fallback`]).
 //!
 //! Every other line is blank, a `#` comment, or an error; structured lines
 //! may end in a `#` comment and are printable ASCII only.
@@ -77,6 +80,8 @@ pub struct Param {
     pub value: Value,
     /// `(min, max)`, inclusive, of the value's type; `None` for `bool`.
     pub range: Option<(Value, Value)>,
+    /// Engineering unit (`unit=`), metadata only; never on a `bool`.
+    pub unit: Option<String>,
 }
 
 impl Param {
@@ -341,6 +346,9 @@ impl Manifest {
             if let Some((lo, hi)) = p.range {
                 let _ = write!(s, " min={} max={}", show(lo), show(hi));
             }
+            if let Some(u) = &p.unit {
+                let _ = write!(s, " unit={u}");
+            }
             s.push('\n');
         }
         s
@@ -531,15 +539,26 @@ fn param(name: &str, tyname: &str, text: &str, bounds: &[&str]) -> Result<Param,
             name: name.into(),
             value,
             range: None,
+            unit: None,
         });
     }
-    let (mut lo, mut hi) = (None, None);
+    let (mut lo, mut hi, mut unit) = (None, None, None);
     for b in bounds {
         let (key, raw) = b.split_once('=').unwrap_or((b, ""));
         let slot = match key {
             "min" => &mut lo,
             "max" => &mut hi,
-            _ => return Err(format!("param {name}: {b:?}: expected min=X or max=X")),
+            "unit" => {
+                if !helmsman_io::unit_ok(raw) {
+                    return Err(format!(
+                        "param {name}: unit must be 1..={} printable ASCII characters",
+                        helmsman_io::MAX_UNIT
+                    ));
+                }
+                once(&mut unit, key, raw.to_string()).map_err(|e| format!("param {name}: {e}"))?;
+                continue;
+            }
+            _ => return Err(format!("param {name}: {b:?}: expected min=X, max=X or unit=U")),
         };
         let bound =
             parse_value(ty, raw).ok_or_else(|| format!("param {name}: {key}: {raw:?} is not a {tyname}"))?;
@@ -552,6 +571,7 @@ fn param(name: &str, tyname: &str, text: &str, bounds: &[&str]) -> Result<Param,
         name: name.into(),
         value,
         range: Some((lo, hi)),
+        unit,
     };
     let ordered = match (lo, hi) {
         (Value::Int(lo), Value::Int(hi)) => lo <= hi,
