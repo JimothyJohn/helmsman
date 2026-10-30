@@ -373,7 +373,7 @@ Update 2026-10-29 (I/O mapping): "This device is the PLC, it just may talk to ot
 
 Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". The agent drafts ST, the canvas shows it live against real values, a PIN approves it, the Pi's output toggles, and undo restores the previous snapshot.
 
-- [ ] **Architecture note** — docs/ARCHITECTURE.md: the vision above as boxes and arrows. Box core (runtime, signals, sinks, snapshots, policy), box API, canvas, agent loop, relay. Which crate owns what; the trust boundaries.
+- [x] **Architecture note** — docs/ARCHITECTURE.md: the vision above as boxes and arrows. Box core (runtime, signals, sinks, snapshots, policy), box API, canvas, agent loop, relay. Which crate owns what; the trust boundaries.
   result: one page every later card points at
   est: 3h
   difficulty: med
