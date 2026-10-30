@@ -319,13 +319,75 @@ the other modules never notice.
 
 Not in the binary yet: there is no control channel until `box-api`.
 
+## Webhook sinks (`sink-webhook`, built)
+
+`helmsman-plc --sinks FILE --sink-dir DIR` publishes signal events over
+HTTP (`sink/`; contract in `tests/sink.rs`, `tests/sink_queue.rs`,
+`tests/sink_bin.rs`). Modules never see the network: a module *emits* by
+driving a signal (a `VAR_OUTPUT` bound to an `out` signal or to an
+`in NAME TYPE module MODULE` signal), and the sinks file, which the core
+owns, says which signals go where and when.
+
+```text
+sink   mes  https://mes.example.com/hooks/line3  timeout_ms=5000 queue_bytes=1048576
+header mes  Authorization  file:/etc/helmsman-plc/mes.token
+emit   mes  parts  change
+emit   mes  jam    rise
+emit   mes  level  every_ms=60000
+```
+
+- **Events.** Sampled once per runtime tick, after the scan. `change`
+  (any new value; reals bitwise, no deadband), `rise`/`fall` (`bool`
+  only), `every_ms=N` (late ticks skip missed periods). The first value
+  after start is a baseline, not an event; a missing value never fires and
+  keeps the baseline (false → missing → true is a rise). A change undone
+  within one tick is not seen: count pulses in ST and publish the count.
+- **Body.** One flat JSON object per event: `key`, `boot`, `seq`,
+  `signal`, `value`, `trigger`, `ts_ms` (`null` while the clock is
+  untrusted, as for the calendar). `key` (`SINK-BOOT-SEQ`) is also the
+  `Idempotency-Key` header; `boot` is a per-sink counter persisted next to
+  the queue, so a key is never reused across restarts, and a `seq` gap is
+  a dropped event.
+- **Never blocks the scan.** One thread per sink. The scan thread
+  `try_send`s into a channel of 1024 events; a full channel drops and
+  counts (`dropped_channel`).
+- **Queue.** Bounded (`queue_bytes`), on disk, append-only records with a
+  CRC-32 each; replay stops at the first torn or damaged record and cuts
+  the file there, so a half-written append is never sent. Full → the
+  *oldest* events go (counted): after an outage the receiver gets current
+  state, not a stale morning. Compacted past twice the bound.
+- **Delivery.** At-least-once, in order, one event at a time: queued and
+  synced before the first attempt, removed only on a 2xx. 400/413/415/422
+  drop that event (the receiver will never take it); anything else retries
+  with exponential backoff (`retry_min_ms`..`retry_max_ms`, equal jitter
+  from a seeded generator).
+- **SSRF.** `http`/`https` only; no user info or fragment in the URL; the
+  host is resolved once, every address is checked and the socket connects
+  to a checked address. Refused always: link-local (`169.254/16`, where
+  cloud metadata lives; `fe80::/10`), known metadata addresses, unspecified,
+  multicast, broadcast, reserved, and IPv4 embedded in IPv6 that maps to
+  any of those. Loopback and `localhost` only with `allow_local=true`.
+  Plant-LAN addresses are allowed. Literal addresses are refused at load;
+  names at each send. Redirects are never followed; the response head is
+  capped at 16 KiB and the body never read; one deadline covers connect,
+  TLS, write and read.
+- **Secrets.** Credential headers (`Authorization`, `Cookie`, anything
+  named like a token, key, secret or password) must come from `env:` or
+  `file:`. Header values never print (`Secret` has no `Display`), and
+  logs show only the URL's origin, never its path or query (a webhook path
+  is often the credential).
+- **TLS.** `https` is the `https` cargo feature (rustls with the ring
+  provider and compiled-in Mozilla roots), on by default;
+  `--no-default-features` builds an http-only box with no third-party
+  crates.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
 | --- | --- | --- | --- |
 | module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | built |
 | module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault) | built |
-| module ↔ network | nothing | ST has no network primitives; sinks (webhook, OPC UA) are core-owned | built by construction; sinks planned |
+| module ↔ network | nothing | ST has no network primitives; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink; OPC UA planned (`sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
