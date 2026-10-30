@@ -21,6 +21,8 @@
 //! GET  /api/snapshots/head
 //! GET  /api/snapshots/{id}                a snapshot's files
 //! GET  /api/snapshots/{a}/diff/{b}
+//! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
+//! POST /api/bundles                       token: a bundle file, verified, bound by name, stored as a draft
 //! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
 //! POST /api/snapshots/{id}/rollback       token + {role, pin, replay?}: roll back through the approval policy
 //! GET  /api/replays/{n}                   a replay kept as evidence
@@ -60,6 +62,7 @@
 //! ([`Limits`]).
 
 pub mod approve;
+pub mod bundle;
 pub mod catalog;
 pub mod http;
 pub mod live;
@@ -80,6 +83,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value as Json, json};
 
+use crate::bundle::TrustStore;
 use crate::policy::Role;
 use crate::store::{self as snapshots, ChangeSet, SnapshotId, Store};
 
@@ -171,6 +175,8 @@ struct Ctx {
     stop: Arc<AtomicBool>,
     streams: AtomicUsize,
     ui: Option<ui::Ui>,
+    /// Publishers whose bundles import; `None`: import answers 501.
+    trust: Option<TrustStore>,
 }
 
 impl Ctx {
@@ -267,7 +273,21 @@ impl Api {
     ///
     /// # Errors
     /// The bind fails.
-    pub fn start_with_ui(cfg: Config, mut shared: Shared, ui: Option<ui::Ui>) -> io::Result<Self> {
+    pub fn start_with_ui(cfg: Config, shared: Shared, ui: Option<ui::Ui>) -> io::Result<Self> {
+        Self::start_with_trust(cfg, shared, ui, None)
+    }
+
+    /// [`Api::start_with_ui`], also importing bundles signed by a
+    /// publisher in `trust` (`POST /api/bundles`).
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_with_trust(
+        cfg: Config,
+        mut shared: Shared,
+        ui: Option<ui::Ui>,
+        trust: Option<TrustStore>,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -284,6 +304,7 @@ impl Api {
             stop: Arc::clone(&stop),
             streams: AtomicUsize::new(0),
             ui,
+            trust,
         });
         let thread = thread::Builder::new()
             .name("api".into())
@@ -517,6 +538,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         ("POST", ["api", "proposals"]) => return create(req, ctx),
+        ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
         ("POST", ["api", "proposals", id, "apply"]) => {
             return approve::apply(req, ctx, approve::Target::Proposal(id));
         }
@@ -550,6 +572,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
 fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "proposals"] => Some("GET, POST"),
+        ["api", "bundles"] => Some("POST"),
         ["api", "proposals", _, "apply" | "replay"] | ["api", "snapshots", _, "rollback" | "replay"] => {
             Some("POST")
         }
@@ -564,6 +587,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
             _,
         ]
         | ["api", "snapshots", _, "diff", _]
+        | ["api", "snapshots", _, "bundle"]
         | ["api", "modules", _, "trace"]
         | ["api", "modules", _, "trace", "events"] => Some("GET"),
         _ => None,
@@ -722,6 +746,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             Ok(cs) => Response::json(200, &render::change_set(&cs)),
             Err(r) => r,
         },
+        ["api", "snapshots", id, "bundle"] => bundle::export(ctx, id),
         ["api", "snapshots", a, "diff", b] => match (snapshot(ctx, a), snapshot(ctx, b)) {
             (Ok(a), Ok(b)) => Response::json(200, &render::diff(&snapshots::diff(&a, &b))),
             (Err(r), _) | (_, Err(r)) => r,
@@ -798,6 +823,8 @@ fn index() -> Json {
             e("GET", "/api/snapshots/head", false, "the head entry"),
             e("GET", "/api/snapshots/{id}", false, "a snapshot's files"),
             e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
+            e("GET", "/api/snapshots/{id}/bundle", false, "that snapshot as an unsigned bundle file (sign it off the box)"),
+            e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: {role, pin, replay?}, checked against the policy"),
             e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),

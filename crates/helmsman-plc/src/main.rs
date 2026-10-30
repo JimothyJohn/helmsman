@@ -25,6 +25,7 @@ use helmsman_plc::api::{
     self, Api, Approval, Catalog, Devices, Live, MemAudit, MemProposals, ModuleInfo, Plant, Publisher,
     Swapper,
 };
+use helmsman_plc::bundle::TrustStore;
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{Link, links, spawn};
 use helmsman_plc::manifest::ModuleDir;
@@ -38,6 +39,7 @@ use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
 const USAGE: &str = "\
 usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-dir DIR ...] [options]
+       helmsman-plc bundle COMMAND ...   (signed bundles: `helmsman-plc bundle help`)
   --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
@@ -63,7 +65,8 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
   --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
                        at / on the API's address: a browser on the LAN is
                        the HMI (read-only, like the API's reads)
-  --state-dir DIR      where the API token and the role PINs live (default
+  --state-dir DIR      where the API token, the role PINs and the trusted
+                       bundle publishers (trusted-publishers) live (default
                        $STATE_DIRECTORY, as systemd's StateDirectory= sets
                        it, else ./helmsman-state)
   --policy FILE        approval policy (see helmsman_plc::policy); stricter
@@ -640,6 +643,9 @@ fn load_policy(o: &Opts) -> Result<Policy, String> {
 fn load_access(o: &Opts) -> Result<(Policy, Pins), String> {
     let policy = load_policy(o)?;
     let pins = Pins::load(&state_dir(o), pin::MIN_ITERATIONS)?;
+    // Checked now so a bad trust store stops the box before it is on the
+    // network; the API reads it again when it starts.
+    TrustStore::load(&state_dir(o))?;
     Ok((policy, pins))
 }
 
@@ -688,8 +694,10 @@ fn start_api(
         snapshots,
         approval: Some(approval),
     };
+    let trust = TrustStore::load(&dir)?;
     let has_ui = ui.is_some();
-    let server = Api::start_with_ui(cfg, shared, ui).map_err(|e| format!("--api {bind}: {e}"))?;
+    let server =
+        Api::start_with_trust(cfg, shared, ui, Some(trust)).map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
         "helmsman-plc: API on http://{}/api (reads open; changes need the token)",
         server.addr()
@@ -928,6 +936,18 @@ fn run(o: &Opts) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "bundle") {
+        return match helmsman_plc::bundle::cli::run(&args[1..]) {
+            Ok(out) => {
+                print!("{out}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let opts = match parse(&args) {
         Ok(o) => o,
         Err(e) if e.is_empty() => {
