@@ -7,6 +7,18 @@
 //!   used as the reference adapter when the specification text itself is not
 //!   available in this repo.
 //!
+//! # Read-only by default
+//!
+//! Without the `unrestricted` feature the only ways to put a request on the
+//! wire are reads: [`session::Session::get_attribute_single`] and
+//! [`logix::TagReader`] (Read Tag, Multiple Service Packet of reads, Read
+//! Tag Fragmented, Symbol object browse). [`session::Session::request`] /
+//! `request_raw` (any service) and `scanner` (Class 1 connections that
+//! drive outputs) exist only with `unrestricted`. The box build
+//! (`helmsman-plc`) must not enable it; the CLI and tests do. The byte
+//! codecs stay public either way: the adapter needs them to answer
+//! requests, and they open no socket.
+//!
 //! This crate is not an ODVA product and conveys no license to the
 //! EtherNet/IP technology or marks.
 
@@ -20,6 +32,8 @@ pub mod encap;
 pub mod explicit;
 pub mod identity;
 pub mod io;
+pub mod logix;
+#[cfg(feature = "unrestricted")]
 pub mod scanner;
 pub mod session;
 

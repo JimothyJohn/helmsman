@@ -13,7 +13,8 @@ helmsman-iec = { path = "../helmsman-iec" }
 helmsman-io = { path = "../helmsman-io" }
 
 [dev-dependencies]
-helmsman-proto = { path = "../helmsman-proto" }
+# The box build itself never enables `unrestricted`; its tests play scanner.
+helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
 
 [lints]

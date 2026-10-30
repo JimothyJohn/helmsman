@@ -201,6 +201,8 @@ pub struct Device {
     next_id: u32,
     /// Last run/idle header from an exclusive owner; `None` until one arrives.
     run_idle: Option<u32>,
+    /// Logix tag services (test fixture), answered before the objects above.
+    logix: Option<crate::logix::Controller>,
     pub stats: Stats,
 }
 
@@ -233,8 +235,27 @@ impl Device {
             connections: Vec::new(),
             next_id,
             run_idle: None,
+            logix: None,
             stats: Stats::default(),
         }
+    }
+
+    /// Also answer Logix tag services from `controller` (a test fixture:
+    /// Read Tag, Multiple Service Packet, Read Tag Fragmented, Symbol
+    /// object browse, routed or not). Everything else is answered as before.
+    #[must_use]
+    pub fn with_logix(mut self, controller: crate::logix::Controller) -> Self {
+        self.logix = Some(controller);
+        self
+    }
+
+    #[must_use]
+    pub const fn logix(&self) -> Option<&crate::logix::Controller> {
+        self.logix.as_ref()
+    }
+
+    pub const fn logix_mut(&mut self) -> Option<&mut crate::logix::Controller> {
+        self.logix.as_mut()
     }
 
     #[must_use]
@@ -806,6 +827,10 @@ pub fn lock_ref(m: &std::sync::Mutex<Device>) -> std::sync::MutexGuard<'_, Devic
 /// only have bytes (the server). Malformed requests get a CIP error, never a
 /// dropped session.
 pub fn handle_bytes(dev: &mut Device, mr: &[u8], peer: Ipv4Addr, now: Instant) -> Response {
+    if let Some(resp) = dev.logix.as_mut().and_then(|l| l.handle(mr)) {
+        dev.stats.requests += 1;
+        return resp;
+    }
     match Request::decode(mr) {
         Ok(req) => dev.handle(&req, peer, now),
         Err(e) => {
