@@ -56,6 +56,7 @@ pub use types::{Ty, Value};
 
 use check::{AggKind, Checked, Type};
 use interp::Machine;
+use parser::Section;
 
 /// Instructions one scan may execute before it faults (see [`FaultKind::Watchdog`]).
 pub const DEFAULT_BUDGET: u64 = 1_000_000;
@@ -253,6 +254,74 @@ impl Program {
         matches!(ty, Type::Elem(_) | Type::Enum(_)).then(|| self.mem[slot])
     }
 
+    /// The program's ports: its `VAR_INPUT`s and `VAR_OUTPUT`s, in
+    /// declaration order, names upper-cased. A host binds them to signals.
+    #[must_use]
+    pub fn ports(&self) -> Vec<Port> {
+        let prog = &self.code.pous[self.code.program];
+        prog.vars
+            .iter()
+            .filter_map(|v| {
+                let dir = match v.section {
+                    Section::Input => PortDir::Input,
+                    Section::Output => PortDir::Output,
+                    _ => return None,
+                };
+                let Type::Elem(ty) = v.ty else { return None };
+                Some(Port {
+                    name: v.name.clone(),
+                    dir,
+                    ty,
+                })
+            })
+            .collect()
+    }
+
+    /// Sets a `VAR_INPUT` (case-insensitive) before a scan. The value must
+    /// already be the input's kind and fit its range: nothing is wrapped,
+    /// truncated or converted, and REALs must be finite.
+    ///
+    /// # Errors
+    /// No such input, or a value of the wrong kind or out of range; the
+    /// input keeps its previous value.
+    pub fn set_input(&mut self, name: &str, value: Value) -> Result<(), SetError> {
+        let name = name.to_ascii_uppercase();
+        let prog = &self.code.pous[self.code.program];
+        let Some(v) = prog
+            .vars
+            .iter()
+            .find(|v| v.name == name && v.section == Section::Input)
+        else {
+            return Err(SetError::NoSuchInput);
+        };
+        let (slot, Type::Elem(ty)) = (prog.base + v.off, v.ty) else {
+            return Err(SetError::NoSuchInput);
+        };
+        let stored = match (ty, value) {
+            (Ty::Bool, Value::Bool(_)) => value,
+            (t, Value::Real(x)) if t.is_real() => {
+                if !x.is_finite() {
+                    return Err(SetError::Range(ty));
+                }
+                let r = types::round_real(t, x);
+                if !r.is_finite() {
+                    return Err(SetError::Range(ty));
+                }
+                Value::Real(r)
+            }
+            (t, Value::Int(n)) if t != Ty::Bool && !t.is_real() => {
+                let (lo, hi) = t.range();
+                if n < lo || n > hi {
+                    return Err(SetError::Range(ty));
+                }
+                value
+            }
+            _ => return Err(SetError::Kind(ty)),
+        };
+        self.mem[slot] = stored;
+        Ok(())
+    }
+
     /// Declared elementary type of a variable path, if it has one.
     #[must_use]
     pub fn ty(&self, path: &str) -> Option<Ty> {
@@ -262,6 +331,47 @@ impl Program {
         }
     }
 }
+
+/// Which way a program port faces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortDir {
+    /// `VAR_INPUT`: the host writes it before each scan.
+    Input,
+    /// `VAR_OUTPUT`: the host reads it after each scan.
+    Output,
+}
+
+/// A program's `VAR_INPUT` or `VAR_OUTPUT`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Port {
+    /// Upper-cased, as ST names are case-insensitive.
+    pub name: String,
+    pub dir: PortDir,
+    pub ty: Ty,
+}
+
+/// Why [`Program::set_input`] refused a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetError {
+    /// The program has no `VAR_INPUT` of that name.
+    NoSuchInput,
+    /// A value of the wrong kind (BOOL, integer or real) for this type.
+    Kind(Ty),
+    /// Out of this type's range, or a non-finite real.
+    Range(Ty),
+}
+
+impl std::fmt::Display for SetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSuchInput => f.write_str("no such VAR_INPUT"),
+            Self::Kind(t) => write!(f, "wrong kind of value for {t}"),
+            Self::Range(t) => write!(f, "value out of range for {t}"),
+        }
+    }
+}
+
+impl std::error::Error for SetError {}
 
 /// `name[1,2]` -> ("NAME", Some([1, 2])); `name` -> ("NAME", None).
 fn split_index(seg: &str) -> Option<(&str, Option<Vec<i128>>)> {
