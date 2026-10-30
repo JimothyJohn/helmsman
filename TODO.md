@@ -142,12 +142,12 @@
   depends: cli-crate
   id: daemon
 
-- [ ] **Flash the Pi 5 for CODESYS** — reflashes the card that was the perceptronics pick PC with Raspberry Pi OS Lite 64-bit, SSH on. Run in the native terminal (sudo + dd), not through `!`.
+- [x] **Flash the Pi 5 for CODESYS** — reflashes the card that was the perceptronics pick PC with Raspberry Pi OS Lite 64-bit, SSH on. Run in the native terminal (sudo + dd), not through `!`.
   needs: the Pi's SD card in a reader on the Mac; `diskutil list` to find /dev/diskN
   result: a headless Pi with user nick and a printed first-boot password
-  notes: scripts/pi-flash.sh /dev/diskN
   est: 20m
   difficulty: low
+  notes: dropped 2026-10-29: no reflash (was scripts/pi-flash.sh /dev/diskN); pi-prep ran in place on the pick PC
   id: pi-flash
 
 - [x] **Cable the Pi to the office LAN** — USB-C on a Pi 5 is power only; the 2026-10-27 sweep found no Pi on either subnet, over mDNS, or on USB.
@@ -158,22 +158,31 @@
   depends: pi-flash
   id: pi-cable
 
-- [ ] **Prep the Pi** — key-only SSH, hostname codesys-pi, packages current, checks 44818/2222 free. Runs here.
+- [x] **Prep the Pi** — key-only SSH, hostname codesys-pi, packages current, checks 44818/2222 free. Runs here.
   needs: the first-boot password pi-flash printed
   result: Pi ready for Deploy Control SL
-  notes: ! scripts/pi-prep.sh nick@raspberrypi.local
+  notes: done 2026-10-29 in place on the unflashed pick PC (`scripts/pi-prep.sh nick@pickpc.local pickpc`): hostname kept as pickpc, perceptronics-cockpit left running, eth0 192.168.3.20, wlan0 10.0.0.56, password SSH off, 44818/2222 free. pickpc.local mDNS hung afterwards; use the IP
   est: 10m
   difficulty: low
   depends: pi-cable
   id: pi-prep
 
-- [ ] **Install CODESYS Control for Raspberry Pi 64 SL and an EtherNet/IP Adapter project** — Windows-only IDE, so this is yours. Steps 4–5 in docs/interop/codesys-pi.md; record the assembly numbers and sizes it assigns.
-  needs: a Windows machine with the CODESYS Development System
+- [x] **Install CODESYS Control for Raspberry Pi 64 SL and an EtherNet/IP Adapter project** — Windows-only IDE, so this is yours. Steps 4–5 in docs/interop/codesys-pi.md; record the assembly numbers and sizes it assigns.
+  needs: a Windows machine with the CODESYS Development System; Deploy Control SL target 192.168.3.20, user nick (key login, passwordless sudo)
   result: Pi runs an EtherNet/IP adapter (2-hour demo without a licence)
   est: 1h
   difficulty: med
   depends: pi-prep
+  notes: dropped 2026-10-29: Nick skips CODESYS. OpENer (make opener-up) is the CI adapter, tcpethernet-plc is our own soft PLC + adapter (MIT) and is what customers run
   id: codesys-runtime
+
+- [ ] **Deploy tcpethernet-plc (IEC runtime) to the pick PC** — the Pi target now that CODESYS is out. The old toy-PLC deploy/smoke scripts left with #11; write scripts/pi-deploy-plc.sh for the IEC runtime (cross-build aarch64, systemd unit, open 44818/tcp+udp and 2222/udp in perceptronics' firewall) and re-smoke from the Studio.
+  needs: nothing; Pi prepped (192.168.3.20, key SSH, passwordless sudo)
+  result: a .st program on the Pi drives Class 1 I/O the Studio's scanner sees
+  est: 2h
+  difficulty: med
+  depends: pi-prep
+  id: pi-deploy-iec
 
 - [x] **Deploy tcpethernet-plc to the Pi and smoke it from the Studio** — our own adapter + soft PLC as a systemd service (web page on :8080, token printed by the script). Alternative or complement to CODESYS; needs no Windows. Runs here.
   needs: pi-prep done (key SSH, passwordless sudo)
