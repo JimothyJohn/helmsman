@@ -626,7 +626,14 @@ fn load_policy(o: &Opts) -> Result<Policy, String> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The policy file and the PINs, read before anything starts so a bad one
+/// stops the box before it is on the network.
+fn load_access(o: &Opts) -> Result<(Policy, Pins), String> {
+    let policy = load_policy(o)?;
+    let pins = Pins::load(&state_dir(o), pin::MIN_ITERATIONS)?;
+    Ok((policy, pins))
+}
+
 fn start_api(
     o: &Opts,
     bind: SocketAddr,
@@ -634,24 +641,9 @@ fn start_api(
     running: Option<ChangeSet>,
     live: &Arc<Live>,
     devices: &Arc<Devices>,
-    plant: Plant,
-    swap: api::SwapHandle,
+    approval: Approval,
 ) -> Result<Api, String> {
     let dir = state_dir(o);
-    let policy = load_policy(o)?;
-    let pins = Pins::load(&dir, pin::MIN_ITERATIONS)?;
-    if Role::ALL.iter().all(|r| !pins.has(*r)) {
-        eprintln!(
-            "helmsman-plc: no role PINs in {}: nothing can be applied until one is set (--set-pin ROLE)",
-            dir.display()
-        );
-    }
-    let approval = Approval {
-        gate: Gate::new(pins, policy.lockout, Arc::new(Instant::now)),
-        policy,
-        plant,
-        swap,
-    };
     let token =
         api::token::load_or_create(&dir).map_err(|e| format!("API token in {}: {e}", dir.display()))?;
     let snapshots = o
@@ -659,6 +651,12 @@ fn start_api(
         .as_deref()
         .map(|d| Store::open(d).map(Mutex::new).map_err(|e| e.to_string()))
         .transpose()?;
+    if Role::ALL.iter().all(|r| !approval.gate.pins().has(*r)) {
+        eprintln!(
+            "helmsman-plc: no role PINs in {}: nothing can be applied until one is set (--set-pin ROLE)",
+            dir.display()
+        );
+    }
     let cfg = api::Config {
         bind,
         token: token.token.clone(),
@@ -788,6 +786,7 @@ fn run(o: &Opts) -> Result<(), String> {
     if let Some(role) = o.set_pin {
         return set_pin(o, role);
     }
+    let access = o.api.map(|_| load_access(o)).transpose()?;
     let cfg = device_config(o.serial);
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
     let d = defaults(o, i_len, q_len);
@@ -826,16 +825,22 @@ fn run(o: &Opts) -> Result<(), String> {
     announce(&adapter, &specs, &content, uses_box, cal.as_ref());
     let mut recorder = recorder(&table);
     let (swap, swapper) = api::swap::channel(Duration::from_secs(5));
-    let plant = Plant {
-        table: table.lock().unwrap_or_else(PoisonError::into_inner).clone(),
-        i_len,
-        q_len,
-        defaults: d,
-        record: Some(recorder.tap()),
-    };
+    let approval = access.map(|(policy, pins)| Approval {
+        gate: Gate::new(pins, policy.lockout, Arc::new(Instant::now)),
+        policy,
+        plant: Plant {
+            table: table.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            i_len,
+            q_len,
+            defaults: d,
+            record: Some(recorder.tap()),
+        },
+        swap,
+    });
     let server = o
         .api
-        .map(|bind| {
+        .zip(approval)
+        .map(|(bind, approval)| {
             start_api(
                 o,
                 bind,
@@ -843,8 +848,7 @@ fn run(o: &Opts) -> Result<(), String> {
                 content.running.take(),
                 &live,
                 &devices,
-                plant,
-                swap,
+                approval,
             )
         })
         .transpose()?;

@@ -375,7 +375,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
                 400,
                 &err("expected JSON {\"role\": ..., \"pin\": ..., \"replay\": N}"),
                 &format!("{label}: malformed approval"),
-                Note::default(),
+                Note::target(content, None),
             );
         }
     };
@@ -386,7 +386,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             400,
             &err("role must be operator, engineer or integrator"),
             &format!("{label}: unknown role"),
-            Note::default(),
+            Note::target(content, None),
         );
     };
     if ctx.box_.snapshots.is_none() {

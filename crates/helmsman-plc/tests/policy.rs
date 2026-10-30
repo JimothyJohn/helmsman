@@ -3,6 +3,7 @@
 //! sockets, a real store, a real scan thread) is `tests/approval.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -52,7 +53,7 @@ fn manifest(name: &str, s: &Spec) -> String {
         s.max
     );
     if let Some((start, len)) = s.q {
-        m += &format!("q {start}+{len}\n");
+        let _ = writeln!(m, "q {start}+{len}");
     }
     if s.comment {
         m = format!("# reviewed\n{m}");
@@ -105,12 +106,12 @@ fn nothing_changed_is_param() {
 
 #[test]
 fn a_param_within_its_range_is_param_even_with_the_manifest_rerendered() {
-    let t = with(|s| {
+    let target = with(|s| {
         s.speed = 2.5;
         s.comment = true;
     });
-    let c = classify(&base(), &t);
-    assert_eq!(c.tier, Tier::Param, "{c:?}");
+    let class = classify(&base(), &target);
+    assert_eq!(class.tier, Tier::Param, "{class:?}");
     // The proposal path re-renders manifests through Manifest::render.
     let mut r = base();
     let f = r.modules.get_mut("conveyor").unwrap();
@@ -371,7 +372,7 @@ fn no_policy_file_is_the_floor() {
         assert_eq!(FLOOR.rule(t).role, Role::Engineer, "{t}");
         assert!(FLOOR.rule(t).replay, "{t}");
     }
-    assert!(FLOOR.below_floor().is_empty());
+    assert_eq!(FLOOR.below_floor(), Vec::<String>::new());
 }
 
 #[test]
@@ -593,7 +594,7 @@ fn malformed_pin_files_are_refused() {
         format!("helmsman-pins 1\n{line}\n{line}\n"),
         format!("helmsman-pins 1\n{}\n", line.replace("pbkdf2-sha256", "md5")),
         format!("helmsman-pins 1\n{}\n", line.replace("operator", "root")),
-        format!("helmsman-pins 1\n{}0\n", line),
+        format!("helmsman-pins 1\n{line}0\n"),
         format!("helmsman-pins 1\n{}\n", &line[..line.len() - 2]),
     ] {
         assert!(Pins::parse(&bad, 1).is_err(), "{bad:?}");
