@@ -498,8 +498,9 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format, signal-model
   id: box-api
 
-- [ ] **Snapshots and rollback** — each applied change set is an immutable, content-addressed snapshot in SQLite (modules, params, signal bindings) with author, prompt, approver, time. One-call rollback. Exportable as a bundle later.
+- [x] **Snapshots and rollback** — each applied change set is an immutable, content-addressed snapshot in SQLite (modules, params, signal bindings) with author, prompt, approver, time. One-call rollback. Exportable as a bundle later.
   result: undo for everything the agent does
+  notes: built: helmsman_plc::store (rusqlite bundled + sha2), `helmsman-plc --store DIR` runs head; see ARCHITECTURE "Snapshots"
   est: 2d
   difficulty: med
   depends: module-format
