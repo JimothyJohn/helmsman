@@ -15,7 +15,12 @@
 //! GET  /api/proposals/{id}
 //! POST /api/proposals                     token: a module draft or a param change, checked, stored as a draft
 //! POST /api/proposals/{id}/apply          token: 501, applying is the approval policy's (not built)
-//! GET  /api/audit?after=N&limit=M         every mutating call, append-only
+//! GET  /api/audit?after=N&limit=M         every mutating call, append-only, naming snapshot ids
+//! GET  /api/snapshots                     snapshot history (with --store), head, the running change set's id
+//! GET  /api/snapshots/head
+//! GET  /api/snapshots/{id}                a snapshot's files
+//! GET  /api/snapshots/{a}/diff/{b}
+//! POST /api/snapshots/{id}/rollback       token: 501, rollback is the approval policy's (not built)
 //! GET  /api/events                        event stream of live values and module status
 //! ```
 //!
@@ -61,6 +66,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value as Json, json};
+
+use crate::store::{self as snapshots, ChangeSet, SnapshotId, Store};
 
 pub use catalog::{Catalog, Devices, ModuleInfo, SignalInfo};
 pub use http::{Limits, Request, Response};
@@ -111,6 +118,14 @@ pub struct Shared {
     pub devices: Arc<Devices>,
     pub audit: Box<dyn Audit>,
     pub proposals: Box<dyn Proposals>,
+    /// What the box runs, as a change set: the store's head, or the
+    /// module directories, map and calendar it was started from. `None`
+    /// when bare programs or `--module` specs are part of it (they are not
+    /// module directories, so no snapshot can hold them).
+    pub running: Option<ChangeSet>,
+    /// The snapshot store, read-only here (`--store`). Its calls block on
+    /// `SQLite`, so only API worker threads make them.
+    pub snapshots: Option<Mutex<Store>>,
 }
 
 /// A traced scan's number and its JSON.
@@ -344,6 +359,11 @@ fn handle(req: &Request, ctx: &Ctx) -> Reply {
 /// Records a mutating call; `None` if the log is full (the call must not
 /// take effect).
 fn audit(ctx: &Ctx, req: &Request, status: u16, detail: &str) -> Option<u64> {
+    audit_with(ctx, req, status, detail, None)
+}
+
+/// [`audit`], naming the snapshot the call concerns.
+fn audit_with(ctx: &Ctx, req: &Request, status: u16, detail: &str, snapshot: Option<String>) -> Option<u64> {
     let seq = ctx
         .box_
         .audit
@@ -354,6 +374,7 @@ fn audit(ctx: &Ctx, req: &Request, status: u16, detail: &str) -> Option<u64> {
             path: req.path.clone(),
             status,
             detail: detail.into(),
+            snapshot,
         })
         .ok();
     (ctx.cfg.log)(&format!(
@@ -381,18 +402,43 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
                     Response::error(404, "no such proposal"),
                     "apply: no such proposal".to_string(),
                 ),
-                Some(p) => (
-                    Response::json(
+                Some(p) => {
+                    let snap = p.json["snapshot"].as_str().map(str::to_string);
+                    let r = Response::json(
                         501,
                         &json!({
                             "error": "applying a proposal needs the approval policy (card approval-policy), which is not built; nothing was changed",
                             "proposal": p.id,
                         }),
-                    ),
-                    format!("apply proposal {} refused: needs approval-policy", p.id),
-                ),
+                    );
+                    let d = format!("apply proposal {} refused: needs approval-policy", p.id);
+                    return match audit_with(ctx, req, 501, &d, snap) {
+                        Some(_) => r,
+                        None => audit_full(),
+                    };
+                }
             }
         }
+        ("POST", ["api", "snapshots", id, "rollback"]) => match snapshot(ctx, id) {
+            Err(r) => {
+                let d = format!("rollback refused: {}", r.status);
+                (r, d)
+            }
+            Ok(cs) => {
+                let id = cs.id().to_string();
+                let r = Response::json(
+                    501,
+                    &json!({
+                        "error": "rolling back needs the approval policy (card approval-policy), which is not built; nothing was changed",
+                        "snapshot": id,
+                    }),
+                );
+                return match audit_with(ctx, req, 501, "rollback refused: needs approval-policy", Some(id)) {
+                    Some(_) => r,
+                    None => audit_full(),
+                };
+            }
+        },
         (_, path) => match allowed(path) {
             Some(allow) => (
                 Response::error(405, "method not allowed").with("Allow", allow.into()),
@@ -414,13 +460,14 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
 fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "proposals"] => Some("GET, POST"),
-        ["api", "proposals", _, "apply"] => Some("POST"),
+        ["api", "proposals" | "snapshots", _, "apply" | "rollback"] => Some("POST"),
         ["api"]
         | [
             "api",
-            "signals" | "modules" | "outputs" | "devices" | "audit" | "events",
+            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots",
         ]
-        | ["api", "signals" | "modules" | "proposals", _]
+        | ["api", "signals" | "modules" | "proposals" | "snapshots", _]
+        | ["api", "snapshots", _, "diff", _]
         | ["api", "modules", _, "trace"]
         | ["api", "modules", _, "trace", "events"] => Some("GET"),
         _ => None,
@@ -460,7 +507,8 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
             );
         }
     };
-    let mut p = match proposal::check(&new, &ctx.box_.catalog, ctx.cfg.memory) {
+    let checked = proposal::check(&new, &ctx.box_.catalog, ctx.cfg.memory, ctx.box_.running.as_ref());
+    let (mut p, change) = match checked {
         Ok(p) => p,
         Err((status, body)) => return refused(status, body, "proposal refused by the checks"),
     };
@@ -480,10 +528,19 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
     p["status"] = json!("draft");
     p["at"] = json!(wall());
     p["apply"] = json!("needs approval-policy");
-    if audit(ctx, req, 201, &what).is_none() {
+    let snap = change.as_ref().map(|cs| cs.id().to_string());
+    let what = match (&snap, p["base"].as_str()) {
+        (Some(to), Some(base)) => format!("{what}: snapshot {base} -> {to}"),
+        _ => what,
+    };
+    if audit_with(ctx, req, 201, &what, snap).is_none() {
         return audit_full();
     }
-    ctx.box_.proposals.insert(store::Stored { id, json: p.clone() });
+    ctx.box_.proposals.insert(store::Stored {
+        id,
+        json: p.clone(),
+        change,
+    });
     Response::json(201, &p).with("Location", format!("/api/proposals/{id}"))
 }
 
@@ -532,10 +589,66 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             None => Response::error(404, "no such proposal"),
         },
         ["api", "audit"] => audit_list(req, ctx),
+        ["api", "snapshots"] => with_store(ctx, |s| {
+            let entries = s.list()?;
+            // Newest first: head leads.
+            let head = entries.first().map(|e| e.id.to_string());
+            Ok(json!({
+                "head": head,
+                "running": ctx.box_.running.as_ref().map(|cs| cs.id().to_string()),
+                "log": entries.iter().map(render::entry).collect::<Vec<_>>(),
+            }))
+        }),
+        ["api", "snapshots", "head"] => {
+            with_store(ctx, |s| Ok(s.head()?.as_ref().map_or(Json::Null, render::entry)))
+        }
+        ["api", "snapshots", id] => match snapshot(ctx, id) {
+            Ok(cs) => Response::json(200, &render::change_set(&cs)),
+            Err(r) => r,
+        },
+        ["api", "snapshots", a, "diff", b] => match (snapshot(ctx, a), snapshot(ctx, b)) {
+            (Ok(a), Ok(b)) => Response::json(200, &render::diff(&snapshots::diff(&a, &b))),
+            (Err(r), _) | (_, Err(r)) => r,
+        },
         ["api", "events"] => return Reply::Values,
         _ => Response::error(404, "no such resource"),
     };
     Reply::Once(r)
+}
+
+/// Runs `f` on the store; 404 without one, 500 if it fails.
+fn with_store(ctx: &Ctx, f: impl FnOnce(&Store) -> Result<Json, snapshots::Error>) -> Response {
+    let Some(store) = &ctx.box_.snapshots else {
+        return Response::error(404, "no snapshot store on this box (--store)");
+    };
+    let store = store.lock().unwrap_or_else(PoisonError::into_inner);
+    match f(&store) {
+        Ok(j) => Response::json(200, &j),
+        Err(e) => store_error(&e),
+    }
+}
+
+fn store_error(e: &snapshots::Error) -> Response {
+    match e {
+        snapshots::Error::NotFound(_) => Response::error(404, "no such snapshot"),
+        e => Response::error(500, &e.to_string()),
+    }
+}
+
+/// A snapshot's content by id (64 hex digits): from the store, or the
+/// running change set when it has that id.
+fn snapshot(ctx: &Ctx, id: &str) -> Result<ChangeSet, Response> {
+    let Some(id) = SnapshotId::parse(id) else {
+        return Err(Response::error(404, "no such snapshot"));
+    };
+    if let Some(cs) = ctx.box_.running.as_ref().filter(|cs| cs.id() == id) {
+        return Ok(cs.clone());
+    }
+    let Some(store) = &ctx.box_.snapshots else {
+        return Err(Response::error(404, "no such snapshot"));
+    };
+    let store = store.lock().unwrap_or_else(PoisonError::into_inner);
+    store.get(&id).map_err(|e| store_error(&e))
 }
 
 fn index() -> Json {
@@ -556,6 +669,11 @@ fn index() -> Json {
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source} or {kind: param, module, param, value}"),
             e("POST", "/api/proposals/{id}/apply", true, "501: needs the approval policy"),
             e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),
+            e("GET", "/api/snapshots", false, "snapshot history (needs --store), head, and the running change set's id"),
+            e("GET", "/api/snapshots/head", false, "the head entry"),
+            e("GET", "/api/snapshots/{id}", false, "a snapshot's files"),
+            e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
+            e("POST", "/api/snapshots/{id}/rollback", true, "501: needs the approval policy"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
         ],
         "writes": "no endpoint writes a signal, an output or a module; applying a proposal needs the approval policy",
@@ -597,7 +715,7 @@ fn audit_list(req: &Request, ctx: &Ctx) -> Response {
         .map(|e| {
             json!({
                 "seq": e.seq, "at": e.at, "method": e.method, "path": e.path,
-                "status": e.status, "detail": e.detail,
+                "status": e.status, "detail": e.detail, "snapshot": e.snapshot,
             })
         })
         .collect();

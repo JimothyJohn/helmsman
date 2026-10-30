@@ -41,7 +41,11 @@ fn private(_: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn create(path: &Path, token: &str) -> io::Result<()> {
+/// Writes `token` to a private file beside `path`, whole and synced, and
+/// returns that file's path. Readers of `path` never see it half written:
+/// it reaches `path` by a link or rename, which are atomic.
+fn stage(path: &Path, token: &str) -> io::Result<PathBuf> {
+    let tmp = path.with_file_name(format!(".{FILE}.{}", &token[..16]));
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
@@ -49,10 +53,11 @@ fn create(path: &Path, token: &str) -> io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut f = opts.open(path)?;
+    let mut f = opts.open(&tmp)?;
     f.write_all(token.as_bytes())?;
     f.write_all(b"\n")?;
-    f.sync_all()
+    f.sync_all()?;
+    Ok(tmp)
 }
 
 /// A token and where it lives.
@@ -72,31 +77,38 @@ pub struct Token {
 pub fn load_or_create(dir: &Path) -> io::Result<Token> {
     fs::create_dir_all(dir)?;
     let path = dir.join(FILE);
-    for _ in 0..2 {
+    // What this call wrote, if anything: a valid file holding it is new.
+    let mut made: Option<String> = None;
+    for _ in 0..4 {
         match fs::read_to_string(&path) {
             Ok(t) if valid(t.trim()) => {
                 private(&path)?;
+                let token = t.trim().to_string();
                 return Ok(Token {
-                    token: t.trim().into(),
-                    path,
-                    new: false,
-                });
-            }
-            Ok(_) => fs::remove_file(&path)?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
-        }
-        let token = random()?;
-        match create(&path, &token) {
-            Ok(()) => {
-                return Ok(Token {
+                    new: made.as_deref() == Some(token.as_str()),
                     token,
                     path,
-                    new: true,
                 });
             }
-            // Another process made it between our read and create: read it.
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Ok(_) => {
+                // Not a token: replace it whole.
+                let token = random()?;
+                let tmp = stage(&path, &token)?;
+                fs::rename(&tmp, &path)?;
+                made = Some(token);
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let token = random()?;
+                let tmp = stage(&path, &token)?;
+                // Fails if another process got there first; then read theirs.
+                let linked = fs::hard_link(&tmp, &path);
+                fs::remove_file(&tmp)?;
+                match linked {
+                    Ok(()) => made = Some(token),
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(e) => return Err(e),
+                }
+            }
             Err(e) => return Err(e),
         }
     }

@@ -1,6 +1,6 @@
 //! Where the API keeps what it is given: the audit log and proposals.
-//! In memory for now, behind traits, so snapshots (SQLite, `snapshots`)
-//! can take them over without the API changing.
+//! In memory for now, behind traits, so the snapshot store's SQLite file
+//! ([`crate::store`]) can take them over without the API changing.
 //!
 //! Both are append-only and bounded. When full they refuse (the caller
 //! answers 507) rather than forget: an audit log that drops its oldest
@@ -23,6 +23,9 @@ pub struct AuditEntry {
     pub status: u16,
     /// What was done or refused, for a person.
     pub detail: String,
+    /// The snapshot the call concerns (a proposal's change set, a
+    /// rollback target), as its id.
+    pub snapshot: Option<String>,
 }
 
 /// The store is full; nothing was recorded.
@@ -46,6 +49,8 @@ pub trait Audit: Send + Sync {
 pub struct Stored {
     pub id: u64,
     pub json: Json,
+    /// The change set applying it would commit, when the box runs one.
+    pub change: Option<crate::store::ChangeSet>,
 }
 
 /// Proposals: drafts awaiting the approval path.

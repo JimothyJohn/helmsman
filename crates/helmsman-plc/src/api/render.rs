@@ -10,6 +10,7 @@ use serde_json::{Value as Json, json};
 use super::catalog::{Catalog, ModuleInfo, SignalInfo};
 use super::live::{ModuleLive, View};
 use crate::manifest::Manifest;
+use crate::store::{ChangeSet, Diff, Entry, Kind, ModuleChange};
 use crate::{Sample, Status, Window};
 
 #[must_use]
@@ -278,5 +279,91 @@ pub fn trace(module: &str, s: &Sample) -> Json {
         "faulted_at": t.faulted_at().map(|id| id.0),
         "stmts": stmts,
         "values": values,
+    })
+}
+
+fn presence<T>(name: &str, from: Option<&T>, to: Option<&T>) -> Json {
+    let change = match (from, to) {
+        (None, _) => "added",
+        (_, None) => "removed",
+        _ => "changed",
+    };
+    json!({ "name": name, "change": change })
+}
+
+/// What changed between two change sets.
+#[must_use]
+pub fn diff(d: &Diff) -> Json {
+    let modules: Vec<Json> = d
+        .modules
+        .iter()
+        .map(|m| match m {
+            ModuleChange::Added(n) => json!({ "name": n, "change": "added" }),
+            ModuleChange::Removed(n) => json!({ "name": n, "change": "removed" }),
+            ModuleChange::Changed {
+                name,
+                source,
+                manifest,
+                params,
+            } => {
+                let params: Vec<Json> = params
+                    .iter()
+                    .map(|f| {
+                        json!({
+                            "name": f.name,
+                            "from": value(f.from.as_ref().map(|p| p.value)),
+                            "to": value(f.to.as_ref().map(|p| p.value)),
+                        })
+                    })
+                    .collect();
+                json!({
+                    "name": name, "change": "changed",
+                    "source": source, "manifest": manifest, "params": params,
+                })
+            }
+        })
+        .collect();
+    let named = |fields: Vec<Json>| Json::Array(fields);
+    json!({
+        "empty": d.is_empty(),
+        "modules": modules,
+        "io_map": d.io_map,
+        "devices": named(d.devices.iter().map(|f| presence(&f.name, f.from.as_ref(), f.to.as_ref())).collect()),
+        "bindings": named(d.bindings.iter().map(|f| presence(&f.name, f.from.as_ref(), f.to.as_ref())).collect()),
+        "calendar": d.calendar,
+    })
+}
+
+/// A change set's content: each module's two files, the map, the calendar.
+#[must_use]
+pub fn change_set(cs: &ChangeSet) -> Json {
+    let modules: serde_json::Map<String, Json> = cs
+        .modules
+        .iter()
+        .map(|(n, f)| (n.clone(), json!({ "manifest": f.manifest, "source": f.source })))
+        .collect();
+    json!({
+        "id": cs.id().to_string(),
+        "modules": modules,
+        "io_map": cs.io_map,
+        "calendar": cs.calendar,
+    })
+}
+
+/// One history entry.
+#[must_use]
+pub fn entry(e: &Entry) -> Json {
+    let kind = match e.kind {
+        Kind::Apply => json!({ "kind": "apply" }),
+        Kind::Rollback { to } => json!({ "kind": "rollback", "to": to.to_string() }),
+    };
+    json!({
+        "seq": e.seq,
+        "id": e.id.to_string(),
+        "kind": kind,
+        "author": e.meta.author,
+        "prompt": e.meta.prompt,
+        "approver": e.meta.approver,
+        "time_ms": e.meta.time_ms,
     })
 }

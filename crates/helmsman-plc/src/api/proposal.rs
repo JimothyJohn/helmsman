@@ -13,6 +13,7 @@ use serde_json::{Value as Json, json};
 use super::catalog::Catalog;
 use super::render;
 use crate::manifest::{self, Manifest};
+use crate::store::{self, ChangeSet, ModuleFiles};
 
 /// What a client posts to `/api/proposals`.
 #[derive(Debug, Deserialize)]
@@ -52,22 +53,48 @@ fn note(n: Option<&str>) -> Result<Option<String>, Refusal> {
     }
 }
 
+/// A module's files as a proposal would leave them.
+type Files = Option<(String, ModuleFiles)>;
+
 /// Checks `new` against the box as `catalog` describes it; `memory` is
-/// the default `%M` size. The proposal as JSON, without id, time or
-/// status, or why not.
+/// the default `%M` size. `running` is the change set the box runs (the
+/// store's head, or its files), when it has one: the proposal then
+/// carries the change set applying it would commit, its snapshot id and
+/// its diff from `running` (the audit log names both ids). The proposal
+/// as JSON, without id, time or status, and its change set; or why not.
 ///
 /// # Errors
 /// A [`Refusal`]: 422 for a draft that does not check, 400 for a
 /// malformed request.
-pub fn check(new: &New, catalog: &Catalog, memory: usize) -> Result<Json, Refusal> {
+pub fn check(
+    new: &New,
+    catalog: &Catalog,
+    memory: usize,
+    running: Option<&ChangeSet>,
+) -> Result<(Json, Option<ChangeSet>), Refusal> {
     let note = note(new.note.as_deref())?;
-    let mut p = match new.kind.as_str() {
+    let (mut p, files) = match new.kind.as_str() {
         "module" => module(new, catalog, memory)?,
-        "param" => param(new, catalog)?,
+        "param" => param(new, catalog, running)?,
         _ => return Err((400, json!({ "error": "kind must be \"module\" or \"param\"" }))),
     };
     p["note"] = json!(note);
-    Ok(p)
+    let cs = if let (Some(base), Some((name, f))) = (running, files) {
+        let mut cs = base.clone();
+        cs.modules.insert(name, f);
+        cs.validate()
+            .map_err(|errs| refuse("the change set would not be stored", &errs))?;
+        p["base"] = json!(base.id().to_string());
+        p["snapshot"] = json!(cs.id().to_string());
+        p["diff"] = render::diff(&store::diff(base, &cs));
+        Some(cs)
+    } else {
+        p["base"] = Json::Null;
+        p["snapshot"] = Json::Null;
+        p["diff"] = Json::Null;
+        None
+    };
+    Ok((p, cs))
 }
 
 fn only(new: &New, allowed: &[&str]) -> Result<(), Refusal> {
@@ -93,7 +120,7 @@ fn only(new: &New, allowed: &[&str]) -> Result<(), Refusal> {
     }
 }
 
-fn module(new: &New, catalog: &Catalog, memory: usize) -> Result<Json, Refusal> {
+fn module(new: &New, catalog: &Catalog, memory: usize) -> Result<(Json, Files), Refusal> {
     only(new, &["manifest", "source"])?;
     let (Some(text), Some(source)) = (&new.manifest, &new.source) else {
         return Err((
@@ -139,17 +166,22 @@ fn module(new: &New, catalog: &Catalog, memory: usize) -> Result<Json, Refusal> 
         return Err(refuse("names signals the box does not have", &unknown));
     }
     let q = m.q.unwrap_or(crate::Window::new(0, 0));
-    Ok(json!({
+    let files = ModuleFiles {
+        manifest: text.clone(),
+        source: source.clone(),
+    };
+    let j = json!({
         "kind": "module",
         "name": m.name,
         "replaces": catalog.module(&m.name).is_some(),
         "touches_outputs": !m.drives.is_empty() || q.len > 0,
         "manifest": render::manifest(&m),
         "source": source,
-    }))
+    });
+    Ok((j, Some((m.name, files))))
 }
 
-fn param(new: &New, catalog: &Catalog) -> Result<Json, Refusal> {
+fn param(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(Json, Files), Refusal> {
     only(new, &["module", "param", "value"])?;
     let (Some(module), Some(name), Some(given)) = (&new.module, &new.param, &new.value) else {
         return Err((
@@ -178,7 +210,21 @@ fn param(new: &New, catalog: &Catalog) -> Result<Json, Refusal> {
     if !p.admits(to) {
         return Err(refuse("value outside the param's range", &[]));
     }
-    Ok(json!({
+    let name = &catalog.modules[at].name;
+    // The module's files with the one value changed. The manifest is
+    // re-rendered, so comments and spacing in it are normalized.
+    let files = running.and_then(|r| r.modules.get(name)).and_then(|f| {
+        let mut m = Manifest::parse(&f.manifest).ok()?;
+        m.params.iter_mut().find(|q| q.name == p.name)?.value = to;
+        Some((
+            name.clone(),
+            ModuleFiles {
+                manifest: m.render(),
+                source: f.source.clone(),
+            },
+        ))
+    });
+    let j = json!({
         "kind": "param",
         "module": catalog.modules[at].name,
         "param": p.name,
@@ -188,5 +234,6 @@ fn param(new: &New, catalog: &Catalog) -> Result<Json, Refusal> {
         "min": render::value(p.range.map(|r| r.0)),
         "max": render::value(p.range.map(|r| r.1)),
         "touches_outputs": !m.drives.is_empty() || m.q.is_some_and(|w| w.len > 0),
-    }))
+    });
+    Ok((j, files))
 }
