@@ -11,6 +11,7 @@ use crate::box_view::BoxView;
 use crate::canvas::{Interaction, View};
 use crate::example;
 use crate::look;
+use crate::review_view::ReviewView;
 use crate::st_view::{StView, brand};
 
 const STORAGE_KEY: &str = "helmsman-canvas/project";
@@ -50,6 +51,8 @@ pub struct App {
     pub st: Option<StView>,
     /// The box's, likewise.
     pub boxv: Option<BoxView>,
+    /// The proposal review screen, built the first time it is opened.
+    pub review: Option<ReviewView>,
     /// The floor screen, likewise.
     pub andon: Option<AndonView>,
 }
@@ -72,6 +75,8 @@ pub enum Mode {
     Lab,
     /// A module's ST as a live, read-only diagram.
     Live,
+    /// The box's proposals: diffs, sim replay, approve with a PIN.
+    Review,
     /// The floor screen: the box's andon tiles, full screen (`?andon`).
     Andon,
 }
@@ -134,6 +139,7 @@ impl App {
             source: Source::Demo,
             st: None,
             boxv: None,
+            review: None,
             andon: None,
         }
     }
@@ -1041,7 +1047,7 @@ impl App {
             self.andon.get_or_insert_with(AndonView::new).show(ui);
             return;
         }
-        if self.mode == Mode::Live {
+        if matches!(self.mode, Mode::Live | Mode::Review) {
             self.show_live(ui);
             return;
         }
@@ -1087,12 +1093,20 @@ impl App {
                     ),
                 ] {
                     if ui
-                        .selectable_label(self.source == s, label)
+                        .selectable_label(self.mode == Mode::Live && self.source == s, label)
                         .on_hover_text(tip)
                         .clicked()
                     {
                         self.source = s;
+                        self.mode = Mode::Live;
                     }
+                }
+                if ui
+                    .selectable_label(self.mode == Mode::Review, "Proposals")
+                    .on_hover_text("the agent's drafts on this box: review, replay, approve")
+                    .clicked()
+                {
+                    self.mode = Mode::Review;
                 }
                 ui.separator();
                 ui.label(
@@ -1101,8 +1115,14 @@ impl App {
                 );
             });
         });
-        if self.mode != Mode::Live {
-            return;
+        match self.mode {
+            // The floor screen is drawn by `show` before it gets here.
+            Mode::Lab | Mode::Andon => return,
+            Mode::Review => {
+                self.review.get_or_insert_with(ReviewView::new).show(ui);
+                return;
+            }
+            Mode::Live => {}
         }
         match self.source {
             Source::Demo => self.st.get_or_insert_with(StView::demo).show(ui),

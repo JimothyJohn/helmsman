@@ -12,6 +12,8 @@
 //! - [`live::annotate`]: one traced scan on the diagram (values on wires,
 //!   gates open or closed).
 //! - [`explain()`]: "on because …" for any variable, as data.
+//! - [`diff`]: what a proposal changes, line by line in the source and
+//!   block by block in the diagram, for the review screen.
 //!
 //! ```
 //! use std::time::Duration;
@@ -40,6 +42,7 @@
     clippy::single_match_else
 )]
 
+pub mod diff;
 pub mod explain;
 pub mod layout;
 pub mod live;

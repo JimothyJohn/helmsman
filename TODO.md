@@ -351,6 +351,16 @@
   difficulty: low
   id: dev-bundles-switch
 
+- [ ] **Canvas approvals: how does the browser get the API token?** The review screen (feat/proposal-ui) needs the box's bearer token to replay and apply, on top of the role PIN. The token lives in `api-token` in the box's state directory and is printed once to the journal. Built: the operator pastes it once per page load into a masked field; it is held in the page's memory only (never localStorage, never egui's persisted state), dropped on "Forget", a reload, or a 401, and sent only in the `Authorization` header. Trade-off: 64 hex digits is awkward on a tablet, and anyone who can read the journal or state dir can hand it out; but nothing new is stored in the browser and no API change was needed. The better long-term shape is a login exchange: `POST /api/session` with role + PIN returns a short-lived, role-scoped session token (memory only), so operators never see the box token; that is an API change under the same lockout, and overlaps `local-accounts`. Reversible: the token only enters through `Review::set_token` in crates/helmsman-canvas/src/review.rs.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: how an operator authenticates the canvas to the box before approving
+  options: paste the box token once per page load, memory only (recommended for now, built) | PIN login exchange for a short-lived session token (API change) | the box injects the token into the page it serves on loopback only
+  est: 1d
+  difficulty: med
+  id: canvas-token
+
 - [ ] **Floor screen layout: a startup file, or part of the snapshot?** The andon view (feat/andon-screen) reads its layout from `--screen FILE` at startup, like the sinks file: tile titles, which signal each tile shows, and the state code → colour/message table. It is not in the snapshot store, so changing a message is a file edit plus a restart, outside the approval path and the history. What the tiles *are* (the `screen` outputs and their safe states) is in the I/O map, which is snapshotted and output-affecting, so nothing that drives a tile bypasses approval; only the words and colours do. Putting the layout in a change set means a store schema bump (a `screen` blob beside `io-map` and `calendar`), a tier for it (I'd say `param`: it moves no output), and a live reload in the canvas. I kept it a startup file (reversible: the API already serves it by content).
   asked: 2026-10-30
   by: claude-agent
@@ -714,10 +724,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: built on feat/approval-policy: helmsman-plc `policy` (classify from the diff, policy file with a floor in code, PBKDF2 PINs + lockout) and `api/approve.rs` (replay evidence bound to content hashes; apply/rollback = check, scan-thread reconfigure, commit); docs/ARCHITECTURE.md "Approval policy"
   id: approval-policy
 
-- [ ] **Proposal review UI** — in the canvas: ST diff, diagram diff (ghost blocks), sim replay chart, manifest changes (new outputs/signals highlighted), approve with PIN.
+- [x] **Proposal review UI** — in the canvas: ST diff, diagram diff (ghost blocks), sim replay chart, manifest changes (new outputs/signals highlighted), approve with PIN.
   est: 4d
   difficulty: med
   depends: st-graph-view, approval-policy, sim-replay
+  notes: built on feat/proposal-ui: "Proposals" in the canvas top bar (review.rs decides, review_view.rs draws, web::Http fetches); helmsman_diagram::diff (line diff, block diff with ghosts); the replay JSON now carries each signal's step track; the API token is typed once per page load (canvas-token asks)
   id: proposal-ui
 
 - [ ] **M1 demo run** — the sentence at the top of this section, on the bench, recorded. scripts/m1-demo.sh brings the box up from a clean deploy.
