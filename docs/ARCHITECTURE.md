@@ -33,7 +33,7 @@ roadmap card, by id). Crates still carry the `tcpethernet-*` names until
  │  │  ── interpreter + checker: tcpethernet-iec (built) ──────────────────────│  │
  │  └───────┬───────────────────────────────┬──────────────────────────┬───────┘  │
  │          │ process image (built)         │ signals by name          │ trace    │
- │          ▼                               ▼ (planned: io-runtime)    ▼ (plan-   │
+ │          ▼                               ▼ (built)                  ▼ (plan-   │
  │  ┌─ CIP adapter ───────────┐   ┌─ I/O map + drivers: tcpethernet-io ─┐  ned)   │
  │  │ tcpethernet-adapter     │   │ IoMap · Driver · modbus-tcp (built) │         │
  │  │ assembly 150 in, 100 out│   │ WASM drivers (planned: wasm-driver) │         │
@@ -67,7 +67,7 @@ Three directions of traffic, three different rules:
 | `tcpethernet-cli` | `tcpethernet discover / get / io`: the originator from a shell. | built |
 | `tcpethernet-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `tcpethernet-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
-| `tcpethernet-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, a device simulator, the conformance harness. | built (no scan integration yet) |
+| `tcpethernet-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
 | `tcpethernet-graph` | Node-graph model and scan simulator behind the canvas; the model `st-graph-view` will lower ST into. | built (lab tool) |
 | `tcpethernet-canvas` | egui canvas, native and wasm. Today an editor over `tcpethernet-graph`; per `canvas-edit-scope` it becomes the read-only ST view. | built (lab tool) |
 
@@ -150,10 +150,34 @@ scan; the scheduler bounds how often.
   only pretends to write fails. `cargo run -p tcpethernet-io --example
   conformance -- --sim`.
 
-Not yet wired: nothing in the scan reads the map. `io-runtime` adds a poll
-task per device filling input signals, modules reading and writing signals by
-name, outputs written on change, and a declared safe state when a device
-drops.
+- **`local`**: the box's own channels (`do:N`, `di:N`) behind the same
+  contract; in memory until `gpio-outputs` adds the Pi backend.
+- **`text`**: the map as a file, one `device` / `in` / `out` line each, with
+  optional `safe=` values for outputs.
+
+## Signals in the scan (`io-runtime`, built)
+
+`tcpethernet-plc --io-map FILE` loads the map; a module names signals by
+declaring them as its PROGRAM's `VAR_INPUT`s and `VAR_OUTPUT`s (matched by
+name, case-insensitively, as ST is). That interface is also what a module
+manifest can be derived from.
+
+- **`SignalTable`** (`signals.rs`) holds each input's last good read and each
+  output's *command*. Outputs start at their safe value.
+- **Binding** happens when the runtime is built: an unknown name, a
+  `VAR_OUTPUT` on an input signal, a type the port can't carry (integers
+  cross as `i64`, so `ULINT`/`LWORD` outputs are refused), and two modules
+  driving one signal are all refused before the adapter starts.
+- **Links** (`link.rs`), one thread per device plus `box`: each cycle writes
+  the commands that changed since the device last took them, then reads
+  every input. Any error marks the link down: its inputs go missing, and it
+  forgets what the device holds, so every output is written again on
+  reconnect.
+- **A module never computes on missing data.** If any signal it reads has no
+  value (device down, or a value that doesn't fit the port), it is held: not
+  scanned, `%Q` window zeroed, output signals sent to their safe values. It
+  runs again once every input is back. An output value its signal can't
+  carry (a non-finite `REAL`) faults the module (`OutputRange`).
 
 ## Trust boundaries
 
@@ -162,7 +186,7 @@ drops.
 | module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | built |
 | module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault) | built |
 | module ↔ network | nothing | ST has no network primitives; sinks (webhook, OPC UA) are core-owned | built by construction; sinks planned |
-| module ↔ devices | signal values by name | the I/O map: only bound signals, one writer per point, writable points only | map built; scan side `io-runtime` |
+| module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one module per output signal), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | the box build exposes read services only (no Write Tag, no `Set_Attribute`) | planned (`logix-tag-read`); **today the `tcpethernet` library and CLI can send any service and drive Class 1 outputs** |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
