@@ -27,7 +27,7 @@ roadmap card, by id). Crates still carry the `tcpethernet-*` names until
  │  └────────────────────────┘           └──┬────────────┬───────────────┬─────┘  │   LAN (planned:
  │                                 policy + │ PIN        │ read-only     │        │   canvas-web)
  │                                          ▼            ▼               ▼        │
- │  ┌─ runtime: tcpethernet-plc (built: one program; multi-module in progress) ┐  │
+ │  ┌─ runtime: tcpethernet-plc (built: N modules, one scheduler thread) ──────┐  │
  │  │  module A (ST, 10 ms)   module B (ST, 100 ms)   module C (ST, 1 s)       │  │
  │  │     own %I/%Q/%M window, own scan rate, faults stop only itself          │  │
  │  │  ── interpreter + checker: tcpethernet-iec (built) ──────────────────────│  │
@@ -66,7 +66,7 @@ Three directions of traffic, three different rules:
 | `tcpethernet-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O. | built |
 | `tcpethernet-cli` | `tcpethernet discover / get / io`: the originator from a shell. | built |
 | `tcpethernet-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
-| `tcpethernet-plc` | The runtime binary: program(s) behind the adapter, scan loop, fault handling. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built (one program); `multi-module` in progress |
+| `tcpethernet-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `tcpethernet-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, a device simulator, the conformance harness. | built (no scan integration yet) |
 | `tcpethernet-graph` | Node-graph model and scan simulator behind the canvas; the model `st-graph-view` will lower ST into. | built (lab tool) |
 | `tcpethernet-canvas` | egui canvas, native and wasm. Today an editor over `tcpethernet-graph`; per `canvas-edit-scope` it becomes the read-only ST view. | built (lab tool) |
@@ -77,22 +77,28 @@ box API, so it can run on the box or the relay), the WASM host (`wasm-tier`).
 
 ## One scan, as built
 
-`tcpethernet-plc` today runs one program on a fixed period (`--scan-ms`,
-default 10):
+With a single program (the default deploy) each scan, every `--scan-ms`
+(default 10):
 
 1. copy adapter assembly 150 (32 B, written by the scanner) into `%I`;
-2. `Program::scan` runs the program once, under an instruction budget
+2. the runtime runs the program once (`Program::scan_at`), under an instruction budget
    (`DEFAULT_BUDGET`, 1 000 000; an endless loop is a `Watchdog` fault, not a
    hang);
 3. copy `%Q` into assembly 100 (32 B, read by the scanner);
-4. sleep to the next period; an overrun starts the next period from now
-   rather than bursting.
+4. sleep to the next deadline; a late scan skips the periods it missed
+   (counted as overruns) rather than bursting.
 
-A fault (division by zero, index out of range, watchdog) zeroes assembly 100
-and stops the program; the adapter stays on the network so the PLC can still
-be found and diagnosed.
+A fault (division by zero, index out of range, watchdog) zeroes that
+module's outputs and stops it; the adapter stays on the network so the PLC
+can still be found and diagnosed, even once every module has stopped.
 
 ## Many modules in one runtime (`multi-module`)
+
+Built in `tcpethernet-plc` (`runtime.rs`; contract in `tests/runtime.rs`).
+On the command line a module is `--module PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]`;
+a bare program argument is a module with every default (whole image), so
+existing deploys run unchanged. The `module-format` manifest replaces the
+flag syntax later.
 
 A module is one compiled ST `PROGRAM` plus a schedule and three windows:
 
@@ -153,7 +159,7 @@ drops.
 
 | boundary | what crosses | enforced by | status |
 | --- | --- | --- | --- |
-| module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | `multi-module` |
+| module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | built |
 | module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault) | built |
 | module ↔ network | nothing | ST has no network primitives; sinks (webhook, OPC UA) are core-owned | built by construction; sinks planned |
 | module ↔ devices | signal values by name | the I/O map: only bound signals, one writer per point, writable points only | map built; scan side `io-runtime` |
