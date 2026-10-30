@@ -1163,7 +1163,7 @@ fn an_unreachable_relay_is_offline_and_chat_reads_param_edits_by_rule() {
     assert_eq!(last(&evs, "fallback")["kind"], "not_a_command");
     assert_eq!(last(&evs, "done")["stop"], "offline");
     assert_eq!(last(&evs, "done")["proposals"], json!([]));
-    assert!(b.proposals().is_empty());
+    assert_eq!(b.proposals(), Vec::<Json>::new());
 
     // A param change: one param proposal through the API, nothing applied.
     let evs = b.say("set conveyor speed to 2.5", None);
