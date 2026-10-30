@@ -363,6 +363,8 @@ pub enum StKind {
 pub struct Checked {
     pub pous: Vec<PouCode>,
     pub aggs: Vec<AggInfo>,
+    /// Enumerations by id (what [`Type::Enum`] indexes).
+    pub enums: Vec<EnumInfo>,
     pub program: usize,
     /// Initial contents of the whole slot array.
     pub mem_init: Vec<Value>,
@@ -2514,6 +2516,7 @@ pub fn check(
         Some(program) if ck.diags.is_empty() => Ok(Checked {
             pous: ck.pous,
             aggs: ck.aggs,
+            enums: ck.enums,
             program,
             mem_init,
         }),
