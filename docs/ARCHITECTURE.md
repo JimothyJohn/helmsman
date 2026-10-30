@@ -32,8 +32,8 @@ roadmap card, by id).
  │  │  ── interpreter + checker: helmsman-iec (built) ─────────────────────────│  │
  │  └───────┬───────────────────────────────┬──────────────────────────┬───────┘  │
  │          │ process image (built)         │ signals by name          │ trace    │
- │          ▼                               ▼ (built)                  ▼ (plan-   │
- │  ┌─ CIP adapter ───────────┐   ┌─ I/O map + drivers: helmsman-io ────┐  ned)   │
+ │          ▼                               ▼ (built)                  ▼ (built)  │
+ │  ┌─ CIP adapter ───────────┐   ┌─ I/O map + drivers: helmsman-io ────┐         │
  │  │ helmsman-adapter        │   │ IoMap · Driver · modbus-tcp (built) │         │
  │  │ assembly 150 in, 100 out│   │ WASM drivers (planned: wasm-driver) │         │
  │  └───────▲─────────────────┘   └───────┬──────────────┬──────────────┘         │
@@ -214,6 +214,28 @@ param    beacon  bool true
   sequences or bidi overrides in a log or a review). Files over 1 MiB are
   refused.
 
+## The trace tap (`trace-tap`, built)
+
+What the live canvas draws: one scan of one module, as it ran.
+
+- **`helmsman_iec::trace`**. `Program::scan_traced` runs a scan and returns
+  a `Trace`: per statement (a `StmtId`, with POU, line, column, shape and
+  parent arm in the shared `TraceMap`) how many times it started; for each
+  IF/CASE the arm taken (last) and per-arm counts; for each loop its
+  passes; the fault and the innermost statement running when it struck;
+  every scalar of the program at the end of the scan, FB internals
+  included (`s.hold.ET`), plus the module image. Statements of FB and
+  function bodies count over every instance and call; each instance's state
+  is in the values.
+- **Cost.** A plain `scan_at` pays one predictable branch per statement
+  (about 2% on `examples/trace_bench.rs`); a traced scan about 1% more.
+- **`helmsman_plc::TraceTap`** (`Runtime::tap(name)`): sampling on demand.
+  A viewer calls `request()`, that module's next scan is traced, the
+  `Sample { scan, fault, trace }` lands in a one-slot mailbox that `take()`
+  empties. The scheduler thread never waits on it (one atomic load per
+  untraced scan; a `try_lock` to post). A UI at 30 Hz traces at most 30
+  scans a second however fast the module runs. The tap survives a swap.
+
 ## Shift calendar (`shift-calendar`, built)
 
 `helmsman-plc --calendar FILE` loads shifts, breaks and planned downtime
@@ -268,8 +290,8 @@ prompt. The agent never touches the Rust core.
 - `module-format` → `signal-model` → `box-api`: the manifest (signals read,
   outputs driven, schedule, params) is what the scheduler, the I/O map and
   the policy check; the box API serves it.
-- `trace-tap` → `st-graph-view` → `canvas-web`: per-scan values from the
-  interpreter, rendered on the ST diagram, served by the box.
+- `st-graph-view` → `canvas-web`: the trace tap's samples (built, below)
+  rendered on the ST diagram, served by the box.
 - `snapshots`: each applied change set (modules, params, bindings) is an
   immutable, content-addressed record in SQLite; rollback is one call.
 - `sim-replay`: a RAM ring buffer of signal values that a proposed module is

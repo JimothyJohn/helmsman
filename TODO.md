@@ -474,7 +474,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format
   id: snapshots
 
-- [ ] **Runtime trace tap** — the interpreter exposes per-scan variable values and which statements/branches executed, sampled at UI rates, without slowing the scan.
+- [x] **Runtime trace tap** — the interpreter exposes per-scan variable values and which statements/branches executed, sampled at UI rates, without slowing the scan.
   result: the data the live canvas draws
   est: 3d
   difficulty: high

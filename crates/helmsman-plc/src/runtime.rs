@@ -26,6 +26,7 @@ use std::time::Duration;
 use helmsman_iec::{Fault, FaultKind, Image, PortDir, Program};
 
 use crate::signals::{BindError, PortBinding, SignalTable, bind, from_st, to_st};
+use crate::tap::{Sample, TraceTap};
 
 /// Longest scan period a module may ask for.
 pub const MAX_PERIOD: Duration = Duration::from_secs(24 * 60 * 60);
@@ -172,6 +173,7 @@ struct Slot {
     status: Status,
     next: Duration,
     stats: Stats,
+    tap: TraceTap,
 }
 
 /// The modules and the box's images they share.
@@ -290,6 +292,7 @@ impl Runtime {
                 status: Status::Running,
                 next: Duration::ZERO,
                 stats: Stats::default(),
+                tap: TraceTap::default(),
             })
             .collect();
         Ok(Self {
@@ -329,11 +332,21 @@ impl Runtime {
                     *b = inputs.get(w.start + k).copied().unwrap_or(0);
                 }
                 s.stats.scans = s.stats.scans.saturating_add(1);
-                let result = s
-                    .module
-                    .program
-                    .scan_at(&mut s.image, now)
-                    .and_then(|()| outputs(s));
+                let result = if s.tap.claim() {
+                    let (r, trace) = s.module.program.scan_traced(&mut s.image, now);
+                    let result = r.and_then(|()| outputs(s));
+                    s.tap.post(Sample {
+                        scan: s.stats.scans,
+                        fault: result.as_ref().err().copied(),
+                        trace,
+                    });
+                    result
+                } else {
+                    s.module
+                        .program
+                        .scan_at(&mut s.image, now)
+                        .and_then(|()| outputs(s))
+                };
                 match result {
                     Ok(commands) => {
                         q.copy_from_slice(&s.image.q);
@@ -406,6 +419,14 @@ impl Runtime {
     #[must_use]
     pub fn program(&self, name: &str) -> Option<&Program> {
         self.slot(name).map(|s| &s.module.program)
+    }
+
+    /// The module's trace tap: [`TraceTap::request`] traces its next scan.
+    /// Clone it to another thread before moving the runtime to its own.
+    /// A swap keeps the tap.
+    #[must_use]
+    pub fn tap(&self, name: &str) -> Option<TraceTap> {
+        self.slot(name).map(|s| s.tap.clone())
     }
 
     /// Module names, in scan order.
