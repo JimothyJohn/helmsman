@@ -33,8 +33,9 @@ pub struct Words {
     pub times: HashSet<String>,
     /// Variables that come from the field: signals and located inputs.
     pub field: HashSet<String>,
-    /// How long a variable has been seen at its current value, at least,
-    /// in ms (from the scans the viewer received; absent when unknown).
+    /// How long every scan the viewer received has shown a variable at
+    /// its current value, in ms (absent when unknown). Sampled: a change
+    /// between two samples is not seen, and the text says "seen".
     pub steady_ms: HashMap<String, u64>,
 }
 
@@ -400,7 +401,11 @@ impl Phraser<'_> {
                 let mut s = Say::default();
                 self.is(&mut s, &b.path, b.value);
                 if let Some(ms) = self.w.steady_ms.get(&b.path) {
-                    let _ = write!(s.text, " and has been for at least {}", since(*ms));
+                    let _ = write!(
+                        s.text,
+                        " (unchanged in the scans seen over the last {})",
+                        since(*ms)
+                    );
                 }
                 if self.w.field.contains(&b.path) {
                     s.push(": it comes from the field");

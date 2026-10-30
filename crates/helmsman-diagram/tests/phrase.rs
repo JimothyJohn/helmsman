@@ -67,7 +67,7 @@ Motor is ON because line 6 set it: `MOTOR := RUNNING`.
   Line 6 stops setting it if jam turns ON.
   Running is ON because line 4 set it: `RUNNING := (START OR RUNNING) AND NOT STOP`.
     It reads start (ON), running (its own value from before) and stop (OFF).
-    Start is ON and has been for at least 12 s: it comes from the field.
+    Start is ON (unchanged in the scans seen over the last 12 s): it comes from the field.
     Stop is OFF: it comes from the field.
   Jam is OFF: it comes from the field.
 "

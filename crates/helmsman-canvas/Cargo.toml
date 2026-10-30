@@ -20,18 +20,26 @@ serde_json = "1.0"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
 # fetch (Request, Response) and EventSource (Event, EventTarget,
-# MessageEvent) for the box API; Location for `?demo`.
+# MessageEvent) for the box API; Location for `?demo`. Headers,
+# RequestInit, ReadableStream(DefaultReader) and TextDecoder(Options):
+# POST /api/explain with the token in a header, read as it streams.
 web-sys = { version = "0.3", features = [
     "console",
     "Document",
     "Event",
     "EventSource",
     "EventTarget",
+    "Headers",
     "HtmlCanvasElement",
     "Location",
     "MessageEvent",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
     "Request",
+    "RequestInit",
     "Response",
+    "TextDecodeOptions",
+    "TextDecoder",
     "Window",
 ] }
 

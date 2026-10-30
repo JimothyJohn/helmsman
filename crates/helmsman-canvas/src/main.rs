@@ -25,6 +25,7 @@ mod box_tests;
 mod box_view;
 mod canvas;
 mod example;
+mod explain;
 mod look;
 mod remote;
 mod st_view;

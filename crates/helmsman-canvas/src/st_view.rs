@@ -17,9 +17,14 @@ use eframe::egui::{
     epaint::CubicBezierShape,
 };
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
-use helmsman_diagram::{Diagram, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, explain};
+use helmsman_diagram::phrase::{Phrased, paths};
+use helmsman_diagram::{
+    Diagram, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, Words, annotate, explain, phrase,
+};
 use helmsman_iec::{ImageSizes, Value, compile};
 use helmsman_plc::{Module as Slot, Runtime, Sample, Status, TraceTap, Window};
+
+use crate::explain::{Ask, Phase, Steady};
 
 /// Brand colours (docs/brand/index.html).
 pub mod brand {
@@ -177,6 +182,45 @@ pub struct Viewer {
     pub pick: Option<Pick>,
     /// The variable "on because" is shown for (program path).
     pub because: Option<String>,
+    /// What the templates know beside the trace: the module's kinds, and
+    /// the signal model's units when a box gave them.
+    pub words: Words,
+    /// How long each explained variable has shown its value.
+    pub steady: Steady,
+    /// The source lines the explanation is about (drawn highlighted).
+    pub highlight: Vec<u32>,
+}
+
+/// The smallest thing a finger can hit, in points.
+pub const TAP: f32 = 44.0;
+
+/// What the explain panel offers beside the box's own explanation.
+pub struct AskUi<'a> {
+    /// Why "Ask why" cannot be used now; `None`: it can.
+    pub blocked: Option<&'a str>,
+    /// The ask in flight or answered.
+    pub ask: Option<&'a Ask>,
+    /// The API token, to type in (box only; memory only).
+    pub token: Option<&'a mut String>,
+}
+
+impl AskUi<'_> {
+    /// For the in-page demo: no box, no agent.
+    #[must_use]
+    pub const fn demo() -> Self {
+        Self {
+            blocked: Some("The demo runs in this page: asking the agent needs a box with a relay."),
+            ask: None,
+            token: None,
+        }
+    }
+}
+
+/// What the operator asked for in the panel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Action {
+    /// "Ask why" for this program path.
+    AskWhy(String),
 }
 
 impl Viewer {
@@ -222,7 +266,39 @@ impl Viewer {
             cams,
             pick: None,
             because: None,
+            words: Words::default(),
+            steady: Steady::default(),
+            highlight: Vec::new(),
         }
+        .with_words()
+    }
+
+    fn with_words(mut self) -> Self {
+        self.words = Words::of(&self.module);
+        self
+    }
+
+    /// The box's own explanation of the variable "on because" is shown
+    /// for, from `scan` (at `now_ms` on the module's clock): the facts, as
+    /// sentences. Notes the values it saw, for "unchanged over the last".
+    pub fn explanation(&mut self, scan: Option<&dyn Scan>, now_ms: Option<u64>) -> Option<Phrased> {
+        let path = self.because.clone()?;
+        let b = explain(&self.module, scan?, &path, 4);
+        if let Some(now) = now_ms {
+            let s = scan?;
+            for p in paths(&b) {
+                self.steady.observe(&p, s.get(&p), now);
+            }
+        }
+        let mut w = self.words.clone();
+        for p in paths(&b) {
+            if let Some(ms) = self.steady.ms(&p) {
+                w.steady_ms.insert(p, ms);
+            }
+        }
+        let said = phrase(&b, &w);
+        self.highlight = said.lines();
+        Some(said)
     }
 
     /// Whether there is anything to draw.
@@ -318,18 +394,72 @@ impl Viewer {
             let text = RichText::new(format!("{} {path} = {}", if on { "●" } else { "○" }, show(value)))
                 .monospace()
                 .color(if on { YELLOW } else { WHITE });
-            if ui
-                .selectable_label(self.because.as_deref() == Some(path.as_str()), text)
-                .clicked()
-            {
+            let row = egui::Button::selectable(self.because.as_deref() == Some(path.as_str()), text)
+                .min_size(Vec2::new(ui.available_width(), TAP));
+            if ui.add(row).clicked() {
                 self.because = Some(path);
             }
         }
     }
 
-    /// The selection and "on because" panel.
-    pub fn right(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
+    /// The explain panel: why the chosen variable is in its state (the
+    /// box's own words, instantly), "Ask why" for the agent's, the facts
+    /// for an engineer, and the selection's source line.
+    pub fn right(
+        &mut self,
+        ui: &mut egui::Ui,
+        scan: Option<&dyn Scan>,
+        now_ms: Option<u64>,
+        ask: AskUi<'_>,
+    ) -> Option<Action> {
+        let said = self.explanation(scan, now_ms);
+        let mut action = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.label(RichText::new("Why").strong().size(16.0));
+            match (&self.because, &said) {
+                (Some(_), Some(said)) => {
+                    for s in &said.sentences {
+                        ui.horizontal_wrapped(|ui| {
+                            #[allow(clippy::cast_precision_loss)]
+                            ui.add_space(12.0 * s.depth as f32);
+                            let color = if s.depth == 0 {
+                                WHITE
+                            } else {
+                                STEEL.gamma_multiply(1.4)
+                            };
+                            ui.label(RichText::new(&s.text).color(color));
+                        });
+                    }
+                    for l in said.lines() {
+                        ui.label(RichText::new(self.source_line(l)).monospace().color(YELLOW));
+                    }
+                }
+                (Some(_), None) => {
+                    ui.label(RichText::new("Waiting for a traced scan…").color(STEEL));
+                }
+                (None, _) => {
+                    ui.label(
+                        RichText::new("Tap an output or a block to see why it is in its state.").color(STEEL),
+                    );
+                }
+            }
+            if let Some(path) = self.because.clone() {
+                ui.add_space(6.0);
+                if let Some(a) = action_ui(ui, &path, ask) {
+                    action = Some(a);
+                }
+            }
+            if let (Some(path), Some(s)) = (&self.because, scan) {
+                egui::CollapsingHeader::new(RichText::new("Facts").strong())
+                    .id_salt("facts")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        for line in explain(&self.module, s, path, 4).outline() {
+                            ui.label(RichText::new(line).monospace().size(11.5));
+                        }
+                    });
+            }
+            ui.separator();
             ui.label(RichText::new("Selection").strong());
             match self.picked() {
                 Some((line, text)) => {
@@ -349,29 +479,32 @@ impl Viewer {
                                 );
                             }
                         }
-                        let path = match &node.kind {
-                            NodeKind::Write { path } | NodeKind::Read { path } => Some(path.clone()),
-                            _ => None,
-                        };
-                        if let Some(p) = path
-                            && ui.button("Why is it in this state?").clicked()
-                        {
-                            self.because = Some(format!("{}{p}", self.scopes[self.scope].prefix));
-                        }
                     }
                 }
                 None => {
-                    ui.label(RichText::new("Click a block or region to see its source line.").color(STEEL));
-                }
-            }
-            ui.separator();
-            ui.label(RichText::new("On because").strong());
-            if let (Some(path), Some(s)) = (&self.because, scan) {
-                for line in explain(&self.module, s, path, 4).outline() {
-                    ui.label(RichText::new(line).monospace().size(11.5));
+                    ui.label(RichText::new("Tap a block or region to see its source line.").color(STEEL));
                 }
             }
         });
+        action
+    }
+
+    /// The variable a tap on node `n` asks about: a variable read or
+    /// written, or a function block's first output.
+    #[must_use]
+    pub fn tapped(&self, n: NodeId) -> Option<String> {
+        let prefix = &self.scopes[self.scope].prefix;
+        let node = self.diagram().nodes.get(n.0 as usize)?;
+        match &node.kind {
+            NodeKind::Write { path } | NodeKind::Read { path } if !path.starts_with('%') => {
+                Some(format!("{prefix}{path}"))
+            }
+            NodeKind::Fb { instance, .. } => {
+                let out = node.outs.iter().find(|o| !o.is_empty())?;
+                Some(format!("{prefix}{instance}.{out}"))
+            }
+            _ => None,
+        }
     }
 
     /// The diagram, panned, zoomed and clickable, with `scan` on it.
@@ -409,13 +542,28 @@ impl Viewer {
         {
             let (x, y) = cam.to_world(p);
             let d = self.diagram();
-            self.pick = d
-                .node_at(x, y)
+            // A finger is wider than a block at low zoom: the nearest
+            // block within half a tap target counts.
+            let slop = TAP / 2.0 / cam.zoom;
+            self.pick = node_near(d, x, y, slop)
                 .map(Pick::Node)
                 .or_else(|| d.region_at(x, y).map(Pick::Region));
+            if let Some(Pick::Node(n)) = self.pick
+                && let Some(path) = self.tapped(n)
+            {
+                self.because = Some(path);
+            }
         }
         let live = self.live(scan);
-        draw(&painter, area, cam, self.diagram(), live.as_ref(), self.pick);
+        draw(
+            &painter,
+            area,
+            cam,
+            self.diagram(),
+            live.as_ref(),
+            self.pick,
+            &self.highlight,
+        );
     }
 }
 
@@ -555,7 +703,9 @@ impl StView {
         egui::Panel::right("st-right")
             .resizable(true)
             .default_size(340.0)
-            .show(ui, |ui| self.view.right(ui, scan));
+            .show(ui, |ui| {
+                let _ = self.view.right(ui, scan, Some(self.now_ms), AskUi::demo());
+            });
         egui::CentralPanel::no_frame().show(ui, |ui| self.view.canvas(ui, scan));
         if self.running {
             ui.ctx().request_repaint();
@@ -635,7 +785,88 @@ fn bezier(painter: &egui::Painter, a: Pos2, b: Pos2, z: f32, color: Color32, wid
     ));
 }
 
-fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option<&Live>, pick: Option<Pick>) {
+/// The node at `(x, y)`, or the nearest one within `slop` of it.
+#[must_use]
+pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
+    d.node_at(x, y).or_else(|| {
+        d.nodes
+            .iter()
+            .map(|n| {
+                let r = &n.rect;
+                let dx = (r.x - x).max(x - r.right()).max(0.0);
+                let dy = (r.y - y).max(y - r.bottom()).max(0.0);
+                (n.id, dx.hypot(dy))
+            })
+            .filter(|(_, dist)| *dist <= slop)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id)
+    })
+}
+
+/// "Ask why" and its answer, under the box's own explanation.
+fn action_ui(ui: &mut egui::Ui, path: &str, ask: AskUi<'_>) -> Option<Action> {
+    let mut action = None;
+    let answered = ask.ask.filter(|a| a.path.eq_ignore_ascii_case(path));
+    let running = answered.is_some_and(Ask::running);
+    let enabled = ask.blocked.is_none() && !running;
+    let button = egui::Button::new(RichText::new("Ask why").strong().color(BLACK))
+        .fill(if enabled { YELLOW } else { GRAPHITE })
+        .min_size(Vec2::new(TAP * 3.0, TAP));
+    let r = ui.add_enabled(enabled, button);
+    if r.clicked() {
+        action = Some(Action::AskWhy(path.to_string()));
+    }
+    if let Some(why) = ask.blocked {
+        ui.label(RichText::new(why).color(STEEL));
+    }
+    if let Some(token) = ask.token {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("API token").color(STEEL));
+            ui.add(
+                egui::TextEdit::singleline(token)
+                    .password(true)
+                    .desired_width(160.0)
+                    .min_size(Vec2::new(0.0, TAP * 0.75)),
+            );
+        });
+    }
+    if let Some(a) = answered {
+        ui.add_space(4.0);
+        if let Some(scan) = a.scan {
+            ui.label(RichText::new(format!("The agent's answer (scan {scan}):")).color(STEEL));
+        }
+        if !a.text.is_empty() {
+            ui.label(RichText::new(&a.text).color(WHITE));
+        }
+        for n in &a.notes {
+            ui.label(RichText::new(n).small().color(STEEL));
+        }
+        match &a.phase {
+            Phase::Waiting | Phase::Streaming => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new("asking…").color(STEEL));
+                });
+            }
+            Phase::Done => {}
+            Phase::Failed(why) => {
+                ui.colored_label(Color32::from_rgb(255, 110, 100), why);
+            }
+        }
+    }
+    action
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw(
+    painter: &egui::Painter,
+    area: Rect,
+    cam: Cam,
+    d: &Diagram,
+    live: Option<&Live>,
+    pick: Option<Pick>,
+    lines: &[u32],
+) {
     let z = cam.zoom;
     painter.rect_filled(area, CornerRadius::ZERO, BLACK);
     let text = z > 0.35;
@@ -740,6 +971,15 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
             },
             head.gamma_multiply(fade),
         );
+        if lines.contains(&n.pos.line) {
+            // The source line the explanation is about.
+            painter.rect_stroke(
+                r.expand(4.0 * z),
+                CornerRadius::same(6),
+                Stroke::new(2.0 * z, YELLOW.gamma_multiply(0.6)),
+                StrokeKind::Outside,
+            );
+        }
         let outline = if pick == Some(Pick::Node(n.id)) {
             Stroke::new(2.5 * z, YELLOW)
         } else {
