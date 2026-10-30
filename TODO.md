@@ -156,6 +156,16 @@
   id: relay-hosting
   answer: Lambda + DynamoDB (recommended)
 
+- [ ] **Does the EtherNet/IP library keep the `tcpethernet` name?** You picked Helmsman Factory Automation on 2026-10-29 and asked for the crates and project to be renamed, but the roadmap's naming card said "tcpethernet stays the protocol layer". My pick: keep `tcpethernet` (and the adapter) as the protocol library, since it's an accurate, searchable name and a protocol library shouldn't carry a product brand; everything product-shaped becomes helmsman-*. The fresh agent on helmsman-rename needs this before it starts.
+  asked: 2026-10-29
+  by: claude-session
+  needs: your call
+  result: the name map helmsman-rename applies
+  options: keep tcpethernet for the protocol crates (recommended) | rename everything to helmsman-*
+  est: 5m
+  difficulty: low
+  id: protocol-crate-name
+
 ## Tasks
 
 - [ ] **Bench sweep against the CompactLogix and FP0H** — `cargo run --example discover <subnet broadcast>`; fill the rows in `docs/INTEROP.md`, keep the first capture.
@@ -313,6 +323,15 @@
   difficulty: low
   depends: plcopen-xml
   id: plcopen-editor-check
+
+- [ ] **Rename the project to Helmsman Factory Automation** — move crates, binaries, repo, docs and UI off the tcpethernet name. Suggested map (final shape per protocol-crate-name): tcpethernet-plc → helmsman-plc, tcpethernet-iec → helmsman-iec, tcpethernet-cli → helmsman-cli (bin `tcpethernet` → `helmsman`), tcpethernet-canvas/-graph → helmsman-canvas/-graph, tcpethernet-adapter follows the protocol crate. Touches: root Cargo.toml members and the `repository` URL, package names and every `use` path, deploy/tcpethernet-plc.service and scripts/pi-deploy-plc.sh (the new deploy must stop and remove the old unit on the pick PC), the other scripts/ and Makefile targets, CI job names, README and docs, web page titles, env vars TCPETHERNET_OPENER_ADDR / _OPENER_IO / _RUSTY / _RUSTY_CASES / _RUSTY_SEED. The GitHub repo rename is a hand-off: write scripts/repo-rename.sh and a card for Nick.
+  needs: protocol-crate-name answered; PR #19 (feat/canvas, adds tcpethernet-canvas and tcpethernet-graph) merged or closed, and no crate edits in flight in sibling worktrees (feat/io-model); this is a mass edit that conflicts with everything open
+  result: one PR into dev, `./scripts/lint.sh` and `cargo test --workspace --locked` green under the new names, interop job green, scripts/repo-rename.sh + its card
+  est: 1d
+  difficulty: med
+  depends: protocol-crate-name, naming
+  id: helmsman-rename
+  notes: brand canvas (private) https://claude.ai/artifact/WB1uKtP1NRHHfGoWw95tBt: wordmark Saira Stencil One, descriptor Barlow Condensed 700; palette yellow #FFC20E, black #141414, graphite #3A3A3A, steel #8C8C8C (rules only), white; never yellow on white; mark is the stencil encoder gear. crates.io `helmsman` is taken by an unrelated crate: run `cargo search <name>` on each new name before publishing. Restarting or removing the service on the pick PC asks Nick each time.
 
 
 ## Product vision (interview 2026-10-29)
@@ -603,7 +622,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: relay-v0
   id: open-core-split
 
-- [ ] **Product name** — the app gets its own name; tcpethernet stays the protocol layer.
+- [x] **Product name** — the app gets its own name; tcpethernet stays the protocol layer.
   est: 1h
   difficulty: low
   id: naming
+  notes: decided 2026-10-29: Helmsman Factory Automation. Rename work is helmsman-rename; whether the protocol crate keeps tcpethernet is protocol-crate-name.
