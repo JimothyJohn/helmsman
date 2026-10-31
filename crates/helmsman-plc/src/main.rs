@@ -920,7 +920,9 @@ fn start_api(
 }
 
 /// The OPC UA server on `bind`, if any, and the scan side of its feed.
-fn start_opcua(bind: Option<SocketAddr>) -> Result<(Option<opcua::Server>, Option<opcua::FeedPublisher>), String> {
+fn start_opcua(
+    bind: Option<SocketAddr>,
+) -> Result<(Option<opcua::Server>, Option<opcua::FeedPublisher>), String> {
     let Some(bind) = bind else {
         return Ok((None, None));
     };

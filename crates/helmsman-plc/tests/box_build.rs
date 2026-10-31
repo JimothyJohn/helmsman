@@ -39,3 +39,40 @@ fn box_build_cannot_send_arbitrary_services() {
         "the box build enables helmsman-proto/unrestricted:\n{tree}"
     );
 }
+
+/// The OPC UA tests drive the server with `async-opcua`'s client, a
+/// dev-dependency only. It must never reach the box: it pulls tokio and
+/// some 150 crates, and its crypto (`rsa`) carries RUSTSEC-2023-0071, an
+/// unpatched timing side channel (docs/ARCHITECTURE.md "OPC UA server").
+#[test]
+fn box_build_carries_no_opcua_crate_or_rsa() {
+    let out = Command::new(env!("CARGO"))
+        .args([
+            "tree",
+            "--locked",
+            "--offline",
+            "-p",
+            "helmsman-plc",
+            "-e",
+            "normal",
+            "--prefix",
+            "none",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run cargo tree");
+    assert!(
+        out.status.success(),
+        "cargo tree failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let tree = String::from_utf8_lossy(&out.stdout);
+    assert!(tree.contains("helmsman-plc"), "{tree}");
+    for line in tree.lines() {
+        let name = line.split_whitespace().next().unwrap_or("");
+        assert!(
+            !(name.starts_with("async-opcua") || name == "rsa" || name == "tokio"),
+            "the box build depends on {name}:\n{tree}"
+        );
+    }
+}

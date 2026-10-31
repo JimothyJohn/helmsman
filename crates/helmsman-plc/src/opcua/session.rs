@@ -862,7 +862,10 @@ impl Session {
         out: &mut Vec<Reply>,
     ) -> Result<(), u32> {
         let acks = decode(r.vec(|r| Ok((r.u32()?, r.u32()?))))?;
-        check_ops(ctx, acks.len())?;
+        // A first publish acknowledges nothing: only too many is refused.
+        if acks.len() > ctx.limits.operations {
+            return Err(sc::BAD_TOO_MANY_OPERATIONS);
+        }
         if self.subs.is_empty() {
             return Err(sc::BAD_NO_SUBSCRIPTION);
         }
