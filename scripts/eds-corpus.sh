@@ -8,7 +8,7 @@
 #     file at the repo root, where Nick keeps it untracked). Its terms don't
 #     say it may be redistributed (TODO.md `e1213-eds-license`), so it is
 #     never committed. Without it, the E1213 half of the test is skipped.
-# Provenance in docs/SOURCES.md ("EDS files"). Data only: nothing in them
+# Provenance in docs/SOURCES.md ("Device sources"). Data only: nothing in them
 # is executed.
 #
 # Needs: curl, shasum (or sha256sum), cargo, network on the first run.

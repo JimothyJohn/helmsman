@@ -1,9 +1,9 @@
 //! Electronic Data Sheets: the text file a vendor ships with an
 //! EtherNet/IP device to say what it is and how to connect to it.
 //!
-//! The ODVA specification of the format (Vol. 1, ch. 7) is not in this
+//! The ODVA specification of the format is not in this
 //! repo. What this module relies on, and where it comes from
-//! (`docs/SOURCES.md`, "EDS files"):
+//! (`docs/SOURCES.md`, "Device sources"):
 //!
 //! - **The lexical form** is read off two real files: `OpENer`'s
 //!   `data/opener_sample_app.eds` (commit `0e1ab7e`) and Moxa's ioLogik
