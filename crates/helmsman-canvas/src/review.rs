@@ -14,18 +14,23 @@
 //! - `POST /api/proposals/{id}/replay`, `POST /api/snapshots/{id}/replay`:
 //!   the sim replay, charted.
 //! - `POST /api/proposals/{id}/apply`, `POST /api/snapshots/{id}/rollback`:
-//!   approve and undo: with a login session and `{replay}` on a box with
-//!   accounts, else with the API token and `{role, pin, replay}`.
-//! - `POST /api/login`, `POST /api/logout`: a person's session (boxes
-//!   with accounts; `GET /api/policy` says `credentials: accounts`).
+//!   approve and undo, `{replay}` only: the session's role approves.
+//! - `POST /api/login`, `POST /api/logout`, `GET /api/session`: signing
+//!   in, with a user and password on a box with accounts (`GET
+//!   /api/policy` says `credentials: accounts`), else with a role and its
+//!   PIN; signing out; and, after a reload, who the page is signed in as.
 //!
-//! **Secrets.** The API token, or the session a login returns, is held
-//! here, in memory only (never browser storage, never egui's persisted
-//! state); "Forget", "Sign out", a reload or a 401 drops it. A PIN or
-//! password is held only while it is typed: [`Review::approve`] and
-//! [`Review::login`] move it into the request body and leave the field
-//! empty, whatever the answer. None of them is ever in a `Debug` output
-//! ([`Request`]'s redacts bearer and body) or a log line.
+//! **Secrets.** The page never holds a credential. The box answers a
+//! login with an `HttpOnly` session cookie the browser keeps and sends
+//! (no script can read it), and every call this screen makes is
+//! same-origin with the `X-Helmsman-Request: 1` header the box wants
+//! beside the cookie. The API token is for machines; nothing here takes
+//! it. A PIN or password is held only while it is typed:
+//! [`Review::login`] and [`Review::login_pin`] move it into the request
+//! body and leave the field empty, whatever the answer; it is never in a
+//! `Debug` output ([`Request`]'s redacts the body) or a log line. A 401
+//! means the session ended (signed out elsewhere, expired, the box
+//! restarted): the screen forgets who was signed in and asks again.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -105,34 +110,46 @@ pub enum Call {
     Apply(Target),
     Login,
     Logout,
+    /// `GET /api/session`: who the page's cookie is.
+    Session,
 }
 
-/// A person logged in for this page load. `Debug` never shows the token.
-#[derive(Clone, PartialEq, Eq)]
+/// Who this page is signed in as (the box holds the session; the page
+/// only knows its name).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
-    token: String,
-    pub user: String,
+    /// The person; `None` for a role-PIN session.
+    pub user: Option<String>,
     pub role: String,
 }
 
-impl fmt::Debug for Session {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Session")
-            .field("user", &self.user)
-            .field("role", &self.role)
-            .finish_non_exhaustive()
+impl Session {
+    fn parse(j: &Json) -> Option<Self> {
+        Some(Self {
+            user: j["user"].as_str().map(str::to_string),
+            role: j["role"].as_str()?.to_string(),
+        })
+    }
+
+    /// `alice (engineer)`, or `operator (PIN)`.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match &self.user {
+            Some(u) => format!("{u} ({})", self.role),
+            None => format!("{} (PIN)", self.role),
+        }
     }
 }
 
-/// One HTTP call for the transport. Its token and body never show in
-/// `Debug` (the body of an apply carries the PIN).
+/// One HTTP call for the transport: same-origin, with the browser's
+/// session cookie and, for anything but a `GET`, the `X-Helmsman-Request:
+/// 1` header. Its body never shows in `Debug` (a login's carries the PIN
+/// or password).
 #[derive(Clone, PartialEq, Eq)]
 pub struct Request {
     pub call: Call,
     pub method: Method,
     pub url: String,
-    /// `Authorization: Bearer` value.
-    pub bearer: Option<String>,
     /// A JSON body (`Content-Type: application/json`).
     pub body: Option<String>,
 }
@@ -143,7 +160,6 @@ impl fmt::Debug for Request {
             .field("call", &self.call)
             .field("method", &self.method)
             .field("url", &self.url)
-            .field("bearer", &self.bearer.as_ref().map(|_| "<redacted>"))
             .field("body", &self.body.as_ref().map(|_| "<redacted>"))
             .finish()
     }
@@ -155,8 +171,16 @@ impl Request {
             call,
             method: Method::Get,
             url,
-            bearer: None,
             body: None,
+        }
+    }
+
+    fn post(call: Call, url: String, body: Option<String>) -> Self {
+        Self {
+            call,
+            method: Method::Post,
+            url,
+            body,
         }
     }
 }
@@ -409,8 +433,8 @@ pub struct Refusal {
 /// The kinds of refusal the screen treats differently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Why {
-    /// No token, or the box refused it (401).
-    Token,
+    /// Not signed in, or the box no longer knows the session (401).
+    SignIn,
     /// The role is below what the tier needs (403).
     Role,
     /// Wrong PIN (403).
@@ -442,8 +466,8 @@ pub fn refusal(a: &Answer, now: f64) -> Refusal {
             "The box did not answer. Nothing was changed by this screen; check the connection and try again.".into(),
         ),
         401 => (
-            Why::Token,
-            "The box did not take the API token or the login session. Log in again (boxes with accounts), or enter the token again: it is in api-token in the box's state directory, and printed once in its journal.".into(),
+            Why::SignIn,
+            "The box no longer knows this page's session (signed out, expired after an hour or 15 minutes unused, or the box restarted). Sign in again (left panel); nothing was changed.".into(),
         ),
         403 if error == "wrong PIN" => (
             Why::Pin,
@@ -451,7 +475,7 @@ pub fn refusal(a: &Answer, now: f64) -> Refusal {
         ),
         403 => (
             Why::Role,
-            "This change needs a higher role than the one picked. Someone with that role approves it with their PIN.".into(),
+            "This change needs a higher role than the one signed in. Someone with that role signs in and approves it.".into(),
         ),
         428 => (
             Why::Replay,
@@ -529,25 +553,20 @@ pub enum Replay {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Step {
     pub target: Target,
-    pub role: String,
-    /// Typed, not yet sent. Emptied by [`Review::approve`].
-    pub pin: String,
     pub replay: Replay,
     pub phase: Phase,
 }
 
 impl Step {
-    fn new(target: Target, role: &str) -> Self {
+    const fn new(target: Target) -> Self {
         Self {
             target,
-            role: role.into(),
-            pin: String::new(),
             replay: Replay::None,
             phase: Phase::Idle,
         }
     }
 
-    /// Seconds until PIN entry opens again, while locked.
+    /// Seconds until the box takes an approval again, while locked.
     #[must_use]
     pub fn locked_for(&self, now: f64) -> Option<u64> {
         match &self.phase {
@@ -641,12 +660,9 @@ pub struct Review {
     pub outputs: Vec<String>,
     /// The history entry for what runs, after an apply.
     pub head: Option<Json>,
-    token: Option<String>,
-    /// Why the last token typed was not taken.
-    pub token_problem: Option<String>,
-    /// Who is logged in (boxes with accounts).
+    /// Who this page is signed in as.
     pub session: Option<Session>,
-    /// Why the last login did not work.
+    /// Why the last sign-in did not work, or why the session ended.
     pub login_problem: Option<String>,
     /// A login is on its way.
     pub logging_in: bool,
@@ -668,6 +684,8 @@ impl Review {
         self.queue
             .push(Request::get(Call::Signals, "/api/signals".into()));
         self.queue.push(Request::get(Call::Policy, "/api/policy".into()));
+        self.queue
+            .push(Request::get(Call::Session, "/api/session".into()));
     }
 
     /// What to send now.
@@ -675,93 +693,72 @@ impl Review {
         std::mem::take(&mut self.queue)
     }
 
-    #[must_use]
-    pub const fn has_token(&self) -> bool {
-        self.token.is_some()
-    }
-
-    /// Takes the API token for this page load (memory only). It must look
-    /// like the box's: 64 hex digits, blanks around it ignored.
-    pub fn set_token(&mut self, typed: &str) -> bool {
-        let t = typed.trim();
-        if t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit()) {
-            self.token = Some(t.to_string());
-            self.token_problem = None;
-            true
-        } else {
-            self.token_problem = Some(
-                "That is not an API token: it is 64 hex digits (0-9, a-f), from api-token in the box's state directory."
-                    .into(),
-            );
-            false
-        }
-    }
-
-    pub fn forget_token(&mut self) {
-        self.token = None;
-    }
-
-    /// Whether the box approves by login (it has accounts) rather than by
-    /// role PIN, as its policy says.
+    /// Whether the box signs people in by account (it has an accounts
+    /// file) rather than by role PIN, as its policy says.
     #[must_use]
     pub fn accounts(&self) -> bool {
-        self.policy
-            .as_ref()
-            .is_some_and(|p| p["credentials"] == "accounts")
+        self.credentials() == Some("accounts")
     }
 
-    /// `alice (engineer)`, while someone is logged in.
+    /// What the box's policy says it signs in with: `pins`, `accounts`, or
+    /// `unavailable`; `None` until the policy came.
+    #[must_use]
+    pub fn credentials(&self) -> Option<&str> {
+        self.policy.as_ref()?["credentials"].as_str()
+    }
+
+    /// `alice (engineer)` or `operator (PIN)`, while signed in.
     #[must_use]
     pub fn signed_in(&self) -> Option<String> {
-        self.session.as_ref().map(|s| format!("{} ({})", s.user, s.role))
+        self.session.as_ref().map(Session::label)
     }
 
-    /// Logs `user` in; the password goes into the request body and nowhere
-    /// else.
+    fn sign_in(&mut self, body: String) {
+        self.login_problem = None;
+        self.logging_in = true;
+        self.queue
+            .push(Request::post(Call::Login, "/api/login".into(), Some(body)));
+    }
+
+    /// Signs `user` in; the password goes into the request body and
+    /// nowhere else.
     pub fn login(&mut self, user: &str, password: String) {
         let user = user.trim();
         if user.is_empty() || password.is_empty() || self.logging_in {
             self.login_problem = Some("Type your user name and password.".into());
             return;
         }
-        self.login_problem = None;
-        self.logging_in = true;
         let body = json!({ "user": user, "password": password }).to_string();
         drop(password);
-        self.queue.push(Request {
-            call: Call::Login,
-            method: Method::Post,
-            url: "/api/login".into(),
-            bearer: None,
-            body: Some(body),
-        });
+        self.sign_in(body);
     }
 
-    /// Ends the session here at once, and on the box.
+    /// Signs in as `role` with its PIN (boxes without accounts); the PIN
+    /// goes into the request body and nowhere else.
+    pub fn login_pin(&mut self, role: &str, pin: String) {
+        if !ROLES.contains(&role) || pin.is_empty() || self.logging_in {
+            self.login_problem = Some("Pick a role and type its PIN.".into());
+            return;
+        }
+        let body = json!({ "role": role, "pin": pin }).to_string();
+        drop(pin);
+        self.sign_in(body);
+    }
+
+    /// Ends the session here at once, and on the box (which clears the
+    /// cookie).
     pub fn logout(&mut self) {
-        if let Some(s) = self.session.take() {
-            self.queue.push(Request {
-                call: Call::Logout,
-                method: Method::Post,
-                url: "/api/logout".into(),
-                bearer: Some(s.token),
-                body: None,
-            });
+        if self.session.take().is_some() {
+            self.queue
+                .push(Request::post(Call::Logout, "/api/logout".into(), None));
         }
     }
 
-    /// What goes in `Authorization: Bearer`: the session, else the token.
-    fn bearer(&self) -> Option<String> {
-        self.session
-            .as_ref()
-            .map(|s| s.token.clone())
-            .or_else(|| self.token.clone())
-    }
-
-    /// The box refused the credential (401): drop whichever was used.
-    fn credential_refused(&mut self) {
-        if self.session.take().is_none() {
-            self.token = None;
+    /// The box no longer knows the session (401): back to signing in.
+    fn session_ended(&mut self) {
+        if self.session.take().is_some() {
+            self.login_problem =
+                Some("The session ended (signed out, expired, or the box restarted). Sign in again.".into());
         }
     }
 
@@ -783,74 +780,44 @@ impl Review {
         o.undo.as_mut().filter(|u| u.target == *target)
     }
 
-    fn post(&self, call: Call, url: String, body: String) -> Request {
-        Request {
-            call,
-            method: Method::Post,
-            url,
-            bearer: self.bearer(),
-            body: Some(body),
-        }
-    }
-
     /// Asks the box to replay `target` (the open proposal, or its undo).
-    pub fn replay(&mut self, target: &Target, now: f64) {
-        let no_token = self.bearer().is_none();
+    pub fn replay(&mut self, target: &Target) {
+        let signed_in = self.session.is_some();
         let Some(step) = self.step_mut(target) else { return };
-        if no_token {
-            step.replay = Replay::Failed(no_token_refusal(now));
+        if !signed_in {
+            step.replay = Replay::Failed(not_signed_in());
             return;
         }
         step.replay = Replay::Running;
-        let req = self.post(Call::Replay(target.clone()), target.replay_url(), "{}".into());
-        self.queue.push(req);
+        self.queue.push(Request::post(
+            Call::Replay(target.clone()),
+            target.replay_url(),
+            Some("{}".into()),
+        ));
     }
 
-    /// Sends the approval of `target`: as the person logged in, or with
-    /// the role and PIN typed. The PIN leaves the form here, whatever
-    /// happens next.
+    /// Sends the approval of `target` as whoever is signed in: their role
+    /// is the session's, so only the replay it cites is sent.
     pub fn approve(&mut self, target: &Target, now: f64) {
-        let token = self.bearer();
-        let session = self.session.is_some();
-        let accounts = self.accounts();
+        let signed_in = self.session.is_some();
         let Some(step) = self.step_mut(target) else { return };
-        let pin = std::mem::take(&mut step.pin);
         if step.locked_for(now).is_some() || matches!(step.phase, Phase::Sending) {
             return;
         }
-        if session {
-            // The account's role is the session's; nothing else is sent.
-            let mut body = json!({});
-            if let Replay::Done(c) = &step.replay {
-                body["replay"] = json!(c.id);
-            }
-            step.phase = Phase::Sending;
-            let req = self.post(Call::Apply(target.clone()), target.apply_url(), body.to_string());
-            self.queue.push(req);
+        if !signed_in {
+            step.phase = Phase::Refused(not_signed_in());
             return;
         }
-        if token.is_none() || accounts {
-            step.phase = Phase::Refused(no_token_refusal(now));
-            return;
-        }
-        if pin.is_empty() {
-            step.phase = Phase::Refused(Refusal {
-                status: 0,
-                why: Why::Pin,
-                error: "no PIN entered".into(),
-                hint: "Type the PIN for the role picked.".into(),
-                retry_at: None,
-                tier: None,
-            });
-            return;
-        }
-        let mut body = json!({ "role": step.role, "pin": pin });
+        let mut body = json!({});
         if let Replay::Done(c) = &step.replay {
             body["replay"] = json!(c.id);
         }
         step.phase = Phase::Sending;
-        let req = self.post(Call::Apply(target.clone()), target.apply_url(), body.to_string());
-        self.queue.push(req);
+        self.queue.push(Request::post(
+            Call::Apply(target.clone()),
+            target.apply_url(),
+            Some(body.to_string()),
+        ));
     }
 
     /// Takes in an answer at page time `now` (seconds).
@@ -925,8 +892,8 @@ impl Review {
                     }),
                     _ => Replay::Failed(refusal(a, now)),
                 };
-                if matches!(&step.replay, Replay::Failed(r) if r.why == Why::Token) {
-                    self.credential_refused();
+                if matches!(&step.replay, Replay::Failed(r) if r.why == Why::SignIn) {
+                    self.session_ended();
                 }
             }
             Call::Apply(target) => {
@@ -936,7 +903,7 @@ impl Review {
                 let applied = j.as_ref().filter(|_| a.status == 200).and_then(Applied::parse);
                 if let Some(done) = applied {
                     let undo = matches!(target, Target::Proposal(_))
-                        .then(|| Step::new(Target::Snapshot(done.previous.clone()), &step.role));
+                        .then(|| Step::new(Target::Snapshot(done.previous.clone())));
                     step.phase = Phase::Applied(done);
                     if let Some(o) = self.open.as_mut()
                         && undo.is_some()
@@ -949,22 +916,20 @@ impl Review {
                     self.queue.push(Request::get(Call::List, "/api/proposals".into()));
                 } else {
                     let r = refusal(a, now);
-                    let forget = r.why == Why::Token;
+                    let ended = r.why == Why::SignIn;
                     step.phase = Phase::Refused(r);
-                    if forget {
-                        self.credential_refused();
+                    if ended {
+                        self.session_ended();
                     }
                 }
             }
+            Call::Session => {
+                // A reload while signed in: the browser still has the cookie.
+                self.session = j.as_ref().filter(|_| a.status == 200).and_then(Session::parse);
+            }
             Call::Login => {
                 self.logging_in = false;
-                let session = j.as_ref().filter(|_| a.status == 200).and_then(|j| {
-                    Some(Session {
-                        token: j["token"].as_str()?.to_string(),
-                        user: j["user"].as_str()?.to_string(),
-                        role: j["role"].as_str()?.to_string(),
-                    })
-                });
+                let session = j.as_ref().filter(|_| a.status == 200).and_then(Session::parse);
                 if let Some(s) = session {
                     self.session = Some(s);
                     self.login_problem = None;
@@ -988,10 +953,6 @@ impl Review {
     }
 
     fn opened(&mut self, id: u64, j: Json) {
-        let role = j["approval"]["needs"]["role"]
-            .as_str()
-            .unwrap_or("engineer")
-            .to_string();
         let param = (j["kind"] == "param").then(|| ParamChange {
             module: j["module"].as_str().unwrap_or("?").into(),
             name: j["param"].as_str().unwrap_or("?").into(),
@@ -1009,7 +970,7 @@ impl Review {
             problem: None,
             manifest: Vec::new(),
             param,
-            step: Step::new(Target::Proposal(id), &role),
+            step: Step::new(Target::Proposal(id)),
             undo: None,
             json: j,
         };
@@ -1027,12 +988,12 @@ impl Review {
     }
 }
 
-fn no_token_refusal(_now: f64) -> Refusal {
+fn not_signed_in() -> Refusal {
     Refusal {
         status: 0,
-        why: Why::Token,
-        error: "not logged in, and no API token entered".into(),
-        hint: "Log in first (left panel) if this box has accounts; otherwise enter its API token. Either is kept in this page only, until it is closed or reloaded.".into(),
+        why: Why::SignIn,
+        error: "not signed in".into(),
+        hint: "Sign in first (left panel): with your user name and password on a box with accounts, else with your role's PIN. Nothing was sent.".into(),
         retry_at: None,
         tier: None,
     }
@@ -1229,7 +1190,21 @@ mod tests {
         }
     }
 
-    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    /// Signed in as `role` by PIN, as the box answers a browser login.
+    fn sign_in(r: &mut Review, role: &str) {
+        r.login_pin(role, "123456".into());
+        let sent = r.poll();
+        assert_eq!(sent.len(), 1);
+        r.answer(
+            Call::Login,
+            &ans(
+                200,
+                &json!({ "user": null, "role": role, "credential": "pin", "expires_in_s": 3600, "idle_s": 900, "cookie": true }),
+            ),
+            0.0,
+        );
+        assert_eq!(r.signed_in(), Some(format!("{role} (PIN)")));
+    }
 
     fn opened() -> Review {
         let mut r = Review::new();
@@ -1250,7 +1225,11 @@ mod tests {
     #[test]
     fn every_api_status_has_its_own_screen_state_with_the_box_words_verbatim() {
         let cases = [
-            (401, json!({ "error": "wrong token" }), Why::Token),
+            (
+                401,
+                json!({ "error": "not logged in, or the session ended; log in again" }),
+                Why::SignIn,
+            ),
             (403, json!({ "error": "wrong PIN", "tier": "logic" }), Why::Pin),
             (
                 403,
@@ -1314,19 +1293,15 @@ mod tests {
     #[test]
     fn a_lockout_counts_down_from_retry_after_and_blocks_sending() {
         let mut r = opened();
-        assert!(r.set_token(TOKEN));
+        sign_in(&mut r, "operator");
         let t = Target::Proposal(7);
-        r.open.as_mut().unwrap().step.pin = "123456".into();
         r.approve(&t, 10.0);
         let sent = r.poll();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].url, "/api/proposals/7/apply");
-        assert_eq!(sent[0].bearer.as_deref(), Some(TOKEN));
+        assert_eq!(sent[0].method, Method::Post);
         let body: Json = serde_json::from_str(sent[0].body.as_deref().unwrap()).unwrap();
-        assert_eq!(body, json!({ "role": "operator", "pin": "123456" }));
-        assert_eq!(r.open.as_ref().unwrap().step.pin, "", "the PIN left the form");
-        assert!(!format!("{sent:?}").contains("123456"), "never in Debug");
-        assert!(!format!("{sent:?}").contains(TOKEN), "never in Debug");
+        assert_eq!(body, json!({}), "the session's role: no role, no PIN");
         r.answer(
             Call::Apply(t.clone()),
             &Answer {
@@ -1341,54 +1316,129 @@ mod tests {
         assert_eq!(step.locked_for(10.0), Some(30));
         assert_eq!(step.locked_for(39.2), Some(1));
         assert_eq!(step.locked_for(40.0), None);
-        r.open.as_mut().unwrap().step.pin = "654321".into();
         r.approve(&t, 20.0);
         assert!(r.poll().is_empty(), "nothing is sent while locked");
-        assert_eq!(
-            r.open.as_ref().unwrap().step.pin,
-            "",
-            "and the PIN is still cleared"
-        );
-        r.open.as_mut().unwrap().step.pin = "654321".into();
         r.approve(&t, 41.0);
         assert_eq!(r.poll().len(), 1, "after the countdown it goes");
     }
 
     #[test]
-    fn no_token_no_request_and_a_refused_token_is_forgotten() {
+    fn not_signed_in_nothing_is_sent_and_a_401_signs_the_page_out() {
         let mut r = opened();
         let t = Target::Proposal(7);
-        r.open.as_mut().unwrap().step.pin = "123456".into();
         r.approve(&t, 0.0);
+        r.replay(&t);
         assert_eq!(r.poll(), Vec::<Request>::new());
-        assert!(matches!(&r.open.as_ref().unwrap().step.phase, Phase::Refused(x) if x.why == Why::Token));
-        assert_eq!(r.open.as_ref().unwrap().step.pin, "");
-        assert!(!r.set_token("hunter2"));
-        assert!(r.token_problem.is_some());
-        assert!(!r.set_token(&"g".repeat(64)));
-        assert!(r.set_token(&format!("  {TOKEN}\n")));
-        r.replay(&t, 0.0);
+        let step = &r.open.as_ref().unwrap().step;
+        assert!(matches!(&step.phase, Phase::Refused(x) if x.why == Why::SignIn));
+        assert!(matches!(&step.replay, Replay::Failed(x) if x.why == Why::SignIn));
+
+        // Signing in with a PIN: role and PIN in the body, redacted in Debug.
+        r.login_pin("engineer", "eng-135797".into());
+        let sent = r.poll();
+        assert_eq!((sent.len(), sent[0].url.as_str()), (1, "/api/login"));
+        let body: Json = serde_json::from_str(sent[0].body.as_deref().unwrap()).unwrap();
+        assert_eq!(body, json!({ "role": "engineer", "pin": "eng-135797" }));
+        assert!(!format!("{sent:?}").contains("eng-135797"), "never in Debug");
+        assert!(r.logging_in);
+        r.login_pin("engineer", "again".into());
+        assert_eq!(r.poll(), Vec::<Request>::new(), "one sign-in at a time");
+        // A wrong PIN: the box's words; locked: when to try again.
+        r.answer(Call::Login, &ans(403, &json!({ "error": "wrong PIN" })), 0.0);
+        assert_eq!(
+            (r.login_problem.as_deref(), r.session.as_ref()),
+            (Some("wrong PIN"), None)
+        );
+        r.login_pin("engineer", "x".into());
+        r.poll();
+        r.answer(
+            Call::Login,
+            &Answer {
+                status: 429,
+                retry_after: Some(30),
+                body: json!({ "error": "too many wrong PINs; PIN entry is locked" }).to_string(),
+            },
+            0.0,
+        );
+        assert_eq!(
+            r.login_problem.as_deref(),
+            Some("too many wrong PINs; PIN entry is locked. Try again in 30 s.")
+        );
+        // Nothing to send without a role or a PIN.
+        for (role, pin) in [("root", "123456"), ("engineer", ""), ("", "123456")] {
+            r.login_pin(role, pin.into());
+            assert_eq!(r.poll(), Vec::<Request>::new(), "{role:?} {pin:?}");
+            assert!(r.login_problem.is_some());
+        }
+
+        sign_in(&mut r, "engineer");
+        assert_eq!(r.login_problem, None);
+        r.replay(&t);
         let sent = r.poll();
         assert_eq!(sent[0].url, "/api/proposals/7/replay");
         r.answer(
             Call::Replay(t.clone()),
-            &ans(401, &json!({ "error": "wrong token" })),
+            &ans(401, &json!({ "error": "session expired; log in again" })),
             0.0,
         );
-        assert!(!r.has_token(), "a token the box refused is dropped");
-        // An empty PIN is not sent.
-        assert!(r.set_token(TOKEN));
+        assert_eq!(r.session, None, "a session the box ended is forgotten");
+        assert!(r.login_problem.as_deref().unwrap().contains("Sign in again"));
         r.approve(&t, 0.0);
-        assert_eq!(r.poll(), Vec::<Request>::new());
-        assert!(matches!(&r.open.as_ref().unwrap().step.phase, Phase::Refused(x) if x.why == Why::Pin));
+        assert_eq!(r.poll(), Vec::<Request>::new(), "signed out: nothing sent");
+    }
+
+    #[test]
+    fn a_reload_finds_the_cookie_session_and_sign_out_ends_it_on_the_box() {
+        let mut r = Review::new();
+        let calls: Vec<Call> = r.poll().into_iter().map(|q| q.call).collect();
+        assert_eq!(calls, [Call::List, Call::Signals, Call::Policy, Call::Session]);
+        r.answer(
+            Call::Session,
+            &ans(401, &json!({ "error": "not logged in" })),
+            0.0,
+        );
+        assert_eq!(r.signed_in(), None);
+        r.answer(
+            Call::Session,
+            &ans(
+                200,
+                &json!({ "user": "alice", "role": "engineer", "credential": "account", "via": "cookie" }),
+            ),
+            0.0,
+        );
+        assert_eq!(r.signed_in().as_deref(), Some("alice (engineer)"));
+        r.logout();
+        assert_eq!(r.signed_in(), None, "gone here at once");
+        let sent = r.poll();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            (
+                &sent[0].call,
+                sent[0].method,
+                sent[0].url.as_str(),
+                sent[0].body.as_deref()
+            ),
+            (&Call::Logout, Method::Post, "/api/logout", None)
+        );
+        r.logout();
+        assert_eq!(r.poll(), Vec::<Request>::new(), "nothing to end twice");
+        // The policy says which sign-in the panel offers.
+        r.answer(
+            Call::Policy,
+            &ans(200, &json!({ "credentials": "accounts" })),
+            0.0,
+        );
+        assert!(r.accounts());
+        r.answer(Call::Policy, &ans(200, &json!({ "credentials": "pins" })), 0.0);
+        assert_eq!((r.accounts(), r.credentials()), (false, Some("pins")));
     }
 
     #[test]
     fn an_apply_offers_the_undo_through_the_same_flow_and_cites_the_replay() {
         let mut r = opened();
-        assert!(r.set_token(TOKEN));
+        sign_in(&mut r, "engineer");
         let t = Target::Proposal(7);
-        r.replay(&t, 0.0);
+        r.replay(&t);
         r.poll();
         r.answer(
             Call::Replay(t.clone()),
@@ -1398,15 +1448,10 @@ mod tests {
             ),
             0.0,
         );
-        r.open.as_mut().unwrap().step.role = "engineer".into();
-        r.open.as_mut().unwrap().step.pin = "eng-1234".into();
         r.approve(&t, 0.0);
         let sent = r.poll();
         let body: Json = serde_json::from_str(sent[0].body.as_deref().unwrap()).unwrap();
-        assert_eq!(
-            body,
-            json!({ "role": "engineer", "pin": "eng-1234", "replay": 3 })
-        );
+        assert_eq!(body, json!({ "replay": 3 }));
         let prev = "ab".repeat(32);
         r.answer(
             Call::Apply(t),
@@ -1427,7 +1472,6 @@ mod tests {
         assert_eq!(calls, [Call::Snapshots, Call::List]);
         // A 409 for the undo lands on the undo, not the apply.
         let ut = Target::Snapshot(prev);
-        r.open.as_mut().unwrap().undo.as_mut().unwrap().pin = "eng-1234".into();
         r.approve(&ut, 2.0);
         r.poll();
         r.answer(Call::Apply(ut), &ans(409, &json!({ "error": "stale: x" })), 2.0);
