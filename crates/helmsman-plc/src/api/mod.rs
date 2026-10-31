@@ -44,6 +44,8 @@
 //! GET  /api/dropins/{id}?chunk=K          one chunk of a drop-in's text
 //! GET  /api/dropins/{id}/plc?view=V...    a PLC drop-in's inventory (overview, tags, routine, names)
 //! POST /api/devices/{name}/browse         token: an observed controller's tag list, read-only
+//! GET  /api/projects ...                  the editor's projects; PUT, DELETE, deploy and uploads need an engineer session (see [`projects`])
+//! GET  /api/running                       the project deployed last, and whether it is what runs
 //! POST /mcp                               token: MCP Streamable HTTP, the agent's tools for an engineer's own client (see [`mcp`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
@@ -52,7 +54,9 @@
 //! output, a param or a module, with or without the token. Proposals are
 //! stored drafts; the only way one runs is `apply` (and the only way back
 //! is `rollback`), both through [`approve`]: tier, policy, role, PIN and
-//! sim evidence, checked by the host ([`crate::policy`]). The token alone
+//! sim evidence, checked by the host ([`crate::policy`]). A project
+//! deploy ([`projects`]) is an apply of the project's build, through the
+//! same path. The token alone
 //! (what the agent holds) can draft and replay, never apply. Limits are
 //! enforced here, by the host, never by whatever is calling.
 //!
@@ -96,6 +100,7 @@ pub mod login;
 pub mod mcp;
 pub mod pdf;
 pub mod photo;
+pub mod projects;
 pub mod proposal;
 pub mod render;
 pub mod sim;
@@ -200,6 +205,15 @@ pub struct Extras {
     pub trust: Option<TrustStore>,
 }
 
+/// What a box running the editor serves besides [`Extras`] (a struct of
+/// its own so that adding to it breaks no caller of [`Api::start_with`]).
+#[derive(Debug, Default)]
+pub struct More {
+    /// The projects folder ([`crate::project`], `--projects`): the
+    /// project routes ([`projects`]).
+    pub projects: Option<crate::project::Projects>,
+}
+
 /// A floor screen layout as loaded: the file, byte for byte, and what it
 /// parsed to (already checked against the I/O map).
 #[derive(Debug, Clone)]
@@ -271,6 +285,9 @@ struct Ctx {
     site: Option<crate::site::Handle>,
     /// The MCP route's drafts (see [`mcp`]).
     mcp: Mutex<mcp::Workspace>,
+    /// The editor's projects (see [`projects`]); `None`: those routes
+    /// answer 404.
+    projects: Option<crate::project::Projects>,
 }
 
 impl Ctx {
@@ -468,11 +485,27 @@ impl Api {
     /// The bind fails.
     pub fn start_in_site(
         cfg: Config,
-        mut shared: Shared,
+        shared: Shared,
         extras: Extras,
         site: Option<crate::site::Handle>,
     ) -> io::Result<Self> {
+        Self::start_box(cfg, shared, extras, site, More::default())
+    }
+
+    /// [`Api::start_in_site`], with what a box running the editor serves
+    /// besides ([`More`]).
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_box(
+        cfg: Config,
+        mut shared: Shared,
+        extras: Extras,
+        site: Option<crate::site::Handle>,
+        more: More,
+    ) -> io::Result<Self> {
         let Extras { ui, screen, trust } = extras;
+        let More { projects } = more;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -506,6 +539,7 @@ impl Api {
             browsing: Mutex::new(()),
             site,
             mcp: Mutex::new(mcp::Workspace::default()),
+            projects,
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
@@ -990,6 +1024,7 @@ fn audit_full() -> Response {
 fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
+        (_, ["api", "projects", ..]) => return projects::mutate(req, ctx, &segs[1..]),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
@@ -1028,6 +1063,9 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
 
 /// The methods a known path takes.
 fn allowed(path: &[&str]) -> Option<&'static str> {
+    if let Some(allow) = projects::allowed(path) {
+        return Some(allow);
+    }
     match path {
         ["api", "proposals" | "dropins"] => Some("GET, POST"),
         ["api", "proposals", _, "apply" | "replay"]
@@ -1383,6 +1421,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             (Err(r), _) | (_, Err(r)) => r,
         },
         ["api", "events"] => return Reply::Values,
+        ["api", "projects", ..] | ["api", "running"] => projects::get(ctx, &segs[1..]),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "screen"] => match &ctx.screen {
@@ -1499,7 +1538,22 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
             e("GET", "/api/screen", false, "the floor screen's layout: tiles, state codes, colours (with --screen)"),
             e("GET", "/api/site", false, "this box's status and the boxes it heard on the LAN (with --site); readable from other origins"),
-            e("POST", "/mcp", true, "MCP (Streamable HTTP, 2026-07-28 or 2025-11-25): the agent's read, draft, check, simulate and propose tools for an engineer's own client; no apply"),
+            e("GET", "/api/projects", false, "the editor's projects (with --projects) and which one runs"),
+            e("POST", "/api/projects", true, "engineer session: {name} a new empty project, or {name, from} a copy"),
+            e("GET", "/api/projects/{p}", false, "a project's files: name, bytes, version (SHA-256)"),
+            e("DELETE", "/api/projects/{p}", true, "engineer session: delete a project (never the running one)"),
+            e("POST", "/api/projects/{p}/rename", true, "engineer session: {to}"),
+            e("GET", "/api/projects/{p}/files/{f}", false, "one file: {name, text, version}"),
+            e("PUT", "/api/projects/{p}/files/{f}", true, "engineer session: save {text, version?} (a draft; version: what was read, null: a new file)"),
+            e("DELETE", "/api/projects/{p}/files/{f}", true, "engineer session: delete a file"),
+            e("POST", "/api/projects/{p}/check", true, "build the project as a deploy would: its modules and tier, or every problem with file and line; nothing changes"),
+            e("POST", "/api/projects/{p}/replay", true, "engineer session: sim replay of deploying the project (evidence for deploy)"),
+            e("POST", "/api/projects/{p}/deploy", true, "engineer session: {replay?}: build, apply through the approval policy, commit a snapshot, hot-swap between scans"),
+            e("GET", "/api/projects/{p}/zip", false, "the project as a .zip (its .st files, io.map, project.settings)"),
+            e("POST", "/api/projects/{p}/zip?replace=true", true, "engineer session: a .zip (application/zip) as project p, new or (replace=true) in its place"),
+            e("POST", "/api/projects/{p}/import?file=F&replace=true", true, "engineer session: one file into the project: F.st as it is, F.xml (PLCopen TC6) lowered to F.st"),
+            e("GET", "/api/running", false, "the project deployed last, its snapshot, and whether it is what runs"),
+            e("POST", "/mcp", true,"MCP (Streamable HTTP, 2026-07-28 or 2025-11-25): the agent's read, draft, check, simulate and propose tools for an engineer's own client; no apply"),
         ],
         "agent": agent,
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",

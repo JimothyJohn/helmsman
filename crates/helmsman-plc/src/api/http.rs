@@ -336,7 +336,9 @@ pub fn parse_head(head: &[u8], limits: &Limits) -> Result<(Request, usize), Read
     if length > body_cap(&req, limits) {
         return Err(ReadError::Status(
             413,
-            if is_upload(&req) {
+            if req.segments.get(1).is_some_and(|s| s == "projects") {
+                "an upload is at most 2 MiB"
+            } else if is_upload(&req) {
                 "a drop-in is at most 2 MiB (a PDF; text 1 MiB, a photo 512 KiB)"
             } else {
                 "body too large"
@@ -346,12 +348,16 @@ pub fn parse_head(head: &[u8], limits: &Limits) -> Result<(Request, usize), Read
     Ok((req, length))
 }
 
-/// `POST /api/dropins`: the one route whose body may be [`Limits::upload`].
+/// `POST /api/dropins`, and a project's `.zip` or one imported file
+/// (`POST /api/projects/{p}/zip`, `.../import`): the routes whose body
+/// may be [`Limits::upload`].
 fn is_upload(req: &Request) -> bool {
+    let s: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     req.method == "POST"
-        && req.segments.len() == 2
-        && req.segments[0] == "api"
-        && req.segments[1] == "dropins"
+        && matches!(
+            s.as_slice(),
+            ["api", "dropins"] | ["api", "projects", _, "zip" | "import"]
+        )
 }
 
 /// The largest body `req` may carry.
