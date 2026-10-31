@@ -17,7 +17,7 @@ use eframe::wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::explain::{Reply, Side, SideCmd};
-use crate::remote::{Cmd, Msg, Stream};
+use crate::remote::{Cmd, Fetch, Msg, Stream};
 use crate::review::{Answer, Call, Request as ReviewRequest};
 
 type Inbox = Rc<RefCell<Vec<Msg>>>;
@@ -88,7 +88,10 @@ impl Driver {
             Cmd::Get(what, url) => {
                 let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
                 wasm_bindgen_futures::spawn_local(async move {
-                    let r = get(&url).await;
+                    let r = match what {
+                        Fetch::Peer { .. } => get_peer(&url).await,
+                        _ => get(&url).await,
+                    };
                     inbox.borrow_mut().push(Msg::Got(what, r));
                     ctx.request_repaint();
                 });
@@ -172,6 +175,45 @@ async fn get(url: &str) -> Result<String, String> {
         .await
         .map_err(|e| text(&e))?;
     body.as_string().ok_or_else(|| "not text".into())
+}
+
+/// `GET url` on another box (the site view's peers): cross-origin, no
+/// credentials, nothing cached; an answer over [`crate::site::MAX_BODY`]
+/// (by its length, or once read) is refused.
+async fn get_peer(url: &str) -> Result<String, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let init = web_sys::RequestInit::new();
+    init.set_method("GET");
+    init.set_mode(web_sys::RequestMode::Cors);
+    init.set_credentials(web_sys::RequestCredentials::Omit);
+    init.set_cache(web_sys::RequestCache::NoStore);
+    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(|e| text(&e))?;
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| text(&e))?
+        .dyn_into()
+        .map_err(|e| text(&e))?;
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let declared = resp
+        .headers()
+        .get("Content-Length")
+        .ok()
+        .flatten()
+        .and_then(|v| v.trim().parse::<usize>().ok());
+    if declared.is_some_and(|n| n > crate::site::MAX_BODY) {
+        return Err("answer too large".into());
+    }
+    let body = JsFuture::from(resp.text().map_err(|e| text(&e))?)
+        .await
+        .map_err(|e| text(&e))?
+        .as_string()
+        .ok_or("not text")?;
+    if body.len() > crate::site::MAX_BODY {
+        return Err("answer too large".into());
+    }
+    Ok(body)
 }
 
 /// Whether the page asked for the demo (`?demo`).

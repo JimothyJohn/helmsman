@@ -8,8 +8,9 @@
 //! Native: `cargo run -p helmsman-canvas` (the demo). Web: built by
 //! `make canvas-web` and served by the box (`helmsman-plc --ui`), it
 //! watches that box over its API; `?demo` (or `make canvas-serve`, with
-//! no box behind it) runs the demo in the page instead, and `?andon` is
-//! the box's floor screen, full screen.
+//! no box behind it) runs the demo in the page instead, `?andon` is
+//! the box's floor screen, full screen, and `?site` lists every box of its
+//! site (`--site`), each a link to its own canvas.
 
 // Screen geometry is f32 throughout; counts and sim values convert into it.
 // Drawing code reads best with short geometry names (r, z, p, x, y).
@@ -38,6 +39,9 @@ mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod review_tests;
 mod review_view;
+mod site;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod site_tests;
 mod st_view;
 #[cfg(test)]
 mod ui_tests;
