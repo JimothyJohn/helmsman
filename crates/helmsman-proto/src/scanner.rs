@@ -235,16 +235,44 @@ impl IoConnection {
         target: SocketAddrV4,
         config: IoConfig,
     ) -> Result<Self, Error> {
+        let zeros = vec![0; usize::from(config.output_len)];
+        Self::open_with_output(session, socket, target, config, &zeros)
+    }
+
+    /// As [`Self::open`], with `output` as the O->T data from the very first
+    /// packet, so a reconnect re-sends what the outputs held instead of a
+    /// zero glitch.
+    ///
+    /// # Errors
+    /// As [`Self::open`]; `Io(InvalidInput)` if `output` is not
+    /// `config.output_len` bytes.
+    pub fn open_with_output(
+        session: &mut Session,
+        socket: &UdpSocket,
+        target: SocketAddrV4,
+        config: IoConfig,
+        output: &[u8],
+    ) -> Result<Self, Error> {
+        if output.len() != usize::from(config.output_len) {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "initial output is {} bytes, connection carries {}",
+                    output.len(),
+                    config.output_len
+                ),
+            )));
+        }
         let serial = next_serial();
         let t_to_o_id = u32::from(serial) << 16 | u32::from(config.originator_vendor_id);
         let open = config.forward_open(serial, t_to_o_id);
-        let resp = session.request_raw(&open.to_request())?;
+        let resp = send(session, &open.to_request())?;
         let reply = open_result(&resp)
             .map_err(session::Error::Decode)?
             .map_err(Error::Refused)?;
 
         let shared = Arc::new(Shared {
-            output: Mutex::new(vec![0; usize::from(config.output_len)]),
+            output: Mutex::new(output.to_vec()),
             run: AtomicBool::new(true),
             input: Mutex::new(None),
             packets_in: AtomicU64::new(0),
@@ -395,19 +423,52 @@ impl IoConnection {
     /// A refused close (unknown connection) or session error.
     pub fn close(mut self, session: &mut Session) -> Result<ForwardCloseReply, Error> {
         self.stop_threads();
-        let fc = ForwardClose {
+        self.closer().send(session)
+    }
+
+    /// What closes this connection later, over any session from this
+    /// host: drop the connection (its threads stop), keep the closer, and
+    /// send it once a session is up again. A target that lost the
+    /// connection meanwhile answers "not found", which is fine.
+    #[must_use]
+    pub fn closer(&self) -> Closer {
+        Closer(ForwardClose {
             priority_time_tick: self.open.priority_time_tick,
             timeout_ticks: self.open.timeout_ticks,
             connection_serial: self.open.connection_serial,
             originator_vendor_id: self.open.originator_vendor_id,
             originator_serial: self.open.originator_serial,
             path: self.open.path.clone(),
-        };
-        let resp = session.request_raw(&fc.to_request())?;
+        })
+    }
+}
+
+/// A `Forward_Close` for one connection this originator opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Closer(ForwardClose);
+
+impl Closer {
+    /// Sends the `Forward_Close`.
+    ///
+    /// # Errors
+    /// A refused close (unknown connection) or session error.
+    pub fn send(&self, session: &mut Session) -> Result<ForwardCloseReply, Error> {
+        let resp = send(session, &self.0.to_request())?;
         close_result(&resp)
             .map_err(session::Error::Decode)?
             .map_err(Error::Refused)
     }
+}
+
+/// The only requests this module puts on the wire: `Forward_Open` and
+/// `Forward_Close`, built above with an Assembly-class path.
+fn send(
+    session: &mut Session,
+    request: &crate::cip::Request,
+) -> Result<crate::cip::Response, session::Error> {
+    let mut mr = crate::codec::Writer::default();
+    request.encode(&mut mr);
+    session.exchange(&mr.into_inner())
 }
 
 impl Drop for IoConnection {

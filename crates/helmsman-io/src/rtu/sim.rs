@@ -175,7 +175,14 @@ fn serve(mut line: End, unit: u8, timing: Timing, state: &Mutex<State>, stop: &A
                 line.send(&out)
             }
             Some(Fault::Split) => out.iter().try_for_each(|b| line.send(&[*b])),
-            Some(Fault::WrongTransaction | Fault::DeviceFailure) | None => line.send(&out),
+            Some(
+                Fault::WrongTransaction
+                | Fault::DeviceFailure
+                | Fault::Silent
+                | Fault::ShortInput
+                | Fault::Reboot,
+            )
+            | None => line.send(&out),
         };
         if sent.is_err() {
             return;

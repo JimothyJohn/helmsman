@@ -42,6 +42,13 @@ pub enum Fault {
     Noise,
     /// RTU: a good answer, one byte at a time.
     Split,
+    /// EtherNet/IP: the target stops producing T->O data (a pulled cable,
+    /// a hung device) until cleared.
+    Silent,
+    /// EtherNet/IP: T->O data one byte shorter than the connection's size.
+    ShortInput,
+    /// EtherNet/IP: the target forgets every connection (a power cycle).
+    Reboot,
 }
 
 /// A simulator that can be told to misbehave: what the conformance
@@ -54,6 +61,14 @@ pub trait Faults {
     fn clear_faults(&self);
     /// The faults worth checking on this transport, named.
     fn fault_checks(&self) -> Vec<(&'static str, Fault)>;
+    /// How long after a fault is injected the driver may still answer
+    /// reads before it must notice. Zero for request/reply transports
+    /// (the next read is the one that meets the fault); a cyclic
+    /// transport (EtherNet/IP Class 1) notices only when its connection
+    /// times out.
+    fn fault_window(&self) -> Duration {
+        Duration::ZERO
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -361,7 +376,10 @@ fn serve(mut conn: TcpStream, state: &Mutex<State>, stop: &AtomicBool) {
                 | Fault::Truncate
                 | Fault::WrongUnit
                 | Fault::Noise
-                | Fault::Split,
+                | Fault::Split
+                | Fault::Silent
+                | Fault::ShortInput
+                | Fault::Reboot,
             )
             | None => {}
         }

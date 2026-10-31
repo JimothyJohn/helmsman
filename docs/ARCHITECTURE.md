@@ -61,8 +61,8 @@ Three directions of traffic, three different rules:
 
 | crate | owns | status |
 | --- | --- | --- |
-| `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Logix tag reads (`logix`: Read Tag, Multiple Service Packet, Read Tag Fragmented, Symbol object browse, backplane routing), Class 1 scanner. Byte codecs plus socket-level session, discovery and scanner. Any-service requests and the scanner sit behind the `unrestricted` feature. | built |
-| `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
+| `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Logix tag reads (`logix`: Read Tag, Multiple Service Packet, Read Tag Fragmented, Symbol object browse, backplane routing), Class 1 scanner, EDS reader (`eds`). Byte codecs plus socket-level session, discovery and scanner. Any-service requests sit behind the `unrestricted` feature, the scanner behind `scanner` (which `unrestricted` implies). | built |
+| `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O; layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
@@ -129,7 +129,7 @@ scan; the scheduler bounds how often.
 ## The I/O layer, as built (`helmsman-io`)
 
 - **`Device`**: an endpoint the box is master of: `id`, `driver` name
-  (`modbus-tcp`, `modbus-rtu`, `logix-tag`), `endpoint` (`host:port`, or a
+  (`modbus-tcp`, `modbus-rtu`, `enip-io`, `logix-tag`), `endpoint` (`host:port`, or a
   serial port's path for `modbus-rtu`), driver params (`unit`,
   `timeout_ms`, and the serial settings).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
@@ -174,8 +174,28 @@ scan; the scheduler bounds how often.
 - **`harness`**: driver conformance, reported as `PASS`/`FAIL`/`SKIP` lines.
   Writes are proven through loops (output wired to input), so a driver that
   only pretends to write fails. Each simulator lists the faults that mean
-  something on its transport. `cargo run -p helmsman-io --example
-  conformance -- --sim` (TCP) or `-- --sim-rtu`.
+  something on its transport (a cyclic transport also says how long a
+  fault may take to show: `Faults::fault_window`). `cargo run -p
+  helmsman-io --example conformance -- --sim` (TCP), `-- --sim-rtu` or
+  `-- --sim-e1213` (EtherNet/IP).
+
+- **`enip`**: `enip-io`, an EtherNet/IP adapter (remote I/O) the box
+  masters over one Class 1 connection, from a built-in profile
+  (`profile=moxa-e1213`), the vendor's EDS (`eds=PATH`, read by
+  `helmsman_proto::eds`) or explicit points and sizes. Points are bits and
+  little-endian words of the input and output assemblies (`di:N`, `do:N`,
+  `in:BYTE.BIT`, `out:OFFSET:FMT`, ...); reads answer from the latest T->O
+  packet, writes change the O->T image. No T->O data within the
+  connection's timeout, T->O of the wrong size, or a refused `Forward_Open`
+  is a link error: the driver closes the connection (releasing exclusive
+  ownership) and reopens it with the outputs it held from the first packet.
+  A point past an assembly or a value its format can't hold is a point
+  error. Behind helmsman-io's `enip` feature, which `box` turns on.
+  `enip_sim` (feature `enip-sim`) is a simulated Moxa ioLogik E1213 for
+  the harness: `conformance -- --sim-e1213`. The device:
+  `docs/devices/moxa-iologik-e1213.md`.
+  Not yet: the box's own adapter and `enip-io` both want UDP 2222 on one
+  host (`enip-io-port`).
 
 - **`logix`**: `logix-tag`, read-only signals from an observed Logix
   controller by tag name (`in temp real plc Program:Main.Temp@real`); the
@@ -1501,8 +1521,9 @@ server: everything runs in the page (`playground.rs`, `playground_view.rs`,
 | module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink and the OPC UA server (read-only, SecurityPolicy None; `sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
-| box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
+| box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` exist only with the feature; the Class 1 scanner (its own `scanner` feature, in the box build for the adapters the box masters, below) sends only `Forward_Open`/`Forward_Close` to an Assembly path. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
+| box ↔ mastered EtherNet/IP adapters | Class 1 I/O: the device's output assembly, its input assembly | `helmsman-proto`'s `scanner` feature, which the box build has: it sends `Forward_Open` and `Forward_Close` to an Assembly-class path and nothing else (no other service, no `Session::request`); only devices in the I/O map, through `enip-io`, with the map's one-writer rule and approval tier. `tests/box_build.rs` checks `scanner` is in and `unrestricted` still out. | built (`enip-io`); real-device check `e1213-bench` |
 | box ↔ LAN peers | site beacons in, this box's beacon out | strict parse, source-address rule, intake and refresh limits, a bounded list, no takeover of a live id; the box only lists peers and never connects to one; `/api/site` is the only cross-origin read | built (`site-view`) |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) and `local-accounts` (per-person logins that replace the PINs once an accounts file exists; the audit names the person) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |

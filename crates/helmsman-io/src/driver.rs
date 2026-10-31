@@ -102,7 +102,33 @@ pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
             crate::modbus::Point::parse(addr).map(crate::modbus::Point::info)
         }
         crate::logix::DRIVER => crate::logix::Point::parse(addr).map(|p| p.info()),
+        crate::enip::DRIVER => crate::enip::Point::parse(addr).map(|p| p.info()),
         other => Err(Error::UnknownDriver(other.into())),
+    }
+}
+
+/// As [`parse_point`], knowing the device: a driver whose points depend on
+/// the device's params (`enip-io`: assembly sizes, channel counts, an
+/// input-only connection) checks them here.
+///
+/// # Errors
+/// As [`parse_point`], plus params that don't parse and points the
+/// device can't have.
+pub fn parse_point_on(device: &Device, addr: &str) -> Result<PointInfo, Error> {
+    match device.driver.as_str() {
+        crate::enip::DRIVER => crate::enip::parse_on(&device.params, addr),
+        driver => parse_point(driver, addr),
+    }
+}
+
+/// What the one-writer rule compares for an output point: the point
+/// itself, or for `enip-io` each output bit it drives (so `do:0` and
+/// `out:0.0` are the same writer).
+#[must_use]
+pub fn output_keys(driver: &str, addr: &str) -> Vec<String> {
+    match (driver, crate::enip::Point::parse(addr)) {
+        (crate::enip::DRIVER, Ok(p)) => p.out_bits(),
+        _ => vec![addr.to_string()],
     }
 }
 
@@ -123,6 +149,16 @@ pub fn open(device: &Device) -> Result<Box<dyn Driver + Send>, Error> {
             &device.endpoint,
             &device.params,
         )?)),
+        #[cfg(feature = "enip")]
+        crate::enip::DRIVER => Ok(Box::new(crate::enip::EnipDriver::from_params(
+            &device.endpoint,
+            &device.params,
+        )?)),
+        #[cfg(not(feature = "enip"))]
+        crate::enip::DRIVER => Err(Error::UnknownDriver(format!(
+            "{}: this build has no enip-io (helmsman-io's `enip` feature)",
+            crate::enip::DRIVER
+        ))),
         other => Err(Error::UnknownDriver(other.into())),
     }
 }

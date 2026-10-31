@@ -593,6 +593,26 @@
   difficulty: low
   id: playground-key
 
+- [ ] **Commit Moxa's E1213 EDS, or keep it out?** The E1213's EDS (`moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`, the one you put at the repo root) has no license or terms in it at all, only the EZ-EDS generator line, and Moxa's download page is where its terms would be. EDS files are meant to be passed around (every PLC tool imports them), but "meant to" isn't permission. Built (feat/moxa-e1213) without it: the facts are restated in our own fixture (`crates/helmsman-proto/tests/fixtures/e1213-facts.eds`), the profile is built in, and `scripts/eds-corpus.sh` checks the real file by SHA-256 and proves it resolves to that profile. Committing it would let CI run that check and let the box ship a vetted copy.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call, or a line from Moxa (or their download page's terms) that EDS files may be redistributed
+  result: whether the vendor EDS lives in the repo (tests/fixtures or docs/devices) or stays fetched-by-hand
+  options: keep it out, check by hash (recommended, built) | commit it under docs/devices with provenance in SOURCES.md | ask Moxa support first, then commit
+  est: 10m
+  difficulty: low
+  id: e1213-eds-license
+
+- [ ] **The Class 1 scanner in the box build: OK?** Until now the box build could only *read* from CIP devices (`helmsman-proto` without `unrestricted`). Mastering the E1213 over EtherNet/IP means driving its outputs, so feat/moxa-e1213 split the scanner into its own feature, `scanner`, and the box's `box` feature turns it on through helmsman-io's `enip` (the `enip-io` driver). What it can send: `Forward_Open` and `Forward_Close` to an Assembly-class path, nothing else; `Session::request` (any service) still needs `unrestricted`, which `tests/box_build.rs` still forbids (and now also checks `scanner` is in). Outputs reach a device only through a map signal, so the one-writer rule and the approval tier for map changes apply, as for Modbus coils. The other way: keep `enip-io` out of the box until a later card, and use the E1213 over Modbus/TCP meanwhile (its map is in `docs/devices/moxa-iologik-e1213-modbus.map`).
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether the box ships `enip-io` (Class 1 to devices in its map) now
+  options: in the box, scanner only (recommended, built) | out of the box until the bench passes, Modbus/TCP meanwhile | out until the UDP 2222 sharing (`enip-io-port`) lands
+  est: 5m
+  difficulty: low
+  id: enip-in-box
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -987,8 +1007,25 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 1w
   difficulty: high
   depends: wasm-driver, io-bench, agent-loop
+  notes: EDS part started (feat/moxa-e1213): `helmsman_proto::eds` reads a vendor EDS and resolves its Class 1 connections, `enip-io` takes `eds=PATH`, so for an EtherNet/IP device the agent's job is choosing points, not writing a driver. Still to do here: the agent reading a manual's data map (Appendix B for the E1213) into points, and iterating on harness output.
   id: driver-agent
   needs: I put this is in tcpethernet: moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds
+
+- [ ] **Bench: the Moxa ioLogik E1213 over EtherNet/IP** — `scripts/bench-e1213.sh` against the real E1213: ListIdentity (vendor 991, product 515), the Identity object, then the conformance harness over a Class 1 exclusive-owner connection at 100 ms (DI reads, DI-00's counter, the DO status byte, the four DO->DI loops, a point past the 51-byte input assembly). Turns the inferred parts of docs/devices/moxa-iologik-e1213.md into facts (bit order, counter byte order, DIO numbering): note what the run shows there.
+  needs: the E1213 on the Studio link with its IP; EtherNet/IP enabled on its web console and activated for this unit (manual pp. 3-26, 5-1); DO-00..03 wired to DI-00..03 with field power (or `LOOPS="do:0=di:4 ..."`); UDP 2222 free on the Studio; the Moxa EDS at the repo root to check it too (optional)
+  result: the enip-io driver passes on the real device; the device doc's "inferred" lines confirmed or corrected
+  notes: `scripts/bench-e1213.sh <E1213-IP>`; the first run in the native terminal (the conformance binary is unsigned and the firewall asks once to accept incoming UDP; over SSH every read times out), later runs as `! scripts/bench-e1213.sh <IP>` here
+  est: 30m
+  difficulty: low
+  depends: io-bench
+  id: e1213-bench
+
+- [ ] **Share UDP 2222 between the box's adapter and enip-io** — a box is both a CIP target (its own adapter binds 0.0.0.0:2222 for scanners that own it) and, with `enip-io`, a scanner whose devices send their inputs to 2222. Two sockets can't both bind it, so on a box today `enip-io` fails its link with "UDP 2222, where the device sends its inputs: address in use" unless `helmsman-plc --io-port` moves the adapter (which breaks scanners that send to 2222). Fix: one I/O socket per box, demultiplexed by connection id (the adapter's O->T ids and the scanner's T->O ids are both ours to choose), or a T->O socket-address item in the Forward_Open so the device sends elsewhere (check the E1213 honours it).
+  result: the box masters EtherNet/IP devices and is owned by a scanner at the same time
+  est: 1d
+  difficulty: med
+  depends: enip-in-box
+  id: enip-io-port
 
 ## Roadmap M2: floor-ready core
 
