@@ -83,16 +83,17 @@ pub fn pbkdf2(password: &[u8], salt: &[u8], iterations: u32, out: &mut [u8]) {
     }
 }
 
-/// One role's stored PIN.
+/// One stored secret (a role's PIN, an account's password): PBKDF2 with
+/// its own salt and iteration count.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Record {
-    iterations: u32,
-    salt: [u8; 16],
-    hash: [u8; 32],
+pub(crate) struct Record {
+    pub(crate) iterations: u32,
+    pub(crate) salt: [u8; 16],
+    pub(crate) hash: [u8; 32],
 }
 
 impl Record {
-    fn new(pin: &str, iterations: u32, salt: [u8; 16]) -> Self {
+    pub(crate) fn new(pin: &str, iterations: u32, salt: [u8; 16]) -> Self {
         let mut hash = [0u8; 32];
         pbkdf2(pin.as_bytes(), &salt, iterations, &mut hash);
         Self {
@@ -102,11 +103,41 @@ impl Record {
         }
     }
 
-    fn matches(&self, pin: &str) -> bool {
+    /// Slow by design (one PBKDF2); the comparison takes the same time
+    /// wherever the hashes differ.
+    pub(crate) fn matches(&self, pin: &str) -> bool {
         let mut h = [0u8; 32];
         pbkdf2(pin.as_bytes(), &self.salt, self.iterations, &mut h);
-        h.iter().zip(&self.hash).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+        ct_eq(&h, &self.hash)
     }
+
+    /// `pbkdf2-sha256 ITERATIONS SALT HASH`, as the files store it.
+    pub(crate) fn render(&self) -> String {
+        format!(
+            "pbkdf2-sha256 {} {} {}",
+            self.iterations,
+            hex(&self.salt),
+            hex(&self.hash)
+        )
+    }
+
+    /// [`Record::render`]'s four words back.
+    pub(crate) fn parse(words: &[&str]) -> Option<Self> {
+        match words {
+            ["pbkdf2-sha256", iter, salt, hash] => Some(Self {
+                iterations: iter.parse().ok()?,
+                salt: unhex::<16>(salt)?,
+                hash: unhex::<32>(hash)?,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Whether `a == b`, in time that depends only on their lengths.
+#[must_use]
+pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Whether `pin` may be set: [`PIN_LEN`] printable ASCII, no blanks.
@@ -115,7 +146,7 @@ pub fn acceptable(pin: &str) -> bool {
     (PIN_LEN.0..=PIN_LEN.1).contains(&pin.len()) && pin.bytes().all(|b| b.is_ascii_graphic())
 }
 
-fn hex(b: &[u8]) -> String {
+pub(crate) fn hex(b: &[u8]) -> String {
     b.iter().fold(String::with_capacity(b.len() * 2), |mut s, b| {
         let _ = write!(s, "{b:02x}");
         s
@@ -257,26 +288,9 @@ impl Pins {
     /// The file cannot be read, is not private, or does not parse.
     pub fn load(dir: &Path, min_iterations: u32) -> Result<Self, String> {
         let path = dir.join(FILE);
-        let src = match fs::read_to_string(&path) {
-            Ok(s) => s,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
-            Err(e) => return Err(format!("{}: {e}", path.display())),
+        let Some(src) = read_private(&path)? else {
+            return Ok(Self::default());
         };
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(&path)
-                .map_err(|e| format!("{}: {e}", path.display()))?
-                .permissions()
-                .mode();
-            if mode & 0o077 != 0 {
-                return Err(format!(
-                    "{}: readable by others (mode {:o}); chmod 600 it",
-                    path.display(),
-                    mode & 0o777
-                ));
-            }
-        }
         Self::parse(&src, min_iterations).map_err(|errs| {
             let lines: Vec<String> = errs
                 .iter()
@@ -291,20 +305,51 @@ impl Pins {
     /// # Errors
     /// The directory or file cannot be written.
     pub fn save(&self, dir: &Path) -> io::Result<()> {
-        fs::create_dir_all(dir)?;
-        let tmp = dir.join(format!(".{FILE}.{}", std::process::id()));
-        let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp)?;
-        f.write_all(self.render().as_bytes())?;
-        f.sync_all()?;
-        fs::rename(&tmp, dir.join(FILE))
+        write_private(dir, FILE, &self.render())
     }
+}
+
+/// `path`'s text, if it exists; refused if anyone but its owner may read
+/// or write it.
+pub(crate) fn read_private(path: &Path) -> Result<Option<String>, String> {
+    let src = match fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .permissions()
+            .mode();
+        if mode & 0o077 != 0 {
+            return Err(format!(
+                "{}: readable by others (mode {:o}); chmod 600 it",
+                path.display(),
+                mode & 0o777
+            ));
+        }
+    }
+    Ok(Some(src))
+}
+
+/// Writes `dir/name`, mode 0600, whole: a reader never sees half a file.
+pub(crate) fn write_private(dir: &Path, name: &str, text: &str) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(".{name}.{}", std::process::id()));
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&tmp)?;
+    f.write_all(text.as_bytes())?;
+    f.sync_all()?;
+    fs::rename(&tmp, dir.join(name))
 }
 
 /// Why a PIN was not accepted.
@@ -335,6 +380,9 @@ pub struct Gate {
     lockout: Lockout,
     clock: Clock,
     state: Mutex<GateState>,
+    /// Per-person logins ([`super::account`]); once the box has an
+    /// accounts file they replace the PINs.
+    logins: Option<super::account::Logins>,
 }
 
 impl std::fmt::Debug for Gate {
@@ -342,6 +390,7 @@ impl std::fmt::Debug for Gate {
         f.debug_struct("Gate")
             .field("pins", &self.pins)
             .field("lockout", &self.lockout)
+            .field("logins", &self.logins)
             .finish_non_exhaustive()
     }
 }
@@ -357,7 +406,21 @@ impl Gate {
                 failures: 0,
                 locked_until: None,
             }),
+            logins: None,
         }
+    }
+
+    /// The same gate, with per-person logins: while their accounts file
+    /// exists, the box takes sessions and refuses PINs.
+    #[must_use]
+    pub fn with_logins(mut self, logins: super::account::Logins) -> Self {
+        self.logins = Some(logins);
+        self
+    }
+
+    #[must_use]
+    pub const fn logins(&self) -> Option<&super::account::Logins> {
+        self.logins.as_ref()
     }
 
     /// Whether `pin` is `role`'s PIN, unless entry is locked. A wrong PIN

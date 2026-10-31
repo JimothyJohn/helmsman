@@ -73,6 +73,9 @@ pub struct Request {
     pub authorization: bool,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
+    /// Who the bearer is when it is a login session rather than the box
+    /// token: set by the API once the request is read, never by a client.
+    pub session: Option<crate::policy::account::Principal>,
 }
 
 /// Why no request could be read: the status to answer with, or nothing
@@ -222,6 +225,7 @@ pub fn parse_head(head: &[u8], limits: &Limits) -> Result<(Request, usize), Read
         authorization: false,
         content_type: None,
         body: Vec::new(),
+        session: None,
     };
     let mut length: Option<usize> = None;
     let mut count = 0;

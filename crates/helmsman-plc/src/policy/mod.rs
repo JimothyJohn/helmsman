@@ -35,6 +35,7 @@
 //! floor. A higher tier may not ask less than a lower one (the file is
 //! refused, not reinterpreted).
 
+pub mod account;
 pub mod classify;
 pub mod pin;
 

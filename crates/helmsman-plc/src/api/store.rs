@@ -29,8 +29,10 @@ pub struct AuditEntry {
     /// What the box ran when the call was made, for an apply, rollback or
     /// replay.
     pub base: Option<String>,
-    /// The role whose PIN the call carried, if it carried one.
+    /// The role the call acted as: the PIN's, or the session's account's.
     pub role: Option<String>,
+    /// The person whose login session made the call (or who logged in).
+    pub user: Option<String>,
 }
 
 /// The store is full; nothing was recorded.
