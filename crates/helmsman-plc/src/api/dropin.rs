@@ -35,6 +35,12 @@
 //! restart forgets them. PDF is refused (415): there is no PDF text
 //! extraction on the box; paste the text.
 //!
+//! **Photos** (card `dropin-photo`). A PNG, JPEG or WebP (a whiteboard
+//! sketch, a photo of the panel) is a `photo` drop-in: known by its bytes,
+//! read from its headers only and held to [`super::photo`]'s limits. It
+//! has no text to read; the chat shows it to the model as an image block
+//! in the message it is attached to (see [`super::chat::Chat::attach`]).
+//!
 //! **Watch modules.** A proposal that names a PLC drop-in (or one the box
 //! no longer holds) must be a watch module: kind `module`, `watch: true`,
 //! driving no output signal and with no `%Q` window (see
@@ -51,7 +57,7 @@ use helmsman_iec::l5x::{self, Project};
 use serde_json::{Value as Json, json};
 
 use super::catalog::BrowsedTag;
-use super::{Ctx, Request, Response, audit, audit_full, wall};
+use super::{Ctx, Request, Response, audit, audit_full, photo, wall};
 use crate::manifest;
 
 /// Largest document, bytes.
@@ -66,6 +72,8 @@ pub const CHUNK: usize = 6 * 1024;
 pub const PAGE_BYTES: usize = 20 * 1024;
 /// Longest document name, characters.
 pub const MAX_NAME: usize = 128;
+/// What reading a photo as text answers.
+const PHOTO_HAS_NO_TEXT: &str = "this drop-in is a photo: it has no text to read; the box shows the image to the agent in the chat message it is attached to";
 /// A browse result is reused for this long.
 pub const BROWSE_FRESH: Duration = Duration::from_secs(30);
 
@@ -80,6 +88,8 @@ pub enum Kind {
     Plcopen,
     /// IEC 61131-3 Structured Text.
     St,
+    /// A PNG, JPEG or WebP image: a sketch or a photo.
+    Photo,
 }
 
 impl Kind {
@@ -90,6 +100,7 @@ impl Kind {
             Self::L5x => "l5x",
             Self::Plcopen => "plcopen",
             Self::St => "st",
+            Self::Photo => "photo",
         }
     }
 
@@ -99,6 +110,7 @@ impl Kind {
             "l5x" => Self::L5x,
             "plcopen" => Self::Plcopen,
             "st" => Self::St,
+            "photo" => Self::Photo,
             _ => return None,
         })
     }
@@ -106,8 +118,24 @@ impl Kind {
     /// An existing PLC program (proposals citing it must be watch modules).
     #[must_use]
     pub const fn is_plc(self) -> bool {
-        !matches!(self, Self::Prose)
+        matches!(self, Self::L5x | Self::Plcopen | Self::St)
     }
+}
+
+/// A photo drop-in's image: what its headers say, and its bytes untouched.
+#[derive(Debug, Clone)]
+pub struct Photo {
+    pub info: photo::Info,
+    pub bytes: Arc<[u8]>,
+}
+
+/// What the chat attaches for a drop-in (see [`Store::attachment`]).
+#[derive(Debug, Clone)]
+pub enum Attachment {
+    /// A document read through the tools: its kind and chunk count.
+    Text { kind: Kind, chunks: usize },
+    /// A photo shown to the model as an image block.
+    Photo(Photo),
 }
 
 /// One stored document.
@@ -122,14 +150,27 @@ pub struct Dropin {
     chunks: Vec<usize>,
     /// The inventory of a PLC program.
     plc: Option<Arc<Project>>,
+    /// A photo's image.
+    photo: Option<Photo>,
 }
 
 impl Dropin {
+    /// Bytes held for it.
+    fn size(&self) -> usize {
+        self.text.len() + self.photo.as_ref().map_or(0, |p| p.bytes.len())
+    }
+
     fn meta(&self) -> Json {
-        json!({
+        let mut j = json!({
             "id": self.id, "name": self.name, "kind": self.kind.name(), "at": self.at,
-            "bytes": self.text.len(), "chunks": self.chunks.len(),
-        })
+            "bytes": self.size(), "chunks": self.chunks.len(),
+        });
+        if let Some(p) = &self.photo {
+            j["media_type"] = json!(p.info.format.media_type());
+            j["width"] = json!(p.info.width);
+            j["height"] = json!(p.info.height);
+        }
+        j
     }
 
     fn chunk(&self, k: usize) -> Option<&str> {
@@ -153,13 +194,12 @@ impl Store {
     fn add(&mut self, mut d: Dropin) -> Json {
         self.next += 1;
         d.id = self.next;
-        while self.list.len() >= MAX_KEPT || (self.bytes + d.text.len() > MAX_TOTAL && !self.list.is_empty())
-        {
+        while self.list.len() >= MAX_KEPT || (self.bytes + d.size() > MAX_TOTAL && !self.list.is_empty()) {
             if let Some(old) = self.list.pop_front() {
-                self.bytes -= old.text.len();
+                self.bytes -= old.size();
             }
         }
-        self.bytes += d.text.len();
+        self.bytes += d.size();
         let meta = d.meta();
         self.list.push_back(d);
         meta
@@ -176,10 +216,16 @@ impl Store {
         self.get(id).map(|d| d.kind)
     }
 
-    /// Its kind and chunk count, if the box still holds drop-in `id`.
+    /// What the chat attaches for drop-in `id`, if the box still holds it.
     #[must_use]
-    pub fn describe(&self, id: u64) -> Option<(Kind, usize)> {
-        self.get(id).map(|d| (d.kind, d.chunks.len()))
+    pub fn attachment(&self, id: u64) -> Option<Attachment> {
+        self.get(id).map(|d| match &d.photo {
+            Some(p) => Attachment::Photo(p.clone()),
+            None => Attachment::Text {
+                kind: d.kind,
+                chunks: d.chunks.len(),
+            },
+        })
     }
 }
 
@@ -228,6 +274,7 @@ fn read_body(body: &[u8], kind: Option<Kind>) -> Result<(String, Kind, Option<Pr
     let kind = kind.unwrap_or_else(|| sniff(&text));
     let plc = match kind {
         Kind::Prose => None,
+        Kind::Photo => return Err((415, "a photo is an image, not text".into())),
         Kind::L5x => Some(l5x::parse(&text).map_err(|e| (422, format!("not a readable L5X export: {e}")))?),
         Kind::Plcopen => {
             let lowered = helmsman_iec::plcopen::lower(&text).map_err(|d| {
@@ -474,7 +521,11 @@ fn plc_view(doc: &Dropin, req: &Request) -> Response {
     let Some(prog) = &doc.plc else {
         return Response::error(
             404,
-            "this drop-in is prose, not a PLC program; read its text in chunks",
+            if doc.photo.is_some() {
+                PHOTO_HAS_NO_TEXT
+            } else {
+                "this drop-in is prose, not a PLC program; read its text in chunks"
+            },
         );
     };
     let query = |k: &str| req.query.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
@@ -574,6 +625,9 @@ pub(super) fn get(ctx: &Ctx, req: &Request, segs: &[&str]) -> Response {
                     let Ok(k) = k else {
                         return Response::error(400, "chunk is a whole number");
                     };
+                    if d.photo.is_some() {
+                        return Response::error(404, PHOTO_HAS_NO_TEXT);
+                    }
                     let Some(text) = d.chunk(k) else {
                         return Response::error(
                             404,
@@ -611,24 +665,18 @@ pub(super) fn post(req: &Request, ctx: &Ctx) -> Response {
             "dropin: PDF refused",
         );
     }
-    let textual = base.starts_with("text/")
-        || matches!(
-            base,
-            "application/xml" | "application/octet-stream" | "application/x-l5x"
-        );
-    if !textual {
-        return refused(
-            415,
-            "a drop-in is text: text/plain, text/markdown, text/xml or application/xml (L5X, PLCopen), or application/octet-stream holding UTF-8",
-            "dropin: unsupported Content-Type",
-        );
-    }
     let q = |k: &str| req.query.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
     let kind = match q("kind") {
         None => None,
         Some(k) => match Kind::parse(k) {
             Some(k) => Some(k),
-            None => return refused(400, "kind is prose, l5x, plcopen or st", "dropin: bad kind"),
+            None => {
+                return refused(
+                    400,
+                    "kind is prose, l5x, plcopen, st or photo",
+                    "dropin: bad kind",
+                );
+            }
         },
     };
     let name = q("name").unwrap_or("").trim().to_string();
@@ -641,20 +689,100 @@ pub(super) fn post(req: &Request, ctx: &Ctx) -> Response {
             "dropin: bad name",
         );
     }
+    // An image is known by its bytes; a Content-Type or kind that says
+    // image is held to the same reading.
+    if photo::is_image(&req.body) || base.starts_with("image/") || kind == Some(Kind::Photo) {
+        return post_photo(req, ctx, base, kind, name);
+    }
+    let textual = base.starts_with("text/")
+        || matches!(
+            base,
+            "application/xml" | "application/octet-stream" | "application/x-l5x"
+        );
+    if !textual {
+        return refused(
+            415,
+            "a drop-in is text: text/plain, text/markdown, text/xml or application/xml (L5X, PLCopen), or application/octet-stream holding UTF-8; or a PNG, JPEG or WebP photo",
+            "dropin: unsupported Content-Type",
+        );
+    }
     let (text, kind, plc) = match read_body(&req.body, kind) {
         Ok(r) => r,
         Err((status, why)) => return refused(status, &why, "dropin: refused"),
     };
     let chunks = chunks(&text);
-    let d = Dropin {
-        id: 0,
-        name,
-        kind,
-        at: wall(),
-        chunks,
-        text,
-        plc: plc.map(Arc::new),
+    store(
+        ctx,
+        req,
+        Dropin {
+            id: 0,
+            name,
+            kind,
+            at: wall(),
+            chunks,
+            text,
+            plc: plc.map(Arc::new),
+            photo: None,
+        },
+    )
+}
+
+/// `POST /api/dropins` for an image: a photo drop-in, read from its
+/// headers ([`photo::sniff`]).
+fn post_photo(req: &Request, ctx: &Ctx, base: &str, kind: Option<Kind>, name: String) -> Response {
+    let refused = |status: u16, why: &str, detail: &str| match audit(ctx, req, status, detail) {
+        Some(_) => Response::error(status, why),
+        None => audit_full(),
     };
+    let image_type = base.starts_with("image/");
+    if !(image_type || base == "application/octet-stream") {
+        return refused(
+            415,
+            "a photo goes as image/png, image/jpeg or image/webp (or application/octet-stream)",
+            "dropin: image under a text Content-Type",
+        );
+    }
+    if kind.is_some_and(|k| k != Kind::Photo) {
+        return refused(
+            400,
+            "an image is a photo drop-in (kind photo, or no kind)",
+            "dropin: image with a text kind",
+        );
+    }
+    let info = match photo::sniff(&req.body) {
+        Ok(i) => i,
+        Err((status, why)) => return refused(status, &why, "dropin: photo refused"),
+    };
+    store(
+        ctx,
+        req,
+        Dropin {
+            id: 0,
+            name,
+            kind: Kind::Photo,
+            at: wall(),
+            text: String::new(),
+            chunks: Vec::new(),
+            plc: None,
+            photo: Some(Photo {
+                info,
+                bytes: Arc::from(req.body.as_slice()),
+            }),
+        },
+    )
+}
+
+/// Stores a checked drop-in: 201 with its metadata, audited.
+fn store(ctx: &Ctx, req: &Request, d: Dropin) -> Response {
+    let kind = d.kind;
+    let shape = d.photo.as_ref().map(|p| {
+        format!(
+            " {} {}x{} px,",
+            p.info.format.media_type(),
+            p.info.width,
+            p.info.height
+        )
+    });
     let mut store = ctx.dropins();
     let mut meta = store.add(d);
     let id = meta["id"].as_u64().unwrap_or_default();
@@ -671,8 +799,9 @@ pub(super) fn post(req: &Request, ctx: &Ctx) -> Response {
     }
     drop(store);
     let detail = format!(
-        "dropin {id}: {}, {} bytes",
+        "dropin {id}: {},{} {} bytes",
         kind.name(),
+        shape.unwrap_or_default(),
         meta["bytes"].as_u64().unwrap_or_default()
     );
     match audit(ctx, req, 201, &detail) {

@@ -214,6 +214,14 @@ impl Drafts {
         self.watch_only |= plc;
     }
 
+    /// Drop-in `id` was shown to the model in the user's message (a
+    /// photo's image block): it binds every proposal like one a tool read.
+    /// A photo is never a PLC program, so this never makes the
+    /// conversation watch-only.
+    pub fn attached(&mut self, id: u64) {
+        self.dropins.insert(id);
+    }
+
     /// What every draft body carries for the box: watch, provenance.
     fn binding(&self) -> (bool, Vec<u64>) {
         (self.watch_only, self.dropins.iter().copied().collect())
