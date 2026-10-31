@@ -108,3 +108,101 @@ fn hit_testing_finds_nodes_and_regions() {
     );
     assert_eq!(d.node_at(-5.0, -5.0), None);
 }
+
+#[test]
+fn refitting_a_fresh_layout_changes_nothing() {
+    let a = diagram(BODY);
+    let mut b = a.clone();
+    helmsman_diagram::layout::refit(&mut b);
+    for (x, y) in a.regions.iter().zip(&b.regions) {
+        let close = |p: f32, q: f32| (p - q).abs() < 0.01;
+        assert!(
+            close(x.rect.x, y.rect.x)
+                && close(x.rect.y, y.rect.y)
+                && close(x.rect.w, y.rect.w)
+                && close(x.rect.h, y.rect.h),
+            "{}: {:?} -> {:?}",
+            x.label,
+            x.rect,
+            y.rect
+        );
+    }
+}
+
+/// Whether node `i` sits in region `r` or one nested in it.
+fn within(d: &Diagram, i: usize, r: helmsman_diagram::RegionId) -> bool {
+    let mut at = d.nodes[i].region;
+    while let Some(q) = at {
+        if q == r {
+            return true;
+        }
+        at = d.region(q).parent;
+    }
+    false
+}
+
+#[test]
+fn a_moved_node_stays_inside_its_regions_and_its_ports_follow() {
+    let mut d = diagram(BODY);
+    // A node in the nested IF.
+    let n = d
+        .nodes
+        .iter()
+        .find(|n| n.region.is_some_and(|r| d.region(r).parent.is_some()))
+        .map(|n| n.id)
+        .expect("a nested node");
+    let before = d.node(n).rect;
+    let r = &mut d.nodes[n.0 as usize].rect;
+    r.x += 400.0;
+    r.y += 300.0;
+    helmsman_diagram::layout::refit(&mut d);
+    let after = d.node(n).rect;
+    assert_eq!((after.x, after.y), (before.x + 400.0, before.y + 300.0));
+    let mut at = d.node(n).region;
+    while let Some(r) = at {
+        let outer = d.region(r).rect;
+        assert!(
+            after.x >= outer.x
+                && after.y >= outer.y
+                && after.right() <= outer.right()
+                && after.bottom() <= outer.bottom(),
+            "{after:?} outside {}: {outer:?}",
+            d.region(r).label
+        );
+        at = d.region(r).parent;
+    }
+    assert!(
+        d.size.0 >= after.right() && d.size.1 >= after.bottom(),
+        "{:?}",
+        d.size
+    );
+    // Wires are drawn from the node's rect: its ports moved with it.
+    let (x0, y0) = helmsman_diagram::layout::out_port(&before, 0);
+    let (x1, y1) = helmsman_diagram::layout::out_port(&after, 0);
+    assert!((x1 - x0 - 400.0).abs() < 0.01 && (y1 - y0 - 300.0).abs() < 0.01);
+}
+
+#[test]
+fn a_region_carries_exactly_what_is_in_it_and_its_box_follows() {
+    let mut d = diagram(BODY);
+    let outer = d.regions.iter().find(|r| r.parent.is_none()).unwrap().id;
+    let members = helmsman_diagram::layout::inside(&d, outer);
+    let want: Vec<_> = (0..d.nodes.len())
+        .filter(|&i| within(&d, i, outer))
+        .map(|i| d.nodes[i].id)
+        .collect();
+    assert_eq!(members, want);
+    assert!(
+        members.iter().any(|n| d.node(*n).region != Some(outer)),
+        "nested regions' nodes too"
+    );
+    let region = d.region(outer).rect;
+    for n in &members {
+        let r = &mut d.nodes[n.0 as usize].rect;
+        r.x += 50.0;
+        r.y += 500.0;
+    }
+    helmsman_diagram::layout::refit(&mut d);
+    let moved = d.region(outer).rect;
+    assert!((moved.x - region.x - 50.0).abs() < 0.01 && (moved.y - region.y - 500.0).abs() < 0.01);
+}

@@ -1059,6 +1059,125 @@ fn a_push_button_on_the_diagram_is_on_while_held() {
     assert_eq!(s.output("motor"), b(true), "and stays latched");
 }
 
+impl Screen {
+    /// Presses at `from`, moves to `to` in steps, releases.
+    fn drag(&mut self, from: Pos2, to: Pos2) {
+        self.frame(vec![Event::PointerMoved(from)]);
+        self.button(from, true);
+        for k in 1..=10 {
+            #[allow(clippy::cast_precision_loss)]
+            let at = from + (to - from) * (k as f32 / 10.0);
+            self.frame(vec![Event::PointerMoved(at)]);
+        }
+        self.button(to, false);
+    }
+
+    /// The diagram's first block reading `name` (world units).
+    fn node(&self, name: &str) -> helmsman_diagram::Rect {
+        let v = self.view.viewer.as_ref().unwrap();
+        v.diagram()
+            .nodes
+            .iter()
+            .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Read { path } if path.eq_ignore_ascii_case(name)))
+            .unwrap_or_else(|| panic!("no block reads {name}"))
+            .rect
+    }
+
+    /// Where world point `(x, y)` is on screen.
+    fn screen(&self, x: f32, y: f32) -> Pos2 {
+        let v = self.view.viewer.as_ref().unwrap();
+        v.cams[v.scope].to_screen(x, y)
+    }
+}
+
+#[test]
+fn dragging_a_block_by_its_header_moves_it_and_not_the_view() {
+    let mut s = Screen::new();
+    let before = s.node("enable");
+    let offset = {
+        let v = s.view.viewer.as_ref().unwrap();
+        v.cams[v.scope].offset
+    };
+    let header = s.screen(before.x + before.w / 2.0, before.y + 6.0);
+    // Into the clear below the diagram.
+    let size = s.view.viewer.as_ref().unwrap().diagram().size;
+    let clear = s.screen(before.x + before.w / 2.0, size.1 + 40.0);
+    s.drag(header, clear);
+    let after = s.node("enable");
+    assert!(after.y > size.1, "{before:?} -> {after:?}");
+    assert!((after.x - before.x).abs() < 0.01, "moved straight down");
+    let v = s.view.viewer.as_ref().unwrap();
+    assert_eq!(v.cams[v.scope].offset, offset, "the view did not pan");
+    assert!(v.rearranged());
+    assert_eq!(
+        s.input("enable"),
+        b(true),
+        "a header drag is no click on the switch"
+    );
+    // Its switch went with it.
+    let at = s.block("enable").center();
+    s.click(at);
+    assert_eq!(s.input("enable"), b(false));
+}
+
+#[test]
+fn dragging_empty_space_pans_and_moves_no_block() {
+    let mut s = Screen::new();
+    s.view.session.set_running(false);
+    let before = s.node("enable");
+    let size = s.view.viewer.as_ref().unwrap().diagram().size;
+    // Below and right of everything drawn.
+    let empty = s.screen(size.0 + 40.0, size.1 + 40.0);
+    s.drag(empty, empty + Vec2::new(-60.0, -30.0));
+    assert_eq!(s.node("enable"), before);
+    assert!(!s.view.viewer.as_ref().unwrap().rearranged());
+}
+
+#[test]
+fn dragging_an_if_by_its_label_carries_its_statements() {
+    let mut s = Screen::new();
+    s.view.session.set_running(false);
+    let v = s.view.viewer.as_ref().unwrap();
+    let d = v.diagram();
+    let r = d.regions.first().expect("blink has an IF").clone();
+    let inside: Vec<usize> = helmsman_diagram::layout::inside(d, r.id)
+        .iter()
+        .map(|n| n.0 as usize)
+        .collect();
+    let before: Vec<helmsman_diagram::Rect> = d.nodes.iter().map(|n| n.rect).collect();
+    let label = s.screen(r.rect.x + 4.0, r.rect.y + 4.0);
+    s.drag(label, label + Vec2::new(0.0, 90.0));
+    let d = s.view.viewer.as_ref().unwrap().diagram();
+    for (i, was) in before.iter().enumerate() {
+        let now = d.nodes[i].rect;
+        if inside.contains(&i) {
+            assert!(now.y > was.y + 20.0, "{} stayed", d.nodes[i].label);
+        } else {
+            assert_eq!(now, *was, "{} moved", d.nodes[i].label);
+        }
+    }
+    assert!(d.region(r.id).rect.y > r.rect.y + 20.0, "the box followed");
+}
+
+#[test]
+fn a_rearranged_diagram_survives_an_edit_and_resets() {
+    let mut s = Screen::new();
+    s.view.session.set_running(false);
+    let auto = s.node("enable");
+    let header = s.screen(auto.x + auto.w / 2.0, auto.y + 6.0);
+    s.drag(header, header + Vec2::new(0.0, 120.0));
+    let moved = s.node("enable");
+    assert!(moved.y > auto.y + 20.0);
+    // An edit (a comment line on top) recompiles into a new diagram.
+    let src = format!("(* edited *)\n{}", s.view.session.src);
+    s.view.session.set_source(&src);
+    s.wait(0.1);
+    assert_eq!(s.node("enable"), moved, "kept across the edit");
+    s.view.viewer.as_mut().unwrap().reset_arrangement();
+    assert_eq!(s.node("enable"), auto);
+    assert!(!s.view.viewer.as_ref().unwrap().rearranged());
+}
+
 #[test]
 fn a_number_on_the_diagram_drags_sideways() {
     let mut s = Screen::new();

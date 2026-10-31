@@ -145,8 +145,11 @@ impl PlaygroundView {
         }
         self.viewer_of.clone_from(&b.src);
         let old = self.viewer.as_ref().and_then(|v| v.because.clone());
+        // Blocks the user moved stay moved across edits.
+        let arranged = self.viewer.as_ref().map(Viewer::arrangement).unwrap_or_default();
         self.viewer = b.module.clone().map(|m| {
             let mut v = Viewer::new(&b.src, m);
+            v.arrange(&arranged);
             let outs = v.outputs();
             v.because = old.filter(|o| outs.contains(o)).or_else(|| outs.first().cloned());
             v
@@ -259,6 +262,15 @@ impl PlaygroundView {
                 });
             if let Some(k) = pick {
                 self.load(EXAMPLES[k].src, &format!("the {} example", EXAMPLES[k].name));
+            }
+            let moved = self.viewer.as_ref().is_some_and(Viewer::rearranged);
+            if ui
+                .add_enabled(moved, egui::Button::new("Reset layout"))
+                .on_hover_text("drag blocks, or an IF/CASE/loop by its label, to rearrange the diagram")
+                .clicked()
+                && let Some(v) = &mut self.viewer
+            {
+                v.reset_arrangement();
             }
             ui.separator();
             let s = &mut self.session;
