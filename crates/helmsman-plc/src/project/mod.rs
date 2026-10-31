@@ -36,7 +36,11 @@
 
 pub mod build;
 pub mod settings;
-pub mod zip;
+
+pub use helmsman_project::{
+    FileKind, Files, IO_MAP, MAX_FILE, MAX_FILES, MAX_TOTAL, NAME_LEN, SETTINGS, STEM_LEN, check_text,
+    file_name, from_zip, project_name, zip,
+};
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -47,86 +51,10 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use sha2::{Digest as _, Sha256};
 
-/// The I/O map's file name in a project.
-pub const IO_MAP: &str = "io.map";
-/// The settings file's name in a project ([`settings`]).
-pub const SETTINGS: &str = "project.settings";
-/// Largest file, bytes.
-pub const MAX_FILE: usize = 256 * 1024;
-/// Most `.st` files in a project.
-pub const MAX_FILES: usize = 64;
-/// Largest project, all files together, bytes. Every module's source is
-/// at most this (plus a header line per file), under the store's 1 MiB.
-pub const MAX_TOTAL: usize = 900 * 1024;
 /// Most projects on a box.
 pub const MAX_PROJECTS: usize = 256;
-/// Longest project name.
-pub const NAME_LEN: usize = 48;
-/// Longest `.st` file stem.
-pub const STEM_LEN: usize = 64;
 /// The file in the state directory naming the running project.
 pub const RUNNING: &str = "running-project";
-
-/// Whether `s` is a project name.
-#[must_use]
-pub fn project_name(s: &str) -> bool {
-    let b = s.as_bytes();
-    (1..=NAME_LEN).contains(&b.len())
-        && b[0].is_ascii_alphanumeric()
-        && b.iter()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_' || *c == b'-')
-}
-
-/// What a file in a project is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FileKind {
-    St,
-    IoMap,
-    Settings,
-}
-
-/// What `s` names in a project, if it names anything.
-#[must_use]
-pub fn file_name(s: &str) -> Option<FileKind> {
-    match s {
-        IO_MAP => return Some(FileKind::IoMap),
-        SETTINGS => return Some(FileKind::Settings),
-        _ => {}
-    }
-    let stem = s.strip_suffix(".st")?;
-    let b = stem.as_bytes();
-    ((1..=STEM_LEN).contains(&b.len())
-        && b[0].is_ascii_alphanumeric()
-        && b.iter()
-            .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-'))
-    .then_some(FileKind::St)
-}
-
-/// Why a file's bytes are refused, if they are.
-///
-/// # Errors
-/// Not UTF-8, too large, or a character the module docs refuse (named by
-/// line).
-pub fn check_text(bytes: &[u8]) -> Result<&str, String> {
-    if bytes.len() > MAX_FILE {
-        return Err(format!("larger than {MAX_FILE} bytes"));
-    }
-    let text = std::str::from_utf8(bytes).map_err(|_| "not UTF-8".to_string())?;
-    for (n, line) in text.split('\n').enumerate() {
-        for c in line.chars() {
-            let bidi =
-                matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}');
-            if (c.is_control() && c != '\t' && c != '\r') || bidi {
-                return Err(format!(
-                    "line {}: character U+{:04X} is not allowed (control or bidirectional formatting)",
-                    n + 1,
-                    u32::from(c)
-                ));
-            }
-        }
-    }
-    Ok(text)
-}
 
 /// SHA-256 of `bytes`, hex: a file's version, for `if_match` and listings.
 #[must_use]
@@ -138,64 +66,6 @@ pub fn version(bytes: &[u8]) -> String {
         let _ = write!(s, "{b:02x}");
     }
     s
-}
-
-/// A project's files in memory, by name (sorted).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Files(pub BTreeMap<String, String>);
-
-impl Files {
-    /// The `.st` files, by name.
-    pub fn st(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.0
-            .iter()
-            .filter(|(n, _)| file_name(n) == Some(FileKind::St))
-            .map(|(n, t)| (n.as_str(), t.as_str()))
-    }
-
-    #[must_use]
-    pub fn get(&self, name: &str) -> Option<&str> {
-        self.0.get(name).map(String::as_str)
-    }
-
-    /// Bytes, all files together.
-    #[must_use]
-    pub fn total(&self) -> usize {
-        self.0.values().map(String::len).sum()
-    }
-
-    /// Holds a whole set of files to the rules: names, contents, counts,
-    /// sizes, and no two names that differ only by case.
-    ///
-    /// # Errors
-    /// Every problem, one per file (or one for the set).
-    pub fn check(&self) -> Result<(), Vec<String>> {
-        let mut errs = Vec::new();
-        let mut folded: BTreeMap<String, &str> = BTreeMap::new();
-        for (name, text) in &self.0 {
-            if file_name(name).is_none() {
-                errs.push(format!("{}: not a project file name", crate::api::clean(name)));
-                continue;
-            }
-            if let Err(e) = check_text(text.as_bytes()) {
-                errs.push(format!("{name}: {e}"));
-            }
-            if let Some(other) = folded.insert(name.to_ascii_lowercase(), name) {
-                errs.push(format!("{name}: differs from {other} only by case"));
-            }
-        }
-        let st = self.st().count();
-        if st > MAX_FILES {
-            errs.push(format!("{st} .st files; a project holds at most {MAX_FILES}"));
-        }
-        if self.total() > MAX_TOTAL {
-            errs.push(format!(
-                "{} bytes; a project is at most {MAX_TOTAL}",
-                self.total()
-            ));
-        }
-        if errs.is_empty() { Ok(()) } else { Err(errs) }
-    }
 }
 
 /// Why a store call failed: the status the API answers and why.
@@ -651,52 +521,79 @@ impl Projects {
     }
 }
 
-/// Files from an archive's entries: one common top-level folder stripped,
-/// Mac metadata skipped, every name a project file name, no duplicates.
+/// What [`seed`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Seeded {
+    /// The project was made and deployed as this snapshot.
+    Deployed { snapshot: String },
+    /// Not a first install (a project exists, or something was deployed):
+    /// nothing was touched.
+    Left(String),
+}
+
+/// A first install's project: when the box has no project and nothing
+/// deployed, makes project `name` from `files` and commits its build as
+/// the store's first snapshot (author `project NAME`, approver `first
+/// install`), recorded as the running project, so the box boots it. On
+/// any later install it touches nothing, so it never clobbers a project
+/// or brings back one an engineer deleted. There is no approval to ask
+/// for: nothing runs yet, and only someone with root on the box runs it
+/// (`helmsman-plc project seed`, the service's `ExecStartPre`).
 ///
 /// # Errors
-/// A name that is not a project file (traversal, an absolute path, a
-/// nested folder, anything else), a duplicate, bad contents.
-pub fn from_zip(entries: Vec<zip::Entry>) -> Result<Files, String> {
-    let keep: Vec<zip::Entry> = entries
-        .into_iter()
-        .filter(|e| {
-            !(e.name.starts_with("__MACOSX/") || e.name == ".DS_Store" || e.name.ends_with("/.DS_Store"))
-        })
-        .collect();
-    let prefix = keep
-        .first()
-        .and_then(|e| e.name.split_once('/'))
-        .map(|(p, _)| p)
-        // A folder a zipper made: a plain name, never `..`, `.`, a drive.
-        .filter(|p| {
-            let b = p.as_bytes();
-            (1..=128).contains(&b.len())
-                && b[0].is_ascii_alphanumeric()
-                && b.iter()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.' | b' '))
-        })
-        .map(|p| format!("{p}/"))
-        .filter(|p| keep.iter().all(|e| e.name.starts_with(p.as_str())));
-    let mut files = BTreeMap::new();
-    for e in keep {
-        let name = prefix
-            .as_deref()
-            .and_then(|p| e.name.strip_prefix(p))
-            .unwrap_or(&e.name)
-            .to_string();
-        if file_name(&name).is_none() {
-            return Err(format!(
-                "{}: not a project file (NAME.st, {IO_MAP} or {SETTINGS} at the archive's top level)",
-                crate::api::clean(&e.name)
-            ));
-        }
-        let text = check_text(&e.data).map_err(|why| format!("{name}: {why}"))?;
-        if files.insert(name.clone(), text.to_string()).is_some() {
-            return Err(format!("{name}: twice in the archive"));
-        }
+/// The folders or store cannot be used, a file breaks the rules, or the
+/// project does not build (every diagnostic, by file and line); a failed
+/// build leaves the project made, for an engineer to fix.
+pub fn seed(
+    state: &Path,
+    name: &str,
+    files: &[(String, String)],
+    shape: &build::Shape,
+    time_ms: i64,
+) -> Result<Seeded, String> {
+    let projects =
+        Projects::in_state_dir(state).map_err(|e| format!("projects in {}: {e}", state.display()))?;
+    let store_dir = state.join("store");
+    let mut store =
+        crate::store::Store::open(&store_dir).map_err(|e| format!("store {}: {e}", store_dir.display()))?;
+    let existing = projects.list().map_err(|r| r.why)?;
+    if !existing.is_empty() {
+        return Ok(Seeded::Left(format!(
+            "projects already here ({}); nothing seeded",
+            existing.join(", ")
+        )));
     }
-    let files = Files(files);
-    files.check().map_err(|e| e.join("; "))?;
-    Ok(files)
+    if let Some(h) = store.head().map_err(|e| e.to_string())? {
+        return Ok(Seeded::Left(format!(
+            "snapshot {} already deployed; nothing seeded",
+            h.id
+        )));
+    }
+    projects.create(name).map_err(|r| r.why)?;
+    for (file, text) in files {
+        projects
+            .save(name, file, text.as_bytes(), Some(None))
+            .map_err(|r| format!("{file}: {}", r.why))?;
+    }
+    let read = projects.read(name).map_err(|r| r.why)?;
+    let built = build::build(name, &read, None, shape).map_err(|diags| {
+        let lines: Vec<String> = diags.iter().map(ToString::to_string).collect();
+        format!("project {name} does not build:\n  {}", lines.join("\n  "))
+    })?;
+    let meta = crate::store::Meta {
+        author: format!("project {name}"),
+        prompt: "seeded on first install".into(),
+        approver: Some("first install".into()),
+        time_ms,
+    };
+    let id = store.commit(&built.change, &meta).map_err(|e| e.to_string())?;
+    projects
+        .record(&Running {
+            name: name.to_string(),
+            snapshot: id.to_string(),
+        })
+        .map_err(|e| format!("the running-project record: {e}"))?;
+    Ok(Seeded::Deployed {
+        snapshot: id.to_string(),
+    })
 }

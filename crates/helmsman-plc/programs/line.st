@@ -3,7 +3,8 @@
    wired. Open the instances in the tree on the left, or double-click a
    block. A scanner can force station 1's infeed to jam on %IX0.0; the
    line's state is on %QX0.0..2.
-   Deploy: scripts/pi-deploy-plc.sh user@host crates/helmsman-plc/programs/line.st *)
+   Deploy: scripts/pi-deploy-plc.sh user@host seeds a first install with it
+   as project line, deployed. *)
 FUNCTION_BLOCK motor
 VAR_INPUT
   run : BOOL;

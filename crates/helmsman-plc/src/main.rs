@@ -50,6 +50,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
        helmsman-plc account add USER ROLE | passwd USER | disable USER | enable USER | list
                     [--state-dir DIR]   (per-person logins; passwords on stdin. Once
                     any account exists, approvers log in and role PINs are refused)
+       helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE.st ...]
+                    (first install only: with no project and nothing deployed,
+                    makes NAME from the files and deploys it for --projects)
   --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
@@ -1507,11 +1510,100 @@ fn run(o: &Opts) -> Result<(), String> {
     }
 }
 
+/// `helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE...]`:
+/// on a first install (no project, nothing deployed) makes project NAME
+/// from the files and deploys it, so a `--projects` box boots running it
+/// (`helmsman_plc::project::seed`); otherwise, or with no NAME, nothing.
+/// Run by the Pi's unit before every start (`ExecStartPre`), as the service.
+fn project_cli(args: &[String]) -> Result<String, String> {
+    const USE: &str = "usage: helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE.st...]";
+    let Some((verb, rest)) = args.split_first() else {
+        return Err(USE.into());
+    };
+    if verb != "seed" {
+        return Err(USE.into());
+    }
+    let mut state = None;
+    let mut scan = Duration::from_millis(10);
+    let mut words = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--state-dir" => {
+                state = Some(PathBuf::from(rest.get(i + 1).ok_or(USE)?));
+                i += 2;
+            }
+            "--scan-ms" => {
+                scan = match rest.get(i + 1).map(|v| v.parse::<u64>()) {
+                    Some(Ok(ms @ 1..=10_000)) => Duration::from_millis(ms),
+                    _ => return Err(format!("--scan-ms: expected 1..=10000\n{USE}")),
+                };
+                i += 2;
+            }
+            w if w.starts_with("--") => return Err(format!("unknown flag {w}\n{USE}")),
+            w => {
+                words.push(w.to_string());
+                i += 1;
+            }
+        }
+    }
+    let Some((name, paths)) = words.split_first() else {
+        return Ok("helmsman-plc: no project to seed\n".into());
+    };
+    let files = paths
+        .iter()
+        .map(|p| {
+            let path = Path::new(p);
+            let file = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .ok_or_else(|| format!("{p}: not a file name"))?
+                .to_string();
+            let text = fs::read_to_string(path).map_err(|e| format!("{p}: {e}"))?;
+            Ok((file, text))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let cfg = device_config(1);
+    let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
+    let shape = helmsman_plc::project::build::Shape {
+        defaults: Defaults {
+            period: scan,
+            i: Window::new(0, i_len),
+            q: Window::new(0, q_len),
+            m: 1024,
+        },
+        i_len,
+        q_len,
+    };
+    let state = state.unwrap_or_else(default_state_dir);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    match helmsman_plc::project::seed(&state, name, &files, &shape, now)? {
+        helmsman_plc::project::Seeded::Deployed { snapshot } => Ok(format!(
+            "helmsman-plc: first install: project {name} made and deployed as snapshot {snapshot}\n"
+        )),
+        helmsman_plc::project::Seeded::Left(why) => Ok(format!("helmsman-plc: {why}\n")),
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "account") {
         let stdin = std::io::stdin();
         return match account::cli(&args[1..], &mut stdin.lock(), default_state_dir()) {
+            Ok(out) => {
+                print!("{out}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if args.first().is_some_and(|a| a == "project") {
+        return match project_cli(&args[1..]) {
             Ok(out) => {
                 print!("{out}");
                 ExitCode::SUCCESS

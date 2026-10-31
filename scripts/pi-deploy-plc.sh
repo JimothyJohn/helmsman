@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
 # Build helmsman-plc (IEC 61131-3 runtime + CIP adapter) for a 64-bit ARM
-# Pi on this machine and run it there as a systemd service with one program,
-# serving the canvas (the browser HMI, built here as wasm) from its API.
-# Safe to re-run: rebuilds, reinstalls the binary, program and unit, restarts.
+# Pi on this machine and run it there as a systemd service, serving the
+# canvas (the browser editor, built here as wasm) from its API.
+#
+# Projects (the default): the service runs `helmsman-plc --projects`, the
+# editor's projects in /var/lib/helmsman-plc/projects/ and the deployed one
+# booted from its store. On a first install (no project, nothing deployed)
+# it seeds project `line` from crates/helmsman-plc/programs/line.st (or the
+# .st given) and deploys it, so the box runs it from the first boot; a later
+# deploy never touches projects (`helmsman-plc project seed`, run by the
+# unit before every start, only acts on a first install).
+# PLC_MODE=program keeps the old mode: one PROGRAM.st or PROJECT.xml file.
+#
+# Editing, saving, deploying and forcing need an engineer login. A fresh
+# box has no accounts (its role PINs work until one exists); make one:
+#   scripts/pi-account.sh user@host nick engineer      (asks the password)
+# which runs `helmsman-plc account add nick engineer` on the Pi as root and
+# hands the accounts file to the service's user.
+#
+# Safe to re-run: rebuilds, reinstalls the binary, canvas and unit, restarts.
 # Also retires the pre-rename tcpethernet-plc unit and its firewall rules.
 #
 # Needs: Docker here (the build runs in the pinned rust:*-slim-trixie image as
@@ -13,8 +29,12 @@
 # it is built here, not in the arm64 image). Runs here: `! scripts/pi-deploy-plc.sh nick@<pi-ip>`.
 # Then smoke it from here: scripts/adapter-smoke.sh <pi-ip> (needs echo.st).
 #
-# Usage: scripts/pi-deploy-plc.sh user@host [PROGRAM.st|PROJECT.xml]
-#        default program: crates/helmsman-plc/programs/echo.st
+# Usage: scripts/pi-deploy-plc.sh user@host [SEED.st]
+#        PLC_MODE=program scripts/pi-deploy-plc.sh user@host [PROGRAM.st|PROJECT.xml]
+#        PLC_MODE=projects (default) | program
+#        projects: SEED.st seeds a first install as project <its name>
+#                  (default crates/helmsman-plc/programs/line.st: project line)
+#        program:  default program crates/helmsman-plc/programs/echo.st
 #        PLC_SCAN_MS=5     scan period in ms (default 10)
 #        PLC_ALLOW=10.0.0.0/24   firewall source (default 192.168.3.0/24)
 #        PLC_API=0.0.0.0:8080    box API + canvas address (default
@@ -31,9 +51,14 @@
 #       rules are runtime-only and go with a reboot or perceptronics reload.
 set -euo pipefail
 
-target="${1:?usage: $0 user@host [PROGRAM.st|PROJECT.xml]}"
+target="${1:?usage: $0 user@host [SEED.st] (PLC_MODE=program: [PROGRAM.st|PROJECT.xml])}"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
-program="${2:-$repo/crates/helmsman-plc/programs/echo.st}"
+mode="${PLC_MODE:-projects}"
+case "$mode" in
+    projects) program="${2:-$repo/crates/helmsman-plc/programs/line.st}" ;;
+    program) program="${2:-$repo/crates/helmsman-plc/programs/echo.st}" ;;
+    *) echo "PLC_MODE must be projects or program: $mode" >&2; exit 2 ;;
+esac
 scan_ms="${PLC_SCAN_MS:-10}"
 allow="${PLC_ALLOW:-192.168.3.0/24}"
 api="${PLC_API:-127.0.0.1:8080}"
@@ -48,6 +73,16 @@ case "$program" in
     *.xml | *.XML) ext=xml ;;
     *) echo "program must be .st or .xml: $program" >&2; exit 2 ;;
 esac
+# The seeded project's name and file: the .st's own (line.st: project line).
+seed_file="$(basename "$program")"
+seed_name="$(printf '%s' "${seed_file%.*}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_\n-' '-')"
+if [ "$mode" = projects ]; then
+    [ "$ext" = st ] || { echo "a project seed is one .st file: $program" >&2; exit 2; }
+    case "$seed_name" in
+        [a-z0-9]*) ;;
+        *) echo "cannot name a project after $seed_file" >&2; exit 2 ;;
+    esac
+fi
 [ -n "$image" ] || { echo "no rust build image in docker/adapter/Dockerfile" >&2; exit 1; }
 toolchain="${image#rust:}"
 toolchain="${toolchain%%-*}"
@@ -114,13 +149,24 @@ if sudo nft list table inet perceptronics >/dev/null 2>&1; then
 fi"
 
 echo "==> install + restart"
-# shellcheck disable=SC2029 # $ext, $scan_ms, $api and $ui_dir are meant to expand here.
+if [ "$mode" = projects ]; then
+    source_arg=--projects
+    seed_arg="$seed_name /etc/helmsman-plc/seed/$seed_file"
+else
+    source_arg="/etc/helmsman-plc/program.$ext"
+    seed_arg=
+fi
+# shellcheck disable=SC2029 # $ext, $scan_ms, $api, $ui_dir and the seed are meant to expand here.
 ssh "$target" "set -e
 cd ~/.helmsman-plc
 sudo install -m 755 helmsman-plc /usr/local/bin/helmsman-plc
-sudo install -d -m 755 /etc/helmsman-plc
-sudo rm -f /etc/helmsman-plc/program.st /etc/helmsman-plc/program.xml
-sudo install -m 644 program.$ext /etc/helmsman-plc/program.$ext
+sudo install -d -m 755 /etc/helmsman-plc /etc/helmsman-plc/seed
+sudo rm -f /etc/helmsman-plc/program.st /etc/helmsman-plc/program.xml /etc/helmsman-plc/seed/*.st
+if [ '$mode' = projects ]; then
+    sudo install -m 644 program.$ext /etc/helmsman-plc/seed/$seed_file
+else
+    sudo install -m 644 program.$ext /etc/helmsman-plc/program.$ext
+fi
 # The canvas: replaced whole (its file names carry content hashes), read-only
 # for the service.
 sudo rm -rf $ui_dir
@@ -128,8 +174,8 @@ sudo install -d -m 755 $ui_dir
 sudo cp -R ui/. $ui_dir/
 sudo chown -R root:root $ui_dir
 sudo chmod -R u=rwX,go=rX $ui_dir
-printf 'PLC_PROGRAM=/etc/helmsman-plc/program.%s\nPLC_SCAN_MS=%s\nPLC_API=%s\nPLC_UI=%s\n' \
-    $ext $scan_ms $api $ui_dir | sudo tee /etc/helmsman-plc/env >/dev/null
+printf 'PLC_SOURCE=%s\nPLC_SEED=%s\nPLC_SCAN_MS=%s\nPLC_API=%s\nPLC_UI=%s\n' \
+    '$source_arg' '$seed_arg' $scan_ms $api $ui_dir | sudo tee /etc/helmsman-plc/env >/dev/null
 sudo install -m 644 helmsman-plc.service /etc/systemd/system/helmsman-plc.service
 sudo systemctl daemon-reload
 sudo systemctl enable helmsman-plc >/dev/null 2>&1
@@ -204,9 +250,23 @@ ssh "$target" "curl -fsSk --max-time 2 -o /dev/null https://$local_api/api/modul
 # shellcheck disable=SC2029 # $local_api is meant to expand here.
 fingerprint=$(ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/policy" \
     | grep -o '"fingerprint":"[0-9A-F:]*"' | cut -d'"' -f4 || true)
+if [ "$mode" = projects ]; then
+    # shellcheck disable=SC2029 # $local_api is meant to expand here.
+    running="$(ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/running")" \
+        || { echo "FAIL: the box answers without projects (is it running --projects?)" >&2; exit 1; }
+    case "$running" in
+        *'"current":true'*) echo "running: $running" ;;
+        *) echo "projects on, nothing deployed and current: $running (journal: ssh $target journalctl -u helmsman-plc)" ;;
+    esac
+fi
 host="${target#*@}"
 echo
-echo "PLC is up on $host running $(basename "$program") every ${scan_ms} ms"
+if [ "$mode" = projects ]; then
+    echo "PLC is up on $host with projects (first install seeds $seed_name), scanning every ${scan_ms} ms"
+    echo "  engineer:   scripts/pi-account.sh $target USER engineer   (once, to edit and deploy)"
+else
+    echo "PLC is up on $host running $(basename "$program") every ${scan_ms} ms"
+fi
 echo "  from here:  scripts/adapter-smoke.sh $host"
 case "$api" in
     127.*) echo "  canvas:     ssh -L $api_port:127.0.0.1:$api_port $target, then https://localhost:$api_port/" ;;

@@ -14,7 +14,7 @@
 //!   uncompressed size in all; each entry inflates into at most its
 //!   declared size (a bomb that lies about its size is cut off there and
 //!   refused), and its CRC-32 and length must then match.
-//! - **Names are checked by the caller** ([`super::file_name`]): no
+//! - **Names are checked by the caller** ([`crate::file_name`]): no
 //!   directories survive but one common top-level folder (stripped), so
 //!   `../`, absolute paths, drive letters and backslashes never name a
 //!   file. Entries a Mac adds (`__MACOSX/`, `.DS_Store`) are skipped.
@@ -30,7 +30,7 @@ use std::fmt::Write as _;
 /// Most central directory records an upload may hold.
 pub const MAX_ENTRIES: usize = 128;
 /// Most uncompressed bytes, declared and actual, over every entry.
-pub const MAX_TOTAL: usize = super::MAX_TOTAL;
+pub const MAX_TOTAL: usize = crate::MAX_TOTAL;
 
 const LOCAL: u32 = 0x0403_4b50;
 const CENTRAL: u32 = 0x0201_4b50;

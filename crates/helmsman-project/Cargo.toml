@@ -1,0 +1,17 @@
+[package]
+name = "helmsman-project"
+version = "0.1.0"
+description = "A Helmsman project's rules and its .zip, with no I/O: shared by the box (helmsman-plc) and the browser's simulation (helmsman-canvas)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# DEFLATE entries of an uploaded .zip, inflated under a size limit. Pure
+# Rust (one dependency, adler2), so it builds for wasm32; already in the
+# lockfile. The ZIP container itself is ours (zip.rs).
+miniz_oxide = "0.9.1"
+
+[lints]
+workspace = true

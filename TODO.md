@@ -659,7 +659,7 @@
   notes: built as the recommended option on feat/wasm-driver-map (reversible; card left open for your call): a driver is a `wasm-driver` blob in the change set, proposed as `{kind: driver, name, wasm}`, checked at proposal (`wasm::check` + `wasm::sandbox`, and the running map must still load), output-affecting so engineer PIN + replay, carried by bundles, rolled back like anything else. The Modbus guest stays a test fixture. To undo: drop `ChangeSet::drivers` and the `driver` proposal kind; the store's schema 3 only matters to stores that hold a driver.
   answer: file path on the box
 
-- [ ] **BLINK_PATTERN with PERIOD 0 or negative: steady on, off, or a fault?** The stack-light block (#88, `BLINK_PATTERN(EN, MODE, PERIOD) -> Q` in helmsman-iec's library.st) has to do something when a blinking mode (slow, fast, double flash) gets a PERIOD of zero or below, which a bad param or an uninitialised TIME produces. Built: steady on, so a misconfigured alarm light still lights and nothing divides by zero. The alternatives are off (quiet, but a bad setting hides the alarm) or a runtime fault on the module (loud, but one bad param stops every output that module drives). Reversible: one branch in library.st and its property test.
+- [x] **BLINK_PATTERN with PERIOD 0 or negative: steady on, off, or a fault?** The stack-light block (#88, `BLINK_PATTERN(EN, MODE, PERIOD) -> Q` in helmsman-iec's library.st) has to do something when a blinking mode (slow, fast, double flash) gets a PERIOD of zero or below, which a bad param or an uninitialised TIME produces. Built: steady on, so a misconfigured alarm light still lights and nothing divides by zero. The alternatives are off (quiet, but a bad setting hides the alarm) or a runtime fault on the module (loud, but one bad param stops every output that module drives). Reversible: one branch in library.st and its property test.
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -681,7 +681,7 @@
   id: dropin-size-caps
   answer: 2 MiB per PDF, 3.5 MiB history (recommended, built)
 
-- [ ] **A drop-in the relay refused: should proposals still cite it?** When the relay refuses a PDF (encrypted, over 100 pages), #87 swaps the document in the chat history for a note so the chat goes on. The refused drop-in stays in the conversation's proposal binding (`Drafts::dropins`), so a proposal drafted later in that chat lists it as a source even though the model never read it. Built that way because over-citing is the safe side: a reviewer sees everything the conversation touched. The other way drops it from the binding, so the proposal lists only what the model actually saw.
+- [x] **A drop-in the relay refused: should proposals still cite it?** When the relay refuses a PDF (encrypted, over 100 pages), #87 swaps the document in the chat history for a note so the chat goes on. The refused drop-in stays in the conversation's proposal binding (`Drafts::dropins`), so a proposal drafted later in that chat lists it as a source even though the model never read it. Built that way because over-citing is the safe side: a reviewer sees everything the conversation touched. The other way drops it from the binding, so the proposal lists only what the model actually saw.
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -994,6 +994,36 @@
   difficulty: low
   id: save-scope
 
+- [ ] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether the simulation's editor behaves like the box's
+  options: typing runs, Deploy marks (built) | typing only checks (errors marked), Deploy runs, like a box
+  est: 1h
+  difficulty: low
+  id: sim-typing-runs
+
+- [ ] **A project with two PROGRAMs in the simulation?** On a box each PROGRAM of a project is a module of its own. The simulation's interpreter runs one program, so a project with two PROGRAMs fails there with "only one PROGRAM is supported". Built: that error, pointing at the second PROGRAM's file and line.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what the simulation runs for a multi-PROGRAM project
+  options: refuse, as built | run the first PROGRAM and say so | run each as its own task, like a box (simulation runtime work)
+  est: 1d
+  difficulty: med
+  id: sim-multi-program
+
+- [ ] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether a fresh box runs the demo or waits for an engineer's first deploy
+  options: seed and deploy (built) | seed the project only, nothing runs until an engineer deploys | no seed
+  est: 30m
+  difficulty: low
+  id: seed-deploys
+
 - [ ] **HTTPS box: plain HTTP from the LAN refused, and a certificate without the box's IP: OK?** `box-https` (built) serves TLS on the API's port. Plain HTTP is served only from the box's own host (loopback or its own address: local scripts, the agent, the deploy script's curl, an SSH tunnel). From the LAN, a GET is redirected to https:// and anything else, `POST /mcp` from an engineer's MCP client included, is 403. The certificate names `localhost`, the host name (and NAME.local), 127.0.0.1 and ::1, not the LAN IP, because a bind of 0.0.0.0 doesn't say which address that is. A browser asks once either way. A strict client reaching the box by IP (an MCP client with the cert in `NODE_EXTRA_CA_CERTS`) fails the name check, and one using the host name passes. Built: as described.
   asked: 2026-10-31
   by: claude-agent
@@ -1235,10 +1265,11 @@
   asked: 2026-10-31
   by: claude-agent
 
-- [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc) instead of one PLC_PROGRAM file, once the editor UI can deploy.
-  needs: the editor UI (UI.md step 2, canvas side)
-  result: the Pi boots the deployed project; the first boot runs nothing until a deploy
-  est: 1h
+- [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc); a first install seeds project `line` from programs/line.st, deployed (`helmsman-plc project seed`, the unit's ExecStartPre); `PLC_MODE=program` keeps the old one-file mode. Built and tested here; yours to run against the Pi (native terminal or `!`: it needs Docker, trunk, and SSH with sudo on the Pi, and the firewall step is refused from an agent).
+  needs: you to run the two commands (the Pi's IP); the Pi on Debian Trixie with key SSH and passwordless sudo (scripts/pi-prep.sh)
+  result: the Pi serves the editor with projects, running `line`; you can sign in as an engineer and edit, deploy and force
+  notes: PLC_API=0.0.0.0:8080 scripts/pi-deploy-plc.sh nick@<pi-ip>   then   scripts/pi-account.sh nick@<pi-ip> nick engineer
+  est: 15m
   difficulty: low
   id: pi-projects
   asked: 2026-10-31

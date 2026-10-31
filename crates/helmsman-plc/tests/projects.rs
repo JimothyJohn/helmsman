@@ -1890,3 +1890,68 @@ fn forces_end_on_logout_on_expiry_and_on_deploy() {
         b.cmd("lamp") == Some(Value::Bool(true))
     });
 }
+
+fn seed(state: &Path, args: &[&str]) -> (bool, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
+        .args(["project", "seed", "--state-dir"])
+        .arg(state)
+        .args(["--scan-ms", "10"])
+        .args(args)
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), text)
+}
+
+#[test]
+fn a_first_install_seeds_and_deploys_a_project_and_never_again() {
+    let state = tmp("seed");
+    let line = concat!(env!("CARGO_MANIFEST_DIR"), "/programs/line.st");
+    // Nothing named: nothing done (the program-mode unit runs it so).
+    let (ok, out) = seed(&state, &[]);
+    assert!(ok && out.contains("no project to seed"), "{out}");
+    // A first install: made, deployed, recorded.
+    let (ok, out) = seed(&state, &["line", line]);
+    assert!(ok && out.contains("project line made and deployed"), "{out}");
+    let plc = plc_projects(&state);
+    let r = get(plc.addr, "/api/running").json();
+    assert_eq!(
+        (r["project"].as_str(), r["current"].as_bool()),
+        (Some("line"), Some(true)),
+        "{r}"
+    );
+    let modules = get(plc.addr, "/api/modules").json();
+    assert_eq!(modules[0]["name"], "line", "{modules}");
+    let log = get(plc.addr, "/api/snapshots").json();
+    assert_eq!(log["log"][0]["approver"], "first install", "{log}");
+    drop(plc);
+    // Edited since: the next install (every service start) touches nothing.
+    let projects = Projects::in_state_dir(&state).unwrap();
+    let mine = "(* mine *)\n".to_string() + &std::fs::read_to_string(line).unwrap();
+    projects.save("line", "line.st", mine.as_bytes(), None).unwrap();
+    let (ok, out) = seed(&state, &["line", line]);
+    assert!(ok && out.contains("nothing seeded"), "{out}");
+    assert_eq!(projects.file("line", "line.st").unwrap(), mine, "never clobbered");
+    // Nor on a box that already ran something, with no project.
+    let other = tmp("seed-other");
+    Store::open(&other.join("store"))
+        .unwrap()
+        .commit(&running(), &meta())
+        .unwrap();
+    let (ok, out) = seed(&other, &["line", line]);
+    assert!(ok && out.contains("already deployed"), "{out}");
+    assert_eq!(
+        Projects::in_state_dir(&other).unwrap().list().unwrap(),
+        Vec::<String>::new()
+    );
+    // A file that does not build: refused, saying where.
+    let bad = tmp("seed-bad");
+    let src = bad.join("broken.st");
+    std::fs::write(&src, "PROGRAM broken\n  x := ;\nEND_PROGRAM\n").unwrap();
+    let (ok, out) = seed(&bad, &["broken", src.to_str().unwrap()]);
+    assert!(!ok && out.contains("broken.st:2"), "{out}");
+}
