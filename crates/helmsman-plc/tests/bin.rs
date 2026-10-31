@@ -390,6 +390,67 @@ out lamp  bool box do:0 safe=true
     }
 }
 
+/// The box owned by a scanner and mastering an E1213 over `enip-io` at the
+/// same time, on its one I/O port: no `io_port` on the link, nothing moved
+/// apart. The scanner's bit goes through the module to the E1213's DO-00,
+/// back on its wired DI-00, through the module again and out to the
+/// scanner. (`--io-port 0` only so parallel test runs don't fight over
+/// 2222; adapter and link share whatever port it is.)
+#[test]
+fn the_adapter_and_an_enip_io_link_share_one_io_port() {
+    use helmsman_io::enip_sim::E1213Sim;
+    let sim = E1213Sim::start().unwrap();
+    let mut params = sim.params();
+    params.remove("io_port");
+    let params: Vec<String> = params.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    let map = text_file(
+        "shared_port.iomap",
+        &format!(
+            "device rio enip-io {} {}
+out clamp    bool rio do:0 safe=false
+in  clamp_fb bool rio di:0
+",
+            sim.endpoint(),
+            params.join(" ")
+        ),
+    );
+    let prog = program_file(
+        "shared_port",
+        "PROGRAM line
+         VAR_INPUT clamp_fb : BOOL; END_VAR
+         VAR_OUTPUT clamp : BOOL; END_VAR
+         VAR go AT %IX0.0 : BOOL; fb AT %QX0.0 : BOOL; END_VAR
+           clamp := go;
+           fb := clamp_fb;
+         END_PROGRAM",
+    );
+    let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let args = [prog.as_os_str(), "--io-map".as_ref(), map.as_os_str()];
+    let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
+    let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
+    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
+
+    wait_until("the link to the E1213", || !sim.o_to_t_sources().is_empty());
+    // The box's O->T to the E1213 leaves from the port the scanner talks to.
+    assert_eq!(sim.o_to_t_sources(), vec![io]);
+    let mut out = [0u8; 32];
+    out[0] = 1;
+    conn.set_output(&out).unwrap();
+    wait_for(&conn, "the scanner's bit back through the E1213", |i| {
+        i.data[0] & 1 == 1
+    });
+    out[0] = 0;
+    conn.set_output(&out).unwrap();
+    wait_for(&conn, "and off again", |i| i.data[0] & 1 == 0);
+    assert_eq!(conn.packets_ignored(), 0);
+    conn.close(&mut s).unwrap();
+    s.close();
+    let log = plc.finish();
+    assert!(log.contains("device rio up"), "{log}");
+    assert!(!log.contains("address in use"), "{log}");
+}
+
 #[test]
 fn a_bad_io_map_is_refused_before_the_adapter_starts() {
     let prog = program_file(

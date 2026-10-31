@@ -7,10 +7,18 @@
 //!   `SendRRData` on an unregistered handle gets 0x0064 with no payload,
 //!   as in `OpENer`'s `encap.c`.
 //! - UDP listener on the encapsulation port for `ListIdentity` discovery.
-//! - UDP I/O socket: consumes O->T, produces T->O to `originator:peer_io_port`
-//!   (2222 by default, where `OpENer` sends it; 0 answers each connection
-//!   at the port its O->T packets come from), and expires connections.
+//! - Class 1 I/O on a [`helmsman_proto::endpoint::IoEndpoint`]: its own
+//!   on `io_port` ([`Adapter::start`]), or one the box shares with its
+//!   `enip-io` links ([`Adapter::start_on`]). The adapter owns the O->T IDs
+//!   it hands out in `Forward_Open` replies, each routed from the
+//!   originator's IP only; it produces T->O to the port of the T->O
+//!   socket-address item in the `Forward_Open` if there was one (as
+//!   `OpENer`'s `cipioconnection.c` `OpenProducingPointToPointConnection`
+//!   does), else to `originator:peer_io_port` (2222 by default, `OpENer`'s
+//!   default; 0 answers each connection at the port its O->T packets come
+//!   from), and expires connections.
 
+use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -20,9 +28,9 @@ use std::time::{Duration, Instant};
 
 use helmsman_proto::codec::Reader;
 use helmsman_proto::encap::{self, Command, Frame, HEADER_LEN, Header, Status};
+use helmsman_proto::endpoint::{IoEndpoint, Owner};
 use helmsman_proto::explicit;
 use helmsman_proto::identity::{IdentityItem, SocketAddress, encode_list_identity};
-use helmsman_proto::io::IoPacket;
 
 use crate::device::{self, Device};
 
@@ -62,15 +70,33 @@ pub struct Adapter {
     stop: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
     encap_addr: SocketAddrV4,
-    io_addr: SocketAddrV4,
+    endpoint: IoEndpoint,
+    dest: Arc<Mutex<Dest>>,
     sessions: Arc<AtomicUsize>,
+}
+
+/// Where each connection's T->O goes beyond the originator's IP, keyed by
+/// O->T ID (ours, so unique; two originators may pick one T->O ID).
+#[derive(Debug, Default)]
+struct Dest {
+    /// From a T->O socket-address item in the `Forward_Open`.
+    sockaddr: HashMap<u32, u16>,
+    /// Where the connection's O->T datagrams last came from.
+    seen: HashMap<u32, SocketAddrV4>,
+}
+
+impl Dest {
+    fn retain(&mut self, live: &[u32]) {
+        self.sockaddr.retain(|id, _| live.contains(id));
+        self.seen.retain(|id, _| live.contains(id));
+    }
 }
 
 impl std::fmt::Debug for Adapter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Adapter")
             .field("encap_addr", &self.encap_addr)
-            .field("io_addr", &self.io_addr)
+            .field("io_addr", &self.endpoint.local_addr())
             .finish_non_exhaustive()
     }
 }
@@ -83,16 +109,29 @@ fn v4(a: SocketAddr) -> io::Result<SocketAddrV4> {
 }
 
 impl Adapter {
-    /// Bind every socket, then start serving.
+    /// Bind every socket, then start serving. The I/O endpoint is the
+    /// adapter's alone, on `cfg.io_port`.
     ///
     /// # Errors
     /// Any bind failure (port in use, permission).
     pub fn start(device: Device, cfg: &ServerConfig) -> io::Result<Self> {
+        let endpoint = IoEndpoint::bind(SocketAddrV4::new(cfg.bind, cfg.io_port))?;
+        Self::start_on(device, cfg, &endpoint)
+    }
+
+    /// As [`Self::start`], with Class 1 I/O on `endpoint` (shared with
+    /// whatever else owns connections on it); `cfg.io_port` is unused.
+    /// O->T connection IDs come from the endpoint from now on.
+    ///
+    /// # Errors
+    /// Any bind failure (port in use, permission).
+    pub fn start_on(mut device: Device, cfg: &ServerConfig, endpoint: &IoEndpoint) -> io::Result<Self> {
         let tcp = TcpListener::bind((cfg.bind, cfg.encap_port))?;
         let encap_addr = v4(tcp.local_addr()?)?;
         let udp_encap = UdpSocket::bind((cfg.bind, encap_addr.port()))?;
-        let io_sock = UdpSocket::bind((cfg.bind, cfg.io_port))?;
-        let io_addr = v4(io_sock.local_addr()?)?;
+        device.set_id_allocator(endpoint.allocator());
+        let owner = Arc::new(endpoint.owner());
+        let dest = Arc::new(Mutex::new(Dest::default()));
 
         let device = Arc::new(Mutex::new(device));
         let stop = Arc::new(AtomicBool::new(false));
@@ -101,6 +140,10 @@ impl Adapter {
 
         tcp.set_nonblocking(true)?;
         {
+            let io = Io {
+                owner: Arc::clone(&owner),
+                dest: Arc::clone(&dest),
+            };
             let (device, stop, sessions, cfg) = (
                 Arc::clone(&device),
                 Arc::clone(&stop),
@@ -109,7 +152,7 @@ impl Adapter {
             );
             let next_handle = Arc::new(AtomicU32::new(1));
             threads.push(thread::Builder::new().name("eip-tcp".into()).spawn(move || {
-                accept_loop(&tcp, &device, &stop, &sessions, &next_handle, &cfg);
+                accept_loop(&tcp, &device, &stop, &sessions, &next_handle, &cfg, &io);
             })?);
         }
         {
@@ -121,11 +164,14 @@ impl Adapter {
             })?);
         }
         {
+            let io = Io {
+                owner,
+                dest: Arc::clone(&dest),
+            };
             let (device, stop) = (Arc::clone(&device), Arc::clone(&stop));
             let peer_port = cfg.peer_io_port;
-            io_sock.set_read_timeout(Some(Duration::from_millis(1)))?;
             threads.push(thread::Builder::new().name("eip-io".into()).spawn(move || {
-                io_loop(&io_sock, &device, &stop, peer_port);
+                io_loop(&io, &device, &stop, peer_port);
             })?);
         }
         Ok(Self {
@@ -133,7 +179,8 @@ impl Adapter {
             stop,
             threads,
             encap_addr,
-            io_addr,
+            endpoint: endpoint.clone(),
+            dest,
             sessions,
         })
     }
@@ -149,8 +196,22 @@ impl Adapter {
     }
 
     #[must_use]
-    pub const fn io_addr(&self) -> SocketAddrV4 {
-        self.io_addr
+    pub fn io_addr(&self) -> SocketAddrV4 {
+        self.endpoint.local_addr()
+    }
+
+    /// The I/O endpoint this adapter consumes on.
+    #[must_use]
+    pub const fn endpoint(&self) -> &IoEndpoint {
+        &self.endpoint
+    }
+
+    /// Where each open connection's O->T datagrams last came from.
+    #[must_use]
+    pub fn o_to_t_sources(&self) -> Vec<SocketAddrV4> {
+        let mut v: Vec<SocketAddrV4> = lock_dest(&self.dest).seen.values().copied().collect();
+        v.sort_unstable();
+        v
     }
 
     #[must_use]
@@ -172,6 +233,36 @@ impl Drop for Adapter {
     }
 }
 
+/// The adapter's share of the I/O endpoint.
+#[derive(Clone)]
+struct Io {
+    owner: Arc<Owner>,
+    dest: Arc<Mutex<Dest>>,
+}
+
+fn lock_dest(m: &Mutex<Dest>) -> std::sync::MutexGuard<'_, Dest> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+impl Io {
+    /// Route exactly the device's open connections here, each from its
+    /// originator; forget where closed ones sent from. Call with the device
+    /// locked, right after anything that opens or closes connections, so
+    /// the first O->T datagram already has its route.
+    fn sync(&self, dev: &Device) {
+        let want: Vec<(u32, Ipv4Addr)> = dev
+            .connections()
+            .iter()
+            .map(|c| (c.o_to_t_id, c.originator))
+            .collect();
+        // An ID another owner holds can only happen if the device chose
+        // it without the endpoint's allocator; its datagrams stay unrouted.
+        let _taken = self.owner.sync(&want);
+        let live: Vec<u32> = want.iter().map(|(id, _)| *id).collect();
+        lock_dest(&self.dest).retain(&live);
+    }
+}
+
 fn accept_loop(
     tcp: &TcpListener,
     device: &Arc<Mutex<Device>>,
@@ -179,6 +270,7 @@ fn accept_loop(
     sessions: &Arc<AtomicUsize>,
     next_handle: &Arc<AtomicU32>,
     cfg: &ServerConfig,
+    io: &Io,
 ) {
     let mut clients: Vec<JoinHandle<()>> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
@@ -196,9 +288,10 @@ fn accept_loop(
                     Arc::clone(next_handle),
                 );
                 let idle = cfg.session_idle;
+                let io = io.clone();
                 sessions.fetch_add(1, Ordering::Relaxed);
                 let spawned = thread::Builder::new().name("eip-client".into()).spawn(move || {
-                    let _ = serve_client(stream, peer_ip, &device, &stop, &next_handle, idle);
+                    let _ = serve_client(stream, peer_ip, &device, &stop, &next_handle, idle, &io);
                     sessions.fetch_sub(1, Ordering::Relaxed);
                 });
                 if let Ok(h) = spawned {
@@ -281,6 +374,15 @@ fn status_only(h: &Header, status: Status, session: u32) -> Vec<u8> {
     out.encode().to_vec()
 }
 
+/// The port of a T->O socket-address item among `items`, if any.
+fn t_to_o_port(items: &[helmsman_proto::cpf::Item<'_>]) -> Option<u16> {
+    let item = items
+        .iter()
+        .find(|i| i.type_id == helmsman_proto::cpf::item::SOCKADDR_T_TO_O)?;
+    let addr = SocketAddress::decode(&mut Reader::new(item.data)).ok()?;
+    (addr.family == SocketAddress::AF_INET && addr.port != 0).then_some(addr.port)
+}
+
 fn serve_client(
     mut stream: TcpStream,
     peer: Ipv4Addr,
@@ -288,6 +390,7 @@ fn serve_client(
     stop: &AtomicBool,
     next_handle: &AtomicU32,
     idle: Duration,
+    io: &Io,
 ) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
     stream.set_nodelay(true)?;
@@ -337,23 +440,33 @@ fn serve_client(
                         helmsman_proto::cpf::decode(r.rest())
                             .ok()
                             .and_then(|items| match items.as_slice() {
-                                [a, d, ..]
+                                [a, d, rest @ ..]
                                     if a.type_id == helmsman_proto::cpf::item::NULL_ADDRESS
                                         && d.type_id == helmsman_proto::cpf::item::UNCONNECTED_DATA =>
                                 {
-                                    Some(d.data.to_vec())
+                                    Some((d.data.to_vec(), t_to_o_port(rest)))
                                 }
                                 _ => None,
                             })
                     };
                     match mr {
-                        Some(mr) => {
-                            let resp = device::handle_bytes(
-                                &mut device::lock_ref(device),
-                                &mr,
-                                peer,
-                                Instant::now(),
-                            );
+                        Some((mr, port)) => {
+                            let resp = {
+                                let mut dev = device::lock_ref(device);
+                                let before: Vec<u32> =
+                                    dev.connections().iter().map(|c| c.o_to_t_id).collect();
+                                let resp = device::handle_bytes(&mut dev, &mr, peer, Instant::now());
+                                io.sync(&dev);
+                                if let Some(port) = port {
+                                    let mut d = lock_dest(&io.dest);
+                                    for c in dev.connections() {
+                                        if !before.contains(&c.o_to_t_id) {
+                                            d.sockaddr.insert(c.o_to_t_id, port);
+                                        }
+                                    }
+                                }
+                                resp
+                            };
                             Some(explicit::encode_send_rr_data_reply(
                                 h.session_handle,
                                 h.sender_context,
@@ -409,44 +522,48 @@ fn udp_encap_loop(sock: &UdpSocket, device: &Mutex<Device>, stop: &AtomicBool, p
     }
 }
 
-fn io_loop(sock: &UdpSocket, device: &Mutex<Device>, stop: &AtomicBool, peer_port: u16) {
-    let mut buf = [0u8; 1500];
-    // With `peer_port` 0: T->O connection id -> the port its O->T came from.
-    let mut ports: std::collections::HashMap<u32, u16> = std::collections::HashMap::new();
+fn io_loop(io: &Io, device: &Mutex<Device>, stop: &AtomicBool, peer_port: u16) {
+    let mut routed: Vec<u32> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
-        if let Ok((n, SocketAddr::V4(from))) = sock.recv_from(&mut buf) {
-            let mut d = device::lock_ref(device);
-            if d.on_io_packet(&buf[..n], *from.ip(), Instant::now()).is_ok()
-                && peer_port == 0
-                && let Ok(pkt) = IoPacket::decode(&buf[..n])
-                && let Some(c) = d.connections().iter().find(|c| c.o_to_t_id == pkt.connection_id)
-            {
-                ports.insert(c.t_to_o_id, from.port());
+        if let Some(d) = io.owner.recv_timeout(Duration::from_millis(1)) {
+            let mut dev = device::lock_ref(device);
+            // The endpoint routed it here from the connection's originator;
+            // the device still checks both, and the sequence.
+            if dev.on_io_packet(&d.bytes, *d.from.ip(), Instant::now()).is_ok() {
+                lock_dest(&io.dest).seen.insert(d.connection_id, d.from);
             }
         }
         let now = Instant::now();
         let out = {
-            let mut d = device::lock_ref(device);
-            d.expire(now);
-            if peer_port == 0 {
-                let live: Vec<u32> = d.connections().iter().map(|c| c.t_to_o_id).collect();
-                ports.retain(|id, _| live.contains(id));
+            let mut dev = device::lock_ref(device);
+            dev.expire(now);
+            // Timeouts, and closes nobody asked for (a simulated power cycle).
+            if !dev
+                .connections()
+                .iter()
+                .map(|c| c.o_to_t_id)
+                .eq(routed.iter().copied())
+            {
+                io.sync(&dev);
+                routed = dev.connections().iter().map(|c| c.o_to_t_id).collect();
             }
-            d.due_productions(now)
+            dev.due(now)
         };
-        for (ip, pkt) in out {
-            let port = if peer_port == 0 {
-                match IoPacket::decode(&pkt)
-                    .ok()
-                    .and_then(|p| ports.get(&p.connection_id))
-                {
-                    Some(p) => *p,
-                    None => continue,
+        for p in out {
+            let port = {
+                let dest = lock_dest(&io.dest);
+                match (dest.sockaddr.get(&p.o_to_t_id), peer_port) {
+                    (Some(port), _) => *port,
+                    (None, 0) => match dest.seen.get(&p.o_to_t_id) {
+                        Some(from) => from.port(),
+                        None => continue,
+                    },
+                    (None, port) => port,
                 }
-            } else {
-                peer_port
             };
-            let _ = sock.send_to(&pkt, SocketAddrV4::new(ip, port));
+            let _ = io
+                .owner
+                .send_to(&p.datagram, SocketAddrV4::new(p.originator, port));
         }
     }
 }

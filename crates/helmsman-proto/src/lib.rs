@@ -37,6 +37,7 @@ pub mod cpf;
 pub mod discover;
 pub mod eds;
 pub mod encap;
+pub mod endpoint;
 pub mod explicit;
 pub mod identity;
 pub mod io;

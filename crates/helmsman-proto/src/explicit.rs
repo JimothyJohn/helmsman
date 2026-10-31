@@ -83,7 +83,21 @@ pub fn send_rr_data(
 /// path).
 #[must_use]
 pub fn send_rr_data_bytes(session_handle: u32, sender_context: [u8; 8], timeout: u16, mr: &[u8]) -> Vec<u8> {
-    let items = [
+    send_rr_data_with_items(session_handle, sender_context, timeout, mr, &[])
+}
+
+/// [`send_rr_data_bytes`] with `extra` CPF items after the unconnected
+/// data item, where socket-address items go (`OpENer` `cpf.c`
+/// `CreateCommonPacketFormatStructure` reads them after the data item).
+#[must_use]
+pub fn send_rr_data_with_items(
+    session_handle: u32,
+    sender_context: [u8; 8],
+    timeout: u16,
+    mr: &[u8],
+    extra: &[Item<'_>],
+) -> Vec<u8> {
+    let mut items = vec![
         Item {
             type_id: cpf::item::NULL_ADDRESS,
             data: &[],
@@ -93,6 +107,7 @@ pub fn send_rr_data_bytes(session_handle: u32, sender_context: [u8; 8], timeout:
             data: mr,
         },
     ];
+    items.extend_from_slice(extra);
     let mut w = Writer::default();
     w.u32_le(0).u16_le(timeout);
     cpf::encode(&items, &mut w);

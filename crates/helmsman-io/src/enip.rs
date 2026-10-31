@@ -33,10 +33,21 @@
 //! Optional everywhere: `rpi_ms` (default the EDS's, else 100; checked
 //! against the EDS's range), `multiplier` (0..=7, default 1: the
 //! connection times out after RPI × 2^(multiplier+2) without T->O data),
-//! `timeout_ms` (explicit messaging, default 1000), `io_port` (the local
-//! UDP port T->O data arrives on, default 2222, where targets send it),
-//! `device_io_port` (the device's, default 2222), and `key=off|exact|compatible`
-//! (an electronic key from the EDS or profile identity; default off).
+//! `timeout_ms` (explicit messaging, default 1000), `io_port` (a local UDP
+//! port of the link's own for T->O data; see below), `device_io_port` (the
+//! device's, default 2222), and `key=off|exact|compatible` (an electronic
+//! key from the EDS or profile identity; default off).
+//!
+//! # The I/O port
+//!
+//! On a box the link consumes on the box's one Class 1 endpoint
+//! (`helmsman_proto::endpoint`, UDP 2222 unless `helmsman-plc --io-port`
+//! moves it), shared with the box's own adapter and every other `enip-io`
+//! link: each T->O datagram is routed by its connection ID, which the box
+//! chose, and only from the device's IP. Elsewhere (no shared endpoint),
+//! or with `io_port=N`, the link binds a port of its own (2222 by
+//! default). Devices send T->O to 2222 unless told otherwise, so off 2222
+//! the `Forward_Open` carries a T->O socket-address item naming the port.
 //!
 //! # Points
 //!
@@ -540,7 +551,9 @@ pub struct Params {
     pub rpi: Option<Duration>,
     pub multiplier: u8,
     pub timeout: Duration,
-    pub io_port: u16,
+    /// A UDP port of the link's own for I/O; `None`: the box's shared
+    /// endpoint, or 2222 where there is none.
+    pub io_port: Option<u16>,
     pub device_io_port: u16,
     pub key: Key,
 }
@@ -689,7 +702,7 @@ impl Params {
                 .and_then(|v| u8::try_from(v).ok())
                 .unwrap_or(1),
             timeout: Duration::from_millis(int("timeout_ms", 60_000)?.unwrap_or(1000).max(1)),
-            io_port: port("io_port", IO_PORT)?,
+            io_port: int("io_port", 0xFFFF)?.and_then(|v| u16::try_from(v).ok()),
             device_io_port: port("device_io_port", IO_PORT)?,
             key,
         };
@@ -746,14 +759,15 @@ pub use driver::EnipDriver;
 #[cfg(feature = "enip")]
 mod driver {
     use std::io;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
     use std::time::Duration;
 
+    use helmsman_proto::endpoint::IoEndpoint;
     use helmsman_proto::io::{ElectronicKey, Priority};
     use helmsman_proto::scanner::{self, Closer, IoConfig, IoConnection};
     use helmsman_proto::session::{self, Session};
 
-    use super::{Connection, DEFAULT_PORT, Key, Params, Point, Side, Spec};
+    use super::{Connection, DEFAULT_PORT, IO_PORT, Key, Params, Point, Side, Spec};
     use crate::driver::{Driver, Error, PointInfo};
     use crate::model::Value;
 
@@ -774,6 +788,8 @@ mod driver {
         link: Option<Link>,
         /// A connection lost with its session; closed on the next one.
         stale: Option<Closer>,
+        /// The box's I/O endpoint, shared with its adapter and other links.
+        shared: Option<IoEndpoint>,
         /// `Forward_Open`s sent, for tests and status.
         pub opens: u64,
     }
@@ -849,8 +865,17 @@ mod driver {
                 params,
                 link: None,
                 stale: None,
+                shared: None,
                 opens: 0,
             })
+        }
+
+        /// Consume T->O on `endpoint` (the box's, shared with its adapter)
+        /// unless the device's params give an `io_port` of its own.
+        #[must_use]
+        pub fn on_endpoint(mut self, endpoint: Option<&IoEndpoint>) -> Self {
+            self.shared = endpoint.cloned();
+            self
         }
 
         fn spec(&self) -> &Spec {
@@ -908,20 +933,23 @@ mod driver {
                 // found" means the device already let it go.
                 let _ = c.send(&mut session);
             }
-            let port = self.params.io_port;
-            let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).map_err(|e| {
-                // On a box, the box's own adapter holds 2222 unless its
-                // --io-port moves it (TODO.md enip-io-port).
-                Error::Io(io::Error::new(
-                    e.kind(),
-                    format!("UDP {port}, where the device sends its inputs: {e}"),
-                ))
-            })?;
+            let endpoint = match (self.params.io_port, &self.shared) {
+                (None, Some(shared)) => shared.clone(),
+                (port, _) => {
+                    let port = port.unwrap_or(IO_PORT);
+                    IoEndpoint::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port)).map_err(|e| {
+                        Error::Io(io::Error::new(
+                            e.kind(),
+                            format!("UDP {port}, where the device sends its inputs: {e}"),
+                        ))
+                    })?
+                }
+            };
             let config = self.config()?;
             let timeout = config.timeout();
             let target = SocketAddrV4::new(ip, self.params.device_io_port);
             self.opens += 1;
-            let io = IoConnection::open_with_output(&mut session, &socket, target, config, &self.out)
+            let io = IoConnection::open_on(&mut session, &endpoint, target, config, &self.out)
                 .map_err(scanner_error)?;
             // The first T->O packet, within the connection's timeout.
             if io.wait_for_input(timeout).is_none() {

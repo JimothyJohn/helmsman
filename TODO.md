@@ -994,12 +994,13 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: io-bench
   id: e1213-bench
 
-- [ ] **Share UDP 2222 between the box's adapter and enip-io** — a box is both a CIP target (its own adapter binds 0.0.0.0:2222 for scanners that own it) and, with `enip-io`, a scanner whose devices send their inputs to 2222. Two sockets can't both bind it, so on a box today `enip-io` fails its link with "UDP 2222, where the device sends its inputs: address in use" unless `helmsman-plc --io-port` moves the adapter (which breaks scanners that send to 2222). Fix: one I/O socket per box, demultiplexed by connection id (the adapter's O->T ids and the scanner's T->O ids are both ours to choose), or a T->O socket-address item in the Forward_Open so the device sends elsewhere (check the E1213 honours it).
+- [x] **Share UDP 2222 between the box's adapter and enip-io** — a box is both a CIP target (its own adapter binds 0.0.0.0:2222 for scanners that own it) and, with `enip-io`, a scanner whose devices send their inputs to 2222. Two sockets can't both bind it, so on a box today `enip-io` fails its link with "UDP 2222, where the device sends its inputs: address in use" unless `helmsman-plc --io-port` moves the adapter (which breaks scanners that send to 2222). Fix: one I/O socket per box, demultiplexed by connection id (the adapter's O->T ids and the scanner's T->O ids are both ours to choose), or a T->O socket-address item in the Forward_Open so the device sends elsewhere (check the E1213 honours it).
   result: the box masters EtherNet/IP devices and is owned by a scanner at the same time
   est: 1d
   difficulty: med
   depends: enip-in-box
   id: enip-io-port
+  notes: built on fix/enip-io-port: `helmsman_proto::endpoint` (one socket, routed by connection ID, each route bound to its peer IP, a drop-oldest queue per owner), `Adapter::start_on`, `helmsman_io::open_on`; `helmsman-plc --io-port` moves the whole endpoint, and off 2222 the links' Forward_Open names the port in a T->O socket-address item. docs/ARCHITECTURE.md "One Class 1 I/O port per box". Whether the real E1213 honours that item is for `e1213-bench` off 2222.
 
 ## Roadmap M2: floor-ready core
 

@@ -139,6 +139,21 @@ pub fn output_keys(driver: &str, addr: &str) -> Vec<String> {
 /// # Errors
 /// Unknown driver, or a device param that does not parse.
 pub fn open(device: &Device) -> Result<Box<dyn Driver + Send>, Error> {
+    open_on(device, None)
+}
+
+/// [`open`] on a box: `enip-io` links consume on `io` (the box's one Class 1
+/// I/O endpoint, shared with its adapter) unless a device names an
+/// `io_port` of its own.
+///
+/// # Errors
+/// As [`open`].
+pub fn open_on(
+    device: &Device,
+    io: Option<&helmsman_proto::endpoint::IoEndpoint>,
+) -> Result<Box<dyn Driver + Send>, Error> {
+    #[cfg(not(feature = "enip"))]
+    let _ = io;
     match device.driver.as_str() {
         crate::modbus::DRIVER => Ok(Box::new(crate::modbus::ModbusDriver::from_params(
             &device.endpoint,
@@ -150,10 +165,9 @@ pub fn open(device: &Device) -> Result<Box<dyn Driver + Send>, Error> {
             &device.params,
         )?)),
         #[cfg(feature = "enip")]
-        crate::enip::DRIVER => Ok(Box::new(crate::enip::EnipDriver::from_params(
-            &device.endpoint,
-            &device.params,
-        )?)),
+        crate::enip::DRIVER => Ok(Box::new(
+            crate::enip::EnipDriver::from_params(&device.endpoint, &device.params)?.on_endpoint(io),
+        )),
         #[cfg(not(feature = "enip"))]
         crate::enip::DRIVER => Err(Error::UnknownDriver(format!(
             "{}: this build has no enip-io (helmsman-io's `enip` feature)",

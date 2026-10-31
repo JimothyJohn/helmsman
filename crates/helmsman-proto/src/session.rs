@@ -162,9 +162,19 @@ impl Session {
     /// it (through [`Self::get_attribute_single`] and
     /// [`crate::logix::TagReader`]).
     pub(crate) fn exchange(&mut self, mr: &[u8]) -> Result<cip::Response, Error> {
+        self.exchange_with(mr, &[])
+    }
+
+    /// [`Self::exchange`] with `extra` CPF items after the data item (a
+    /// socket-address item on a `Forward_Open`).
+    pub(crate) fn exchange_with(
+        &mut self,
+        mr: &[u8],
+        extra: &[crate::cpf::Item<'_>],
+    ) -> Result<cip::Response, Error> {
         let ctx = self.context();
         self.stream
-            .write_all(&explicit::send_rr_data_bytes(self.handle, ctx, 0, mr))?;
+            .write_all(&explicit::send_rr_data_with_items(self.handle, ctx, 0, mr, extra))?;
         let bytes = self.read_frame()?;
         let (frame, _) = Frame::decode(&bytes)?;
         if frame.header.sender_context != ctx {
