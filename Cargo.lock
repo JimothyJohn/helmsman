@@ -1592,10 +1592,12 @@ version = "0.1.0"
 dependencies = [
  "gpiocdev",
  "helmsman-adapter",
+ "helmsman-io",
  "helmsman-proto",
  "i2cdev",
  "proptest",
  "rustix 1.1.6",
+ "sha2 0.11.1",
 ]
 
 [[package]]

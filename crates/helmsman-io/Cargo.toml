@@ -8,8 +8,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-# No features: the box build reads observed controllers, it never writes them.
+# No `unrestricted`: the box build reads observed controllers, it never
+# writes them. `enip` adds only the Class 1 scanner (`scanner`), for the
+# adapters the box masters.
 helmsman-proto = { path = "../helmsman-proto" }
+# The simulated E1213 (`enip-sim`): already in every build that has the
+# box's own adapter, so no new code reaches a binary.
+helmsman-adapter = { path = "../helmsman-adapter", optional = true }
 
 # Serial ports for modbus-rtu: termios through rustix (safe Rust, no C;
 # already in the lock), unix only, behind `serial`.
@@ -28,9 +33,18 @@ i2cdev = { version = "0.6", optional = true }
 default = []
 serial = ["dep:rustix"]
 gpio = ["dep:gpiocdev", "dep:i2cdev"]
+# `enip-io`: EtherNet/IP adapters (remote I/O) over a Class 1 connection.
+enip = ["helmsman-proto/scanner"]
+# A simulated Moxa ioLogik E1213 for the conformance harness and tests.
+enip-sim = ["enip", "dep:helmsman-adapter"]
 
 [dev-dependencies]
 helmsman-adapter = { path = "../helmsman-adapter" }
+# Tests and examples run the enip-io driver against the simulated E1213.
+helmsman-io = { path = ".", features = ["enip-sim"] }
+# SHA-256 of the vendor EDS files tests/eds_corpus.rs reads (already in
+# the lock through helmsman-plc).
+sha2 = { version = "0.11.1", default-features = false }
 proptest = "1.12"
 
 [lints]

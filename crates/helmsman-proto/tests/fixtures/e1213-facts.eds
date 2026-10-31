@@ -1,0 +1,76 @@
+$ Written for this repository; not Moxa's file. It restates the facts of
+$ the ioLogik E1213 EDS (v2.0, SHA-256 3895fbca...d470d, which is not
+$ redistributed here: docs/devices/moxa-iologik-e1213.md) in the same
+$ layout, so tests can read an E1213-shaped EDS without the vendor's file.
+$ Line references below are to the vendor file.
+
+[File]
+    DescText = "E1213 facts for helmsman tests";   $ vendor l.5 "EtherNet/IP Adapter"
+    CreateDate = 10-30-2026;
+    CreateTime = 12:00:00;
+    Revision = 2.0;                                 $ vendor l.10
+
+[Device]
+    VendCode = 991;          $ l.14
+    VendName = "Moxa";       $ l.15
+    ProdType = 12;           $ l.16, Communications Adapter
+    ProdTypeStr = "Communications Adapter";
+    ProdCode = 515;          $ l.18
+    MajRev = 4;              $ l.19
+    MinRev = 1;              $ l.20
+    ProdName = "E1213";      $ l.21
+    Catalog = "ioLogik E1200 Series";
+    IconContents =           $ the vendor's is a 377-line base64 icon; two
+        "AAAB"               $ adjacent strings make one value
+        "AAE=";
+
+[Device Classification]
+    Class1 = EtherNetIP;
+
+[Params]
+    Param1 = 0, ,, 0x0000, 0xC7, 2, "Output Size", "", "",
+             1, 1, 1,                 $ l.407-419: UINT, 1 byte
+             ,,,, ,,,, ;
+    Param2 = 0, ,, 0x0000, 0xC7, 2, "Input Size", "", "",
+             51, 51, 51,              $ l.420-432: UINT, 51 bytes
+             ,,,, ,,,, ;
+    Param3 = 0, ,, 0x0000, 0xC8, 4, "RPI Range", "", "",
+             100000, 3000000, 100000, $ l.433-445: UDINT us, 100 ms ..= 3 s
+             ,,,, ,,,, ;
+
+[Assembly]
+    Object_Name = "Assembly Object";
+    Object_Class_Code = 0x04;
+    MaxInst = 2;
+    Number_Of_Static_Instances = 2;
+    Assem101 = "Input Data", , 51, 0x0001, ,, 408, ;    $ l.460-466
+    Assem102 = "Output Data", , 1, 0x0001, ,, 8, ;      $ l.467-473
+
+[Connection Manager]
+    Revision = 1;
+    Object_Name = "Connection Manager Object";
+    Object_Class_Code = 0x06;
+    Connection1 =                       $ l.484-528
+        0x04010002,                     $ class 1, cyclic, exclusive owner
+        0x44640405,                     $ O->T run/idle, T->O modeless, p2p
+        Param3, Param1, Assem102,       $ O->T RPI, size, format
+        Param3, Param2, Assem101,       $ T->O RPI, size, format
+        ,,                              $ proxy config
+        ,,                              $ target config
+        "Exclusive Owner",
+        "",
+        "20 04 24 64 2C 66 2C 65";      $ class 4, config 100, O->T 102, T->O 101
+    Connection2 =                       $ l.529-573
+        0x02010002,                     $ class 1, cyclic, input only
+        0x44640305,                     $ O->T heartbeat
+        Param3, 0, ,
+        Param3, Param2, Assem101,
+        ,,
+        ,,
+        "Input Only",
+        "",
+        "20 04 24 64 2C 6F 2C 65";      $ heartbeat point 111
+
+[Identity Class]
+    Revision = 1;
+    Object_Class_Code = 0x01;

@@ -1,0 +1,17 @@
+# Moxa ioLogik E1213 over EtherNet/IP (enip-io, one Class 1 exclusive-owner
+# connection at 100 ms). docs/devices/moxa-iologik-e1213.md says where each
+# address comes from. Bench wiring: DO-00..03 to DI-00..03.
+device e1213 enip-io 192.168.3.60 profile=moxa-e1213 rpi_ms=100 poll_ms=20
+
+# DI-00..DI-07 (and DI-08..11 when the DIO jumpers say DI): input bytes 0-1
+in  part_present  bool e1213 di:4
+in  door_closed   bool e1213 di:5
+in  clamp_closed  bool e1213 di:0
+# DI-04's counter: UDINT at byte 2 + 4 * 4, little-endian
+in  parts_counted int  e1213 in:18:u32
+# what the device says its outputs are (byte 50)
+in  clamp_is_on   bool e1213 in:50.0
+
+# DO-00..DO-07: the one output byte
+out clamp         bool e1213 do:0 safe=false
+out beacon        bool e1213 do:1 safe=false

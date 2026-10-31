@@ -78,6 +78,8 @@ pub struct DeviceConfig {
     pub produced_run_idle: bool,
     pub max_connections: usize,
     pub min_rpi: Duration,
+    /// Slowest RPI accepted (an EDS's RPI param max; `Duration::MAX` for none).
+    pub max_rpi: Duration,
     /// Grace period before the first O->T packet must arrive.
     pub initial_watchdog: Duration,
     /// First O->T connection ID handed out; later ones count up.
@@ -126,9 +128,157 @@ impl DeviceConfig {
             produced_run_idle: false,
             max_connections: 16,
             min_rpi: Duration::from_millis(1),
+            max_rpi: Duration::MAX,
             initial_watchdog: Duration::from_secs(10),
             connection_id_base: 0x0100_0000,
         }
+    }
+
+    /// A simulated Moxa ioLogik E1213, from its EDS (v2.0, SHA-256
+    /// `3895fbca…d470d`; `docs/devices/moxa-iologik-e1213.md` cites each
+    /// line): identity 991 / 12 / 515 rev 4.1 "E1213" (l.14–21); input
+    /// assembly 101, 51 bytes, and output assembly 102, 1 byte (l.460–473);
+    /// configuration instance 100 and no configuration data; an exclusive
+    /// owner 100/102/101 with a run/idle header O->T and none T->O, and an
+    /// input-only connection with heartbeat point 111 (l.484–573); RPI
+    /// 100 ms ..= 3 s (Param3, l.433–445). No listen-only connection: the
+    /// EDS declares none. At most 10 connections, "9 for read-only, and 1
+    /// for read/write" (ioLogik E1200 User's Manual v15.10, p.3-27).
+    ///
+    /// The data's meaning (DI bits, counters, DO status) is the
+    /// application's business; `helmsman-io`'s E1213 simulator fills it.
+    #[must_use]
+    pub fn moxa_e1213() -> Self {
+        Self {
+            identity: Identity {
+                vendor_id: 991,
+                device_type: 12,
+                product_code: 515,
+                revision: (4, 1),
+                status: 0,
+                serial_number: 0x00E1_2130,
+                product_name: "E1213".into(),
+            },
+            assemblies: vec![(100, 0), (101, 51), (102, 1), (111, 0)],
+            points: vec![
+                ConnectionPoint {
+                    kind: PointKind::ExclusiveOwner,
+                    configuration: 100,
+                    consumed: 102,
+                    produced: 101,
+                },
+                ConnectionPoint {
+                    kind: PointKind::InputOnly,
+                    configuration: 100,
+                    consumed: 111,
+                    produced: 101,
+                },
+            ],
+            consumed_run_idle: true,
+            produced_run_idle: false,
+            max_connections: 10,
+            min_rpi: Duration::from_millis(100),
+            max_rpi: Duration::from_secs(3),
+            initial_watchdog: Duration::from_secs(10),
+            connection_id_base: 0x0E12_0000,
+        }
+    }
+
+    /// A target laid out as an EDS describes it: its identity, its
+    /// assemblies (plus zero-length ones for configuration and heartbeat
+    /// instances the EDS names only in a path), a connection point per
+    /// `ConnectionN`, run/idle headers per the exclusive owner's real-time
+    /// formats, and the RPI range all connections share.
+    ///
+    /// Up to 16 connections and serial number 0: the EDS says neither.
+    ///
+    /// # Errors
+    /// The EDS doesn't resolve, has no Class 1 connection, declares a
+    /// connection only as redundant owner (not simulated), needs
+    /// configuration data, or uses a real-time format other than
+    /// modeless, heartbeat and run/idle.
+    pub fn from_eds(eds: &helmsman_proto::eds::Eds) -> Result<Self, String> {
+        use helmsman_proto::eds::{AppType, RealTimeFormat};
+        let e = |x: helmsman_proto::eds::Error| x.to_string();
+        let id = eds.identity().map_err(e)?;
+        let mut assemblies: Vec<(u16, usize)> = eds
+            .assemblies()
+            .map_err(e)?
+            .iter()
+            .map(|a| (a.instance, usize::from(a.size.unwrap_or(0))))
+            .collect();
+        let connections = eds.connections().map_err(e)?;
+        let mut points = Vec::new();
+        let (mut min_rpi, mut max_rpi) = (Duration::ZERO, Duration::MAX);
+        let (mut consumed_run_idle, mut produced_run_idle) = (true, false);
+        for c in connections.iter().filter(|c| c.class1) {
+            let name = format!("Connection{} ({:?})", c.number, c.name);
+            if c.config_size > 0 {
+                return Err(format!("{name}: configuration data is not simulated"));
+            }
+            for f in [c.o_to_t.format, c.t_to_o.format] {
+                if let RealTimeFormat::Other(v) = f {
+                    return Err(format!("{name}: real-time format {v} is not simulated"));
+                }
+            }
+            let kind = if c.is(AppType::ExclusiveOwner) {
+                consumed_run_idle = c.o_to_t.format == RealTimeFormat::RunIdle;
+                produced_run_idle = c.t_to_o.format == RealTimeFormat::RunIdle;
+                PointKind::ExclusiveOwner
+            } else if c.is(AppType::InputOnly) {
+                PointKind::InputOnly
+            } else if c.is(AppType::ListenOnly) {
+                PointKind::ListenOnly
+            } else {
+                return Err(format!(
+                    "{name}: only exclusive owner, input only and listen only are simulated"
+                ));
+            };
+            for r in [c.o_to_t.rpi, c.t_to_o.rpi] {
+                min_rpi = min_rpi.max(r.min.unwrap_or(Duration::ZERO));
+                max_rpi = max_rpi.min(r.max.unwrap_or(Duration::MAX));
+            }
+            for inst in [c.configuration, c.o_to_t_point, c.t_to_o_point] {
+                if !assemblies.iter().any(|(i, _)| *i == inst) {
+                    assemblies.push((inst, 0));
+                }
+            }
+            points.push(ConnectionPoint {
+                kind,
+                configuration: c.configuration,
+                consumed: c.o_to_t_point,
+                produced: c.t_to_o_point,
+            });
+        }
+        if points.is_empty() {
+            return Err("the EDS declares no Class 1 connection".into());
+        }
+        if min_rpi > max_rpi {
+            return Err(format!(
+                "no RPI fits every connection ({min_rpi:?} > {max_rpi:?})"
+            ));
+        }
+        assemblies.sort_unstable();
+        Ok(Self {
+            identity: Identity {
+                vendor_id: id.vendor_id,
+                device_type: id.device_type,
+                product_code: id.product_code,
+                revision: (id.major_revision, id.minor_revision),
+                status: 0,
+                serial_number: 0,
+                product_name: id.product_name.unwrap_or_default().chars().take(32).collect(),
+            },
+            assemblies,
+            points,
+            consumed_run_idle,
+            produced_run_idle,
+            max_connections: 16,
+            min_rpi,
+            max_rpi,
+            initial_watchdog: Duration::from_secs(10),
+            connection_id_base: 0x0100_0000,
+        })
     }
 
     fn assembly_len(&self, instance: u16) -> Option<usize> {
@@ -204,6 +354,20 @@ pub struct Device {
     /// Logix tag services (test fixture), answered before the objects above.
     logix: Option<crate::logix::Controller>,
     pub stats: Stats,
+    /// Simulator knob: misbehave on purpose (see [`Misbehave`]).
+    misbehave: Option<Misbehave>,
+}
+
+/// Ways a simulated target misbehaves on purpose, for testing scanners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Misbehave {
+    /// Produce nothing (a pulled cable, a hung device). Connections stay
+    /// open until their O->T traffic stops.
+    Silent,
+    /// Produce T->O data one byte short of the assembly.
+    ShortInput,
+    /// Produce T->O datagrams whose body is junk of the wrong length.
+    Garbage,
 }
 
 /// `SEQ_GT32` from `OpENer`: `a` is newer than `b` with wraparound.
@@ -236,6 +400,7 @@ impl Device {
             next_id,
             run_idle: None,
             logix: None,
+            misbehave: None,
             stats: Stats::default(),
         }
     }
@@ -574,7 +739,12 @@ impl Device {
             return refused(self, &[extended::INCONSISTENT_PATH_COMBO]);
         };
         let min_us = u32::try_from(self.cfg.min_rpi.as_micros()).unwrap_or(u32::MAX);
-        if fo.o_to_t_rpi_us < min_us || fo.t_to_o_rpi_us < min_us {
+        let max_us = u32::try_from(self.cfg.max_rpi.as_micros()).unwrap_or(u32::MAX);
+        if fo.o_to_t_rpi_us < min_us
+            || fo.t_to_o_rpi_us < min_us
+            || fo.o_to_t_rpi_us > max_us
+            || fo.t_to_o_rpi_us > max_us
+        {
             return refused(self, &[extended::RPI_NOT_SUPPORTED]);
         }
         let want_o = self
@@ -757,6 +927,18 @@ impl Device {
         Ok(())
     }
 
+    /// Misbehave from now on (`None`: behave). A simulator knob.
+    pub const fn set_misbehave(&mut self, m: Option<Misbehave>) {
+        self.misbehave = m;
+    }
+
+    /// Forget every connection at once, as a power cycle does. A simulator
+    /// knob: the scanners find out when their T->O traffic stops.
+    pub fn drop_connections(&mut self) {
+        self.connections.clear();
+        self.run_idle = None;
+    }
+
     /// T->O datagrams due at `now`, addressed to each originator's IP.
     pub fn due_productions(&mut self, now: Instant) -> Vec<(Ipv4Addr, Vec<u8>)> {
         let mut out = Vec::new();
@@ -772,11 +954,19 @@ impl Device {
             };
             c.produce_seq = c.produce_seq.wrapping_add(1);
             c.encap_seq = c.encap_seq.wrapping_add(1);
-            let data = self
+            let mut data = self
                 .assemblies
                 .get(&c.point.produced)
                 .cloned()
                 .unwrap_or_default();
+            match self.misbehave {
+                Some(Misbehave::Silent) => continue,
+                Some(Misbehave::ShortInput) => {
+                    data.pop();
+                }
+                Some(Misbehave::Garbage) => data = vec![0xA5; data.len() * 2 + 3],
+                None => {}
+            }
             let body = Class1Body {
                 sequence_count: c.produce_seq,
                 run_idle: (header && !data.is_empty()).then_some(1),

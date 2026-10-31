@@ -28,8 +28,9 @@ pub struct Bench {
     pub loops: Vec<(String, String)>,
     /// Writable numeric points to write, read back and restore.
     pub registers: Vec<String>,
-    /// A point the device does not have: reading it must fail cleanly and
-    /// leave the driver usable.
+    /// A point the device does not have: reading it must fail cleanly, as
+    /// a point error (a device exception, or the driver refusing the
+    /// point), and leave the driver usable.
     pub absent: Option<String>,
     /// How long a loop may take to show a write.
     pub settle: Duration,
@@ -158,8 +159,8 @@ pub fn run(d: &mut dyn Driver, bench: &Bench, sim: Option<&dyn Faults>) -> Vec<C
         Some(a) => {
             let r = match read_one(d, a) {
                 Ok(v) => Err(format!("read {v:?} from a point the device lacks")),
-                Err(Error::Exception(_)) => recovers(d),
-                Err(e) => Err(format!("want a device exception, got {e}")),
+                Err(Error::Exception(_) | Error::Point(_)) => recovers(d),
+                Err(e) => Err(format!("want a device exception or a point error, got {e}")),
             };
             out.push(check(format!("absent {a}"), r));
         }
@@ -183,9 +184,21 @@ pub fn run(d: &mut dyn Driver, bench: &Bench, sim: Option<&dyn Faults>) -> Vec<C
         sim.clear_faults();
         sim.inject(fault);
         let started = Instant::now();
-        let r = match read_one(d, p) {
+        let window = sim.fault_window();
+        // A cyclic transport answers from its last packet until the
+        // connection times out: keep reading, within the window, until the
+        // fault shows. A read that succeeds after the window is a failure.
+        let first = loop {
+            match read_one(d, p) {
+                Ok(_) if started.elapsed() < window => std::thread::sleep(Duration::from_millis(5)),
+                other => break other,
+            }
+        };
+        let r = match first {
             Ok(v) => Err(format!("read {v:?} through a {fault:?}")),
-            Err(_) if started.elapsed() > Duration::from_secs(10) => Err("took over 10 s to give up".into()),
+            Err(_) if started.elapsed() > window + Duration::from_secs(10) => {
+                Err("took over 10 s to give up".into())
+            }
             Err(_) => {
                 sim.clear_faults();
                 // A late reply may still be in flight; the driver must not take

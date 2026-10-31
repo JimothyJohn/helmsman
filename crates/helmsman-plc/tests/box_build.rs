@@ -38,6 +38,13 @@ fn box_build_cannot_send_arbitrary_services() {
         !tree.contains("\"unrestricted\""),
         "the box build enables helmsman-proto/unrestricted:\n{tree}"
     );
+    // The Class 1 scanner is in, for the adapters the box masters
+    // (helmsman-io's enip-io): it sends Forward_Open / Forward_Close to an
+    // Assembly path and nothing else, so it widens nothing above.
+    assert!(
+        tree.contains("\"scanner\""),
+        "the box build lost helmsman-proto/scanner (enip-io):\n{tree}"
+    );
 }
 
 /// The OPC UA tests drive the server with `async-opcua`'s client, a

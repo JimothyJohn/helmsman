@@ -2,8 +2,10 @@
 //! the devices it talks to, and its logic only ever names *signals*:
 //!
 //! - a [`Device`] is an endpoint the box masters, spoken to by a driver
-//!   (`modbus-tcp`, `modbus-rtu` on a serial line ([`rtu`]), and [`logix`] read-only for controllers the box only
-//!   observes; agent-written WASM drivers later);
+//!   (`modbus-tcp`, `modbus-rtu` on a serial line ([`rtu`]), [`enip`]
+//!   (`enip-io`, an EtherNet/IP adapter over a Class 1 connection), and
+//!   [`logix`] read-only for controllers the box only observes;
+//!   agent-written WASM drivers later);
 //! - a [`Signal`] is a named, typed point with a direction, bound to a point on
 //!   a device or to one of the box's own channels (a GPIO driving a 24 V
 //!   output stage, say);
@@ -19,6 +21,9 @@
 
 pub mod board;
 pub mod driver;
+pub mod enip;
+#[cfg(feature = "enip-sim")]
+pub mod enip_sim;
 pub mod harness;
 pub mod local;
 pub mod logix;
