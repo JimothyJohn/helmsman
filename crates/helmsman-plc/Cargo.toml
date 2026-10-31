@@ -27,6 +27,10 @@ webpki-roots = { version = "1.0.11", optional = true }
 ring = { version = "0.17.14", optional = true }
 # The WASM module tier (`wasm`): a pure-Rust interpreter with fuel
 # metering; ARCHITECTURE "WASM modules" says why not wasmtime.
+# Project uploads (`project::zip`): DEFLATE entries inflated under a
+# size limit. Pure Rust, one dependency (adler2); both already in the
+# lockfile through the canvas's png. The ZIP container itself is ours.
+miniz_oxide = { version = "0.9.1", optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
 
 [dev-dependencies]
@@ -60,7 +64,7 @@ workspace = true
 # compiled in). On by default so the Pi can post to a cloud receiver;
 # `--no-default-features --features box` builds an http-only box.
 default = ["box", "https"]
-box = ["dep:rusqlite", "dep:ring", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "helmsman-io/enip", "wasm"]
+box = ["dep:rusqlite", "dep:ring", "dep:miniz_oxide", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "helmsman-io/enip", "wasm"]
 # `wasm`: modules compiled to WebAssembly (`module.wasm`) beside ST ones,
 # run by an interpreter under fuel and memory limits, and the map's WASM
 # drivers (`wasm:NAME`, helmsman-io's `wasm`). In `box`; the canvas's
@@ -148,3 +152,7 @@ required-features = ["box"]
 [[example]]
 name = "wasm_bench"
 required-features = ["wasm"]
+
+[[test]]
+name = "projects"
+required-features = ["box"]

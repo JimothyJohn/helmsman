@@ -1613,6 +1613,7 @@ dependencies = [
  "helmsman-iec",
  "helmsman-io",
  "helmsman-proto",
+ "miniz_oxide 0.9.1",
  "proptest",
  "ring",
  "rusqlite",

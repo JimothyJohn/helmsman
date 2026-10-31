@@ -18,6 +18,8 @@ pub mod manifest;
 pub mod opcua;
 #[cfg(feature = "box")]
 pub mod policy;
+#[cfg(feature = "box")]
+pub mod project;
 pub mod record;
 pub mod replay;
 pub mod runtime;
