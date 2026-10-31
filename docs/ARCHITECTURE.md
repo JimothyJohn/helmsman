@@ -1071,6 +1071,93 @@ emit   mes  level  every_ms=60000
   `--no-default-features` builds an http-only box with no third-party
   crates.
 
+## OPC UA server (`sink-opcua`, built)
+
+`helmsman-plc --opcua ADDR` (default `127.0.0.1:4840`, `off`) serves the
+box's signals and module outputs to SCADA and MES clients that pull
+(`opcua/`; contract in `tests/opcua.rs` against an independent client,
+`tests/opcua_fuzz.rs`). It is a sink like the webhooks: core-owned, and
+modules never see it.
+
+```text
+Objects
+├── Signals                    ns=1;s=signals
+│   └── level                  ns=1;s=signals/level       Double, quality, source timestamp
+│       └── EngineeringUnits   EUInformation (unit text, UnitId -1)
+├── Modules                    ns=1;s=modules
+│   └── fill                   ns=1;s=modules/fill
+│       ├── Status             running | held | faulted: why
+│       └── Outputs            ns=1;s=modules/fill/Outputs
+│           └── pump           the signal its VAR_OUTPUT drives
+└── Server                     NamespaceArray, ServerStatus (State, CurrentTime, ...)
+```
+
+- **Values.** `bool` → Boolean, `int` → Int64, `real` → Double. Inputs as
+  last read, outputs as commanded, module outputs as last published.
+  Quality comes from the signal table. A missing value is Bad and carries
+  no value: `BadNoCommunication` for a device or box channel (the link is
+  down), `BadOutOfService` for a module output while its module is held,
+  faulted or not yet scanned. A value whose point has an error standing
+  (a refused write) is `Uncertain`. The source timestamp is when the value
+  or quality last changed, as published; it is null while the wall clock
+  is untrusted, as for the calendar and the sinks.
+- **Read-only.** Every variable has `AccessLevel` `CurrentRead` and
+  `WriteMask` 0. Write answers `BadNotWritable` (or `BadNodeIdUnknown`).
+  Every service that could change anything (`AddNodes`, `Call`,
+  `HistoryUpdate`, ...) answers `BadServiceUnsupported`. The server reads
+  only the published snapshot, never the runtime or the table.
+- **Services.** GetEndpoints, FindServers, Create/Activate/CloseSession,
+  Browse, BrowseNext, TranslateBrowsePathsToNodeIds, Read,
+  Register/UnregisterNodes, Cancel, subscriptions (create, modify, delete,
+  publishing mode) and monitored items (Value attribute, data change
+  without deadband, queue of one), Publish, Republish (last 10 messages).
+- **Security: None only.** `SecurityPolicy#None`, `MessageSecurityMode`
+  None, anonymous identity; any other policy, mode or identity token is
+  refused. Nothing is signed or encrypted. That is why the default bind is
+  loopback, and why a non-loopback bind logs a warning at start. Putting
+  it on the plant LAN is a choice to trust that LAN, the same choice as
+  the API's open reads. Sign and SignAndEncrypt are an open question
+  (`opcua-security` in TODO.md).
+- **The scan never waits on it.** The scan thread offers a snapshot (one
+  copy of the values, plus the box's shape only after start, an apply or a
+  reload) with a `try_lock` at most every 100 ms, and wakes at least that
+  often while OPC UA runs. Connection threads build the address space from
+  the snapshot's shape. 100 ms is also the fastest publishing interval
+  and the reported `MinimumSamplingInterval`.
+- **Bounded.** Hand-rolled on `std::net`, no new runtime crates. 16
+  connections (`BadTcpServerTooBusy` beyond), 64 KiB chunks, 1 MiB
+  requests in at most 64 chunks, one session per connection, 8
+  subscriptions per session, 1000 monitored items each, 1000 operations
+  per request, 10 queued publish requests, 8 browse continuation points.
+  Hello within 5 s, a channel within 10 s, an expired channel token or
+  session closes. Decoding checks every length against the bytes left
+  before allocating and stops nesting at depth 8. The connection is a
+  bytes-in/bytes-out state machine (`opcua::Conn`), property-tested with
+  random input, flipped bytes in valid exchanges and random request
+  bodies: a malformed message ends in `ERR` or a `ServiceFault`, never a
+  panic.
+- **A port that won't bind stops the box** with a line naming
+  `--opcua off`, as the API does (`opcua-bind-fatal` in TODO.md).
+
+**Dependency review (why hand-written).** Checked 2026-10-30 against
+crates.io, GitHub and RustSec:
+
+| option | maintained | footprint | security policies | verdict |
+| --- | --- | --- | --- | --- |
+| `opcua` (locka99) | no: last release 0.12.0, 2024-01-01; moved to `async-opcua` | n/a | n/a | rejected |
+| `async-opcua` 0.19.0 (freeopcua), pure Rust | yes, releases every few months (0.19.0 on 2026-07-18) | server: 157 crates (`cargo tree`): tokio, futures, chrono, regex, icu, deprecated `serde_yaml` + `unsafe-libyaml` | via RustCrypto `rsa` 0.9.10: RUSTSEC-2023-0071 (Marvin, network timing key recovery, unpatched) | rejected for the box; its client is the test oracle |
+| `open62541` 0.12.1 / `-sys` 0.6.5 (C bindings) | yes (2026-10) | 19 MB of vendored C, bindgen (libclang) and cmake at build, 58 crates with build deps | mbedTLS feature | rejected: a C parser on the network behind FFI, and the arm64 cross-build cost |
+| hand-written subset, None only | ours | no new crates (`ring`, already in the box, for random tokens) | none | **chosen** |
+
+The only thing the libraries buy over the subset is the signed and
+encrypted policies, and the pure-Rust one does that with an advisory
+open on exactly that path. So the box ships None-only, and the secure
+policies wait on that question. `async-opcua`'s client (`=0.19.0`,
+`client` feature only) is a dev-dependency. The server is tested against
+an implementation that isn't ours, so a misreading of the spec can't
+pass on both sides. `tests/box_build.rs` fails if `async-opcua`, `rsa` or
+tokio ever reach the box build.
+
 ## The live ST view (`st-graph-view`, built)
 
 The operator's read-only view of what a module's code is doing
@@ -1212,7 +1299,7 @@ file and token in a temporary state directory).
 | --- | --- | --- | --- |
 | module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | built |
 | module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault); a WASM module's fuel per scan (the same fault) and linear-memory cap | built |
-| module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink; OPC UA planned (`sink-opcua`) |
+| module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink and the OPC UA server (read-only, SecurityPolicy None; `sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |

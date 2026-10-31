@@ -483,6 +483,26 @@
   difficulty: low
   id: wasm-limits
 
+- [ ] **OPC UA: offer Sign / SignAndEncrypt, or stay None-only?** The OPC UA server (feat/sink-opcua) is hand-written and speaks only SecurityPolicy#None with anonymous access, read-only. Anyone on the path can read what a client reads, and could alter what the client *sees*, but nothing a client sends can change the box. By default it listens on loopback (127.0.0.1:4840), and `--opcua 0.0.0.0:4840` puts it on the plant LAN. Many SCADA/MES installs require Basic256Sha256 (or the newer Aes128/Aes256 RSA policies). Those need RSA-OAEP decryption and RSA signatures plus X.509 handling. `ring` (already in the box) signs and verifies RSA but cannot decrypt it. The pure-Rust `rsa` crate carries RUSTSEC-2023-0071 (Marvin timing side channel, unpatched as of 2026-09), which is exactly the network-observable case. aws-lc-rs or OpenSSL would bring C crypto into the build. The ECC policies (ECC_nistP256) work with `ring` but few clients support them yet.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call, and which SCADA/MES clients the first sites run
+  result: whether the box ships a signed/encrypted OPC UA endpoint, and which crypto stack carries it
+  options: None-only, loopback default, LAN at your own risk (recommended for now, built) | add Basic256Sha256 via aws-lc-rs | add ECC_nistP256 only, on ring | add Basic256Sha256 via the rsa crate and accept Marvin
+  est: 1w
+  difficulty: high
+  id: opcua-security
+
+- [ ] **OPC UA: should a port that won't bind stop the box?** OPC UA is on by default (127.0.0.1:4840). If something else holds that port, `helmsman-plc` exits with `--opcua 127.0.0.1:4840: Address already in use (--opcua off runs without it)`, the same as the box API does with its port. A box that won't start over an optional read-only interface is harsh. The other way, though, a SCADA that silently gets no data looks just as broken on the floor, and the journal line is easy to miss.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether a failed OPC UA bind is fatal or a logged warning
+  options: fatal, like the API (recommended, built) | warn and run without OPC UA | OPC UA off by default, fatal when asked for
+  est: 15m
+  difficulty: low
+  id: opcua-bind-fatal
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -901,7 +921,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: sink-webhook
   notes: done 2026-10-30 (feat/sink-webhook). `--sinks FILE --sink-dir DIR`; format and semantics in docs/ARCHITECTURE.md "Webhook sinks" and crates/helmsman-plc/src/sink/.
 
-- [ ] **OPC UA server** — expose signals and module outputs as an OPC UA address space for SCADA/MES to pull. Dependency review first (pure-Rust stack vs bindings).
+- [x] **OPC UA server** — expose signals and module outputs as an OPC UA address space for SCADA/MES to pull. Dependency review first (pure-Rust stack vs bindings).
+  notes: built on feat/sink-opcua: hand-written, read-only, SecurityPolicy None, anonymous; `--opcua ADDR|off` (default 127.0.0.1:4840). Review and design in docs/ARCHITECTURE.md "OPC UA server"; open: `opcua-security`, `opcua-bind-fatal`
   est: 1w
   difficulty: high
   depends: signal-model
