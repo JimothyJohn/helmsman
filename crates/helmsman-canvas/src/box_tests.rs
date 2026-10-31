@@ -377,3 +377,52 @@ fn an_unknown_module_and_a_dead_box_are_told_apart() {
         s.link()
     );
 }
+
+#[test]
+fn the_box_tree_nests_the_programs_instances_and_a_refetch_keeps_the_arrangement() {
+    use eframe::egui::{self, Pos2, RawInput, Rect, Vec2};
+
+    let b = Bench::new();
+    let (_, seen) = watch(&b);
+    let ctx = egui::Context::default();
+    let mut bv = crate::box_view::BoxView::new();
+    bv.step(&ctx, seen.clone(), 0.0);
+    let frame = |bv: &mut crate::box_view::BoxView| {
+        let input = RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 860.0))),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| bv.show(ui));
+        out.textures_delta.clear();
+    };
+    frame(&mut bv);
+    let v = bv.view.as_mut().expect("the module's diagram");
+    let rows: Vec<(String, usize)> = v
+        .tree_rows()
+        .iter()
+        .map(|r| (v.scopes[r.scope].prefix.to_ascii_lowercase(), r.depth))
+        .collect();
+    assert_eq!(
+        rows,
+        [(String::new(), 0), ("m.".to_string(), 1)],
+        "the program calls m"
+    );
+    v.open(1);
+    assert_eq!(v.trail(), [0, 1]);
+    v.open(0);
+    // Rearranged, then the box sends the same source again.
+    let n = v.diagram().nodes[0].id;
+    v.move_node(n, egui::Vec2::new(0.0, 500.0));
+    let moved = v.diagram().nodes[0].rect;
+    frame(&mut bv);
+    bv.state.lowered.as_mut().unwrap().generation += 1;
+    bv.step(&ctx, vec![], 1.0);
+    frame(&mut bv);
+    let v = bv.view.as_ref().unwrap();
+    assert_eq!(
+        v.diagram().nodes[0].rect,
+        moved,
+        "the arrangement survives a refetch"
+    );
+    assert!(!bv.wants_site);
+}

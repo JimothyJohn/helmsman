@@ -1362,6 +1362,118 @@ fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
     assert_eq!(s.view.session.scans, 0);
 }
 
+/// The scope labelled `label` (`s1.infeed : MOTOR` → "s1.infeed").
+fn scope(s: &Screen, path: &str) -> usize {
+    let v = s.view.viewer.as_ref().unwrap();
+    let want = format!("{path}.");
+    v.scopes
+        .iter()
+        .position(|x| x.prefix.eq_ignore_ascii_case(&want))
+        .unwrap_or_else(|| panic!("no instance {path}"))
+}
+
+#[test]
+fn the_tree_nests_instances_by_call_and_folds() {
+    let mut s = Screen::new();
+    s.view.load(example("stations"), "stations");
+    s.wait(0.1);
+    let v = s.view.viewer.as_mut().unwrap();
+    let rows: Vec<(String, usize)> = v
+        .tree_rows()
+        .iter()
+        .map(|r| (v.scopes[r.scope].prefix.to_ascii_lowercase(), r.depth))
+        .collect();
+    let want: Vec<(String, usize)> = [
+        ("", 0),
+        ("s1.", 1),
+        ("s1.infeed.", 2),
+        ("s1.outfeed.", 2),
+        ("s2.", 1),
+        ("s2.infeed.", 2),
+        ("s2.outfeed.", 2),
+    ]
+    .iter()
+    .map(|(p, d)| ((*p).to_string(), *d))
+    .collect();
+    assert_eq!(rows, want);
+    // The program is the root: it never folds. A station folds its motors.
+    assert!(!v.tree_rows()[0].has_kids);
+    let s1 = v
+        .scopes
+        .iter()
+        .position(|x| x.prefix.eq_ignore_ascii_case("s1."))
+        .unwrap();
+    v.toggle_fold(s1);
+    let shown: Vec<String> = v
+        .tree_rows()
+        .iter()
+        .map(|r| v.scopes[r.scope].prefix.to_ascii_lowercase())
+        .collect();
+    assert_eq!(shown, ["", "s1.", "s2.", "s2.infeed.", "s2.outfeed."]);
+    assert!(v.tree_rows()[1].folded);
+    v.toggle_fold(s1);
+    assert_eq!(v.tree_rows().len(), 7);
+}
+
+#[test]
+fn up_and_down_the_levels() {
+    let mut s = Screen::new();
+    s.view.load(example("stations"), "stations");
+    s.wait(0.1);
+    let infeed = scope(&s, "s1.infeed");
+    let s1 = scope(&s, "s1");
+    let v = s.view.viewer.as_mut().unwrap();
+    v.open(infeed);
+    assert_eq!(v.trail(), vec![0, s1, infeed], "program › s1 › s1.infeed");
+    assert_eq!(v.parent(), Some(s1));
+    // Alt+↑ climbs one level per press, and stops at the program.
+    for want in [s1, 0, 0] {
+        s.frame(vec![Event::Key {
+            key: egui::Key::ArrowUp,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::ALT,
+        }]);
+        assert_eq!(s.view.viewer.as_ref().unwrap().scope, want);
+    }
+}
+
+#[test]
+fn double_clicking_a_block_instance_opens_it() {
+    let mut s = Screen::new();
+    s.view.load(example("stations"), "stations");
+    s.wait(0.1);
+    let s1 = scope(&s, "s1");
+    let (at, other) = {
+        let v = s.view.viewer.as_ref().unwrap();
+        let d = v.diagram();
+        let fb = d
+            .nodes
+            .iter()
+            .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Fb { instance, .. } if instance.eq_ignore_ascii_case("s1")))
+            .expect("s1's block");
+        let read = d
+            .nodes
+            .iter()
+            .find(|n| matches!(n.kind, helmsman_diagram::NodeKind::Write { .. }))
+            .unwrap();
+        let cam = v.cams[v.scope];
+        (
+            cam.to_screen(fb.rect.x + fb.rect.w / 2.0, fb.rect.y + 8.0),
+            cam.to_screen(read.rect.x + read.rect.w / 2.0, read.rect.y + 8.0),
+        )
+    };
+    // A double click anywhere else only refits: the program stays.
+    s.click(other);
+    s.click(other);
+    assert_eq!(s.view.viewer.as_ref().unwrap().scope, 0);
+    s.wait(0.6);
+    s.click(at);
+    s.click(at);
+    assert_eq!(s.view.viewer.as_ref().unwrap().scope, s1, "into the station");
+}
+
 #[test]
 fn the_canvas_has_a_playground_mode() {
     let mut app = App::with_project(crate::example::project());
