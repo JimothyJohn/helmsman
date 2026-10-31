@@ -128,7 +128,8 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
   --bind IP            CIP interface address (default 0.0.0.0)
   --encap-port N       TCP/UDP encapsulation port (default 44818, 0 = any)
   --io-port N          the box's Class 1 I/O port, shared by its adapter and
-                       its enip-io links (default 2222, 0 = any)
+                       its enip-io links in a build with them (default
+                       2222, 0 = any)
   --peer-io-port N     scanner's UDP I/O port (default 2222)
 Process image: %I = assembly 150 (32 B from the scanner), %Q = assembly
 100 (32 B to the scanner); a module's windows default to all 32 B of each,
