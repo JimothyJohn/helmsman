@@ -477,12 +477,24 @@ struct Watch {
 
 impl Watch {
     /// `coils`: (simulator, coil, value it must hold); `commands`: (signal,
-    /// command it must have).
+    /// command it must have). Watching starts once all of them hold (the
+    /// steady state before the change under test); from then on any
+    /// sample that differs is a glitch. Without that first wait a slow link
+    /// that has not written its first command yet read as a glitch under
+    /// load.
     fn start(
         sims: Vec<(Arc<Sim>, usize, bool)>,
         table: &Arc<Mutex<SignalTable>>,
         commands: Vec<(&'static str, bool)>,
     ) -> Self {
+        wait("the watched state before watching", || {
+            sims.iter().all(|(s, n, want)| s.state().coils[*n] == *want) && {
+                let t = table.lock().unwrap_or_else(PoisonError::into_inner);
+                commands
+                    .iter()
+                    .all(|(name, want)| t.index(name).and_then(|i| t.command(i)) == Some(Value::Bool(*want)))
+            }
+        });
         let stop = Arc::new(AtomicBool::new(false));
         let (st, table) = (Arc::clone(&stop), Arc::clone(table));
         let thread = thread::spawn(move || {
@@ -827,11 +839,10 @@ fn a_reload_whose_device_link_will_not_start_changes_nothing() {
     assert_eq!(bench.devices(), ["a", "b"]);
     let ra = requests(&a);
     bench.settle();
-    thread::sleep(Duration::from_millis(50));
-    assert!(
-        requests(&a) > ra,
-        "a is still polled (b has no inputs, and nothing changed to write)"
-    );
+    // a is still polled (b has no inputs, and nothing changed to write).
+    // A bounded wait, not a fixed sleep: under load the link thread may
+    // not run within any particular few milliseconds.
+    wait("a polled again", || requests(&a) > ra);
     watch.finish();
     // And a module set that does not fit the new map is refused whole too.
     let no_horn = map(&a, &b).replace("out horn  bool b coil:0 safe=false\n", "");

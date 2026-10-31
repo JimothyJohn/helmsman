@@ -464,6 +464,17 @@
   depends: local-accounts
   id: session-scope
 
+- [ ] **Site view: let browsers read /api/site cross-origin, or have the box fetch its peers?** The site view (feat/site-view) shows each peer's status by fetching that peer's `GET /api/site` straight from the browser. So with `--site` on, `/api/site` (and nothing else) answers `Access-Control-Allow-Origin: *`, with no credentials and no preflight (OPTIONS and POST still get 401), and the canvas page's CSP widens to `connect-src 'self' http:`. The body is the beacon's fields, the peer list, and module/device counts only: no names, no values, no source. The cost: any web page a browser on the floor opens can read that summary from every box. The alternative is the box fetching its peers on the browser's behalf: no CORS, no CSP change, but every box then opens HTTP connections to addresses it learned from untrusted UDP beacons (SSRF-shaped), and "reachable" would mean reachable from the box, not from the tablet doing the click-through. I built CORS (reversible: one header in `site_route`, one CSP swap in `Asset::allow_peers`).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether a page from another origin may read a box's site summary
+  options: CORS on /api/site only, with --site (recommended, built) | the box proxies peers' /api/site | CORS only for origins that are heard peers' addresses
+  est: 2h
+  difficulty: low
+  depends: site-view
+  id: site-view-cors
+
 - [ ] **MCP on the box: which credential does an engineer's Claude hold?** `POST /mcp` (feat/box-mcp) takes the box API token, the same 64 hex digits the canvas pastes and the chat agent holds, so `claude mcp add --header "Authorization: Bearer ..."` puts that token in the engineer's laptop config. It can draft, check, simulate and propose (never apply: no tool reaches apply, rollback or a PIN), and every call is audited as source `mcp`, but it cannot be revoked without re-keying the canvas too, and the audit cannot say which engineer. Also because MCP 2026-07-28 has no sessions, drafts live in one workspace shared by every MCP client of the box (handles d1, d2, ...; an hour idle drops them). Built: the box token, no new file or flag (reversible: the check is the one `handle` already makes).
   asked: 2026-10-30
   by: claude-agent
@@ -484,6 +495,16 @@
   difficulty: low
   depends: relay-images
   id: dropin-photo-size
+
+- [ ] **WASM runtime: wasmi now, per-module limits later?** The WASM module tier (feat/wasm-tier) runs on wasmi, a pure-Rust interpreter, not wasmtime as the card said. Why: fuel per scan is exact and built in, there is no JIT (no executable memory on the box, same behaviour on the Pi as in CI), 6 small crates instead of Cranelift's tree, and it is already faster than our ST interpreter (a small module's tick 0.16 µs vs 0.30 µs; a 1000-pass loop 16 µs vs 185 µs). Cost: the box binary grows about 2.1 MiB (7.9 to 10.1 MB, macOS release), and heavy number-crunching would run maybe 5-10x faster under wasmtime. Limits are fixed for every module today: 1 000 000 fuel per scan, 4 MiB of linear memory. Per-module limits would be two manifest keys (`fuel`, `memory_kib`) capped by the box policy, which makes them part of the approval tier.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether wasm-tier stays on wasmi, and whether modules may ask for more fuel or memory
+  options: wasmi, fixed limits (recommended, built) | wasmi, per-module limits in the manifest capped by policy | switch to wasmtime
+  est: 5m
+  difficulty: low
+  id: wasm-limits
 
 ## Tasks
 
@@ -990,11 +1011,19 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 
 ## Roadmap M3: tiers, sharing, fleet
 
-- [ ] **WASM module tier** — wasmtime host; capabilities from the manifest (read signals, emit outputs, nothing else); fuel/memory limits; for drivers and code ST is bad at. Built off-box by the relay.
+- [x] **WASM module tier** — wasmtime host; capabilities from the manifest (read signals, emit outputs, nothing else); fuel/memory limits; for drivers and code ST is bad at. Built off-box by the relay.
+  notes: built on feat/wasm-tier with wasmi, not wasmtime (interpreter with fuel; ARCHITECTURE "WASM modules" has the why and the measurements). `module.wasm` beside `module.st`, the `helmsman/v1` imports as ports, fuel and memory caps, faults like ST. Store/proposal/bundle support is `wasm-store`.
   est: 2w
   difficulty: high
   depends: module-format
   id: wasm-tier
+
+- [ ] **WASM modules in snapshots, proposals and bundles** — the store, the box API's proposals and bundles carry a module's files as UTF-8 text (`module.st`), so a `module.wasm` module runs from `--module-dir` but cannot be stored, proposed, approved, rolled back or bundled. Carry the binary as a blob (SHA-256 like the others), classify its tier from the manifest as for ST, show the API its imports instead of a source.
+  result: a WASM module goes through the same approval path as an ST one
+  est: 3d
+  difficulty: med
+  depends: wasm-tier
+  id: wasm-store
 
 - [x] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
   notes: floor = signature + capability manifest + host-enforced sandbox; the AI review on install sits on top and can only refuse (market-floor). Built: `bundle` module (format, Ed25519 via ring, trust store), `helmsman-plc bundle keygen/pack/sign/verify/trust`, `GET /api/snapshots/{id}/bundle`, `POST /api/bundles` (proposal only); see ARCHITECTURE "Bundles".
@@ -1023,10 +1052,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: built on feat/local-accounts: helmsman-plc policy/account.rs (accounts file, PBKDF2 like the PINs, per-account + box-wide lockout, server-side sessions with TTL/idle/logout/revocation), api/login.rs (POST /api/login, /api/logout), `helmsman-plc account add|passwd|disable|enable|list`; PINs refused once an accounts file exists; audit `user`; canvas review screen logs in; docs/ARCHITECTURE.md "Approval policy"
   id: local-accounts
 
-- [ ] **Multi-box site view** — boxes discover each other on the LAN; one canvas shows the floor.
+- [x] **Multi-box site view** — boxes discover each other on the LAN; one canvas shows the floor.
   est: 1w
   difficulty: high
   depends: canvas-web
+  notes: built on feat/site-view: `--site NAME` (off by default) sends a strict text beacon to 239.255.72.77:41910 (TTL 1) every 5 s and lists what it hears at `GET /api/site` (site.rs, tests/site.rs); the canvas's Site tab / `?site` reads each peer's /api/site from the browser, cross-origin (site.rs, site_tests.rs); see site-view-cors
   id: site-view
 
 - [ ] **Fleet console + OTA** — the relay grows into the fleet backbone: box registry, snapshot sync, signed updates of the core.

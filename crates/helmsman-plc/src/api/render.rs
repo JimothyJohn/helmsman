@@ -61,6 +61,7 @@ const fn fault_kind(k: FaultKind) -> &'static str {
         FaultKind::IndexOutOfRange => "index_out_of_range",
         FaultKind::Watchdog => "watchdog",
         FaultKind::OutputRange => "output_range",
+        FaultKind::Trap => "trap",
     }
 }
 

@@ -73,7 +73,9 @@ Three directions of traffic, three different rules:
 | `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
-`relay-repo`, in `../helmsman-relay`), the WASM host (`wasm-tier`).
+`relay-repo`, in `../helmsman-relay`). The WASM module host
+(`wasm-tier`) is built inside `helmsman-plc` (`wasm.rs`, the `wasm`
+feature), below.
 
 ## One scan, as built
 
@@ -272,6 +274,59 @@ param    beacon  bool true
   Unicode except control and invisible formatting characters (no escape
   sequences or bidi overrides in a log or a review). Files over 1 MiB are
   refused.
+
+## WASM modules (`wasm-tier`, built)
+
+A module directory may hold `module.wasm` instead of `module.st`, with
+the same manifest (`wasm.rs`, `logic.rs` in `helmsman-plc`; contract in
+`tests/wasm.rs`). The runtime holds either as a `Logic` (`St` or `Wasm`),
+so scheduling, binding, hold-on-missing, faults, `swap` and `reconfigure`
+are the same code for both. Behind the `wasm` feature, which `box`
+turns on; the canvas's wasm build never has it.
+
+- **Interface `helmsman/v1`** (versioned by its import module names). A
+  module imports `helmsman/v1/in NAME : () -> T` per input,
+  `helmsman/v1/out NAME : (T) -> ()` per output, optionally
+  `helmsman/v1 now_ms : () -> i64` (the scan's time on the runtime's
+  clock, the only clock), and exports `scan : () -> ()`. `T` is `i32`
+  (`BOOL`, 0 or 1), `i64` (`LINT`) or `f64` (`LREAL`). Each import is a
+  port, named and typed like a `VAR_INPUT`/`VAR_OUTPUT`, so the manifest
+  is checked against the imports exactly as against ST (a module whose
+  manifest lies is refused before the adapter starts) and ports bind to
+  signals by name at load. Any other import (WASI, a memory, a table, a
+  global, another function) refuses the module; so do a `start`
+  function, f32 ports, a port name that is not an identifier or is used
+  twice, and a missing `scan`. No windows: a WASM module's manifest has
+  no `i`, `q` or `m`.
+- **Runtime: wasmi** (a pure-Rust interpreter; eager translation at
+  load, fuel metering, NaN canonicalisation). Chosen over wasmtime for
+  the floor of a soft PLC: deterministic fuel per scan without a JIT,
+  no executable memory, a small footprint, and the same behaviour on the
+  Pi as in CI. Measured (`examples/wasm_bench.rs`, release, M-series
+  Mac): a small module's tick 0.16 µs (ST 0.30 µs); a 1 000-pass loop
+  16 µs (ST 185 µs); load and instantiate 21 µs. The box binary grows
+  about 2.1 MiB (7.9 MB to 10.1 MB, macOS aarch64 release).
+- **Limits** (`wasm::Limits`): 1 000 000 fuel per scan (about one unit an
+  instruction; out of fuel is a `Watchdog` fault, as ST's budget), linear
+  memory capped at 4 MiB (more declared is refused at load, `memory.grow`
+  past it returns -1), one memory, one table of at most 10 000 elements.
+  Fixed for every module for now (`wasm-limits` asks about per-module
+  ones).
+- **Faults**: a trap stops the module and sends its outputs safe, as an
+  ST fault does; the others keep their schedule. Out-of-bounds memory or
+  table access is `IndexOutOfRange`, integer division by zero
+  `DivisionByZero`, a `BOOL` output other than 0/1 or a non-finite real
+  `OutputRange`, anything else (`unreachable`, overflow, a stack
+  overflow in the module) the new `Trap` kind.
+- **State**: outputs keep their last value until set again. A swap
+  carries outputs and exported mutable globals by name and type; linear
+  memory restarts from its data segments. Across kinds (ST to WASM) nothing
+  carries. A WASM module is not traced (the tap's request stays open) and
+  `Runtime::program` is `None` for it.
+- **Not yet**: snapshots, proposals and bundles carry module files as
+  text, so a WASM module runs from `--module-dir` but cannot be stored,
+  proposed, approved or bundled (`wasm-store`); the API shows its source
+  as an ST comment naming its size and SHA-256.
 
 ## The trace tap (`trace-tap`, built)
 
@@ -1196,17 +1251,51 @@ file and token in a temporary state directory).
   and the history head, and an undo (`/api/snapshots/{previous}/rollback`)
   through the same replay and PIN flow.
 
+## Site view (`site-view`, built)
+
+Boxes of one site find each other on the LAN, and any box's canvas lists
+them all (`site.rs` in `helmsman-plc`, `site.rs` in the canvas; contracts
+in `tests/site.rs`, `site_tests.rs`).
+
+- **Opt-in.** `--site NAME` (off by default; needs `--api` with a fixed
+  port), `--box-name NAME` (default: the host name). The box id is a
+  labelled SHA-256 of the API token, first 8 bytes: stable, one-way.
+- **Beacon** (hand-written, no mDNS crate): six fixed text lines
+  (`helmsman-site 1`, site, id, name, API port, version), at most 512
+  bytes, every 5 s to 239.255.72.77:41910 with TTL 1. One thread sends it
+  and hears the others'.
+- **Untrusted input; a box only lists.** Strict parse (exact lines and
+  order, small alphabets, length caps); the peer's address is the
+  datagram's source IP with the beacon's port; sources outside private,
+  CGNAT, link-local and loopback IPv4 dropped; 100 datagrams a second
+  looked at, the rest dropped unread; a peer refreshed at most once a
+  second; 64 peers at most, a new id waits for one to expire (30 s); an id
+  heard from a second address stays where it was and is flagged as a
+  conflict. The box never answers a datagram, never connects to a peer,
+  never forwards what it heard. Every drop is counted and served.
+- **`GET /api/site`**: this box (beacon fields and module/device-link
+  counts by state, no names or values), the live peers, the drop counts.
+  It is the one route other origins may read (`Access-Control-Allow-Origin:
+  *`, no credentials, no preflight), and with `--site` the canvas page's
+  CSP allows `connect-src http:` (question `site-view-cors`).
+- **The view** (`?site`, or the Site tab): the list from this box, each
+  peer's status from that peer's own `/api/site` fetched by the browser
+  (no credentials, 64 KiB cap, 8 s timeout, the answering box's id must be
+  the beacon's), every row a link to `http://ADDR/` built only from a
+  parsed IPv4:port. Unreachable, silent and conflicting boxes say so.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
 | --- | --- | --- | --- |
 | module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | built |
-| module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault) | built |
-| module ↔ network | nothing | ST has no network primitives; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink; OPC UA planned (`sink-opcua`) |
+| module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault); a WASM module's fuel per scan (the same fault) and linear-memory cap | built |
+| module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink; OPC UA planned (`sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
+| box ↔ LAN peers | site beacons in, this box's beacon out | strict parse, source-address rule, intake and refresh limits, a bounded list, no takeover of a live id; the box only lists peers and never connects to one; `/api/site` is the only cross-origin read | built (`site-view`) |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) and `local-accounts` (per-person logins that replace the PINs once an accounts file exists; the audit names the person) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |

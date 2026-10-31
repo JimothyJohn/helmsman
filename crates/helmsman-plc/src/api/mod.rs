@@ -36,6 +36,7 @@
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
 //! GET  /api/screen                        the floor screen's layout (with --screen FILE; see [`crate::screen`])
+//! GET  /api/site                          this box and the boxes it heard on the LAN (with --site NAME; see [`crate::site`])
 //! POST /api/dropins?name=N&kind=K         token: a document or a photo for the agent, stored in memory (see [`dropin`], [`photo`])
 //! GET  /api/dropins                       the drop-ins held
 //! GET  /api/dropins/{id}?chunk=K          one chunk of a drop-in's text
@@ -259,6 +260,8 @@ struct Ctx {
     dropins: Mutex<dropin::Store>,
     /// Held while a device browse runs (one at a time).
     browsing: Mutex<()>,
+    /// The site this box announces itself in (`--site`), and what it heard.
+    site: Option<crate::site::Handle>,
     /// The MCP route's drafts (see [`mcp`]).
     mcp: Mutex<mcp::Workspace>,
 }
@@ -445,7 +448,23 @@ impl Api {
     ///
     /// # Errors
     /// The bind fails.
-    pub fn start_with(cfg: Config, mut shared: Shared, extras: Extras) -> io::Result<Self> {
+    pub fn start_with(cfg: Config, shared: Shared, extras: Extras) -> io::Result<Self> {
+        Self::start_in_site(cfg, shared, extras, None)
+    }
+
+    /// [`Api::start_with`], also serving `GET /api/site` from a running
+    /// [`crate::site::Site`]. With a site, `/api/site` may be read from
+    /// other origins (the site view on another box's canvas) and the
+    /// canvas may fetch from other boxes (see [`site_json`]).
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_in_site(
+        cfg: Config,
+        mut shared: Shared,
+        extras: Extras,
+        site: Option<crate::site::Handle>,
+    ) -> io::Result<Self> {
         let Extras { ui, screen, trust } = extras;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
@@ -478,6 +497,7 @@ impl Api {
             trust,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
+            site,
             mcp: Mutex::new(mcp::Workspace::default()),
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
@@ -995,7 +1015,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | [
             "api",
             "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
-            | "screen",
+            | "screen" | "site",
         ]
         | [
             "api",
@@ -1244,18 +1264,28 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
     Response::json(201, &p).with("Location", format!("/api/proposals/{id}"))
 }
 
+/// A file of the canvas (`--ui`); with a site, its page may fetch peers.
+fn ui_file(req: &Request, ctx: &Ctx) -> Reply {
+    match &ctx.ui {
+        Some(ui) => match ui.resolve(&req.segments) {
+            Ok(mut asset) => {
+                if ctx.site.is_some() {
+                    asset.allow_peers();
+                }
+                Reply::File(asset)
+            }
+            Err(r) => Reply::Once(r),
+        },
+        None => Reply::Once(Response::error(
+            404,
+            "no such resource (no UI on this box: --ui DIR)",
+        )),
+    }
+}
+
 fn get(req: &Request, ctx: &Ctx) -> Reply {
     if req.segments.first().is_none_or(|s| s != "api") {
-        return match &ctx.ui {
-            Some(ui) => match ui.resolve(&req.segments) {
-                Ok(asset) => Reply::File(asset),
-                Err(r) => Reply::Once(r),
-            },
-            None => Reply::Once(Response::error(
-                404,
-                "no such resource (no UI on this box: --ui DIR)",
-            )),
-        };
+        return ui_file(req, ctx);
     }
     let c = &*ctx.catalog();
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
@@ -1334,6 +1364,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             Some(j) => Response::json(200, j),
             None => Response::error(404, "no floor screen on this box (--screen FILE)"),
         },
+        ["api", "site"] => site_route(ctx, c, &view),
         ["api", "policy"] => match &ctx.approval {
             Some(a) => Response::json(200, &policy_json(a)),
             None => Response::error(404, "no approval path on this box"),
@@ -1425,10 +1456,85 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/devices/{name}/browse", true, "an observed Logix controller's tag list, read-only"),
             e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
             e("GET", "/api/screen", false, "the floor screen's layout: tiles, state codes, colours (with --screen)"),
+            e("GET", "/api/site", false, "this box's status and the boxes it heard on the LAN (with --site); readable from other origins"),
             e("POST", "/mcp", true, "MCP (Streamable HTTP, 2026-07-28 or 2025-11-25): the agent's read, draft, check, simulate and propose tools for an engineer's own client; no apply"),
         ],
         "agent": agent,
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
+    })
+}
+
+fn site_route(ctx: &Ctx, c: &Catalog, view: &View) -> Response {
+    match &ctx.site {
+        Some(site) => Response::json(200, &site_json(site, c, view, &ctx.box_.devices))
+            .with("Access-Control-Allow-Origin", "*".into()),
+        None => Response::error(404, "this box is in no site (--site NAME)"),
+    }
+}
+
+/// `GET /api/site`: this box (its beacon and a status summary: module
+/// and device-link counts by state, no names, no values) and the peers it
+/// heard, with what it dropped.
+///
+/// **Read from other origins.** The site view on one box's canvas asks
+/// each peer for this directly, so it carries
+/// `Access-Control-Allow-Origin: *`, and nothing else does: no other
+/// route, no credentials (a wildcard origin never carries cookies, and the
+/// API's token is a header no other origin can set), no preflight (any
+/// other method still needs the token). A page from anywhere that the
+/// browser of someone on the floor opens can therefore read this body:
+/// it holds only what the beacons already tell the whole LAN, plus counts.
+/// The other choice, this box fetching its peers for the browser, would
+/// make every box open connections to addresses learned from untrusted
+/// beacons; here a box never acts on what it heard.
+fn site_json(site: &crate::site::Handle, c: &Catalog, view: &View, devices: &Devices) -> Json {
+    let me = site.me();
+    let (peers, counts, now) = site.snapshot();
+    let (mut running, mut held, mut faulted) = (0usize, 0usize, 0usize);
+    for k in 0..c.modules.len() {
+        match view.modules.get(k).map(|m| m.status) {
+            Some(crate::Status::Running) => running += 1,
+            Some(crate::Status::Held) => held += 1,
+            Some(crate::Status::Faulted(_)) => faulted += 1,
+            None => {}
+        }
+    }
+    let (mut up, mut down, mut unknown) = (0usize, 0usize, 0usize);
+    for (_, state) in devices.list() {
+        match state {
+            None => unknown += 1,
+            Some(Ok(())) => up += 1,
+            Some(Err(_)) => down += 1,
+        }
+    }
+    let age = |t: Duration| u64::try_from(now.saturating_sub(t).as_millis()).unwrap_or(u64::MAX);
+    json!({
+        "site": me.site,
+        "self": {
+            "id": me.id,
+            "name": me.name,
+            "api_port": me.api,
+            "version": me.version,
+            "status": {
+                "published": view.seq > 0,
+                "modules": c.modules.len(),
+                "running": running,
+                "held": held,
+                "faulted": faulted,
+                "devices": { "up": up, "down": down, "unknown": unknown },
+            },
+        },
+        "peers": peers.iter().map(|p| json!({
+            "id": p.id,
+            "name": p.name,
+            "version": p.version,
+            "address": p.addr.to_string(),
+            "last_seen_ms": age(p.last),
+            "first_seen_ms": age(p.first),
+            "conflict": p.conflict.map(|ip| ip.to_string()),
+        })).collect::<Vec<_>>(),
+        "max_peers": crate::site::MAX_PEERS,
+        "dropped": counts,
     })
 }
 
