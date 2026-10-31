@@ -22,6 +22,9 @@
 #                 `ssh -L 8080:127.0.0.1:8080 user@host`; 0.0.0.0:8080 serves
 #                 the LAN and opens 8080/tcp from PLC_ALLOW. Reads are open:
 #                 TODO.md api-lan-reads)
+#        PLC_UI_ALLOW=10.0.0.0/24  source for the API + canvas port only
+#                 (default PLC_ALLOW), e.g. the Wi-Fi a laptop browses from
+#                 while the CIP ports stay on the wired link
 # Undo: sudo systemctl disable --now helmsman-plc, remove the unit,
 #       /usr/local/bin/helmsman-plc, /usr/local/share/helmsman-plc and
 #       /etc/helmsman-plc; the firewall
@@ -34,6 +37,7 @@ program="${2:-$repo/crates/helmsman-plc/programs/echo.st}"
 scan_ms="${PLC_SCAN_MS:-10}"
 allow="${PLC_ALLOW:-192.168.3.0/24}"
 api="${PLC_API:-127.0.0.1:8080}"
+ui_allow="${PLC_UI_ALLOW:-$allow}"
 api_port="${api##*:}"
 ui_dir=/usr/local/share/helmsman-plc/ui
 image="$(sed -n 's#^FROM \(rust:[^ ]*\) AS build$#\1#p' "$repo/docker/adapter/Dockerfile")"
@@ -136,7 +140,7 @@ echo "==> firewall"
 # the PLC's ports from $PLC_ALLOW only, as runtime rules: they vanish on reboot
 # or a perceptronics firewall reload, and a redeploy puts them back. No table,
 # no change.
-# shellcheck disable=SC2029 # $allow, $api and $api_port are meant to expand here.
+# shellcheck disable=SC2029 # $allow, $ui_allow, $api and $api_port are meant to expand here.
 ssh "$target" "set -e
 if sudo nft list table inet perceptronics >/dev/null 2>&1; then
     if sudo nft list chain inet perceptronics input | grep -q 'comment \"helmsman-plc\"'; then
@@ -152,8 +156,8 @@ if sudo nft list table inet perceptronics >/dev/null 2>&1; then
             if sudo nft list chain inet perceptronics input | grep -q 'comment \"helmsman-plc-api\"'; then
                 echo 'API rule already present'
             else
-                sudo nft add rule inet perceptronics input ip saddr $allow tcp dport $api_port accept comment '\"helmsman-plc-api\"'
-                echo 'opened $api_port tcp (API + canvas) from $allow'
+                sudo nft add rule inet perceptronics input ip saddr $ui_allow tcp dport $api_port accept comment '\"helmsman-plc-api\"'
+                echo 'opened $api_port tcp (API + canvas) from $ui_allow'
             fi ;;
     esac
 else
@@ -169,7 +173,8 @@ for _ in $(seq 1 20); do
     fi
     sleep 1
 done
-ssh "$target" 'systemctl is-active helmsman-plc; journalctl -u helmsman-plc -n 5 --no-pager' || true
+# The token line stays in the journal, never in this script's output.
+ssh "$target" "systemctl is-active helmsman-plc; journalctl -u helmsman-plc -n 5 --no-pager | grep -v 'API token'" || true
 [ -n "$up" ] || { echo "FAIL: helmsman-plc is not listening on 44818 (journal above)" >&2; exit 1; }
 # The box API on the Pi's loopback: proves StateDirectory= let it write its
 # token under the unit's hardening. The token itself stays in the journal.
