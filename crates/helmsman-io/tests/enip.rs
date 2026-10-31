@@ -206,9 +206,14 @@ fn a_lost_connection_is_a_link_error_and_comes_back_with_its_outputs() {
     assert!(e.is_link(), "{e}");
     s.clear_faults();
 
-    // The next read reopens; the first O->T packet already carries DO-01.
+    // The next read reopens and the outputs go back out with it; the first
+    // O->T packet can land after that read returns.
     read(&mut d, "di:5").unwrap();
-    assert_eq!(lock_ref(&s.device()).assembly(102), Some(&[0b10][..]));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while lock_ref(&s.device()).assembly(102) != Some(&[0b10][..]) {
+        assert!(Instant::now() < deadline, "DO-01 never came back");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     wait_value(&mut d, "di:1", Value::Bool(true), Duration::from_secs(2));
     assert_eq!(d.opens, 2);
 }
