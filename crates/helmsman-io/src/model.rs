@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::time::Duration;
 
-use crate::driver::{PointInfo, parse_point};
+use crate::driver::{PointInfo, output_keys, parse_point_on};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Ty {
@@ -264,8 +264,8 @@ impl IoMap {
                         });
                         continue;
                     };
-                    match parse_point(&d.driver, point) {
-                        Ok(i) => (i, (device.clone(), point.clone())),
+                    match parse_point_on(d, point) {
+                        Ok(i) => (i, (device.clone(), point.clone(), d.driver.clone())),
                         Err(e) => {
                             errs.push(MapError::BadPoint {
                                 signal: s.name.clone(),
@@ -276,7 +276,7 @@ impl IoMap {
                     }
                 }
                 Binding::Local { channel } => match local_point(channel) {
-                    Ok(i) => (i, (String::new(), channel.clone())),
+                    Ok(i) => (i, (String::new(), channel.clone(), String::new())),
                     Err(why) => {
                         errs.push(MapError::BadPoint {
                             signal: s.name.clone(),
@@ -306,7 +306,14 @@ impl IoMap {
                 if !info.writable {
                     errs.push(MapError::NotWritable(s.name.clone()));
                 }
-                if let Some(other) = writers.insert(target, &s.name) {
+                let (device, point, driver) = target;
+                let mut clash = None;
+                for key in output_keys(&driver, &point) {
+                    if let Some(other) = writers.insert((device.clone(), key), &s.name) {
+                        clash = clash.or(Some(other));
+                    }
+                }
+                if let Some(other) = clash {
                     errs.push(MapError::TwoWriters {
                         a: other.into(),
                         b: s.name.clone(),

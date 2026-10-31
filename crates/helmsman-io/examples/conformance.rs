@@ -10,6 +10,15 @@
 //!     --point di:0 --point ir:0 --expect ir:0=4242 --loop coil:0=di:0 \
 //!     --reg hr:10:f32 --absent hr:9999
 //!
+//! # against the simulated Moxa ioLogik E1213 (EtherNet/IP, Class 1;
+//! # DO-00..03 wired to DI-00..03 like the bench):
+//! cargo run -p helmsman-io --example conformance -- --sim-e1213
+//!
+//! # against a real EtherNet/IP adapter (enip-io params as in the map):
+//! cargo run -p helmsman-io --example conformance -- \
+//!     --enip 192.168.3.60 --param profile=moxa-e1213 --param rpi_ms=100 \
+//!     --loop do:0=di:0 --loop do:1=di:1 --point in:50.0 --absent in:51.0
+//!
 //! # against the built-in RTU simulator, over an in-memory line:
 //! cargo run -p helmsman-io --example conformance -- --sim-rtu
 //!
@@ -24,14 +33,18 @@ use std::collections::BTreeMap;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use helmsman_io::enip::EnipDriver;
+use helmsman_io::enip_sim::E1213Sim;
 use helmsman_io::harness::{self, Bench};
 use helmsman_io::modbus::ModbusDriver;
 use helmsman_io::rtu::{self, sim::RtuSim};
 use helmsman_io::sim::{Faults, Sim, State};
 use helmsman_io::{Driver, Value};
 
-const USAGE: &str = "usage: conformance (--sim | --sim-rtu | --endpoint HOST:PORT | --serial PATH)
+const USAGE: &str = "usage: conformance (--sim | --sim-rtu | --sim-e1213 | --endpoint HOST:PORT
+                    | --serial PATH | --enip HOST[:PORT])
        [--unit N] [--timeout-ms N] [--baud N] [--parity even|odd|none] [--stop 1|2]
+       [--param KEY=VALUE]... (enip-io device params)
        [--point ADDR]... [--expect ADDR=VALUE]... [--loop OUT=IN]... [--reg ADDR]...
        [--absent ADDR] [--settle-ms N]
 VALUE is true/false, an integer, or a number with a decimal point.";
@@ -47,13 +60,16 @@ fn main() -> ExitCode {
     let mut endpoint = None;
     let mut sim = false;
     let mut sim_rtu = false;
+    let mut sim_e1213 = false;
     let mut serial = None;
+    let mut enip = None;
     let mut i = 0;
     while i < args.len() {
         let flag = args[i].as_str();
-        if flag == "--sim" || flag == "--sim-rtu" {
+        if flag == "--sim" || flag == "--sim-rtu" || flag == "--sim-e1213" {
             sim = flag == "--sim";
             sim_rtu = flag == "--sim-rtu";
+            sim_e1213 = flag == "--sim-e1213";
             i += 1;
             continue;
         }
@@ -67,6 +83,15 @@ fn main() -> ExitCode {
         };
         match flag {
             "--endpoint" => endpoint = Some(v),
+            "--enip" => enip = Some(v),
+            "--param" => {
+                if let Some((k, x)) = v.split_once('=') {
+                    params.insert(k.to_string(), x.to_string());
+                } else {
+                    eprintln!("--param wants KEY=VALUE, got {v}");
+                    return ExitCode::from(2);
+                }
+            }
             "--serial" => serial = Some(v),
             "--baud" => drop(params.insert("baud".to_string(), v)),
             "--parity" => drop(params.insert("parity".to_string(), v)),
@@ -106,6 +131,10 @@ fn main() -> ExitCode {
             }
         }
         i += 2;
+    }
+
+    if sim_e1213 || enip.is_some() {
+        return enip_conformance(enip, sim_e1213, params, &mut bench);
     }
 
     let mut state = State::new(64);
@@ -192,6 +221,65 @@ fn default_bench(bench: &mut Bench) {
             ("hr:20:f32".into(), Value::Real(1.5)),
         ];
     }
+}
+
+/// The E1213 bench: every DI and the DO status read, the four wired
+/// loops, DI-00's counter, a point past the input assembly.
+fn e1213_bench(bench: &mut Bench) {
+    if bench.points.is_empty() && bench.loops.is_empty() {
+        bench.points = vec![
+            "di:0".into(),
+            "di:11".into(),
+            "in:2:u32".into(),
+            "in:50.0".into(),
+            "do:7".into(),
+        ];
+        bench.loops = (0..4).map(|n| (format!("do:{n}"), format!("di:{n}"))).collect();
+        bench.absent = Some("in:51.0".into());
+    }
+}
+
+fn enip_conformance(
+    endpoint: Option<String>,
+    sim: bool,
+    mut params: BTreeMap<String, String>,
+    bench: &mut Bench,
+) -> ExitCode {
+    let running = if sim {
+        match E1213Sim::start() {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("simulator: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(s) = &running {
+        params.extend(s.params());
+        e1213_bench(bench);
+    } else if params.get("profile").is_some_and(|p| p == "moxa-e1213") {
+        e1213_bench(bench);
+    }
+    let Some(endpoint) = running.as_ref().map(E1213Sim::endpoint).or(endpoint) else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    };
+    let mut driver = match EnipDriver::from_params(&endpoint, &params) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let what = if running.is_some() { "the simulated E1213" } else { endpoint.as_str() };
+    let c = driver.connection();
+    println!(
+        "enip-io conformance against {what}: config {} O->T {} ({} B) T->O {} ({} B)",
+        c.configuration, c.o_to_t, c.o_to_t_len, c.t_to_o, c.t_to_o_len
+    );
+    report(&mut driver, bench, running.as_ref().map(|s| s as &dyn Faults))
 }
 
 fn report(driver: &mut dyn Driver, bench: &Bench, sim: Option<&dyn Faults>) -> ExitCode {

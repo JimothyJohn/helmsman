@@ -1592,6 +1592,7 @@ version = "0.1.0"
 dependencies = [
  "gpiocdev",
  "helmsman-adapter",
+ "helmsman-io",
  "helmsman-proto",
  "i2cdev",
  "proptest",

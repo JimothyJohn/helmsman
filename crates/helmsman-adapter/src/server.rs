@@ -8,7 +8,8 @@
 //!   as in `OpENer`'s `encap.c`.
 //! - UDP listener on the encapsulation port for `ListIdentity` discovery.
 //! - UDP I/O socket: consumes O->T, produces T->O to `originator:peer_io_port`
-//!   (2222 by default, where `OpENer` sends it), and expires connections.
+//!   (2222 by default, where `OpENer` sends it; 0 answers each connection
+//!   at the port its O->T packets come from), and expires connections.
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
@@ -21,6 +22,7 @@ use helmsman_proto::codec::Reader;
 use helmsman_proto::encap::{self, Command, Frame, HEADER_LEN, Header, Status};
 use helmsman_proto::explicit;
 use helmsman_proto::identity::{IdentityItem, SocketAddress, encode_list_identity};
+use helmsman_proto::io::IoPacket;
 
 use crate::device::{self, Device};
 
@@ -31,7 +33,11 @@ pub struct ServerConfig {
     pub encap_port: u16,
     /// Local UDP port for I/O (2222). 0 picks a free port.
     pub io_port: u16,
-    /// Port T->O data is sent to on the originator (2222).
+    /// Port T->O data is sent to on the originator (2222). 0: the port each
+    /// connection's O->T packets come from, so several scanners on one host
+    /// can each bind a port of their own (a simulator convenience; a real
+    /// target sends to 2222). Nothing is produced until the first O->T
+    /// packet arrives.
     pub peer_io_port: u16,
     pub max_sessions: usize,
     pub session_idle: Duration,
@@ -405,18 +411,42 @@ fn udp_encap_loop(sock: &UdpSocket, device: &Mutex<Device>, stop: &AtomicBool, p
 
 fn io_loop(sock: &UdpSocket, device: &Mutex<Device>, stop: &AtomicBool, peer_port: u16) {
     let mut buf = [0u8; 1500];
+    // With `peer_port` 0: T->O connection id -> the port its O->T came from.
+    let mut ports: std::collections::HashMap<u32, u16> = std::collections::HashMap::new();
     while !stop.load(Ordering::Relaxed) {
         if let Ok((n, SocketAddr::V4(from))) = sock.recv_from(&mut buf) {
-            let _ = device::lock_ref(device).on_io_packet(&buf[..n], *from.ip(), Instant::now());
+            let mut d = device::lock_ref(device);
+            if d.on_io_packet(&buf[..n], *from.ip(), Instant::now()).is_ok()
+                && peer_port == 0
+                && let Ok(pkt) = IoPacket::decode(&buf[..n])
+                && let Some(c) = d.connections().iter().find(|c| c.o_to_t_id == pkt.connection_id)
+            {
+                ports.insert(c.t_to_o_id, from.port());
+            }
         }
         let now = Instant::now();
         let out = {
             let mut d = device::lock_ref(device);
             d.expire(now);
+            if peer_port == 0 {
+                let live: Vec<u32> = d.connections().iter().map(|c| c.t_to_o_id).collect();
+                ports.retain(|id, _| live.contains(id));
+            }
             d.due_productions(now)
         };
         for (ip, pkt) in out {
-            let _ = sock.send_to(&pkt, SocketAddrV4::new(ip, peer_port));
+            let port = if peer_port == 0 {
+                match IoPacket::decode(&pkt)
+                    .ok()
+                    .and_then(|p| ports.get(&p.connection_id))
+                {
+                    Some(p) => *p,
+                    None => continue,
+                }
+            } else {
+                peer_port
+            };
+            let _ = sock.send_to(&pkt, SocketAddrV4::new(ip, port));
         }
     }
 }
