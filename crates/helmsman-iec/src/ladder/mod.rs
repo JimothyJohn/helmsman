@@ -221,6 +221,9 @@ const fn members(k: Kind) -> &'static [(&'static str, Kind)] {
 
 type TagId = usize;
 
+/// A timer's or counter's pseudo-operands: PRE, ACC and where they were.
+type Pseudo = (Option<i32>, Option<i32>, String);
+
 #[derive(Debug, Clone)]
 struct TagDef {
     name: String,
@@ -321,11 +324,9 @@ struct Cx {
     /// Tags each program's rungs reference.
     used: Vec<BTreeSet<TagId>>,
     /// Pseudo-operand initial values: (tag, element) -> (PRE, ACC, where).
-    pseudo: BTreeMap<(TagId, usize), (Option<i32>, Option<i32>, String)>,
+    pseudo: BTreeMap<(TagId, usize), Pseudo>,
     /// Helper parts the code needs.
     needs: BTreeSet<&'static str>,
-    /// Tags written by some rung.
-    written: BTreeSet<TagId>,
 }
 
 fn at(prog: &str, routine: &str, rung: Option<u32>) -> String {
@@ -572,7 +573,6 @@ impl Cx {
         if self.tags[p.tag].constant {
             return Err(format!("{arg} is a constant tag; it cannot be written"));
         }
-        self.written.insert(p.tag);
         Ok(())
     }
 
@@ -717,7 +717,11 @@ impl Cx {
         }
     }
 
-    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::too_many_arguments,
+        clippy::many_single_char_names
+    )]
     fn instr(
         &mut self,
         prog: usize,
@@ -948,16 +952,17 @@ impl Cx {
                         "COP is converted between elements of one-dimensional arrays or whole scalars".into(),
                     );
                 };
-                if len < 1 || len > MAX_COP {
+                if !(1..=MAX_COP).contains(&len) {
                     return Err(format!("length {len} is outside 1..{MAX_COP}"));
                 }
-                if len > sleft as i64 {
+                let len = usize::try_from(len).unwrap_or(0);
+                if len > sleft {
                     return Err(format!(
                         "length {len} runs past the end of {} ({sleft} element(s) left); controllers differ there",
                         a[0]
                     ));
                 }
-                let n = len.min(dleft as i64) as usize;
+                let n = len.min(dleft);
                 let base = |p: &Place| p.st.split('[').next().unwrap_or("").to_string();
                 let (sb, db) = (base(&s), base(&d));
                 let sarr = !self.tags[s.tag].dims.is_empty();
@@ -1106,11 +1111,7 @@ fn value_lit(k: Kind, v: &str) -> Result<String, String> {
 }
 
 /// An initial value for one element: `None` when all default.
-fn elem_init(
-    k: Kind,
-    d: Option<&Data>,
-    pseudo: Option<&(Option<i32>, Option<i32>, String)>,
-) -> Result<Option<String>, String> {
+fn elem_init(k: Kind, d: Option<&Data>, pseudo: Option<&Pseudo>) -> Result<Option<String>, String> {
     match k {
         Kind::Timer | Kind::Counter => {
             let mut fields: Vec<(String, String)> = Vec::new();
@@ -1245,7 +1246,6 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
         used: vec![BTreeSet::new(); p.programs.len()],
         pseudo: BTreeMap::new(),
         needs: BTreeSet::new(),
-        written: BTreeSet::new(),
         p,
     };
     for s in cx.p.skipped.clone() {
@@ -1757,16 +1757,16 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
         programs.push(unit.name.clone());
     }
     // Names in.
-    let mut named = String::with_capacity(body.len());
+    let mut st_out = String::with_capacity(body.len());
     let mut rest = body.as_str();
     while let Some(i) = rest.find('\u{1}') {
-        named.push_str(&rest[..i]);
+        st_out.push_str(&rest[..i]);
         let j = rest[i..].find('\u{2}').map_or(rest.len(), |j| i + j);
         let id: usize = rest[i + 1..j].parse().unwrap_or(0);
-        named.push_str(&names[id]);
+        st_out.push_str(&names[id]);
         rest = &rest[(j + 1).min(rest.len())..];
     }
-    named.push_str(rest);
+    st_out.push_str(rest);
 
     let mut head = String::new();
     let _ = writeln!(
@@ -1791,7 +1791,7 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
     if needs_types {
         head.push_str(lib_part("TYPES"));
     }
-    let r2l = named.contains("LOGIX_R2L(");
+    let r2l = st_out.contains("LOGIX_R2L(");
     for part in ["TON", "RTO", "TOF", "CTU", "CTD", "DIVI", "MODI", "MODR"] {
         if cx.needs.contains(part) {
             head.push_str(lib_part(part));
@@ -1803,7 +1803,7 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
     // Every PROGRAM must compile with the helpers; a failure here is the
     // converter's bug, refused rather than shipped.
     let mut problems = Vec::new();
-    for prog in named.split_inclusive("END_PROGRAM\n") {
+    for prog in st_out.split_inclusive("END_PROGRAM\n") {
         if !prog.contains("PROGRAM ") {
             continue;
         }
@@ -1825,7 +1825,7 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
         return Err(Refused { problems, total });
     }
     Ok(Converted {
-        st: format!("{head}{named}"),
+        st: format!("{head}{st_out}"),
         programs,
         notes: cx.notes,
     })

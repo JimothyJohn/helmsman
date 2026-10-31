@@ -943,7 +943,7 @@
   id: deploy-replay
   answer: keep replay, UI does both calls (built)
 
-- [ ] **What should an L5X upload become?** `helmsman_iec::l5x` reads an L5X as an inventory (tags, rungs as text, ST routines as lines); there is no ladder-to-ST translator, so `POST /api/projects/{p}/import?file=X.L5X` is refused (415) for now. Options: translate the common ladder instructions (XIC/XIO/OTE/OTL/OTU/TON/TOF/CTU/MOV/compare) and Logix TIMER/COUNTER semantics into ST, refusing a file with anything else; import only its ST routines plus tags as VARs (rarely compiles); or keep L5X as an agent drop-in and have the agent write the ST.
+- [x] **What should an L5X upload become?** `helmsman_iec::l5x` reads an L5X as an inventory (tags, rungs as text, ST routines as lines); there is no ladder-to-ST translator, so `POST /api/projects/{p}/import?file=X.L5X` is refused (415) for now. Options: translate the common ladder instructions (XIC/XIO/OTE/OTL/OTU/TON/TOF/CTU/MOV/compare) and Logix TIMER/COUNTER semantics into ST, refusing a file with anything else; import only its ST routines plus tags as VARs (rarely compiles); or keep L5X as an agent drop-in and have the agent write the ST.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -953,6 +953,7 @@
   difficulty: med
   id: l5x-scope
   answer: ladder subset to ST, refuse the rest (recommended)
+  result-note: built as card l5x-import (feat/l5x-ladder): helmsman_iec::ladder, docs/ARCHITECTURE.md "L5X ladder import".
 
 - [ ] **Monitor lamps: is TRUE always green?** docs/UI.md says a tile's outputs are green or red. Built (reversible, one function in `monitor.rs`): a BOOL output TRUE is a green lamp, FALSE a red one, whatever its name, so the line's `alarm` and a motor's `tripped` light green when they are on. Options: keep it literal; invert by name (alarm, fault, trip, jam, error, estop light red when TRUE, off otherwise); or let the source say per output (a `(* monitor: alarm *)` comment on the declaration).
   asked: 2026-10-31
@@ -1246,13 +1247,14 @@
   asked: 2026-10-31
   by: claude-agent
 
-- [ ] **L5X to ST import** — `POST /api/projects/{p}/import?file=X.L5X` produces ST that compiles.
+- [x] **L5X to ST import** — `POST /api/projects/{p}/import?file=X.L5X` produces ST that compiles.
   depends: l5x-scope
   est: 3d
   difficulty: high
   id: l5x-import
   asked: 2026-10-31
   by: claude-agent
+  notes: built on feat/l5x-ladder (2026-10-31): `helmsman_iec::ladder` converts the ladder subset (contacts, coils, branches, one-shots, TON/TOF/RTO/CTU/CTD/RES on TIMER/COUNTER structures, compares, math, CPT, MOV/CLR/COP, JSR inlined) to one F.st with a PROGRAM per task, and refuses anything else with its program, routine and rung; semantics from RM003 (docs/SOURCES.md), proven against a reference evaluator over random rungs (tests/ladder_equiv.rs). Left: the browser simulation still refuses L5X (sim_projects.rs; the converter is wasm-safe), and UDTs, indirect subscripts and JSR parameters are refused until a real export shows they matter.
 
 - [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc); a first install seeds project `line` from programs/line.st, deployed (`helmsman-plc project seed`, the unit's ExecStartPre); `PLC_MODE=program` keeps the old one-file mode. Built and tested here; yours to run against the Pi (native terminal or `!`: it needs Docker, trunk, and SSH with sudo on the Pi, and the firewall step is refused from an agent).
   needs: you to run the two commands (the Pi's IP); the Pi on Debian Trixie with key SSH and passwordless sudo (scripts/pi-prep.sh)
@@ -1582,7 +1584,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: low
   depends: dropin-plc
   id: l5x-real-export
-  notes: source (l5x-source, 2026-10-31): Nick exports one from his bench project.
+  notes: source (l5x-source, 2026-10-31): Nick exports one from his bench project. Later 2026-10-31: RM014 is read and cited; the ladder converter (l5x-import) also needs the real export: run `POST .../import?file=X.L5X` on it and check the refusal list (or the ST) against the project, the neutral text of each instruction it uses (JSR's `JSR(Name,0)` form, `?` pseudo-operands, v36 mnemonics such as EQ/MOVE), decorated data of TIMER/COUNTER tags, and rung Type attributes other than N. The fixtures (line3.L5X, ladder.L5X) are hand-written, not exports.
 
 - [x] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
   notes: built on feat/dropin-photo: `POST /api/dropins` takes PNG/JPEG/WebP known by their bytes and read from headers only (`api/photo.rs`: 512 KiB, 8000 px a side, no trailing bytes, no animation); an attached photo goes to the model as a base64 `image` block plus the box's note; see ARCHITECTURE "Drop-ins". Works with relay protocol v1 as it is (no block-type check); relay caps and prompt in `relay-images`.

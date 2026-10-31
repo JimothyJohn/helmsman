@@ -21,6 +21,7 @@ fn fixture(name: &str) -> String {
 
 /// An export: controller tags, programs (name, tags, routines as
 /// (name, type, rungs)), tasks (name, type, programs).
+#[allow(clippy::type_complexity)]
 struct X<'a> {
     ctl_tags: &'a str,
     programs: Vec<(&'a str, &'a str, Vec<(&'a str, &'a str, Vec<&'a str>)>)>,
@@ -251,6 +252,7 @@ fn operand_problems_are_refused_with_the_instruction() {
         "MOV(R.1,D);",
         "TON(T1,1.5,0);",
         "XIC(Local:1:I.Data.0)OTE(Q);",
+        "XIC(S:FS)OTE(Q);",
     ];
     let r = refused(&one(&tags, &rungs));
     let at = |n: usize| format!("rung {n}");
@@ -275,6 +277,7 @@ fn operand_problems_are_refused_with_the_instruction() {
     has(&r, &at(18), "does not name a part of a REAL");
     has(&r, &at(19), "not an integer immediate");
     has(&r, &at(20), "I/O module tag");
+    has(&r, &at(21), "status flag");
     assert_eq!(r.total, rungs.len(), "{r}");
 }
 

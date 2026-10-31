@@ -194,7 +194,7 @@ impl P<'_> {
         let mut depth = 0usize;
         loop {
             match self.s.get(self.i) {
-                None => {
+                None | Some(b';') => {
                     return Err(format!(
                         "{name} at column {}: operands not closed with ')'",
                         start + 1
@@ -210,12 +210,6 @@ impl P<'_> {
                 Some(b',') if depth == 0 => {
                     args.push(&self.s[cur..self.i]);
                     cur = self.i + 1;
-                }
-                Some(b';') => {
-                    return Err(format!(
-                        "{name} at column {}: operands not closed with ')'",
-                        start + 1
-                    ));
                 }
                 _ => {}
             }
@@ -401,8 +395,15 @@ pub fn operand(s: &str) -> Result<Operand, String> {
     if b[0].is_ascii_digit() || b[0] == b'-' || b[0] == b'+' || b[0] == b'.' {
         return number(s).ok_or_else(|| format!("{s} is not a number this converter reads"));
     }
+    if s.len() > 2 && s[..2].eq_ignore_ascii_case("S:") {
+        return Err(format!(
+            "{s} is a controller status flag; status flags are not converted"
+        ));
+    }
     if s.contains(':') {
-        return Err(format!("{s} is an I/O module tag or a program-qualified name"));
+        return Err(format!(
+            "{s} is an I/O module tag (or a program-qualified name), which is not converted"
+        ));
     }
     let mut i = 0;
     let p = path_at(b, &mut i)?;
@@ -617,7 +618,7 @@ mod tests {
         let r = parse("CPT(Dest,(a + b[1,2]) * 2);TON(T,?,?)").unwrap_err();
         assert!(r.contains("after the rung"), "{r}");
         let r = parse(" ; ").unwrap();
-        assert!(r.is_empty());
+        assert_eq!(r, Vec::<Elem>::new());
     }
 
     #[test]

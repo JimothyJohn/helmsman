@@ -1546,10 +1546,10 @@ fn plcopen_and_st_files_import_into_a_project_and_build() {
     );
     assert_eq!(r.status, 201, "{r:?}");
     assert_eq!(file(b.addr, "imp", "extra.st").json()["text"], COUNTER);
-    let l5x = std::fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../helmsman-iec/tests/fixtures/l5x/line3.L5X"),
-    )
-    .unwrap();
+    // An L5X outside the ladder subset is refused whole, every problem
+    // with its routine and rung; nothing is written.
+    let l5x_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../helmsman-iec/tests/fixtures/l5x");
+    let l5x = std::fs::read(l5x_dir.join("line3.L5X")).unwrap();
     let r = send(
         b.addr,
         "POST",
@@ -1558,7 +1558,46 @@ fn plcopen_and_st_files_import_into_a_project_and_build() {
         "application/xml",
         &l5x,
     );
-    assert_eq!(r.status, 415, "L5X conversion is not built: {r:?}");
+    assert_eq!(r.status, 422, "{r:?}");
+    let e = r.json()["error"].as_str().unwrap().to_string();
+    for part in [
+        "line3.L5X is not converted",
+        "routine MainRoutine, rung 1",
+        "routine Calc",
+        "routine Seq",
+    ] {
+        assert!(e.contains(part), "{part} in {e}");
+    }
+    assert_eq!(file(b.addr, "imp", "line3.st").status, 404);
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/imp/import?file=x.L5X",
+        Some(&s),
+        "application/xml",
+        b"<!DOCTYPE x [<!ENTITY e SYSTEM \"file:///etc/passwd\">]><RSLogix5000Content>&e;</RSLogix5000Content>",
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    // Ladder in the subset becomes one file that builds: a PROGRAM per task.
+    b.project(&s, "lad", &[]);
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/lad/import?file=bench.L5X",
+        Some(&s),
+        "application/xml",
+        &std::fs::read(l5x_dir.join("ladder.L5X")).unwrap(),
+    );
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(r.json()["name"], "bench.st");
+    let st = file(b.addr, "lad", "bench.st").json()["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(st.contains("PROGRAM MainTask"), "{st}");
+    let r = post_json(b.addr, "/api/projects/lad/check", Some(&s), &json!({}));
+    assert_eq!(r.status, 200, "the converted ladder builds: {r:?}");
+    assert_eq!(r.json()["modules"][0]["name"], "maintask", "{r:?}");
     for bad in ["..%2fx.st", "x.exe", "noext", "%2e%2e.st"] {
         let r = send(
             b.addr,

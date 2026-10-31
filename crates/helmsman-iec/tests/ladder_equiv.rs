@@ -9,6 +9,17 @@
 //! The evaluator shares only the rung *parser* with the converter; what
 //! each instruction does is coded again here, independently.
 
+// The evaluator uses `as` on purpose: Logix truncates and wraps where
+// these casts do (RM003 pp.851-856).
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap,
+    clippy::many_single_char_names,
+    clippy::struct_excessive_bools,
+    clippy::match_same_arms
+)]
+
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::time::Duration;
@@ -247,10 +258,14 @@ fn l5x(main: &[String], sub: &[String], init: &BTreeMap<&str, String>) -> String
         );
     }
     let rungs = |rs: &[String]| {
-        rs.iter()
-            .enumerate()
-            .map(|(k, t)| format!("<Rung Number=\"{k}\" Type=\"N\"><Text><![CDATA[{t}]]></Text></Rung>"))
-            .collect::<String>()
+        let mut out = String::new();
+        for (k, t) in rs.iter().enumerate() {
+            let _ = write!(
+                out,
+                "<Rung Number=\"{k}\" Type=\"N\"><Text><![CDATA[{t}]]></Text></Rung>"
+            );
+        }
+        out
     };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<RSLogix5000Content SchemaRevision=\"1.0\" SoftwareRevision=\"33.00\" TargetName=\"Q\" TargetType=\"Controller\">\n<Controller Use=\"Target\" Name=\"Q\">\n<Programs><Program Name=\"P\" MainRoutineName=\"Main\">\n<Tags>\n{tags}</Tags>\n<Routines>\n<Routine Name=\"Main\" Type=\"RLL\"><RLLContent>{}</RLLContent></Routine>\n<Routine Name=\"Sub\" Type=\"RLL\"><RLLContent>{}</RLLContent></Routine>\n</Routines></Program></Programs>\n<Tasks><Task Name=\"T\" Type=\"CONTINUOUS\"><ScheduledPrograms><ScheduledProgram Name=\"P\"/></ScheduledPrograms></Task></Tasks>\n</Controller>\n</RSLogix5000Content>\n",
@@ -643,9 +658,9 @@ impl Eval<'_> {
                     let other = if up { c.un } else { c.ov };
                     if !other {
                         if up {
-                            c.ov = true
+                            c.ov = true;
                         } else {
-                            c.un = true
+                            c.un = true;
                         }
                         return;
                     }
@@ -1042,7 +1057,7 @@ fn run_case(seed: u64) -> (usize, bool) {
     let main: Vec<String> = (0..n_main)
         .map(|k| gen_rung(&mut r, jsr && k + 1 == n_main))
         .collect();
-    let sub: Vec<String> = (0..1 + r.below(3)).map(|_| gen_rung(&mut r, false)).collect();
+    let sub: Vec<String> = (0..=r.below(3)).map(|_| gen_rung(&mut r, false)).collect();
     // Initial PRE/ACC of the timers and counters, through decorated data.
     let mut pre_acc: BTreeMap<&str, (i32, i32)> = BTreeMap::new();
     let mut data: BTreeMap<&str, String> = BTreeMap::new();

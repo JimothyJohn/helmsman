@@ -1,19 +1,21 @@
 //! Rockwell L5X (the Logix Designer XML export), read for its inventory:
 //! the controller, its data types and add-on instruction names, controller
 //! tags, programs with their tags (type, dimensions, usage, alias target,
-//! description) and routines (ladder rungs as text with their comments, ST
-//! lines, the kind of anything else), and tasks with the programs they
-//! schedule. Nothing here gives the file meaning: rungs stay text for a
-//! reader (the agent) to understand, and nothing is ever written back.
+//! description, decorated data as text) and routines (ladder rungs as text
+//! with their comments, ST lines, the kind of anything else), and tasks
+//! with the programs they schedule. Nothing here gives the file meaning:
+//! rungs stay text for a reader (the agent, or [`crate::ladder`], which
+//! converts a subset to Structured Text), and nothing is ever written back.
 //!
 //! The structure is that of an export as the Rockwell reference describes
 //! it (`RSLogix5000Content` > `Controller` > `DataTypes`, `Tags`,
 //! `Programs`, `Tasks`), checked against Rockwell's *Logix 5000 Controllers
 //! Import/Export* (1756-RM014D-EN-P): root pp.37-38, tag attributes
-//! pp.106-107, `MainRoutineName` p.196, rungs pp.206-208, ST p.264ff.,
-//! tasks p.313. The root's `TargetName`/`TargetType` are not in RM014's
-//! text (docs/SOURCES.md). Everything else in the file (modules, data values, trends,
-//! safety info) is ignored.
+//! pp.106-107, decorated data pp.43-46, `MainRoutineName` p.196, rungs
+//! pp.206-208, ST p.264ff., tasks p.313. The root's
+//! `TargetName`/`TargetType` are not in RM014's text (docs/SOURCES.md).
+//! Everything else in the file (modules, raw and L5K data, trends, safety
+//! info) is ignored.
 //!
 //! An L5X comes from a customer's PLC project, so it is treated as hostile:
 //! it goes through the same non-validating reader as `PLCopen` files (no
