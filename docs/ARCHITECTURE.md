@@ -376,10 +376,17 @@ turns on; the canvas's wasm build never has it.
   memory restarts from its data segments. Across kinds (ST to WASM) nothing
   carries. A WASM module is not traced (the tap's request stays open) and
   `Runtime::program` is `None` for it.
-- **Not yet**: snapshots, proposals and bundles carry module files as
-  text, so a WASM module runs from `--module-dir` but cannot be stored,
-  proposed, approved or bundled (`wasm-store`); the API shows its source
-  as an ST comment naming its size and SHA-256.
+- **Stored, proposed and bundled like ST** (`wasm-store`): the snapshot
+  store and bundles carry `module.wasm` as a binary blob under its SHA-256
+  (a `wasm-module` tree line), a proposal carries it as base64 (`wasm` in
+  place of `source`), and the tier comes from the manifest as for ST, which
+  is sound because nothing applies until the binary loads and its imports
+  match the manifest (`compile_set`). Where the API shows a source it shows
+  the module's imports instead (`render::wasm`: interface, size, SHA-256,
+  every import's module, name and type); `/api/modules/{name}` keeps the
+  ST comment naming size and SHA-256, beside the ports. Over the box API a
+  binary is capped by the 1 MiB request body (about 750 KiB of WASM);
+  the store and bundles take up to 1 MiB.
 
 ## The trace tap (`trace-tap`, built)
 
@@ -537,14 +544,17 @@ every applied change set in one SQLite file, `DIR/snapshots.db`;
 module, map or calendar source).
 
 - **A change set is files, byte for byte**: each module's
-  `module.manifest` and `module.st` (params live in the manifest), the I/O
-  map (the bindings) and the calendar. Commit checks that each manifest
+  `module.manifest` and its program, `module.st` or `module.wasm` (params
+  live in the manifest), the I/O map (the bindings) and the calendar. Commit checks that each manifest
   parses and names its module and that the map parses; it does not compile
   (whoever applies compiles first).
 - **Content-addressed**: blobs are keyed by SHA-256; a snapshot's id is the
   SHA-256 of a canonical text tree (`helmsman-snapshot 1`, then one
-  `module NAME MANIFEST SOURCE` line per module by name, `io-map H`,
-  `calendar H`). Same content, same id, in any store. Every read re-hashes
+  `module NAME MANIFEST SOURCE` or `wasm-module NAME MANIFEST WASM` line
+  per module by name, `io-map H`, `calendar H`). Same content, same id, in
+  any store; an ST snapshot's id is what it was before WASM modules. Blobs
+  are bytes; the tree says which are text, and one read as text that is not
+  UTF-8 is an error. Every read re-hashes
   the tree and each blob, so a corrupted or edited row is an error, never
   wrong content. A tree plus its blobs is what a bundle carries (below).
 - **History is an append-only log**: one entry per apply or rollback, with
@@ -555,8 +565,12 @@ module, map or calendar source).
   changed (source, manifest, which params), devices and signal bindings
   changed, and whether the calendar changed.
 - **Guarded**: triggers refuse `UPDATE` and `DELETE` on every table; the
-  file carries an application id and `user_version` (schema 1), and a
-  newer schema is refused rather than misread. Writers take SQLite's write
+  file carries an application id and `user_version` (schema 2), and a
+  newer schema is refused rather than misread. Schema 2 is schema 1's
+  tables plus `wasm-module` lines: a schema 1 store opens as it is and is
+  marked 2 by the first commit holding a WASM module, so an older build
+  keeps opening it until then and is told to upgrade after
+  (`tests/fixtures/store-v1` is a store from before). Writers take SQLite's write
   lock up front (`BEGIN IMMEDIATE`, WAL), so concurrent commits never lose
   an entry. Author and approver are one line, prompt may span lines; none
   may carry controls or invisible formatting characters (as the manifest).
@@ -1146,7 +1160,9 @@ host-enforced checks; an AI review (`marketplace`) can only refuse on top.
   after the last; a blob twice, a blob the tree does not name or a name
   with no blob (a changed file); a module name that is not a module name
   (`../`, `/`, non-ASCII lookalikes, invisible characters); a tree or
-  manifest not in canonical form.
+  manifest not in canonical form; a blob the tree reads as text (all but
+  a `wasm-module`'s binary) that is not UTF-8. A box from before
+  `wasm-store` refuses a bundle with a WASM module as an unknown tree line.
 - **Bundle manifest** (`helmsman-bundle-manifest 1`, canonical): name,
   version, author, description, and the **capability manifest**: modules,
   signals read, signals driven (modules and calendar `drive` lines), `%Q`

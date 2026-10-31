@@ -1,20 +1,24 @@
 //! Checking a proposal before it is stored. A proposal is a draft: a new
-//! or replacement module (manifest + ST), one param's new value, or a new
+//! or replacement module (manifest + ST, or manifest + WASM binary as
+//! base64), one param's new value, or a new
 //! I/O map or calendar file (applied as a reload; `map-reload`). It is
 //! checked here exactly as the runtime would check it at load (manifest
-//! parse, compile against its windows, manifest against the program's
-//! ports, signals known), so the agent iterates on the same errors a
-//! person would get. Nothing here applies anything.
+//! parse, compile against its windows or load under the default limits,
+//! manifest against the program's ports, signals known), so the agent
+//! iterates on the same errors a person would get. Nothing here applies
+//! anything.
 
-use helmsman_iec::{ImageSizes, compile};
+use helmsman_iec::{ImageSizes, Port, compile};
 use helmsman_io::{Ty, Value};
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
 use super::catalog::Catalog;
+use super::photo::unbase64;
 use super::render;
 use crate::manifest::{self, Manifest};
-use crate::store::{self, ChangeSet, ModuleFiles};
+use crate::store::{self, ChangeSet, Code, ModuleFiles};
+use crate::wasm::{Limits, WasmProgram};
 
 /// What a client posts to `/api/proposals`.
 #[derive(Debug, Deserialize)]
@@ -23,6 +27,9 @@ pub struct New {
     pub kind: String,
     pub manifest: Option<String>,
     pub source: Option<String>,
+    /// A WASM module's `module.wasm`, in place of `source`: standard
+    /// base64, padded, nothing else.
+    pub wasm: Option<String>,
     pub module: Option<String>,
     pub param: Option<String>,
     pub value: Option<Json>,
@@ -139,6 +146,7 @@ fn only(new: &New, allowed: &[&str]) -> Result<(), Refusal> {
         ("text", new.text.is_some()),
         ("manifest", new.manifest.is_some()),
         ("source", new.source.is_some()),
+        ("wasm", new.wasm.is_some()),
         ("module", new.module.is_some()),
         ("param", new.param.is_some()),
         ("value", new.value.is_some()),
@@ -158,17 +166,42 @@ fn only(new: &New, allowed: &[&str]) -> Result<(), Refusal> {
     }
 }
 
+/// The program a module proposal carries: ST source or a WASM binary.
+fn code(new: &New) -> Result<Code, Refusal> {
+    match (&new.source, &new.wasm) {
+        (Some(s), None) => Ok(Code::St(s.clone())),
+        (None, Some(b64)) => unbase64(b64).map(Code::Wasm).ok_or_else(|| {
+            (
+                400,
+                json!({ "error": "wasm must be the module.wasm file as standard base64 (padded, nothing else)" }),
+            )
+        }),
+        (Some(_), Some(_)) => Err((
+            400,
+            json!({ "error": "a module proposal carries source or wasm, not both" }),
+        )),
+        (None, None) => Err((
+            400,
+            json!({ "error": "a module proposal needs manifest and source (or wasm)" }),
+        )),
+    }
+}
+
 fn module(new: &New, catalog: &Catalog, memory: usize) -> Result<(Json, Files), Refusal> {
-    only(new, &["manifest", "source"])?;
-    let (Some(text), Some(source)) = (&new.manifest, &new.source) else {
+    only(new, &["manifest", "source", "wasm"])?;
+    let Some(text) = &new.manifest else {
         return Err((
             400,
-            json!({ "error": "a module proposal needs manifest and source" }),
+            json!({ "error": "a module proposal needs manifest and source (or wasm)" }),
         ));
     };
+    let code = code(new)?;
     let cap = usize::try_from(manifest::MAX_FILE).unwrap_or(usize::MAX);
-    if text.len() > cap || source.len() > cap {
-        return Err(refuse("manifest or source larger than a module file may be", &[]));
+    if text.len() > cap || code.bytes().len() > cap {
+        return Err(refuse(
+            &format!("manifest or {} larger than a module file may be", code_key(&code)),
+            &[format!("at most {cap} bytes each")],
+        ));
     }
     let m = Manifest::parse(text).map_err(|errs| {
         let lines: Vec<String> = errs
@@ -177,19 +210,7 @@ fn module(new: &New, catalog: &Catalog, memory: usize) -> Result<(Json, Files), 
             .collect();
         refuse("manifest does not parse", &lines)
     })?;
-    let sizes = ImageSizes {
-        i: m.i.map_or(0, |w| w.len),
-        q: m.q.map_or(0, |w| w.len),
-        m: m.m.unwrap_or(memory),
-    };
-    let program = compile(source, sizes).map_err(|diags| {
-        let lines: Vec<String> = diags
-            .iter()
-            .map(|d| format!("{}:{d}", manifest::SOURCE))
-            .collect();
-        refuse("source does not compile", &lines)
-    })?;
-    m.check(&program.ports()).map_err(|errs| {
+    m.check(&ports(&code, &m, memory)?).map_err(|errs| {
         let lines: Vec<String> = errs.iter().map(ToString::to_string).collect();
         refuse("manifest does not match the program", &lines)
     })?;
@@ -225,19 +246,62 @@ fn module(new: &New, catalog: &Catalog, memory: usize) -> Result<(Json, Files), 
             ));
         }
     }
-    let files = ModuleFiles {
-        manifest: text.clone(),
-        source: source.clone(),
-    };
     let j = json!({
         "kind": "module",
         "name": m.name,
         "replaces": catalog.module(&m.name).is_some(),
         "touches_outputs": !m.drives.is_empty() || q.len > 0,
         "manifest": render::manifest(&m),
-        "source": source,
+        "source": code.st(),
+        "wasm": code.wasm().map(render::wasm),
     });
+    let files = ModuleFiles {
+        manifest: text.clone(),
+        code,
+    };
     Ok((j, Some((m.name, files))))
+}
+
+/// The program's ports: ST compiled against the manifest's windows, WASM
+/// loaded under the default limits (and it has no windows).
+fn ports(code: &Code, m: &Manifest, memory: usize) -> Result<Vec<Port>, Refusal> {
+    match code {
+        Code::St(source) => {
+            let sizes = ImageSizes {
+                i: m.i.map_or(0, |w| w.len),
+                q: m.q.map_or(0, |w| w.len),
+                m: m.m.unwrap_or(memory),
+            };
+            let program = compile(source, sizes).map_err(|diags| {
+                let lines: Vec<String> = diags
+                    .iter()
+                    .map(|d| format!("{}:{d}", manifest::SOURCE))
+                    .collect();
+                refuse("source does not compile", &lines)
+            })?;
+            Ok(program.ports())
+        }
+        Code::Wasm(bytes) => {
+            let program = WasmProgram::load(bytes, Limits::default()).map_err(|errs| {
+                let lines: Vec<String> = errs.iter().map(|e| format!("{}: {e}", manifest::WASM)).collect();
+                refuse("wasm does not load", &lines)
+            })?;
+            if m.i.is_some() || m.q.is_some() || m.m.is_some() {
+                return Err(refuse(
+                    "manifest does not match the program",
+                    &["a WASM module has no i, q or m windows: it reads and drives signals only".into()],
+                ));
+            }
+            Ok(program.ports())
+        }
+    }
+}
+
+const fn code_key(c: &Code) -> &'static str {
+    match c {
+        Code::St(_) => "source",
+        Code::Wasm(_) => "wasm",
+    }
 }
 
 fn param(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(Json, Files), Refusal> {
@@ -279,7 +343,7 @@ fn param(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(J
             name.clone(),
             ModuleFiles {
                 manifest: m.render(),
-                source: f.source.clone(),
+                code: f.code.clone(),
             },
         ))
     });

@@ -2,15 +2,18 @@
 //! the runtime's types stay free of serde and the wire shape is written
 //! down in one place.
 
+use std::fmt::Write as _;
+
 use helmsman_iec::trace::{Shape, StmtId};
 use helmsman_iec::{Fault, FaultKind, Value as StValue};
 use helmsman_io::{Dir, Ty, Value};
 use serde_json::{Value as Json, json};
+use sha2::{Digest, Sha256};
 
 use super::catalog::{Catalog, ModuleInfo, SignalInfo};
 use super::live::{ModuleLive, View};
 use crate::manifest::Manifest;
-use crate::store::{ChangeSet, Diff, Entry, Kind, ModuleChange};
+use crate::store::{ChangeSet, Code, Diff, Entry, Kind, ModuleChange};
 use crate::{Sample, Status, Window};
 
 #[must_use]
@@ -346,18 +349,69 @@ pub fn diff(d: &Diff) -> Json {
 }
 
 /// A change set's content: each module's two files, the map, the calendar.
+/// A WASM module's binary is not shown: `source` is null and `wasm` says
+/// what it is and imports ([`wasm`]).
 #[must_use]
 pub fn change_set(cs: &ChangeSet) -> Json {
     let modules: serde_json::Map<String, Json> = cs
         .modules
         .iter()
-        .map(|(n, f)| (n.clone(), json!({ "manifest": f.manifest, "source": f.source })))
+        .map(|(n, f)| {
+            let j = match &f.code {
+                Code::St(s) => json!({ "manifest": f.manifest, "source": s }),
+                Code::Wasm(b) => json!({ "manifest": f.manifest, "source": null, "wasm": wasm(b) }),
+            };
+            (n.clone(), j)
+        })
         .collect();
     json!({
         "id": cs.id().to_string(),
         "modules": modules,
         "io_map": cs.io_map,
         "calendar": cs.calendar,
+    })
+}
+
+/// What the API shows of a WASM module in place of a source: its
+/// interface, size, SHA-256 and every import as the binary declares it
+/// (module, name, type), which is everything it can reach. `imports` is
+/// null, with `error`, for a binary that does not parse.
+#[must_use]
+pub fn wasm(bytes: &[u8]) -> Json {
+    let sha = Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        });
+    let vt = |v: &wasmi::ValType| format!("{v:?}").to_ascii_lowercase();
+    let list = |vs: &[wasmi::ValType]| vs.iter().map(vt).collect::<Vec<_>>().join(", ");
+    let (imports, error) = match wasmi::Module::new(&wasmi::Engine::default(), bytes) {
+        Ok(m) => {
+            let imports: Vec<Json> = m
+                .imports()
+                .map(|i| {
+                    let ty = match i.ty() {
+                        wasmi::ExternType::Func(f) => {
+                            format!("({}) -> ({})", list(f.params()), list(f.results()))
+                        }
+                        wasmi::ExternType::Global(_) => "global".into(),
+                        wasmi::ExternType::Memory(_) => "memory".into(),
+                        wasmi::ExternType::Table(_) => "table".into(),
+                    };
+                    json!({ "module": i.module(), "name": i.name(), "type": ty })
+                })
+                .collect();
+            (Json::Array(imports), Json::Null)
+        }
+        Err(e) => (Json::Null, json!(format!("not a valid WASM module: {e}"))),
+    };
+    json!({
+        "abi": crate::wasm::ABI,
+        "bytes": bytes.len(),
+        "sha256": sha,
+        "imports": imports,
+        "error": error,
     })
 }
 

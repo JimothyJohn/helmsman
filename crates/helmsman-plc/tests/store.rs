@@ -10,8 +10,8 @@ use std::thread;
 use helmsman_io::{Binding, Device, Dir, Signal, Ty, Value};
 use helmsman_plc::manifest::{MAX_FILE, Param};
 use helmsman_plc::store::{
-    ChangeSet, DB_FILE, Diff, Error, Field, Kind, Meta, ModuleChange, ModuleFiles, SCHEMA, SnapshotId, Store,
-    diff,
+    ChangeSet, Code, DB_FILE, Diff, Error, Field, Kind, Meta, ModuleChange, ModuleFiles, SCHEMA, SnapshotId,
+    Store, diff,
 };
 use proptest::prelude::*;
 use rusqlite::Connection;
@@ -64,7 +64,7 @@ fn files(name: &str, speed: f64, src: &str) -> (String, ModuleFiles) {
         name.to_string(),
         ModuleFiles {
             manifest: manifest(name, speed, ""),
-            source: src.to_string(),
+            code: src.into(),
         },
     )
 }
@@ -134,8 +134,12 @@ fn identical_content_has_one_id_in_any_store_and_any_meta() {
         },
     ];
     let mut src = cs.clone();
-    src.modules.get_mut("lamp").unwrap().source.push(' ');
+    src.modules.get_mut("lamp").unwrap().code = format!("{SRC} ").into();
     variants.push(src);
+    // The same bytes as a WASM binary are other content.
+    let mut wasm = cs.clone();
+    wasm.modules.get_mut("lamp").unwrap().code = Code::Wasm(SRC.as_bytes().to_vec());
+    variants.push(wasm);
     for v in &variants {
         assert_ne!(v.id(), x, "{v:?}");
     }
@@ -394,7 +398,7 @@ fn a_huge_change_set_round_trips() {
 fn a_file_over_the_limit_is_refused() {
     let (mut s, _) = open("too-big");
     let mut cs = set(&[("conveyor", 1.0)]);
-    cs.modules.get_mut("conveyor").unwrap().source = "x".repeat(usize::try_from(MAX_FILE).unwrap() + 1);
+    cs.modules.get_mut("conveyor").unwrap().code = "x".repeat(usize::try_from(MAX_FILE).unwrap() + 1).into();
     assert!(matches!(s.commit(&cs, &meta("Nick")), Err(Error::Invalid(_))));
     let cs = ChangeSet {
         calendar: Some("x".repeat(usize::try_from(MAX_FILE).unwrap() + 1)),
@@ -415,7 +419,7 @@ fn malformed_change_sets_are_refused_with_every_reason() {
         "broken".into(),
         ModuleFiles {
             manifest: "name broken\n".into(),
-            source: SRC.into(),
+            code: SRC.into(),
         },
     );
     // a module name the runtime refuses
@@ -540,11 +544,7 @@ fn diff_names_modules_params_and_bindings() {
     b.modules.remove("old");
     b.modules.extend([files("new", 1.0, SRC)]);
     b.modules.get_mut("conveyor").unwrap().manifest = manifest("conveyor", 2.5, "param beacon bool true\n");
-    b.modules
-        .get_mut("lamp")
-        .unwrap()
-        .source
-        .push_str("(* tweak *)\n");
+    b.modules.get_mut("lamp").unwrap().code = format!("{SRC}(* tweak *)\n").into();
     b.io_map = Some(
         "device rio modbus-tcp 127.0.0.1:503 unit=1\n\
          in  start bool rio di:1\nout motor bool rio coil:1\nout horn bool box do:0 safe=true\n"
@@ -649,7 +649,7 @@ fn arb_change_set() -> impl Strategy<Value = ChangeSet> {
                         name.clone(),
                         ModuleFiles {
                             manifest: manifest(&name, speed, ""),
-                            source,
+                            code: source.into(),
                         },
                     )
                 })
@@ -676,5 +676,304 @@ proptest! {
     #[test]
     fn different_change_sets_have_different_ids(a in arb_change_set(), b in arb_change_set()) {
         prop_assert_eq!(a == b, a.id() == b.id());
+    }
+}
+
+// ---- WASM modules ---------------------------------------------------------------
+
+/// Stands in for a `module.wasm`: the store neither parses nor loads it,
+/// and these bytes are not UTF-8 (every byte value, then the magic).
+fn binary() -> Vec<u8> {
+    let mut b: Vec<u8> = (0..=255).collect();
+    b.extend_from_slice(b"\0asm\x01\0\0\0");
+    b
+}
+
+fn with_wasm(cs: &ChangeSet, module: &str, bytes: &[u8]) -> ChangeSet {
+    let mut cs = cs.clone();
+    let m = cs.modules[module].manifest.clone();
+    cs.modules.insert(module.into(), ModuleFiles::wasm(m, bytes));
+    cs
+}
+
+fn sha(b: &[u8]) -> Vec<u8> {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(b).to_vec()
+}
+
+fn sha_hex(b: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    helmsman_plc::bundle::sign::hex_key(&Sha256::digest(b).into())
+}
+
+#[test]
+fn a_wasm_module_round_trips_byte_identical_through_commit_get_and_rollback() {
+    let (mut s, _) = open("wasm-round-trip");
+    let st = set(&[("conveyor", 1.0), ("lamp", 1.0)]);
+    let first = s.commit(&st, &meta("Nick")).unwrap();
+    let cs = with_wasm(&st, "lamp", &binary());
+    let id = s.commit(&cs, &meta("Nick")).unwrap();
+    assert_eq!(id, cs.id());
+    let got = s.get(&id).unwrap();
+    assert_eq!(got, cs);
+    assert_eq!(
+        got.modules["lamp"].code.wasm(),
+        Some(binary().as_slice()),
+        "byte for byte"
+    );
+    assert_eq!(got.modules["conveyor"].code.st(), Some(SRC));
+    // The tree names the program's kind; ST lines are as they always were.
+    let tree = cs.tree();
+    let line = format!(
+        "\nwasm-module lamp {} {}\n",
+        sha_hex(cs.modules["lamp"].manifest.as_bytes()),
+        sha_hex(&binary())
+    );
+    assert!(tree.contains(&line), "{tree}");
+    assert!(tree.contains("\nmodule conveyor "), "{tree}");
+    // Rolled back to ST and forward to the WASM content again: the same
+    // id, the same bytes.
+    s.rollback(&first, &meta("Nick")).unwrap();
+    assert_eq!(s.rollback(&id, &meta("Nick")).unwrap(), id);
+    assert_eq!(s.get(&s.head().unwrap().unwrap().id).unwrap(), cs);
+    let d = s.diff(&first, &id).unwrap();
+    assert_eq!(
+        d.modules,
+        [ModuleChange::Changed {
+            name: "lamp".into(),
+            source: true,
+            manifest: false,
+            params: Vec::new(),
+        }]
+    );
+}
+
+#[test]
+fn st_text_and_a_wasm_binary_of_the_same_bytes_are_different_content() {
+    let st = set(&[("lamp", 1.0)]);
+    let wasm = with_wasm(&st, "lamp", SRC.as_bytes());
+    assert_ne!(st.id(), wasm.id());
+    let (mut s, dir) = open("wasm-vs-st");
+    let a = s.commit(&st, &meta("Nick")).unwrap();
+    let b = s.commit(&wasm, &meta("Nick")).unwrap();
+    assert_ne!(a, b);
+    assert_eq!(s.get(&a).unwrap(), st);
+    assert_eq!(s.get(&b).unwrap(), wasm);
+    // Content addressing is by bytes: one blob holds both programs.
+    assert_eq!(count(&dir, "blobs"), 3, "manifest, program, map");
+}
+
+#[test]
+fn a_tampered_wasm_blob_is_detected_on_read() {
+    let (mut s, dir) = open("wasm-tamper");
+    let cs = with_wasm(&set(&[("lamp", 1.0)]), "lamp", &binary());
+    let id = s.commit(&cs, &meta("Nick")).unwrap();
+    let db = raw(&dir);
+    db.execute_batch("DROP TRIGGER blobs_no_update").unwrap();
+    let mut evil = binary();
+    evil[100] ^= 0x01;
+    let n = db
+        .execute(
+            "UPDATE blobs SET data = ?1 WHERE hash = ?2",
+            rusqlite::params![evil, sha(&binary())],
+        )
+        .unwrap();
+    assert_eq!(n, 1);
+    match s.get(&id) {
+        Err(Error::Corrupt(why)) => assert!(why.contains("does not match its hash"), "{why}"),
+        other => panic!("expected Corrupt, got {other:?}"),
+    }
+    db.execute("UPDATE blobs SET data = x'' WHERE hash = ?1", [sha(&binary())])
+        .unwrap();
+    assert!(matches!(s.get(&id), Err(Error::Corrupt(_))), "truncated");
+}
+
+/// Inserts a snapshot row whose id is its tree's hash, as a forger
+/// with write access to the file would.
+fn forge(dir: &std::path::Path, tree: &str) -> SnapshotId {
+    raw(dir)
+        .execute(
+            "INSERT INTO snapshots (id, tree) VALUES (?1, ?2)",
+            rusqlite::params![sha(tree.as_bytes()), tree],
+        )
+        .unwrap();
+    SnapshotId::parse(&sha_hex(tree.as_bytes())).unwrap()
+}
+
+#[test]
+fn a_tree_that_reads_a_binary_blob_as_text_is_corrupt() {
+    let (mut s, dir) = open("wasm-as-text");
+    let cs = with_wasm(&set(&[("lamp", 1.0)]), "lamp", &binary());
+    s.commit(&cs, &meta("Nick")).unwrap();
+    // Self-consistent (its id is its hash), but it calls the WASM binary
+    // `module.st`: refused, never handed out as a lossy string.
+    let id = forge(&dir, &cs.tree().replace("wasm-module lamp", "module lamp"));
+    match s.get(&id) {
+        Err(Error::Corrupt(why)) => assert!(why.contains("not UTF-8"), "{why}"),
+        other => panic!("expected Corrupt, got {other:?}"),
+    }
+    // A manifest that names the binary blob: the same.
+    let (m, w) = (
+        sha_hex(cs.modules["lamp"].manifest.as_bytes()),
+        sha_hex(&binary()),
+    );
+    let id = forge(&dir, &cs.tree().replace(&format!("{m} {w}"), &format!("{w} {w}")));
+    assert!(matches!(s.get(&id), Err(Error::Corrupt(why)) if why.contains("not UTF-8")));
+    // A non-UTF-8 module.st on disk is refused on read.
+    let dir = fresh("st-not-utf8");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("module.manifest"), manifest("lamp", 1.0, "")).unwrap();
+    std::fs::write(dir.join("module.st"), binary()).unwrap();
+    let err = ChangeSet::read(std::slice::from_ref(&dir), None, None).unwrap_err();
+    assert!(err.contains("not UTF-8"), "{err}");
+}
+
+#[test]
+fn a_module_directory_reads_module_wasm_as_bytes_and_refuses_both_programs() {
+    let dir = fresh("wasm-moddir");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("module.manifest"), manifest("lamp", 1.0, "")).unwrap();
+    std::fs::write(dir.join("module.wasm"), binary()).unwrap();
+    let cs = ChangeSet::read(std::slice::from_ref(&dir), None, None).unwrap();
+    assert_eq!(cs.modules["lamp"].code, Code::Wasm(binary()));
+    std::fs::write(dir.join("module.st"), SRC).unwrap();
+    let err = ChangeSet::read(std::slice::from_ref(&dir), None, None).unwrap_err();
+    assert!(err.contains("both module.st and module.wasm"), "{err}");
+    std::fs::remove_file(dir.join("module.st")).unwrap();
+    std::fs::write(
+        dir.join("module.wasm"),
+        vec![0; usize::try_from(MAX_FILE).unwrap() + 1],
+    )
+    .unwrap();
+    let err = ChangeSet::read(std::slice::from_ref(&dir), None, None).unwrap_err();
+    assert!(err.contains("larger than"), "{err}");
+}
+
+#[test]
+fn an_oversized_wasm_is_refused() {
+    let (mut s, _) = open("wasm-too-big");
+    let cap = usize::try_from(MAX_FILE).unwrap();
+    let st = set(&[("lamp", 1.0)]);
+    let at_cap = with_wasm(&st, "lamp", &vec![0xff; cap]);
+    s.commit(&at_cap, &meta("Nick")).unwrap();
+    let over = with_wasm(&st, "lamp", &vec![0xff; cap + 1]);
+    match s.commit(&over, &meta("Nick")) {
+        Err(Error::Invalid(why)) => assert!(why[0].contains("larger than"), "{why:?}"),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
+    assert_eq!(s.head().unwrap().unwrap().id, at_cap.id());
+}
+
+// ---- a store written before WASM modules ------------------------------------------
+
+/// `tests/fixtures/store-v1/snapshots.db` was written by the build before
+/// WASM modules (schema 1): conveyor at speed 1.0 (A), then 2.0 (B), then
+/// rolled back to A by `engineer`.
+const V1_A: &str = "db1c1a6833401e8fb2fc79d93b84f1dd41030e549d80f968ae5b885ebdead374";
+const V1_B: &str = "8791fc7f9e53e9c78416efbe5413f24a14a71debfc3ac69599fb375661dab3a4";
+
+/// A copy of the fixture, so a test never writes the checked-in file.
+fn v1_store(name: &str) -> PathBuf {
+    let dir = fresh(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/store-v1")
+        .join(DB_FILE);
+    std::fs::copy(fixture, dir.join(DB_FILE)).unwrap();
+    dir
+}
+
+fn v1_content(speed: f64) -> ChangeSet {
+    ChangeSet {
+        modules: [files("conveyor", speed, SRC)].into(),
+        io_map: Some(MAP.into()),
+        calendar: Some("zone +01:00\n".into()),
+    }
+}
+
+fn user_version(dir: &std::path::Path) -> i64 {
+    raw(dir)
+        .pragma_query_value(None, "user_version", |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn a_store_from_before_wasm_opens_and_keeps_its_rows_and_ids() {
+    let dir = v1_store("v1-open");
+    assert_eq!(user_version(&dir), 1);
+    let s = Store::open(&dir).unwrap();
+    assert_eq!(s.schema().unwrap(), 1, "opening changes nothing");
+    let (a, b) = (SnapshotId::parse(V1_A).unwrap(), SnapshotId::parse(V1_B).unwrap());
+    let log = s.list().unwrap();
+    assert_eq!(
+        log.iter().map(|e| e.id).collect::<Vec<_>>(),
+        [a, b, a],
+        "the hash chain checks"
+    );
+    assert_eq!(log[0].kind, Kind::Rollback { to: a });
+    assert_eq!(log[0].meta.author, "engineer");
+    assert_eq!(log[2].meta.time_ms, 1_793_000_000_000);
+    // The content, and the ids this build computes for it: an ST
+    // snapshot hashes as it always did.
+    assert_eq!(s.get(&a).unwrap(), v1_content(1.0));
+    assert_eq!(s.get(&b).unwrap(), v1_content(2.0));
+    assert_eq!(v1_content(1.0).id(), a);
+    assert_eq!(v1_content(2.0).id(), b);
+}
+
+#[test]
+fn a_store_from_before_wasm_stays_v1_for_st_and_moves_to_v2_with_its_first_wasm_module() {
+    let dir = v1_store("v1-upgrade");
+    let a = SnapshotId::parse(V1_A).unwrap();
+    {
+        let mut s = Store::open(&dir).unwrap();
+        s.commit(&v1_content(3.0), &meta("Nick")).unwrap();
+        s.rollback(&SnapshotId::parse(V1_B).unwrap(), &meta("Nick"))
+            .unwrap();
+        assert_eq!(s.schema().unwrap(), 1, "an older build still opens it");
+        // A WASM change set the store refuses changes nothing either.
+        let big = with_wasm(
+            &v1_content(3.0),
+            "conveyor",
+            &vec![0; usize::try_from(MAX_FILE).unwrap() + 1],
+        );
+        assert!(s.commit(&big, &meta("Nick")).is_err());
+        assert_eq!(s.schema().unwrap(), 1);
+        let w = with_wasm(&v1_content(3.0), "conveyor", &binary());
+        s.commit(&w, &meta("Nick")).unwrap();
+        assert_eq!(s.schema().unwrap(), SCHEMA);
+    }
+    assert_eq!(user_version(&dir), 2);
+    let s = Store::open(&dir).unwrap();
+    let log = s.list().unwrap();
+    assert_eq!(log.len(), 6, "every row kept, the chain intact");
+    assert_eq!(log[5].id, a);
+    assert_eq!(s.get(&a).unwrap(), v1_content(1.0));
+    assert_eq!(
+        s.get(&log[0].id).unwrap().modules["conveyor"].code,
+        Code::Wasm(binary())
+    );
+    // Past this build's version: refused, not misread.
+    raw(&dir).pragma_update(None, "user_version", SCHEMA + 1).unwrap();
+    assert!(matches!(Store::open(&dir), Err(Error::NewerSchema { .. })));
+}
+
+#[test]
+fn a_store_file_with_no_schema_version_is_not_a_store() {
+    let dir = v1_store("v0");
+    raw(&dir).pragma_update(None, "user_version", 0).unwrap();
+    assert!(matches!(Store::open(&dir), Err(Error::NotAStore(_))));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    #[test]
+    fn any_wasm_bytes_round_trip(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
+        let (mut s, _) = open("prop-wasm");
+        let cs = with_wasm(&set(&[("lamp", 1.0)]), "lamp", &bytes);
+        let id = s.commit(&cs, &meta("Nick")).unwrap();
+        let got = s.get(&id).unwrap();
+        prop_assert_eq!(got.modules["lamp"].code.wasm(), Some(bytes.as_slice()));
     }
 }

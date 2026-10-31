@@ -615,6 +615,26 @@
   difficulty: low
   id: enip-in-box
 
+- [ ] **Snapshot store schema 2: mark it on the first WASM commit, or on open?** WASM modules in the store (`wasm-store`) add a `wasm-module` tree line, which a build from before would read as a corrupt snapshot. So the schema goes 1 → 2, with no table changes. Built: a schema 1 store opens untouched and is marked 2 inside the first commit that holds a WASM module; until then you can still roll the box's binary back to an older build, and after it the older build says "newer schema, run a newer helmsman-plc" instead of "corrupt". The other way, mark every store 2 the first time a new build opens it: simpler to reason about, but a binary rollback then fails even on a box that never ran WASM.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: when an existing box's store stops opening on an older build
+  options: on the first WASM commit (recommended, built) | on first open by a new build
+  est: 15m
+  difficulty: low
+  id: store-schema-2
+
+- [ ] **WASM over the box API: is ~750 KiB enough?** A proposal carries `module.wasm` as base64 in the JSON body, and the API's request body limit is 1 MiB, so the largest WASM module the API takes is about 750 KiB, though the store and bundles take 1 MiB (`MAX_FILE`). `POST /api/dropins` already has its own larger body cap (`http::Limits::upload`, 2 MiB for PDFs); the same mechanism would serve here. Bundles have the same ceiling over `POST /api/bundles`. Hand-written and `no_std` Rust modules are a few KiB; a Rust module with `std` and formatting can pass 1 MiB. Built: unchanged limit.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: the largest WASM module (and bundle) a box takes over its API
+  options: keep 1 MiB bodies, ~750 KiB WASM (recommended, built) | raise the body limit for /api/proposals and /api/bundles to 2 MiB | a raw upload route (application/wasm) beside the JSON one
+  est: 1h
+  difficulty: low
+  id: wasm-api-size
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -1153,8 +1173,9 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format
   id: wasm-tier
 
-- [ ] **WASM modules in snapshots, proposals and bundles** — the store, the box API's proposals and bundles carry a module's files as UTF-8 text (`module.st`), so a `module.wasm` module runs from `--module-dir` but cannot be stored, proposed, approved, rolled back or bundled. Carry the binary as a blob (SHA-256 like the others), classify its tier from the manifest as for ST, show the API its imports instead of a source.
+- [x] **WASM modules in snapshots, proposals and bundles** — the store, the box API's proposals and bundles carry a module's files as UTF-8 text (`module.st`), so a `module.wasm` module runs from `--module-dir` but cannot be stored, proposed, approved, rolled back or bundled. Carry the binary as a blob (SHA-256 like the others), classify its tier from the manifest as for ST, show the API its imports instead of a source.
   result: a WASM module goes through the same approval path as an ST one
+  notes: built: `store::Code` (St / Wasm), `wasm-module` tree lines, store schema 2 marked on the first WASM commit (store-schema-2), proposals take `wasm` as base64 (wasm-api-size), `render::wasm` shows imports; ARCHITECTURE "WASM modules" and "Snapshots".
   est: 3d
   difficulty: med
   depends: wasm-tier

@@ -10,14 +10,21 @@
 //!   drives a signal or has a `%Q` window; a module's `drives` or `%Q`
 //!   window changed; any file that should parse does not (a manifest, the
 //!   calendar), as nothing can then be said about it.
-//! - **Logic**: a module's program, or anything in its manifest but param
-//!   values, changed; a module that drives nothing was added or removed;
-//!   the calendar changed but drives the same outputs.
+//! - **Logic**: a module's program (`module.st` or `module.wasm`, or one
+//!   for the other), or anything in its manifest but param values,
+//!   changed; a module that drives nothing was added or removed; the
+//!   calendar changed but drives the same outputs.
 //! - **Param**: only param values changed (the manifest may be re-rendered,
 //!   its program byte for byte the same), each new value of the param's
 //!   type and within the range the *running* manifest declares.
 //!
 //! When in doubt, up: a step this cannot read is output-affecting.
+//!
+//! The manifest stands for what a program can touch, ST or WASM alike:
+//! nothing is applied until every module is compiled (or loaded) and held
+//! to its manifest (`api::swap::compile_set`), which refuses a port, an ST
+//! `VAR_OUTPUT` or a WASM `helmsman/v1/out` import, that the manifest does
+//! not declare. A manifest cannot understate a program into a lower tier.
 
 use std::collections::BTreeSet;
 
@@ -138,7 +145,7 @@ fn module(c: &mut Class, name: &str, a: &ModuleFiles, b: &ModuleFiles) {
         );
         return;
     }
-    if a.source != b.source {
+    if a.code != b.code {
         c.add(Tier::Logic, format!("module {name}: program changed"));
     }
     // The target manifest with the running param values: anything left
