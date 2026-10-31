@@ -488,7 +488,7 @@ see the approval policy below.
 
 `helmsman-plc --api ADDR` (default `127.0.0.1:8080`, `0.0.0.0:8080` for the
 LAN, `off`): one HTTP/1.1 + JSON surface for the canvas, the agent's tools
-and later MCP (`api/`; contract in `tests/api.rs`). Endpoints are listed at
+and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are listed at
 `GET /api` and in `api/mod.rs`.
 
 - **Reads** (`GET`) are open: signals with live values, quality and point errors, modules
@@ -719,6 +719,43 @@ serves those per agent version (relay protocol v1).
   proposal (`POST /api/proposals/{id}/replay`), and only a role PIN applies.
   The agent holds the API token and nothing else: it has no tool that
   reaches `apply`, `rollback` or a PIN, and the token alone cannot apply.
+
+## MCP on the box (`box-mcp`, built)
+
+`POST /mcp` on the box API's listener (`api/mcp.rs`; contract in
+`helmsman-plc/tests/mcp.rs`) serves the chat agent's tools to an
+engineer's own MCP client (Claude Code, Claude Desktop): `claude mcp add
+--transport http helmsman http://<box>:8080/mcp --header "Authorization:
+Bearer <token>"`. Sources: `docs/SOURCES.md`, MCP specification.
+
+- **Transport.** Streamable HTTP, one JSON-RPC message per POST, answered
+  with one JSON object, through the same bounded parser, worker cap,
+  deadline and 1 MiB body as every route. Dual-era: a request carrying
+  `_meta.io.modelcontextprotocol/protocolVersion` is served statelessly as
+  2026-07-28 (`server/discover`; `MCP-Protocol-Version`, `Mcp-Method` and
+  `Mcp-Name` must match the body, else `-32020`); `initialize` selects
+  2025-11-25 or 2025-06-18, with no session minted, and later legacy
+  requests name their version in `MCP-Protocol-Version`. `GET` and
+  `DELETE /mcp` answer 405; a JSON array (batch) is refused. No stdio
+  proxy: every MCP client this is for speaks HTTP with a header, so a
+  `helmsman-plc mcp` binary would only add a second path to secure.
+- **Auth and audit.** It is a mutating route: the box token (401 before
+  any MCP parsing), never in the URL; an `Origin` other than the box's own
+  is refused (403). Every message is one audit entry with source `mcp`,
+  and every box API call a tool makes is audited as that route always is,
+  also `mcp` (audit entries now carry `source`: `api` or `mcp`).
+- **Tools.** The agent's eleven (`helmsman_agent::tools::NAMES`), by the
+  same executor, which reaches the box through `tools::Caller`: the chat
+  agent's goes over loopback HTTP, MCP's calls the API's handler in
+  process and may reach only the reads and the four draft routes
+  (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
+  stays a person on the canvas. Results are text inside the agent's
+  `<box-data>` envelope, never `structuredContent`.
+- **Drafts.** The protocol has no sessions, so drafts are server-minted
+  handles in one workspace shared by every MCP client of the box (they
+  hold one token): at most 32 (the oldest forgotten), dropped after an
+  hour without a stateful call, watch-only once any MCP call reads a PLC
+  program, until they expire.
 
 ## Offline chat (`local-fallback`, built)
 
@@ -1127,6 +1164,7 @@ file and token in a temporary state directory).
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
+| engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 
@@ -1137,7 +1175,7 @@ prompt. The agent never touches the Rust core.
 
 - `approval-policy` (built, above) → `proposal-ui` (built, above): the
   canvas shows a draft's `approval` (tier, reasons, what it needs), charts
-  its replay, and posts the PIN to `apply`. `box-mcp` wraps
+  its replay, and posts the PIN to `apply`. `box-mcp` (built, above) wraps
   the same routes; `local-accounts` replaces role PINs with people, keeping
   the role check and the gate.
 - `canvas-web` (built, above) → `andon-screen`: another page the box
