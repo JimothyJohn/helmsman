@@ -452,6 +452,16 @@
   difficulty: low
   id: dropin-watch-only
 
+- [ ] **MCP on the box: which credential does an engineer's Claude hold?** `POST /mcp` (feat/box-mcp) takes the box API token, the same 64 hex digits the canvas pastes and the chat agent holds, so `claude mcp add --header "Authorization: Bearer ..."` puts that token in the engineer's laptop config. It can draft, check, simulate and propose (never apply: no tool reaches apply, rollback or a PIN), and every call is audited as source `mcp`, but it cannot be revoked without re-keying the canvas too, and the audit cannot say which engineer. Also because MCP 2026-07-28 has no sessions, drafts live in one workspace shared by every MCP client of the box (handles d1, d2, ...; an hour idle drops them). Built: the box token, no new file or flag (reversible: the check is the one `handle` already makes).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether an MCP client's access can be revoked or attributed apart from the canvas
+  options: box token, shared workspace (recommended for now, built) | a separate `mcp-token` in the state dir, revocable alone | per-person tokens once local-accounts lands, workspace per person
+  est: 3h
+  difficulty: med
+  id: mcp-credential
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -968,7 +978,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: theme-depth, canvas-web
   id: theme-engine
 
-- [ ] **MCP server on the box** — the box API as MCP tools so an engineer's own Claude / Claude Code can work on it, under the same policy and audit.
+- [x] **MCP server on the box** — the box API as MCP tools so an engineer's own Claude / Claude Code can work on it, under the same policy and audit.
   est: 2d
   difficulty: med
   depends: box-api, approval-policy

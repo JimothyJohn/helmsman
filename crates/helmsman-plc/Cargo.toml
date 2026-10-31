@@ -95,3 +95,7 @@ required-features = ["box"]
 [[test]]
 name = "dropins"
 required-features = ["box"]
+
+[[test]]
+name = "mcp"
+required-features = ["box"]

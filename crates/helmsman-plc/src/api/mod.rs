@@ -1,5 +1,5 @@
 //! The box API: one local HTTP/1.1 + JSON surface for the canvas, the
-//! agent's tools and (later) MCP. Testable without a UI.
+//! agent's tools and MCP ([`mcp`]). Testable without a UI.
 //!
 //! ```text
 //! GET  /api                               this list
@@ -39,6 +39,7 @@
 //! GET  /api/dropins/{id}?chunk=K          one chunk of a drop-in's text
 //! GET  /api/dropins/{id}/plc?view=V...    a PLC drop-in's inventory (overview, tags, routine, names)
 //! POST /api/devices/{name}/browse         token: an observed controller's tag list, read-only
+//! POST /mcp                               token: MCP Streamable HTTP, the agent's tools for an engineer's own client (see [`mcp`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
 //!
@@ -80,6 +81,7 @@ pub mod dropin;
 pub mod explain;
 pub mod http;
 pub mod live;
+pub mod mcp;
 pub mod proposal;
 pub mod render;
 pub mod sim;
@@ -250,6 +252,8 @@ struct Ctx {
     dropins: Mutex<dropin::Store>,
     /// Held while a device browse runs (one at a time).
     browsing: Mutex<()>,
+    /// The MCP route's drafts (see [`mcp`]).
+    mcp: Mutex<mcp::Workspace>,
 }
 
 impl Ctx {
@@ -467,6 +471,7 @@ impl Api {
             trust,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
+            mcp: Mutex::new(mcp::Workspace::default()),
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
@@ -630,6 +635,21 @@ fn handle(req: &Request, ctx: &Ctx) -> Reply {
             "credentials go in the Authorization header, never the URL",
         ));
     }
+    let mcp_route = req.segments.len() == 1 && req.segments[0] == "mcp";
+    if mcp_route && req.method != "POST" {
+        // Streamable HTTP 2026-07-28: no GET stream, no sessions to DELETE.
+        return Reply::Once(
+            mcp::reject(
+                405,
+                &mcp::error(
+                    &Json::Null,
+                    mcp::INVALID_REQUEST,
+                    "the MCP endpoint takes POST only",
+                ),
+            )
+            .with("Allow", "POST".into()),
+        );
+    }
     if req.method == "GET" {
         return get(req, ctx);
     }
@@ -663,6 +683,9 @@ fn handle(req: &Request, ctx: &Ctx) -> Reply {
         && req.segments[1] == "explain"
     {
         return start_explain(req, ctx);
+    }
+    if mcp_route {
+        return Reply::Once(mcp::post(req, ctx));
     }
     Reply::Once(mutate(req, ctx))
 }
@@ -836,6 +859,7 @@ fn append(
             snapshot,
             base,
             role: role.map(|r| r.as_str().to_string()),
+            source: req.source.into(),
         })
         .ok();
     (ctx.cfg.log)(&format!(
@@ -1332,6 +1356,7 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/devices/{name}/browse", true, "an observed Logix controller's tag list, read-only"),
             e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
             e("GET", "/api/screen", false, "the floor screen's layout: tiles, state codes, colours (with --screen)"),
+            e("POST", "/mcp", true, "MCP (Streamable HTTP, 2026-07-28 or 2025-11-25): the agent's read, draft, check, simulate and propose tools for an engineer's own client; no apply"),
         ],
         "agent": agent,
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
@@ -1374,7 +1399,7 @@ fn audit_list(req: &Request, ctx: &Ctx) -> Response {
             json!({
                 "seq": e.seq, "at": e.at, "method": e.method, "path": e.path,
                 "status": e.status, "detail": e.detail, "snapshot": e.snapshot,
-                "base": e.base, "role": e.role,
+                "base": e.base, "role": e.role, "source": e.source,
             })
         })
         .collect();

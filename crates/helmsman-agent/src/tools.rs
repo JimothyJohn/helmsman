@@ -129,16 +129,46 @@ impl BoxApi {
         Ok((status, j))
     }
 
-    fn get(&self, path: &str) -> Result<(u16, Json), String> {
-        self.call("GET", path, None)
-    }
-
     /// `POST` with the token; the status and the JSON answer.
     ///
     /// # Errors
     /// The box API could not be reached or did not answer.
     pub fn post(&self, path: &str, body: &Json) -> Result<(u16, Json), String> {
         self.call("POST", path, Some(body))
+    }
+}
+
+/// How the tools reach the box API: one request, its status and JSON
+/// answer. [`BoxApi`] goes over the box's loopback; the box's MCP route
+/// calls its own handler in process, so its calls are audited as MCP's.
+pub trait Caller {
+    /// Sends `method path` with `body` (as JSON), and the token for
+    /// anything but `GET`.
+    ///
+    /// # Errors
+    /// The box API could not be reached or did not answer.
+    fn call(&self, method: &str, path: &str, body: Option<&Json>) -> Result<(u16, Json), String>;
+
+    /// `GET path`.
+    ///
+    /// # Errors
+    /// See [`Caller::call`].
+    fn get(&self, path: &str) -> Result<(u16, Json), String> {
+        self.call("GET", path, None)
+    }
+
+    /// `POST path` with the token.
+    ///
+    /// # Errors
+    /// See [`Caller::call`].
+    fn post(&self, path: &str, body: &Json) -> Result<(u16, Json), String> {
+        self.call("POST", path, Some(body))
+    }
+}
+
+impl Caller for BoxApi {
+    fn call(&self, method: &str, path: &str, body: Option<&Json>) -> Result<(u16, Json), String> {
+        Self::call(self, method, path, body)
     }
 }
 
@@ -206,6 +236,15 @@ impl Drafts {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.list.is_empty()
+    }
+
+    /// Forgets the oldest draft when [`MAX_DRAFTS`] are held, so the next
+    /// `draft_module` has room. What the conversation read (and so whether
+    /// it is watch-only) is kept.
+    pub fn make_room(&mut self) {
+        if self.list.len() >= MAX_DRAFTS {
+            self.list.remove(0);
+        }
     }
 }
 
@@ -378,7 +417,7 @@ pub fn module_name_ok(n: &str) -> bool {
 }
 
 /// Runs tool `name` on `input` (already [`validate`]d; checked again).
-pub fn run(api: &BoxApi, drafts: &mut Drafts, name: &str, input: &Json) -> Outcome {
+pub fn run(api: &dyn Caller, drafts: &mut Drafts, name: &str, input: &Json) -> Outcome {
     let r = match name {
         "list_signals" => parse(input).map(|i| list_signals(api, &i)),
         "read_signals" => parse(input).map(|i| read_signals(api, &i)),
@@ -406,7 +445,7 @@ fn unexpected(what: &str, status: u16, body: &Json) -> Outcome {
     fail(format!("{what}: the box answered {status}: {why}"))
 }
 
-fn signals(api: &BoxApi) -> Result<Vec<Json>, Outcome> {
+fn signals(api: &dyn Caller) -> Result<Vec<Json>, Outcome> {
     match api.get("/api/signals") {
         Ok((200, Json::Array(list))) => Ok(list),
         Ok((s, b)) => Err(unexpected("reading signals", s, &b)),
@@ -414,7 +453,7 @@ fn signals(api: &BoxApi) -> Result<Vec<Json>, Outcome> {
     }
 }
 
-fn list_signals(api: &BoxApi, i: &ListSignals) -> Outcome {
+fn list_signals(api: &dyn Caller, i: &ListSignals) -> Outcome {
     let list = match signals(api) {
         Ok(l) => l,
         Err(o) => return o,
@@ -433,7 +472,7 @@ fn list_signals(api: &BoxApi, i: &ListSignals) -> Outcome {
     ok(json!({ "signals": picked }), format!("{n} signal(s)"))
 }
 
-fn read_signals(api: &BoxApi, i: &ReadSignals) -> Outcome {
+fn read_signals(api: &dyn Caller, i: &ReadSignals) -> Outcome {
     if i.names.len() > MAX_READ {
         return fail(format!("at most {MAX_READ} names at once"));
     }
@@ -456,7 +495,7 @@ fn read_signals(api: &BoxApi, i: &ReadSignals) -> Outcome {
     ok(json!({ "values": values, "unknown": unknown }), summary)
 }
 
-fn list_modules(api: &BoxApi) -> Outcome {
+fn list_modules(api: &dyn Caller) -> Outcome {
     match api.get("/api/modules") {
         Ok((200, Json::Array(list))) => {
             let n = list.len();
@@ -467,7 +506,7 @@ fn list_modules(api: &BoxApi) -> Outcome {
     }
 }
 
-fn read_module(api: &BoxApi, i: &ReadModule) -> Outcome {
+fn read_module(api: &dyn Caller, i: &ReadModule) -> Outcome {
     if !module_name_ok(&i.name) {
         return fail("not a module name (1-64 of A-Z a-z 0-9 _ -)");
     }
@@ -664,7 +703,7 @@ fn module_body(d: &Draft, binding: &(bool, Vec<u64>)) -> Json {
     })
 }
 
-fn check_module(api: &BoxApi, drafts: &mut Drafts, i: &DraftRef) -> Outcome {
+fn check_module(api: &dyn Caller, drafts: &mut Drafts, i: &DraftRef) -> Outcome {
     let binding = drafts.binding();
     let Some(d) = drafts.get_mut(&i.draft_id) else {
         return fail(format!("no draft {:?} in this conversation", i.draft_id));
@@ -700,7 +739,7 @@ fn check_module(api: &BoxApi, drafts: &mut Drafts, i: &DraftRef) -> Outcome {
     }
 }
 
-fn simulate_module(api: &BoxApi, drafts: &mut Drafts, i: &Simulate) -> Outcome {
+fn simulate_module(api: &dyn Caller, drafts: &mut Drafts, i: &Simulate) -> Outcome {
     if !(1..=1440).contains(&i.minutes) {
         return fail("minutes must be 1 to 1440");
     }
@@ -742,7 +781,7 @@ fn param_value(s: &str) -> Json {
         .map_or_else(|| json!(t), |x| json!(x))
 }
 
-fn propose_change(api: &BoxApi, drafts: &mut Drafts, i: &Propose) -> Outcome {
+fn propose_change(api: &dyn Caller, drafts: &mut Drafts, i: &Propose) -> Outcome {
     let summary: String = i
         .summary
         .chars()
@@ -815,7 +854,7 @@ fn propose_change(api: &BoxApi, drafts: &mut Drafts, i: &Propose) -> Outcome {
     }
 }
 
-fn read_dropin(api: &BoxApi, drafts: &mut Drafts, i: &ReadDropin) -> Outcome {
+fn read_dropin(api: &dyn Caller, drafts: &mut Drafts, i: &ReadDropin) -> Outcome {
     match api.get(&format!("/api/dropins/{}?chunk={}", i.dropin_id, i.chunk)) {
         Ok((200, d)) => {
             let plc = d["kind"].as_str() != Some("prose");
@@ -840,7 +879,7 @@ fn read_dropin(api: &BoxApi, drafts: &mut Drafts, i: &ReadDropin) -> Outcome {
     }
 }
 
-fn read_plc_program(api: &BoxApi, drafts: &mut Drafts, i: &ReadPlc) -> Outcome {
+fn read_plc_program(api: &dyn Caller, drafts: &mut Drafts, i: &ReadPlc) -> Outcome {
     if !matches!(i.view.as_str(), "overview" | "tags" | "routine") {
         return fail("view is overview, tags or routine");
     }
@@ -880,7 +919,7 @@ fn atomic(t: &str) -> Option<String> {
     ATOMIC.contains(&u.as_str()).then_some(u)
 }
 
-fn compare_plc_tags(api: &BoxApi, drafts: &mut Drafts, i: &ComparePlc) -> Outcome {
+fn compare_plc_tags(api: &dyn Caller, drafts: &mut Drafts, i: &ComparePlc) -> Outcome {
     if !module_name_ok(&i.device) {
         return fail("not a device name (1-64 of A-Z a-z 0-9 _ -)");
     }
