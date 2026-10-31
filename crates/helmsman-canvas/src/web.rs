@@ -16,6 +16,7 @@ use eframe::wasm_bindgen::closure::Closure;
 use eframe::wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
+use crate::claude::{Incoming, KeyStore, PROXY_HEALTH, PROXY_HELLO, Request as ClaudeRequest};
 use crate::explain::{Reply, Side, SideCmd};
 use crate::remote::{Cmd, Fetch, Msg, Stream};
 use crate::review::{Answer, Call, Request as ReviewRequest};
@@ -214,6 +215,163 @@ async fn get_peer(url: &str) -> Result<String, String> {
         return Err("answer too large".into());
     }
     Ok(body)
+}
+
+/// Whether this page is the playground: `?playground`, or the canvas
+/// element says so (`docs/playground/`'s page: `data-mode="playground"`).
+#[must_use]
+pub fn wants_playground() -> bool {
+    wants("playground")
+        || web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("canvas"))
+            .and_then(|e| e.get_attribute("data-mode"))
+            .is_some_and(|m| m == "playground")
+}
+
+/// The playground's link to Claude: one answer at a time, abortable.
+/// Callbacks only push [`Incoming`]s; [`crate::claude::Chat`] decides.
+#[derive(Default)]
+pub struct ClaudeLink {
+    inbox: Rc<RefCell<Vec<Incoming>>>,
+    abort: Option<web_sys::AbortController>,
+}
+
+impl ClaudeLink {
+    pub fn drain(&mut self) -> Vec<Incoming> {
+        std::mem::take(&mut *self.inbox.borrow_mut())
+    }
+
+    /// Asks the page's origin whether the local proxy is there.
+    pub fn check_proxy(&mut self, ctx: &egui::Context) {
+        let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let yes = get(PROXY_HEALTH).await.is_ok_and(|b| b.trim() == PROXY_HELLO);
+            inbox.borrow_mut().push(Incoming::Proxy(yes));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Stops the answer in flight.
+    pub fn abort(&mut self) {
+        if let Some(a) = self.abort.take() {
+            a.abort();
+        }
+    }
+
+    /// Sends `req` and streams its answer back as `seq`.
+    pub fn send(&mut self, seq: u64, req: ClaudeRequest, ctx: &egui::Context) {
+        self.abort();
+        let controller = web_sys::AbortController::new().ok();
+        let signal = controller.as_ref().map(web_sys::AbortController::signal);
+        self.abort = controller;
+        let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let push = |m: Incoming| {
+                inbox.borrow_mut().push(m);
+                ctx.request_repaint();
+            };
+            if let Err(why) = claude(seq, &req, signal.as_ref(), &push).await {
+                push(Incoming::Unreachable { seq, why });
+            }
+        });
+    }
+}
+
+/// `POST` the Messages API request; the key (direct route) only ever in
+/// its `x-api-key` header, to [`crate::claude::ANTHROPIC_URL`]. Errors
+/// carry the browser's words, never a header.
+async fn claude(
+    seq: u64,
+    req: &ClaudeRequest,
+    signal: Option<&web_sys::AbortSignal>,
+    push: &dyn Fn(Incoming),
+) -> Result<(), String> {
+    use web_sys::js_sys::{Reflect, Uint8Array};
+
+    let window = web_sys::window().ok_or("no window")?;
+    let headers = web_sys::Headers::new().map_err(|e| text(&e))?;
+    for (n, v) in req.headers() {
+        headers.set(n, v).map_err(|_| format!("bad header {n}"))?;
+    }
+    let init = web_sys::RequestInit::new();
+    init.set_method("POST");
+    init.set_headers(&headers);
+    init.set_body(&JsValue::from_str(&req.body));
+    init.set_cache(web_sys::RequestCache::NoStore);
+    init.set_credentials(web_sys::RequestCredentials::Omit);
+    init.set_signal(signal);
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(req.url, &init))
+        .await
+        .map_err(|e| text(&e))?
+        .dyn_into()
+        .map_err(|e| text(&e))?;
+    if resp.status() != 200 {
+        let b = JsFuture::from(resp.text().map_err(|e| text(&e))?)
+            .await
+            .map_err(|e| text(&e))?;
+        let mut body = b.as_string().unwrap_or_default();
+        body.truncate(crate::claude::MAX_ANSWER);
+        push(Incoming::Status {
+            seq,
+            status: resp.status(),
+            body,
+        });
+        return Ok(());
+    }
+    let stream = resp.body().ok_or("no body")?;
+    let reader: web_sys::ReadableStreamDefaultReader =
+        stream.get_reader().dyn_into().map_err(|e| text(&e))?;
+    let decoder = web_sys::TextDecoder::new().map_err(|e| text(&e))?;
+    let opts = web_sys::TextDecodeOptions::new();
+    opts.set_stream(true);
+    loop {
+        let r = JsFuture::from(reader.read()).await.map_err(|e| text(&e))?;
+        let done = Reflect::get(&r, &JsValue::from_str("done"))
+            .map_err(|e| text(&e))?
+            .as_bool()
+            .unwrap_or(true);
+        if done {
+            push(Incoming::End { seq });
+            return Ok(());
+        }
+        let value: Uint8Array = Reflect::get(&r, &JsValue::from_str("value"))
+            .map_err(|e| text(&e))?
+            .dyn_into()
+            .map_err(|e| text(&e))?;
+        let chunk = decoder
+            .decode_with_js_u8_array_and_options(&value, &opts)
+            .map_err(|e| text(&e))?;
+        push(Incoming::Chunk { seq, text: chunk });
+    }
+}
+
+/// A key the user asked this browser to remember, in `localStorage`.
+#[derive(Debug, Default)]
+pub struct LocalKeyStore;
+
+const KEY_SLOT: &str = "helmsman-playground/anthropic-api-key";
+
+fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok().flatten()
+}
+
+impl KeyStore for LocalKeyStore {
+    fn load(&self) -> Option<String> {
+        local_storage()?.get_item(KEY_SLOT).ok().flatten()
+    }
+
+    fn save(&mut self, key: &str) {
+        if let Some(s) = local_storage() {
+            let _ = s.set_item(KEY_SLOT, key);
+        }
+    }
+
+    fn forget(&mut self) {
+        if let Some(s) = local_storage() {
+            let _ = s.remove_item(KEY_SLOT);
+        }
+    }
 }
 
 /// Whether the page asked for the demo (`?demo`).

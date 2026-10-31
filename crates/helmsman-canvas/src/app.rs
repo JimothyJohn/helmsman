@@ -11,6 +11,7 @@ use crate::box_view::BoxView;
 use crate::canvas::{Interaction, View};
 use crate::example;
 use crate::look;
+use crate::playground_view::PlaygroundView;
 use crate::review_view::ReviewView;
 use crate::site::SiteView;
 use crate::st_view::{StView, brand};
@@ -58,6 +59,8 @@ pub struct App {
     pub andon: Option<AndonView>,
     /// The site view, likewise.
     pub site: Option<SiteView>,
+    /// The ST playground, likewise.
+    pub playground: Option<PlaygroundView>,
 }
 
 /// Where the live ST view's scans come from.
@@ -84,6 +87,9 @@ pub enum Mode {
     Andon,
     /// Every box of this box's site, with a link to each (`?site`).
     Site,
+    /// The public ST playground: edit, run against virtual I/O, ask
+    /// Claude (`?playground`, docs/playground/).
+    Playground,
 }
 
 impl App {
@@ -107,7 +113,9 @@ impl App {
         #[cfg(not(target_arch = "wasm32"))]
         let source = Source::Demo;
         #[cfg(target_arch = "wasm32")]
-        let mode = if crate::web::wants("andon") {
+        let mode = if crate::web::wants_playground() {
+            Mode::Playground
+        } else if crate::web::wants("andon") {
             Mode::Andon
         } else if crate::web::wants("site") {
             Mode::Site
@@ -149,6 +157,7 @@ impl App {
             review: None,
             andon: None,
             site: None,
+            playground: None,
         }
     }
 
@@ -1055,6 +1064,11 @@ impl App {
             self.andon.get_or_insert_with(AndonView::new).show(ui);
             return;
         }
+        if self.mode == Mode::Playground {
+            // A page of its own: no box behind it, so no box tabs.
+            self.playground.get_or_insert_with(PlaygroundView::new).show(ui);
+            return;
+        }
         if matches!(self.mode, Mode::Live | Mode::Review | Mode::Site) {
             self.show_live(ui);
             return;
@@ -1123,6 +1137,13 @@ impl App {
                 {
                     self.mode = Mode::Site;
                 }
+                if ui
+                    .selectable_label(false, "Playground")
+                    .on_hover_text("write ST and run it in this page against virtual I/O")
+                    .clicked()
+                {
+                    self.mode = Mode::Playground;
+                }
                 ui.separator();
                 ui.label(
                     RichText::new("live ST view · read-only: changes go through the agent as ST")
@@ -1131,8 +1152,9 @@ impl App {
             });
         });
         match self.mode {
-            // The floor screen is drawn by `show` before it gets here.
-            Mode::Lab | Mode::Andon => return,
+            // The floor screen and the playground are drawn by `show`
+            // before it gets here.
+            Mode::Lab | Mode::Andon | Mode::Playground => return,
             Mode::Review => {
                 self.review.get_or_insert_with(ReviewView::new).show(ui);
                 return;

@@ -24,9 +24,14 @@ wasm-bindgen-futures = "0.4"
 # EventTarget, MessageEvent) for the box API; Location for `?demo`.
 # ReadableStream(DefaultReader) and TextDecoder(Options): POST
 # /api/explain with the token in a header, read as it streams.
+# The playground: AbortController/AbortSignal to stop an answer, Storage
+# for a key the user asked to remember, Element for the page's mode.
 web-sys = { version = "0.3", features = [
+    "AbortController",
+    "AbortSignal",
     "console",
     "Document",
+    "Element",
     "Event",
     "EventSource",
     "EventTarget",
@@ -42,6 +47,7 @@ web-sys = { version = "0.3", features = [
     "RequestInit",
     "RequestMode",
     "Response",
+    "Storage",
     "TextDecodeOptions",
     "TextDecoder",
     "Window",

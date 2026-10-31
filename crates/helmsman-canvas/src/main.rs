@@ -10,7 +10,10 @@
 //! watches that box over its API; `?demo` (or `make canvas-serve`, with
 //! no box behind it) runs the demo in the page instead, `?andon` is
 //! the box's floor screen, full screen, and `?site` lists every box of its
-//! site (`--site`), each a link to its own canvas.
+//! site (`--site`), each a link to its own canvas. `?playground` (and the
+//! page `scripts/build-playground.sh` builds into docs/playground/) is the
+//! public ST playground: write ST, run it in the page against a virtual
+//! I/O panel, and ask Claude for help with your own API key.
 
 // Screen geometry is f32 throughout; counts and sim values convert into it.
 // Drawing code reads best with short geometry names (r, z, p, x, y).
@@ -31,9 +34,14 @@ mod app;
 mod box_tests;
 mod box_view;
 mod canvas;
+mod claude;
 mod example;
 mod explain;
 mod look;
+mod playground;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod playground_tests;
+mod playground_view;
 mod remote;
 mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]
