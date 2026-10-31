@@ -32,10 +32,18 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - name: Format check
         run: cargo fmt --all --check
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # The two builds that broke dev on 2026-10-30 without CI noticing:
+      # helmsman-plc without its `box` feature (the runtime the canvas
+      # embeds) and the canvas itself for wasm32. Same as scripts/lint.sh.
+      - name: Runtime without the box feature
+        run: cargo check -p helmsman-plc --no-default-features --all-targets
+      - name: Canvas for wasm32
+        run: cargo check --target wasm32-unknown-unknown -p helmsman-canvas
       - name: Test workspace
         run: cargo test --workspace --locked
 
