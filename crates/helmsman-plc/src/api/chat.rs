@@ -70,6 +70,12 @@ pub struct Setup {
     pub running: usize,
     /// A conversation unused this long is dropped.
     pub idle: Duration,
+    /// The agent version `POST /api/explain` asks the relay for (an
+    /// explain profile: its prompt and the read-only tools); `None`: the
+    /// chat's version. The box runs only read-only tools either way.
+    pub explain_agent: Option<String>,
+    /// What one explanation may cost.
+    pub explain_budget: Budget,
     /// How often the relay is probed while the agent is not online.
     pub probe_every: Duration,
 }
@@ -85,6 +91,8 @@ impl Setup {
             sessions: 16,
             running: 2,
             idle: Duration::from_secs(3600),
+            explain_agent: None,
+            explain_budget: super::explain::budget(),
             probe_every: Duration::from_secs(15),
         }
     }
@@ -183,7 +191,7 @@ pub struct Taken {
 }
 
 /// Frees a running slot when dropped.
-struct Running<'a>(&'a AtomicUsize);
+pub(super) struct Running<'a>(&'a AtomicUsize);
 
 impl Drop for Running<'_> {
     fn drop(&mut self) {
@@ -454,7 +462,24 @@ impl Chat {
         }
     }
 
-    fn slot(&self) -> Option<Running<'_>> {
+    /// The agent explain mode runs: the explain profile's version, the
+    /// explain budget. Its tool set is chosen per call
+    /// ([`helmsman_agent::tools::READ_ONLY`]).
+    pub(super) fn explain_agent(&self) -> Agent {
+        let mut relay = self.setup.relay.clone();
+        if let Some(v) = &self.setup.explain_agent {
+            relay.version.clone_from(v);
+        }
+        Agent {
+            relay,
+            api: self.api.clone(),
+            budget: self.setup.explain_budget,
+            retry: self.setup.retry,
+            limits: self.setup.limits,
+        }
+    }
+
+    pub(super) fn slot(&self) -> Option<Running<'_>> {
         let n = &self.running;
         let mut v = n.load(Ordering::Acquire);
         while v < self.setup.running {
@@ -703,7 +728,7 @@ fn show(v: &Json) -> String {
     }
 }
 
-fn event(stream: &mut TcpStream, name: &str, data: &Json) -> io::Result<()> {
+pub(super) fn event(stream: &mut TcpStream, name: &str, data: &Json) -> io::Result<()> {
     let body = serde_json::to_string(data).unwrap_or_default();
     write!(stream, "event: {name}\ndata: {body}\n\n")?;
     stream.flush()

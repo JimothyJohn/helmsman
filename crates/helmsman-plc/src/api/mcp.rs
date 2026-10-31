@@ -635,9 +635,8 @@ impl Caller for InProcess<'_> {
         };
         match super::handle(&req, self.ctx) {
             Reply::Once(r) => Ok((r.status, serde_json::from_slice(&r.body).unwrap_or(Json::Null))),
-            Reply::Values | Reply::Traces(_) | Reply::Chat(_) | Reply::File(_) => {
-                Err("that route streams; the MCP tools do not use it".into())
-            }
+            // Streams, chat and explain turns, files: never reachable.
+            _ => Err("that route streams; the MCP tools do not use it".into()),
         }
     }
 }
@@ -849,6 +848,7 @@ mod tests {
             ("POST", "/api/snapshots/ab/replay"),
             ("POST", "/api/bundles"),
             ("POST", "/api/chat"),
+            ("POST", "/api/explain"),
             ("POST", "/api/dropins"),
             ("POST", "/mcp"),
             ("GET", "/api/events"),

@@ -256,6 +256,7 @@ impl Agent {
         &self,
         conv: &mut Conversation,
         call: &crate::turn::ToolCall,
+        set: &[&str],
         allowed: Result<(), String>,
         on: &mut dyn FnMut(Progress),
         proposals: &mut Vec<u64>,
@@ -295,7 +296,15 @@ impl Agent {
             let why = format!(
                 "no tool named {:?} on this box; the tools are {}. Nothing was run.",
                 call.name,
-                tools::NAMES.join(", ")
+                set.join(", ")
+            );
+            return refuse(why.clone(), json!({ "error": why, "ran": false }), on);
+        }
+        if !set.contains(&call.name.as_str()) {
+            let why = format!(
+                "{} is not available in this mode (read-only); the tools here are {}. Nothing was run.",
+                call.name,
+                set.join(", ")
             );
             return refuse(why.clone(), json!({ "error": why, "ran": false }), on);
         }
@@ -344,11 +353,26 @@ impl Agent {
     }
 
     /// [`Agent::chat`] for a user message of several content blocks (the
-    /// user's text, then the box's notes about attached drop-ins).
+    /// user's text, then the box's notes about attached drop-ins), with
+    /// every tool.
     pub fn chat_blocks(
         &self,
         conv: &mut Conversation,
         blocks: Vec<Json>,
+        on: &mut dyn FnMut(Progress),
+    ) -> Outcome {
+        self.chat_with(conv, blocks, &tools::NAMES, on)
+    }
+
+    /// Runs the loop for one user message of `blocks`, running only the
+    /// tools in `set` (a subset of [`tools::NAMES`]); a call to any other
+    /// is answered "not available", unrun. Explain mode passes
+    /// [`tools::READ_ONLY`].
+    pub fn chat_with(
+        &self,
+        conv: &mut Conversation,
+        blocks: Vec<Json>,
+        set: &[&str],
         on: &mut dyn FnMut(Progress),
     ) -> Outcome {
         let until = Instant::now() + self.budget.time;
@@ -406,7 +430,7 @@ impl Agent {
                 } else {
                     Ok(())
                 };
-                results.push(self.answer(conv, call, allowed, on, &mut out.proposals));
+                results.push(self.answer(conv, call, set, allowed, on, &mut out.proposals));
             }
             conv.push_user(results);
             if out.output_tokens >= self.budget.output_tokens {

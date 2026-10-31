@@ -576,6 +576,199 @@ mod boxed {
     }
 }
 
+/// Explain mode, driven headless: tap a block or an output, read the
+/// box's own explanation, ask the agent (on a box).
+mod explained {
+    use eframe::egui::Pos2;
+    use helmsman_diagram::NodeKind;
+    use helmsman_graph::Project;
+
+    use super::Harness;
+    use crate::app::{Mode, Source};
+    use crate::box_tests::{Bench, watch};
+    use crate::box_view::BoxView;
+    use crate::explain::{Phase, Reply, Side, SideCmd};
+    use crate::remote::{Msg, Stream};
+    use crate::st_view::{TAP, Viewer, node_near};
+
+    fn live() -> Harness {
+        let mut h = Harness::new(Project::default());
+        h.app.mode = Mode::Live;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h
+    }
+
+    fn st(h: &Harness) -> &Viewer {
+        &h.app.st.as_ref().unwrap().view
+    }
+
+    /// Screen centre and on-screen width of the first node matching `f`.
+    fn node(h: &Harness, f: impl Fn(&NodeKind) -> bool) -> (Pos2, f32) {
+        let v = st(h);
+        let n = v.diagram().nodes.iter().find(|n| f(&n.kind)).unwrap();
+        let cam = v.cams[v.scope];
+        (
+            cam.to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0),
+            n.rect.w * cam.zoom,
+        )
+    }
+
+    #[test]
+    fn tapping_an_assignment_explains_it_in_words_and_highlights_its_line() {
+        let mut h = live();
+        h.app.st.as_mut().unwrap().scans(100); // started at 0.2 s
+        let (at, _) = node(&h, |k| *k == NodeKind::Write { path: "RED".into() });
+        h.click(at);
+        assert_eq!(st(&h).because.as_deref(), Some("RED"));
+        h.frame(vec![]);
+        let v = h.app.st.as_mut().unwrap();
+        let now = v.now_ms;
+        let scan = v.sample.as_ref().map(|s| &s.trace as &dyn helmsman_diagram::Scan);
+        let said = v.view.explanation(scan, Some(now)).unwrap();
+        let first = &said.sentences[0].text;
+        assert!(first.starts_with("Red is OFF because line "), "{said:#?}");
+        let line = said.sentences[0].line.unwrap();
+        assert_eq!(st(&h).highlight[0], line, "the cited line is drawn highlighted");
+        assert!(
+            said.sentences.iter().any(|s| s.text.contains("jam is OFF")),
+            "{said:#?}"
+        );
+    }
+
+    #[test]
+    fn tapping_a_timer_block_explains_its_output_in_time() {
+        let mut h = live();
+        h.app.st.as_mut().unwrap().scans(30);
+        let (at, _) = node(&h, |k| matches!(k, NodeKind::Fb { fb, .. } if fb == "TON"));
+        h.click(at);
+        assert_eq!(st(&h).because.as_deref(), Some("BLINK.Q"));
+        let v = h.app.st.as_mut().unwrap();
+        let now = v.now_ms;
+        let scan = v.sample.as_ref().map(|s| &s.trace as &dyn helmsman_diagram::Scan);
+        let text = v.view.explanation(scan, Some(now)).unwrap().text();
+        assert!(
+            text.contains("Blink turns ON after 400 ms of its input being ON."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_tap_near_a_small_block_still_hits_it() {
+        let mut h = live();
+        h.frame(vec![eframe::egui::Event::Zoom(0.5)]);
+        h.frame(vec![]);
+        let (at, width) = node(&h, |k| {
+            *k == NodeKind::Write {
+                path: "CONVEYOR".into(),
+            }
+        });
+        // Just right of the block (assignments are rightmost), within half
+        // a tap target.
+        let near = at + eframe::egui::Vec2::new(width / 2.0 + TAP / 2.0 - 4.0, 0.0);
+        h.click(near);
+        assert_eq!(
+            st(&h).because.as_deref(),
+            Some("CONVEYOR"),
+            "zoom {}",
+            st(&h).cams[0].zoom
+        );
+        // Far from anything: nothing new is picked.
+        let d = st(&h).diagram();
+        assert_eq!(node_near(d, -500.0, -500.0, 22.0), None);
+    }
+
+    #[test]
+    fn the_demo_explains_offline_and_says_why_it_cannot_ask() {
+        let mut h = live();
+        h.app.st.as_mut().unwrap().scans(100);
+        h.frame(vec![]);
+        // No transport, no ask: the demo's panel draws with "Ask why"
+        // disabled and its reason; a click on it does nothing.
+        assert_eq!(
+            crate::st_view::AskUi::demo().blocked,
+            Some("The demo runs in this page: asking the agent needs a box with a relay.")
+        );
+        assert!(h.app.boxv.is_none(), "no box anywhere");
+        let v = h.app.st.as_mut().unwrap();
+        let now = v.now_ms;
+        let scan = v.sample.as_ref().map(|s| &s.trace as &dyn helmsman_diagram::Scan);
+        let text = v.view.explanation(scan, Some(now)).unwrap().text();
+        assert!(text.starts_with("Conveyor is ON because line "), "{text}");
+        assert!(text.contains("it comes from the field"), "{text}");
+    }
+
+    #[test]
+    fn on_a_box_ask_why_waits_for_agent_and_token_then_streams_the_answer() {
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(Project::default());
+        h.app.mode = Mode::Live;
+        h.app.source = Source::Box;
+        h.frame(vec![]);
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let b: &mut BoxView = h.app.boxv.as_mut().unwrap();
+        // Connected: it asked the box whether there is an agent, once.
+        assert_eq!(b.side_sent, [SideCmd::Index]);
+        assert!(b.blocked().unwrap().contains("Checking"));
+        let (_, index) = bench.get("/api");
+        b.side_in(vec![Side::Index(Ok(index))]);
+        assert_eq!(b.agent, Some(false), "this bench has no relay");
+        assert!(b.blocked().unwrap().contains("No agent"));
+        b.agent = Some(true);
+        assert!(b.blocked().unwrap().contains("token"));
+        let ctx = h.ctx.clone();
+        let b = h.app.boxv.as_mut().unwrap();
+        b.ask_why(&ctx, "CONVEYOR");
+        assert_eq!(b.side_sent.len(), 1, "blocked: nothing sent");
+        b.token = format!(" {} ", "ab".repeat(32));
+        assert_eq!(b.blocked(), None);
+        b.ask_why(&ctx, "CONVEYOR");
+        let sent = b.side_sent.last().unwrap().clone();
+        assert_eq!(
+            sent,
+            SideCmd::Ask {
+                token: "ab".repeat(32),
+                body: r#"{"module":"cell","path":"CONVEYOR"}"#.into(),
+            }
+        );
+        assert!(
+            !format!("{sent:?}").contains(&"ab".repeat(32)),
+            "the token never reaches a log line"
+        );
+        b.ask_why(&ctx, "CONVEYOR");
+        assert_eq!(b.side_sent.len(), 2, "one ask at a time");
+        b.side_in(vec![
+            Side::Ask(Reply::Chunk(
+                "event: explain\ndata: {\"scan\":9,\"sentences\":[{\"text\":\"Conveyor is ON.\"}]}\n\nevent: text\ndata: {\"delta\":\"The belt runs: \"}\n\n".into(),
+            )),
+        ]);
+        h.frame(vec![]);
+        let b = h.app.boxv.as_mut().unwrap();
+        assert_eq!(b.ask.as_ref().unwrap().phase, Phase::Streaming);
+        b.side_in(vec![
+            Side::Ask(Reply::Chunk("event: text\ndata: {\"delta\":\"start was pressed.\"}\n\nevent: done\ndata: {\"stop\":\"end_turn\",\"why\":null}\n\n".into())),
+            Side::Ask(Reply::End),
+        ]);
+        h.frame(vec![]);
+        let a = h.app.boxv.as_ref().unwrap().ask.as_ref().unwrap();
+        assert_eq!(a.text, "The belt runs: start was pressed.");
+        assert_eq!(a.phase, Phase::Done);
+
+        // The box goes away: asking is blocked again, the answer stays.
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        for k in 0..3 {
+            b.state.apply(Msg::Failed(Stream::Values), t + f64::from(k));
+        }
+        assert!(b.blocked().unwrap().contains("offline"));
+        h.frame(vec![]);
+        assert!(h.app.boxv.as_ref().unwrap().ask.is_some());
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 mod reviewing {
     use eframe::egui::{Event, Pos2, Rect, Vec2};
