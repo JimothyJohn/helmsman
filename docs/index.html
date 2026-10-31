@@ -101,6 +101,7 @@ footer a{color:var(--yellow)}
   <div class="wrap">
     <a class="brand" href="#"><svg class="mk" viewBox="0 0 96 96" width="28" height="28" aria-hidden="true" style="color:#FFC20E"><use href="#se20"/></svg>HELMSMAN</a>
     <nav aria-label="Sections">
+      <a href="playground/">Playground</a>
       <a href="#what">What</a>
       <a href="#crates">Crates</a>
       <a href="#cli">CLI</a>
@@ -121,7 +122,8 @@ footer a{color:var(--yellow)}
     </div>
     <p class="lede">A small soft PLC for factory edge boxes, a Raspberry Pi 5 being the reference. Structured Text modules that an agent drafts and an engineer approves run against named signals on the devices the box masters. Alongside it, an open-source CIP-over-Ethernet originator and adapter. Early, written in Rust.</p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/JimothyJohn/helmsman">View on GitHub</a>
+      <a class="btn primary" href="playground/">Try the ST playground</a>
+      <a class="btn" href="https://github.com/JimothyJohn/helmsman">View on GitHub</a>
       <a class="btn" href="#cli">Quick start</a>
     </div>
   </div>
@@ -135,6 +137,15 @@ footer a{color:var(--yellow)}
     <div><b>MIT</b><span>open source</span></div>
   </div>
 </div>
+
+<section id="playground">
+  <div class="wrap">
+    <h2>Playground</h2>
+    <h3>Write ST. Run it here.</h3>
+    <p>The <a href="playground/">ST playground</a> is the box's Structured Text compiler and interpreter built for the browser. Write a program, and its <code>VAR_INPUT</code>s and <code>%IX</code> bits become buttons and sliders, its <code>VAR_OUTPUT</code>s and <code>%QX</code> bits become lamps. Run, stop or step it, watch the live diagram and a trend, and tap an output to see why it is on. Nothing is sent anywhere: it all runs in the page.</p>
+    <p>Stuck? <b>Ask Claude</b> in the side panel with your own Anthropic API key. The key stays in the page (optionally in this browser, if you tick “remember”) and goes only to <code>api.anthropic.com</code>; Claude sees your program and its compile errors and answers with a whole program you can load with one click. It never runs until you press Run.</p>
+  </div>
+</section>
 
 <section id="what">
   <div class="wrap">
