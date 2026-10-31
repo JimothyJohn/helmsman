@@ -86,7 +86,14 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
                        for the LAN), or `off`. Reads are open; anything
                        else needs the token from the state directory.
-  --opcua ADDR         read-only OPC UA server (see helmsman_plc::opcua) on
+  --https on|off       serve the API and canvas over HTTPS (default on): a
+                       self-signed certificate made at first start and kept
+                       in the state directory (tls.pem); its SHA-256
+                       fingerprint is printed at start and shown in the
+                       canvas's ⋯ menu. Plain HTTP on the same port is
+                       served only from this host (loopback, an SSH
+                       tunnel); from the LAN it is redirected to https://
+  --opcua ADDR        read-only OPC UA server (see helmsman_plc::opcua) on
                        ADDR (default 127.0.0.1:4840: loopback only), or `off`.
                        Anonymous, SecurityPolicy None: nothing is signed or
                        encrypted, so bind it to the plant LAN only.
@@ -154,6 +161,9 @@ struct Opts {
     projects: bool,
     emit_st: bool,
     api: Option<SocketAddr>,
+    /// Serve the API over HTTPS (`--https`, on by default in a build with
+    /// the `https` feature).
+    https: bool,
     opcua: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
     relay: Option<String>,
@@ -209,6 +219,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         projects: false,
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
+        https: cfg!(feature = "https"),
         opcua: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 4840))),
         state_dir: None,
         relay: None,
@@ -267,6 +278,14 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     .map_err(|_| format!("--bind: not an IPv4 address: {v:?}"))?;
             }
             "--api" if v == "off" => o.api = None,
+            "--https" => {
+                o.https = match v.as_str() {
+                    "on" if cfg!(feature = "https") => true,
+                    "on" => return Err("--https on: this build has no TLS (the `https` feature)".into()),
+                    "off" => false,
+                    _ => return Err(format!("--https: expected on or off, got {v:?}")),
+                };
+            }
             "--opcua" if v == "off" => o.opcua = None,
             "--opcua" => {
                 o.opcua = Some(
@@ -961,18 +980,20 @@ fn start_api(
             p.root().display()
         );
     }
+    let tls = box_tls(o, &dir)?;
+    let scheme = if tls.is_some() { "https" } else { "http" };
     let more = api::More {
         projects,
         forces: Some(Arc::clone(forces)),
     };
-    let server = Api::start_box(cfg, shared, extras, site.as_ref().map(Site::handle), more)
+    let server = Api::start_secure(cfg, shared, extras, site.as_ref().map(Site::handle), more, tls)
         .map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
-        "helmsman-plc: API on http://{}/api (reads open; changes need the token)",
+        "helmsman-plc: API on {scheme}://{}/api (reads open; changes need the token)",
         server.addr()
     );
     if has_ui {
-        eprintln!("helmsman-plc: canvas on http://{}/", server.addr());
+        eprintln!("helmsman-plc: canvas on {scheme}://{}/", server.addr());
     }
     if token.new {
         eprintln!(
@@ -984,6 +1005,38 @@ fn start_api(
         eprintln!("helmsman-plc: API token in {}", token.path.display());
     }
     Ok((server, site))
+}
+
+/// The box's HTTPS (`--https`, on by default): its certificate from the
+/// state directory, made on the first start, and the fingerprint printed
+/// for the journal. `None` with `--https off` or without the `https`
+/// feature.
+#[cfg(feature = "https")]
+fn box_tls(o: &Opts, dir: &Path) -> Result<Option<api::Tls>, String> {
+    if !o.https {
+        eprintln!(
+            "helmsman-plc: --https off: the API and canvas are plain HTTP, sign-ins can be sniffed on the LAN"
+        );
+        return Ok(None);
+    }
+    let id = api::tls::load_or_create(dir, host_name().as_deref())
+        .map_err(|e| format!("TLS certificate in {}: {e}", dir.display()))?;
+    let tls = api::Tls::new(&id).map_err(|e| format!("TLS certificate {}: {e}", id.path.display()))?;
+    eprintln!(
+        "helmsman-plc: TLS certificate ({}, {}) SHA-256 fingerprint {}; check that your browser shows the same before you trust it",
+        if id.new { "new" } else { "kept" },
+        id.path.display(),
+        id.fingerprint()
+    );
+    eprintln!(
+        "helmsman-plc: plain HTTP on the API's port is served only from this host; from the LAN it is sent to https://"
+    );
+    Ok(Some(tls))
+}
+
+#[cfg(not(feature = "https"))]
+fn box_tls(_: &Opts, _: &Path) -> Result<Option<api::Tls>, String> {
+    Ok(None)
 }
 
 /// The host's name as a site box name, if it is one.

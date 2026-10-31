@@ -676,6 +676,37 @@ LAN, `off`): one HTTP/1.1 + JSON surface for the canvas, the agent's tools
 and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are listed at
 `GET /api` and in `api/mod.rs`.
 
+- **HTTPS (`box-https`, built; `api/tls.rs`, contract in
+  `tests/https.rs`).** On by default (`--https on|off`; a build without
+  the `https` feature is plain HTTP). At first start the box makes a
+  P-256 key with `ring` and a self-signed X.509 v3 certificate for it,
+  written in `api/tls.rs` rather than by a crate (rcgen is not in the
+  lockfile, and a few hundred bytes of DER do not need one): `CN=helmsman-plc`, valid to
+  9999-12-31, CA false, serverAuth, names `localhost`, the host's name,
+  `127.0.0.1` and `::1`. Cert and key are one PEM file, `tls.pem` (mode
+  0600) in the state directory, made once (atomically: starts racing
+  settle on one) and then only read, so the fingerprint stays across
+  restarts and upgrades. A file that does not hold a matching cert and
+  key stops the box rather than being replaced: a new certificate means
+  every browser trusting it again, so it is the operator's call (delete
+  the file). The SHA-256 fingerprint (as browsers and `openssl x509
+  -fingerprint -sha256` print it) goes to the journal at every start and
+  is at `GET /api/policy` as `transport.fingerprint`, which the canvas
+  shows in its ⋯ menu. The person compares it once with what the
+  browser shows, then trusts the certificate. rustls (ring, TLS 1.2 and
+  1.3, ALPN `http/1.1`) serves it on the API's own port: the first byte
+  of a connection decides. A TLS handshake (`0x16`) is TLS. Plain HTTP
+  from this host (loopback, or the box's own address: scripts, the
+  agent's own calls, `curl` in the deploy script, an SSH tunnel) is
+  served as before. Plain HTTP from anywhere else is never served: a
+  `GET`/`HEAD` is redirected (301) to `https://` on the Host it asked
+  for, anything else is 403. A client mid-handshake gets nothing back,
+  not even an error, and every connection stays under the request
+  deadline whatever it sends; at the worker cap a box with HTTPS drops
+  the connection instead of a plain 503. Relative URLs and the
+  `EventSource` streams follow the page's scheme, so the canvas needs
+  nothing.
+
 - **Reads** (`GET`) are open: signals with live values, quality and point errors, modules
   (source, manifest, ports, status, stats), a module's latest trace (a
   `GET` requests the next traced scan; 202 until one lands), output commands
@@ -708,9 +739,9 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   SHA-256, in the accounts session table (1 h, 15 min idle, 8 per
   account or per role, 256 per box); a role-PIN session is the role's
   (audited with the role and no person; history says `ROLE (PIN)`) and
-  ends at its next use once an accounts file appears. **No `Secure`
-  flag:** boxes serve plain HTTP on the LAN, where a browser would drop
-  a `Secure` cookie; it goes on with TLS, if a box ever serves it.
+  ends at its next use once an accounts file appears. Over the box's
+  HTTPS (below) the cookie is also `Secure`; over plain HTTP (this host
+  only, or a box run with `--https off`) it is not.
   `GET /api/session` says who the cookie (or a bearer session) is, so a
   reloaded page knows; `POST /api/logout` ends it on the box and sends
   `Max-Age=0`; any 401 on a cookie also clears it.
@@ -718,7 +749,8 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   which is a read) must carry exactly one `X-Helmsman-Request: 1` (a
   cross-site form cannot send a custom header; a cross-site `fetch` with
   one needs a preflight the box never answers) and an `Origin` equal to
-  `http://` + its `Host`, or, with no `Origin`, a `Referer` on that
+  the scheme the request came over (`https://` over TLS, `http://`
+  otherwise) + its `Host`, or, with no `Origin`, a `Referer` on that
   origin; anything else (missing or wrong header, another site's or an
   opaque `null` origin, two origins, a look-alike `http://box.evil/`
   referer, a form post) is 403 before the session is looked up, so a
@@ -1201,8 +1233,12 @@ serves those per agent version (relay protocol v1).
 `POST /mcp` on the box API's listener (`api/mcp.rs`; contract in
 `helmsman-plc/tests/mcp.rs`) serves the chat agent's tools to an
 engineer's own MCP client (Claude Code, Claude Desktop): `claude mcp add
---transport http helmsman http://<box>:8080/mcp --header "Authorization:
-Bearer <token>"`. Sources: `docs/SOURCES.md`, MCP specification.
+--transport http helmsman http://localhost:8080/mcp --header "Authorization:
+Bearer <token>"` on the box or through an SSH tunnel; from the LAN,
+`https://<box-name>:8080/mcp`, with the client trusting the certificate
+part of the box's `tls.pem` (Node: `NODE_EXTRA_CA_CERTS`), since plain
+HTTP from another host is refused (Box API, HTTPS). Sources:
+`docs/SOURCES.md`, MCP specification.
 
 - **Transport.** Streamable HTTP, one JSON-RPC message per POST, answered
   with one JSON object, through the same bounded parser, worker cap,
@@ -1934,7 +1970,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
 | box ↔ LAN peers | site beacons in, this box's beacon out | strict parse, source-address rule, intake and refresh limits, a bounded list, no takeover of a live id; the box only lists peers and never connects to one; `/api/site` is the only cross-origin read | built (`site-view`) |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) and `local-accounts` (per-person logins that replace the PINs once an accounts file exists; the audit names the person) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
-| browser (canvas) ↔ box | sign-in, drafts' replays, approvals, Ask why | the session is an `HttpOnly; SameSite=Strict; Path=/api` cookie the page cannot read (no API token in the browser); every cookie call but a `GET` needs `X-Helmsman-Request: 1` and the box's own `Origin` (or `Referer`), else 403; a bearer, when sent, wins and the cookie is not read; no `Secure` flag on plain-HTTP LAN boxes | built (`canvas-token`; `helmsman-plc/tests/accounts.rs`, the canvas's `review_tests.rs`) |
+| browser (canvas) ↔ box | sign-in, drafts' replays, approvals, Ask why | the session is an `HttpOnly; SameSite=Strict; Path=/api` cookie the page cannot read (no API token in the browser); every cookie call but a `GET` needs `X-Helmsman-Request: 1` and the box's own `Origin` (or `Referer`), else 403; a bearer, when sent, wins and the cookie is not read; the box serves HTTPS with a self-signed certificate whose fingerprint the person checks once (journal, ⋯ menu), the cookie is `Secure` over it, and plain HTTP is served only from the box's own host | built (`canvas-token`, `box-https`; `helmsman-plc/tests/https.rs`, `helmsman-plc/tests/accounts.rs`, the canvas's `review_tests.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
 | playground visitor ↔ Claude | the visitor's own key, program and question | the key only in `x-api-key` to api.anthropic.com (redacted `Debug`, page CSP `connect-src` to that host and self), memory unless "remember" is ticked; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run; or the local proxy holds the key | built (`playground`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
