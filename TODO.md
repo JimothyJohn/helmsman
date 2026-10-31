@@ -611,7 +611,7 @@
   id: e1213-eds-license
   answer: keep it out, check by hash (recommended, built)
 
-- [ ] **The Class 1 scanner in the box build: OK?** Until now the box build could only *read* from CIP devices (`helmsman-proto` without `unrestricted`). Mastering the E1213 over EtherNet/IP means driving its outputs, so feat/moxa-e1213 split the scanner into its own feature, `scanner`, and the box's `box` feature turns it on through helmsman-io's `enip` (the `enip-io` driver). What it can send: `Forward_Open` and `Forward_Close` to an Assembly-class path, nothing else; `Session::request` (any service) still needs `unrestricted`, which `tests/box_build.rs` still forbids (and now also checks `scanner` is in). Outputs reach a device only through a map signal, so the one-writer rule and the approval tier for map changes apply, as for Modbus coils. The other way: keep `enip-io` out of the box until a later card, and use the E1213 over Modbus/TCP meanwhile (its map is in `docs/devices/moxa-iologik-e1213-modbus.map`).
+- [x] **The Class 1 scanner in the box build: OK?** Until now the box build could only *read* from CIP devices (`helmsman-proto` without `unrestricted`). Mastering the E1213 over EtherNet/IP means driving its outputs, so feat/moxa-e1213 split the scanner into its own feature, `scanner`, and the box's `box` feature turns it on through helmsman-io's `enip` (the `enip-io` driver). What it can send: `Forward_Open` and `Forward_Close` to an Assembly-class path, nothing else; `Session::request` (any service) still needs `unrestricted`, which `tests/box_build.rs` still forbids (and now also checks `scanner` is in). Outputs reach a device only through a map signal, so the one-writer rule and the approval tier for map changes apply, as for Modbus coils. The other way: keep `enip-io` out of the box until a later card, and use the E1213 over Modbus/TCP meanwhile (its map is in `docs/devices/moxa-iologik-e1213-modbus.map`).
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -1456,6 +1456,14 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: enip-in-box
   id: enip-io-port
   notes: built on fix/enip-io-port: `helmsman_proto::endpoint` (one socket, routed by connection ID, each route bound to its peer IP, a drop-oldest queue per owner), `Adapter::start_on`, `helmsman_io::open_on`; `helmsman-plc --io-port` moves the whole endpoint, and off 2222 the links' Forward_Open names the port in a T->O socket-address item. docs/ARCHITECTURE.md "One Class 1 I/O port per box". Whether the real E1213 honours that item is for `e1213-bench` off 2222.
+
+- [ ] **Put `enip-io` back in the box build** — `enip-in-box` took the EtherNet/IP Class 1 scanner out of the box until the bench passes: helmsman-plc's `box` no longer turns on helmsman-io's `enip` (so no helmsman-proto `scanner`), a box map naming `enip-io` is refused as "not in this build" (`helmsman_plc::drivers::not_in_build`), and the E1213 runs over Modbus/TCP (`docs/devices/moxa-iologik-e1213-modbus.map`). The code stays behind helmsman-plc's `enip-io` feature, which `scripts/lint.sh` lints. Once `e1213-bench` passes: add `enip-io` to `box` (or `default`), flip the `scanner` assertion in `tests/box_build.rs` back, drop the `cfg(not(feature = "enip-io"))` refusal tests in `tests/bin.rs` and `tests/driver_map.rs` (the shared-port test in `tests/bin.rs` then runs again), and restore docs/ARCHITECTURE.md's trust-boundary row.
+  needs: `e1213-bench` green on the real E1213
+  result: a box masters EtherNet/IP remote I/O again, from the default build
+  est: 1h
+  difficulty: low
+  depends: e1213-bench
+  id: enip-in-box-again
 
 ## Roadmap M2: floor-ready core
 

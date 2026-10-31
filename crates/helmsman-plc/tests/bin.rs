@@ -395,7 +395,9 @@ out lamp  bool box do:0 safe=true
 /// apart. The scanner's bit goes through the module to the E1213's DO-00,
 /// back on its wired DI-00, through the module again and out to the
 /// scanner. (`--io-port 0` only so parallel test runs don't fight over
-/// 2222; adapter and link share whatever port it is.)
+/// 2222; adapter and link share whatever port it is.) Only with the
+/// `enip-io` feature (`scripts/lint.sh` builds it; out of the box build).
+#[cfg(feature = "enip-io")]
 #[test]
 fn the_adapter_and_an_enip_io_link_share_one_io_port() {
     use helmsman_io::enip_sim::E1213Sim;
@@ -449,6 +451,48 @@ in  clamp_fb bool rio di:0
     let log = plc.finish();
     assert!(log.contains("device rio up"), "{log}");
     assert!(!log.contains("address in use"), "{log}");
+}
+
+/// The box build leaves `enip-io` out (TODO.md `enip-in-box`): a map that
+/// names it is refused before the box goes on the network, saying so,
+/// even when no signal uses the device. The E1213 runs over Modbus/TCP.
+#[cfg(not(feature = "enip-io"))]
+#[test]
+fn a_map_naming_enip_io_is_refused_as_not_in_this_build() {
+    let prog = program_file(
+        "enip_out",
+        "PROGRAM p VAR_INPUT start : BOOL; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR lamp := start; END_PROGRAM",
+    );
+    for (name, text) in [
+        (
+            "enip_used.iomap",
+            "device rio enip-io 127.0.0.1:44818\nin start bool rio di:0\nout lamp bool box do:0\n",
+        ),
+        (
+            "enip_unused.iomap",
+            "device rio enip-io 127.0.0.1:44818\nin start bool box di:0\nout lamp bool box do:0\n",
+        ),
+    ] {
+        let map = text_file(name, text);
+        let out = plc()
+            .arg(&prog)
+            .arg("--io-map")
+            .arg(&map)
+            .args(["--encap-port", "0", "--io-port", "0"])
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}: {err}");
+        assert!(
+            err.contains("device rio: unknown driver \"enip-io: not in this build"),
+            "{name}: {err}"
+        );
+        assert!(
+            err.contains("modbus-tcp"),
+            "{name}: names the way that works: {err}"
+        );
+        assert!(!err.contains("CIP on"), "{name}: {err}");
+    }
 }
 
 #[test]
