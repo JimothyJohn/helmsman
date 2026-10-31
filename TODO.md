@@ -878,6 +878,26 @@
   difficulty: med
   id: box-https
 
+- [ ] **The box's andon layout (`--screen`, `/api/screen`) now has no screen: keep it for the Monitor or retire it?** UI.md step 1 removed the canvas's Andon mode (`?andon` now opens the Editor). The box side is untouched: `Binding::Screen` outputs, the `--screen` layout file, `GET /api/screen`, and helmsman-plc still prints "floor screen on http://…/?andon" at start. UI.md's Monitor (step 3) builds its tiles from the program's top-level instances, not from a layout file. Built default: nothing removed, the startup line is stale.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether step 3 reads the layout file or helmsman-plc drops `--screen` and its line
+  options: retire --screen and /api/screen once the Monitor ships (recommended) | the Monitor shows a box's layout when it has one, instance tiles otherwise | keep both, untouched
+  est: 2h
+  difficulty: low
+  id: andon-layout-after-monitor
+
+- [ ] **The Trend tab on a box: where does its history come from?** On a box the Editor's right panel has only I/O for now; the simulation's Trend records every scan in the page. A box sends values over `/api/events` several times a second, and its recorder (sim-replay) already keeps the last minutes of inputs on the box. Built default: no Trend tab on a box (nor Claude, until step 2).
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what a pinned signal on a box shows and from when
+  options: page-side, from /api/events while the page is open (recommended) | box-side, from the recorder, so history is there on open | wait for step 2
+  est: 4h
+  difficulty: med
+  id: box-trend-source
+
 - [ ] **Does Deploy skip the sim replay for an engineer?** docs/UI.md says Deploy compiles, snapshots and hot-swaps. The approval floor in code says a `logic` or `output-affecting` change needs an engineer *and* a sim replay. Built (reversible): Deploy goes through the same approval path, so the UI calls `POST /api/projects/{p}/replay` then `POST .../deploy {replay: N}` (one click can do both; the replay is real evidence of exactly that build against the box's recording). Options: keep it (the floor holds everywhere); let an engineer's Deploy skip the replay (the policy floor gets an exception for the editor); or have Deploy run the replay itself and refuse only if it faults.
   asked: 2026-10-31
   by: claude-agent

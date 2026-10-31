@@ -17,8 +17,7 @@ use eframe::wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::claude::{Incoming, KeyStore, PROXY_HEALTH, PROXY_HELLO, Request as ClaudeRequest};
-use crate::explain::{Reply, Side, SideCmd};
-use crate::remote::{Cmd, Fetch, Msg, Stream};
+use crate::remote::{Cmd, Msg, Stream};
 use crate::review::{Answer, Call, Request as ReviewRequest};
 
 type Inbox = Rc<RefCell<Vec<Msg>>>;
@@ -50,35 +49,9 @@ pub struct Driver {
     inbox: Inbox,
     values: Option<Source>,
     trace: Option<Source>,
-    /// What the explain panel's requests brought back.
-    side: Rc<RefCell<Vec<Side>>>,
 }
 
 impl Driver {
-    /// What the explain panel's requests brought back since the last call.
-    pub fn drain_side(&mut self) -> Vec<Side> {
-        std::mem::take(&mut *self.side.borrow_mut())
-    }
-
-    /// Carries out an explain-panel request.
-    pub fn side(&mut self, cmd: SideCmd, ctx: &egui::Context) {
-        let (side, ctx) = (Rc::clone(&self.side), ctx.clone());
-        wasm_bindgen_futures::spawn_local(async move {
-            let push = |m: Side| {
-                side.borrow_mut().push(m);
-                ctx.request_repaint();
-            };
-            match cmd {
-                SideCmd::Index => push(Side::Index(get("/api").await)),
-                SideCmd::Ask { body } => {
-                    if let Err(e) = ask(&body, &push).await {
-                        push(Side::Ask(Reply::Failed(e)));
-                    }
-                }
-            }
-        });
-    }
-
     /// What arrived since the last call.
     pub fn drain(&mut self) -> Vec<Msg> {
         std::mem::take(&mut *self.inbox.borrow_mut())
@@ -89,10 +62,7 @@ impl Driver {
             Cmd::Get(what, url) => {
                 let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
                 wasm_bindgen_futures::spawn_local(async move {
-                    let r = match what {
-                        Fetch::Peer { .. } => get_peer(&url).await,
-                        _ => get(&url).await,
-                    };
+                    let r = get(&url).await;
                     inbox.borrow_mut().push(Msg::Got(what, r));
                     ctx.request_repaint();
                 });
@@ -178,55 +148,21 @@ async fn get(url: &str) -> Result<String, String> {
     body.as_string().ok_or_else(|| "not text".into())
 }
 
-/// `GET url` on another box (the site view's peers): cross-origin, no
-/// credentials, nothing cached; an answer over [`crate::site::MAX_BODY`]
-/// (by its length, or once read) is refused.
-async fn get_peer(url: &str) -> Result<String, String> {
-    let window = web_sys::window().ok_or("no window")?;
-    let init = web_sys::RequestInit::new();
-    init.set_method("GET");
-    init.set_mode(web_sys::RequestMode::Cors);
-    init.set_credentials(web_sys::RequestCredentials::Omit);
-    init.set_cache(web_sys::RequestCache::NoStore);
-    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(|e| text(&e))?;
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
-        .await
-        .map_err(|e| text(&e))?
-        .dyn_into()
-        .map_err(|e| text(&e))?;
-    if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let declared = resp
-        .headers()
-        .get("Content-Length")
-        .ok()
-        .flatten()
-        .and_then(|v| v.trim().parse::<usize>().ok());
-    if declared.is_some_and(|n| n > crate::site::MAX_BODY) {
-        return Err("answer too large".into());
-    }
-    let body = JsFuture::from(resp.text().map_err(|e| text(&e))?)
-        .await
-        .map_err(|e| text(&e))?
-        .as_string()
-        .ok_or("not text")?;
-    if body.len() > crate::site::MAX_BODY {
-        return Err("answer too large".into());
-    }
-    Ok(body)
-}
-
-/// Whether this page is the playground: `?playground`, or the canvas
-/// element says so (`docs/playground/`'s page: `data-mode="playground"`).
+/// Whether this page runs the simulation rather than watching the box
+/// that served it ([`crate::app::wants_sim`] on the page's query string
+/// and its canvas element's `data-mode`).
 #[must_use]
-pub fn wants_playground() -> bool {
-    wants("playground")
-        || web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.get_element_by_id("canvas"))
-            .and_then(|e| e.get_attribute("data-mode"))
-            .is_some_and(|m| m == "playground")
+pub fn wants_sim() -> bool {
+    let window = web_sys::window();
+    let query = window
+        .as_ref()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default();
+    let mode = window
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("canvas"))
+        .and_then(|e| e.get_attribute("data-mode"));
+    crate::app::wants_sim(&query, mode.as_deref())
 }
 
 /// The playground's link to Claude: one answer at a time, abortable.
@@ -376,78 +312,6 @@ impl KeyStore for LocalKeyStore {
         if let Some(s) = local_storage() {
             let _ = s.remove_item(KEY_SLOT);
         }
-    }
-}
-
-/// Whether the page asked for the demo (`?demo`).
-#[must_use]
-pub fn wants_demo() -> bool {
-    wants("demo")
-}
-
-/// Whether the page's query string has `key` (`?andon`, `?demo`).
-#[must_use]
-pub fn wants(key: &str) -> bool {
-    web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .is_some_and(|q| {
-            q.trim_start_matches('?')
-                .split('&')
-                .any(|kv| kv.split('=').next() == Some(key))
-        })
-}
-
-/// `POST /api/explain` (same origin, the session cookie, see [`init`]),
-/// its body handed over chunk by chunk as it streams.
-async fn ask(body: &str, push: &dyn Fn(Side)) -> Result<(), String> {
-    use web_sys::js_sys::{Reflect, Uint8Array};
-
-    let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init("POST")?;
-    headers
-        .set("Content-Type", "application/json")
-        .map_err(|e| text(&e))?;
-    init.set_headers(&headers);
-    init.set_body(&JsValue::from_str(body));
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init("/api/explain", &init))
-        .await
-        .map_err(|e| text(&e))?
-        .dyn_into()
-        .map_err(|e| text(&e))?;
-    if resp.status() != 200 {
-        let b = JsFuture::from(resp.text().map_err(|e| text(&e))?)
-            .await
-            .map_err(|e| text(&e))?;
-        push(Side::Ask(Reply::Status(
-            resp.status(),
-            b.as_string().unwrap_or_default(),
-        )));
-        return Ok(());
-    }
-    let stream = resp.body().ok_or("no body")?;
-    let reader: web_sys::ReadableStreamDefaultReader =
-        stream.get_reader().dyn_into().map_err(|e| text(&e))?;
-    let decoder = web_sys::TextDecoder::new().map_err(|e| text(&e))?;
-    let opts = web_sys::TextDecodeOptions::new();
-    opts.set_stream(true);
-    loop {
-        let r = JsFuture::from(reader.read()).await.map_err(|e| text(&e))?;
-        let done = Reflect::get(&r, &JsValue::from_str("done"))
-            .map_err(|e| text(&e))?
-            .as_bool()
-            .unwrap_or(true);
-        if done {
-            push(Side::Ask(Reply::End));
-            return Ok(());
-        }
-        let value: Uint8Array = Reflect::get(&r, &JsValue::from_str("value"))
-            .map_err(|e| text(&e))?
-            .dyn_into()
-            .map_err(|e| text(&e))?;
-        let chunk = decoder
-            .decode_with_js_u8_array_and_options(&value, &opts)
-            .map_err(|e| text(&e))?;
-        push(Side::Ask(Reply::Chunk(chunk)));
     }
 }
 

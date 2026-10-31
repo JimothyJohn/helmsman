@@ -1,31 +1,29 @@
-//! The canvas driven headlessly through egui with synthetic pointer and key
-//! events, asserting on the project and app state, not on pixels.
+//! The app driven headlessly through egui with synthetic pointer and key
+//! events, asserting on the app's state and on where it drew its
+//! controls, not on pixels.
 
-use eframe::egui::{self, Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
-use helmsman_graph::{Kind, Node, NodeId, Project, Scope, Ty, Wire};
+use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+use helmsman_diagram::NodeKind;
 
-use crate::app::App;
-use crate::look::layout;
+use crate::app::{App, Screen, Source};
+use crate::st_view::Viewer;
 
 struct Harness {
     ctx: egui::Context,
     app: App,
     time: f64,
-    mods: Modifiers,
     /// The window, in points.
     size: Vec2,
 }
 
 impl Harness {
-    fn new(project: Project) -> Self {
+    fn new(app: App) -> Self {
         let mut h = Self {
             ctx: egui::Context::default(),
-            app: App::with_project(project),
+            app,
             time: 0.0,
-            mods: Modifiers::NONE,
             size: Vec2::new(1400.0, 860.0),
         };
-        h.app.running = false;
         // Two frames: panels settle their sizes, the view fits the graph.
         h.frame(vec![]);
         h.frame(vec![]);
@@ -36,9 +34,7 @@ impl Harness {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
             time: Some(self.time),
-            events: std::iter::once(Event::ModifiersChanged(self.mods))
-                .chain(events)
-                .collect(),
+            events,
             ..Default::default()
         };
         self.time += 1.0 / 60.0;
@@ -48,422 +44,361 @@ impl Harness {
         out.textures_delta.clear();
     }
 
-    fn button(&self, pos: Pos2, pressed: bool) -> Event {
+    /// Frames for `secs` of page time (animations end).
+    fn wait(&mut self, secs: f64) {
+        let end = self.time + secs;
+        while self.time < end {
+            self.frame(vec![]);
+        }
+    }
+
+    fn button(pos: Pos2, pressed: bool) -> Event {
         Event::PointerButton {
             pos,
             button: PointerButton::Primary,
             pressed,
-            modifiers: self.mods,
+            modifiers: Modifiers::NONE,
         }
-    }
-
-    /// Press at `a`, move to `b` in steps, release.
-    fn drag(&mut self, a: Pos2, b: Pos2) {
-        self.frame(vec![Event::PointerMoved(a)]);
-        self.frame(vec![self.button(a, true)]);
-        for i in 1..=6 {
-            let t = i as f32 / 6.0;
-            self.frame(vec![Event::PointerMoved(a + (b - a) * t)]);
-        }
-        self.frame(vec![self.button(b, false)]);
-        self.frame(vec![]);
     }
 
     fn click(&mut self, at: Pos2) {
         self.frame(vec![Event::PointerMoved(at)]);
-        self.frame(vec![self.button(at, true)]);
-        self.frame(vec![self.button(at, false)]);
+        self.frame(vec![Self::button(at, true)]);
+        self.frame(vec![Self::button(at, false)]);
     }
 
-    fn double_click(&mut self, at: Pos2) {
-        self.frame(vec![Event::PointerMoved(at)]);
-        self.frame(vec![self.button(at, true), self.button(at, false)]);
-        self.frame(vec![self.button(at, true), self.button(at, false)]);
-        self.frame(vec![]);
+    /// Where the app drew control `key` last frame.
+    fn rect(&self, key: &str) -> Rect {
+        self.app.chrome.rect(key).unwrap_or_else(|| {
+            let keys: Vec<&String> = self.app.chrome.hits.iter().map(|(k, _)| k).collect();
+            panic!("no {key} on screen: {keys:?}")
+        })
     }
 
-    fn key(&mut self, key: Key, mods: Modifiers) {
-        let ev = |pressed| Event::Key {
-            key,
-            physical_key: None,
-            pressed,
-            repeat: false,
-            modifiers: mods,
-        };
-        self.mods = mods;
-        self.frame(vec![ev(true)]);
-        self.frame(vec![ev(false)]);
-        self.mods = Modifiers::NONE;
-        self.frame(vec![]);
+    fn has(&self, key: &str) -> bool {
+        self.app.chrome.rect(key).is_some()
     }
 
-    fn node(&self, id: NodeId) -> Node {
-        self.app.project.graph(self.app.scope()).unwrap().nodes[&id].clone()
+    fn press(&mut self, key: &str) {
+        let at = self.rect(key).center();
+        self.click(at);
     }
 
-    fn screen(&self, p: Pos2) -> Pos2 {
-        self.app.views[&self.app.scope()].to_screen(p)
-    }
-
-    fn header(&self, id: NodeId) -> Pos2 {
-        let l = layout(&self.app.project, &self.node(id));
-        self.screen(l.header.center())
-    }
-
-    fn widget(&self, id: NodeId) -> Pos2 {
-        let l = layout(&self.app.project, &self.node(id));
-        self.screen(l.widget.unwrap().center())
-    }
-
-    fn port(&self, id: NodeId, out: bool, index: usize) -> Pos2 {
-        let l = layout(&self.app.project, &self.node(id));
-        let ports = if out { &l.outs } else { &l.ins };
-        self.screen(ports[index].1)
-    }
-}
-
-const CMD: Modifiers = Modifiers::COMMAND;
-
-/// Toggle at the left, NOT in the middle, lamp at the right; nothing wired.
-fn three() -> (Project, NodeId, NodeId, NodeId) {
-    let mut p = Project::default();
-    let t = p
-        .add_node(Scope::Root, Node::new(Kind::Toggle { on: false }, [0.0, 0.0]))
-        .unwrap();
-    let n = p
-        .add_node(Scope::Root, Node::new(Kind::Not, [300.0, 0.0]))
-        .unwrap();
-    let l = p
-        .add_node(Scope::Root, Node::new(Kind::Lamp, [600.0, 0.0]))
-        .unwrap();
-    (p, t, n, l)
-}
-
-#[test]
-fn dragging_a_header_moves_the_node_as_one_undo_step() {
-    let (p, t, _, _) = three();
-    let mut h = Harness::new(p);
-    let before = h.node(t).pos;
-    let a = h.header(t);
-    h.drag(a, a + Vec2::new(0.0, 120.0));
-    let after = h.node(t).pos;
-    assert!(after[1] > before[1] + 50.0, "moved down: {before:?} -> {after:?}");
-    h.key(Key::Z, CMD);
-    assert_eq!(h.node(t).pos, before);
-}
-
-#[test]
-fn dragging_output_to_input_wires_them_and_type_mismatch_does_not() {
-    let (mut p, t, n, l) = three();
-    let c = p
-        .add_node(Scope::Root, Node::new(Kind::Const { value: 1.0 }, [0.0, 250.0]))
-        .unwrap();
-    let mut h = Harness::new(p);
-    h.drag(h.port(t, true, 0), h.port(n, false, 0));
-    h.drag(h.port(n, true, 0), h.port(l, false, 0));
-    // Num into a Bool input: refused.
-    h.drag(h.port(c, true, 0), h.port(l, false, 0));
-    let wires = &h.app.project.root.wires;
-    assert_eq!(
-        wires,
-        &[
-            Wire {
-                from: t,
-                from_port: 0,
-                to: n,
-                to_port: 0
-            },
-            Wire {
-                from: n,
-                from_port: 0,
-                to: l,
-                to_port: 0
-            }
-        ],
-        "toast: {:?}",
-        h.app.toast
-    );
-    assert!(h.app.toast.as_ref().is_some_and(|(_, _, err)| *err));
-}
-
-#[test]
-fn picking_up_a_wired_input_and_dropping_it_on_nothing_removes_it_and_offers_search() {
-    let (mut p, t, n, _) = three();
-    p.connect(
-        Scope::Root,
-        Wire {
-            from: t,
-            from_port: 0,
-            to: n,
-            to_port: 0,
-        },
-    )
-    .unwrap();
-    let mut h = Harness::new(p);
-    let a = h.port(n, false, 0);
-    h.drag(a, a + Vec2::new(60.0, 200.0));
-    assert_eq!(h.app.project.root.wires, []);
-    assert!(h.app.ix.busy(), "search popup open for the dangling wire");
-    h.key(Key::Escape, Modifiers::NONE);
-    assert!(!h.app.ix.busy());
-    h.key(Key::Z, CMD);
-    assert_eq!(h.app.project.root.wires.len(), 1, "undo puts the wire back");
-}
-
-#[test]
-fn search_adds_the_typed_node_and_wires_a_dangling_end_to_it() {
-    let (p, t, _, _) = three();
-    let mut h = Harness::new(p);
-    let a = h.port(t, true, 0);
-    h.drag(a, a + Vec2::new(40.0, 220.0));
-    h.frame(vec![Event::Text("ton".into())]);
-    h.key(Key::Enter, Modifiers::NONE);
-    let g = &h.app.project.root;
-    let ton = g
-        .nodes
-        .iter()
-        .find(|(_, n)| matches!(n.kind, Kind::Ton { .. }))
-        .map(|(id, _)| *id);
-    let ton = ton.expect("TON added");
-    assert_eq!(
-        g.wires,
-        [Wire {
-            from: t,
-            from_port: 0,
-            to: ton,
-            to_port: 0
-        }]
-    );
-    h.key(Key::Z, CMD);
-    assert_eq!(
-        h.app.project.root.nodes.len(),
-        3,
-        "add + autowire undo as one step"
-    );
-}
-
-#[test]
-fn box_select_then_group_makes_a_block_and_double_click_goes_inside() {
-    let (mut p, t, n, l) = three();
-    p.connect(
-        Scope::Root,
-        Wire {
-            from: t,
-            from_port: 0,
-            to: n,
-            to_port: 0,
-        },
-    )
-    .unwrap();
-    p.connect(
-        Scope::Root,
-        Wire {
-            from: n,
-            from_port: 0,
-            to: l,
-            to_port: 0,
-        },
-    )
-    .unwrap();
-    let mut h = Harness::new(p);
-    // Box around the NOT only.
-    let r = layout(&h.app.project, &h.node(n)).rect.expand(20.0);
-    h.drag(h.screen(r.left_top()), h.screen(r.right_bottom()));
-    assert_eq!(h.app.selected.iter().copied().collect::<Vec<_>>(), [n]);
-    h.key(Key::G, CMD);
-    assert_eq!(h.app.project.blocks.len(), 1);
-    let inst = *h.app.selected.iter().next().unwrap();
-    assert!(matches!(h.node(inst).kind, Kind::Block(_)));
-    assert_eq!(h.app.project.root.wires.len(), 2, "rewired through the block");
-
-    h.frame(vec![]);
-    h.double_click(h.header(inst));
-    assert_eq!(h.app.nav.len(), 1, "went inside");
-    assert!(h.app.live_path().is_some());
-    h.key(Key::Escape, Modifiers::NONE);
-    assert!(h.app.nav.is_empty(), "Esc goes back up");
-}
-
-#[test]
-fn clicking_a_switch_flips_it_and_holding_a_button_drives_the_sim() {
-    let mut p = Project::default();
-    let t = p
-        .add_node(Scope::Root, Node::new(Kind::Toggle { on: false }, [0.0, 0.0]))
-        .unwrap();
-    let b = p
-        .add_node(Scope::Root, Node::new(Kind::Button, [0.0, 200.0]))
-        .unwrap();
-    let mut h = Harness::new(p);
-    h.click(h.widget(t));
-    assert_eq!(h.node(t).kind, Kind::Toggle { on: true });
-
-    h.app.running = true;
-    let at = h.widget(b);
-    h.frame(vec![Event::PointerMoved(at)]);
-    h.frame(vec![h.button(at, true)]);
-    for _ in 0..3 {
-        h.frame(vec![]);
-    }
-    assert_eq!(h.app.sim.held.iter().collect::<Vec<_>>(), [&vec![b]]);
-    let held = h.app.sim.root.out(b, 0, Ty::Bool);
-    h.frame(vec![h.button(at, false)]);
-    h.frame(vec![]);
-    assert!(held.as_bool(), "button output true while held");
-    assert!(h.app.sim.held.is_empty());
-}
-
-#[test]
-fn delete_key_removes_the_selection_and_undo_restores_it() {
-    let (p, t, _, _) = three();
-    let mut h = Harness::new(p);
-    h.click(h.header(t));
-    h.key(Key::Delete, Modifiers::NONE);
-    assert_eq!(h.app.project.root.nodes.len(), 2);
-    h.key(Key::Z, CMD);
-    assert_eq!(h.app.project.root.nodes.len(), 3);
-    h.key(Key::Z, CMD | Modifiers::SHIFT);
-    assert_eq!(h.app.project.root.nodes.len(), 2, "redo");
-}
-
-#[test]
-fn the_example_opens_and_survives_a_click_storm() {
-    let mut h = Harness::new(crate::example::project());
-    h.app.running = true;
-    // Deterministic spray of clicks, drags and double-clicks over the canvas.
-    let mut seed = 0x2545_f491_u32;
-    let mut next = || {
-        seed ^= seed << 13;
-        seed ^= seed >> 17;
-        seed ^= seed << 5;
-        seed
-    };
-    for _ in 0..60 {
-        let p = Pos2::new(200.0 + (next() % 1000) as f32, 30.0 + (next() % 800) as f32);
-        match next() % 4 {
-            0 => h.click(p),
-            1 => h.double_click(p),
-            2 => h.drag(
-                p,
-                p + Vec2::new((next() % 200) as f32 - 100.0, (next() % 200) as f32 - 100.0),
-            ),
-            _ => h.key(Key::Escape, Modifiers::NONE),
+    /// The header's controls, all there.
+    fn header_is_up(&self) {
+        for k in ["mark", "title", "editor", "menu"] {
+            assert!(self.has(k), "no {k} in the header");
         }
     }
-    let json = h.app.project.to_json();
-    assert_eq!(
-        Project::from_json(&json).as_ref(),
-        Ok(&h.app.project),
-        "still a valid project"
-    );
+
+    /// The menu's items on screen now.
+    fn menu_items(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .app
+            .chrome
+            .hits
+            .iter()
+            .filter(|(k, _)| k.starts_with("menu "))
+            .map(|(k, _)| k.clone())
+            .collect();
+        out.sort();
+        out
+    }
 }
 
-// ---- the live ST view ----
+/// The simulation's diagram.
+fn sim_view(h: &Harness) -> &Viewer {
+    h.app.sim.as_ref().unwrap().viewer.as_ref().expect("a diagram")
+}
 
-mod live {
+/// Screen centre and on-screen width of the first node matching `f`.
+fn node(v: &Viewer, f: impl Fn(&NodeKind) -> bool) -> (Pos2, f32) {
+    let n = v.diagram().nodes.iter().find(|n| f(&n.kind)).expect("the node");
+    let cam = v.cams[v.scope];
+    (
+        cam.to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0),
+        n.rect.w * cam.zoom,
+    )
+}
+
+fn write_to(path: &str) -> impl Fn(&NodeKind) -> bool + '_ {
+    move |k| *k == NodeKind::Write { path: path.into() }
+}
+
+// ---- the header and the Editor's frame ----
+
+mod chrome {
+    use eframe::egui::{self, Pos2, Vec2};
+
+    use super::{Harness, node, sim_view, write_to};
+    use crate::app::{App, Screen, Source, wants_sim};
+    use crate::editor::{Chrome, STRIP, Tab};
+
+    #[test]
+    fn the_header_is_on_every_screen() {
+        let h = Harness::new(App::sim());
+        h.header_is_up();
+        assert_eq!(h.app.title(), "blink", "the program's name");
+        let mut h = Harness::new(App::boxed());
+        h.header_is_up();
+        assert_eq!(h.app.title(), "This box", "no module yet");
+        h.app.screen = Screen::Proposals;
+        h.frame(vec![]);
+        h.header_is_up();
+        // The menu open over the screen: still there.
+        h.press("menu");
+        assert!(h.app.menu);
+        h.header_is_up();
+    }
+
+    #[test]
+    fn the_menu_opens_proposals_and_the_header_leads_back() {
+        let mut h = Harness::new(App::boxed());
+        assert!(!h.app.menu);
+        h.press("menu");
+        assert!(h.app.menu, "⋯ opens the menu");
+        assert_eq!(h.menu_items(), ["menu editor", "menu proposals", "menu sim"]);
+        h.press("menu proposals");
+        assert_eq!(h.app.screen, Screen::Proposals);
+        assert!(!h.app.menu, "picking closes it");
+        assert!(h.app.review.is_some());
+        // Back by the header's Editor...
+        h.press("editor");
+        assert_eq!(h.app.screen, Screen::Editor);
+        // ...or by the menu's.
+        h.press("menu");
+        h.press("menu proposals");
+        assert_eq!(h.app.screen, Screen::Proposals);
+        h.press("menu");
+        h.press("menu editor");
+        assert_eq!(h.app.screen, Screen::Editor);
+        // A click elsewhere closes the menu and changes nothing.
+        h.press("menu");
+        assert!(h.app.menu);
+        h.click(Pos2::new(700.0, 500.0));
+        assert!(!h.app.menu);
+        assert_eq!(h.app.screen, Screen::Editor);
+        // ⋯ again closes it too.
+        h.press("menu");
+        h.press("menu");
+        assert!(!h.app.menu);
+    }
+
+    #[test]
+    fn the_source_is_a_setting_in_the_menu_on_a_box_and_absent_without_one() {
+        let mut h = Harness::new(App::boxed());
+        h.press("menu");
+        h.press("menu sim");
+        assert_eq!(h.app.source, Source::Sim);
+        assert!(h.app.sim.is_some(), "the simulation runs");
+        h.header_is_up();
+        h.press("menu");
+        assert_eq!(
+            h.menu_items(),
+            ["menu box", "menu editor"],
+            "no proposals without a box"
+        );
+        h.press("menu box");
+        assert_eq!(h.app.source, Source::Box);
+
+        // The public page: no box to go back to, no proposals.
+        let mut h = Harness::new(App::sim());
+        h.press("menu");
+        assert_eq!(h.menu_items(), ["menu editor"]);
+        h.app.screen = Screen::Proposals;
+        h.frame(vec![]);
+        assert_eq!(h.app.screen, Screen::Editor, "proposals need a box");
+        assert!(h.app.review.is_none(), "and nothing asks one");
+    }
+
+    #[test]
+    fn no_old_mode_is_reachable() {
+        // Every control the app draws, on every screen and source, with the
+        // menu open: nothing leads to Lab, Site, Demo, Andon or Playground.
+        let mut seen = Vec::new();
+        for (app, proposals) in [(App::sim(), false), (App::boxed(), false), (App::boxed(), true)] {
+            let mut h = Harness::new(app);
+            if proposals {
+                h.app.screen = Screen::Proposals;
+            }
+            h.frame(vec![]);
+            h.press("menu");
+            seen.extend(h.app.chrome.hits.iter().map(|(k, _)| k.to_ascii_lowercase()));
+        }
+        for gone in ["lab", "site", "demo", "andon", "playground"] {
+            assert!(!seen.iter().any(|k| k.contains(gone)), "{gone} in {seen:?}");
+        }
+        // The query string picks only where the program runs.
+        for q in ["?andon", "?site", "?lab", "?view=demo", ""] {
+            assert!(!wants_sim(q, None), "{q}");
+        }
+    }
+
+    #[test]
+    fn old_playground_links_still_open_the_simulation() {
+        for q in ["?playground", "?demo", "?x=1&playground", "?playground=1"] {
+            assert!(wants_sim(q, None), "{q}");
+        }
+        assert!(wants_sim("", Some("playground")), "docs/playground/'s page");
+        assert!(!wants_sim("?playgrounds", Some("box")));
+    }
+
+    #[test]
+    fn both_sidebars_collapse_to_a_strip_and_come_back() {
+        let mut h = Harness::new(App::sim());
+        assert!(h.app.chrome.left && h.app.chrome.right);
+        for (side, edge) in [("left", 0.0), ("right", h.size.x)] {
+            let open = h.rect(side);
+            h.press(side);
+            h.wait(0.5);
+            let shut = h.rect(side);
+            assert!(
+                (shut.center().x - edge).abs() <= STRIP,
+                "{side} folds to a strip at its edge: {shut:?} (was {open:?})"
+            );
+            h.press(side);
+            h.wait(0.5);
+            assert!(h.has(&format!("tab {}", "io")) || side == "left");
+        }
+        assert!(h.app.chrome.left && h.app.chrome.right, "both open again");
+        h.press("left");
+        assert!(!h.app.chrome.left);
+        h.press("right");
+        assert!(!h.app.chrome.right);
+        h.wait(0.5);
+        assert!(!h.has("tab io"), "the tabs fold with the panel");
+        // Remembered per browser: what the app saves reads back the same.
+        let back = Chrome::restored(&h.app.chrome.saved());
+        assert_eq!((back.left, back.right, back.st), (false, false, true));
+    }
+
+    #[test]
+    fn the_layout_read_back_from_storage_is_forgiving() {
+        let mut c = Chrome::default();
+        c.tab = Tab::Trend;
+        c.st = true;
+        let back = Chrome::restored(&c.saved());
+        assert_eq!(
+            (back.left, back.right, back.st, back.tab),
+            (true, true, true, Tab::Trend)
+        );
+        // Anything else keeps the defaults; the Why tab is gone.
+        for junk in ["", "left", "tab=why", "=== =1"] {
+            assert_eq!(Chrome::restored(junk), Chrome::default(), "{junk:?}");
+        }
+        let c = Chrome::restored("right=yes left=0 st=1 \u{0}");
+        assert_eq!((c.left, c.right, c.st, c.tab), (false, false, true, Tab::Io));
+    }
+
+    #[test]
+    fn the_st_toggle_opens_and_closes_the_editor_and_a_block_click_sends_it_to_the_line() {
+        let mut h = Harness::new(App::sim());
+        let editor = || egui::Id::unique("pg-source");
+        assert!(h.app.chrome.st, "the simulation starts with the ST open");
+        assert!(h.ctx.read_response(editor()).is_some());
+        h.press("st");
+        assert!(!h.app.chrome.st);
+        h.wait(0.5);
+        assert!(h.ctx.read_response(editor()).is_none(), "shut");
+        h.press("st");
+        assert!(h.app.chrome.st);
+        h.wait(0.5);
+        let r = h.ctx.read_response(editor()).expect("open again");
+        assert!(r.rect.width() > 200.0, "{:?}", r.rect);
+
+        // Click the lamp's assignment: the ST goes to its line.
+        let (at, _) = node(sim_view(&h), write_to("LAMP"));
+        h.click(at);
+        let (line, text) = sim_view(&h).picked().unwrap();
+        assert_eq!(text, "LAMP := NOT LAMP");
+        assert_eq!(h.app.chrome.line, Some(line));
+        h.frame(vec![]);
+        let src = h.app.sim.as_ref().unwrap().session.src.clone();
+        assert_eq!(
+            src.lines().nth(line as usize - 1).unwrap().trim(),
+            "lamp := NOT lamp;"
+        );
+        let chars: usize = src
+            .split_inclusive('\n')
+            .take(line as usize - 1)
+            .map(|l| l.chars().count())
+            .sum();
+        let state = egui::text_edit::TextEditState::load(&h.ctx, editor()).expect("the editor's state");
+        assert_eq!(
+            state.cursor.char_range(),
+            Some(egui::text::CCursorRange::one(egui::text::CCursor::new(chars))),
+            "the caret at the start of line {line}"
+        );
+        // Shut, the line is still where it opens.
+        h.press("st");
+        let (at, _) = node(sim_view(&h), write_to("LAMP"));
+        h.click(at + Vec2::new(0.0, 0.0));
+        assert_eq!(h.app.chrome.line, Some(line));
+    }
+}
+
+// ---- the Editor on the simulation ----
+
+mod simulated {
     use eframe::egui::{Event, Modifiers, MouseWheelUnit, Pos2, Vec2};
-    use helmsman_diagram::NodeKind;
-    use helmsman_graph::Project;
-    use helmsman_iec::Value;
 
-    use super::Harness;
-    use crate::app::Mode;
-    use crate::st_view::{DEMO, Pick, StView, Viewer};
+    use super::{Harness, node, sim_view, write_to};
+    use crate::app::App;
+    use crate::editor::Tab;
+    use crate::st_view::{Pick, TAP, node_near};
 
-    fn live() -> Harness {
-        let mut h = Harness::new(Project::default());
-        h.app.mode = Mode::Live;
-        h.frame(vec![]);
-        h.frame(vec![]);
+    fn stations() -> Harness {
+        let mut h = Harness::new(App::sim());
+        let src = crate::playground::EXAMPLES
+            .iter()
+            .find(|e| e.name.contains("stations"))
+            .unwrap()
+            .src;
+        h.app.sim.as_mut().unwrap().load(src, "stations");
+        h.wait(0.1);
         h
     }
 
-    fn demo(h: &Harness) -> &StView {
-        h.app.st.as_ref().unwrap()
-    }
-
-    fn st(h: &Harness) -> &Viewer {
-        &demo(h).view
-    }
-
-    /// Screen centre of the program's write to `path`.
-    fn write_of(h: &Harness, path: &str) -> Pos2 {
-        let st = st(h);
-        let n = st
-            .diagram()
-            .nodes
-            .iter()
-            .find(|n| n.kind == NodeKind::Write { path: path.into() })
-            .unwrap();
-        st.cams[st.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
-    }
-
     #[test]
-    fn the_demo_compiles_and_the_view_runs_it_with_a_trace_every_frame() {
-        assert!(StView::new(DEMO).is_ok());
-        let mut h = live();
-        let first = demo(&h).sample.as_ref().unwrap().scan;
-        h.frame(vec![]);
-        let d = demo(&h);
-        assert!(d.error.is_none(), "{:?}", d.error);
-        let st = &d.view;
-        assert!(
-            d.sample.as_ref().unwrap().scan > first,
-            "a fresh traced scan each frame"
-        );
-        assert_eq!(
-            st.outputs(),
-            ["CONVEYOR", "RED", "GREEN"],
-            "in order of first assignment"
-        );
-        let scopes: Vec<&str> = st.scopes.iter().map(|s| s.label.as_str()).collect();
-        assert_eq!(scopes, ["PROGRAM CELL", "M : MOTOR"]);
-    }
-
-    #[test]
-    fn clicking_a_block_shows_its_source_line() {
-        let mut h = live();
-        let at = write_of(&h, "CONVEYOR");
+    fn clicking_empty_canvas_clears_the_pick() {
+        let mut h = Harness::new(App::sim());
+        let (at, _) = node(sim_view(&h), write_to("LAMP"));
         h.click(at);
-        let (line, text) = st(&h).picked().unwrap();
-        assert_eq!(text, "CONVEYOR := M.ON");
-        assert_eq!(st(&h).source_line(line), format!("{line:>3} | conveyor := m.on;"));
-        // Clicking empty canvas clears it.
-        h.click(Pos2::new(1050.0, 845.0));
-        assert_eq!(st(&h).pick, None);
+        assert!(matches!(sim_view(&h).pick, Some(Pick::Node(_))));
+        // The canvas's bottom right corner, left of the right panel.
+        let far = Pos2::new(h.rect("right").left() - 30.0, h.size.y - 6.0);
+        h.click(far);
+        assert_eq!(sim_view(&h).pick, None);
     }
 
     #[test]
-    fn the_scripted_shift_runs_the_conveyor_and_says_why() {
-        let mut h = live();
-        let v = h.app.st.as_mut().unwrap();
-        v.scans(100); // 1 s: started at 0.2 s
-        let t = &v.sample.as_ref().unwrap().trace;
-        assert_eq!(t.get("conveyor"), Some(Value::Bool(true)));
-        let why = helmsman_diagram::explain(&v.view.module, t, "conveyor", 4).outline();
-        assert!(why[0].starts_with("CONVEYOR = TRUE because line"), "{why:#?}");
-        assert!(
-            why.iter()
-                .any(|l| l.contains("IF NOT FAULT") && l.contains("open")),
-            "{why:#?}"
-        );
-        v.scans(600); // 7 s: jammed
-        let t = &v.sample.as_ref().unwrap().trace;
-        assert_eq!(t.get("conveyor"), Some(Value::Bool(false)));
-        let why = helmsman_diagram::explain(&v.view.module, t, "conveyor", 4).outline();
-        assert!(why.iter().any(|l| l.contains("JAM = TRUE")), "{why:#?}");
+    fn a_tap_near_a_small_block_still_hits_it() {
+        let mut h = Harness::new(App::sim());
+        h.frame(vec![Event::Zoom(0.5)]);
         h.frame(vec![]);
-        assert!(matches!(
-            st(&h).pick,
-            None | Some(Pick::Node(_) | Pick::Region(_))
-        ));
+        let (at, width) = node(sim_view(&h), write_to("LAMP"));
+        // Just right of the block (assignments are rightmost), within half
+        // a tap target.
+        let near = at + Vec2::new(width / 2.0 + TAP / 2.0 - 4.0, 0.0);
+        h.click(near);
+        assert_eq!(
+            sim_view(&h).because.as_deref(),
+            Some("LAMP"),
+            "zoom {}",
+            sim_view(&h).cams[0].zoom
+        );
+        // Far from anything: nothing new is picked.
+        assert_eq!(node_near(sim_view(&h).diagram(), -500.0, -500.0, 22.0), None);
     }
 
     #[test]
     fn scroll_pans_pinch_zooms_and_the_instance_view_switches_diagrams() {
-        let mut h = live();
-        let before = st(&h).cams[0];
+        let mut h = stations();
+        // Between the ST (files 230, ST 440) and the right panel.
+        let centre = Pos2::new(h.rect("right").left() - 150.0, 450.0);
+        let before = sim_view(&h).cams[0];
         h.frame(vec![
-            Event::PointerMoved(Pos2::new(700.0, 400.0)),
+            Event::PointerMoved(centre),
             Event::MouseWheel {
                 unit: MouseWheelUnit::Point,
                 delta: Vec2::new(0.0, -120.0),
@@ -472,32 +407,48 @@ mod live {
                 source: eframe::egui::MouseWheelSource::Wheel,
             },
         ]);
-        for _ in 0..10 {
-            h.frame(vec![]);
-        }
-        let panned = st(&h).cams[0];
+        h.wait(0.2);
+        let panned = sim_view(&h).cams[0];
         assert!(panned.offset.y < before.offset.y, "{before:?} -> {panned:?}");
         h.frame(vec![Event::Zoom(1.5)]);
-        assert!(st(&h).cams[0].zoom > panned.zoom);
-        h.app.st.as_mut().unwrap().view.scope = 1;
+        assert!(sim_view(&h).cams[0].zoom > panned.zoom);
+        let v = h.app.sim.as_mut().unwrap().viewer.as_mut().unwrap();
+        v.open(1);
         h.frame(vec![]);
-        assert_eq!(st(&h).diagram().pou, "MOTOR");
-        assert!(demo(&h).live().is_some());
-        h.app.mode = Mode::Lab;
-        h.frame(vec![]);
+        assert_eq!(sim_view(&h).diagram().pou, "STATION");
+    }
+
+    #[test]
+    fn the_trend_has_its_own_tab() {
+        let mut h = Harness::new(App::sim());
+        assert_eq!(h.app.chrome.tab, Tab::Io);
+        for (key, tab) in [
+            ("tab trend", Tab::Trend),
+            ("tab claude", Tab::Claude),
+            ("tab io", Tab::Io),
+        ] {
+            h.press(key);
+            assert_eq!(h.app.chrome.tab, tab);
+        }
+        h.press("tab trend");
+        let s = &mut h.app.sim.as_mut().unwrap().session;
+        s.trend.toggle("LAMP");
+        h.wait(0.2);
+        let s = &h.app.sim.as_ref().unwrap().session;
+        assert!(!s.trend.samples.is_empty(), "it records while shown");
     }
 }
 
-/// The live ST view of a real box, driven headless: the state a browser
-/// built from the real API, drawn and clicked through egui.
-mod boxed {
-    use helmsman_diagram::NodeKind;
-    use helmsman_graph::Project;
+// ---- the Editor on a box ----
 
-    use super::Harness;
-    use crate::app::{Mode, Source};
+/// The box's Editor, driven headless: the state a browser built from the
+/// real API, drawn and clicked through egui.
+mod boxed {
+    use super::{Harness, node, write_to};
+    use crate::app::{App, Source};
     use crate::box_tests::{Bench, watch};
     use crate::box_view::BoxView;
+    use crate::editor::Tab;
     use crate::remote::{Link, Msg, Stream};
 
     fn boxed(h: &Harness) -> &BoxView {
@@ -505,44 +456,54 @@ mod boxed {
     }
 
     #[test]
-    fn a_live_box_is_drawn_clicked_and_explained_and_losing_it_offers_the_demo() {
+    fn a_live_box_is_drawn_clicked_and_read_only_and_losing_it_offers_the_simulation() {
         let bench = Bench::new();
         let (state, _) = watch(&bench);
-        let mut h = Harness::new(Project::default());
-        h.app.mode = Mode::Live;
-        h.app.source = Source::Box;
-        h.frame(vec![]);
+        let mut h = Harness::new(App::boxed());
         assert!(boxed(&h).view.is_none());
         assert_eq!(boxed(&h).waiting(), "Looking for the box…");
         h.app.boxv.as_mut().unwrap().state = state;
         h.frame(vec![]);
         h.frame(vec![]);
+        h.header_is_up();
+        assert_eq!(h.app.title(), "cell", "the module open");
         let b = boxed(&h);
         let v = b.view.as_ref().expect("the module is drawn");
-        assert_eq!(
-            v.because.as_deref(),
-            Some("CONVEYOR"),
-            "the first output is explained"
-        );
+        assert_eq!(v.because, None, "opens with no path lit");
         assert_eq!(b.status(h.time).0, "● connected");
+        assert!(
+            !h.has("tab trend") && !h.has("tab claude"),
+            "I/O only on a box, for now"
+        );
+        assert_eq!(h.app.chrome.tab, Tab::Io);
 
-        // Click the conveyor's assignment: its source line comes up.
-        let n = v
-            .diagram()
-            .nodes
-            .iter()
-            .find(|n| {
-                n.kind
-                    == NodeKind::Write {
-                        path: "CONVEYOR".into(),
-                    }
-            })
-            .unwrap();
-        let at = v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0);
+        // The ST open beside the diagram, read-only.
+        h.press("st");
+        h.wait(0.4);
+        let src = boxed(&h).view.as_ref().unwrap().src.clone();
+        let st = h
+            .ctx
+            .read_response(eframe::egui::Id::unique("box-st"))
+            .expect("the ST");
+        h.click(st.rect.left_top() + eframe::egui::vec2(40.0, 6.0));
+        h.frame(vec![eframe::egui::Event::Text("x".into())]);
+        h.frame(vec![]);
+        assert_eq!(
+            boxed(&h).view.as_ref().unwrap().src,
+            src,
+            "typing changes nothing"
+        );
+
+        // Click the conveyor's assignment: the ST goes to its line.
+        let (at, _) = node(boxed(&h).view.as_ref().unwrap(), write_to("CONVEYOR"));
         h.click(at);
         let (line, text) = boxed(&h).view.as_ref().unwrap().picked().unwrap();
         assert_eq!(text, "CONVEYOR := M.ON");
-        assert!(line > 0);
+        assert_eq!(h.app.chrome.line, Some(line));
+        assert_eq!(
+            src.lines().nth(line as usize - 1).unwrap().trim(),
+            "conveyor := m.on;"
+        );
 
         // The box goes away: reconnecting, then unreachable, still drawn.
         let t = h.time;
@@ -564,230 +525,38 @@ mod boxed {
         );
         h.frame(vec![]);
         assert!(boxed(&h).view.is_some(), "the last diagram stays up");
-        h.app.boxv.as_mut().unwrap().wants_demo = true;
-        h.frame(vec![]);
+        h.press("simulate");
         assert_eq!(
             h.app.source,
-            Source::Demo,
-            "the operator can fall back to the demo"
+            Source::Sim,
+            "the operator can fall back to the simulation"
         );
         h.frame(vec![]);
-        assert!(h.app.st.is_some());
+        assert!(h.app.sim.is_some());
+        h.header_is_up();
     }
 }
 
-/// Explain mode, driven headless: tap a block or an output, read the
-/// box's own explanation, ask the agent (on a box).
-mod explained {
-    use eframe::egui::Pos2;
-    use helmsman_diagram::NodeKind;
-    use helmsman_graph::Project;
+// ---- proposals, behind the ⋯ menu ----
 
-    use super::Harness;
-    use crate::app::{Mode, Source};
-    use crate::box_tests::{Bench, watch};
-    use crate::box_view::BoxView;
-    use crate::explain::{Phase, Reply, Side, SideCmd};
-    use crate::remote::{Msg, Stream};
-    use crate::st_view::{TAP, Viewer, node_near};
-
-    fn live() -> Harness {
-        let mut h = Harness::new(Project::default());
-        h.app.mode = Mode::Live;
-        h.frame(vec![]);
-        h.frame(vec![]);
-        h
-    }
-
-    fn st(h: &Harness) -> &Viewer {
-        &h.app.st.as_ref().unwrap().view
-    }
-
-    /// Screen centre and on-screen width of the first node matching `f`.
-    fn node(h: &Harness, f: impl Fn(&NodeKind) -> bool) -> (Pos2, f32) {
-        let v = st(h);
-        let n = v.diagram().nodes.iter().find(|n| f(&n.kind)).unwrap();
-        let cam = v.cams[v.scope];
-        (
-            cam.to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0),
-            n.rect.w * cam.zoom,
-        )
-    }
-
-    #[test]
-    fn tapping_an_assignment_explains_it_in_words_and_highlights_its_line() {
-        let mut h = live();
-        h.app.st.as_mut().unwrap().scans(100); // started at 0.2 s
-        let (at, _) = node(&h, |k| *k == NodeKind::Write { path: "RED".into() });
-        h.click(at);
-        assert_eq!(st(&h).because.as_deref(), Some("RED"));
-        h.frame(vec![]);
-        let v = h.app.st.as_mut().unwrap();
-        let now = v.now_ms;
-        let scan = v.sample.as_ref().map(|s| &s.trace as &dyn helmsman_diagram::Scan);
-        let said = v.view.explanation(scan, Some(now)).unwrap();
-        let first = &said.sentences[0].text;
-        assert!(first.starts_with("Red is OFF because line "), "{said:#?}");
-        let line = said.sentences[0].line.unwrap();
-        assert_eq!(st(&h).highlight[0], line, "the cited line is drawn highlighted");
-        assert!(
-            said.sentences.iter().any(|s| s.text.contains("jam is OFF")),
-            "{said:#?}"
-        );
-    }
-
-    #[test]
-    fn tapping_a_timer_block_explains_its_output_in_time() {
-        let mut h = live();
-        h.app.st.as_mut().unwrap().scans(30);
-        let (at, _) = node(&h, |k| matches!(k, NodeKind::Fb { fb, .. } if fb == "TON"));
-        h.click(at);
-        assert_eq!(st(&h).because.as_deref(), Some("BLINK.Q"));
-        let v = h.app.st.as_mut().unwrap();
-        let now = v.now_ms;
-        let scan = v.sample.as_ref().map(|s| &s.trace as &dyn helmsman_diagram::Scan);
-        let text = v.view.explanation(scan, Some(now)).unwrap().text();
-        assert!(
-            text.contains("Blink turns ON after 400 ms of its input being ON."),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn a_tap_near_a_small_block_still_hits_it() {
-        let mut h = live();
-        h.frame(vec![eframe::egui::Event::Zoom(0.5)]);
-        h.frame(vec![]);
-        let (at, width) = node(&h, |k| {
-            *k == NodeKind::Write {
-                path: "CONVEYOR".into(),
-            }
-        });
-        // Just right of the block (assignments are rightmost), within half
-        // a tap target.
-        let near = at + eframe::egui::Vec2::new(width / 2.0 + TAP / 2.0 - 4.0, 0.0);
-        h.click(near);
-        assert_eq!(
-            st(&h).because.as_deref(),
-            Some("CONVEYOR"),
-            "zoom {}",
-            st(&h).cams[0].zoom
-        );
-        // Far from anything: nothing new is picked.
-        let d = st(&h).diagram();
-        assert_eq!(node_near(d, -500.0, -500.0, 22.0), None);
-    }
-
-    #[test]
-    fn the_demo_explains_offline_and_says_why_it_cannot_ask() {
-        let mut h = live();
-        h.app.st.as_mut().unwrap().scans(100);
-        h.frame(vec![]);
-        // No transport, no ask: the demo's panel draws with "Ask why"
-        // disabled and its reason; a click on it does nothing.
-        assert_eq!(
-            crate::st_view::AskUi::demo().blocked,
-            Some("The demo runs in this page: asking the agent needs a box with a relay.")
-        );
-        assert!(h.app.boxv.is_none(), "no box anywhere");
-        let v = h.app.st.as_mut().unwrap();
-        let now = v.now_ms;
-        let scan = v.sample.as_ref().map(|s| &s.trace as &dyn helmsman_diagram::Scan);
-        let text = v.view.explanation(scan, Some(now)).unwrap().text();
-        assert!(text.starts_with("Conveyor is ON because line "), "{text}");
-        assert!(text.contains("it comes from the field"), "{text}");
-    }
-
-    #[test]
-    fn on_a_box_ask_why_waits_for_the_agent_then_streams_the_answer() {
-        let bench = Bench::new();
-        let (state, _) = watch(&bench);
-        let mut h = Harness::new(Project::default());
-        h.app.mode = Mode::Live;
-        h.app.source = Source::Box;
-        h.frame(vec![]);
-        h.app.boxv.as_mut().unwrap().state = state;
-        h.frame(vec![]);
-        h.frame(vec![]);
-        let b: &mut BoxView = h.app.boxv.as_mut().unwrap();
-        // Connected: it asked the box whether there is an agent, once.
-        assert_eq!(b.side_sent, [SideCmd::Index]);
-        assert!(b.blocked().unwrap().contains("Checking"));
-        let (_, index) = bench.get("/api");
-        b.side_in(vec![Side::Index(Ok(index))]);
-        assert_eq!(b.agent, Some(false), "this bench has no relay");
-        assert!(b.blocked().unwrap().contains("No agent"));
-        let ctx = h.ctx.clone();
-        let b = h.app.boxv.as_mut().unwrap();
-        b.ask_why(&ctx, "CONVEYOR");
-        assert_eq!(b.side_sent.len(), 1, "blocked: nothing sent");
-        // No token to type: the session is the browser's cookie.
-        b.agent = Some(true);
-        assert_eq!(b.blocked(), None);
-        // Not signed in: the box's 401 says where to sign in.
-        b.ask_why(&ctx, "CONVEYOR");
-        b.side_in(vec![Side::Ask(Reply::Status(
-            401,
-            r#"{"error":"not logged in, or the session ended; log in again"}"#.into(),
-        ))]);
-        assert_eq!(
-            b.ask.as_ref().unwrap().phase,
-            Phase::Failed(crate::explain::SIGN_IN.into())
-        );
-        h.frame(vec![]);
-        let b = h.app.boxv.as_mut().unwrap();
-        b.ask_why(&ctx, "CONVEYOR");
-        let sent = b.side_sent.last().unwrap().clone();
-        assert_eq!(
-            sent,
-            SideCmd::Ask {
-                body: r#"{"module":"cell","path":"CONVEYOR"}"#.into(),
-            }
-        );
-        b.ask_why(&ctx, "CONVEYOR");
-        assert_eq!(b.side_sent.len(), 3, "one ask at a time");
-        b.side_in(vec![
-            Side::Ask(Reply::Chunk(
-                "event: explain\ndata: {\"scan\":9,\"sentences\":[{\"text\":\"Conveyor is ON.\"}]}\n\nevent: text\ndata: {\"delta\":\"The belt runs: \"}\n\n".into(),
-            )),
-        ]);
-        h.frame(vec![]);
-        let b = h.app.boxv.as_mut().unwrap();
-        assert_eq!(b.ask.as_ref().unwrap().phase, Phase::Streaming);
-        b.side_in(vec![
-            Side::Ask(Reply::Chunk("event: text\ndata: {\"delta\":\"start was pressed.\"}\n\nevent: done\ndata: {\"stop\":\"end_turn\",\"why\":null}\n\n".into())),
-            Side::Ask(Reply::End),
-        ]);
-        h.frame(vec![]);
-        let a = h.app.boxv.as_ref().unwrap().ask.as_ref().unwrap();
-        assert_eq!(a.text, "The belt runs: start was pressed.");
-        assert_eq!(a.phase, Phase::Done);
-
-        // The box goes away: asking is blocked again, the answer stays.
-        let t = h.time;
-        let b = h.app.boxv.as_mut().unwrap();
-        for k in 0..3 {
-            b.state.apply(Msg::Failed(Stream::Values), t + f64::from(k));
-        }
-        assert!(b.blocked().unwrap().contains("offline"));
-        h.frame(vec![]);
-        assert!(h.app.boxv.as_ref().unwrap().ask.is_some());
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
 mod reviewing {
     use eframe::egui::{Event, Pos2, Rect, Vec2};
-    use helmsman_graph::Project;
 
-    use super::Harness;
-    use crate::app::Mode;
+    use super::{Harness, Screen};
+    use crate::app::App;
     use crate::review::{Answer, Phase, Replay, Target};
     use crate::review_tests::Bench;
     use crate::review_view::ReviewView;
 
     fn rv(h: &mut Harness) -> &mut ReviewView {
         h.app.review.as_mut().unwrap()
+    }
+
+    fn proposals() -> Harness {
+        let mut h = Harness::new(App::boxed());
+        h.app.screen = Screen::Proposals;
+        h.frame(vec![]);
+        h
     }
 
     /// Carries out what the screen sent, feeds the answers back, draws.
@@ -839,13 +608,33 @@ mod reviewing {
     }
 
     #[test]
+    fn a_waiting_proposal_badges_the_menu_from_any_screen() {
+        let b = Bench::new();
+        let mut h = Harness::new(App::boxed());
+        assert_eq!(h.app.screen, Screen::Editor);
+        pump(&mut h, &b);
+        assert_eq!(h.app.waiting(), Some(0));
+        b.horn();
+        // The list is read again every 30 s, without opening the screen.
+        h.time += 31.0;
+        pump(&mut h, &b);
+        assert_eq!(h.app.waiting(), Some(1), "the draft waits");
+        assert_eq!(h.app.screen, Screen::Editor);
+        h.press("menu");
+        assert!(h.menu_items().contains(&"menu proposals".to_string()));
+        h.press("menu proposals");
+        assert_eq!(h.app.screen, Screen::Proposals);
+        pump(&mut h, &b);
+        assert_eq!(rv(&mut h).state.list.len(), 1);
+    }
+
+    #[test]
     fn an_engineer_signs_in_with_a_pin_reviews_replays_and_approves_by_clicking() {
         let b = Bench::new();
         let id = b.horn();
-        let mut h = Harness::new(Project::default());
+        let mut h = proposals();
         // Tall enough that the whole review is on screen without scrolling.
         h.size = Vec2::new(1400.0, 4000.0);
-        h.app.mode = Mode::Review;
         h.frame(vec![]);
         pump(&mut h, &b);
         click(&mut h, &format!("row {id}"));
@@ -912,6 +701,7 @@ mod reviewing {
             rv(&mut h).state.open.as_ref().unwrap().undo.is_some(),
             "the undo is offered"
         );
+        assert_eq!(h.app.waiting(), Some(0), "nothing waits once applied");
 
         // Readable on a tablet either way up, and on a small laptop.
         for size in [
@@ -923,6 +713,7 @@ mod reviewing {
             h.frame(vec![]);
             h.frame(vec![]);
             fits(&mut h);
+            h.header_is_up();
         }
 
         // Sign out: the box ends it and clears the cookie; the panel asks
@@ -951,9 +742,8 @@ mod reviewing {
             )
             .unwrap();
         accounts.save(b.state_dir()).unwrap();
-        let mut h = Harness::new(Project::default());
+        let mut h = proposals();
         h.size = Vec2::new(1400.0, 2000.0);
-        h.app.mode = Mode::Review;
         h.frame(vec![]);
         pump(&mut h, &b);
         let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
@@ -985,9 +775,7 @@ mod reviewing {
 
     #[test]
     fn the_screen_without_a_box_says_so_and_survives_clicks_everywhere() {
-        let mut h = Harness::new(Project::default());
-        h.app.mode = Mode::Review;
-        h.frame(vec![]);
+        let mut h = proposals();
         let calls: Vec<_> = rv(&mut h).sent.iter().map(|q| q.call.clone()).collect();
         assert_eq!(
             calls.len(),
@@ -1010,13 +798,32 @@ mod reviewing {
         h.frame(vec![]);
         let e = rv(&mut h).state.list_error.clone().unwrap();
         assert!(e.contains("connection refused"), "{e}");
+        // Below the header (its controls leave this screen, as they should).
+        let below = h.rect("header").bottom() + 4.0;
         for x in (0..1400u16).step_by(97) {
-            // Below the top bar (its buttons leave this screen, as they should).
-            for y in (40..860u16).step_by(83) {
-                h.click(Pos2::new(f32::from(x), f32::from(y)));
+            for y in (0..860u16).step_by(83) {
+                let y = f32::from(y).max(below);
+                h.click(Pos2::new(f32::from(x), y));
             }
         }
         assert!(rv(&mut h).state.open.is_none());
-        assert_eq!(h.app.mode, Mode::Review, "{:?}", h.app.mode);
+        assert_eq!(h.app.screen, Screen::Proposals, "{:?}", h.app.screen);
+    }
+}
+
+#[test]
+fn the_simulation_survives_a_click_storm_on_every_tab() {
+    let mut h = Harness::new(App::sim());
+    for tab in ["tab io", "tab trend", "tab claude"] {
+        h.press(tab);
+        let below = h.rect("st").bottom() + 4.0;
+        for x in (0..1400u16).step_by(131) {
+            for y in (0..860u16).step_by(97) {
+                h.click(Pos2::new(f32::from(x), f32::from(y).max(below)));
+            }
+        }
+        h.header_is_up();
+        assert_eq!(h.app.screen, Screen::Editor);
+        assert_eq!(h.app.source, Source::Sim);
     }
 }

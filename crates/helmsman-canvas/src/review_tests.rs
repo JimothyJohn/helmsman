@@ -35,14 +35,15 @@ use serde_json::{Value as Json, json};
 use crate::review::{Answer, Call, Delta, Method, Phase, Replay, Request, Review, Target, Why};
 
 #[test]
-fn ask_why_rides_the_same_cookie_and_is_refused_without_it() {
+fn explain_rides_the_same_cookie_and_is_refused_without_it() {
     let b = Bench::new();
-    // What `web::Driver` posts for "Ask why": the body only, no token.
+    // `POST /api/explain` (the canvas no longer asks it; the box still
+    // answers it): the body only, no token.
     let ask = Request {
         call: Call::List,
         method: Method::Post,
         url: "/api/explain".into(),
-        body: Some(crate::explain::body("conveyor", "LAMP")),
+        body: Some(r#"{"module":"conveyor","path":"LAMP"}"#.into()),
     };
     let a = b.send(&ask);
     assert_eq!(a.status, 401, "not signed in: {a:?}");

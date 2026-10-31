@@ -142,6 +142,13 @@ impl ReviewView {
         }
     }
 
+    /// Takes in what arrived and sends what is queued, without drawing:
+    /// the header's badge, while another screen is up.
+    pub fn tick(&mut self, ctx: &egui::Context, now: f64) {
+        let answers = self.inbox();
+        self.step(ctx, answers, now);
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn run(&mut self, ctx: &egui::Context, reqs: Vec<Request>) {
         for r in reqs {

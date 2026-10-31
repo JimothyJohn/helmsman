@@ -8,16 +8,17 @@ use std::rc::Rc;
 use eframe::egui::{self, Event, Id, PointerButton, Pos2, RawInput, Rect, Vec2};
 use helmsman_iec::{Ty, Value};
 
-use crate::app::{App, Mode};
+use crate::app::{App, Source};
 use crate::claude::{
     self, ANTHROPIC_URL, API_VERSION, Answer, ApiKey, Chat, Context, Event as SseEvent, Exchange,
     FALLBACK_BETA, HISTORY, Incoming, KeyStore, MAX_ANSWER, MAX_PROGRAM, Model, PROXY_URL, Phase, Proxy,
     Route, Segment, Sse, extract_program, request, segments,
 };
+use crate::editor::{Chrome, Tab, highlight};
 use crate::playground::{
     Dir, EXAMPLES, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget,
 };
-use crate::playground_view::{PlaygroundView, Tab, highlight};
+use crate::playground_view::PlaygroundView;
 
 const KEY: &str = "sk-ant-api03-TESTKEY-not-a-real-key-0123456789";
 
@@ -934,14 +935,19 @@ fn segments_split_prose_and_code_and_show_an_open_block() {
 struct Screen {
     ctx: egui::Context,
     view: PlaygroundView,
+    chrome: Chrome,
     time: f64,
 }
 
 impl Screen {
     fn new() -> Self {
+        // The ST open beside the diagram, as the simulation starts.
+        let mut chrome = Chrome::default();
+        chrome.st = true;
         let mut s = Self {
             ctx: egui::Context::default(),
             view: PlaygroundView::new(),
+            chrome,
             time: 0.0,
         };
         s.frame(vec![]);
@@ -957,8 +963,10 @@ impl Screen {
             ..Default::default()
         };
         self.time += 1.0 / 60.0;
-        let Self { ctx, view, .. } = self;
-        let mut out = ctx.run_ui(input, |ui| view.show(ui));
+        let Self {
+            ctx, view, chrome, ..
+        } = self;
+        let mut out = ctx.run_ui(input, |ui| view.show(ui, chrome));
         out.textures_delta.clear();
     }
 
@@ -1234,8 +1242,21 @@ fn the_playground_opens_running_the_first_example() {
     s.wait(0.5);
     assert!(s.view.session.scans >= 30, "{}", s.view.session.scans);
     assert!(s.view.viewer.is_some(), "the diagram is up");
-    assert_eq!(s.view.viewer.as_ref().unwrap().because.as_deref(), Some("LAMP"));
+    assert_eq!(s.view.viewer.as_ref().unwrap().because, None, "no path lit");
     assert!(s.view.chat.proxy == Proxy::No, "no proxy natively");
+}
+
+#[test]
+fn a_pick_survives_an_edit_while_its_variable_does() {
+    let mut s = Screen::new();
+    s.view.pick("LAMP");
+    // An edit that keeps lamp: still picked.
+    let src = s.view.session.src.replace("(* A timer", "(* Still a timer");
+    s.view.load(&src, "an edit");
+    assert_eq!(s.view.viewer.as_ref().unwrap().because.as_deref(), Some("LAMP"));
+    // A program without it: nothing lit.
+    s.view.load(example("latch"), "latch");
+    assert_eq!(s.view.viewer.as_ref().unwrap().because, None);
 }
 
 #[test]
@@ -1262,7 +1283,7 @@ fn typing_in_the_editor_compiles_after_a_pause_and_marks_the_error_line() {
     assert!(s.view.session.running);
     // The highlighter marks line 1.
     let diags = [(1, 13)];
-    let job = highlight(&s.view.session.src, &diags, &egui::FontId::monospace(13.0));
+    let job = highlight(&s.view.session.src, &diags, None, &egui::FontId::monospace(13.0));
     assert!(job.sections.iter().any(|x| x.format.underline.width > 0.0));
     assert_eq!(job.text, s.view.session.src, "the layout keeps the text as is");
 }
@@ -1274,8 +1295,8 @@ fn every_tab_and_example_draws() {
         s.view.load(e.src, e.name);
         assert!(!s.view.session.running, "loading never runs");
         s.view.session.set_running(true);
-        for tab in [Tab::Io, Tab::Why, Tab::Claude] {
-            s.view.tab = tab;
+        for tab in [Tab::Io, Tab::Trend, Tab::Claude] {
+            s.chrome.tab = tab;
             s.wait(0.1);
         }
         assert!(s.view.session.scans > 0, "{k}");
@@ -1286,35 +1307,20 @@ fn every_tab_and_example_draws() {
 }
 
 #[test]
-fn tapping_an_output_explains_it() {
+fn tapping_an_output_picks_it() {
     let mut s = Screen::new();
     s.view.load(example("latch"), "latch");
-    s.view.explain("MOTOR");
-    assert_eq!(s.view.tab, Tab::Why);
+    s.view.pick("MOTOR");
     s.view.session.step();
     s.wait(0.1);
-    let v = s.view.viewer.as_mut().unwrap();
-    let said = v
-        .explanation(
-            s.view
-                .session
-                .trace
-                .as_ref()
-                .map(|t| t as &dyn helmsman_diagram::Scan),
-            Some(10),
-        )
-        .unwrap();
-    assert!(
-        said.sentences[0].text.to_ascii_lowercase().contains("motor"),
-        "{:?}",
-        said.sentences
-    );
+    assert_eq!(s.view.viewer.as_ref().unwrap().because.as_deref(), Some("MOTOR"));
+    assert_eq!(s.chrome.tab, Tab::Io, "no tab of its own");
 }
 
 #[test]
 fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
     let mut s = Screen::new();
-    s.view.tab = Tab::Claude;
+    s.chrome.tab = Tab::Claude;
     s.frame(vec![]);
     s.view.chat.question = "a latch please".into();
     s.view.ask(&s.ctx.clone());
@@ -1475,9 +1481,9 @@ fn double_clicking_a_block_instance_opens_it() {
 }
 
 #[test]
-fn the_canvas_has_a_playground_mode() {
-    let mut app = App::with_project(crate::example::project());
-    app.mode = Mode::Playground;
+fn a_page_no_box_serves_runs_the_simulation() {
+    let mut app = App::sim();
+    assert_eq!(app.source, Source::Sim);
     let ctx = egui::Context::default();
     for _ in 0..3 {
         let input = RawInput {
@@ -1487,5 +1493,6 @@ fn the_canvas_has_a_playground_mode() {
         let mut out = ctx.run_ui(input, |ui| app.show(ui));
         out.textures_delta.clear();
     }
-    assert!(app.playground.is_some());
+    assert!(app.sim.is_some());
+    assert!(app.boxv.is_none() && app.review.is_none(), "no box asked");
 }

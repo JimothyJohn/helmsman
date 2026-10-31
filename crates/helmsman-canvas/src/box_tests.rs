@@ -1,5 +1,5 @@
 //! The box data source against the real box API (helmsman-plc's, with a
-//! runtime scanning the demo module on its own thread): what the canvas
+//! runtime scanning a conveyor cell on its own thread): what the canvas
 //! makes of the JSON and event streams the API really produces.
 
 use std::io::{Read as _, Write as _};
@@ -19,11 +19,85 @@ use helmsman_plc::{Module as Slot, Runtime, Sample, SignalTable, Window};
 use serde_json::Value as Json;
 
 use crate::remote::{BoxScan, BoxState, Cmd, Fetch, Link, Msg, Stream};
-use crate::st_view::{DEMO, StView, Viewer};
+use crate::st_view::Viewer;
 
 const SIZES: ImageSizes = ImageSizes { i: 1, q: 1, m: 0 };
 
-/// The demo module on a real runtime, the way the box runs it, with the
+/// The bench's module: a conveyor cell with a start/stop latch, a motor
+/// block with a nested IF, a blinker, a part counter, a CASE and a stack
+/// light.
+pub const DEMO: &str = "FUNCTION_BLOCK motor
+VAR_INPUT run, fault : BOOL; END_VAR
+VAR_OUTPUT on : BOOL; END_VAR
+IF run THEN
+  IF NOT fault THEN
+    on := TRUE;
+  ELSE
+    on := FALSE;
+  END_IF;
+ELSE
+  on := FALSE;
+END_IF;
+END_FUNCTION_BLOCK
+
+PROGRAM cell
+VAR
+  start AT %IX0.0 : BOOL;
+  stop AT %IX0.1 : BOOL;
+  jam AT %IX0.2 : BOOL;
+  conveyor AT %QX0.0 : BOOL;
+  green AT %QX0.1 : BOOL;
+  red AT %QX0.2 : BOOL;
+  running : BOOL;
+  m : motor;
+  blink : TON;
+  flash : BOOL;
+  parts : CTU;
+  count : INT;
+  lane : INT;
+END_VAR
+running := (start OR running) AND NOT stop;
+m(run := running, fault := jam);
+conveyor := m.on;
+blink(IN := NOT blink.Q, PT := T#400ms);
+IF blink.Q THEN flash := NOT flash; END_IF;
+parts(CU := m.on AND flash, R := stop, PV := 1000);
+count := parts.CV;
+CASE count MOD 3 OF
+  0: lane := 1;
+  1: lane := 2;
+ELSE
+  lane := 3;
+END_CASE;
+IF jam THEN
+  red := flash;
+  green := FALSE;
+ELSIF m.on THEN
+  green := TRUE;
+  red := FALSE;
+ELSE
+  green := FALSE;
+  red := FALSE;
+END_IF;
+END_PROGRAM
+";
+
+/// The scripted shift repeats every this many ms.
+const SHIFT_MS: u64 = 12_000;
+
+/// The scripted shift's `start`, `stop` and `jam` at `ms`: start at 0.2 s,
+/// a jam from 6 to 7.5 s, stop at 10 s.
+#[must_use]
+pub const fn scripted(ms: u64) -> [bool; 3] {
+    let t = ms % SHIFT_MS;
+    [
+        t >= 200 && t < 500,
+        t >= 10_000 && t < 10_300,
+        t >= 6_000 && t < 7_500,
+    ]
+}
+
+/// [`DEMO`] on a real runtime, the way the box runs it, with the
 /// real API over it. The scripted shift drives `%IX0.0..2`.
 pub struct Bench {
     api: Option<Api>,
@@ -94,7 +168,7 @@ impl Bench {
                 while !stop.load(Ordering::Relaxed) {
                     let now = t0.elapsed();
                     let ms = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
-                    let byte = StView::scripted(ms)
+                    let byte = scripted(ms)
                         .iter()
                         .enumerate()
                         .fold(0u8, |b, (i, &on)| b | (u8::from(on) << i));
@@ -231,7 +305,7 @@ fn a_box_trace_reads_exactly_like_the_trace_it_was_rendered_from() {
     let mut checked = 0;
     for k in 0..1300u64 {
         let ms = k * 10;
-        let byte = StView::scripted(ms)
+        let byte = scripted(ms)
             .iter()
             .enumerate()
             .fold(0u8, |b, (i, &on)| b | (u8::from(on) << i));
@@ -334,10 +408,9 @@ fn the_canvas_watches_a_live_box_through_its_api() {
     assert!(live.ran[conveyor.id.0 as usize]);
     let why = explain(&l.module, scan, "conveyor", 4).outline();
     assert!(why[0].starts_with("CONVEYOR = TRUE because line"), "{why:#?}");
-    assert_eq!(
-        view.source_line(conveyor.pos.line),
-        format!("{:>3} | conveyor := m.on;", conveyor.pos.line)
-    );
+    // The line a click on it sends the ST editor to is its own.
+    let line = view.src.lines().nth(conveyor.pos.line as usize - 1).unwrap();
+    assert_eq!(line.trim(), "conveyor := m.on;");
 }
 
 #[test]
@@ -392,7 +465,8 @@ fn the_box_tree_nests_the_programs_instances_and_a_refetch_keeps_the_arrangement
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1400.0, 860.0))),
             ..Default::default()
         };
-        let mut out = ctx.run_ui(input, |ui| bv.show(ui));
+        let mut chrome = crate::editor::Chrome::default();
+        let mut out = ctx.run_ui(input, |ui| bv.show(ui, &mut chrome));
         out.textures_delta.clear();
     };
     frame(&mut bv);
@@ -424,5 +498,4 @@ fn the_box_tree_nests_the_programs_instances_and_a_refetch_keeps_the_arrangement
         moved,
         "the arrangement survives a refetch"
     );
-    assert!(!bv.wants_site);
 }

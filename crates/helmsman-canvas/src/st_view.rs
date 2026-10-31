@@ -1,31 +1,20 @@
 //! The live ST view: a module's Structured Text drawn as its diagram
 //! (`helmsman-diagram`), read-only, with a traced scan on it every frame.
 //!
-//! [`Viewer`] draws a module from whatever scans it is given: the demo
-//! here ([`StView`]), or a box over its API (`box_view`).
-//!
-//! The demo runs the module in-process the way the box does: a
-//! `helmsman_plc::Runtime` scanning every 10 ms on the page's clock, a
-//! `TraceTap` asked for one scan per frame. Its inputs are simulated (a
-//! scripted shift, or switched by hand); the ST itself is never edited
-//! here (`canvas-edit-scope`: changes go through the agent as ST).
-
-use std::time::Duration;
+//! [`Viewer`] draws a module from whatever scans it is given: the
+//! simulation in the page (`playground_view`), or a box over its API
+//! (`box_view`). The ST itself is never edited from the diagram
+//! (`canvas-edit-scope`).
 
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
     epaint::CubicBezierShape,
 };
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
-use helmsman_diagram::phrase::{Phrased, paths};
 use helmsman_diagram::{
-    Diagram, Drivers, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, Words, annotate, drivers,
-    explain, phrase,
+    Diagram, Drivers, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, drivers,
 };
-use helmsman_iec::{ImageSizes, Value, compile};
-use helmsman_plc::{Module as Slot, Runtime, Sample, Status, TraceTap, Window};
-
-use crate::explain::{Ask, Phase, Steady};
+use helmsman_iec::Value;
 
 /// Brand colours (docs/brand/index.html).
 pub mod brand {
@@ -40,71 +29,6 @@ pub mod brand {
 }
 
 use brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
-
-/// The demo module: a conveyor cell with a start/stop latch, a motor
-/// block with a nested IF, a blinker, a part counter, a CASE and a stack
-/// light.
-pub const DEMO: &str = "FUNCTION_BLOCK motor
-VAR_INPUT run, fault : BOOL; END_VAR
-VAR_OUTPUT on : BOOL; END_VAR
-IF run THEN
-  IF NOT fault THEN
-    on := TRUE;
-  ELSE
-    on := FALSE;
-  END_IF;
-ELSE
-  on := FALSE;
-END_IF;
-END_FUNCTION_BLOCK
-
-PROGRAM cell
-VAR
-  start AT %IX0.0 : BOOL;
-  stop AT %IX0.1 : BOOL;
-  jam AT %IX0.2 : BOOL;
-  conveyor AT %QX0.0 : BOOL;
-  green AT %QX0.1 : BOOL;
-  red AT %QX0.2 : BOOL;
-  running : BOOL;
-  m : motor;
-  blink : TON;
-  flash : BOOL;
-  parts : CTU;
-  count : INT;
-  lane : INT;
-END_VAR
-running := (start OR running) AND NOT stop;
-m(run := running, fault := jam);
-conveyor := m.on;
-blink(IN := NOT blink.Q, PT := T#400ms);
-IF blink.Q THEN flash := NOT flash; END_IF;
-parts(CU := m.on AND flash, R := stop, PV := 1000);
-count := parts.CV;
-CASE count MOD 3 OF
-  0: lane := 1;
-  1: lane := 2;
-ELSE
-  lane := 3;
-END_CASE;
-IF jam THEN
-  red := flash;
-  green := FALSE;
-ELSIF m.on THEN
-  green := TRUE;
-  red := FALSE;
-ELSE
-  green := FALSE;
-  red := FALSE;
-END_IF;
-END_PROGRAM
-";
-
-const MODULE: &str = "cell";
-const SCAN_MS: u64 = 10;
-/// The scripted shift repeats every this many ms.
-const SHIFT_MS: u64 = 12_000;
-const INPUTS: [&str; 3] = ["start", "stop", "jam"];
 
 /// Pan and zoom: `screen = origin + offset + world * zoom`.
 #[derive(Clone, Copy, Debug)]
@@ -181,14 +105,10 @@ pub struct Viewer {
     pub scope: usize,
     pub cams: Vec<Cam>,
     pub pick: Option<Pick>,
-    /// The variable "on because" is shown for (program path).
+    /// The variable last tapped (an output, or a block's first output),
+    /// as a program path.
     pub because: Option<String>,
-    /// What the templates know beside the trace: the module's kinds, and
-    /// the signal model's units when a box gave them.
-    pub words: Words,
-    /// How long each explained variable has shown its value.
-    pub steady: Steady,
-    /// The source lines the explanation is about (drawn highlighted).
+    /// Source lines drawn highlighted.
     pub highlight: Vec<u32>,
     /// The "because" path the last frame drew (see [`Self::highlighted`]).
     lit: Option<Drivers>,
@@ -227,33 +147,6 @@ pub struct Arrangement(Vec<(String, String, String, usize, Vec2)>);
 
 /// The smallest thing a finger can hit, in points.
 pub const TAP: f32 = 44.0;
-
-/// What the explain panel offers beside the box's own explanation.
-#[derive(Clone, Copy)]
-pub struct AskUi<'a> {
-    /// Why "Ask why" cannot be used now; `None`: it can.
-    pub blocked: Option<&'a str>,
-    /// The ask in flight or answered.
-    pub ask: Option<&'a Ask>,
-}
-
-impl AskUi<'_> {
-    /// For the in-page demo: no box, no agent.
-    #[must_use]
-    pub const fn demo() -> Self {
-        Self {
-            blocked: Some("The demo runs in this page: asking the agent needs a box with a relay."),
-            ask: None,
-        }
-    }
-}
-
-/// What the operator asked for in the panel.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Action {
-    /// "Ask why" for this program path.
-    AskWhy(String),
-}
 
 impl Viewer {
     /// `module`, lowered from `src`: the program first, then each user
@@ -299,15 +192,12 @@ impl Viewer {
             cams,
             pick: None,
             because: None,
-            words: Words::default(),
-            steady: Steady::default(),
             highlight: Vec::new(),
             lit: None,
             grab: None,
             folded: Vec::new(),
             moved,
         }
-        .with_words()
     }
 
     /// Moves block `n` of the shown POU by `by` (diagram units).
@@ -402,34 +292,6 @@ impl Viewer {
         }
     }
 
-    fn with_words(mut self) -> Self {
-        self.words = Words::of(&self.module);
-        self
-    }
-
-    /// The box's own explanation of the variable "on because" is shown
-    /// for, from `scan` (at `now_ms` on the module's clock): the facts, as
-    /// sentences. Notes the values it saw, for "unchanged over the last".
-    pub fn explanation(&mut self, scan: Option<&dyn Scan>, now_ms: Option<u64>) -> Option<Phrased> {
-        let path = self.because.clone()?;
-        let b = explain(&self.module, scan?, &path, 4);
-        if let Some(now) = now_ms {
-            let s = scan?;
-            for p in paths(&b) {
-                self.steady.observe(&p, s.get(&p), now);
-            }
-        }
-        let mut w = self.words.clone();
-        for p in paths(&b) {
-            if let Some(ms) = self.steady.ms(&p) {
-                w.steady_ms.insert(p, ms);
-            }
-        }
-        let said = phrase(&b, &w);
-        self.highlight = said.lines();
-        Some(said)
-    }
-
     /// Whether there is anything to draw.
     #[must_use]
     pub fn drawable(&self) -> bool {
@@ -446,20 +308,8 @@ impl Viewer {
         Some(annotate(self.diagram(), scan?, &self.scopes[self.scope].prefix))
     }
 
-    /// The source line a statement starts on, numbered.
-    #[must_use]
-    pub fn source_line(&self, line: u32) -> String {
-        let text = self
-            .src
-            .lines()
-            .nth(line.saturating_sub(1) as usize)
-            .unwrap_or("")
-            .trim();
-        format!("{line:>3} | {text}")
-    }
-
-    /// What the selection panel shows: the picked element's source line
-    /// and its text.
+    /// The picked element's source line and its text (a block click
+    /// sends the ST editor to the line).
     #[must_use]
     pub fn picked(&self) -> Option<(u32, String)> {
         let d = self.diagram();
@@ -473,6 +323,14 @@ impl Viewer {
                 (r.pos.line, r.label.clone())
             }
         })
+    }
+
+    /// Whether `path` (a program path; `M.ON` for an instance's) names a
+    /// variable of the program: a pick that survives a new version.
+    #[must_use]
+    pub fn knows(&self, path: &str) -> bool {
+        let head = path.split('.').next().unwrap_or(path).to_ascii_uppercase();
+        self.module.program().is_some_and(|p| p.vars.contains_key(&head))
     }
 
     /// Program paths the outputs list offers: located outputs and
@@ -651,26 +509,10 @@ impl Viewer {
         hit
     }
 
-    pub fn scopes_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("View").strong());
-        let mut chosen = None;
-        for (k, s) in self.scopes.iter().enumerate() {
-            if ui.selectable_label(k == self.scope, &s.label).clicked() {
-                chosen = Some(k);
-            }
-        }
-        if let Some(k) = chosen
-            && k != self.scope
-        {
-            self.scope = k;
-            self.pick = None;
-        }
-    }
-
-    /// The outputs with their values; a click asks why.
+    /// The outputs with their values; a click picks one.
     pub fn outputs_ui(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         ui.label(RichText::new("Outputs").strong())
-            .on_hover_text("click: why is it in this state?");
+            .on_hover_text("click: pick it");
         for path in self.outputs() {
             let value = scan.and_then(|s| s.get(&path));
             let on = value == Some(Value::Bool(true));
@@ -683,93 +525,6 @@ impl Viewer {
                 self.because = Some(path);
             }
         }
-    }
-
-    /// The explain panel: why the chosen variable is in its state (the
-    /// box's own words, instantly), "Ask why" for the agent's, the facts
-    /// for an engineer, and the selection's source line.
-    pub fn right(
-        &mut self,
-        ui: &mut egui::Ui,
-        scan: Option<&dyn Scan>,
-        now_ms: Option<u64>,
-        ask: AskUi<'_>,
-    ) -> Option<Action> {
-        let said = self.explanation(scan, now_ms);
-        let mut action = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.label(RichText::new("Why").strong().size(16.0));
-            match (&self.because, &said) {
-                (Some(_), Some(said)) => {
-                    for s in &said.sentences {
-                        ui.horizontal_wrapped(|ui| {
-                            #[allow(clippy::cast_precision_loss)]
-                            ui.add_space(12.0 * s.depth as f32);
-                            let color = if s.depth == 0 {
-                                WHITE
-                            } else {
-                                STEEL.gamma_multiply(1.4)
-                            };
-                            ui.label(RichText::new(&s.text).color(color));
-                        });
-                    }
-                    for l in said.lines() {
-                        ui.label(RichText::new(self.source_line(l)).monospace().color(YELLOW));
-                    }
-                }
-                (Some(_), None) => {
-                    ui.label(RichText::new("Waiting for a traced scan…").color(STEEL));
-                }
-                (None, _) => {
-                    ui.label(
-                        RichText::new("Tap an output or a block to see why it is in its state.").color(STEEL),
-                    );
-                }
-            }
-            if let Some(path) = self.because.clone() {
-                ui.add_space(6.0);
-                if let Some(a) = action_ui(ui, &path, ask) {
-                    action = Some(a);
-                }
-            }
-            if let (Some(path), Some(s)) = (&self.because, scan) {
-                egui::CollapsingHeader::new(RichText::new("Facts").strong())
-                    .id_salt("facts")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        for line in explain(&self.module, s, path, 4).outline() {
-                            ui.label(RichText::new(line).monospace().size(11.5));
-                        }
-                    });
-            }
-            ui.separator();
-            ui.label(RichText::new("Selection").strong());
-            match self.picked() {
-                Some((line, text)) => {
-                    ui.label(RichText::new(self.source_line(line)).monospace().color(YELLOW));
-                    ui.label(RichText::new(text).monospace());
-                    if let Some(Pick::Node(n)) = self.pick {
-                        let live = self.live(scan);
-                        let node = &self.diagram().nodes[n.0 as usize];
-                        if let Some(live) = &live {
-                            for (k, o) in node.outs.iter().enumerate() {
-                                let v = live.values[n.0 as usize].get(k).copied().flatten();
-                                let name = if o.is_empty() { "out" } else { o.as_str() };
-                                ui.label(
-                                    RichText::new(format!("{name} = {}", show(v)))
-                                        .monospace()
-                                        .color(STEEL),
-                                );
-                            }
-                        }
-                    }
-                }
-                None => {
-                    ui.label(RichText::new("Tap a block or region to see its source line.").color(STEEL));
-                }
-            }
-        });
-        action
     }
 
     /// The variable a tap on node `n` asks about: a variable read or
@@ -955,197 +710,6 @@ impl Viewer {
     }
 }
 
-/// The demo: the module running in-page on a `helmsman_plc::Runtime`.
-pub struct StView {
-    pub view: Viewer,
-    rt: Runtime,
-    tap: TraceTap,
-    pub sample: Option<Sample>,
-    /// Runtime clock, ms.
-    pub now_ms: u64,
-    /// Page time the clock last caught up to.
-    last: Option<f64>,
-    pub running: bool,
-    /// Inputs follow the scripted shift; off: switched by hand.
-    pub auto: bool,
-    pub inputs: [bool; 3],
-    pub error: Option<String>,
-}
-
-impl StView {
-    /// The demo module, compiled and running.
-    pub fn demo() -> Self {
-        Self::new(DEMO).unwrap_or_else(|e| {
-            // DEMO is a constant that compiles (tested); keep the view up anyway.
-            let mut v = Self::new("PROGRAM cell\nVAR x : BOOL; END_VAR\nx := NOT x;\nEND_PROGRAM")
-                .unwrap_or_else(|_| unreachable!());
-            v.error = Some(e);
-            v
-        })
-    }
-
-    /// `src` as module `cell` with one byte of `%I` and `%Q`.
-    ///
-    /// # Errors
-    /// Compile, lowering or runtime configuration errors, as text.
-    pub fn new(src: &str) -> Result<Self, String> {
-        let sizes = ImageSizes { i: 1, q: 1, m: 0 };
-        let program = compile(src, sizes).map_err(|d| {
-            d.iter()
-                .map(|d| format!("{}: {}", d.pos, d.msg))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
-        let module = helmsman_diagram::lower(src, &program.trace_map()).map_err(|e| e.to_string())?;
-        let rt = Runtime::new(
-            1,
-            1,
-            vec![Slot {
-                name: MODULE.into(),
-                program: program.into(),
-                period: Duration::from_millis(SCAN_MS),
-                i: Window::new(0, 1),
-                q: Window::new(0, 1),
-                params: Vec::new(),
-            }],
-        )
-        .map_err(|e| format!("{e:?}"))?;
-        let tap = rt.tap(MODULE).ok_or("no tap")?;
-        let mut view = Viewer::new(src, module);
-        view.because = Some("CONVEYOR".into());
-        Ok(Self {
-            view,
-            rt,
-            tap,
-            sample: None,
-            now_ms: 0,
-            last: None,
-            running: true,
-            auto: true,
-            inputs: [false; 3],
-            error: None,
-        })
-    }
-
-    /// The scripted shift: start at 0.2 s, a jam from 6 to 7.5 s, stop at 10 s.
-    #[must_use]
-    pub const fn scripted(ms: u64) -> [bool; 3] {
-        let t = ms % SHIFT_MS;
-        [
-            t >= 200 && t < 500,
-            t >= 10_000 && t < 10_300,
-            t >= 6_000 && t < 7_500,
-        ]
-    }
-
-    /// Runs the module up to page time `t` (seconds), tracing the last scan.
-    pub fn advance(&mut self, t: f64) {
-        let last = *self.last.get_or_insert(t);
-        self.last = Some(t);
-        if !self.running {
-            return;
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let due = (((t - last).max(0.0) * 1000.0) as u64 / SCAN_MS).min(200);
-        // At least one scan per frame keeps a live trace on the page.
-        self.scans(due.max(1));
-    }
-
-    /// Runs `n` scans; the last one is traced.
-    pub fn scans(&mut self, n: u64) {
-        for k in 0..n {
-            if self.auto {
-                self.inputs = Self::scripted(self.now_ms);
-            }
-            let byte = self
-                .inputs
-                .iter()
-                .enumerate()
-                .fold(0u8, |b, (i, &on)| b | (u8::from(on) << i));
-            if k + 1 == n {
-                self.tap.request();
-            }
-            self.rt.tick(Duration::from_millis(self.now_ms), &[byte]);
-            self.now_ms += SCAN_MS;
-        }
-        if let Some(s) = self.tap.take() {
-            self.sample = Some(s);
-        }
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn live(&self) -> Option<Live> {
-        self.view
-            .live(self.sample.as_ref().map(|s| &s.trace as &dyn Scan))
-    }
-
-    pub fn show(&mut self, ui: &mut egui::Ui) {
-        let t = ui.ctx().input(|i| i.time);
-        self.advance(t);
-        egui::Panel::left("st-left")
-            .resizable(true)
-            .default_size(220.0)
-            .show(ui, |ui| self.left(ui));
-        let scan = self.sample.as_ref().map(|s| &s.trace as &dyn Scan);
-        egui::Panel::right("st-right")
-            .resizable(true)
-            .default_size(340.0)
-            .show(ui, |ui| {
-                let _ = self.view.right(ui, scan, Some(self.now_ms), AskUi::demo());
-            });
-        egui::CentralPanel::no_frame().show(ui, |ui| self.view.canvas(ui, scan));
-        if self.running {
-            ui.ctx().request_repaint();
-        }
-    }
-
-    fn left(&mut self, ui: &mut egui::Ui) {
-        ui.heading(RichText::new("Module cell").color(YELLOW));
-        ui.label(RichText::new("demo, running in this page").color(STEEL));
-        let status = match self.rt.status(MODULE) {
-            Some(Status::Running) => "running".to_string(),
-            Some(Status::Held) => "held".to_string(),
-            Some(Status::Faulted(f)) => format!("faulted: {f:?}"),
-            None => "?".into(),
-        };
-        let scans = self.rt.stats(MODULE).map_or(0, |s| s.scans);
-        ui.label(
-            RichText::new(format!(
-                "{status} · {scans} scans · t={:.1}s",
-                self.now_ms as f64 / 1000.0
-            ))
-            .monospace()
-            .color(STEEL),
-        );
-        ui.horizontal(|ui| {
-            let label = if self.running { "Pause" } else { "Run" };
-            if ui.button(label).clicked() {
-                self.running = !self.running;
-            }
-            if ui.add_enabled(!self.running, egui::Button::new("Step")).clicked() {
-                self.scans(1);
-            }
-        });
-        if let Some(e) = &self.error {
-            ui.colored_label(Color32::from_rgb(255, 110, 100), e);
-        }
-        ui.separator();
-        self.view.scopes_ui(ui);
-        ui.separator();
-        ui.label(RichText::new("Demo inputs").strong());
-        ui.checkbox(&mut self.auto, "scripted shift");
-        ui.add_enabled_ui(!self.auto, |ui| {
-            for (k, name) in INPUTS.iter().enumerate() {
-                ui.checkbox(&mut self.inputs[k], format!("{name}  %IX0.{k}"));
-            }
-        });
-        ui.separator();
-        let scan = self.sample.as_ref().map(|s| &s.trace as &dyn Scan);
-        self.view.outputs_ui(ui, scan);
-    }
-}
-
 pub fn show(v: Option<Value>) -> String {
     v.map_or_else(|| "–".into(), |v| v.to_string())
 }
@@ -1198,49 +762,6 @@ pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(id, _)| id)
     })
-}
-
-/// "Ask why" and its answer, under the box's own explanation.
-fn action_ui(ui: &mut egui::Ui, path: &str, ask: AskUi<'_>) -> Option<Action> {
-    let mut action = None;
-    let answered = ask.ask.filter(|a| a.path.eq_ignore_ascii_case(path));
-    let running = answered.is_some_and(Ask::running);
-    let enabled = ask.blocked.is_none() && !running;
-    let button = egui::Button::new(RichText::new("Ask why").strong().color(BLACK))
-        .fill(if enabled { YELLOW } else { GRAPHITE })
-        .min_size(Vec2::new(TAP * 3.0, TAP));
-    let r = ui.add_enabled(enabled, button);
-    if r.clicked() {
-        action = Some(Action::AskWhy(path.to_string()));
-    }
-    if let Some(why) = ask.blocked {
-        ui.label(RichText::new(why).color(STEEL));
-    }
-    if let Some(a) = answered {
-        ui.add_space(4.0);
-        if let Some(scan) = a.scan {
-            ui.label(RichText::new(format!("The agent's answer (scan {scan}):")).color(STEEL));
-        }
-        if !a.text.is_empty() {
-            ui.label(RichText::new(&a.text).color(WHITE));
-        }
-        for n in &a.notes {
-            ui.label(RichText::new(n).small().color(STEEL));
-        }
-        match &a.phase {
-            Phase::Waiting | Phase::Streaming => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(RichText::new("asking…").color(STEEL));
-                });
-            }
-            Phase::Done => {}
-            Phase::Failed(why) => {
-                ui.colored_label(Color32::from_rgb(255, 110, 100), why);
-            }
-        }
-    }
-    action
 }
 
 /// What [`draw`] marks on the diagram beside the scan.
@@ -1483,8 +1004,10 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
 mod path_tests {
     use eframe::egui::{self, Event, PointerButton, Pos2, RawInput, Rect, Vec2};
     use helmsman_diagram::NodeKind;
+    use helmsman_iec::Value;
 
-    use super::{Scan, StView};
+    use super::{Scan, Viewer};
+    use crate::playground::Session;
 
     /// The playground's latch, with two unrelated statements.
     const LATCH: &str = "PROGRAM latch
@@ -1502,22 +1025,32 @@ IF other THEN count := count + 1; END_IF;
 END_PROGRAM
 ";
 
+    /// The simulation's session (stopped, stepped by hand) and its view.
+    struct Sim {
+        session: Session,
+        view: Viewer,
+    }
+
     struct Harness {
         ctx: egui::Context,
-        sv: StView,
+        sv: Sim,
         time: f64,
     }
 
     impl Harness {
         fn new() -> Self {
-            let mut sv = StView::new(LATCH).unwrap();
-            sv.running = false;
-            sv.auto = false;
-            sv.inputs = [true, false, false]; // start
-            sv.scans(3);
+            let mut session = Session::new(LATCH);
+            assert!(session.set_input("start", Value::Bool(true)));
+            for _ in 0..3 {
+                session.step();
+            }
+            let module = session.build.as_ref().unwrap().module.clone().unwrap();
+            let mut view = Viewer::new(LATCH, module);
+            // Something not on this diagram, as a box's first output can be.
+            view.because = Some("CONVEYOR".into());
             let mut h = Self {
                 ctx: egui::Context::default(),
-                sv,
+                sv: Sim { session, view },
                 time: 0.0,
             };
             h.frame(vec![]);
@@ -1533,8 +1066,8 @@ END_PROGRAM
                 ..Default::default()
             };
             self.time += 1.0 / 60.0;
-            let StView { view, sample, .. } = &mut self.sv;
-            let scan = sample.as_ref().map(|s| &s.trace as &dyn Scan);
+            let Sim { view, session } = &mut self.sv;
+            let scan = session.trace.as_ref().map(|t| t as &dyn Scan);
             let mut out = self.ctx.run_ui(input, |ui| {
                 egui::CentralPanel::no_frame().show(ui, |ui| view.canvas(ui, scan));
             });
@@ -1588,7 +1121,7 @@ END_PROGRAM
         assert_eq!(
             h.sv.view.because.as_deref(),
             Some("CONVEYOR"),
-            "the demo's default"
+            "a variable elsewhere"
         );
         assert!(
             h.sv.view.highlighted().is_none(),
