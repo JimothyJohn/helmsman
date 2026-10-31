@@ -16,6 +16,7 @@ use eframe::wasm_bindgen::closure::Closure;
 use eframe::wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
+use crate::box_projects::{PCall, PReq};
 use crate::claude::{Incoming, KeyStore, PROXY_HEALTH, PROXY_HELLO, Request as ClaudeRequest};
 use crate::remote::{Cmd, Msg, Stream};
 use crate::review::{Answer, Call, Request as ReviewRequest};
@@ -368,17 +369,31 @@ fn init(method: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String
 /// Carries out `req` on the page's origin with the session cookie (see
 /// [`init`]); nothing is cached or stored.
 async fn send(req: ReviewRequest) -> Result<Answer, String> {
+    let body = req.body.as_ref().map(|b| JsValue::from_str(b));
+    let ctype = body.as_ref().map(|_| "application/json");
+    let (method, url) = (req.method.as_str(), req.url.clone());
+    drop(req);
+    fetch(method, &url, body, ctype).await
+}
+
+/// One same-origin call (see [`init`]) with an optional body of type
+/// `ctype`: its status, `Retry-After` and body whatever the status.
+async fn fetch(
+    method: &str,
+    url: &str,
+    body: Option<JsValue>,
+    ctype: Option<&str>,
+) -> Result<Answer, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init(req.method.as_str())?;
-    if let Some(b) = &req.body {
-        headers
-            .set("Content-Type", "application/json")
-            .map_err(|e| text(&e))?;
-        init.set_body(&JsValue::from_str(b));
+    let (init, headers) = init(method)?;
+    if let Some(b) = &body {
+        if let Some(t) = ctype {
+            headers.set("Content-Type", t).map_err(|e| text(&e))?;
+        }
+        init.set_body(b);
     }
     init.set_headers(&headers);
-    let request = web_sys::Request::new_with_str_and_init(&req.url, &init).map_err(|e| text(&e))?;
-    drop(req);
+    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(|e| text(&e))?;
     let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|e| text(&e))?
@@ -400,4 +415,105 @@ async fn send(req: ReviewRequest) -> Result<Answer, String> {
         retry_after,
         body,
     })
+}
+
+/// The project and force routes' transport: one `fetch` per [`PReq`],
+/// its body bytes as they are (a `.zip`, a file, JSON).
+#[derive(Default)]
+pub struct ProjHttp {
+    inbox: Rc<RefCell<Vec<(PCall, Answer)>>>,
+}
+
+impl ProjHttp {
+    /// What arrived since the last call.
+    pub fn drain(&mut self) -> Vec<(PCall, Answer)> {
+        std::mem::take(&mut *self.inbox.borrow_mut())
+    }
+
+    pub fn send(&mut self, req: PReq, ctx: &egui::Context) {
+        let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let body = req
+                .body
+                .as_ref()
+                .map(|b| JsValue::from(web_sys::js_sys::Uint8Array::from(b.as_slice())));
+            let ctype = body.as_ref().map(|_| req.ctype);
+            let answer = fetch(req.method, &req.url, body, ctype)
+                .await
+                .unwrap_or_else(|why| Answer {
+                    status: 0,
+                    retry_after: None,
+                    body: why,
+                });
+            inbox.borrow_mut().push((req.call, answer));
+            ctx.request_repaint();
+        });
+    }
+}
+
+thread_local! {
+    /// Files the user picked, read, and not taken yet.
+    static PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Opens the browser's file picker (`accept`: `.zip,.st,.xml,.l5x`); the
+/// file chosen arrives through [`take_picked`].
+pub fn pick_file(accept: &str, ctx: &egui::Context) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Some(input) = doc
+        .create_element("input")
+        .ok()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    else {
+        return;
+    };
+    input.set_type("file");
+    input.set_accept(accept);
+    let ctx = ctx.clone();
+    let picker = input.clone();
+    let on_change = Closure::once_into_js(move || {
+        let Some(file) = picker.files().and_then(|l| l.get(0)) else {
+            return;
+        };
+        let name = file.name();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(buf) = JsFuture::from(file.array_buffer()).await {
+                let bytes = web_sys::js_sys::Uint8Array::new(&buf).to_vec();
+                PICKED.with(|p| p.borrow_mut().push((name, bytes)));
+                ctx.request_repaint();
+            }
+        });
+    });
+    input.set_onchange(Some(on_change.unchecked_ref()));
+    input.click();
+}
+
+/// The files picked since the last call: name and bytes.
+#[must_use]
+pub fn take_picked() -> Vec<(String, Vec<u8>)> {
+    PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Clicks a hidden link to `href` that downloads as `name`.
+fn click_download(href: &str, name: &str) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Some(a) = doc
+        .create_element("a")
+        .ok()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlAnchorElement>().ok())
+    else {
+        return;
+    };
+    a.set_href(href);
+    a.set_download(name);
+    a.click();
+}
+
+/// Downloads a same-origin `url` (the box's `GET .../zip`) as `name`.
+pub fn download_url(url: &str, name: &str) {
+    click_download(url, name);
 }

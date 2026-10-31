@@ -24,17 +24,25 @@ wasm-bindgen-futures = "0.4"
 # TextDecoder(Options) to read an answer as it streams,
 # AbortController/AbortSignal to stop one, Storage for a key the user
 # asked to remember, Element for the page's mode.
+# Projects: HtmlInputElement, File and FileList for Upload's file picker;
+# Blob, BlobPropertyBag, Url and HtmlAnchorElement for Download.
 web-sys = { version = "0.3", features = [
     "AbortController",
     "AbortSignal",
+    "Blob",
+    "BlobPropertyBag",
     "console",
     "Document",
     "Element",
     "Event",
     "EventSource",
     "EventTarget",
+    "File",
+    "FileList",
     "Headers",
+    "HtmlAnchorElement",
     "HtmlCanvasElement",
+    "HtmlInputElement",
     "Location",
     "MessageEvent",
     "ReadableStream",
@@ -49,6 +57,7 @@ web-sys = { version = "0.3", features = [
     "Storage",
     "TextDecodeOptions",
     "TextDecoder",
+    "Url",
     "Window",
 ] }
 

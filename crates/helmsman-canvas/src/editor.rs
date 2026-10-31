@@ -146,7 +146,7 @@ pub trait Body {
     /// The toolbar's own part, after the ST toggle.
     fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// Under "Files": the open program and its tree.
-    fn files(&mut self, ui: &mut egui::Ui);
+    fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The ST editor (read-only on a box).
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The right panel's tabs this view has, in order.
@@ -194,7 +194,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .id_salt("ed-files-scroll")
-                    .show(ui, |ui| body.files(ui));
+                    .show(ui, |ui| body.files(ui, chrome));
                 t
             } else {
                 Some(ui.small_button("▸").on_hover_text("show the files"))

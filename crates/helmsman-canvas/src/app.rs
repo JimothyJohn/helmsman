@@ -8,12 +8,17 @@ use eframe::egui::{self, Rect, RichText, Vec2};
 use crate::box_view::BoxView;
 use crate::editor::{CHROME_KEY, Chrome};
 use crate::playground_view::PlaygroundView;
+use crate::projects::Workspace;
 use crate::review_view::ReviewView;
 use crate::st_view::TAP;
-use crate::st_view::brand::{BLACK, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
 
 /// Seconds between re-reads of the proposal list for the ⋯ badge.
 const PROPOSALS_EVERY: f64 = 30.0;
+
+/// What Upload's file picker offers.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub const UPLOAD_ACCEPT: &str = ".zip,.st,.xml,.l5x";
 
 /// What the program runs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,6 +64,8 @@ pub struct App {
     pub chrome: Chrome,
     /// The ⋯ menu is open.
     pub menu: bool,
+    /// The sign-in panel under the header is open.
+    pub login: bool,
     /// The box's Editor, built the first time it is shown.
     pub boxv: Option<BoxView>,
     /// The simulation's, likewise.
@@ -101,6 +108,7 @@ impl App {
             served_by_box: false,
             chrome,
             menu: false,
+            login: false,
             boxv: None,
             sim: None,
             review: None,
@@ -127,6 +135,36 @@ impl App {
             return None;
         }
         Some(self.review.as_ref().map_or(0, |r| r.state.waiting()))
+    }
+
+    /// The open project's Save, Deploy, Upload and Download, wherever it
+    /// lives (`None`: nothing to edit here).
+    pub fn workspace(&mut self) -> Option<&mut dyn Workspace> {
+        match self.source {
+            Source::Box => self
+                .boxv
+                .as_mut()
+                .filter(|b| b.has_projects())
+                .map(|b| b as &mut dyn Workspace),
+            Source::Sim => None,
+        }
+    }
+
+    /// Who the page is signed in as on the box.
+    #[must_use]
+    pub fn session(&self) -> Option<crate::review::Session> {
+        self.review.as_ref().and_then(|r| r.state.session.clone())
+    }
+
+    /// Files the browser's picker read since the last frame, uploaded to
+    /// whatever is open.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn uploaded(&mut self, files: Vec<(String, Vec<u8>)>) {
+        for (name, bytes) in files {
+            if let Some(w) = self.workspace() {
+                w.upload(&name, bytes);
+            }
+        }
     }
 
     /// What the header names: the program or module open.
@@ -166,6 +204,12 @@ impl App {
             }
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(PROPOSALS_EVERY));
         }
+        #[cfg(target_arch = "wasm32")]
+        self.uploaded(crate::web::take_picked());
+        let session = self.session();
+        if let Some(b) = &mut self.boxv {
+            b.session = session;
+        }
         let header = self.header(ui);
         self.chrome.hits.clear();
         match (self.screen, self.source) {
@@ -175,10 +219,18 @@ impl App {
                 }
             }
             (Screen::Editor, Source::Box) => {
+                let session = self.review.as_ref().and_then(|r| r.state.session.clone());
                 let b = self.boxv.get_or_insert_with(BoxView::new);
+                b.session = session;
                 b.show(ui, &mut self.chrome);
                 if std::mem::take(&mut b.wants_sim) {
                     self.source = Source::Sim;
+                }
+                // A project call found the session gone: so is the header's.
+                if std::mem::take(&mut b.projects.ended)
+                    && let Some(r) = &mut self.review
+                {
+                    r.state.session_ended();
                 }
             }
             (Screen::Editor, Source::Sim) => {
@@ -206,6 +258,7 @@ impl App {
                 if self.source == Source::Sim {
                     ui.label(RichText::new("simulation").color(STEEL));
                 }
+                self.project_controls(ui, &mut hits);
                 ui.separator();
                 let e = ui.add(
                     egui::Button::selectable(self.screen == Screen::Editor, RichText::new("Editor").strong())
@@ -234,6 +287,7 @@ impl App {
                     if m.clicked() {
                         self.menu = !self.menu;
                     }
+                    self.login_button(ui, &mut hits);
                     m.rect
                 })
                 .inner
@@ -245,7 +299,100 @@ impl App {
         if self.menu {
             self.menu_ui(ui.ctx(), menu_at, waiting, &mut hits);
         }
+        if self.login {
+            self.login_ui(ui.ctx(), menu_at, &mut hits);
+        }
         hits
+    }
+
+    /// The open project's name with its dirty marker, Save and Deploy;
+    /// disabled, with why on hover, when this page may not write.
+    fn project_controls(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        let Some(w) = self.workspace() else { return };
+        let dirty = w.dirty();
+        let write = w.writable();
+        let busy = w.busy();
+        if dirty {
+            let d = ui
+                .label(RichText::new("●").strong().color(YELLOW))
+                .on_hover_text("edited, not saved");
+            hits.push(("dirty".to_string(), d.rect));
+        }
+        ui.separator();
+        let button = |ui: &mut egui::Ui, text: &str, hint: &str, on: bool| {
+            let b = egui::Button::new(RichText::new(text).strong()).min_size(Vec2::new(TAP * 1.5, 0.0));
+            match &write {
+                Ok(()) => ui.add_enabled(on && !busy, b).on_hover_text(hint),
+                Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
+            }
+        };
+        let save = button(
+            ui,
+            "Save",
+            "write the edited files (a draft: what runs does not change)",
+            dirty,
+        );
+        hits.push(("save".to_string(), save.rect));
+        let deploy = button(
+            ui,
+            "Deploy",
+            "save, compile and run this project (through the box's approval policy)",
+            true,
+        );
+        hits.push(("deploy".to_string(), deploy.rect));
+        let (save, deploy) = (save.clicked(), deploy.clicked());
+        if let Some(w) = self.workspace() {
+            if save {
+                w.save();
+            }
+            if deploy {
+                w.deploy();
+            }
+        }
+    }
+
+    /// Sign in, or who is signed in: on a box only.
+    fn login_button(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        if self.source != Source::Box {
+            return;
+        }
+        let text = self
+            .review
+            .as_ref()
+            .and_then(|r| r.state.signed_in())
+            .map_or_else(|| "Sign in".to_string(), |who| format!("● {who}"));
+        let b = ui
+            .add(egui::Button::selectable(self.login, RichText::new(text).strong()))
+            .on_hover_text("sign in to edit, deploy, force and approve; or sign out");
+        hits.push(("sign in".to_string(), b.rect));
+        if b.clicked() {
+            self.login = !self.login;
+            self.menu = false;
+        }
+    }
+
+    /// The sign-in panel: the box's own (a user and password, or a role
+    /// and its PIN), or who is signed in with Sign out.
+    fn login_ui(&mut self, ctx: &egui::Context, at: Rect, hits: &mut Vec<(String, Rect)>) {
+        let Some(r) = &mut self.review else { return };
+        let was = r.state.session.is_some();
+        r.rects.clear();
+        egui::Area::new(egui::Id::unique("header-login"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(at.right_bottom() + Vec2::new(0.0, 4.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).fill(GRAPHITE).show(ui, |ui| {
+                    ui.set_max_width(300.0);
+                    r.login_ui(ui);
+                });
+            });
+        hits.extend(r.rects.iter().map(|(k, rect)| (format!("login {k}"), *rect)));
+        // Signed in or out: the panel has done its job.
+        let now = r.state.session.is_some();
+        if was != now {
+            self.login = false;
+        }
     }
 
     fn menu_ui(
@@ -274,6 +421,21 @@ impl App {
                     if item(ui, "menu editor", "Editor".into(), self.screen == Screen::Editor) {
                         self.screen = Screen::Editor;
                         close = true;
+                    }
+                    if self.workspace().is_some() {
+                        ui.separator();
+                        if item(ui, "menu upload", "Upload…".into(), false) {
+                            #[cfg(target_arch = "wasm32")]
+                            crate::web::pick_file(UPLOAD_ACCEPT, ctx);
+                            close = true;
+                        }
+                        if item(ui, "menu download", "Download .zip".into(), false) {
+                            if let Some(w) = self.workspace() {
+                                w.download();
+                            }
+                            close = true;
+                        }
+                        ui.separator();
                     }
                     if let Some(n) = waiting {
                         let text = if n > 0 {
