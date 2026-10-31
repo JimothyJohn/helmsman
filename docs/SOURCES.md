@@ -533,6 +533,22 @@ into the code.
 - **How to cite:** `MCP 2026-07-28 <page> § <heading>`, e.g.
   `MCP 2026-07-28 basic/transports/streamable-http § Server Validation`.
 
+### PKWARE, APPNOTE.TXT, .ZIP File Format Specification, version 6.3.10 (2022-11-01)
+
+- **Where:** https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT,
+  read 2026-10-31. Sections leaned on: §4.3.7 local file header, §4.3.12
+  central directory file header, §4.3.16 end of central directory record,
+  §4.4.2 / §4.4.2.2 version made by (upper byte 3 = UNIX, so the
+  external attributes' high 16 bits are a Unix mode), §4.4.4 general
+  purpose flag (bit 0 encrypted, bit 11 the UTF-8 language encoding
+  flag), §4.4.5 compression method (0 stored, 8 deflate), §4.4.15
+  external file attributes.
+- **Leaned on by** `crates/helmsman-plc/src/project/zip.rs` (project
+  download and upload): writes stored entries only; reads stored and
+  deflate; refuses ZIP64, multi-disk, encrypted, symlink and non-UTF-8
+  entries rather than interpret them.
+- **How to cite:** `APPNOTE 6.3.10 §<n>`.
+
 ## Device sources
 
 ### Moxa ioLogik E1213 EDS, v2.0 (EtherNet/IP Electronic Data Sheet)

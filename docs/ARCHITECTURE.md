@@ -753,7 +753,8 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   when the box runs a change set, carrying the change set applying it would
   commit, its snapshot id, its diff and its tier. The only way a draft runs
   is `apply`, the only way back `rollback`, both through the approval
-  policy (below).
+  policy (below). A project deploy (`projects`, below) is an apply of
+  the project's build, through the same path, by an engineer's session.
 - **The scan never waits on it.** The scheduler publishes a view (signal
   values, module status and stats, `%Q`) at most every 100 ms with a
   `try_lock`, dropping it if a reader holds the slot; the API reads only
@@ -952,6 +953,111 @@ threads, the Modbus simulator over TCP).
   next replay's window starts at the reload. A published live view from
   just before the catalog moves can be read against the other one for a
   moment (display only).
+
+## Projects on the box (`projects`, built: server side)
+
+The editor's projects (docs/UI.md "Projects", build step 2):
+`helmsman_plc::project` (folders, rules, `build`, `zip`) and
+`api/projects.rs` (routes); contract in `tests/projects.rs`.
+`helmsman-plc --projects` turns it on: projects live in
+`<state-dir>/projects/<name>/` (`/var/lib/helmsman-plc/projects/` on a
+Pi), the store defaults to `<state-dir>/store/`, and the box boots the
+store's head, or nothing (zero modules, the adapter up) before a first
+deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
+`--io-map` or `--calendar`.
+
+- **A project is a folder** of free-form `.st` files (any PROGRAMs,
+  FUNCTION_BLOCKs, FUNCTIONs and TYPEs, compiled together), plus an
+  optional `io.map` (the I/O map it runs with, `helmsman_io::text`) and
+  an optional `project.settings` (`author`; `program NAME scan_ms=
+  i= q= m=`; `param PROGRAM NAME TYPE VALUE ...`, a manifest's param
+  line). Many are stored; one runs; editing or saving one never touches
+  what runs.
+- **Names and contents.** A project is 1..=48 of `a-z 0-9 _ -` (lower
+  case, so a case-folding file system never merges two); a file is
+  `NAME.st` (1..=64 of `A-Z a-z 0-9 _ -`, no case-only twins), `io.map`
+  or `project.settings`. Checked after percent-decoding, so `..`,
+  `%2e%2e`, `a%2fb`, `a\b`, `C:` and NUL name nothing. Contents are
+  UTF-8 without NUL, other controls (tab, CR, LF aside) or bidirectional
+  overrides (no Trojan Source in reviewed code); at most 256 KiB a file,
+  64 `.st` files and 900 KiB a project, 256 projects. Symbolic links
+  under the folder are never followed.
+- **Writes** are atomic (temporary file, rename) and serialized for the
+  whole folder, so a deploy or a download reads each file whole, before
+  or after a racing save. A save may name the version (SHA-256) it read
+  (`version`, or `null` for "new only"): a stale one is 409, so two
+  editors never silently clobber each other.
+- **Build** (`project::build`): each PROGRAM becomes a module named as
+  the PROGRAM in lower case. Its `module.st` is every file in name
+  order under a `(* file NAME *)` line with every other PROGRAM blanked
+  to spaces (line breaks kept), so it is one self-contained unit with one
+  PROGRAM and a module line is a line of one file: compile errors come
+  back as `{file, line, col, message}`. Its manifest is generated:
+  `reads` its signal `VAR_INPUT`s, `drives` its `VAR_OUTPUT`s, `author`
+  the settings' (else `project NAME`), schedule and windows from the
+  settings (else `--scan-ms` and no windows; the only PROGRAM of a
+  project gets the whole image, like a bare program). The same files
+  always build the same snapshot. The project's `io.map` is the map; the
+  calendar and the WASM drivers are carried over from what runs.
+- **Deploy is an apply** (`approve::apply` with `Target::Project`): the
+  build is the target change set, then the same steps as an apply:
+  tier from the diff, the policy's role and replay rule
+  (`POST /api/projects/{p}/replay` makes the evidence), compile, swap
+  between scans (`swap.rs`, state carried by name), commit with author
+  `project NAME`, approver the engineer. A project that does not build is
+  422 with its diagnostics and nothing changes; rollback is the snapshot
+  rollback it always was. A deploy records `NAME SNAPSHOT` in
+  `<state-dir>/running-project`; `GET /api/running` says which project
+  that is and whether it is still what runs (a later apply or rollback
+  moves the head, and `current` goes false). The running project cannot
+  be deleted; a rename carries the record.
+- **ZIP** (`project::zip`, hand-written on APPNOTE 6.3.10; DEFLATE through
+  `miniz_oxide`, already in the lockfile): a download is the files
+  stored, sorted, with fixed timestamps, so download, upload, download is
+  byte-identical. An upload (2 MiB body) is hostile: at most 128 entries
+  and 900 KiB uncompressed (declared and actual; each entry inflates into
+  at most its declared size, then CRC and length must match), no ZIP64,
+  encryption, symlinks or other non-files, names UTF-8, local and central
+  headers agreeing. One common top-level folder (a plain name, never
+  `..`) is stripped and `__MACOSX/` and `.DS_Store` skipped; anything
+  else must be a project file name at the top level, so zip-slip names
+  are refused, not cleaned. A refused upload writes nothing, and a
+  replacing one leaves the old project whole until the new one is in.
+- **Import** (`POST .../import?file=F`): `F.st` as it is; `F.xml`
+  (PLCopen TC6) lowered to `F.st` by the existing importer. L5X is
+  refused (415): `helmsman_iec::l5x` reads an inventory, not ST (card
+  `l5x-import`).
+- **The engineer gate.** Every write (create, copy, rename, delete,
+  save, upload, import, replay, deploy) needs a login session of an
+  engineer or above (an account's, or the engineer's role-PIN session on
+  a box without accounts). The box token alone is 403 there: the agent
+  drafts proposals, never edits the editor's files. `check` takes the
+  token or any session; reads are open like every `GET`. Every call is
+  audited with the person.
+
+Endpoints (also in `api/projects.rs` and `GET /api`):
+
+| route | who | body / answer |
+| --- | --- | --- |
+| `GET /api/projects` | open | `{projects: [{name, running}], running}` |
+| `POST /api/projects` | engineer | `{name}` or `{name, from}` (copy); 201 |
+| `GET /api/projects/{p}` | open | `{name, running, files: [{name, bytes, version}]}` |
+| `DELETE /api/projects/{p}` | engineer | 409 for the running project |
+| `POST /api/projects/{p}/rename` | engineer | `{to}` |
+| `GET /api/projects/{p}/files/{f}` | open | `{name, text, version}` |
+| `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
+| `DELETE /api/projects/{p}/files/{f}` | engineer | |
+| `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval}`, or 422 `{diagnostics: [{file, line, col, message}]}` |
+| `POST /api/projects/{p}/replay` | engineer | sim replay evidence, as `POST /api/proposals/{id}/replay` |
+| `POST /api/projects/{p}/deploy` | engineer | `{replay?}`; as apply, plus `project: {name, recorded}` |
+| `GET /api/projects/{p}/zip` | open | `application/zip` |
+| `POST /api/projects/{p}/zip[?replace=true]` | engineer | `application/zip` body; 201 new, 200 replaced |
+| `POST /api/projects/{p}/import?file=F[&replace=true]` | engineer | the file's bytes; 201 `{name, version, bytes}` |
+| `GET /api/running` | open | `{project, snapshot, running, current}` |
+
+Not built yet (cards): forcing inputs (`force-inputs`), L5X to ST
+(`l5x-import`), and the Pi's service running `--projects`
+(`pi-projects`).
 
 ## Agent loop (`agent-loop`, built)
 

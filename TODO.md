@@ -898,6 +898,26 @@
   difficulty: med
   id: box-trend-source
 
+- [ ] **Does Deploy skip the sim replay for an engineer?** docs/UI.md says Deploy compiles, snapshots and hot-swaps. The approval floor in code says a `logic` or `output-affecting` change needs an engineer *and* a sim replay. Built (reversible): Deploy goes through the same approval path, so the UI calls `POST /api/projects/{p}/replay` then `POST .../deploy {replay: N}` (one click can do both; the replay is real evidence of exactly that build against the box's recording). Options: keep it (the floor holds everywhere); let an engineer's Deploy skip the replay (the policy floor gets an exception for the editor); or have Deploy run the replay itself and refuse only if it faults.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether the editor's Deploy is one call or two, and whether the replay floor has an exception
+  options: keep replay, UI does both calls (built) | engineer Deploy skips the replay | Deploy runs the replay itself, refuses on a fault
+  est: 1h
+  difficulty: low
+  id: deploy-replay
+
+- [ ] **What should an L5X upload become?** `helmsman_iec::l5x` reads an L5X as an inventory (tags, rungs as text, ST routines as lines); there is no ladder-to-ST translator, so `POST /api/projects/{p}/import?file=X.L5X` is refused (415) for now. Options: translate the common ladder instructions (XIC/XIO/OTE/OTL/OTU/TON/TOF/CTU/MOV/compare) and Logix TIMER/COUNTER semantics into ST, refusing a file with anything else; import only its ST routines plus tags as VARs (rarely compiles); or keep L5X as an agent drop-in and have the agent write the ST.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: card `l5x-import` scoped
+  options: ladder subset to ST, refuse the rest (recommended) | ST routines only | agent drop-in only (built)
+  est: 30m
+  difficulty: med
+  id: l5x-scope
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -1108,6 +1128,32 @@
   id: pi-ui-demo
   asked: 2026-10-31
   by: claude-session
+
+- [ ] **Force inputs from the editor** — docs/UI.md step 2's last part: an engineer forces an input (a signal and/or a %I address) to a value, applied every scan after the I/O read and before the programs run.
+  result: `GET/POST/DELETE /api/forces` (engineer session, audited per force and release), forces end on that engineer's logout or session expiry and on deploy, and the live and trace APIs mark forced points so the UI shows FORCED
+  notes: the scan thread reads a published force set (try_lock, keeps the last copy), so it never waits on the API; a sweep ends forces whose session is gone. Projects (#this PR) are in.
+  est: 1d
+  difficulty: med
+  id: force-inputs
+  asked: 2026-10-31
+  by: claude-agent
+
+- [ ] **L5X to ST import** — `POST /api/projects/{p}/import?file=X.L5X` produces ST that compiles.
+  depends: l5x-scope
+  est: 3d
+  difficulty: high
+  id: l5x-import
+  asked: 2026-10-31
+  by: claude-agent
+
+- [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc) instead of one PLC_PROGRAM file, once the editor UI can deploy.
+  needs: the editor UI (UI.md step 2, canvas side)
+  result: the Pi boots the deployed project; the first boot runs nothing until a deploy
+  est: 1h
+  difficulty: low
+  id: pi-projects
+  asked: 2026-10-31
+  by: claude-agent
 
 ## Product vision (interview 2026-10-29)
 

@@ -70,7 +70,14 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
   --store DIR          run the head snapshot of the store in DIR (see
                        helmsman_plc::store): its modules, I/O map and calendar,
                        instead of the files above
-  --emit-st            print the Structured Text a .xml project lowers to, and exit
+  --projects           the browser editor's projects, in the state directory's
+                       projects/ (see helmsman_plc::project): deploying one
+                       commits it to the store (--store DIR, default the
+                       state directory's store/) and hot-swaps it; the box
+                       boots the store's head, or nothing until a first deploy.
+                       Takes no PROGRAM, --module, --module-dir, --io-map or
+                       --calendar
+  --emit-st           print the Structured Text a .xml project lowers to, and exit
   --api ADDR           box API (HTTP + JSON, see helmsman_plc::api) on ADDR
                        (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
                        for the LAN), or `off`. Reads are open; anything
@@ -142,6 +149,7 @@ struct Opts {
     sinks: Option<PathBuf>,
     sink_dir: Option<PathBuf>,
     store: Option<PathBuf>,
+    projects: bool,
     emit_st: bool,
     api: Option<SocketAddr>,
     opcua: Option<SocketAddr>,
@@ -197,6 +205,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         sinks: None,
         sink_dir: None,
         store: None,
+        projects: false,
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         opcua: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 4840))),
@@ -224,6 +233,11 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         }
         if flag == "--emit-st" {
             o.emit_st = true;
+            i += 1;
+            continue;
+        }
+        if flag == "--projects" {
+            o.projects = true;
             i += 1;
             continue;
         }
@@ -320,6 +334,18 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         return Err("--sinks and --sink-dir go together".into());
     }
     let from_files = !(o.programs.is_empty() && o.modules.is_empty() && o.module_dirs.is_empty());
+    if o.projects {
+        if from_files || o.io_map.is_some() || o.calendar.is_some() || o.emit_st {
+            return Err(
+                "--projects runs the deployed project (the store's head); it takes no PROGRAM, --module, \
+                 --module-dir, --io-map, --calendar or --emit-st"
+                    .into(),
+            );
+        }
+        if o.store.is_none() {
+            o.store = Some(state_dir(&o).join("store"));
+        }
+    }
     if o.store.is_some() && (from_files || o.io_map.is_some() || o.calendar.is_some() || o.emit_st) {
         return Err(
             "--store runs the store's head snapshot; it takes no PROGRAM, --module, --module-dir, \
@@ -395,12 +421,27 @@ fn read_text(path: &Path) -> Result<Text, String> {
 
 /// The head snapshot of the store in `dir`; messages name its files as
 /// `DIR/<id>/...`.
-fn from_store(dir: &Path, d: &Defaults) -> Result<Content, String> {
+fn from_store(dir: &Path, d: &Defaults, projects: bool) -> Result<Content, String> {
     let store = Store::open(dir).map_err(|e| e.to_string())?;
-    let head = store
-        .head()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("store {} has no snapshot yet", dir.display()))?;
+    let head = store.head().map_err(|e| e.to_string())?;
+    let head = match head {
+        Some(h) => h,
+        // The editor's box before its first deploy: nothing runs yet.
+        None if projects => {
+            return Ok(Content {
+                dirs: Vec::new(),
+                io_map: None,
+                calendar: None,
+                drivers: helmsman_plc::drivers::Drivers::new(),
+                origin: Some(format!(
+                    "store {}: no project deployed yet; nothing runs until one is",
+                    dir.display()
+                )),
+                running: Some(ChangeSet::default()),
+            });
+        }
+        None => return Err(format!("store {} has no snapshot yet", dir.display())),
+    };
     let cs = store.get(&head.id).map_err(|e| e.to_string())?;
     let running = Some(cs.clone());
     let at = dir.join(head.id.to_string());
@@ -434,7 +475,7 @@ fn from_store(dir: &Path, d: &Defaults) -> Result<Content, String> {
 
 fn content(o: &Opts, d: &Defaults) -> Result<Content, String> {
     if let Some(dir) = &o.store {
-        return from_store(dir, d);
+        return from_store(dir, d, o.projects);
     }
     Ok(Content {
         dirs: o
@@ -946,7 +987,21 @@ fn start_api(
         .as_deref()
         .map(|name| start_site(o, name, bind.port(), &token.token))
         .transpose()?;
-    let server = Api::start_in_site(cfg, shared, extras, site.as_ref().map(Site::handle))
+    let projects = o
+        .projects
+        .then(|| {
+            helmsman_plc::project::Projects::in_state_dir(&dir)
+                .map_err(|e| format!("--projects in {}: {e}", dir.display()))
+        })
+        .transpose()?;
+    if let Some(p) = &projects {
+        eprintln!(
+            "helmsman-plc: projects in {}; deploying one needs an engineer login",
+            p.root().display()
+        );
+    }
+    let more = api::More { projects };
+    let server = Api::start_box(cfg, shared, extras, site.as_ref().map(Site::handle), more)
         .map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
         "helmsman-plc: API on http://{}/api (reads open; changes need the token)",

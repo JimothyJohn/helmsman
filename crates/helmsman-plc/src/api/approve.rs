@@ -111,6 +111,8 @@ impl Replays {
 pub enum Target<'a> {
     Proposal(&'a str),
     Snapshot(&'a str),
+    /// A project, built from its folder as it is now (a deploy).
+    Project(&'a str),
 }
 
 /// What the approver sends: `{replay?}` with a login session, `{role, pin,
@@ -253,6 +255,19 @@ fn prelude<'c>(
                 ));
             }
         },
+        Target::Project(name) => match super::projects::built(ctx, name) {
+            Ok(b) => (Some(b.change), None),
+            Err((status, body, why)) => {
+                return Err(refuse(
+                    ctx,
+                    req,
+                    status,
+                    &body,
+                    &format!("{label}: {why}"),
+                    Note::default(),
+                ));
+            }
+        },
     };
     let note = cs
         .as_ref()
@@ -285,6 +300,7 @@ fn what(target_ref: Target<'_>) -> String {
     match target_ref {
         Target::Proposal(id) => format!("proposal {}", super::clean(id)),
         Target::Snapshot(id) => format!("rollback to {}", super::clean(id)),
+        Target::Project(name) => format!("deploy of project {}", super::clean(name)),
     }
 }
 
@@ -491,7 +507,15 @@ fn track_json(t: Option<&replay::Track>) -> Json {
 }
 
 /// Who approved, for the store's history.
-fn meta(p: Option<&Stored>, by: &Approver) -> Meta {
+fn meta(target: Target<'_>, p: Option<&Stored>, by: &Approver) -> Meta {
+    if let Target::Project(name) = target {
+        return Meta {
+            author: format!("project {name}"),
+            prompt: format!("deployed from project {name}"),
+            approver: Some(by.who()),
+            time_ms: i64::try_from(wall()).unwrap_or(i64::MAX).saturating_mul(1000),
+        };
+    }
     let (author, prompt) = p.map_or_else(
         || ("box API (rollback)".to_string(), String::new()),
         |p| {
@@ -774,12 +798,12 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     if let Some((_, _, links)) = &reloaded {
         ctx.links_changed(links);
     }
-    let m = meta(proposal.as_ref(), &by);
+    let m = meta(target_ref, proposal.as_ref(), &by);
     let committed = {
         let store = ctx.box_.snapshots.as_ref().expect("checked above");
         let mut store = store.lock().unwrap_or_else(PoisonError::into_inner);
         match target_ref {
-            Target::Proposal(_) => store.commit(&target, &m),
+            Target::Proposal(_) | Target::Project(_) => store.commit(&target, &m),
             Target::Snapshot(_) => store.rollback(&content, &m),
         }
     };
@@ -800,6 +824,10 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         return Response::json(500, &json!({ "error": why, "changed": back.is_err() }));
     }
     ctx.set_running(target, catalog);
+    let project = match target_ref {
+        Target::Project(name) => Some(super::projects::deployed(ctx, name, content)),
+        _ => None,
+    };
     let reload = reloaded.map(|(table, record, links)| {
         if let Some(table) = table {
             ctx.set_shape(Shape { table, record });
@@ -845,6 +873,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             "previous": base.to_string(),
             "undo": undo,
             "reload": reload,
+            "project": project,
         }),
     )
 }
