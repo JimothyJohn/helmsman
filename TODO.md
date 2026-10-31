@@ -645,6 +645,7 @@
   difficulty: low
   depends: wasm-driver
   id: wasm-driver-home
+  notes: built as the recommended option on feat/wasm-driver-map (reversible; card left open for your call): a driver is a `wasm-driver` blob in the change set, proposed as `{kind: driver, name, wasm}`, checked at proposal (`wasm::check` + `wasm::sandbox`, and the running map must still load), output-affecting so engineer PIN + replay, carried by bundles, rolled back like anything else. The Modbus guest stays a test fixture. To undo: drop `ChangeSet::drivers` and the `driver` proposal kind; the store's schema 3 only matters to stores that hold a driver.
 
 ## Tasks
 
@@ -1036,12 +1037,13 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: wasm-driver
   notes: built on feat/wasm-driver: `helmsman_io::wasm` (feature `wasm`), interface `helmsman-driver/v1`; the Modbus/TCP guest in `crates/helmsman-io/guests/modbus-tcp/` (committed .wasm, `scripts/build-wasm-drivers.sh`); docs/ARCHITECTURE.md "WASM drivers". A map can't name one yet: `wasm-driver-map`.
 
-- [ ] **A map names a WASM driver** — `device rio wasm:NAME 10.0.0.5:502 unit=1`: the I/O map points a device at a WASM driver module, `IoMap::validate` parses its points through the guest, and `LinkSet` opens it with `WasmDriver::load`. Where the module bytes come from is `wasm-driver-home` (open question). The agent's `driver-agent` loop then writes a guest, runs `wasm::check` and the harness, and proposes the map change.
+- [x] **A map names a WASM driver** — `device rio wasm:NAME 10.0.0.5:502 unit=1`: the I/O map points a device at a WASM driver module, `IoMap::validate` parses its points through the guest, and `LinkSet` opens it with `WasmDriver::load`. Where the module bytes come from is `wasm-driver-home` (open question). The agent's `driver-agent` loop then writes a guest, runs `wasm::check` and the harness, and proposes the map change.
   result: a device in the running map driven by an agent-written driver
   est: 1d
   difficulty: med
   depends: wasm-driver, wasm-store, wasm-driver-home
   id: wasm-driver-map
+  notes: built on feat/wasm-driver-map: `helmsman_plc::drivers` (approved set, `Points` for map validation, `open` for links), `Layout::build_with`, `LinkSet::plan_with` (a link's identity includes its driver's SHA-256, so a new version reopens it), `IoMap::validate_with`, `wasm::sandbox`; contract in crates/helmsman-plc/tests/driver_map.rs (the Modbus guest reading the simulator through the box runtime). docs/ARCHITECTURE.md "WASM drivers". The agent side (writing, checking and proposing a driver) is `driver-agent`.
 
 - [ ] **Agent writes a driver from the manual** — give the agent a device's documentation (PDF to text, as done for the Modbus spec); it writes the point map and, for a new protocol, a WASM driver, and iterates on harness output: simulator first, then the bench. Engineer approves the map before any output is bound.
   result: a new device or protocol without hand-written driver code

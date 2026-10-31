@@ -5,7 +5,9 @@
 //! the step's tier is the highest any of them gives:
 //!
 //! - **Output-affecting**: the I/O map changed at all (bindings, devices,
-//!   safe values, units: whatever drives a point lives there); the
+//!   safe values, units: whatever drives a point lives there); a WASM
+//!   driver was added, removed or changed (it is what reaches a device:
+//!   whatever it writes there, its outputs included, is its own); the
 //!   calendar's `drive` lines changed; a module was added or removed that
 //!   drives a signal or has a `%Q` window; a module's `drives` or `%Q`
 //!   window changed; any file that should parse does not (a manifest, the
@@ -99,6 +101,19 @@ pub fn classify(base: &ChangeSet, target: &ChangeSet) -> Class {
         c.add(
             Tier::OutputAffecting,
             "the I/O map changed (bindings, devices or safe values)".into(),
+        );
+    }
+    let guests: BTreeSet<&String> = base.drivers.keys().chain(target.drivers.keys()).collect();
+    for name in guests {
+        let verb = match (base.drivers.get(name), target.drivers.get(name)) {
+            (None, Some(_)) => "added",
+            (Some(_), None) => "removed",
+            (Some(a), Some(b)) if a != b => "changed",
+            _ => continue,
+        };
+        c.add(
+            Tier::OutputAffecting,
+            format!("WASM driver {name} {verb}; a driver reaches its devices"),
         );
     }
     if base.calendar != target.calendar {

@@ -411,6 +411,7 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
         json!({
             "io_map_changed": running.io_map != target.io_map,
             "calendar_changed": running.calendar != target.calendar,
+            "drivers_changed": running.drivers != target.drivers,
             "unrecorded": unrecorded,
             "retyped": retyped,
             "complete": cov.is_complete(),
@@ -865,8 +866,12 @@ fn swap_back(
             .map(drop)
             .map_err(|e| e.to_string());
     }
-    let layout =
-        Layout::build(running.io_map.as_deref(), running.calendar.as_deref()).map_err(|e| e.join("; "))?;
+    let layout = Layout::build_with(
+        running.io_map.as_deref(),
+        running.calendar.as_deref(),
+        &running.drivers,
+    )
+    .map_err(|e| e.join("; "))?;
     let r = appr
         .swap
         .reload(old, running.clone(), layout)
@@ -876,15 +881,25 @@ fn swap_back(
 }
 
 /// The table and calendar a step from `running` to `target` loads, if it
-/// changes either: `Ok(None)` when both are the running ones.
+/// changes either or the WASM drivers the map may name (a new driver
+/// version reopens its devices' links): `Ok(None)` when all are the
+/// running ones.
 ///
 /// # Errors
 /// What does not load, file by file.
 fn reload_layout(running: &ChangeSet, target: &ChangeSet) -> Result<Option<Layout>, Vec<String>> {
-    if running.io_map == target.io_map && running.calendar == target.calendar {
+    if running.io_map == target.io_map
+        && running.calendar == target.calendar
+        && running.drivers == target.drivers
+    {
         return Ok(None);
     }
-    Layout::build(target.io_map.as_deref(), target.calendar.as_deref()).map(Some)
+    Layout::build_with(
+        target.io_map.as_deref(),
+        target.calendar.as_deref(),
+        &target.drivers,
+    )
+    .map(Some)
 }
 
 /// The table and recording the box runs now, which replays use: the

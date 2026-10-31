@@ -154,6 +154,7 @@ fn change(modules: &[(&str, &str)], io_map: &str, calendar: Option<&str>) -> Cha
             .collect::<BTreeMap<_, _>>(),
         io_map: Some(io_map.into()),
         calendar: calendar.map(str::to_string),
+        drivers: BTreeMap::new(),
     }
 }
 

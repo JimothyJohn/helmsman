@@ -8,6 +8,7 @@ pub mod api;
 #[cfg(feature = "box")]
 pub mod bundle;
 pub mod calendar;
+pub mod drivers;
 pub mod fallback;
 pub mod layout;
 pub mod link;

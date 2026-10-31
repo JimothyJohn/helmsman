@@ -228,6 +228,20 @@ impl IoMap {
     /// # Errors
     /// The list of problems.
     pub fn validate(&self) -> Result<(), Vec<MapError>> {
+        self.validate_with(&mut parse_point_on)
+    }
+
+    /// [`IoMap::validate`], parsing each device point with `parse` rather
+    /// than the built-in drivers alone: a box passes one that also knows
+    /// the WASM drivers it has approved (`wasm:NAME`, [`crate::driver::WASM`]),
+    /// asking the guest, and falls back to [`parse_point_on`] for the rest.
+    ///
+    /// # Errors
+    /// The list of problems.
+    pub fn validate_with(
+        &self,
+        parse: &mut dyn FnMut(&Device, &str) -> Result<PointInfo, crate::Error>,
+    ) -> Result<(), Vec<MapError>> {
         let mut errs = Vec::new();
         let mut devices = BTreeMap::new();
         for d in &self.devices {
@@ -264,7 +278,7 @@ impl IoMap {
                         });
                         continue;
                     };
-                    match parse_point_on(d, point) {
+                    match parse(d, point) {
                         Ok(i) => (i, (device.clone(), point.clone(), d.driver.clone())),
                         Err(e) => {
                             errs.push(MapError::BadPoint {

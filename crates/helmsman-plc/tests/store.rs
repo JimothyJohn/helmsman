@@ -10,8 +10,8 @@ use std::thread;
 use helmsman_io::{Binding, Device, Dir, Signal, Ty, Value};
 use helmsman_plc::manifest::{MAX_FILE, Param};
 use helmsman_plc::store::{
-    ChangeSet, Code, DB_FILE, Diff, Error, Field, Kind, Meta, ModuleChange, ModuleFiles, SCHEMA, SnapshotId,
-    Store, diff,
+    ChangeSet, Code, DB_FILE, Diff, Error, Field, Kind, Meta, ModuleChange, ModuleFiles, SCHEMA, SCHEMA_V2,
+    SnapshotId, Store, diff,
 };
 use proptest::prelude::*;
 use rusqlite::Connection;
@@ -74,6 +74,7 @@ fn set(mods: &[(&str, f64)]) -> ChangeSet {
         modules: mods.iter().map(|(n, s)| files(n, *s, SRC)).collect(),
         io_map: Some(MAP.into()),
         calendar: None,
+        drivers: BTreeMap::new(),
     }
 }
 
@@ -169,6 +170,7 @@ fn equal_files_in_different_modules_are_one_blob() {
         modules: [files("a", 1.0, SRC), files("b", 2.0, SRC)].into_iter().collect(),
         io_map: None,
         calendar: None,
+        drivers: BTreeMap::new(),
     };
     s.commit(&cs, &meta("Nick")).unwrap();
     // two manifests + one shared source
@@ -389,6 +391,7 @@ fn a_huge_change_set_round_trips() {
         modules,
         io_map: Some(MAP.into()),
         calendar: Some("zone +01:00\n".into()),
+        drivers: BTreeMap::new(),
     };
     let id = s.commit(&cs, &meta("Nick")).unwrap();
     assert_eq!(s.get(&id).unwrap(), cs);
@@ -539,6 +542,7 @@ fn diff_names_modules_params_and_bindings() {
         .collect(),
         io_map: Some(MAP.into()),
         calendar: None,
+        drivers: BTreeMap::new(),
     };
     let mut b = a.clone();
     b.modules.remove("old");
@@ -617,6 +621,7 @@ fn diff_names_modules_params_and_bindings() {
             },
         ],
         calendar: true,
+        drivers: Vec::new(),
     };
     assert_eq!(d, want);
     assert!(diff(&a, &a).is_empty());
@@ -656,6 +661,7 @@ fn arb_change_set() -> impl Strategy<Value = ChangeSet> {
                 .collect(),
             io_map,
             calendar,
+            drivers: BTreeMap::new(),
         })
 }
 
@@ -888,6 +894,7 @@ fn v1_content(speed: f64) -> ChangeSet {
         modules: [files("conveyor", speed, SRC)].into(),
         io_map: Some(MAP.into()),
         calendar: Some("zone +01:00\n".into()),
+        drivers: BTreeMap::new(),
     }
 }
 
@@ -941,7 +948,7 @@ fn a_store_from_before_wasm_stays_v1_for_st_and_moves_to_v2_with_its_first_wasm_
         assert_eq!(s.schema().unwrap(), 1);
         let w = with_wasm(&v1_content(3.0), "conveyor", &binary());
         s.commit(&w, &meta("Nick")).unwrap();
-        assert_eq!(s.schema().unwrap(), SCHEMA);
+        assert_eq!(s.schema().unwrap(), SCHEMA_V2);
     }
     assert_eq!(user_version(&dir), 2);
     let s = Store::open(&dir).unwrap();

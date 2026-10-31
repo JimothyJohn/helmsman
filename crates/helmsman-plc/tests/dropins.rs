@@ -93,6 +93,7 @@ fn running() -> ChangeSet {
         )]),
         io_map: Some(MAP.into()),
         calendar: None,
+        drivers: std::collections::BTreeMap::new(),
     }
 }
 

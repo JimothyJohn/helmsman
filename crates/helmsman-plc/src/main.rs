@@ -377,6 +377,9 @@ struct Content {
     dirs: Vec<ModuleDir>,
     io_map: Option<Text>,
     calendar: Option<Text>,
+    /// The approved WASM drivers the map may name (`wasm:NAME`): the
+    /// snapshot's; none from files.
+    drivers: helmsman_plc::drivers::Drivers,
     /// Which snapshot, when it came from a store.
     origin: Option<String>,
     /// All of it as a change set, for the API's proposals: the head
@@ -417,6 +420,7 @@ fn from_store(dir: &Path, d: &Defaults) -> Result<Content, String> {
         dirs,
         io_map: cs.io_map.map(|s| (at.join("io.map"), s)),
         calendar: cs.calendar.map(|s| (at.join("calendar"), s)),
+        drivers: cs.drivers,
         origin: Some(format!(
             "store {}: snapshot {} (entry {}, {kind} by {})",
             dir.display(),
@@ -440,6 +444,7 @@ fn content(o: &Opts, d: &Defaults) -> Result<Content, String> {
             .collect::<Result<_, _>>()?,
         io_map: o.io_map.as_deref().map(read_text).transpose()?,
         calendar: o.calendar.as_deref().map(read_text).transpose()?,
+        drivers: helmsman_plc::drivers::Drivers::new(),
         origin: None,
         running: (o.programs.is_empty() && o.modules.is_empty())
             .then(|| ChangeSet::read(&o.module_dirs, o.io_map.as_deref(), o.calendar.as_deref()).ok())
@@ -537,16 +542,26 @@ struct Signals {
 
 /// The I/O map's signal table, whether any signal is on the box's own
 /// channels, and the map.
-fn load_io((path, src): &Text) -> Result<(SignalTable, bool, helmsman_io::IoMap), String> {
+fn load_io(
+    (path, src): &Text,
+    drivers: &helmsman_plc::drivers::Drivers,
+) -> Result<(SignalTable, bool, helmsman_io::IoMap), String> {
     let file = path.display();
     let parsed = helmsman_io::text::parse(src).map_err(|errs| {
         let lines: Vec<String> = errs.iter().map(|(n, e)| format!("\n  {file}:{n}: {e}")).collect();
         format!("{file} does not parse:{}", lines.concat())
     })?;
-    let table = SignalTable::new(&parsed.map, &parsed.safe).map_err(|errs| {
-        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
-        format!("{file} is not a valid map:{}", lines.concat())
-    })?;
+    let unknown = helmsman_plc::drivers::unknown(&parsed.map, drivers);
+    let mut points = helmsman_plc::drivers::Points::new(drivers);
+    let table = SignalTable::with_points(&parsed.map, &parsed.safe, &mut |d, a| points.parse(d, a));
+    let table = match table {
+        Ok(t) if unknown.is_empty() => t,
+        r => {
+            let mut lines: Vec<String> = unknown.iter().map(|e| format!("\n  {file}: {e}")).collect();
+            lines.extend(r.err().into_iter().flatten().map(|e| format!("\n  {file}: {e}")));
+            return Err(format!("{file} is not a valid map:{}", lines.concat()));
+        }
+    };
     let uses_box = parsed
         .map
         .signals
@@ -653,7 +668,7 @@ fn box_channels(chip: Option<&Path>) -> Result<helmsman_plc::link::Channels, Str
 fn load_signals(c: &Content) -> Result<Signals, String> {
     let (mut table, uses_box, map) = match &c.io_map {
         Some(text) => {
-            let (table, uses_box, map) = load_io(text)?;
+            let (table, uses_box, map) = load_io(text, &c.drivers)?;
             (table, uses_box, Some(map))
         }
         None => (SignalTable::default(), false, None),
@@ -769,6 +784,7 @@ fn plan_io(
     devices: &Arc<Devices>,
     channels: helmsman_plc::link::Channels,
     io: &IoEndpoint,
+    drivers: &helmsman_plc::drivers::Drivers,
 ) -> Result<(LinkSet, Plan), String> {
     let devices = Arc::clone(devices);
     let io = io.clone();
@@ -784,7 +800,7 @@ fn plan_io(
             devices.set(name, err.map(ToString::to_string));
         }),
     );
-    let plan = set.plan(&map.cloned().unwrap_or_default())?;
+    let plan = set.plan_with(&map.cloned().unwrap_or_default(), drivers)?;
     Ok((set, plan))
 }
 
@@ -1224,6 +1240,7 @@ fn run(o: &Opts) -> Result<(), String> {
         &devices,
         box_channels(o.gpio_chip.as_deref())?,
         &io,
+        &content.drivers,
     )?;
     for name in io_plan.starts() {
         devices.add(name);

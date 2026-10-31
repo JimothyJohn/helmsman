@@ -264,6 +264,14 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
             replaces.push(name.clone());
         }
     }
+    // Its WASM drivers join the box's (as a driver proposal would): a
+    // device of this box's map on one it replaces runs the new version.
+    let mut replaces_drivers = Vec::new();
+    for (name, b) in &v.bundle.content.drivers {
+        if target.drivers.insert(name.clone(), b.clone()).is_some() {
+            replaces_drivers.push(name.clone());
+        }
+    }
     if let Err(errs) = target.validate() {
         return refused(
             422,
@@ -300,7 +308,9 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
         "bindings": bindings,
         "modules": v.caps.modules,
         "replaces": replaces,
-        "touches_outputs": v.caps.drives_anything(),
+        "drivers": v.bundle.content.drivers.keys().collect::<Vec<_>>(),
+        "replaces_drivers": replaces_drivers,
+        "touches_outputs": v.caps.drives_anything() || !v.bundle.content.drivers.is_empty(),
         // What the store's history records as author and prompt on apply.
         "manifest": { "author": format!("{} (bundle {} {})", m.author, m.name, m.version), "prompt": [] },
         "note": note,
