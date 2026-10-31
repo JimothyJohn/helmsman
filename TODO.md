@@ -233,7 +233,7 @@
   id: logix-point-syntax
   answer: keep TAG@TYPE required (recommended)
 
-- [ ] **Download 1756-PM020 by hand?** The Logix 5000 Controllers Data Access manual (the reference for Read Tag, fragmented reads, Multiple Service Packet and the Symbol object) returns HTTP 403 to scripted fetches, like the Modbus PDFs did. The tag-read code cites pycomm3 and libplctag for its byte layouts instead (`docs/SOURCES.md`). If you save the PDF anywhere on the Studio, the next session checks every layout and error code against it and adds `PM020 p.<n>` citations.
+- [x] **Download 1756-PM020 by hand?** The Logix 5000 Controllers Data Access manual (the reference for Read Tag, fragmented reads, Multiple Service Packet and the Symbol object) returns HTTP 403 to scripted fetches, like the Modbus PDFs did. The tag-read code cites pycomm3 and libplctag for its byte layouts instead (`docs/SOURCES.md`). If you save the PDF anywhere on the Studio, the next session checks every layout and error code against it and adds `PM020 p.<n>` citations.
   asked: 2026-10-30
   by: claude-agent
   needs: the PDF from the vendor's literature library (publication 1756-PM020), dropped under `~/Downloads` or `docs/`
@@ -242,6 +242,7 @@
   est: 5m
   difficulty: low
   id: logix-pm020
+  result-note: PM020 and RM014 read 2026-10-31: tests/logix_pm020.rs holds 7 byte-exact vectors from PM020; docs/SOURCES.md cites both by page. The L5X export is still wanted for l5x-real-export.
   notes: what I need, exactly (2026-10-31): (1) Rockwell pub 1756-PM020, "Logix 5000 Controllers Data Access" programming manual, latest PDF (Read Tag, Read Tag Fragmented, Multiple Service Packet, Symbol object: I cite its pages in docs/SOURCES.md); (2) Rockwell pub 1756-RM014, "Logix 5000 Controllers Import/Export" reference manual, latest PDF (the L5X format, for l5x-real-export); (3) one real .L5X exported from Studio 5000 / Logix Designer: any small project with controller and program tags, one UDT, one AOI, a ladder routine and an ST routine. Put them in ~/github/helmsman-refs/ (outside the repo: vendor copyright, never committed). I read and cite them; the L5X becomes a sanitized test fixture only if you say so.
   answer: I'll store these files somewhere if you can tell me explicitly what you need.
 

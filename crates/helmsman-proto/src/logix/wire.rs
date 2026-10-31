@@ -8,6 +8,13 @@
 //! constructor that takes a service code, so code holding only this type
 //! cannot ask a controller to write.
 //!
+//! Checked byte for byte against Rockwell's *Logix 5000 Controllers Data
+//! Access* (1756-PM020I-EN-P) examples in `tests/logix_pm020.rs`: Read Tag
+//! PM020 p.18, Read Tag Fragmented pp.20-21, Multiple Service Packet
+//! pp.38-39, Symbol object pp.44-50. Not in PM020 (still pycomm3): Symbol
+//! attribute 8 and the `Unconnected_Send` route (PM020 p.15 defers to the
+//! ODVA CIP Networks Library).
+//!
 //! Layouts:
 //! - Read Tag: service, path, element count `u16`. Reply data: type (2 or
 //!   4 bytes, see [`DataType`]), then the elements. pycomm3
