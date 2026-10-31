@@ -1,5 +1,5 @@
 //! The browser transport for [`crate::remote`]: `fetch` for one-off
-//! reads, `EventSource` for the two streams. Callbacks only push
+//! reads, `EventSource` for the streams. Callbacks only push
 //! [`Msg`]s into an inbox and wake egui; all decisions are
 //! [`crate::remote::BoxState`]'s.
 //!
@@ -50,6 +50,7 @@ pub struct Driver {
     inbox: Inbox,
     values: Option<Source>,
     trace: Option<Source>,
+    traces: Option<Source>,
 }
 
 impl Driver {
@@ -83,6 +84,7 @@ impl Driver {
         match stream {
             Stream::Values => &mut self.values,
             Stream::Trace => &mut self.trace,
+            Stream::Traces => &mut self.traces,
         }
     }
 
@@ -164,6 +166,16 @@ pub fn wants_sim() -> bool {
         .and_then(|d| d.get_element_by_id("canvas"))
         .and_then(|e| e.get_attribute("data-mode"));
     crate::app::wants_sim(&query, mode.as_deref())
+}
+
+/// Whether this page opens on the Monitor ([`crate::app::wants_monitor`]
+/// on its query string: `?monitor`, or the old `?andon`).
+#[must_use]
+pub fn wants_monitor() -> bool {
+    let query = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default();
+    crate::app::wants_monitor(&query)
 }
 
 /// The playground's link to Claude: one answer at a time, abortable.

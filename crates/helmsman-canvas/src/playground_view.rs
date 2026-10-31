@@ -216,10 +216,16 @@ impl PlaygroundView {
 
     /// One frame of the Editor.
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let ctx = ui.ctx().clone();
+        self.tick(&ui.ctx().clone());
+        editor::show(ui, chrome, self);
+    }
+
+    /// Runs the program (and Claude's answer) on with nothing drawn: the
+    /// Monitor watches the same session.
+    pub fn tick(&mut self, ctx: &egui::Context) {
         if !self.proxy_asked {
             self.proxy_asked = true;
-            self.link.check_proxy(&ctx);
+            self.link.check_proxy(ctx);
         }
         for m in self.link.drain() {
             self.chat.receive(m);
@@ -230,7 +236,6 @@ impl PlaygroundView {
         if self.session.running || self.pending.is_some() || self.chat.busy() {
             ctx.request_repaint();
         }
-        editor::show(ui, chrome, self);
     }
 }
 

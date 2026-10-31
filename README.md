@@ -6,6 +6,11 @@ against named signals on the devices the box masters, plus an open-source
 CIP-over-Ethernet originator and adapter. `docs/ARCHITECTURE.md` is the map
 of the code; `TODO.md` is the plan.
 
+**Try it in your browser:** <https://jimothyjohn.github.io/helmsman/playground/>
+writes and runs Structured Text against a simulated box, with its live
+diagram; no install. Asking Claude there takes your own API key, kept in
+the page's memory unless you tick "remember".
+
 Status: early. Rust cargo workspace, crates under `crates/helmsman-*`:
 `helmsman-proto` (CIP originator), `helmsman-adapter` (CIP target),
 `helmsman-cli` (the `helmsman` command), `helmsman-iec` (ST compiler and
