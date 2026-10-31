@@ -73,7 +73,7 @@ Three directions of traffic, three different rules:
 | `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame), the public ST playground (`?playground`, docs/playground/: edit, run against virtual I/O, ask Claude with the visitor's key) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
-`relay-repo`, in `../helmsman-relay`). The WASM module host
+`relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
 (`wasm-tier`) is built inside `helmsman-plc` (`wasm.rs`, the `wasm`
 feature), below.
 
@@ -556,11 +556,53 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
 - **Everything else** needs `Authorization: Bearer <token>` (64 hex
   digits, made on first start in `api-token`, mode 0600, under
   `--state-dir` or systemd's `StateDirectory=`, printed once to the
-  journal), or a login session from `POST /api/login` on a box with
-  accounts (below). A token, password, PIN or session in a query string
-  is refused on any request. Every
-  authenticated call is appended to the audit log whatever its outcome,
-  with the snapshot id it concerns and, for a session, the person.
+  journal), or a login session from `POST /api/login` (below). A token,
+  password, PIN or session in a query string is refused on any request.
+  Every authenticated call is appended to the audit log whatever its
+  outcome, with the snapshot id it concerns and, for an account's
+  session, the person.
+- **Browser sessions (`canvas-token`, built).** The box token is for
+  machines (scripts, the agent, MCP); the browser never holds it.
+  `POST /api/login` takes `{user, password}` on a box with accounts, or
+  `{role, pin}` on a box without (the role's PIN through the same gate
+  apply uses: lockout, 1 KiB cap, constant-time check; refused, and
+  counted toward nothing, once an accounts file exists), JSON only (415
+  otherwise: a cross-site form cannot send it). A login carrying
+  `X-Helmsman-Request: 1` and a same-origin proof (below) is the
+  canvas's: the session comes back only as `Set-Cookie:
+  helmsman_session=<64 hex>; HttpOnly; SameSite=Strict; Path=/api;
+  Max-Age=3600`, never in the body, so no script on the page can read
+  it; a login over a live cookie ends that session first (rotation).
+  Without the header the session comes back as `token` in the body, for
+  `Authorization: Bearer`, as before. The server keeps only the token's
+  SHA-256, in the accounts session table (1 h, 15 min idle, 8 per
+  account or per role, 256 per box); a role-PIN session is the role's
+  (audited with the role and no person; history says `ROLE (PIN)`) and
+  ends at its next use once an accounts file appears. **No `Secure`
+  flag:** boxes serve plain HTTP on the LAN, where a browser would drop
+  a `Secure` cookie; it goes on with TLS, if a box ever serves it.
+  `GET /api/session` says who the cookie (or a bearer session) is, so a
+  reloaded page knows; `POST /api/logout` ends it on the box and sends
+  `Max-Age=0`; any 401 on a cookie also clears it.
+- **CSRF.** A request authenticated by the cookie (any method but `GET`,
+  which is a read) must carry exactly one `X-Helmsman-Request: 1` (a
+  cross-site form cannot send a custom header; a cross-site `fetch` with
+  one needs a preflight the box never answers) and an `Origin` equal to
+  `http://` + its `Host`, or, with no `Origin`, a `Referer` on that
+  origin; anything else (missing or wrong header, another site's or an
+  opaque `null` origin, two origins, a look-alike `http://box.evil/`
+  referer, a form post) is 403 before the session is looked up, so a
+  forgery neither uses nor refreshes it, and is only logged. The
+  canvas's `fetch` sets `referrerPolicy: same-origin` on its own calls:
+  under the pages' `Referrer-Policy: no-referrer` a browser would send
+  `Origin: null` even to the same origin.
+- **Precedence.** An `Authorization` header, when sent, is the
+  credential and the cookie is not read: a wrong token is 401 whatever
+  cookie rides along, and a bearer is never held to the cookie's
+  same-origin rule (no other site can make a browser send one). `/mcp`
+  takes the box token only (and sits outside the cookie's path). A
+  cookie the box did not issue (made up, the box token, one character
+  off, two `helmsman_session` cookies at once) is 401.
 - **No write path.** There is no route that writes a signal, an output, a
   param or a module. `POST /api/proposals` stores a checked draft (a module
   directory's two files, or one param's value): parsed, compiled against its
@@ -666,16 +708,20 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   looks like a wrong password. A session carries its account's role: an
   apply or rollback with one sends only `{replay?}`, and a role or PIN
   beside it is refused (400), so nothing in a request raises it. A
-  session goes wherever the box token goes (replays, drafts, chat),
-  except `/mcp`, which takes the box token only and audits no person.
+  session goes wherever the box token goes (replays, drafts, chat;
+  `session-scope`), except `/mcp`, which takes the box token only and
+  audits no person. So does a role-PIN session on a box without
+  accounts: knowing the operator PIN now opens what the box token opens,
+  except apply above the operator's tier.
   Logins that worked and wrong passwords are audited with the account; a
   name is logged or audited only if it is an account (a password typed
   as a user name never lands in a log); refusals while locked are only
   logged, so an unauthenticated flood cannot fill the audit log.
   `GET /api/policy` says which applies (`credentials`: `pins`,
-  `accounts`, `unavailable`); the canvas's review screen logs in with a
-  user and masked password, holds the session in memory only, and drops
-  it on a 401.
+  `accounts`, `unavailable`); the canvas's review screen signs in with a
+  user and masked password there, or with a role and its masked PIN on a
+  box without accounts, and the session is the browser's `HttpOnly`
+  cookie (Box API, above), never the page's.
 - **Evidence bound to content.** `POST /api/proposals/{id}/replay` (or
   `/api/snapshots/{id}/replay` for a rollback) replays what runs and the
   target over the recorder's window (`replay::replay` twice, then
@@ -688,8 +734,9 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   is exactly what runs and its content exactly the target, over at least
   `min-replay`: an old replay, or one of other content, never counts.
 - **Apply = check, swap, commit, as one.** `POST .../apply` and
-  `POST /api/snapshots/{id}/rollback` take a login session and
-  `{replay?}`, or (no accounts) the token and `{role, pin, replay?}`; in
+  `POST /api/snapshots/{id}/rollback` take a login session (an
+  account's, or a role-PIN one) and `{replay?}`, or (no accounts) the
+  token and `{role, pin, replay?}`; in
   order: target known; draft not stale (its base is what
   runs, else 409); tier and rule; role (the session's, or the one named)
   at least the rule's (403, no PIN
@@ -1275,7 +1322,7 @@ is in its state right now, in two layers.
   test over generated programs); "what would change it" only says which
   line would stop or start running, never what a value would become.
   The cited source lines are highlighted on the diagram.
-- **Ask why** (`POST /api/explain {module, path}`, token, audited): the
+- **Ask why** (`POST /api/explain {module, path}`, token or session, audited): the
   box explains its own newest trace of the module (not one the browser
   sends), streams those sentences as an `explain` event, then runs the
   agent loop on one user message: a fixed ask (no plant text in it) and
@@ -1289,8 +1336,9 @@ is in its state right now, in two layers.
   (default `explain-v1`: the relay's read-only, floor-language profile;
   the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
   agent; the canvas disables Ask why with its reason (box offline, no
-  relay, no token) and the first layer stays up. The canvas holds the
-  API token the operator typed in memory only.
+  relay) and the first layer stays up. Asking rides the browser's
+  session cookie (signed in on the Proposals screen); a 401 says to sign
+  in there.
 
 ## Proposal review (`proposal-ui`, built)
 
@@ -1327,16 +1375,23 @@ file and token in a temporary state directory).
   in egui, no charting crate: what runs in steel, the proposal in yellow,
   rises marked, and the box's `extra_rises` as "would have fired N more /
   fewer times"; differences first.
-- **Approve and undo.** Role picker, a masked PIN field, and the API
-  token typed once per page load (memory only; `canvas-token` asks about a
-  login exchange). Submitting moves the PIN into the request body and
-  empties the field whatever happens; neither secret shows in a `Debug`
-  output or a log. The box's refusals are shown verbatim with what to do:
-  401 token (and the token is dropped), 403 role or wrong PIN, 428 replay
-  missing or stale, 429 locked with a countdown from `Retry-After` (nothing
-  is sent until it ends), 409 stale draft. After an apply: the new snapshot
-  and the history head, and an undo (`/api/snapshots/{previous}/rollback`)
-  through the same replay and PIN flow.
+- **Sign in, approve and undo.** The left panel signs in the way the
+  box's policy says: a role picker and a masked PIN, or (accounts) a user
+  and a masked password. The session is the browser's `HttpOnly` cookie
+  (Box API, above); the page knows only who is signed in (`GET
+  /api/session` after a reload), sends every call same-origin with
+  `X-Helmsman-Request: 1`, and never sees or takes the API token.
+  "Sign out" ends it on the box. Submitting moves the PIN or password
+  into the request body and empties the field whatever happens; neither
+  shows in a `Debug` output or a log; a wrong one or a lockout (with
+  when to try again) shows under the fields. Approving sends only the
+  replay it cites: the session's role approves. The box's refusals are
+  shown verbatim with what to do: 401 (the session ended, expired or the
+  box restarted: back to the sign-in panel), 403 role, 428 replay missing
+  or stale, 429 locked with a countdown, 409 stale draft. After an
+  apply: the new snapshot and the history head, and an undo
+  (`/api/snapshots/{previous}/rollback`) through the same replay and
+  approval.
 
 ## Site view (`site-view`, built)
 
@@ -1451,6 +1506,7 @@ server: everything runs in the page (`playground.rs`, `playground_view.rs`,
 | box ↔ LAN peers | site beacons in, this box's beacon out | strict parse, source-address rule, intake and refresh limits, a bounded list, no takeover of a live id; the box only lists peers and never connects to one; `/api/site` is the only cross-origin read | built (`site-view`) |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) and `local-accounts` (per-person logins that replace the PINs once an accounts file exists; the audit names the person) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
+| browser (canvas) ↔ box | sign-in, drafts' replays, approvals, Ask why | the session is an `HttpOnly; SameSite=Strict; Path=/api` cookie the page cannot read (no API token in the browser); every cookie call but a `GET` needs `X-Helmsman-Request: 1` and the box's own `Origin` (or `Referer`), else 403; a bearer, when sent, wins and the cookie is not read; no `Secure` flag on plain-HTTP LAN boxes | built (`canvas-token`; `helmsman-plc/tests/accounts.rs`, the canvas's `review_tests.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
 | playground visitor ↔ Claude | the visitor's own key, program and question | the key only in `x-api-key` to api.anthropic.com (redacted `Debug`, page CSP `connect-src` to that host and self), memory unless "remember" is ticked; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run; or the local proxy holds the key | built (`playground`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |

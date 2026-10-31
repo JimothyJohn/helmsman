@@ -34,6 +34,31 @@ use serde_json::{Value as Json, json};
 
 use crate::review::{Answer, Call, Delta, Method, Phase, Replay, Request, Review, Target, Why};
 
+#[test]
+fn ask_why_rides_the_same_cookie_and_is_refused_without_it() {
+    let b = Bench::new();
+    // What `web::Driver` posts for "Ask why": the body only, no token.
+    let ask = Request {
+        call: Call::List,
+        method: Method::Post,
+        url: "/api/explain".into(),
+        body: Some(crate::explain::body("conveyor", "LAMP")),
+    };
+    let a = b.send(&ask);
+    assert_eq!(a.status, 401, "not signed in: {a:?}");
+    let mut r = Review::new();
+    settle(&b, &mut r, 0.0);
+    r.login_pin("operator", OPERATOR.into());
+    settle(&b, &mut r, 0.0);
+    assert!(b.jar.session().is_some());
+    let a = b.send(&ask);
+    assert_eq!(
+        a.status, 503,
+        "past the session check, to the agent (none here): {a:?}"
+    );
+    assert!(a.body.contains("no relay"), "{a:?}");
+}
+
 const OPERATOR: &str = "op-246810";
 const ENGINEER: &str = "eng-135797";
 
@@ -119,6 +144,25 @@ pub struct Bench {
     scan: Option<JoinHandle<()>>,
     logs: Arc<Mutex<Vec<String>>>,
     dirs: Vec<PathBuf>,
+    /// The browser the screen runs in: its cookie jar.
+    pub jar: Jar,
+}
+
+/// A browser's cookie jar for the box: the session cookie, as the box
+/// last set it, and every `Set-Cookie` it ever sent (to check the flags).
+#[derive(Default)]
+pub struct Jar {
+    pub session: Mutex<Option<String>>,
+    pub set: Mutex<Vec<String>>,
+}
+
+impl Jar {
+    pub fn session(&self) -> Option<String> {
+        self.session
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 impl Drop for Bench {
@@ -285,19 +329,68 @@ impl Bench {
             scan: Some(scan),
             logs,
             dirs: vec![state, store],
+            jar: Jar::default(),
         }
     }
 
-    /// Carries out `req` the way `web::Http` does: method, path, the
-    /// bearer only in its header, a JSON body; the answer's status,
-    /// `Retry-After` and body whatever the status.
+    /// The box's state directory (PINs, token, an accounts file).
+    pub fn state_dir(&self) -> &Path {
+        &self.dirs[0]
+    }
+
+    /// Carries out `req` the way `web::Http` does in the bench's browser
+    /// ([`Bench::jar`]).
     pub fn send(&self, req: &Request) -> Answer {
+        self.send_in(&self.jar, req)
+    }
+
+    /// Carries out `req` the way the browser's `fetch` does for
+    /// `web::Http` on the box's page: same origin (`Host: box`, and for a
+    /// `POST` its `Origin` and `X-Helmsman-Request: 1`), the jar's session
+    /// cookie, a JSON body, no `Authorization`; the `Set-Cookie` it gets
+    /// back goes into the jar. The answer's status, `Retry-After` and body
+    /// whatever the status.
+    pub fn send_in(&self, jar: &Jar, req: &Request) -> Answer {
         let mut head = format!("{} {} HTTP/1.1\r\nHost: box\r\n", req.method.as_str(), req.url);
-        if let Some(t) = &req.bearer {
-            let _ = write!(head, "Authorization: Bearer {t}\r\n");
+        if req.method != Method::Get {
+            head.push_str("X-Helmsman-Request: 1\r\nOrigin: http://box\r\n");
         }
-        let body = req.body.clone().unwrap_or_default();
-        if req.body.is_some() {
+        if let Some(s) = jar.session() {
+            let _ = write!(head, "Cookie: theme=dark; helmsman_session={s}\r\n");
+        }
+        let a = self.raw(&head, req.body.as_deref());
+        for c in &a.1 {
+            jar.set
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(c.clone());
+            let value = c
+                .strip_prefix("helmsman_session=")
+                .and_then(|r| r.split(';').next())
+                .unwrap_or_default();
+            *jar.session.lock().unwrap_or_else(PoisonError::into_inner) =
+                (!c.contains("Max-Age=0") && !value.is_empty()).then(|| value.to_string());
+        }
+        a.0
+    }
+
+    /// A machine's call (the agent, a script): the box token as bearer,
+    /// no cookie.
+    pub fn machine(&self, method: &str, url: &str, body: Option<&str>) -> Answer {
+        let head = format!(
+            "{method} {url} HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {}\r\n",
+            self.token
+        );
+        self.raw(&head, body).0
+    }
+
+    /// Sends `head` (without its blank line) and `body`; the answer and
+    /// its `Set-Cookie` values.
+    fn raw(&self, head: &str, body: Option<&str>) -> (Answer, Vec<String>) {
+        let mut head = head.to_string();
+        let has_body = body.is_some();
+        let body = body.unwrap_or_default().to_string();
+        if has_body {
             let _ = write!(
                 head,
                 "Content-Type: application/json\r\nContent-Length: {}\r\n",
@@ -317,22 +410,22 @@ impl Bench {
             .lines()
             .find_map(|l| l.strip_prefix("Retry-After: "))
             .and_then(|v| v.trim().parse().ok());
-        Answer {
+        let cookies = head
+            .lines()
+            .filter_map(|l| l.strip_prefix("Set-Cookie: "))
+            .map(str::to_string)
+            .collect();
+        let a = Answer {
             status: head.get(9..12).and_then(|s| s.parse().ok()).unwrap_or(0),
             retry_after,
             body: body.into(),
-        }
+        };
+        (a, cookies)
     }
 
     /// The agent's side: a draft posted with the token.
     pub fn draft(&self, body: &Json) -> u64 {
-        let a = self.send(&Request {
-            call: Call::List,
-            method: Method::Post,
-            url: "/api/proposals".into(),
-            bearer: Some(self.token.clone()),
-            body: Some(body.to_string()),
-        });
+        let a = self.machine("POST", "/api/proposals", Some(&body.to_string()));
         assert_eq!(a.status, 201, "{a:?}");
         serde_json::from_str::<Json>(&a.body).unwrap()["id"]
             .as_u64()
@@ -344,13 +437,7 @@ impl Bench {
     }
 
     pub fn running_source(&self) -> String {
-        let a = self.send(&Request {
-            call: Call::List,
-            method: Method::Get,
-            url: "/api/modules/conveyor".into(),
-            bearer: None,
-            body: None,
-        });
+        let a = self.machine("GET", "/api/modules/conveyor", None);
         serde_json::from_str::<Json>(&a.body).unwrap()["source"]
             .as_str()
             .unwrap()
@@ -365,26 +452,24 @@ impl Bench {
     }
 
     pub fn audit(&self) -> String {
-        self.send(&Request {
-            call: Call::List,
-            method: Method::Get,
-            url: "/api/audit?limit=1000".into(),
-            bearer: None,
-            body: None,
-        })
-        .body
+        self.machine("GET", "/api/audit?limit=1000", None).body
     }
 }
 
 /// Sends everything `r` has queued, and what that queues, until it is quiet.
 pub fn settle(b: &Bench, r: &mut Review, now: f64) {
+    settle_in(b, &b.jar, r, now);
+}
+
+/// [`settle`], in the browser whose cookies are `jar`.
+pub fn settle_in(b: &Bench, jar: &Jar, r: &mut Review, now: f64) {
     for _ in 0..20 {
         let reqs = r.poll();
         if reqs.is_empty() {
             return;
         }
         for q in reqs {
-            let a = b.send(&q);
+            let a = b.send_in(jar, &q);
             r.answer(q.call, &a, now);
         }
     }
@@ -467,20 +552,26 @@ fn review_replay_approve_and_undo_against_the_real_box() {
 
     let t = Target::Proposal(id);
     let step = |r: &Review| r.open.as_ref().unwrap().step.clone();
-    let pin = |r: &mut Review, role: &str, p: &str| {
-        let s = &mut r.open.as_mut().unwrap().step;
-        s.role = role.into();
-        s.pin = p.into();
-    };
-    // No token: nothing is sent.
-    pin(&mut r, "engineer", ENGINEER);
+    // Not signed in: nothing is sent.
     r.approve(&t, 1.0);
     assert_eq!(r.poll(), Vec::<Request>::new());
-    assert_eq!(refused(&step(&r).phase).0, Why::Token);
-    assert!(r.set_token(&b.token));
+    assert_eq!(refused(&step(&r).phase).0, Why::SignIn);
+    assert_eq!(b.jar.session(), None);
 
-    // An operator is below the tier: 403, no PIN spent.
-    pin(&mut r, "operator", OPERATOR);
+    // Signed in by the operator PIN: the box sets the cookie, the page
+    // never sees it, and an operator is below the tier (403).
+    r.login_pin("operator", OPERATOR.into());
+    settle(&b, &mut r, 1.0);
+    assert_eq!(r.signed_in().as_deref(), Some("operator (PIN)"));
+    let operator = b.jar.session().expect("the browser holds the cookie");
+    assert!(!format!("{r:?}").contains(&operator), "the screen never sees it");
+    assert_eq!(
+        b.jar.set.lock().unwrap().last().map(String::as_str),
+        Some(
+            format!("helmsman_session={operator}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=3600")
+                .as_str()
+        )
+    );
     r.approve(&t, 1.0);
     settle(&b, &mut r, 1.0);
     let (why, error) = refused(&step(&r).phase);
@@ -489,16 +580,29 @@ fn review_replay_approve_and_undo_against_the_real_box() {
         error,
         "a output-affecting change needs the engineer role or above"
     );
-    assert_eq!(step(&r).pin, "", "cleared after the submit");
 
-    // An engineer without the replay: 428.
-    pin(&mut r, "engineer", ENGINEER);
+    // Sign out (the box ends it and clears the cookie), then a wrong
+    // engineer PIN at sign-in: the box's words.
+    r.logout();
+    settle(&b, &mut r, 1.5);
+    assert_eq!((r.signed_in(), b.jar.session()), (None, None));
+    r.login_pin("engineer", "not-the-pin".into());
+    settle(&b, &mut r, 1.5);
+    assert_eq!(r.login_problem.as_deref(), Some("wrong PIN"));
+    assert_eq!(r.signed_in(), None);
+
+    // The engineer, without the replay: 428.
+    r.login_pin("engineer", ENGINEER.into());
+    settle(&b, &mut r, 2.0);
+    assert_eq!(r.signed_in().as_deref(), Some("engineer (PIN)"));
+    let engineer = b.jar.session().unwrap();
+    assert_ne!(engineer, operator, "a new session, never the old one reused");
     r.approve(&t, 2.0);
     settle(&b, &mut r, 2.0);
     assert_eq!(refused(&step(&r).phase).0, Why::Replay);
 
     // The replay: the horn would have fired, the lamp is the same.
-    r.replay(&t, 3.0);
+    r.replay(&t);
     settle(&b, &mut r, 3.0);
     let Replay::Done(chart) = step(&r).replay else {
         panic!("{:?}", step(&r).replay)
@@ -532,15 +636,9 @@ fn review_replay_approve_and_undo_against_the_real_box() {
             .starts_with(&format!("would have fired {} more", horn.rises.1))
     );
 
-    // A wrong PIN: 403, said as the box says it.
-    pin(&mut r, "engineer", "not-the-pin");
-    r.approve(&t, 4.0);
-    settle(&b, &mut r, 4.0);
-    assert_eq!(refused(&step(&r).phase), (Why::Pin, "wrong PIN".into()));
-
-    // The right one, citing the replay: applied, with the undo offered.
+    // Approved as the engineer session, citing the replay: applied, with
+    // the undo offered.
     let before = b.running_source();
-    pin(&mut r, "engineer", ENGINEER);
     r.approve(&t, 5.0);
     settle(&b, &mut r, 5.0);
     let Phase::Applied(done) = step(&r).phase else {
@@ -558,13 +656,8 @@ fn review_replay_approve_and_undo_against_the_real_box() {
     let stale = b.draft(&json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 2.5 }));
     settle(&b, &mut r, 5.0);
 
-    // Undo goes through the same flow: replay, then PIN.
+    // Undo goes through the same flow: replay, then approve.
     let ut = Target::Snapshot(done.previous.clone());
-    {
-        let u = r.open.as_mut().unwrap().undo.as_mut().unwrap();
-        u.role = "engineer".into();
-        u.pin = ENGINEER.into();
-    }
     r.approve(&ut, 6.0);
     settle(&b, &mut r, 6.0);
     let undo = |r: &Review| r.open.as_ref().unwrap().undo.clone().unwrap();
@@ -573,14 +666,13 @@ fn review_replay_approve_and_undo_against_the_real_box() {
         Why::Replay,
         "an undo of an output change needs its replay"
     );
-    r.replay(&ut, 7.0);
+    r.replay(&ut);
     settle(&b, &mut r, 7.0);
     assert!(
         matches!(undo(&r).replay, Replay::Done(_)),
         "{:?}",
         undo(&r).replay
     );
-    r.open.as_mut().unwrap().undo.as_mut().unwrap().pin = ENGINEER.into();
     r.approve(&ut, 8.0);
     settle(&b, &mut r, 8.0);
     assert!(
@@ -598,43 +690,60 @@ fn review_replay_approve_and_undo_against_the_real_box() {
     let p = o.param.as_ref().unwrap();
     assert_eq!((p.from.as_str(), p.to.as_str()), ("1.5", "2.5"));
     assert_eq!((p.min.as_deref(), p.max.as_deref()), (Some("0.0"), Some("10.0")));
-    pin(&mut r, "operator", OPERATOR);
     r.approve(&Target::Proposal(stale), 9.0);
     settle(&b, &mut r, 9.0);
     let (why, error) = refused(&step(&r).phase);
     assert_eq!(why, Why::Stale);
     assert!(error.starts_with("stale: the box has changed"), "{error}");
 
-    // Wrong PINs until the box locks: 429 with a countdown, then nothing
-    // is sent until it ends.
-    let fresh = b.draft(&json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 3.0 }));
-    r.open(fresh);
+    // A reload: a new screen in the same browser finds the session by its
+    // cookie, without signing in again.
+    let mut reloaded = Review::new();
+    settle(&b, &mut reloaded, 9.5);
+    assert_eq!(reloaded.signed_in().as_deref(), Some("engineer (PIN)"));
+
+    // Signed out, wrong PINs at sign-in until the box locks: the screen
+    // says when to try again, sets no session, and the box's lockout is
+    // the one approvals use.
+    r.logout();
     settle(&b, &mut r, 10.0);
-    let ft = Target::Proposal(fresh);
     let mut locked = None;
     for k in 0..8 {
-        pin(&mut r, "operator", "guess-000");
-        r.approve(&ft, 10.0 + f64::from(k));
+        r.login_pin("operator", "guess-000".into());
         settle(&b, &mut r, 10.0 + f64::from(k));
-        if let Phase::Refused(x) = &step(&r).phase
-            && x.why == Why::Locked
-        {
-            locked = Some((x.clone(), 10.0 + f64::from(k)));
+        let p = r.login_problem.clone().unwrap();
+        if p.starts_with("too many wrong PINs") {
+            locked = Some(p);
             break;
         }
+        assert_eq!(p, "wrong PIN");
     }
-    let (x, at) = locked.expect("the box locks PIN entry");
-    assert_eq!(x.status, 429);
-    assert_eq!(x.error, "too many wrong PINs; PIN entry is locked");
-    let secs = step(&r).locked_for(at).unwrap();
-    assert!((1..=30).contains(&secs), "{secs}");
-    pin(&mut r, "operator", OPERATOR);
-    r.approve(&ft, at + 0.5);
-    assert_eq!(r.poll(), Vec::<Request>::new(), "nothing goes while locked");
+    let p = locked.expect("the box locks PIN entry");
+    assert!(p.contains("Try again in "), "{p}");
+    r.login_pin("operator", OPERATOR.into());
+    settle(&b, &mut r, 20.0);
+    assert_eq!(r.signed_in(), None, "locked: even the right PIN is not taken");
+    assert_eq!(b.jar.session(), None);
+    let fresh = b.draft(&json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 3.0 }));
+    let a = b.machine(
+        "POST",
+        &Target::Proposal(fresh).apply_url(),
+        Some(&json!({ "role": "operator", "pin": OPERATOR }).to_string()),
+    );
+    assert_eq!(a.status, 429, "one lockout for sign-in and apply: {a:?}");
 
-    // No PIN and no token ever reached the box's log or its audit.
+    // No PIN, no token and no session ever reached the box's log or its
+    // audit.
     let (logs, audit) = (b.logs(), b.audit());
-    for secret in [OPERATOR, ENGINEER, "guess-000", "not-the-pin", b.token.as_str()] {
+    for secret in [
+        OPERATOR,
+        ENGINEER,
+        "guess-000",
+        "not-the-pin",
+        b.token.as_str(),
+        operator.as_str(),
+        engineer.as_str(),
+    ] {
         assert!(!logs.contains(secret), "{secret} in the log");
         assert!(!audit.contains(secret), "{secret} in the audit");
     }
@@ -665,7 +774,7 @@ fn on_a_box_with_accounts_the_screen_logs_in_and_approves_as_the_person() {
     r.login("alice", "not-her-password".into());
     let sent = r.poll();
     assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].bearer, None, "a login carries no token");
+    assert_eq!(sent[0].url, "/api/login");
     assert!(
         !format!("{sent:?}").contains("not-her-password"),
         "Debug redacts the body"
@@ -680,17 +789,14 @@ fn on_a_box_with_accounts_the_screen_logs_in_and_approves_as_the_person() {
     settle(&b, &mut r, 0.0);
     assert_eq!(r.signed_in().as_deref(), Some("alice (engineer)"));
     assert!(!format!("{r:?}").contains(ALICE), "{r:?}");
+    let alice = b.jar.session().expect("her session is the browser's cookie");
+    assert!(!format!("{r:?}").contains(&alice), "the screen never sees it");
     let t = Target::Proposal(id);
     r.open(id);
     settle(&b, &mut r, 0.0);
-    r.replay(&t, 1.0);
+    r.replay(&t);
     let sent = r.poll();
     assert_eq!(sent.len(), 1);
-    assert_ne!(
-        sent[0].bearer.as_deref(),
-        Some(b.token.as_str()),
-        "the session, not the box token"
-    );
     for q in sent {
         let a = b.send(&q);
         r.answer(q.call, &a, 1.0);
@@ -724,57 +830,79 @@ fn on_a_box_with_accounts_the_screen_logs_in_and_approves_as_the_person() {
         "the audit names her: {audit}"
     );
 
-    // A PIN, even the right one, is refused by the box, and the screen
-    // does not offer one: with the token alone it sends nothing.
+    // A PIN, even the right one, is refused by the box: by the token at an
+    // apply, and at sign-in from another browser, which stays signed out.
     let p = b.draft(&json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 0.5 }));
-    let a = b.send(&Request {
-        call: Call::Apply(Target::Proposal(p)),
-        method: Method::Post,
-        url: Target::Proposal(p).apply_url(),
-        bearer: Some(b.token.clone()),
-        body: Some(json!({ "role": "engineer", "pin": ENGINEER }).to_string()),
-    });
+    let a = b.machine(
+        "POST",
+        &Target::Proposal(p).apply_url(),
+        Some(&json!({ "role": "engineer", "pin": ENGINEER }).to_string()),
+    );
     assert_eq!(a.status, 403, "{a:?}");
     assert!(a.body.contains("role PINs are off"), "{a:?}");
+    let other = Jar::default();
     let mut by_pin = Review::new();
-    settle(&b, &mut by_pin, 3.0);
-    assert!(by_pin.set_token(&b.token));
+    settle_in(&b, &other, &mut by_pin, 3.0);
+    by_pin.login_pin("engineer", ENGINEER.into());
+    settle_in(&b, &other, &mut by_pin, 3.0);
+    assert!(
+        by_pin
+            .login_problem
+            .as_deref()
+            .unwrap()
+            .contains("role PINs are off"),
+        "{:?}",
+        by_pin.login_problem
+    );
+    assert_eq!((by_pin.signed_in(), other.session()), (None, None));
     by_pin.open(p);
-    settle(&b, &mut by_pin, 3.0);
-    by_pin.open.as_mut().unwrap().step.pin = ENGINEER.into();
+    settle_in(&b, &other, &mut by_pin, 3.0);
     by_pin.approve(&Target::Proposal(p), 3.0);
     assert_eq!(by_pin.poll(), Vec::<Request>::new());
-    assert_eq!(refused(&by_pin.open.as_ref().unwrap().step.phase).0, Why::Token);
+    assert_eq!(refused(&by_pin.open.as_ref().unwrap().step.phase).0, Why::SignIn);
 
-    // The account disabled while she is logged in: the next call is 401
-    // and the screen drops the session.
+    // The account disabled while she is signed in: the next call is 401,
+    // the box clears the cookie, and the screen goes back to signing in.
     let undo = r.open.as_ref().unwrap().undo.as_ref().unwrap().target.clone();
     accounts.set_disabled("alice", true).unwrap();
     accounts.save(&b.dirs[0]).unwrap();
-    r.replay(&undo, 4.0);
+    r.replay(&undo);
     settle(&b, &mut r, 4.0);
     assert!(r.session.is_none(), "a refused session is forgotten");
+    assert!(r.login_problem.as_deref().unwrap().contains("Sign in again"));
+    assert_eq!(b.jar.session(), None, "and the browser dropped the cookie");
     accounts.set_disabled("alice", false).unwrap();
     accounts.save(&b.dirs[0]).unwrap();
 
-    // Sign out: gone here at once, then on the box.
+    // Sign out: gone here at once, then on the box (an old copy of the
+    // cookie is refused there).
     r.login("alice", ALICE.into());
     settle(&b, &mut r, 5.0);
     assert!(r.session.is_some());
+    let cookie = b.jar.session().unwrap();
+    assert_ne!(cookie, alice, "each sign-in is a new session");
     r.logout();
     assert!(r.session.is_none());
     let sent = r.poll();
     assert_eq!(sent.len(), 1);
-    let token = sent[0].bearer.clone().unwrap();
     let a = b.send(&sent[0]);
     assert_eq!(a.status, 200, "{a:?}");
-    let again = b.send(&sent[0]);
+    assert_eq!(b.jar.session(), None, "the box cleared the cookie");
+    let kept = Jar::default();
+    *kept.session.lock().unwrap() = Some(cookie.clone());
+    let again = b.send_in(&kept, &sent[0]);
     assert_eq!(again.status, 401, "the box ended it too: {again:?}");
     r.approve(&undo, 6.0);
     assert_eq!(r.poll(), Vec::<Request>::new(), "signed out: nothing sent");
 
     let (logs, audit) = (b.logs(), b.audit());
-    for secret in [ALICE, "bob-pass-27182", "not-her-password", token.as_str()] {
+    for secret in [
+        ALICE,
+        "bob-pass-27182",
+        "not-her-password",
+        alice.as_str(),
+        cookie.as_str(),
+    ] {
         assert!(!logs.contains(secret), "{secret} in the log");
         assert!(!audit.contains(secret), "{secret} in the audit");
     }

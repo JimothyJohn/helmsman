@@ -180,6 +180,8 @@ fn marked(req: &Request) -> Request {
         headers: Vec::new(),
         source: "mcp",
         session: None,
+        cookies: Vec::new(),
+        by_cookie: false,
     }
 }
 
@@ -634,6 +636,8 @@ impl Caller for InProcess<'_> {
             headers: Vec::new(),
             source: "mcp",
             session: None,
+            cookies: Vec::new(),
+            by_cookie: false,
         };
         match super::handle(&mut req, self.ctx) {
             Reply::Once(r) => Ok((r.status, serde_json::from_slice(&r.body).unwrap_or(Json::Null))),

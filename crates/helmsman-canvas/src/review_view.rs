@@ -1,6 +1,6 @@
 //! The proposal review screen: the list of drafts, and one draft in full
 //! (tier, source diff, diagram diff, manifest or param change, sim replay
-//! chart, approve with role and PIN, then undo). Decisions are
+//! chart, approve as whoever signed in, then undo). Decisions are
 //! [`Review`]'s; this draws them and turns clicks into its calls. In the
 //! browser `web::Http` carries the requests; headless, tests carry them.
 //!
@@ -60,18 +60,19 @@ impl Cam {
 
 pub struct ReviewView {
     pub state: Review,
-    /// The token field, until "Use" takes it (then emptied).
-    pub token_input: String,
-    /// The login fields; the password is emptied when "Log in" sends it.
+    /// The sign-in fields; the password or PIN is emptied when "Sign in"
+    /// sends it.
     pub user_input: String,
     pub password_input: String,
+    /// The role picked to sign in with its PIN (boxes without accounts).
+    pub role_input: String,
+    pub pin_input: String,
     /// Which POU of the diagram diff is shown.
     pub pou: usize,
     pub cam: Cam,
-    /// Where this frame drew its controls (`token`, `use`, `user`,
-    /// `password`, `login`, `logout`, `row N`, `replay T`, `pin T`, `go T`
-    /// for target `T`'s `Debug`): what a
-    /// headless test clicks.
+    /// Where this frame drew its controls (`user`, `password`, `role R`,
+    /// `pin`, `login`, `logout`, `row N`, `replay T`, `go T` for target
+    /// `T`'s `Debug`): what a headless test clicks.
     pub rects: Vec<(String, Rect)>,
     #[cfg(target_arch = "wasm32")]
     http: crate::web::Http,
@@ -112,9 +113,10 @@ impl ReviewView {
     pub fn new() -> Self {
         Self {
             state: Review::new(),
-            token_input: String::new(),
             user_input: String::new(),
             password_input: String::new(),
+            role_input: ROLES[0].to_string(),
+            pin_input: String::new(),
             pou: 0,
             cam: Cam::default(),
             rects: Vec::new(),
@@ -190,16 +192,13 @@ impl ReviewView {
             RichText::new("drafts the agent made; approving one goes through the box's policy").color(STEEL),
         );
         ui.separator();
-        if self.state.accounts() || self.state.session.is_some() {
-            self.login_ui(ui);
-        } else {
-            self.token_ui(ui);
-        }
+        self.login_ui(ui);
         ui.separator();
         self.drafts_ui(ui);
     }
 
-    /// Boxes with accounts: who is approving.
+    /// Who is approving: signed in, or the way in this box takes (a user
+    /// and password with accounts, else a role and its PIN).
     fn login_ui(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Signed in").strong());
         if let Some(who) = self.state.signed_in() {
@@ -215,6 +214,45 @@ impl ReviewView {
             });
             return;
         }
+        let go = match self.state.credentials() {
+            None => {
+                ui.label(RichText::new("asking the box how to sign in…").color(STEEL));
+                return;
+            }
+            Some("unavailable") => {
+                ui.colored_label(
+                    RED,
+                    "The box's accounts file cannot be used: nobody can sign in (see its journal).",
+                );
+                return;
+            }
+            Some("accounts") => self.account_fields(ui),
+            Some(_) => self.pin_fields(ui),
+        };
+        if go {
+            if self.state.accounts() {
+                let password = std::mem::take(&mut self.password_input);
+                self.state.login(&self.user_input, password);
+            } else {
+                let pin = std::mem::take(&mut self.pin_input);
+                self.state.login_pin(&self.role_input, pin);
+            }
+        }
+        if self.state.logging_in {
+            ui.spinner();
+        }
+        if let Some(p) = &self.state.login_problem {
+            ui.colored_label(RED, p);
+        }
+        ui.label(
+            RichText::new("The box keeps the session (1 h, or 15 min unused) in a cookie this page cannot read; signing out ends it on the box. Approvals are made as who is signed in.")
+                .small()
+                .color(STEEL),
+        );
+    }
+
+    /// A user name and masked password; whether "Sign in" was asked for.
+    fn account_fields(&mut self, ui: &mut egui::Ui) -> bool {
         let user = ui.add(
             egui::TextEdit::singleline(&mut self.user_input)
                 .hint_text("user")
@@ -229,63 +267,30 @@ impl ReviewView {
         );
         self.rects.push(("password".into(), pass.rect));
         let enter = pass.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let go = ui.add_enabled(!self.state.logging_in, egui::Button::new("Log in"));
+        let go = ui.add_enabled(!self.state.logging_in, egui::Button::new("Sign in"));
         self.rects.push(("login".into(), go.rect));
-        if go.clicked() || enter {
-            let password = std::mem::take(&mut self.password_input);
-            self.state.login(&self.user_input, password);
-        }
-        if self.state.logging_in {
-            ui.spinner();
-        }
-        if let Some(p) = &self.state.login_problem {
-            ui.colored_label(RED, p);
-        }
-        ui.label(
-            RichText::new("Your own account on this box. The session is kept in this page's memory only, until you sign out, it expires, or the page is closed or reloaded.")
-                .small()
-                .color(STEEL),
-        );
+        go.clicked() || enter
     }
 
-    /// Boxes without accounts: the API token, then a role PIN per approval.
-    fn token_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("API token").strong());
-        if self.state.has_token() {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("● entered for this page").color(YELLOW));
-                if ui
-                    .button("Forget")
-                    .on_hover_text("drop it now; it is never stored")
-                    .clicked()
-                {
-                    self.state.forget_token();
-                }
-            });
-        } else {
-            let edit = ui.add(
-                egui::TextEdit::singleline(&mut self.token_input)
-                    .password(true)
-                    .hint_text("64 hex digits")
-                    .desired_width(f32::INFINITY),
-            );
-            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            self.rects.push(("token".into(), edit.rect));
-            let use_ = ui.button("Use");
-            self.rects.push(("use".into(), use_.rect));
-            if use_.clicked() || enter {
-                let typed = std::mem::take(&mut self.token_input);
-                self.state.set_token(&typed);
+    /// A role and its masked PIN; whether "Sign in" was asked for.
+    fn pin_fields(&mut self, ui: &mut egui::Ui) -> bool {
+        ui.horizontal_wrapped(|ui| {
+            for r in ROLES {
+                let b = ui.selectable_value(&mut self.role_input, r.to_string(), r);
+                self.rects.push((format!("role {r}"), b.rect));
             }
-            if let Some(p) = &self.state.token_problem {
-                ui.colored_label(RED, p);
-            }
-            ui.label(
-                RichText::new("From api-token in the box's state directory (printed once in its journal). Kept in this page's memory only, until it is closed or reloaded.")
-                    .small()
-                    .color(STEEL),
-            );
-        }
+        });
+        let pin = ui.add(
+            egui::TextEdit::singleline(&mut self.pin_input)
+                .password(true)
+                .hint_text("PIN")
+                .desired_width(f32::INFINITY),
+        );
+        self.rects.push(("pin".into(), pin.rect));
+        let enter = pin.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let go = ui.add_enabled(!self.state.logging_in, egui::Button::new("Sign in"));
+        self.rects.push(("login".into(), go.rect));
+        go.clicked() || enter
     }
 
     fn drafts_ui(&mut self, ui: &mut egui::Ui) {
@@ -404,7 +409,7 @@ impl ReviewView {
         self.rects.extend(out.rects);
         for a in out.act {
             match a {
-                Act::Replay(t) => self.state.replay(&t, now),
+                Act::Replay(t) => self.state.replay(&t),
                 Act::Approve(t) => self.state.approve(&t, now),
             }
         }
@@ -478,9 +483,9 @@ fn header(ui: &mut egui::Ui, o: &Open) {
     }
     if let Some((role, replay)) = o.needs() {
         let what = if replay {
-            format!("Needs: {role} PIN or above, and a sim replay of exactly this change.")
+            format!("Needs: {role} or above signed in, and a sim replay of exactly this change.")
         } else {
-            format!("Needs: {role} PIN or above.")
+            format!("Needs: {role} or above signed in.")
         };
         ui.label(RichText::new(what).strong());
     }
@@ -909,53 +914,19 @@ fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut O
     }
     let locked = step.locked_for(now);
     let sending = matches!(step.phase, Phase::Sending);
-    if let Some(who) = &out.signed_in {
-        // A session approves as its account: no role to pick, no PIN.
-        let mut go = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!("as {who}")).color(STEEL));
-            let button = ui.add_enabled(
-                locked.is_none() && !sending,
-                egui::Button::new(RichText::new(verb).strong()),
-            );
-            out.rects.push((format!("go {:?}", step.target), button.rect));
-            go = button.clicked();
-            if sending {
-                ui.spinner();
-            }
-        });
-        if go {
-            out.act.push(Act::Approve(step.target.clone()));
-        }
-        if let Phase::Refused(r) = &step.phase {
-            refusal_ui(ui, r, now);
-        }
-        return;
-    }
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Role");
-        for r in ROLES {
-            ui.selectable_value(&mut step.role, r.to_string(), r);
-        }
-    });
+    // The session approves as whoever signed in: no role to pick, no PIN.
     let mut go = false;
     ui.horizontal_wrapped(|ui| {
-        ui.label("PIN");
-        let edit = ui.add_enabled(
-            locked.is_none() && !sending,
-            egui::TextEdit::singleline(&mut step.pin)
-                .password(true)
-                .desired_width(160.0)
-                .id_salt(format!("pin-{:?}", step.target)),
-        );
-        let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        out.rects.push((format!("pin {:?}", step.target), edit.rect));
+        match &out.signed_in {
+            Some(who) => ui.label(RichText::new(format!("as {who}")).color(STEEL)),
+            None => ui.label(RichText::new("Sign in (left) to approve.").color(STEEL)),
+        };
         let button = ui.add_enabled(
-            locked.is_none() && !sending && !step.pin.is_empty(),
+            out.signed_in.is_some() && locked.is_none() && !sending,
             egui::Button::new(RichText::new(verb).strong()),
         );
         out.rects.push((format!("go {:?}", step.target), button.rect));
-        go = button.clicked() || (enter && !step.pin.is_empty());
+        go = button.clicked();
         if sending {
             ui.spinner();
         }

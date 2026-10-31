@@ -24,10 +24,8 @@ pub struct BoxView {
     pub agent: Option<bool>,
     /// `GET /api` is out.
     index_out: bool,
-    /// The box API token for "Ask why", as typed: in memory only, never
-    /// stored or logged.
-    pub token: String,
-    /// The last "Ask why".
+    /// The last "Ask why" (sent under the browser's session cookie, which
+    /// this page never sees).
     pub ask: Option<Ask>,
     /// Explain-panel requests not carried out (tests read them).
     #[cfg(not(target_arch = "wasm32"))]
@@ -55,7 +53,6 @@ impl BoxView {
             wants_demo: false,
             agent: None,
             index_out: false,
-            token: String::new(),
             ask: None,
             #[cfg(not(target_arch = "wasm32"))]
             side_sent: Vec::new(),
@@ -133,11 +130,7 @@ impl BoxView {
     /// Why "Ask why" cannot be used now.
     #[must_use]
     pub fn blocked(&self) -> Option<&'static str> {
-        explain::blocked(
-            matches!(self.state.link(), Link::Connected),
-            self.agent,
-            self.token.trim(),
-        )
+        explain::blocked(matches!(self.state.link(), Link::Connected), self.agent)
     }
 
     /// "Ask why" for `path` of the selected module, if it can be asked.
@@ -150,7 +143,6 @@ impl BoxView {
         }
         self.ask = Some(Ask::new(&module, path));
         let cmd = SideCmd::Ask {
-            token: self.token.trim().to_string(),
             body: explain::body(&module, path),
         };
         self.side(ctx, cmd);
@@ -224,7 +216,6 @@ impl BoxView {
                 let ask = AskUi {
                     blocked,
                     ask: self.ask.as_ref(),
-                    token: Some(&mut self.token),
                 };
                 egui::Panel::right("box-right")
                     .resizable(true)

@@ -486,7 +486,6 @@ impl PlaygroundView {
         let ask = AskUi {
             blocked: Some("In the playground, ask Claude in the Ask Claude tab."),
             ask: None,
-            token: None,
         };
         let _ = v.right(ui, scan, Some(self.session.now_ms), ask);
     }

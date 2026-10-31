@@ -233,7 +233,7 @@
   id: logix-point-syntax
   answer: keep TAG@TYPE required (recommended)
 
-- [ ] **Download 1756-PM020 by hand?** The Logix 5000 Controllers Data Access manual (the reference for Read Tag, fragmented reads, Multiple Service Packet and the Symbol object) returns HTTP 403 to scripted fetches, like the Modbus PDFs did. The tag-read code cites pycomm3 and libplctag for its byte layouts instead (`docs/SOURCES.md`). If you save the PDF anywhere on the Studio, the next session checks every layout and error code against it and adds `PM020 p.<n>` citations.
+- [x] **Download 1756-PM020 by hand?** The Logix 5000 Controllers Data Access manual (the reference for Read Tag, fragmented reads, Multiple Service Packet and the Symbol object) returns HTTP 403 to scripted fetches, like the Modbus PDFs did. The tag-read code cites pycomm3 and libplctag for its byte layouts instead (`docs/SOURCES.md`). If you save the PDF anywhere on the Studio, the next session checks every layout and error code against it and adds `PM020 p.<n>` citations.
   asked: 2026-10-30
   by: claude-agent
   needs: the PDF from the vendor's literature library (publication 1756-PM020), dropped under `~/Downloads` or `docs/`
@@ -242,6 +242,7 @@
   est: 5m
   difficulty: low
   id: logix-pm020
+  result-note: PM020 and RM014 read 2026-10-31: tests/logix_pm020.rs holds 7 byte-exact vectors from PM020; docs/SOURCES.md cites both by page. The L5X export is still wanted for l5x-real-export.
   notes: what I need, exactly (2026-10-31): (1) Rockwell pub 1756-PM020, "Logix 5000 Controllers Data Access" programming manual, latest PDF (Read Tag, Read Tag Fragmented, Multiple Service Packet, Symbol object: I cite its pages in docs/SOURCES.md); (2) Rockwell pub 1756-RM014, "Logix 5000 Controllers Import/Export" reference manual, latest PDF (the L5X format, for l5x-real-export); (3) one real .L5X exported from Studio 5000 / Logix Designer: any small project with controller and program tags, one UDT, one AOI, a ladder routine and an ST routine. Put them in ~/github/helmsman-refs/ (outside the repo: vendor copyright, never committed). I read and cite them; the L5X becomes a sanitized test fixture only if you say so.
   answer: I'll store these files somewhere if you can tell me explicitly what you need.
 
@@ -254,6 +255,7 @@
   est: 5m
   difficulty: low
   id: relay-repo
+  notes: 2026-10-31: the local repo is now ../agent-relay (renamed, client-agnostic, profiles namespaced helmsman/<name> with the old bare names as aliases). Tick once the GitHub repo exists: run its scripts/create-github-repo.sh.
   answer: private repo JimothyJohn/agent-relay (recommended), an agnostic endpoint that happens to work with helmsman
 
 - [ ] **Stop parallel PRs breaking dev?** Twice on 2026-10-30 two PRs that were each green merged back to back and broke dev's build (trace-tap + signal-model; fixed by #39). Branch protection on dev doesn't require branches to be up to date. Options: require up-to-date branches (each PR re-runs CI after every merge; slow with many agents), or GitHub's merge queue (tests each PR on top of the ones ahead of it; built for this), or leave it and fix forward.
@@ -266,6 +268,17 @@
   difficulty: low
   id: dev-merge-safety
   answer: merge queue on dev (recommended)
+
+- [ ] **Merge queue isn't available here: what instead?** You answered `dev-merge-safety` with "merge queue", but GitHub refuses it on this repo: a `merge_queue` ruleset rule comes back `422 Invalid rule 'merge_queue'` (probed 2026-10-31 with a disabled ruleset; nothing left behind). Merge queues aren't offered on personal-account repos. What does work: (a) require branches to be up to date on `dev` (`strict: true`) plus a small workflow that, when `dev` moves, runs `gh pr update-branch` on every open auto-merge PR into `dev`, so each PR re-runs CI on the new tip and auto-merge lands them one at a time; (b) move the repo to an organization, which gets merge queues; (c) keep fixing forward with the local test-merge rule (CLAUDE.md "Green alone != green together") and the wider CI gate in draft PR #73.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call (repo setting; (b) is a GitHub org)
+  result: dev stays green under parallel PRs
+  options: strict + auto update-branch workflow (recommended) | move the repo to an org and use the merge queue | fix forward + #73
+  est: 1h
+  difficulty: low
+  depends: dev-merge-safety
+  id: dev-merge-safety-2
 
 - [x] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
   asked: 2026-10-30
@@ -367,7 +380,7 @@
   id: dev-bundles-switch
   answer: trust store `dev-bundles allow` (recommended, built)
 
-- [ ] **Canvas approvals: how does the browser get the API token?** The review screen (feat/proposal-ui) needs the box's bearer token to replay and apply, on top of the role PIN. The token lives in `api-token` in the box's state directory and is printed once to the journal. Built: the operator pastes it once per page load into a masked field; it is held in the page's memory only (never localStorage, never egui's persisted state), dropped on "Forget", a reload, or a 401, and sent only in the `Authorization` header. Trade-off: 64 hex digits is awkward on a tablet, and anyone who can read the journal or state dir can hand it out; but nothing new is stored in the browser and no API change was needed. The better long-term shape is a login exchange: `POST /api/session` with role + PIN returns a short-lived, role-scoped session token (memory only), so operators never see the box token; that is an API change under the same lockout, and overlaps `local-accounts`. Reversible: the token only enters through `Review::set_token` in crates/helmsman-canvas/src/review.rs.
+- [x] **Canvas approvals: how does the browser get the API token?** The review screen (feat/proposal-ui) needs the box's bearer token to replay and apply, on top of the role PIN. The token lives in `api-token` in the box's state directory and is printed once to the journal. Built: the operator pastes it once per page load into a masked field; it is held in the page's memory only (never localStorage, never egui's persisted state), dropped on "Forget", a reload, or a 401, and sent only in the `Authorization` header. Trade-off: 64 hex digits is awkward on a tablet, and anyone who can read the journal or state dir can hand it out; but nothing new is stored in the browser and no API change was needed. The better long-term shape is a login exchange: `POST /api/session` with role + PIN returns a short-lived, role-scoped session token (memory only), so operators never see the box token; that is an API change under the same lockout, and overlaps `local-accounts`. Reversible: the token only enters through `Review::set_token` in crates/helmsman-canvas/src/review.rs.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -375,7 +388,7 @@
   options: paste the box token once per page load, memory only (recommended for now, built) | PIN login exchange for a short-lived session token (API change) | the box injects the token into the page it serves on loopback only
   est: 1d
   difficulty: med
-  notes: local-accounts (feat/local-accounts) built the login alternative per person rather than per role PIN: on a box with an accounts file the review screen logs in (user + masked password, memory only) via POST /api/login and uses the session token as bearer, so operators never see the box token; boxes without accounts still paste the token. What's left to decide is only the PIN-only boxes.
+  notes: local-accounts (feat/local-accounts) built the login alternative per person rather than per role PIN: on a box with an accounts file the review screen logs in (user + masked password, memory only) via POST /api/login and uses the session token as bearer, so operators never see the box token; boxes without accounts still paste the token. What's left to decide is only the PIN-only boxes. Built on feat/canvas-session: `POST /api/login {role, pin}` on a box without accounts (the PIN gate and its lockout) opens a role session; the canvas gets it as an HttpOnly cookie (with the next card's answer), never the box token; docs/ARCHITECTURE.md "Box API".
   id: canvas-token
   answer: PIN login exchange for a short-lived session token (API change)
 
@@ -391,7 +404,7 @@
   id: screen-layout-snapshot
   answer: startup file, like sinks (recommended for now, built)
 
-- [ ] **How does the browser canvas hold the box API token?** Ask why (`POST /api/explain`) needs the token like every POST, and the canvas is served without one. Today the operator types it into the panel; it stays in page memory only (gone on reload, never in storage, never in a URL or log). That works on the bench but nobody on the floor should be handed the box-wide token, and proposal-ui's apply has the same need. Options: keep typing it (built, reversible); a narrower per-device "viewer" token that can only reach `/api/explain` and `/api/chat`; or the box sets an HttpOnly session cookie after a role PIN (that is `local-accounts`' shape). Until then Ask why is an engineer feature in practice; the first layer (no model) needs nothing.
+- [x] **How does the browser canvas hold the box API token?** Ask why (`POST /api/explain`) needs the token like every POST, and the canvas is served without one. Today the operator types it into the panel; it stays in page memory only (gone on reload, never in storage, never in a URL or log). That works on the bench but nobody on the floor should be handed the box-wide token, and proposal-ui's apply has the same need. Options: keep typing it (built, reversible); a narrower per-device "viewer" token that can only reach `/api/explain` and `/api/chat`; or the box sets an HttpOnly session cookie after a role PIN (that is `local-accounts`' shape). Until then Ask why is an engineer feature in practice; the first layer (no model) needs nothing.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -399,6 +412,7 @@
   options: type the token, memory only (recommended for now, built) | per-device token scoped to explain/chat | PIN login with an HttpOnly session cookie
   est: 1d
   difficulty: med
+  notes: built on feat/canvas-session: a browser login (X-Helmsman-Request: 1 + same-origin) gets `helmsman_session` as HttpOnly; SameSite=Strict; Path=/api; Max-Age=3600 (no Secure on plain-http LAN boxes), never in the body; cookie calls need X-Helmsman-Request: 1 and the box's Origin/Referer (403 otherwise); a bearer wins over the cookie; /mcp takes the box token only. The canvas's token field is gone; Ask why and approvals ride the cookie. Tests: helmsman-plc/tests/accounts.rs (browser sessions), the canvas's review_tests.rs and ui_tests.rs.
   id: canvas-token
   answer: PIN login with an HttpOnly session cookie
 

@@ -8,8 +8,11 @@
 //!
 //! The structure is that of an export as the Rockwell reference describes
 //! it (`RSLogix5000Content` > `Controller` > `DataTypes`, `Tags`,
-//! `Programs`, `Tasks`; see docs/SOURCES.md for what was and was not
-//! read). Everything else in the file (modules, data values, trends,
+//! `Programs`, `Tasks`), checked against Rockwell's *Logix 5000 Controllers
+//! Import/Export* (1756-RM014D-EN-P): root pp.37-38, tag attributes
+//! pp.106-107, `MainRoutineName` p.196, rungs pp.206-208, ST p.264ff.,
+//! tasks p.313. The root's `TargetName`/`TargetType` are not in RM014's
+//! text (docs/SOURCES.md). Everything else in the file (modules, data values, trends,
 //! safety info) is ignored.
 //!
 //! An L5X comes from a customer's PLC project, so it is treated as hostile:
