@@ -977,10 +977,13 @@ to rule-based param edits, with no model on the box (`fallback.rs`,
   in its own way (a stream error, a malformed stream) does not.
 - **Recovery, automatic.** While the agent is not online, a watcher thread
   probes the relay every 15 s (`GET {relay}/v1/health` with the box token;
-  any answer below 500 except 401/403 counts, the body is never read, no
-  conversation is sent, no tokens are spent), at once on start. Each chat
-  message also probes once before it is read offline, so a reply goes
-  back to the model as soon as the relay answers.
+  only a 2xx counts, card `relay-health`: the relay answers 200 when it
+  reaches the model API with its key and 503 when it cannot, and the
+  banner's reason then carries the relay's message and `upstream`
+  category; a relay without the route (404) or any other answer stays
+  offline; no conversation is sent, no tokens are spent), at once on
+  start. Each chat message also probes once before it is read offline, so
+  a reply goes back to the model as soon as the relay can serve it.
 - **The grammar** (`fallback::parse`, hand-written, no regex): one command
   per message on one line, `set REF to VALUE`, `set REF = VALUE` or
   `REF = VALUE`; REF is `PARAM`, `MODULE PARAM` or `MODULE.PARAM`, a

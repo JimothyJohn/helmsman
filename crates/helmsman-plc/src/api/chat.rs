@@ -21,11 +21,12 @@
 //! `unknown` until the relay is first asked, `online`, or `offline` since
 //! a time with the reason. A turn that fails because the relay is
 //! unreachable, silent, failing (5xx) or refusing the box token
-//! ([`relay::Error::offline`]) takes the agent offline; any answer from
-//! the relay brings it back. While it is not online a watcher
-//! ([`Chat::watch`]) probes the relay ([`relay::probe`], no tokens spent)
-//! every [`Setup::probe_every`], and each chat message probes once more
-//! before it is read, so the chat recovers as soon as the relay answers.
+//! ([`relay::Error::offline`]) takes the agent offline; a turn the relay
+//! answers otherwise, or a 2xx from its health route, brings it back.
+//! While it is not online a watcher ([`Chat::watch`]) probes the relay
+//! ([`relay::probe`], no tokens spent) every [`Setup::probe_every`], and
+//! each chat message probes once more before it is read, so the chat
+//! recovers as soon as the relay says it can serve turns.
 //! Offline, a message never reaches a model: it is read by
 //! [`crate::fallback`]'s rules and becomes either one param proposal,
 //! posted to `POST /api/proposals` with the API token like the agent's
