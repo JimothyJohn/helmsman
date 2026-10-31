@@ -72,8 +72,8 @@ impl Shape {
             .map(|n| ModShape {
                 name: n.to_string(),
                 outputs: rt
-                    .program(n)
-                    .map(|p| p.ports())
+                    .module(n)
+                    .map(|m| m.program.ports())
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|p| p.dir == PortDir::Output)
