@@ -75,6 +75,7 @@ pub mod ast {
 mod check;
 mod interp;
 pub mod l5x;
+pub mod ladder;
 mod lexer;
 mod parser;
 pub mod plcopen;

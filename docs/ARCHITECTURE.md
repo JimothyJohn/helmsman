@@ -1065,9 +1065,10 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   are refused, not cleaned. A refused upload writes nothing, and a
   replacing one leaves the old project whole until the new one is in.
 - **Import** (`POST .../import?file=F`): `F.st` as it is; `F.xml`
-  (PLCopen TC6) lowered to `F.st` by the existing importer. L5X is
-  refused (415): `helmsman_iec::l5x` reads an inventory, not ST (card
-  `l5x-import`).
+  (PLCopen TC6) lowered to `F.st` by the existing importer; `F.L5X`
+  (Rockwell ladder) converted to `F.st` by `helmsman_iec::ladder` (below,
+  "L5X ladder import"), or 422 with every problem, each at its program,
+  routine and rung (the first 20 in the message, then a count).
 - **The engineer gate.** Every write (create, copy, rename, delete,
   save, upload, import, replay, deploy) needs a login session of an
   engineer or above (an account's, or the engineer's role-PIN session on
@@ -1122,8 +1123,8 @@ module view. Otherwise:
   file at its line (`(* file NAME *)` headers in the build).
 - **Upload** (⋯): a `.zip` becomes the project its file name says
   (`projects::slug`), a taken name offers Replace; any other file is
-  imported into the open project, and a refusal (L5X, 415) is shown in
-  the box's words. **Download**: the browser fetches `GET .../zip`.
+  imported into the open project, and a refusal (an L5X outside the
+  ladder subset, 422) is shown in the box's words. **Download**: the browser fetches `GET .../zip`.
 
 **In the simulation** (`sim_projects.rs`, the same Files sidebar and
 header; contract in `sim_projects_tests.rs`): projects live in the page's
@@ -1135,8 +1136,9 @@ and Save keeps a copy under a free name. The build is the box's (one
 `.st` as it is; several in name order under `(* file NAME *)` lines), so
 errors and block clicks map to a file and line. Deploy compiles and runs
 it in the page. Upload and Download use `helmsman-project`'s `.zip`;
-`.st` and `PLCopen` `.xml` import into the open project; L5X is refused
-as the box refuses it.
+`.st` and `PLCopen` `.xml` import into the open project; L5X is still
+refused there (the converter is wasm-safe; wiring it in is a canvas
+change, card `l5x-import` notes).
 
 **The Pi** (`pi-projects`): `scripts/pi-deploy-plc.sh` installs the
 binary and the canvas and runs `helmsman-plc --projects`
@@ -1147,7 +1149,82 @@ commits its build as the store's first snapshot (approver `first
 install`), so the box boots running `line`; afterwards it touches
 nothing. `scripts/pi-account.sh` makes the engineer login.
 
-Not built yet (cards): L5X to ST (`l5x-import`).
+### L5X ladder import (`l5x-import`, built)
+
+`helmsman_iec::ladder` (`mod.rs` the converter, `rung.rs` the rung
+neutral text, `lib.st` the Logix semantics in ST); contracts in
+`helmsman-iec/tests/ladder.rs` (fixtures, refusals, hostile files) and
+`tests/ladder_equiv.rs` (the proof below). Card `l5x-scope`: the ladder
+subset converts, the rest is refused, and either the whole export
+converts or nothing is written.
+
+- **Subset.** XIC, XIO, OTE, OTL, OTU; branches (legs may be empty);
+  ONS, OSR, OSF; TON, TOF, RTO, CTU, CTD, RES; EQU/EQ, NEQ/NE, LES/LT,
+  LEQ/LE, GRT/GT, GEQ/GE, LIM/LIMIT (both the old and the v36
+  mnemonics); ADD, SUB, MUL, DIV, MOD, CPT (`+ - * / MOD`, negation,
+  parentheses), MOV/MOVE, CLR, COP between elements of one type; JSR to a
+  ladder routine of the same program, without parameters, as the last
+  instruction of its rung (inlined there under the rung condition, each
+  call site a copy; recursion, more than 25 levels or more than 4 MiB of
+  inlined text is refused). Tags of controller and program scope of type
+  BOOL, SINT, INT, DINT, REAL, TIMER, COUNTER and arrays of them, with
+  constant subscripts; bits of integers (`Word.5`); aliases of such tags
+  (replaced by the tag they name).
+- **Semantics** (each from RM003's execution table or flow chart, pages
+  in docs/SOURCES.md): a rung runs left to right with a rung condition;
+  a branch gives each leg the condition at its start and ORs the legs. A
+  TIMER or COUNTER stays a structure (`LOGIX_TIMER`: PRE, ACC, EN, TT,
+  DN and a hidden `LAST`; `LOGIX_COUNTER`: PRE, ACC, CU, CD, DN, OV, UN)
+  the rungs read and write; TON/TOF/RTO/CTU/CTD are stateless blocks in
+  `lib.st` that copy it in and out and follow the flow charts: ACC in ms
+  from the scan's clock (a TON on `T#100000d` read once a scan, so a
+  scan sees one time), overflow pinning ACC at 2147483647, a negative
+  PRE or ACC faulting the program (Logix's major fault 4/34), counters
+  wrapping with OV/UN and DN left alone while either is set. Numbers
+  follow Logix's conversions: SINT and INT widen to DINT, an operation is
+  REAL if any operand or the destination is, a REAL stored in an integer
+  rounds to the nearest (ties to even) and keeps the low bits, narrowing
+  keeps the low bits; integer DIV by zero gives Source A, MOD by zero 0
+  (CPT's `/` and `MOD` too: RM003 does not say, see SOURCES). Before the
+  first scan the PROGRAM runs Logix's prescan once (`LOGIX_PRESCANNED`):
+  OTE clears, ONS/OSR arm, OSF clears, TON/TOF/RTO reset as their
+  Prescan rows say, CTU/CTD set CU/CD, every called routine once.
+- **Shape.** One file (`F.st`): a header with the notes (a periodic
+  task's rate, renamed tags, tags left out), only the helpers it uses,
+  then one `PROGRAM` per Logix task, named as the task, running its
+  programs in order from each main routine. A program's `Input`/`Output`
+  parameters of an elementary type are the PROGRAM's `VAR_INPUT`/
+  `VAR_OUTPUT` (the box's ports, bound to signals); every other tag is a
+  `VAR` with its decorated initial value (RM014 pp.43-46) and the
+  timers' and counters' pseudo-operands (RM003 p.856). Program tags of
+  two programs in one task that share a name, or that shadow a
+  controller tag, become `PROGRAM_TAG`; a tag whose name ST keeps
+  (`Log`, `Max`, `Limit`) becomes `Log_tag`. An export without tasks is
+  one PROGRAM named as the controller. Every PROGRAM is compiled before
+  it is returned: a converter fault is a refusal, never a broken file.
+- **Refused**, each with its place: any other instruction (add-on
+  instructions named as such), FBD, SFC and ST routines (Logix ST calls
+  instructions IEC ST lacks), tags of other types (UDTs, LINT, STRING,
+  CONTROL, module I/O such as `Local:1:I.Data.3`, also through an alias),
+  indirect subscripts, produced/consumed and InOut tags, constant tags
+  written, JSR with parameters or inside a branch, JSR to the main
+  routine, programs in no task or disabled, event tasks, a controller
+  tag two tasks use (the box's PROGRAMs share no memory), conflicting
+  pseudo-operands, malformed rungs. The file passes the L5X reader's
+  limits (no DTD so no entities or XXE, nesting 256, 8 MiB, 100 000
+  items); rungs nest at most 32 branches and 1000 instructions.
+- **Not reproduced:** math status flags and minor faults (no tag
+  changes), `S:FS` and other system values (refused as unknown tags),
+  forces (noted), the microsecond clock (a timer reads the scan's ms).
+- **The proof** (`tests/ladder_equiv.rs`): random rungs from the subset
+  (branches three deep, every instruction, a JSR to a subroutine, bits,
+  arrays, SINT/INT/DINT/REAL mixes and extremes) run through a reference
+  evaluator written in the test from RM003 and through the converted ST
+  on the interpreter, with random inputs and scan times; every tag must
+  match after every scan and a fault must come on the same scan (400
+  property cases and 200 fixed seeds; the fixed run also checks that
+  most programs run all 40 scans, so it is never vacuous). A real Studio
+  5000 export is still to come (`l5x-real-export`).
 
 ### Forced inputs (`force-inputs`, built)
 
