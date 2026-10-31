@@ -35,6 +35,11 @@ pub enum Error {
     Point(String),
     /// The driver does not know this device's driver name.
     UnknownDriver(String),
+    /// The driver itself failed: a WASM driver ([`crate::wasm`]) trapped
+    /// (out of fuel, over its memory cap, a bug) or broke its contract.
+    /// Not a link error: the point it was reading or writing goes bad,
+    /// the device's other points carry on.
+    Driver(String),
 }
 
 impl fmt::Display for Error {
@@ -48,6 +53,7 @@ impl fmt::Display for Error {
             Self::Point(m) => write!(f, "point: {m}"),
             Self::ReadOnly(a) => write!(f, "{a} is read-only"),
             Self::UnknownDriver(d) => write!(f, "unknown driver {d:?}"),
+            Self::Driver(m) => write!(f, "driver: {m}"),
         }
     }
 }

@@ -1,0 +1,25 @@
+# The Modbus/TCP driver as a WASM guest of helmsman-driver/v1
+# (helmsman-io's `wasm` module). Not a workspace member: it builds only
+# for wasm32-unknown-unknown, by scripts/build-wasm-drivers.sh, which
+# commits the result beside this directory (../modbus-tcp.wasm).
+[package]
+name = "modbus-tcp-guest"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Its own workspace, so cargo never takes it for a member of the repo's.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+codegen-units = 1
+debug = false
+strip = true

@@ -5,7 +5,8 @@
 //!   (`modbus-tcp`, `modbus-rtu` on a serial line ([`rtu`]), [`enip`]
 //!   (`enip-io`, an EtherNet/IP adapter over a Class 1 connection), and
 //!   [`logix`] read-only for controllers the box only observes;
-//!   agent-written WASM drivers later);
+//!   and drivers compiled to WebAssembly ([`wasm`], the `wasm` feature),
+//!   which reach only their own device;
 //! - a [`Signal`] is a named, typed point with a direction, bound to a point on
 //!   a device or to one of the box's own channels (a GPIO driving a 24 V
 //!   output stage, say);
@@ -32,6 +33,8 @@ pub mod model;
 pub mod rtu;
 pub mod sim;
 pub mod text;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 pub use driver::{Driver, Error, PointInfo, open, open_on};
 pub use model::{
