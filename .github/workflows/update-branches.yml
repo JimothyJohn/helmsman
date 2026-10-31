@@ -1,0 +1,59 @@
+# Keeps auto-merge PRs into `dev` up to date, so dev's protection can require
+# branches to be current (strict) without a merge queue (GitHub offers none
+# on a personal-account repo). When dev moves, every open, non-draft,
+# same-repo PR into dev with auto-merge on that is behind gets
+# `update-branch`; its CI re-runs on the new tip and auto-merge lands the
+# PRs one at a time, each tested against what it will merge into.
+# (TODO.md dev-merge-safety-2.)
+#
+# Token: an update pushed with GITHUB_TOKEN starts no workflows, so the
+# updated PR would wait forever for its checks. UPDATE_BRANCH_TOKEN is a
+# fine-grained PAT on this repo only, with Contents and Pull requests
+# read/write. Without it the job fails and says so.
+# Triggers: a push to dev; and every 15 minutes, because a merge that
+# automerge.yml enabled (GITHUB_TOKEN) fires no push event either.
+# Nothing here checks out or runs PR code: only `gh` calls.
+name: Update branches
+
+on:
+  push:
+    branches: [dev]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-branches
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update auto-merge PRs that are behind dev
+        env:
+          GH_TOKEN: ${{ secrets.UPDATE_BRANCH_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::UPDATE_BRANCH_TOKEN is not set (see the header of this workflow)"
+            exit 1
+          fi
+          prs="$(gh pr list -R "$REPO" --base dev --state open --limit 100 \
+            --json number,isDraft,autoMergeRequest,isCrossRepository,mergeStateStatus \
+            --jq '.[] | select(.isDraft | not) | select(.isCrossRepository | not)
+                      | select(.autoMergeRequest != null) | select(.mergeStateStatus == "BEHIND")
+                      | .number')"
+          if [ -z "$prs" ]; then
+            echo "nothing behind"
+            exit 0
+          fi
+          for n in $prs; do
+            echo "updating #$n"
+            # A PR that conflicts or was just updated fails here; the next run retries.
+            gh api -X PUT "repos/$REPO/pulls/$n/update-branch" >/dev/null || echo "::warning::#$n not updated"
+          done
