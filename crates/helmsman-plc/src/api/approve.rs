@@ -825,7 +825,10 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     }
     ctx.set_running(target, catalog);
     let project = match target_ref {
-        Target::Project(name) => Some(super::projects::deployed(ctx, name, content)),
+        Target::Project(name) => {
+            super::forces::release_all(ctx, "a project was deployed");
+            Some(super::projects::deployed(ctx, name, content))
+        }
         _ => None,
     };
     let reload = reloaded.map(|(table, record, links)| {

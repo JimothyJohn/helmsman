@@ -555,6 +555,12 @@ fn key(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
+/// What the box keeps of a session token: its SHA-256.
+#[must_use]
+pub fn session_key(token: &str) -> [u8; 32] {
+    key(token)
+}
+
 /// The lockout after `over` wrong passwords past the allowance.
 fn backoff(lockout: Lockout, over: u32) -> Duration {
     let factor = 1u32.checked_shl(over.min(31)).unwrap_or(u32::MAX);
@@ -779,6 +785,31 @@ impl Logins {
         }
         s.last = now;
         Ok(s.who.clone())
+    }
+
+    /// Whether the session whose token hashes to `key` ([`session_key`])
+    /// is live and its account unchanged, without using it: its idle time
+    /// does not restart. What holds a session's forces asks this.
+    #[must_use]
+    pub fn live(&self, key: &[u8; 32]) -> bool {
+        let now = (self.clock)();
+        let ss = lock(&self.sessions);
+        let Some(s) = ss.get(key) else {
+            return false;
+        };
+        if now.saturating_duration_since(s.created) >= self.limits.ttl
+            || now.saturating_duration_since(s.last) >= self.limits.idle
+        {
+            return false;
+        }
+        let current = match (self.mode(), s.who.proof) {
+            (Mode::Accounts(a), Proof::Password) => {
+                a.get(&s.who.user).filter(|a| !a.disabled).map(Account::stamp)
+            }
+            (Mode::Pins, Proof::Pin) => Some(pin_stamp(s.who.role)),
+            _ => None,
+        };
+        current.is_some_and(|c| ct_eq(&c, &s.stamp))
     }
 
     /// Ends `token`'s session; who it was, if it was one.
