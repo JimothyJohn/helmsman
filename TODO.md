@@ -1109,7 +1109,7 @@
   asked: 2026-10-31
   by: claude-session
 
-- [ ] **Force inputs from the editor** — docs/UI.md step 2's last part: an engineer forces an input (a signal and/or a %I address) to a value, applied every scan after the I/O read and before the programs run.
+- [x] **Force inputs from the editor** — docs/UI.md step 2's last part: an engineer forces an input (a signal and/or a %I address) to a value, applied every scan after the I/O read and before the programs run.
   result: `GET/POST/DELETE /api/forces` (engineer session, audited per force and release), forces end on that engineer's logout or session expiry and on deploy, and the live and trace APIs mark forced points so the UI shows FORCED
   notes: the scan thread reads a published force set (try_lock, keeps the last copy), so it never waits on the API; a sweep ends forces whose session is gone. Projects (#this PR) are in.
   est: 1d
