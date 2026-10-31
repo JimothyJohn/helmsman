@@ -329,6 +329,9 @@ fn corpus() -> Vec<Case> {
              k := SEL(TRUE, DINT#1, 2);",
         ),
         // Edge triggers and counters from the standard library.
+        // BLINK_PATTERN is left out on purpose: it is a Helmsman extension,
+        // not IEC 61131-3, and ruSTy has no such block to compare with. Its
+        // contract is pinned against its definition in tests/pou.rs.
         case(
             "",
             vec![

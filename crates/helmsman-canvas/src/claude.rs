@@ -689,6 +689,7 @@ Supported by helmsman-iec:
 - Operators: arithmetic, MOD, **, comparisons, AND/&, OR, XOR, NOT; partial bit access `w.3`.
 - Standard functions: ABS, SQRT, LN, LOG, EXP, SIN, COS, TAN, ASIN, ACOS, ATAN, EXPT, MIN, MAX, LIMIT, SEL, MUX, SHL, SHR, ROL, ROR, TRUNC, MOVE, and type conversions such as INT_TO_REAL and REAL_TO_INT.
 - Standard function blocks: TON, TOF, TP (IN, PT -> Q, ET), CTU (CU, R, PV -> Q, CV), CTD (CD, LD, PV -> Q, CV), CTUD, R_TRIG and F_TRIG (CLK -> Q), SR (S1, R -> Q1), RS (S, R1 -> Q1).
+- A stack-light block of this dialect's own (not IEC): BLINK_PATTERN (EN : BOOL, MODE : INT, PERIOD : TIME -> Q). MODE 0 off, 1 steady, 2 slow blink (on for the first half of each PERIOD), 3 fast blink (four times as fast), 4 double flash (two PERIOD/8 flashes, then off for the rest of PERIOD). EN FALSE is off.
 
 Not supported (do not use): STRING and WSTRING, DATE, DT, TOD, VAR_IN_OUT, VAR_GLOBAL, VAR_EXTERNAL, function outputs other than the return value, pointers and references, OOP (METHOD, INTERFACE, EXTENDS), multi-level addresses like %QW0.1.2, word or byte located I/O in the panel (only %IX/%QX bits get controls), and vendor libraries. If a request needs one of these, say so and use a supported alternative (for example an INT state code instead of a string).
 

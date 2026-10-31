@@ -907,7 +907,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 
 - [ ] **Box outputs: GPIO stack light** — Pi GPIO (or a relay hat) as box-owned outputs with named channels; blink patterns as a stdlib FB.
   needs: a relay hat or 24 V stack light + driver on the bench
-  notes: the GPIO backend is in (feat/sources-modbus-rtu: `do:N` is line N of `--gpio-chip`); left: the hardware, the blink FB, and pi-gpio-check on the Pi
+  notes: the GPIO backend is in (feat/sources-modbus-rtu: `do:N` is line N of `--gpio-chip`); the blink FB is in (feat/blink-fb: `BLINK_PATTERN(EN, MODE, PERIOD) -> Q` in helmsman-iec's library.st, modes off / steady / slow / fast / double flash, on the scan clock; not named BLINK so modules called blink still compile); left: the hardware and pi-gpio-check on the Pi
   result: the demo's light
   est: 1d
   difficulty: low
