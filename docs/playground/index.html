@@ -14,8 +14,8 @@
     <!-- trunk builds the crate to wasm and injects the loader here -->
     
 <script type="module">
-import init, * as bindings from '/helmsman/playground/helmsman-canvas-ae6f892941fc2e26.js';
-const wasm = await init({ module_or_path: '/helmsman/playground/helmsman-canvas-ae6f892941fc2e26_bg.wasm' });
+import init, * as bindings from '/helmsman/playground/helmsman-canvas-f0b9c80ac9e5b77c.js';
+const wasm = await init({ module_or_path: '/helmsman/playground/helmsman-canvas-f0b9c80ac9e5b77c_bg.wasm' });
 
 
 window.wasmBindings = bindings;
@@ -30,7 +30,7 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
         #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
                    color: #8C8C8C; font: 15px ui-monospace, Menlo, Consolas, monospace; margin: 0; }
     </style>
-<link rel="modulepreload" href="/helmsman/playground/helmsman-canvas-ae6f892941fc2e26.js" crossorigin="anonymous" integrity="sha384-SRhSXYo/HxHg/4LWHfg93uhwTV2L/32xpGnaZ65Ba0wD7rdPbZ3p4gVQ1O9hAG9E"><link rel="preload" href="/helmsman/playground/helmsman-canvas-ae6f892941fc2e26_bg.wasm" crossorigin="anonymous" integrity="sha384-btT10teNa3Uah029fTKnYp+vhfb3t/MvEOLO9nGROnNaiE7pLu8eL+iEMsShh22B" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/helmsman/playground/helmsman-canvas-f0b9c80ac9e5b77c.js" crossorigin="anonymous" integrity="sha384-SRhSXYo/HxHg/4LWHfg93uhwTV2L/32xpGnaZ65Ba0wD7rdPbZ3p4gVQ1O9hAG9E"><link rel="preload" href="/helmsman/playground/helmsman-canvas-f0b9c80ac9e5b77c_bg.wasm" crossorigin="anonymous" integrity="sha384-e7cxAUsPztXbOtXHgWUJcy65LtCqfYBJZEWKRRCXtLkQ/V2BvLfDWYygSA7uldbc" as="fetch" type="application/wasm"></head>
 <body>
     <p id="loading">Loading the Helmsman ST playground…</p>
     <noscript><p style="color:#fff;font-family:sans-serif;padding:16px">The playground runs in your browser and needs JavaScript and WebAssembly.</p></noscript>

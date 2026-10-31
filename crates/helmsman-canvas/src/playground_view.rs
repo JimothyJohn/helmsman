@@ -432,6 +432,11 @@ impl PlaygroundView {
         }
         let inputs: Vec<Point> = self.session.inputs().cloned().collect();
         let outputs: Vec<Point> = self.session.outputs().cloned().collect();
+        let on_map = self.on_map();
+        let off_map: Vec<&Point> = inputs
+            .iter()
+            .filter(|p| !on_map.iter().any(|r| r.eq_ignore_ascii_case(&p.name)))
+            .collect();
         egui::ScrollArea::vertical().id_salt("pg-io").show(ui, |ui| {
             ui.label(RichText::new("Inputs").strong());
             if inputs.is_empty() {
@@ -440,8 +445,14 @@ impl PlaygroundView {
                         .small()
                         .color(STEEL),
                 );
+            } else if off_map.len() < inputs.len() {
+                ui.label(
+                    RichText::new("Switch, press or drag the inputs on their blocks in the diagram.")
+                        .small()
+                        .color(STEEL),
+                );
             }
-            for p in &inputs {
+            for p in off_map {
                 if let Some(v) = input_ui(ui, p) {
                     self.session.set_input(&p.name, v);
                 }
@@ -738,7 +749,10 @@ impl PlaygroundView {
     fn diagram(&mut self, ui: &mut egui::Ui) {
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
         if let Some(v) = &mut self.viewer {
+            let area = ui.available_rect_before_wrap();
             v.canvas(ui, scan);
+            let reads = v.reads_on_screen();
+            self.map_inputs(ui, area, &reads);
             return;
         }
         let rect = ui.available_rect_before_wrap();
@@ -758,6 +772,152 @@ impl PlaygroundView {
         );
     }
 }
+
+impl PlaygroundView {
+    /// Each input's control, drawn on its blocks in the diagram: a click
+    /// flips a switch, a push button is on while held, a number drags
+    /// sideways (or takes a typed value on a click).
+    fn map_inputs(&mut self, ui: &mut egui::Ui, area: egui::Rect, reads: &[(String, egui::Rect)]) {
+        let inputs: Vec<Point> = self.session.inputs().cloned().collect();
+        ui.set_clip_rect(area);
+        // A push button read in two places is held if either is.
+        let mut held: Vec<(String, bool)> = Vec::new();
+        let mut set = Vec::new();
+        for (k, (path, rect)) in reads.iter().enumerate() {
+            let Some(p) = inputs.iter().find(|p| p.name.eq_ignore_ascii_case(path)) else {
+                continue;
+            };
+            if !area.intersects(*rect) {
+                continue;
+            }
+            match map_input_ui(ui, *rect, p, k) {
+                MapInput::Held(on) => match held.iter_mut().find(|(n, _)| *n == p.name) {
+                    Some((_, h)) => *h |= on,
+                    None => held.push((p.name.clone(), on)),
+                },
+                MapInput::Set(v) => set.push((p.name.clone(), v)),
+                MapInput::Nothing => {}
+            }
+        }
+        for (name, on) in held {
+            self.session.set_input(&name, Value::Bool(on));
+        }
+        for (name, v) in set {
+            self.session.set_input(&name, v);
+        }
+    }
+
+    /// The inputs the diagram shows a control for.
+    pub(crate) fn on_map(&self) -> Vec<String> {
+        let Some(v) = &self.viewer else { return Vec::new() };
+        v.reads_on_screen().into_iter().map(|(path, _)| path).collect()
+    }
+}
+
+/// What an input's control on the diagram did this frame.
+enum MapInput {
+    Nothing,
+    /// A push button: whether it is held.
+    Held(bool),
+    Set(Value),
+}
+
+/// One input's control filling its block at `rect`.
+fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> MapInput {
+    let label = p.name.to_ascii_lowercase();
+    let size = (rect.height() * 0.4).clamp(7.0, 18.0);
+    let builder = egui::UiBuilder::new().max_rect(rect).id_salt(("pg-map", k));
+    ui.scope_builder(builder, |ui| match p.widget {
+        Some(Widget::Push) => {
+            let on = p.value == Value::Bool(true);
+            let b = egui::Button::new(RichText::new(&label).strong().size(size).color(if on {
+                BLACK
+            } else {
+                WHITE
+            }))
+            .fill(if on { YELLOW } else { GRAPHITE })
+            .sense(Sense::click_and_drag());
+            let r = ui
+                .add_sized(rect.size(), b)
+                .on_hover_text("push button: on while held");
+            MapInput::Held(r.is_pointer_button_down_on())
+        }
+        Some(Widget::Toggle) => {
+            let on = p.value == Value::Bool(true);
+            let b = egui::Button::new(
+                RichText::new(format!("{label} {}", if on { "ON" } else { "OFF" }))
+                    .strong()
+                    .size(size)
+                    .color(if on { BLACK } else { WHITE }),
+            )
+            .fill(if on { YELLOW } else { GRAPHITE });
+            if ui
+                .add_sized(rect.size(), b)
+                .on_hover_text("switch: click to flip")
+                .clicked()
+            {
+                MapInput::Set(Value::Bool(!on))
+            } else {
+                MapInput::Nothing
+            }
+        }
+        Some(Widget::Int { min, max }) => {
+            let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
+            let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
+            let mut v = match p.value {
+                Value::Int(n) => i64::try_from(n).unwrap_or(0),
+                _ => 0,
+            };
+            let before = v;
+            let d = egui::DragValue::new(&mut v)
+                .range(lo..=hi)
+                .prefix(format!("{label} = "));
+            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
+            if v == before {
+                MapInput::Nothing
+            } else {
+                MapInput::Set(Value::Int(i128::from(v)))
+            }
+        }
+        Some(Widget::Real) => {
+            let mut v = match p.value {
+                Value::Real(r) => r,
+                _ => 0.0,
+            };
+            let before = v;
+            let d = egui::DragValue::new(&mut v)
+                .speed(0.1)
+                .prefix(format!("{label} = "));
+            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
+            if v.to_bits() != before.to_bits() && v.is_finite() {
+                MapInput::Set(Value::Real(v))
+            } else {
+                MapInput::Nothing
+            }
+        }
+        Some(Widget::Time) => {
+            let mut ms = match p.value {
+                Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
+                _ => 0,
+            };
+            let before = ms;
+            let d = egui::DragValue::new(&mut ms)
+                .range(0..=86_400_000)
+                .prefix(format!("{label} = "))
+                .suffix(" ms");
+            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
+            if ms == before {
+                MapInput::Nothing
+            } else {
+                MapInput::Set(Value::Int(i128::from(ms) * 1_000_000))
+            }
+        }
+        None => MapInput::Nothing,
+    })
+    .inner
+}
+
+const DRAG_HINT: &str = "drag sideways to change, or click to type";
 
 impl Default for PlaygroundView {
     fn default() -> Self {
