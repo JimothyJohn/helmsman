@@ -46,7 +46,10 @@ fn ladder() -> PathBuf {
 }
 
 fn plc() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
+    let mut c = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"));
+    // The OPC UA server's default port is shared; tests/opcua.rs covers it.
+    c.args(["--opcua", "off"]);
+    c
 }
 
 /// A fresh, empty state directory for one PLC process.
@@ -1080,7 +1083,9 @@ fn set_pin_stores_a_slow_salted_private_hash_and_never_prints_the_pin() {
 /// `helmsman-plc account ARGS... --state-dir DIR`, `stdin` on its stdin.
 fn account(dir: &Path, args: &[&str], stdin: &str) -> (Option<i32>, String) {
     use std::io::Write as _;
-    let mut child = plc()
+    // Not plc(): a subcommand must be the first argument, and the account
+    // CLI never starts the OPC UA server anyway.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
         .arg("account")
         .args(args)
         .arg("--state-dir")

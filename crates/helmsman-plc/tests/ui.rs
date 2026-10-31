@@ -94,6 +94,7 @@ fn plc() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"));
     c.arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st"))
         .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
+        .args(["--opcua", "off"])
         .arg("--state-dir")
         .arg(tmp("state"));
     c

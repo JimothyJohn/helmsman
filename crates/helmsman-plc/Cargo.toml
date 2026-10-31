@@ -35,6 +35,13 @@ helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
 # The WASM tier's test modules are hand-written WAT, assembled in the test.
 wat = { version = "1.262.0", default-features = false }
+# An independent OPC UA client to test the box's server against
+# (tests/opcua.rs). Tests only, never the box: its crypto (`rsa`) carries
+# RUSTSEC-2023-0071 (Marvin, unpatched) and it pulls tokio and ~150 crates;
+# tests/box_build.rs fails if any of it reaches the box build. Pinned:
+# pre-1.0, it breaks per minor.
+async-opcua = { version = "=0.19.0", default-features = false, features = ["client"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time"] }
 
 [lints]
 workspace = true
@@ -67,6 +74,14 @@ required-features = ["box"]
 
 [[test]]
 name = "bin"
+required-features = ["box"]
+
+[[test]]
+name = "opcua"
+required-features = ["box"]
+
+[[test]]
+name = "opcua_fuzz"
 required-features = ["box"]
 
 [[test]]
