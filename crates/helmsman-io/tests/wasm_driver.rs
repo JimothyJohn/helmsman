@@ -598,13 +598,14 @@ fn connected(l: &TcpListener) -> Option<Vec<u8>> {
 
 #[test]
 fn the_socket_reaches_the_device_only_and_never_from_parse() {
-    // parse and write both try to send "hello"; connecting is synchronous
-    // in send, so a connection either sits in the backlog when the call
-    // returns or never happened.
+    // parse tries to send "parse", write sends "write". Connections queue
+    // in the order they were made, so had parse connected, the first one
+    // the device accepts would carry "parse".
     let src = guest_src(
-        r#"(data (i32.const 64) "hello")
+        r#"(data (i32.const 64) "write")
+        (data (i32.const 80) "parse")
         (func (export "parse") (param i32 i32)
-          (if (i32.ne (call $send (i32.const 64) (i32.const 5)) (i32.const -1)) (then unreachable))
+          (if (i32.ne (call $send (i32.const 80) (i32.const 5)) (i32.const -1)) (then unreachable))
           (call $point (i32.const 1) (i32.const 1)))
         (func (export "write") (param i32 i32 i32 i64)
           (if (i32.ne (call $send (i32.const 64) (i32.const 5)) (i32.const 0)) (then unreachable)))"#,
@@ -613,12 +614,19 @@ fn the_socket_reaches_the_device_only_and_never_from_parse() {
     let (other, _) = watch();
     let mut d = wat_driver(&src, &at).unwrap();
     d.parse("x").unwrap();
-    assert_eq!(connected(&device), None, "parse got no socket");
     d.write("x", Value::Int(1)).unwrap();
+    // The kernel may queue the connection a moment after send returns.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let first = loop {
+        if let Some(got) = connected(&device) {
+            break got;
+        }
+        assert!(Instant::now() < deadline, "write never reached the device");
+        std::thread::sleep(Duration::from_millis(5));
+    };
     assert_eq!(
-        connected(&device).as_deref(),
-        Some(&b"hello"[..]),
-        "write reached the device"
+        first, b"write",
+        "the device's first connection is write's: parse got no socket"
     );
     assert_eq!(connected(&other), None);
 }
