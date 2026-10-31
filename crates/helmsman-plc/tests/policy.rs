@@ -64,7 +64,7 @@ fn manifest(name: &str, s: &Spec) -> String {
 fn files(name: &str, s: &Spec) -> ModuleFiles {
     ModuleFiles {
         manifest: manifest(name, s),
-        source: format!("PROGRAM {name}\n  {}\nEND_PROGRAM\n", s.body),
+        code: format!("PROGRAM {name}\n  {}\nEND_PROGRAM\n", s.body).into(),
     }
 }
 
@@ -351,7 +351,7 @@ proptest! {
             prop_assert_eq!(&b.calendar, &t.calendar);
             prop_assert_eq!(b.modules.keys().collect::<Vec<_>>(), t.modules.keys().collect::<Vec<_>>());
             for (n, f) in &b.modules {
-                prop_assert_eq!(&f.source, &t.modules[n].source);
+                prop_assert_eq!(&f.code, &t.modules[n].code);
             }
         }
         prop_assert_eq!(Some(c.tier), c.reasons.iter().map(|r| r.0).max());
@@ -744,4 +744,108 @@ fn parallel_guessing_gets_no_more_tries_than_serial() {
         5,
         "160 guesses from 16 threads: only 5 were ever checked"
     );
+}
+
+// ---- WASM modules ---------------------------------------------------------------
+
+/// `conveyor` as WASM: reads `start` and `speed`, drives `lamp`, and
+/// (when `horn`) `horn` too, which its manifest may or may not admit.
+fn conveyor_wasm(horn: bool) -> Vec<u8> {
+    let (import, call) = if horn {
+        (
+            r#"(import "helmsman/v1/out" "horn" (func $horn (param i32)))"#,
+            "(call $horn (call $start))",
+        )
+    } else {
+        ("", "")
+    };
+    wat::parse_str(format!(
+        r#"(module
+             (import "helmsman/v1/in" "start" (func $start (result i32)))
+             (import "helmsman/v1/in" "speed" (func $speed (result f64)))
+             (import "helmsman/v1/out" "lamp" (func $lamp (param i32)))
+             {import}
+             (func (export "scan")
+               (call $lamp (i32.and (call $start) (f64.gt (call $speed) (f64.const 1.0))))
+               {call}))"#
+    ))
+    .unwrap()
+}
+
+fn wasm_cs(bytes: &[u8], s: &Spec) -> ChangeSet {
+    let mut c = base();
+    c.modules.insert(
+        "conveyor".into(),
+        ModuleFiles::wasm(manifest("conveyor", s), bytes),
+    );
+    c
+}
+
+#[test]
+fn a_wasm_module_is_classified_by_its_manifest_as_st_is() {
+    let w = conveyor_wasm(false);
+    let a = wasm_cs(&w, &Spec::default());
+    assert_eq!(tier(&base(), &a), Tier::Logic, "ST for WASM: the program changed");
+    assert_eq!(tier(&a, &base()), Tier::Logic, "and back");
+    let mut other = w.clone();
+    other.extend_from_slice(&[0, 2, 1, b'x']);
+    assert_eq!(
+        tier(&a, &wasm_cs(&other, &Spec::default())),
+        Tier::Logic,
+        "one byte more"
+    );
+    let speed = Spec {
+        speed: 2.0,
+        ..Spec::default()
+    };
+    assert_eq!(tier(&a, &wasm_cs(&w, &speed)), Tier::Param, "a param value only");
+    let speed_and_code = wasm_cs(&other, &speed);
+    assert_eq!(tier(&a, &speed_and_code), Tier::Logic, "a param and the binary");
+    let horn = Spec {
+        drives: vec!["lamp", "horn"],
+        ..Spec::default()
+    };
+    assert_eq!(
+        tier(&a, &wasm_cs(&conveyor_wasm(true), &horn)),
+        Tier::OutputAffecting
+    );
+    // The same bytes as ST text and as a binary are not the same program.
+    let text = String::from_utf8(w[..8].to_vec()).unwrap();
+    let mut st = base();
+    st.modules.get_mut("conveyor").unwrap().code = text.into();
+    assert_eq!(tier(&st, &wasm_cs(&w[..8], &Spec::default())), Tier::Logic);
+    // Added or removed: by what the manifest drives.
+    let mut added = base();
+    added.modules.insert(
+        "siren".into(),
+        ModuleFiles::wasm(manifest("siren", &horn), conveyor_wasm(true)),
+    );
+    assert_eq!(tier(&base(), &added), Tier::OutputAffecting);
+    assert_eq!(tier(&added, &base()), Tier::OutputAffecting);
+}
+
+#[test]
+fn a_wasm_manifest_that_understates_its_imports_never_compiles() {
+    // The binary imports `horn` as an output; its manifest says it drives
+    // only `lamp`. The classifier reads the manifest (a logic change), and
+    // that is safe only because nothing applies a change set whose modules
+    // do not compile against their manifests: this one does not.
+    let d = helmsman_plc::spec::Defaults {
+        period: Duration::from_millis(10),
+        i: helmsman_plc::Window::new(0, 0),
+        q: helmsman_plc::Window::new(0, 0),
+        m: 0,
+    };
+    let honest = wasm_cs(&conveyor_wasm(false), &Spec::default());
+    helmsman_plc::api::swap::compile_set(&honest, &d).unwrap();
+    let liar = wasm_cs(&conveyor_wasm(true), &Spec::default());
+    assert_eq!(tier(&honest, &liar), Tier::Logic, "the manifest says so");
+    let errs = helmsman_plc::api::swap::compile_set(&liar, &d).unwrap_err();
+    assert!(errs.join("\n").to_lowercase().contains("horn"), "{errs:?}");
+    // Nor can a WASM module claim windows to look like something else.
+    let mut windowed = wasm_cs(&conveyor_wasm(false), &Spec::default());
+    let f = windowed.modules.get_mut("conveyor").unwrap();
+    f.manifest.push_str("q 0+1\n");
+    let errs = helmsman_plc::api::swap::compile_set(&windowed, &d).unwrap_err();
+    assert!(errs.join("\n").contains("no i, q or m windows"), "{errs:?}");
 }

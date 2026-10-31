@@ -427,7 +427,7 @@
   id: param-units
   answer: unit= on param lines (recommended, built)
 
-- [ ] **Relay health route for the offline probe?** While the agent is offline the box probes `GET {relay}/v1/health` with its box token every 15 s and on each chat message. Today any answer below 500 except 401/403 counts as "online", so a relay without the route (404) still counts as up. If the relay's upstream (the model API) is down but the relay itself answers, the box flips online, the next turn fails, and it goes offline again: one failed message per flap. A real `/v1/health` on the relay that reflects its upstream (503 when it cannot serve turns) closes that.
+- [x] **Relay health route for the offline probe?** While the agent is offline the box probes `GET {relay}/v1/health` with its box token every 15 s and on each chat message. Today any answer below 500 except 401/403 counts as "online", so a relay without the route (404) still counts as up. If the relay's upstream (the model API) is down but the relay itself answers, the box flips online, the next turn fails, and it goes offline again: one failed message per flap. A real `/v1/health` on the relay that reflects its upstream (503 when it cannot serve turns) closes that.
   asked: 2026-10-30
   by: claude-agent
   needs: your call, then a relay change in the relay repo
@@ -437,6 +437,7 @@
   difficulty: low
   id: relay-health
   answer: add GET /v1/health to the relay, 200/503 by upstream (recommended)
+  notes: relay side done in ../agent-relay (3af804b). Box side on fix/relay-health: `relay::probe` counts only a 2xx as up; a 5xx carries the relay's error kind, message and `upstream` category into the banner; 404 and every other answer are `relay_unhealthy`. Contract in helmsman-agent/tests/probe.rs.
 
 - [x] **No relay configured: should chat still take param edits by rule?** A box started without `--relay` answers `POST /api/chat` with 503 ("no relay configured"), as before; `GET /api/chat/status` says `unconfigured`. The rule-based param edits only run for a box that has a relay and lost it. An air-gapped box could use them too, but then "chat" exists on a box that never has an agent. Kept as is (reversible: the chat route would be built without a relay).
   asked: 2026-10-30
@@ -614,7 +615,27 @@
   difficulty: low
   id: enip-in-box
 
-- [ ] **Where does an agent-written WASM driver live?** The sandbox and the first guest are built (`wasm-driver`), but nothing in a map can name one yet (`wasm-driver-map`). A driver reaches a device, so it should be reviewed like a map change. Recommended: a driver is a module-like blob in the store (`wasm-store` adds WASM blobs for modules), proposed and approved through the same policy at the engineer tier, carried by bundles, and named in the map as `wasm:NAME`; the box ships none built in (the Modbus guest stays a test fixture, since the native driver is the one that runs). Alternatives: a file path on the box (`module=/etc/helmsman/drivers/x.wasm`), simplest but outside snapshots, approval and audit; or bundles only, no local authoring. Nothing is built for this yet: it sits on `wasm-store`, which another branch is building now.
+- [ ] **Snapshot store schema 2: mark it on the first WASM commit, or on open?** WASM modules in the store (`wasm-store`) add a `wasm-module` tree line, which a build from before would read as a corrupt snapshot. So the schema goes 1 → 2, with no table changes. Built: a schema 1 store opens untouched and is marked 2 inside the first commit that holds a WASM module; until then you can still roll the box's binary back to an older build, and after it the older build says "newer schema, run a newer helmsman-plc" instead of "corrupt". The other way, mark every store 2 the first time a new build opens it: simpler to reason about, but a binary rollback then fails even on a box that never ran WASM.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: when an existing box's store stops opening on an older build
+  options: on the first WASM commit (recommended, built) | on first open by a new build
+  est: 15m
+  difficulty: low
+  id: store-schema-2
+
+- [ ] **WASM over the box API: is ~750 KiB enough?** A proposal carries `module.wasm` as base64 in the JSON body, and the API's request body limit is 1 MiB, so the largest WASM module the API takes is about 750 KiB, though the store and bundles take 1 MiB (`MAX_FILE`). `POST /api/dropins` already has its own larger body cap (`http::Limits::upload`, 2 MiB for PDFs); the same mechanism would serve here. Bundles have the same ceiling over `POST /api/bundles`. Hand-written and `no_std` Rust modules are a few KiB; a Rust module with `std` and formatting can pass 1 MiB. Built: unchanged limit.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: the largest WASM module (and bundle) a box takes over its API
+  options: keep 1 MiB bodies, ~750 KiB WASM (recommended, built) | raise the body limit for /api/proposals and /api/bundles to 2 MiB | a raw upload route (application/wasm) beside the JSON one
+  est: 1h
+  difficulty: low
+  id: wasm-api-size
+
+- [ ] **Where does an agent-written WASM driver live?** The sandbox and the first guest are built (`wasm-driver`), but nothing in a map can name one yet (`wasm-driver-map`). A driver reaches a device, so it should be reviewed like a map change. Recommended: a driver is a module-like blob in the store (as `wasm-store` now stores WASM modules), proposed and approved through the same policy at the engineer tier, carried by bundles, and named in the map as `wasm:NAME`; the box ships none built in (the Modbus guest stays a test fixture, since the native driver is the one that runs). Alternatives: a file path on the box (`module=/etc/helmsman/drivers/x.wasm`), simplest but outside snapshots, approval and audit; or bundles only, no local authoring. Nothing is built for this yet.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -1171,8 +1192,9 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: module-format
   id: wasm-tier
 
-- [ ] **WASM modules in snapshots, proposals and bundles** — the store, the box API's proposals and bundles carry a module's files as UTF-8 text (`module.st`), so a `module.wasm` module runs from `--module-dir` but cannot be stored, proposed, approved, rolled back or bundled. Carry the binary as a blob (SHA-256 like the others), classify its tier from the manifest as for ST, show the API its imports instead of a source.
+- [x] **WASM modules in snapshots, proposals and bundles** — the store, the box API's proposals and bundles carry a module's files as UTF-8 text (`module.st`), so a `module.wasm` module runs from `--module-dir` but cannot be stored, proposed, approved, rolled back or bundled. Carry the binary as a blob (SHA-256 like the others), classify its tier from the manifest as for ST, show the API its imports instead of a source.
   result: a WASM module goes through the same approval path as an ST one
+  notes: built: `store::Code` (St / Wasm), `wasm-module` tree lines, store schema 2 marked on the first WASM commit (store-schema-2), proposals take `wasm` as base64 (wasm-api-size), `render::wasm` shows imports; ARCHITECTURE "WASM modules" and "Snapshots".
   est: 3d
   difficulty: med
   depends: wasm-tier

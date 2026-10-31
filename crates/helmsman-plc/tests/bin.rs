@@ -886,7 +886,7 @@ fn offset_set(base: u8) -> ChangeSet {
             "name offset\nauthor test\nscan_ms 2\nq 0+1\nreads in_shift\ndrives\n\
              param base int {base} min=0 max=200\n"
         ),
-        source: "PROGRAM offset
+        code: "PROGRAM offset
                  VAR_INPUT base : USINT := 0; in_shift : BOOL; END_VAR
                  VAR o AT %QB0 : USINT; END_VAR
                    IF in_shift THEN o := base + 2; ELSE o := 1; END_IF;
@@ -951,7 +951,7 @@ fn a_store_that_cannot_run_is_refused_before_the_adapter_starts() {
     std::fs::write(foreign.join(DB_FILE), [0x5a; 4096]).unwrap();
     let bad_module = store_dir("bad-module");
     let mut set = offset_set(40);
-    set.modules.get_mut("offset").unwrap().source = "PROGRAM offset END_PROGRAM".into();
+    set.modules.get_mut("offset").unwrap().code = "PROGRAM offset END_PROGRAM".into();
     Store::open(&bad_module)
         .unwrap()
         .commit(&set, &store_meta("agent"))

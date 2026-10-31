@@ -139,7 +139,7 @@ fn drop_b(map: &str) -> String {
 fn files((manifest, source): (&str, &str)) -> ModuleFiles {
     ModuleFiles {
         manifest: manifest.into(),
-        source: source.into(),
+        code: source.into(),
     }
 }
 

@@ -75,7 +75,7 @@ fn running() -> ChangeSet {
             "conveyor".to_string(),
             ModuleFiles {
                 manifest: MANIFEST.into(),
-                source: SOURCE.into(),
+                code: SOURCE.into(),
             },
         )]),
         io_map: Some(MAP.into()),

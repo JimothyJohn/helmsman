@@ -477,6 +477,41 @@ pub const fn base64_len(n: usize) -> usize {
     n.div_ceil(3) * 4
 }
 
+/// Decodes [`base64`]'s form and only that: standard alphabet, padded,
+/// no whitespace, unused bits zero. `None` for anything else, so one
+/// binary has one spelling.
+#[must_use]
+pub fn unbase64(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(4) {
+        return None;
+    }
+    let digits = s.trim_end_matches('=');
+    if s.len() - digits.len() > 2 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in digits.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = ((acc << 6) | u32::from(v)) & 0xff_ffff;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(u8::try_from((acc >> bits) & 0xff).ok()?);
+        }
+    }
+    // What is left must be padding's zero bits, and the padding exactly
+    // what the length needs.
+    (acc & ((1 << bits) - 1) == 0 && base64(&out) == s).then_some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,6 +744,26 @@ mod tests {
     }
 
     #[test]
+    fn unbase64_takes_only_the_canonical_form() {
+        for (plain, enc) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(unbase64(enc).as_deref(), Some(plain.as_bytes()), "{enc}");
+        }
+        for bad in [
+            "Zg", "Zg=", "Zh==", "Zm9v\n", " Zm9v", "Zm9v====", "Zm=v", "Z===", "Zm9-", "Zm9_",
+        ] {
+            assert_eq!(unbase64(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
     fn base64_matches_rfc_4648() {
         for (raw, enc) in [
             ("", ""),
@@ -750,6 +805,11 @@ mod tests {
             if let Ok(i) = sniff(&b) {
                 prop_assert!(i.width >= 1 && i.width <= MAX_SIDE && i.height >= 1 && i.height <= MAX_SIDE);
             }
+        }
+
+        #[test]
+        fn unbase64_inverts_base64(b in prop::collection::vec(any::<u8>(), 0..300)) {
+            prop_assert_eq!(unbase64(&base64(&b)), Some(b));
         }
 
         #[test]

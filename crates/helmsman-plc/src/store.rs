@@ -2,14 +2,16 @@
 //! record, in one SQLite file ([`DB_FILE`]) under the store directory.
 //!
 //! A [`ChangeSet`] is everything the box runs: each module's
-//! `module.manifest` and `module.st` (params live in the manifest), the I/O
-//! map (the signal bindings) and the shift calendar, as the exact bytes of
-//! their files. Its [`SnapshotId`] is the SHA-256 of a canonical *tree*:
+//! `module.manifest` and its program, `module.st` or `module.wasm` (params
+//! live in the manifest), the I/O map (the signal bindings) and the shift
+//! calendar, as the exact bytes of their files. Its [`SnapshotId`] is the
+//! SHA-256 of a canonical *tree*:
 //!
 //! ```text
 //! helmsman-snapshot 1
 //! module conveyor <sha256 of module.manifest> <sha256 of module.st>
-//! module lamp     ...                          (sorted by name, one space)
+//! wasm-module lamp <sha256 of module.manifest> <sha256 of module.wasm>
+//!                                              (modules sorted by name, one space)
 //! io-map <sha256>                              (if present)
 //! calendar <sha256>                            (if present)
 //! ```
@@ -17,7 +19,9 @@
 //! so identical content is the identical id, in any store and with any
 //! metadata, and a tree plus its blobs is all a bundle needs to carry.
 //! Every read re-hashes the tree and each blob, so a tampered or corrupted
-//! row is an [`Error::Corrupt`], never wrong content.
+//! row is an [`Error::Corrupt`], never wrong content. Blobs are bytes; the
+//! tree says which must be UTF-8 text (all but `module.wasm`), and a blob
+//! read as text that is not is corrupt too.
 //!
 //! History is an append-only **log**: one [`Entry`] per apply or rollback,
 //! with who, why, who approved and when ([`Meta`]). Each entry's hash covers
@@ -29,9 +33,13 @@
 //! Tables are guarded by triggers that refuse `UPDATE` and `DELETE`, the
 //! file carries an application id and a schema version (`PRAGMA
 //! user_version`, [`SCHEMA`]), and a store from a newer version is refused
-//! rather than misread. Writers serialize on SQLite's write lock
-//! (`BEGIN IMMEDIATE`), so concurrent commits from threads or processes
-//! never lose an entry. A [`Store`] is one connection: open one per thread.
+//! rather than misread. Version 2 has version 1's tables; it adds
+//! `wasm-module` tree lines, which a version 1 build would call corrupt.
+//! So a version 1 store opens as it is and is marked 2 by the first commit
+//! that holds a WASM module (in that commit's transaction): until then an
+//! older build still opens it, after that it says to run a newer one.
+//! Writers serialize on SQLite's write lock (`BEGIN IMMEDIATE`), so
+//! concurrent commits from threads or processes never lose an entry. A [`Store`] is one connection: open one per thread.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -44,13 +52,16 @@ use sha2::{Digest, Sha256};
 
 use helmsman_io::{Device, Signal, Value};
 
-use crate::manifest::{self, MAX_FILE, Manifest, Param, hidden, read_capped};
+use crate::manifest::{self, MAX_FILE, Manifest, Param, hidden, read_capped, read_capped_bytes};
 use crate::spec::name_ok;
 
 /// The store's file inside its directory.
 pub const DB_FILE: &str = "snapshots.db";
-/// The schema version this build reads and writes.
-pub const SCHEMA: i64 = 1;
+/// The schema version this build writes; it reads every one back to
+/// [`SCHEMA_V1`].
+pub const SCHEMA: i64 = 2;
+/// The first schema version: no WASM modules.
+pub const SCHEMA_V1: i64 = 1;
 /// `PRAGMA application_id`: "HLMS".
 const APP_ID: i64 = 0x484C_4D53;
 /// Most modules in one change set.
@@ -148,13 +159,123 @@ impl fmt::Debug for SnapshotId {
     }
 }
 
+/// A module's program file, byte for byte.
+#[derive(Clone, PartialEq, Eq)]
+pub enum Code {
+    /// `module.st`: Structured Text.
+    St(String),
+    /// `module.wasm`: a WebAssembly binary ([`crate::wasm`]).
+    Wasm(Vec<u8>),
+}
+
+impl Default for Code {
+    fn default() -> Self {
+        Self::St(String::new())
+    }
+}
+
+/// Text is ST.
+impl From<String> for Code {
+    fn from(s: String) -> Self {
+        Self::St(s)
+    }
+}
+
+/// Text is ST.
+impl From<&str> for Code {
+    fn from(s: &str) -> Self {
+        Self::St(s.to_string())
+    }
+}
+
+impl fmt::Debug for Code {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::St(s) => f.debug_tuple("St").field(s).finish(),
+            Self::Wasm(b) => write!(f, "Wasm({} bytes, sha256 {})", b.len(), hex(&sha256(b))),
+        }
+    }
+}
+
+impl Code {
+    /// The file's bytes.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        match self {
+            Self::St(s) => s.as_bytes(),
+            Self::Wasm(b) => b,
+        }
+    }
+
+    /// The ST source, for an ST module.
+    #[must_use]
+    pub fn st(&self) -> Option<&str> {
+        match self {
+            Self::St(s) => Some(s),
+            Self::Wasm(_) => None,
+        }
+    }
+
+    /// The binary, for a WASM module.
+    #[must_use]
+    pub fn wasm(&self) -> Option<&[u8]> {
+        match self {
+            Self::St(_) => None,
+            Self::Wasm(b) => Some(b),
+        }
+    }
+
+    /// What stands in for a source where one is shown: the ST itself, or
+    /// for WASM an ST comment naming the binary ([`wasm_note`]), so nothing
+    /// mistakes it for code.
+    #[must_use]
+    pub fn shown(&self) -> String {
+        match self {
+            Self::St(s) => s.clone(),
+            Self::Wasm(b) => wasm_note(b),
+        }
+    }
+}
+
+/// What the API shows as a WASM module's source: an ST comment naming the
+/// binary's interface, size and SHA-256.
+#[must_use]
+pub fn wasm_note(bytes: &[u8]) -> String {
+    format!(
+        "(* WASM module ({}): {} bytes, sha256 {} *)\n",
+        crate::wasm::ABI,
+        bytes.len(),
+        hex(&sha256(bytes))
+    )
+}
+
 /// One module's two files, byte for byte.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModuleFiles {
     /// `module.manifest`.
     pub manifest: String,
-    /// `module.st`.
-    pub source: String,
+    /// `module.st` or `module.wasm`.
+    pub code: Code,
+}
+
+impl ModuleFiles {
+    /// An ST module.
+    #[must_use]
+    pub fn st(manifest: impl Into<String>, source: impl Into<String>) -> Self {
+        Self {
+            manifest: manifest.into(),
+            code: Code::St(source.into()),
+        }
+    }
+
+    /// A WASM module.
+    #[must_use]
+    pub fn wasm(manifest: impl Into<String>, wasm: impl Into<Vec<u8>>) -> Self {
+        Self {
+            manifest: manifest.into(),
+            code: Code::Wasm(wasm.into()),
+        }
+    }
 }
 
 /// Everything one snapshot holds.
@@ -169,12 +290,14 @@ pub struct ChangeSet {
 }
 
 impl ChangeSet {
-    /// Reads module directories and optional map and calendar files from
-    /// disk, each capped at [`MAX_FILE`].
+    /// Reads module directories (`module.st` or `module.wasm`, as
+    /// [`manifest::ModuleDir::read`] does) and optional map and calendar
+    /// files from disk, each capped at [`MAX_FILE`].
     ///
     /// # Errors
-    /// A file missing, too large or not UTF-8, a manifest that does not
-    /// parse, or two directories with one module name.
+    /// A file missing, too large or (but `module.wasm`) not UTF-8, a
+    /// directory with both programs, a manifest that does not parse, or
+    /// two directories with one module name.
     pub fn read(
         module_dirs: &[PathBuf],
         io_map: Option<&Path>,
@@ -187,11 +310,21 @@ impl ChangeSet {
             let name = Manifest::parse(&text)
                 .map_err(|_| format!("{} does not parse", path.display()))?
                 .name;
-            let source = read_capped(&dir.join(manifest::SOURCE))?;
-            let files = ModuleFiles {
-                manifest: text,
-                source,
+            let wasm = dir.join(manifest::WASM);
+            let code = if wasm.exists() {
+                if dir.join(manifest::SOURCE).exists() {
+                    return Err(format!(
+                        "{}: holds both {} and {}; a module is one or the other",
+                        dir.display(),
+                        manifest::SOURCE,
+                        manifest::WASM
+                    ));
+                }
+                Code::Wasm(read_capped_bytes(&wasm)?)
+            } else {
+                Code::St(read_capped(&dir.join(manifest::SOURCE))?)
             };
+            let files = ModuleFiles { manifest: text, code };
             if modules.insert(name.clone(), files).is_some() {
                 return Err(format!("two module directories are named {name}"));
             }
@@ -206,16 +339,25 @@ impl ChangeSet {
     /// The canonical tree this change set hashes to (module docs).
     #[must_use]
     pub fn tree(&self) -> String {
-        let h = |s: &str| hex(&sha256(s.as_bytes()));
+        let h = |s: &[u8]| hex(&sha256(s));
         let mut t = format!("{TREE_HEADER}\n");
         for (name, f) in &self.modules {
-            let _ = writeln!(t, "module {name} {} {}", h(&f.manifest), h(&f.source));
+            let kind = match f.code {
+                Code::St(_) => "module",
+                Code::Wasm(_) => "wasm-module",
+            };
+            let _ = writeln!(
+                t,
+                "{kind} {name} {} {}",
+                h(f.manifest.as_bytes()),
+                h(f.code.bytes())
+            );
         }
         if let Some(m) = &self.io_map {
-            let _ = writeln!(t, "io-map {}", h(m));
+            let _ = writeln!(t, "io-map {}", h(m.as_bytes()));
         }
         if let Some(c) = &self.calendar {
-            let _ = writeln!(t, "calendar {}", h(c));
+            let _ = writeln!(t, "calendar {}", h(c.as_bytes()));
         }
         t
     }
@@ -228,14 +370,15 @@ impl ChangeSet {
 
     /// Whether the store will take it: module names the runtime accepts,
     /// each manifest parses and names its module, the I/O map parses, no
-    /// file over [`MAX_FILE`]. Programs are not compiled here; whoever
-    /// applies a change set compiles it before committing.
+    /// file over [`MAX_FILE`] (a `module.wasm` included). Programs are not
+    /// compiled or loaded here; whoever applies a change set does that
+    /// before committing.
     ///
     /// # Errors
     /// Every problem, at most one per module.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errs = Vec::new();
-        let big = |s: &str| s.len() as u64 > MAX_FILE;
+        let big = |s: &[u8]| s.len() as u64 > MAX_FILE;
         if self.modules.len() > MAX_MODULES {
             errs.push(format!("{} modules, more than {MAX_MODULES}", self.modules.len()));
         }
@@ -244,7 +387,7 @@ impl ChangeSet {
                 errs.push(format!(
                     "module {name:?}: not a module name (1..=64 of A-Z a-z 0-9 _ -)"
                 ));
-            } else if big(&f.manifest) || big(&f.source) {
+            } else if big(f.manifest.as_bytes()) || big(f.code.bytes()) {
                 errs.push(format!("module {name}: a file is larger than {MAX_FILE} bytes"));
             } else {
                 match Manifest::parse(&f.manifest) {
@@ -263,14 +406,14 @@ impl ChangeSet {
             }
         }
         if let Some(m) = &self.io_map {
-            if big(m) {
+            if big(m.as_bytes()) {
                 errs.push(format!("io map: larger than {MAX_FILE} bytes"));
             } else if let Err(e) = helmsman_io::text::parse(m) {
                 let lines: Vec<String> = e.iter().map(|(n, w)| format!("{n}: {w}")).collect();
                 errs.push(format!("io map does not parse: {}", lines.join("; ")));
             }
         }
-        if self.calendar.as_deref().is_some_and(big) {
+        if self.calendar.as_deref().is_some_and(|c| big(c.as_bytes())) {
             errs.push(format!("calendar: larger than {MAX_FILE} bytes"));
         }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
@@ -500,7 +643,7 @@ fn head_of(conn: &Connection) -> Result<Option<(Entry, [u8; 32])>, Error> {
 }
 
 /// Reads a blob and checks it against its hash.
-fn blob(conn: &Connection, hash: &str) -> Result<String, Error> {
+fn blob(conn: &Connection, hash: &str) -> Result<Vec<u8>, Error> {
     let key = unhex32(hash).ok_or_else(|| Error::Corrupt(format!("tree names a bad blob hash {hash:?}")))?;
     let data: Option<Vec<u8>> = conn
         .query_row("SELECT data FROM blobs WHERE hash = ?1", [key.as_slice()], |r| {
@@ -511,7 +654,12 @@ fn blob(conn: &Connection, hash: &str) -> Result<String, Error> {
     if sha256(&data) != key {
         return Err(Error::Corrupt(format!("blob {hash} does not match its hash")));
     }
-    String::from_utf8(data).map_err(|_| Error::Corrupt(format!("blob {hash} is not UTF-8")))
+    Ok(data)
+}
+
+/// Reads a blob the tree says is text.
+fn text(conn: &Connection, hash: &str) -> Result<String, Error> {
+    String::from_utf8(blob(conn, hash)?).map_err(|_| Error::Corrupt(format!("blob {hash} is not UTF-8")))
 }
 
 /// Reads a snapshot, checking the tree and every blob.
@@ -538,15 +686,20 @@ fn load(conn: &Connection, id: &SnapshotId) -> Result<ChangeSet, Error> {
     for line in lines {
         let w: Vec<&str> = line.split(' ').collect();
         match w.as_slice() {
-            ["module", name, m, s] => {
+            [kind @ ("module" | "wasm-module"), name, m, s] => {
+                let code = if *kind == "module" {
+                    Code::St(text(conn, s)?)
+                } else {
+                    Code::Wasm(blob(conn, s)?)
+                };
                 let files = ModuleFiles {
-                    manifest: blob(conn, m)?,
-                    source: blob(conn, s)?,
+                    manifest: text(conn, m)?,
+                    code,
                 };
                 cs.modules.insert((*name).to_string(), files);
             }
-            ["io-map", h] => cs.io_map = Some(blob(conn, h)?),
-            ["calendar", h] => cs.calendar = Some(blob(conn, h)?),
+            ["io-map", h] => cs.io_map = Some(text(conn, h)?),
+            ["calendar", h] => cs.calendar = Some(text(conn, h)?),
             _ => return Err(bad()),
         }
     }
@@ -558,7 +711,7 @@ fn load(conn: &Connection, id: &SnapshotId) -> Result<ChangeSet, Error> {
 
 impl Store {
     /// Opens the store in `dir`, creating the directory and an empty store
-    /// if there is none.
+    /// if there is none. A version 1 store opens as it is (module docs).
     ///
     /// # Errors
     /// The directory or file cannot be used, the file is not a store, or it
@@ -595,7 +748,7 @@ impl Store {
                 supported: SCHEMA,
             });
         }
-        if ver < SCHEMA {
+        if ver < SCHEMA_V1 {
             return Err(Error::NotAStore(path));
         }
         let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
@@ -608,6 +761,15 @@ impl Store {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The file's schema version: [`SCHEMA_V1`] for a store made by an
+    /// older build until it holds a WASM module, then [`SCHEMA`].
+    ///
+    /// # Errors
+    /// A storage error.
+    pub fn schema(&self) -> Result<i64, Error> {
+        Ok(self.conn.pragma_query_value(None, "user_version", |r| r.get(0))?)
     }
 
     /// Records `cs` as the new head and returns its id. If head already
@@ -631,16 +793,22 @@ impl Store {
         if head.as_ref().is_some_and(|(e, _)| e.id == id) {
             return Ok(id);
         }
+        if cs.modules.values().any(|f| f.code.wasm().is_some()) {
+            let ver: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+            if ver < SCHEMA {
+                tx.pragma_update(None, "user_version", SCHEMA)?;
+            }
+        }
         {
             let mut put = tx.prepare("INSERT OR IGNORE INTO blobs (hash, data) VALUES (?1, ?2)")?;
             let files = cs
                 .modules
                 .values()
-                .flat_map(|f| [&f.manifest, &f.source])
-                .chain(&cs.io_map)
-                .chain(&cs.calendar);
+                .flat_map(|f| [f.manifest.as_bytes(), f.code.bytes()])
+                .chain(cs.io_map.as_deref().map(str::as_bytes))
+                .chain(cs.calendar.as_deref().map(str::as_bytes));
             for data in files {
-                put.execute(params![sha256(data.as_bytes()).as_slice(), data.as_bytes()])?;
+                put.execute(params![sha256(data).as_slice(), data])?;
             }
         }
         tx.execute(
@@ -777,7 +945,8 @@ pub enum ModuleChange {
     Removed(String),
     Changed {
         name: String,
-        /// `module.st` changed.
+        /// The program changed: `module.st` or `module.wasm`, or one for
+        /// the other.
         source: bool,
         /// `module.manifest` changed (params, schedule, windows, ...).
         manifest: bool,
@@ -870,7 +1039,7 @@ pub fn diff(a: &ChangeSet, b: &ChangeSet) -> Diff {
             (None, Some(_)) => Some(ModuleChange::Added(n.clone())),
             (Some(x), Some(y)) if x != y => Some(ModuleChange::Changed {
                 name: n.clone(),
-                source: x.source != y.source,
+                source: x.code != y.code,
                 manifest: x.manifest != y.manifest,
                 params: fields(&params(&x.manifest), &params(&y.manifest)),
             }),

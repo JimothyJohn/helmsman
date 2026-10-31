@@ -608,7 +608,7 @@ pub struct ModuleDir {
     pub wasm: Option<Vec<u8>>,
 }
 
-fn read_capped_bytes(path: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn read_capped_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let file = path.display();
     let f = fs::File::open(path).map_err(|e| format!("{file}: {e}"))?;
     let mut buf = Vec::new();
