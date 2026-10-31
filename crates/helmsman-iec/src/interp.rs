@@ -98,6 +98,11 @@ pub enum FaultKind {
     /// its signal cannot carry (a non-finite REAL, an integer past 64 bits).
     /// `line` is 0.
     OutputRange,
+    /// Raised by a host, not the interpreter: a WASM module trapped
+    /// (`unreachable`, an integer overflow or bad conversion, a bad
+    /// indirect call, a stack overflow, or an import it called wrongly).
+    /// `line` is 0.
+    Trap,
 }
 
 /// A runtime error. The program is in an undefined state afterwards; the
@@ -116,6 +121,7 @@ impl fmt::Display for Fault {
             FaultKind::IndexOutOfRange => "array index or MUX selector out of range",
             FaultKind::Watchdog => "watchdog: scan exceeded its instruction budget",
             FaultKind::OutputRange => "an output's value does not fit its signal",
+            FaultKind::Trap => "the WASM module trapped",
         };
         write!(f, "line {}: {what}", self.line)
     }

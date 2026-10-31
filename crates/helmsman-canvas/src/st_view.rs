@@ -466,7 +466,7 @@ impl StView {
             1,
             vec![Slot {
                 name: MODULE.into(),
-                program,
+                program: program.into(),
                 period: Duration::from_millis(SCAN_MS),
                 i: Window::new(0, 1),
                 q: Window::new(0, 1),

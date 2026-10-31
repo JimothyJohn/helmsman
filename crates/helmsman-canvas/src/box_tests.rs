@@ -47,7 +47,7 @@ impl Bench {
         let program = compile(DEMO, SIZES).unwrap();
         let module = Slot {
             name: "cell".into(),
-            program,
+            program: program.into(),
             period: Duration::from_millis(2),
             i: Window::new(0, 1),
             q: Window::new(0, 1),

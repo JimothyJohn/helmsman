@@ -139,7 +139,7 @@ impl ModuleInfo {
             q,
             source,
             manifest,
-            ports: rt.program(name)?.ports(),
+            ports: rt.module(name)?.program.ports(),
             tap: rt.tap(name),
         })
     }

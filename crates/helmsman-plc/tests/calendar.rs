@@ -675,7 +675,7 @@ fn module(name: &str, src: &str) -> Module {
     let program = compile(src, ImageSizes { i: 0, q: 0, m: 0 }).unwrap_or_else(|d| panic!("{name}: {d:?}"));
     Module {
         name: name.into(),
-        program,
+        program: program.into(),
         period: Duration::from_millis(10),
         i: Window::new(0, 0),
         q: Window::new(0, 0),

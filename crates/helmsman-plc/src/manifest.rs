@@ -59,9 +59,10 @@ use std::io::Read as _;
 use std::path::Path;
 use std::time::Duration;
 
-use helmsman_iec::{Port, PortDir, Program, Ty as StTy};
+use helmsman_iec::{Port, PortDir, Ty as StTy};
 use helmsman_io::{Ty, Value};
 
+use crate::logic::Logic;
 use crate::spec::{Defaults, Spec, name_ok, window};
 use crate::{Module, Window};
 
@@ -69,6 +70,8 @@ use crate::{Module, Window};
 pub const FILE: &str = "module.manifest";
 /// The program's file name inside a module directory.
 pub const SOURCE: &str = "module.st";
+/// A WASM module's file name, in place of [`SOURCE`] ([`crate::wasm`]).
+pub const WASM: &str = "module.wasm";
 /// Largest manifest or program [`ModuleDir::read`] accepts, in bytes.
 pub const MAX_FILE: u64 = 1 << 20;
 
@@ -595,12 +598,17 @@ fn param(name: &str, tyname: &str, text: &str, bounds: &[&str]) -> Result<Param,
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleDir {
     pub manifest: Manifest,
-    /// Where `module.st` is and how the module is scheduled.
+    /// Where `module.st` (or `module.wasm`) is and how the module is
+    /// scheduled.
     pub spec: Spec,
+    /// The ST source; empty for a WASM module.
     pub source: String,
+    /// `module.wasm`'s bytes, when the directory holds one instead of
+    /// `module.st`.
+    pub wasm: Option<Vec<u8>>,
 }
 
-pub(crate) fn read_capped(path: &Path) -> Result<String, String> {
+fn read_capped_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let file = path.display();
     let f = fs::File::open(path).map_err(|e| format!("{file}: {e}"))?;
     let mut buf = Vec::new();
@@ -610,18 +618,47 @@ pub(crate) fn read_capped(path: &Path) -> Result<String, String> {
     if buf.len() as u64 > MAX_FILE {
         return Err(format!("{file}: larger than {MAX_FILE} bytes"));
     }
-    String::from_utf8(buf).map_err(|_| format!("{file}: not UTF-8"))
+    Ok(buf)
+}
+
+pub(crate) fn read_capped(path: &Path) -> Result<String, String> {
+    String::from_utf8(read_capped_bytes(path)?).map_err(|_| format!("{}: not UTF-8", path.display()))
 }
 
 impl ModuleDir {
-    /// Reads `dir/module.manifest` and `dir/module.st`.
+    /// Reads `dir/module.manifest` and `dir/module.st`, or `dir/module.wasm`
+    /// when that is there instead.
     ///
     /// # Errors
-    /// A file missing, too large or not UTF-8, or a manifest that does not
-    /// parse (every problem, one per line of the message).
+    /// A file missing, too large or not UTF-8, both `module.st` and
+    /// `module.wasm`, or a manifest that does not parse (every problem, one
+    /// per line of the message).
     pub fn read(dir: &Path, d: &Defaults) -> Result<Self, String> {
-        let mut md = Self::from_text(dir, &read_capped(&dir.join(FILE))?, String::new(), d)?;
+        let manifest = read_capped(&dir.join(FILE))?;
+        let wasm = dir.join(WASM);
+        if wasm.exists() {
+            if dir.join(SOURCE).exists() {
+                return Err(format!(
+                    "{}: holds both {SOURCE} and {WASM}; a module is one or the other",
+                    dir.display()
+                ));
+            }
+            return Self::from_wasm(dir, &manifest, read_capped_bytes(&wasm)?, d);
+        }
+        let mut md = Self::from_text(dir, &manifest, String::new(), d)?;
         md.source = read_capped(&md.spec.path)?;
+        Ok(md)
+    }
+
+    /// A WASM module directory whose files are already in memory; `dir` is
+    /// only where messages say they are.
+    ///
+    /// # Errors
+    /// A manifest that does not parse.
+    pub fn from_wasm(dir: &Path, manifest: &str, wasm: Vec<u8>, d: &Defaults) -> Result<Self, String> {
+        let mut md = Self::from_text(dir, manifest, String::new(), d)?;
+        md.spec.path = dir.join(WASM);
+        md.wasm = Some(wasm);
         Ok(md)
     }
 
@@ -643,22 +680,35 @@ impl ModuleDir {
             manifest,
             spec,
             source,
+            wasm: None,
         })
     }
 
     /// The module, from `program` compiled from [`ModuleDir::source`]
-    /// against the spec's window sizes, once the manifest is checked
-    /// against it.
+    /// against the spec's window sizes (or loaded from
+    /// [`ModuleDir::wasm`]), once the manifest is checked against it.
     ///
     /// # Errors
-    /// Every way the manifest and the program disagree.
-    pub fn module(&self, program: Program) -> Result<Module, String> {
-        self.manifest.check(&program.ports()).map_err(|errs| {
-            let file = self.spec.path.with_file_name(FILE);
-            let file = file.display();
+    /// Every way the manifest and the program disagree; a WASM module
+    /// whose manifest gives it `i`, `q` or `m` windows (it has none).
+    pub fn module(&self, program: impl Into<Logic>) -> Result<Module, String> {
+        let program = program.into();
+        let file = self.spec.path.with_file_name(FILE);
+        let file = file.display();
+        let code = if program.st().is_some() { SOURCE } else { WASM };
+        let mut errs: Vec<String> = Vec::new();
+        if let Err(bad) = self.manifest.check(&program.ports()) {
+            errs.extend(bad.iter().map(ToString::to_string));
+        }
+        if program.st().is_none()
+            && (self.manifest.i.is_some() || self.manifest.q.is_some() || self.manifest.m.is_some())
+        {
+            errs.push("a WASM module has no i, q or m windows: it reads and drives signals only".into());
+        }
+        if !errs.is_empty() {
             let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
-            format!("{file} does not match {SOURCE}:{}", lines.concat())
-        })?;
+            return Err(format!("{file} does not match {code}:{}", lines.concat()));
+        }
         Ok(Module {
             name: self.spec.name.clone(),
             program,
@@ -667,5 +717,25 @@ impl ModuleDir {
             q: self.spec.q,
             params: self.manifest.param_values(),
         })
+    }
+
+    /// The module from [`ModuleDir::wasm`], loaded under `limits` and held
+    /// to the manifest as [`ModuleDir::module`] does.
+    ///
+    /// # Errors
+    /// No `module.wasm`, one that does not load, or a manifest that does
+    /// not match it.
+    #[cfg(feature = "wasm")]
+    pub fn wasm_module(&self, limits: crate::wasm::Limits) -> Result<Module, String> {
+        let file = self.spec.path.display();
+        let bytes = self
+            .wasm
+            .as_deref()
+            .ok_or_else(|| format!("{file}: not a WASM module"))?;
+        let program = crate::wasm::WasmProgram::load(bytes, limits).map_err(|errs| {
+            let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
+            format!("{file} does not load:{}", lines.concat())
+        })?;
+        self.module(program)
     }
 }
