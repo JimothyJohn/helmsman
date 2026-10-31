@@ -73,7 +73,9 @@ Three directions of traffic, three different rules:
 | `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
-`relay-repo`, in `../helmsman-relay`), the WASM host (`wasm-tier`).
+`relay-repo`, in `../helmsman-relay`). The WASM module host
+(`wasm-tier`) is built inside `helmsman-plc` (`wasm.rs`, the `wasm`
+feature), below.
 
 ## One scan, as built
 
@@ -272,6 +274,59 @@ param    beacon  bool true
   Unicode except control and invisible formatting characters (no escape
   sequences or bidi overrides in a log or a review). Files over 1 MiB are
   refused.
+
+## WASM modules (`wasm-tier`, built)
+
+A module directory may hold `module.wasm` instead of `module.st`, with
+the same manifest (`wasm.rs`, `logic.rs` in `helmsman-plc`; contract in
+`tests/wasm.rs`). The runtime holds either as a `Logic` (`St` or `Wasm`),
+so scheduling, binding, hold-on-missing, faults, `swap` and `reconfigure`
+are the same code for both. Behind the `wasm` feature, which `box`
+turns on; the canvas's wasm build never has it.
+
+- **Interface `helmsman/v1`** (versioned by its import module names). A
+  module imports `helmsman/v1/in NAME : () -> T` per input,
+  `helmsman/v1/out NAME : (T) -> ()` per output, optionally
+  `helmsman/v1 now_ms : () -> i64` (the scan's time on the runtime's
+  clock, the only clock), and exports `scan : () -> ()`. `T` is `i32`
+  (`BOOL`, 0 or 1), `i64` (`LINT`) or `f64` (`LREAL`). Each import is a
+  port, named and typed like a `VAR_INPUT`/`VAR_OUTPUT`, so the manifest
+  is checked against the imports exactly as against ST (a module whose
+  manifest lies is refused before the adapter starts) and ports bind to
+  signals by name at load. Any other import (WASI, a memory, a table, a
+  global, another function) refuses the module; so do a `start`
+  function, f32 ports, a port name that is not an identifier or is used
+  twice, and a missing `scan`. No windows: a WASM module's manifest has
+  no `i`, `q` or `m`.
+- **Runtime: wasmi** (a pure-Rust interpreter; eager translation at
+  load, fuel metering, NaN canonicalisation). Chosen over wasmtime for
+  the floor of a soft PLC: deterministic fuel per scan without a JIT,
+  no executable memory, a small footprint, and the same behaviour on the
+  Pi as in CI. Measured (`examples/wasm_bench.rs`, release, M-series
+  Mac): a small module's tick 0.16 µs (ST 0.30 µs); a 1 000-pass loop
+  16 µs (ST 185 µs); load and instantiate 21 µs. The box binary grows
+  about 2.1 MiB (7.9 MB to 10.1 MB, macOS aarch64 release).
+- **Limits** (`wasm::Limits`): 1 000 000 fuel per scan (about one unit an
+  instruction; out of fuel is a `Watchdog` fault, as ST's budget), linear
+  memory capped at 4 MiB (more declared is refused at load, `memory.grow`
+  past it returns -1), one memory, one table of at most 10 000 elements.
+  Fixed for every module for now (`wasm-limits` asks about per-module
+  ones).
+- **Faults**: a trap stops the module and sends its outputs safe, as an
+  ST fault does; the others keep their schedule. Out-of-bounds memory or
+  table access is `IndexOutOfRange`, integer division by zero
+  `DivisionByZero`, a `BOOL` output other than 0/1 or a non-finite real
+  `OutputRange`, anything else (`unreachable`, overflow, a stack
+  overflow in the module) the new `Trap` kind.
+- **State**: outputs keep their last value until set again. A swap
+  carries outputs and exported mutable globals by name and type; linear
+  memory restarts from its data segments. Across kinds (ST to WASM) nothing
+  carries. A WASM module is not traced (the tap's request stays open) and
+  `Runtime::program` is `None` for it.
+- **Not yet**: snapshots, proposals and bundles carry module files as
+  text, so a WASM module runs from `--module-dir` but cannot be stored,
+  proposed, approved or bundled (`wasm-store`); the API shows its source
+  as an ST comment naming its size and SHA-256.
 
 ## The trace tap (`trace-tap`, built)
 
@@ -1156,8 +1211,8 @@ file and token in a temporary state directory).
 | boundary | what crosses | enforced by | status |
 | --- | --- | --- | --- |
 | module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | built |
-| module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault) | built |
-| module ↔ network | nothing | ST has no network primitives; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink; OPC UA planned (`sink-opcua`) |
+| module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault); a WASM module's fuel per scan (the same fault) and linear-memory cap | built |
+| module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink; OPC UA planned (`sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |

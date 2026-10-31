@@ -19,7 +19,7 @@ use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 fn module(name: &str, src: &str) -> Module {
     Module {
         name: name.into(),
-        program: compile(src, ImageSizes { i: 0, q: 0, m: 0 }).unwrap(),
+        program: compile(src, ImageSizes { i: 0, q: 0, m: 0 }).unwrap().into(),
         period: Duration::from_millis(10),
         i: Window::new(0, 0),
         q: Window::new(0, 0),

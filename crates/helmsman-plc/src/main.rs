@@ -412,6 +412,20 @@ fn specs(o: &Opts, d: &Defaults, dirs: Vec<ModuleDir>) -> Result<Vec<(Spec, Opti
 /// The module and its source text.
 fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<(Module, String), String> {
     let file = spec.path.display();
+    if let Some(md) = dir
+        && let Some(bytes) = &md.wasm
+    {
+        #[cfg(feature = "wasm")]
+        return Ok((
+            md.wasm_module(helmsman_plc::wasm::Limits::default())?,
+            wasm_note(bytes),
+        ));
+        #[cfg(not(feature = "wasm"))]
+        return Err(format!(
+            "{file}: a WASM module, and this build has no `wasm` feature ({} bytes)",
+            bytes.len()
+        ));
+    }
     let src = match dir {
         Some(md) => md.source.clone(),
         None => fs::read_to_string(&spec.path).map_err(|e| format!("{file}: {e}"))?,
@@ -435,13 +449,31 @@ fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<(Module, String), Str
     }
     let module = Module {
         name: spec.name.clone(),
-        program,
+        program: program.into(),
         period: spec.period,
         i: spec.i,
         q: spec.q,
         params: Vec::new(),
     };
     Ok((module, src))
+}
+
+#[cfg(feature = "wasm")]
+/// What the API shows as a WASM module's source: an ST comment naming
+/// the binary, so nothing mistakes it for code.
+fn wasm_note(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    use sha2::{Digest, Sha256};
+    let mut hash = String::with_capacity(64);
+    for b in Sha256::digest(bytes) {
+        let _ = write!(hash, "{b:02x}");
+    }
+    format!(
+        "(* WASM module ({}): {} bytes, sha256 {hash} *)\n",
+        helmsman_plc::wasm::ABI,
+        bytes.len()
+    )
 }
 
 fn emit_st(o: &Opts) -> Result<(), String> {
