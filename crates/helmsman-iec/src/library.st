@@ -150,3 +150,76 @@ FUNCTION_BLOCK TP
   END_IF;
   PREV := IN;
 END_FUNCTION_BLOCK
+
+(* BLINK_PATTERN: a stack light's patterns. Not IEC 61131-3: a Helmsman
+   extension that ruSTy and other compilers do not have. Not named BLINK,
+   since a standard block's name is taken for every program and a module
+   called blink is likely. While EN, Q follows MODE:
+     0  off
+     1  steady on
+     2  slow blink: on for the first half of each PERIOD
+     3  fast blink: four times as fast (on for the first half of each
+        PERIOD / 4)
+     4  double flash: on, off, on for PERIOD / 8 each, then off for the
+        rest of PERIOD
+   EN FALSE forces Q FALSE, and so does any other MODE. A blinking mode with
+   PERIOD <= 0 (or one too short to divide into its steps) is steady on: the
+   light still says something is up, it never chatters at scan rate, and
+   nothing divides by zero. A pattern starts from its beginning (on) when EN
+   rises, when MODE changes, and after a steady or off spell. Time is the
+   scan clock (__NOW), like the timers'; the phase runs on across scans, so a
+   long scan gap lands where the pattern would be, and a PERIOD change keeps
+   the phase (within the new cycle). *)
+FUNCTION_BLOCK BLINK_PATTERN
+  VAR_INPUT EN : BOOL; MODE : INT; PERIOD : TIME; END_VAR
+  VAR_OUTPUT Q : BOOL; END_VAR
+  VAR RUNNING : BOOL; SHOWN : INT; LAST, PHASE, CYCLE, STEP : TIME; END_VAR
+  IF NOT EN OR MODE < 1 OR MODE > 4 THEN
+    Q := FALSE;
+    RUNNING := FALSE;
+  ELSIF MODE = 1 THEN
+    Q := TRUE;
+    RUNNING := FALSE;
+  ELSE
+    IF MODE = 3 THEN
+      CYCLE := PERIOD / 4;
+    ELSE
+      CYCLE := PERIOD;
+    END_IF;
+    IF MODE = 4 THEN
+      STEP := CYCLE / 8;
+    ELSE
+      STEP := CYCLE / 2;
+    END_IF;
+    IF STEP <= T#0s THEN
+      Q := TRUE;
+      RUNNING := FALSE;
+    ELSE
+      IF NOT RUNNING OR MODE <> SHOWN THEN
+        RUNNING := TRUE;
+        SHOWN := MODE;
+        PHASE := T#0s;
+      ELSE
+        PHASE := PHASE + (__NOW() - LAST);
+        IF PHASE >= CYCLE THEN
+          (* The quotient from LREAL, then held to [0, CYCLE) exactly. *)
+          PHASE := PHASE - CYCLE * LREAL_TO_LINT(TIME_TO_LREAL(PHASE) / TIME_TO_LREAL(CYCLE));
+          IF PHASE < T#0s THEN
+            PHASE := PHASE + CYCLE;
+          ELSIF PHASE >= CYCLE THEN
+            PHASE := PHASE - CYCLE;
+          END_IF;
+          IF PHASE < T#0s OR PHASE >= CYCLE THEN
+            PHASE := T#0s;
+          END_IF;
+        END_IF;
+      END_IF;
+      LAST := __NOW();
+      IF MODE = 4 THEN
+        Q := PHASE < STEP OR (PHASE >= STEP * 2 AND PHASE < STEP * 3);
+      ELSE
+        Q := PHASE < STEP;
+      END_IF;
+    END_IF;
+  END_IF;
+END_FUNCTION_BLOCK

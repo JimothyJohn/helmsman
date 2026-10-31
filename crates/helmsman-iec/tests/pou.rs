@@ -632,10 +632,276 @@ fn edges_latches_and_down_counters() {
     assert!(boolean(&p, "ud.QU"));
 }
 
+// ---- BLINK_PATTERN (a Helmsman extension, not IEC 61131-3) ----
+
+const OFF: i32 = 0;
+const STEADY: i32 = 1;
+const SLOW: i32 = 2;
+const FAST: i32 = 3;
+const DOUBLE: i32 = 4;
+const NS_PER_MS: u64 = 1_000_000;
+
+/// A program around one `BLINK_PATTERN`, driven by the image like a
+/// module's inputs: EN is %IX0.0, MODE is %IB1 - 2 (so a byte reaches the
+/// modes below 0 too), PERIOD is `period` (ST, may read `alt` at %IX0.1).
+struct Light {
+    p: Program,
+    img: Image,
+}
+
+impl Light {
+    fn new(period: &str) -> Self {
+        Self {
+            p: build(&format!(
+                "PROGRAM t
+                   VAR b : BLINK_PATTERN; en AT %IX0.0 : BOOL; alt AT %IX0.1 : BOOL; m AT %IB1 : BYTE; END_VAR
+                   b(EN := en, MODE := BYTE_TO_INT(m) - 2, PERIOD := {period});
+                 END_PROGRAM"
+            )),
+            img: Image::new(SIZES),
+        }
+    }
+
+    /// One scan at `ns` on the scan clock with these inputs; Q after it.
+    fn at_ns(&mut self, ns: u64, en: bool, mode: i32) -> bool {
+        self.img.i[0] = (self.img.i[0] & !1) | u8::from(en);
+        self.img.i[1] = u8::try_from(mode + 2).unwrap();
+        self.p.scan_at(&mut self.img, Duration::from_nanos(ns)).unwrap();
+        boolean(&self.p, "b.Q")
+    }
+
+    fn at(&mut self, ms: u64, en: bool, mode: i32) -> bool {
+        self.at_ns(ms * NS_PER_MS, en, mode)
+    }
+}
+
+/// A PERIOD of `ms` milliseconds as an ST literal (negative too).
+fn period_ms(ms: i64) -> String {
+    format!("T#{ms}ms")
+}
+
+/// `BLINK_PATTERN` by its definition, for a fixed PERIOD of `period` ns:
+/// Q at `now`, with `run` the pattern's start and mode while it blinks.
+fn blink_def(en: bool, mode: i32, period: i64, now: i64, run: &mut Option<(i64, i32)>) -> bool {
+    if !en || !(STEADY..=DOUBLE).contains(&mode) {
+        *run = None;
+        return false;
+    }
+    if mode == STEADY {
+        *run = None;
+        return true;
+    }
+    let cycle = if mode == FAST { period / 4 } else { period };
+    let step = if mode == DOUBLE { cycle / 8 } else { cycle / 2 };
+    if step <= 0 {
+        *run = None;
+        return true;
+    }
+    if run.is_none_or(|(_, m)| m != mode) {
+        *run = Some((now, mode));
+    }
+    let phase = (now - run.unwrap().0) % cycle;
+    if mode == DOUBLE {
+        phase < step || (2 * step..3 * step).contains(&phase)
+    } else {
+        phase < step
+    }
+}
+
+proptest! {
+    /// Against its definition, scan by scan: EN, MODE (in range and out)
+    /// and the gaps between scans at random, PERIOD from negative through
+    /// zero to longer than most gaps.
+    #[test]
+    fn blink_pattern_matches_its_definition(
+        steps in proptest::collection::vec((prop::bool::weighted(0.85), -2i32..7, 0u64..700), 1..150),
+        period in -100i64..1200,
+    ) {
+        let mut l = Light::new(&period_ms(period));
+        let (mut now, mut run) = (0u64, None);
+        for (en, mode, dt) in steps {
+            now += dt;
+            let q = l.at(now, en, mode);
+            let want = blink_def(en, mode, period * 1_000_000, i64::try_from(now * NS_PER_MS).unwrap(), &mut run);
+            prop_assert_eq!(q, want, "now {}ms en {} mode {} period {}ms", now, en, mode, period);
+        }
+    }
+
+    /// Any PERIOD to the nanosecond, any gap: the block never faults (no
+    /// division by zero, no runaway), EN FALSE is always off, steady always
+    /// on, and a blinking mode without a usable PERIOD is steady on.
+    #[test]
+    fn blink_pattern_never_faults_and_keeps_its_safe_rules(
+        steps in proptest::collection::vec((any::<bool>(), -2i32..7, 0u64..(1 << 50)), 1..60),
+        period in prop_oneof![-(1i64 << 60)..(1i64 << 60), -10i64..10],
+    ) {
+        let mut l = Light::new(&format!("T#{period}ns"));
+        let mut now = 0u64;
+        for (en, mode, dt) in steps {
+            now += dt;
+            let q = l.at_ns(now, en, mode);
+            if !en || !(STEADY..=DOUBLE).contains(&mode) {
+                prop_assert!(!q);
+            } else if mode == STEADY || (period <= 0) {
+                prop_assert!(q);
+            }
+        }
+    }
+}
+
+#[test]
+fn blink_pattern_edges_and_duty_cycles() {
+    // PERIOD 1 s, scanned every millisecond for three cycles: where each
+    // pattern switches, and its share of on time.
+    let ons = |mode: i32| {
+        let mut l = Light::new("T#1s");
+        (0..3000).filter(|&ms| l.at(ms, true, mode)).collect::<Vec<_>>()
+    };
+    let windows = |ons: &[u64]| {
+        let mut w: Vec<(u64, u64)> = Vec::new();
+        for &ms in ons {
+            match w.last_mut() {
+                Some((_, end)) if *end == ms => *end = ms + 1,
+                _ => w.push((ms, ms + 1)),
+            }
+        }
+        w
+    };
+    let slow = ons(SLOW);
+    assert_eq!(slow.len(), 1500, "50 % duty");
+    assert_eq!(windows(&slow), [(0, 500), (1000, 1500), (2000, 2500)]);
+    let fast = ons(FAST);
+    assert_eq!(fast.len(), 1500, "50 % duty, four times as often");
+    assert_eq!(windows(&fast).len(), 12);
+    assert_eq!(windows(&fast)[..3], [(0, 125), (250, 375), (500, 625)]);
+    let double = ons(DOUBLE);
+    assert_eq!(double.len(), 750, "two eighths of each period");
+    assert_eq!(
+        windows(&double),
+        [
+            (0, 125),
+            (250, 375),
+            (1000, 1125),
+            (1250, 1375),
+            (2000, 2125),
+            (2250, 2375)
+        ]
+    );
+    assert_eq!(ons(STEADY).len(), 3000);
+    assert_eq!(ons(OFF).len(), 0);
+    for bad in [-2, 5, 6] {
+        assert_eq!(ons(bad).len(), 0, "MODE {bad} is off");
+    }
+
+    // Just either side of an edge, to the nanosecond.
+    let mut l = Light::new("T#1s");
+    assert!(l.at_ns(0, true, SLOW));
+    assert!(l.at_ns(500 * NS_PER_MS - 1, true, SLOW));
+    assert!(!l.at_ns(500 * NS_PER_MS, true, SLOW));
+    assert!(!l.at_ns(1000 * NS_PER_MS - 1, true, SLOW));
+    assert!(l.at_ns(1000 * NS_PER_MS, true, SLOW));
+}
+
+#[test]
+fn blink_pattern_restarts_on_a_mode_change_or_a_rising_en() {
+    let mut l = Light::new("T#1s");
+    assert!(l.at(0, true, SLOW));
+    assert!(l.at(300, true, SLOW));
+    // Mid-cycle, still on: fast starts over, on at once, off 125 ms later.
+    assert!(l.at(300, true, FAST));
+    assert!(l.at(424, true, FAST));
+    assert!(!l.at(425, true, FAST));
+    assert!(l.at(550, true, FAST));
+    // In fast's off half: slow starts over on, for its full half period.
+    assert!(!l.at(680, true, FAST));
+    assert!(l.at(680, true, SLOW));
+    assert!(l.at(1179, true, SLOW));
+    assert!(!l.at(1180, true, SLOW));
+    // Double flash from slow's off half.
+    assert!(l.at(1300, true, DOUBLE));
+    assert!(!l.at(1430, true, DOUBLE));
+    assert!(l.at(1560, true, DOUBLE));
+    assert!(!l.at(1700, true, DOUBLE));
+    // Steady and back: the pattern starts over.
+    assert!(l.at(1800, true, STEADY));
+    assert!(l.at(1900, true, DOUBLE));
+    assert!(!l.at(2030, true, DOUBLE));
+
+    // EN FALSE forces Q off in every mode; EN back starts the pattern over.
+    for mode in [STEADY, SLOW, FAST, DOUBLE] {
+        assert!(!l.at(3000, false, mode), "mode {mode}");
+    }
+    assert!(!l.at(3700, false, SLOW));
+    assert!(l.at(3700, true, SLOW), "on at once, not where the old cycle was");
+    assert!(l.at(4199, true, SLOW));
+    assert!(!l.at(4200, true, SLOW));
+}
+
+#[test]
+fn blink_pattern_with_no_usable_period_is_steady_on() {
+    // PERIOD 0 or negative: every blinking mode is steady on, scan after
+    // scan, and the off modes stay off.
+    for period in ["T#0s", "T#-1s", "T#-1ns"] {
+        let mut l = Light::new(period);
+        for ms in [0, 1, 7, 500, 10_000] {
+            for mode in [SLOW, FAST, DOUBLE, STEADY] {
+                assert!(l.at(ms, true, mode), "{period} mode {mode} at {ms}");
+            }
+            assert!(!l.at(ms, true, OFF), "{period}");
+            assert!(!l.at(ms, false, SLOW), "{period}");
+        }
+    }
+    // Too short to divide into its steps is the same: 3 ns has no eighth (it rounds to 0).
+    let mut l = Light::new("T#3ns");
+    for ns in [0, 1, 3, 5, 100] {
+        assert!(l.at_ns(ns, true, DOUBLE), "{ns}");
+    }
+}
+
+#[test]
+fn blink_pattern_keeps_its_phase_across_gaps_and_period_changes() {
+    // A long scan gap lands where the pattern would be, even a hundred
+    // days of 3 ms cycles later (a quotient past what a DINT holds).
+    let mut l = Light::new("T#3ms");
+    assert!(l.at(0, true, SLOW));
+    let days = 100 * 24 * 3_600_000;
+    assert_eq!(days % 3, 0);
+    assert!(days / 3 > u64::try_from(i32::MAX).unwrap());
+    assert!(l.at(days + 1, true, SLOW), "1 ms into a cycle: on");
+    assert!(!l.at(days + 2, true, SLOW), "2 ms in: off");
+    assert!(l.at(days + 3, true, SLOW));
+    let mut l = Light::new("T#1s");
+    assert!(l.at(0, true, DOUBLE));
+    assert!(
+        l.at(10_260, true, DOUBLE),
+        "10 cycles and 260 ms: the second flash"
+    );
+    assert!(!l.at(10_400, true, DOUBLE));
+
+    // A PERIOD change keeps the phase, within the new cycle.
+    let mut l = Light::new("SEL(alt, T#1s, T#400ms)");
+    assert!(l.at(0, true, SLOW));
+    assert!(!l.at(580, true, SLOW), "1 s: off from 500 ms");
+    l.img.i[0] |= 2;
+    assert!(
+        l.at(590, true, SLOW),
+        "400 ms now: 590 ms of phase is 190 ms into a cycle, on"
+    );
+    assert!(!l.at(610, true, SLOW), "210 ms in: off");
+    assert!(l.at(800, true, SLOW), "a new 400 ms cycle");
+    assert!(!l.at(1000, true, SLOW));
+}
+
 #[test]
 fn standard_names_are_reserved() {
     let e = errors("FUNCTION_BLOCK TON END_FUNCTION_BLOCK PROGRAM t END_PROGRAM");
     assert!(e.contains("TON is already defined (a standard block)"), "{e}");
+    let e = errors("FUNCTION_BLOCK blink_pattern END_FUNCTION_BLOCK PROGRAM t END_PROGRAM");
+    assert!(e.contains("already defined (a standard block)"), "{e}");
+    // The stack-light block is not called BLINK so a module named blink
+    // (the playground's first example is one) still compiles.
+    build("PROGRAM blink VAR blink_pattern_1 : BLINK_PATTERN; END_VAR END_PROGRAM");
+    build("FUNCTION_BLOCK blink END_FUNCTION_BLOCK PROGRAM t VAR b : blink; END_VAR b(); END_PROGRAM");
     let e = errors("FUNCTION_BLOCK a END_FUNCTION_BLOCK");
     assert!(e.contains("no PROGRAM found"), "{e}");
     let e = errors("PROGRAM a END_PROGRAM PROGRAM b END_PROGRAM");

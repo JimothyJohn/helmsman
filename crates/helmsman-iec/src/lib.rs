@@ -32,7 +32,8 @@
 //! conversions; the standard functions (ABS, SQRT, LN, LOG, EXP,
 //! trigonometry, EXPT, MIN, MAX, LIMIT, SEL, MUX, SHL, SHR, ROL, ROR, TRUNC,
 //! MOVE) and function blocks (TON, TOF, TP, CTU, CTD, CTUD, `R_TRIG`,
-//! `F_TRIG`, SR, RS). Pragmas (`{...}`) are skipped. Not yet: STRING, DATE,
+//! `F_TRIG`, SR, RS, and `BLINK_PATTERN`, a stack light's patterns that
+//! IEC 61131-3 does not have; see library.st). Pragmas (`{...}`) are skipped. Not yet: STRING, DATE,
 //! DT and TOD, `VAR_IN_OUT`, `VAR_GLOBAL`, function outputs, pointers and
 //! references, multi-level addresses (`%QW0.1.2`). Nesting is capped at
 //! `MAX_NESTING` levels so hostile input cannot overflow the stack.
