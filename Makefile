@@ -10,7 +10,7 @@ help:  ## Show this help.
 install-dev:  ## Install the toolchain components the gate needs (rustfmt, clippy).
 	./scripts/install-dev.sh
 
-lint:  ## rustfmt check + clippy with warnings denied.
+lint:  ## rustfmt check, clippy (warnings denied), the no-box and wasm32 builds.
 	./scripts/lint.sh
 
 fmt:  ## Format the workspace in place.
