@@ -44,6 +44,9 @@ pub const ITERATIONS: u32 = 600_000;
 pub const MIN_ITERATIONS: u32 = 100_000;
 /// Shortest and longest PIN, in characters (printable ASCII, no blanks).
 pub const PIN_LEN: (usize, usize) = (6, 64);
+/// A PIN typed longer than this, in bytes, is wrong without being hashed
+/// as given (PBKDF2 rehashes a key longer than a block every iteration).
+pub const MAX_PIN_BYTES: usize = 1024;
 
 const BLOCK: usize = 64;
 
@@ -439,7 +442,9 @@ impl Gate {
             }
             st.locked_until = None;
         }
-        if self.pins.verify(role, pin) {
+        // An over-long PIN is wrong, but costs the same PBKDF2.
+        let long = pin.len() > MAX_PIN_BYTES;
+        if self.pins.verify(role, if long { "" } else { pin }) && !long {
             st.failures = 0;
             return Ok(());
         }
