@@ -624,7 +624,7 @@
   difficulty: low
   id: store-schema-2
 
-- [ ] **WASM over the box API: is ~750 KiB enough?** A proposal carries `module.wasm` as base64 in the JSON body, and the API's request body limit is 1 MiB, so the largest WASM module the API takes is about 750 KiB, though the store and bundles take 1 MiB (`MAX_FILE`). Bundles have the same ceiling over `POST /api/bundles`. Hand-written and `no_std` Rust modules are a few KiB; a Rust module with `std` and formatting can pass 1 MiB. Built: unchanged limit.
+- [ ] **WASM over the box API: is ~750 KiB enough?** A proposal carries `module.wasm` as base64 in the JSON body, and the API's request body limit is 1 MiB, so the largest WASM module the API takes is about 750 KiB, though the store and bundles take 1 MiB (`MAX_FILE`). `POST /api/dropins` already has its own larger body cap (`http::Limits::upload`, 2 MiB for PDFs); the same mechanism would serve here. Bundles have the same ceiling over `POST /api/bundles`. Hand-written and `no_std` Rust modules are a few KiB; a Rust module with `std` and formatting can pass 1 MiB. Built: unchanged limit.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
