@@ -1173,6 +1173,9 @@ impl App {
                 if std::mem::take(&mut b.wants_demo) {
                     self.source = Source::Demo;
                 }
+                if std::mem::take(&mut b.wants_site) {
+                    self.mode = Mode::Site;
+                }
             }
         }
     }

@@ -20,6 +20,8 @@ pub struct BoxView {
     generation: u64,
     /// Set when the operator asks for the offline demo.
     pub wants_demo: bool,
+    /// Set when the operator goes up to the site.
+    pub wants_site: bool,
     /// Whether the box has an agent (`GET /api`); `None`: not known yet.
     pub agent: Option<bool>,
     /// `GET /api` is out.
@@ -51,6 +53,7 @@ impl BoxView {
             view: None,
             generation: 0,
             wants_demo: false,
+            wants_site: false,
             agent: None,
             index_out: false,
             ask: None,
@@ -74,11 +77,15 @@ impl BoxView {
             Some(l) if l.generation != self.generation => {
                 self.generation = l.generation;
                 let mut v = Viewer::new(&l.src, l.module.clone());
-                // The same diagram again (the source refetched): keep what was being looked at.
-                if let Some(old) = self.view.take()
-                    && old.module == v.module
-                {
-                    v = old;
+                // The same source again (refetched): keep what was being
+                // looked at, as arranged. A new version keeps the blocks
+                // the operator moved that are still there.
+                if let Some(old) = self.view.take() {
+                    if old.src == v.src {
+                        v = old;
+                    } else {
+                        v.arrange(&old.arrangement());
+                    }
                 }
                 if v.because.is_none() {
                     v.because = v.outputs().into_iter().next();
@@ -221,7 +228,21 @@ impl BoxView {
                     .resizable(true)
                     .default_size(360.0)
                     .show(ui, |ui| action = v.right(ui, scan, now_ms, ask));
-                egui::CentralPanel::no_frame().show(ui, |ui| v.canvas(ui, scan));
+                let outer = vec![
+                    "Site".to_string(),
+                    "This box".to_string(),
+                    self.state.selected.clone().unwrap_or_default(),
+                ];
+                let mut up = None;
+                egui::CentralPanel::no_frame().show(ui, |ui| {
+                    up = v.crumbs_ui(ui, &outer);
+                    v.canvas(ui, scan);
+                });
+                match up {
+                    Some(0) => self.wants_site = true,
+                    Some(_) => v.open(0),
+                    None => {}
+                }
             }
             _ => {
                 egui::CentralPanel::default().show(ui, |ui| {
@@ -283,20 +304,38 @@ impl BoxView {
             self.wants_demo = true;
         }
         ui.separator();
-        ui.label(RichText::new("Modules").strong());
+        // The control system as a tree, IDE style: the site above this
+        // box, its modules, and the open module's program with every
+        // block instance it calls, nested; a click opens any of them.
+        if ui
+            .selectable_label(false, RichText::new("▴ Site: every box").color(brand::STEEL))
+            .on_hover_text("up a level: the boxes of this site")
+            .clicked()
+        {
+            self.wants_site = true;
+        }
+        ui.label(RichText::new("▾ This box").strong());
         let mut chosen = None;
-        for m in &self.state.modules {
+        let modules = self.state.modules.clone();
+        for m in &modules {
             let selected = self.state.selected.as_deref() == Some(m.name.as_str());
-            let text = RichText::new(format!("{}  {} · {} scans", m.name, m.state, m.scans))
-                .monospace()
-                .color(if m.state == "faulted" { RED } else { brand::WHITE });
-            let r = ui.selectable_label(selected, text);
-            let r = match &m.fault {
-                Some(f) => r.on_hover_text(f),
-                None => r,
-            };
-            if r.clicked() {
-                chosen = Some(m.name.clone());
+            ui.horizontal(|ui| {
+                ui.add_space(14.0);
+                let arrow = if selected { "▾" } else { "▸" };
+                let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans))
+                    .monospace()
+                    .color(if m.state == "faulted" { RED } else { brand::WHITE });
+                let r = ui.selectable_label(selected, text);
+                let r = match &m.fault {
+                    Some(f) => r.on_hover_text(f),
+                    None => r,
+                };
+                if r.clicked() {
+                    chosen = Some(m.name.clone());
+                }
+            });
+            if selected && let Some(v) = &mut self.view {
+                ui.indent(("box-tree", &m.name), |ui| v.tree_ui(ui));
             }
         }
         if let Some(name) = chosen {
@@ -314,8 +353,6 @@ impl BoxView {
         }
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         if let Some(v) = &mut self.view {
-            ui.separator();
-            v.scopes_ui(ui);
             ui.separator();
             v.outputs_ui(ui, scan);
         }

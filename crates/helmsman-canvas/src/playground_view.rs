@@ -230,6 +230,10 @@ impl PlaygroundView {
             ctx.request_repaint();
         }
         egui::Panel::top("pg-top").show(ui, |ui| self.top(ui));
+        egui::Panel::left("pg-tree")
+            .resizable(true)
+            .default_size(190.0)
+            .show(ui, |ui| self.tree(ui));
         egui::Panel::left("pg-editor")
             .resizable(true)
             .default_size(460.0)
@@ -417,6 +421,20 @@ impl PlaygroundView {
                     }
                 });
         }
+    }
+
+    /// The program's outline: the program and every block instance it
+    /// calls, nested; a click shows that one's diagram.
+    fn tree(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Program").strong());
+        egui::ScrollArea::vertical()
+            .id_salt("pg-tree")
+            .show(ui, |ui| match &mut self.viewer {
+                Some(v) => v.tree_ui(ui),
+                None => {
+                    ui.label(RichText::new("Nothing compiled yet.").color(STEEL));
+                }
+            });
     }
 
     fn side(&mut self, ui: &mut egui::Ui) {
@@ -761,6 +779,7 @@ impl PlaygroundView {
     fn diagram(&mut self, ui: &mut egui::Ui) {
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
         if let Some(v) = &mut self.viewer {
+            v.crumbs_ui(ui, &[]);
             let area = ui.available_rect_before_wrap();
             v.canvas(ui, scan);
             let reads = v.reads_on_screen();

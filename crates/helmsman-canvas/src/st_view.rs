@@ -191,9 +191,21 @@ pub struct Viewer {
     pub highlight: Vec<u32>,
     /// What the drag in progress holds.
     grab: Option<Grab>,
+    /// Instances folded in the tree (their prefixes).
+    folded: Vec<String>,
     /// How far the operator moved each block from where the layout put it,
     /// per POU. The view's own; the program is untouched.
     moved: Vec<Vec<(NodeId, Vec2)>>,
+}
+
+/// One row of the program tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TreeRow {
+    pub scope: usize,
+    /// 0 for the program, 1 for what it calls, and so on.
+    pub depth: usize,
+    pub has_kids: bool,
+    pub folded: bool,
 }
 
 /// What a drag on the diagram holds.
@@ -288,6 +300,7 @@ impl Viewer {
             steady: Steady::default(),
             highlight: Vec::new(),
             grab: None,
+            folded: Vec::new(),
             moved,
         }
         .with_words()
@@ -480,6 +493,160 @@ impl Viewer {
     }
 
     /// The scope picker (program, or a block through one instance).
+    /// Shows scope `k`: the program or a block instance.
+    pub fn open(&mut self, k: usize) {
+        if k < self.scopes.len() && k != self.scope {
+            self.scope = k;
+            self.pick = None;
+        }
+    }
+
+    /// The scope holding the shown one (an instance's caller), if any.
+    #[must_use]
+    pub fn parent(&self) -> Option<usize> {
+        parent_of(&self.scopes, self.scope)
+    }
+
+    /// The chain from the program down to the shown scope.
+    #[must_use]
+    pub fn trail(&self) -> Vec<usize> {
+        let mut out = vec![self.scope];
+        // Each step drops a path segment, so this ends.
+        while let Some(p) = parent_of(&self.scopes, out[out.len() - 1]) {
+            out.push(p);
+        }
+        out.reverse();
+        out
+    }
+
+    /// The program and its block instances as a tree, nested by call; a
+    /// click shows one. `▸`/`▾` folds an instance's own instances.
+    pub fn tree_ui(&mut self, ui: &mut egui::Ui) {
+        let mut chosen = None;
+        let mut fold = None;
+        for row in self.tree_rows() {
+            let s = &self.scopes[row.scope];
+            ui.horizontal(|ui| {
+                #[allow(clippy::cast_precision_loss)]
+                ui.add_space(row.depth as f32 * 14.0);
+                if row.has_kids {
+                    if ui.small_button(if row.folded { "▸" } else { "▾" }).clicked() {
+                        fold = Some(row.scope);
+                    }
+                } else {
+                    ui.add_space(18.0);
+                }
+                let text = RichText::new(&s.label).monospace();
+                if ui
+                    .selectable_label(row.scope == self.scope, text)
+                    .on_hover_text("show this one's diagram")
+                    .clicked()
+                {
+                    chosen = Some(row.scope);
+                }
+            });
+        }
+        if let Some(k) = fold {
+            self.toggle_fold(k);
+        }
+        if let Some(k) = chosen {
+            self.open(k);
+        }
+    }
+
+    /// The tree's rows, in order, skipping what folded instances hold.
+    #[must_use]
+    pub fn tree_rows(&self) -> Vec<TreeRow> {
+        let mut out = Vec::new();
+        let mut hidden: Option<&str> = None;
+        for (k, s) in self.scopes.iter().enumerate() {
+            if let Some(h) = hidden {
+                if s.prefix.starts_with(h) {
+                    continue;
+                }
+                hidden = None;
+            }
+            // The program's prefix is empty, so every instance is under it;
+            // it is the root and never folds.
+            let has_kids = k > 0
+                && self
+                    .scopes
+                    .iter()
+                    .any(|q| q.prefix.len() > s.prefix.len() && q.prefix.starts_with(s.prefix.as_str()));
+            let folded = has_kids && self.folded.contains(&s.prefix);
+            if folded {
+                hidden = Some(&s.prefix);
+            }
+            out.push(TreeRow {
+                scope: k,
+                depth: s.prefix.matches('.').count(),
+                has_kids,
+                folded,
+            });
+        }
+        out
+    }
+
+    /// Folds scope `k`'s own instances away in the tree, or shows them.
+    pub fn toggle_fold(&mut self, k: usize) {
+        let Some(p) = self.scopes.get(k).map(|s| s.prefix.clone()) else {
+            return;
+        };
+        match self.folded.iter().position(|f| *f == p) {
+            Some(i) => {
+                self.folded.remove(i);
+            }
+            None => self.folded.push(p),
+        }
+    }
+
+    /// "site › box › module" (from the host, `outer`), then the program
+    /// and each instance down to the one shown, every part a link, and ↑
+    /// for one level up. Returns the outer part clicked.
+    pub fn crumbs_ui(&mut self, ui: &mut egui::Ui, outer: &[String]) -> Option<usize> {
+        let mut hit = None;
+        let mut go = None;
+        ui.horizontal_wrapped(|ui| {
+            let up = self.parent();
+            if ui
+                .add_enabled(up.is_some(), egui::Button::new("↑"))
+                .on_hover_text("up one level (Alt+↑)")
+                .clicked()
+            {
+                go = up;
+            }
+            for (i, o) in outer.iter().enumerate() {
+                if ui.link(RichText::new(o).color(brand::STEEL)).clicked() {
+                    hit = Some(i);
+                }
+                ui.label(RichText::new("›").color(brand::STEEL));
+            }
+            let trail = self.trail();
+            for (j, &k) in trail.iter().enumerate() {
+                if j > 0 {
+                    ui.label(RichText::new("›").color(brand::STEEL));
+                }
+                let last = j + 1 == trail.len();
+                let text = RichText::new(&self.scopes[k].label).monospace();
+                let text = if last {
+                    text.strong().color(brand::YELLOW)
+                } else {
+                    text
+                };
+                if ui.link(text).clicked() {
+                    go = Some(k);
+                }
+            }
+        });
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp)) {
+            go = go.or_else(|| self.parent());
+        }
+        if let Some(k) = go {
+            self.open(k);
+        }
+        hit
+    }
+
     pub fn scopes_ui(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("View").strong());
         let mut chosen = None;
@@ -643,6 +810,20 @@ impl Viewer {
             .collect()
     }
 
+    /// The scope of the block instance drawn at screen point `p`, if it
+    /// has a diagram of its own.
+    fn instance_at(&self, cam: Cam, p: Pos2) -> Option<usize> {
+        let (x, y) = cam.to_world(p);
+        let n = self.diagram().node_at(x, y)?;
+        let NodeKind::Fb { instance, .. } = &self.diagram().node(n).kind else {
+            return None;
+        };
+        let want = format!("{}{instance}.", self.scopes[self.scope].prefix);
+        self.scopes
+            .iter()
+            .position(|s| s.prefix.eq_ignore_ascii_case(&want))
+    }
+
     /// What a drag starting at screen point `p` takes hold of.
     fn grab_at(&self, cam: Cam, p: Pos2) -> Grab {
         let (x, y) = cam.to_world(p);
@@ -681,10 +862,19 @@ impl Viewer {
                 cam.offset += scroll;
             }
         }
-        if response.double_clicked() {
-            cam.fitted = false;
-        }
+        let double = response.double_clicked();
         let cam = *cam;
+        // A double click on a block instance opens it; anywhere else it
+        // fits the diagram to the view.
+        if double {
+            let into = response
+                .interact_pointer_pos()
+                .and_then(|p| self.instance_at(cam, p));
+            match into {
+                Some(k) => self.open(k),
+                None => self.cams[self.scope].fitted = false,
+            }
+        }
         // A drag that starts on a block moves it, on a region's label moves
         // the region with all it holds, anywhere else pans.
         if response.drag_started() {
@@ -949,6 +1139,15 @@ fn bezier(painter: &egui::Painter, a: Pos2, b: Pos2, z: f32, color: Color32, wid
         Color32::TRANSPARENT,
         Stroke::new(width * z.max(0.5), color),
     ));
+}
+
+/// The scope that calls scope `k` (`m.t.` → `m.`, `m.` → the program).
+fn parent_of(scopes: &[Scope], k: usize) -> Option<usize> {
+    let prefix = scopes.get(k)?.prefix.strip_suffix('.')?;
+    let up = prefix
+        .rsplit_once('.')
+        .map_or(String::new(), |(p, _)| format!("{p}."));
+    scopes.iter().position(|s| s.prefix == up)
 }
 
 /// The node at `(x, y)`, or the nearest one within `slop` of it.
