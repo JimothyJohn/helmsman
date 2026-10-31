@@ -136,6 +136,108 @@ impl Conversation {
     }
 }
 
+/// The most of a relay's refusal message kept in a note or shown.
+const REASON_CHARS: usize = 300;
+
+/// The start of the box's note after an attached PDF's document block
+/// (`helmsman-plc`'s chat route writes `... drop-in {id} (PDF, ...`).
+const PDF_NOTE: &str = "[box] The user attached drop-in ";
+
+/// A refusal's reason as a person reads it: without the block's address
+/// in front (stale once the block is replaced), at most [`REASON_CHARS`].
+fn reason(message: &str) -> &str {
+    let s = match message.split_once(": ") {
+        Some((at, why)) if located(at).is_some() => why,
+        _ => message,
+    };
+    s.char_indices().nth(REASON_CHARS).map_or(s, |(k, _)| &s[..k])
+}
+
+/// The content block a relay refusal names, if it names one: the relay's
+/// own checks say `messages[i].content[j]`, the model API's (passed
+/// through as `upstream_rejected`) `messages.i.content.j`.
+fn located(message: &str) -> Option<(usize, usize)> {
+    fn index<'a>(s: &'a str, open: char, close: &str) -> Option<(usize, &'a str)> {
+        let s = s.strip_prefix(open)?;
+        let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+        let n = s[..end].parse().ok()?;
+        Some((n, s[end..].strip_prefix(close).unwrap_or(&s[end..])))
+    }
+    message.match_indices("messages").find_map(|(k, _)| {
+        let rest = &message[k + "messages".len()..];
+        let (open, close) = if rest.starts_with('[') {
+            ('[', "]")
+        } else {
+            ('.', "")
+        };
+        let (i, rest) = index(rest, open, close)?;
+        let (j, _) = index(rest.strip_prefix(".content")?, open, close)?;
+        Some((i, j))
+    })
+}
+
+impl Conversation {
+    /// After a failed turn: when the relay refused it because of a PDF
+    /// document block, replace that block (and the box's note after it)
+    /// with a note saying it was refused and why, so the conversation can
+    /// go on. Returns how many were replaced (0: nothing was touched).
+    ///
+    /// Only a refusal of the request itself (`invalid_request`,
+    /// `upstream_rejected`) counts. When it names a block
+    /// (`messages[i].content[j]`), that block must be a `document` in a
+    /// user message, else the refusal is about something else. When it
+    /// names none but is about PDFs (the relay's per-request page and
+    /// document caps), the documents in the trailing user message, the
+    /// ones added since the model last answered, are replaced.
+    pub fn drop_refused_documents(&mut self, e: &RelayError) -> usize {
+        let RelayError::Status { kind, message, .. } = e else {
+            return 0;
+        };
+        if kind != "invalid_request" && kind != "upstream_rejected" {
+            return 0;
+        }
+        let is_doc = |m: &Json, j: usize| m["role"] == "user" && m["content"][j]["type"] == "document";
+        let (i, js) = if let Some((i, j)) = located(message) {
+            match self.messages.get(i) {
+                Some(m) if is_doc(m, j) => (i, vec![j]),
+                _ => return 0,
+            }
+        } else {
+            let lower = message.to_ascii_lowercase();
+            if !lower.contains("pdf") && !lower.contains("document") {
+                return 0;
+            }
+            let Some(i) = self.messages.len().checked_sub(1) else {
+                return 0;
+            };
+            let n = self.messages[i]["content"].as_array().map_or(0, Vec::len);
+            (i, (0..n).filter(|&j| is_doc(&self.messages[i], j)).collect())
+        };
+        let reason = reason(message);
+        let Some(content) = self.messages[i]["content"].as_array_mut() else {
+            return 0;
+        };
+        for &j in js.iter().rev() {
+            let id = content
+                .get(j + 1)
+                .and_then(|b| b["text"].as_str())
+                .and_then(|t| t.strip_prefix(PDF_NOTE))
+                .and_then(|t| t.split_once(" (PDF, "))
+                .and_then(|(id, _)| id.parse::<u64>().ok());
+            let note = if let Some(id) = id {
+                content.remove(j + 1);
+                format!("[box] The user attached drop-in {id} (PDF) here, but the relay refused it")
+            } else {
+                "[box] A PDF the user attached here was refused by the relay".to_string()
+            };
+            content[j] = json!({ "type": "text", "text": format!(
+                "{note}: {reason}. It is not in this conversation and you have not seen it. If it matters, ask the user for a copy that is not encrypted, or for only the pages that matter."
+            ) });
+        }
+        js.len()
+    }
+}
+
 /// What the chat panel is told as the loop runs.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Progress {
@@ -176,6 +278,11 @@ pub enum Stop {
     Refusal,
     /// The relay failed; the turn was discarded.
     Relay(RelayError),
+    /// The relay refused the turn because of the PDF document blocks in
+    /// it (encrypted, too many pages, or one the model API would not
+    /// read). Each was replaced in the history by a note saying so, so the
+    /// next message goes through. `reason` is the relay's message.
+    DocumentRefused { reason: String, dropped: usize },
     /// The conversation is too long to send; start a new one.
     TooLong,
 }
@@ -401,7 +508,14 @@ impl Agent {
             let turn = match self.turn(&conv.messages, until, on) {
                 Ok(t) => t,
                 Err(e) => {
-                    out.stop = Stop::Relay(e);
+                    let dropped = conv.drop_refused_documents(&e);
+                    out.stop = match e {
+                        RelayError::Status { message, .. } if dropped > 0 => Stop::DocumentRefused {
+                            reason: reason(&message).to_string(),
+                            dropped,
+                        },
+                        e => Stop::Relay(e),
+                    };
                     return out;
                 }
             };
@@ -439,6 +553,108 @@ impl Agent {
                 out.stop = Stop::Budget(format!("{} output tokens", self.budget.output_tokens));
                 return out;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn refusal(kind: &str, message: &str) -> RelayError {
+        RelayError::Status {
+            status: 400,
+            kind: kind.into(),
+            message: message.into(),
+            retryable: false,
+        }
+    }
+
+    fn pdf_blocks() -> Vec<Json> {
+        vec![
+            json!({ "type": "text", "text": "read this" }),
+            json!({ "type": "document", "source": { "type": "base64", "media_type": "application/pdf", "data": "JVBERi0=" } }),
+            json!({ "type": "text", "text": "[box] The user attached drop-in 7 (PDF, 5 bytes): the document just above." }),
+        ]
+    }
+
+    fn with_pdf() -> Conversation {
+        let mut c = Conversation::new();
+        c.push_user(pdf_blocks());
+        c
+    }
+
+    #[test]
+    fn a_refusal_names_its_block_in_either_spelling() {
+        assert_eq!(located("messages[3].content[12]: encrypted"), Some((3, 12)));
+        assert_eq!(located("messages.0.content.1.pdf.source: bad"), Some((0, 1)));
+        assert_eq!(located("1 to 500 messages; messages[2] has unknown field"), None);
+        assert_eq!(located("at most 100 PDF pages per request"), None);
+        assert_eq!(located("messages[99999999999999999999].content[0]"), None);
+    }
+
+    #[test]
+    fn only_a_refused_document_is_replaced() {
+        let mut c = with_pdf();
+        let before = c.messages.clone();
+        for e in [
+            refusal(
+                "invalid_request",
+                "messages[0].content[0]: a text block needs text",
+            ),
+            refusal("invalid_request", "messages[5].content[1]: encrypted"),
+            refusal("invalid_request", "1 to 500 messages"),
+            refusal("unauthorized", "missing or invalid box token"),
+            refusal("relay_error", "PDF pages"),
+            RelayError::Timeout,
+        ] {
+            assert_eq!(c.drop_refused_documents(&e), 0, "{e}");
+            assert_eq!(c.messages, before, "{e}");
+        }
+        let e = refusal(
+            "invalid_request",
+            "messages[0].content[1]: encrypted or password-protected PDFs are not supported",
+        );
+        assert_eq!(c.drop_refused_documents(&e), 1);
+        let content = c.messages[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2, "the note after it went with it: {content:?}");
+        let note = content[1]["text"].as_str().unwrap();
+        assert!(
+            note.starts_with(
+                "[box] The user attached drop-in 7 (PDF) here, but the relay refused it: encrypted"
+            ),
+            "{note}"
+        );
+        assert_eq!(c.drop_refused_documents(&e), 0, "nothing left to replace");
+    }
+
+    #[test]
+    fn an_unlocated_pdf_refusal_replaces_the_trailing_messages_documents_only() {
+        let mut c = with_pdf();
+        c.messages
+            .push(json!({ "role": "assistant", "content": [{ "type": "text", "text": "ok" }] }));
+        let earlier = c.messages.clone();
+        let e = refusal("invalid_request", "at most 100 PDF pages per request");
+        assert_eq!(c.drop_refused_documents(&e), 0, "an answered PDF stays");
+        c.push_user(pdf_blocks());
+        c.push_user(pdf_blocks());
+        assert_eq!(c.drop_refused_documents(&e), 2);
+        assert_eq!(c.messages[..2], earlier[..]);
+        assert!(!c.messages[2].to_string().contains("\"document\""));
+        assert_eq!(c.messages[2]["content"].as_array().unwrap().len(), 4);
+    }
+
+    proptest! {
+        #[test]
+        fn any_refusal_message_is_safe(message in ".{0,80}", i in 0usize..3, j in 0usize..5) {
+            let mut c = with_pdf();
+            let _ = located(&message);
+            let _ = c.drop_refused_documents(&refusal("invalid_request", &message));
+            let m = format!("messages[{i}].content[{j}]: {message}");
+            let n = c.drop_refused_documents(&refusal("upstream_rejected", &m));
+            prop_assert!(n <= 1);
+            prop_assert_eq!(c.messages.len(), 1);
         }
     }
 }

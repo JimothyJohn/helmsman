@@ -310,6 +310,11 @@ pub fn serve(chat: &Chat, stream: &mut TcpStream, job: Job) {
             "error",
             &json!({ "kind": e.kind(), "message": e.to_string(), "retryable": e.retryable() }),
         ),
+        // Explain mode attaches no PDF; kept for the match.
+        Stop::DocumentRefused { reason, .. } => send(
+            "error",
+            &json!({ "kind": "document_refused", "message": reason, "retryable": false }),
+        ),
     }
 }
 

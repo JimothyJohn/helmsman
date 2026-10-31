@@ -1205,7 +1205,17 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   bytes under a text or image `Content-Type` (415) or another `kind`
   (400). What the relay checks and the box does not: encryption and the
   100-page cap, both of which need the file's objects read; a PDF refused
-  for them fails that chat turn with the relay's `invalid_request`. A PDF
+  for them fails that chat turn with the relay's `invalid_request` (or the
+  model API's, `upstream_rejected`). The refused document block, and the
+  box's note after it, are replaced in the history by a note saying the
+  drop-in was refused and why (`Conversation::drop_refused_documents`),
+  the chat gets `error` `document_refused` with the relay's reason, and
+  the next message in the same chat goes through. A refusal counts as the
+  document's when it names a `document` block (`messages[i].content[j]`,
+  or the model API's `messages.i.content.j`), or names no block but is
+  about PDFs (the per-request page and document caps: the documents of
+  the trailing, unanswered user message go); any other refusal touches
+  nothing. A PDF
   has no text on the box: `read_dropin` and the PLC view answer 404 saying
   so. Attached to a chat message it goes in that user message as a
   `document` block (`source.type: base64`, `media_type: application/pdf`,

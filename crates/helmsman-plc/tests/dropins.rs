@@ -2116,6 +2116,138 @@ fn a_conversation_carries_at_most_five_pdfs_and_only_what_fits_the_relays_body()
     assert!(all.contains("chat: PDF does not fit"), "{all}");
 }
 
+/// The relay's error body (relay protocol v1, "Errors").
+fn refused(status: u16, kind: &str, message: &str) -> Reply {
+    Reply::Status(
+        status,
+        json!({ "type": "error", "error": { "type": kind, "message": message, "retryable": false }, "request_id": "r" }),
+    )
+}
+
+/// The text of every block in request `k`'s messages.
+fn texts(seen: &[Seen], k: usize) -> String {
+    seen[k].body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["content"].as_array())
+        .flatten()
+        .filter_map(|b| b["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn a_pdf_the_relay_refuses_leaves_the_history_and_the_chat_goes_on() {
+    // What the relay checks and the box does not (encryption, the page
+    // cap) and what the model API refuses: each fails the turn it came in,
+    // and the next plain-text turn in the same chat goes through without it.
+    let cases = [
+        refused(
+            400,
+            "invalid_request",
+            "messages[0].content[1]: encrypted or password-protected PDFs are not supported",
+        ),
+        refused(400, "invalid_request", "at most 100 PDF pages per request"),
+        refused(
+            422,
+            "upstream_rejected",
+            "messages.0.content.1.pdf.source.base64.data: The PDF specified was not valid.",
+        ),
+    ];
+    let mut script = Vec::new();
+    for c in &cases {
+        script.extend([c.clone(), text("Understood, no PDF; what next?")]);
+    }
+    let relay = FakeRelay::start(script);
+    let b = Bench::new(with_relay(&relay));
+    let (s, j) = upload_bytes(&b, "?name=locked.pdf", "application/pdf", &small_pdf());
+    assert_eq!(s, 201, "{j}");
+    let id = j["id"].as_u64().unwrap();
+    for (n, c) in cases.iter().enumerate() {
+        let Reply::Status(_, body) = c else { unreachable!() };
+        // The reason, without the block's address in front.
+        let why = body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .rsplit(": ")
+            .next()
+            .unwrap();
+        let evs = b.say_with("Turn this SOP into a module", &[id]);
+        let err = last(&evs, "error");
+        assert_eq!(err["kind"], "document_refused", "{n}: {evs:?}");
+        assert_eq!(err["retryable"], false, "{n}: {err}");
+        let msg = err["message"].as_str().unwrap();
+        assert!(msg.contains("PDF"), "{n}: {msg}");
+        assert!(msg.contains(why), "{n}: the relay's reason is shown: {msg}");
+        assert!(msg.contains("left out"), "{n}: {msg}");
+
+        let evs = b.say("Then flash the beacon when start is high.", Some(&session(&evs)));
+        assert_eq!(last(&evs, "done")["stop"], "end_turn", "{n}: {evs:?}");
+        assert!(said(&evs).contains("no PDF"), "{n}: {evs:?}");
+        let seen = relay.seen();
+        let at = seen.len() - 1;
+        assert_eq!(documents(&seen[at].body), 0, "{n}: the refused PDF is gone");
+        assert_alternates(&seen[at].body);
+        let sent = texts(&seen, at);
+        assert!(
+            sent.contains("Turn this SOP into a module"),
+            "{n}: the user's words stay: {sent}"
+        );
+        assert!(sent.contains("Then flash the beacon"), "{n}: {sent}");
+        assert!(
+            sent.contains(&format!("drop-in {id}")) && sent.contains("refused") && sent.contains(why),
+            "{n}: a note in its place says it was refused and why: {sent}"
+        );
+        assert!(
+            !sent.contains("the document just above"),
+            "{n}: no note points at a document that is not there: {sent}"
+        );
+        assert!(
+            !sent.contains("locked.pdf"),
+            "{n}: the uploader's name stays out: {sent}"
+        );
+    }
+    assert_eq!(relay.seen().len(), 2 * cases.len());
+}
+
+#[test]
+fn a_refusal_that_is_not_about_the_pdf_drops_nothing() {
+    let relay = FakeRelay::start(vec![
+        // The relay names a block, and it is the user's text, not the PDF.
+        refused(
+            400,
+            "invalid_request",
+            "messages[0].content[0]: a text block's text must be a string",
+        ),
+        text("ok"),
+        // Not about a block, not about a PDF.
+        refused(404, "unknown_agent_version", "agent version v1 is not served"),
+        text("ok"),
+    ]);
+    let b = Bench::new(with_relay(&relay));
+    let (s, j) = upload_bytes(&b, "", "application/pdf", &small_pdf());
+    assert_eq!(s, 201, "{j}");
+    let id = j["id"].as_u64().unwrap();
+    let evs = b.say_with("read this", &[id]);
+    let e = last(&evs, "error");
+    assert_eq!(e["kind"], "invalid_request", "{evs:?}");
+    let s1 = session(&evs);
+    let evs = b.say("and now?", Some(&s1));
+    assert_eq!(last(&evs, "done")["stop"], "end_turn", "{evs:?}");
+    let seen = relay.seen();
+    assert_eq!(documents(&seen[1].body), 1, "the PDF was not dropped");
+    assert_eq!(first_user(&seen, 1)[..3], first_user(&seen, 0)[..], "untouched");
+
+    let evs = b.say_with("read this", &[id]);
+    assert_eq!(last(&evs, "error")["kind"], "unknown_agent_version", "{evs:?}");
+    let evs = b.say("and now?", Some(&session(&evs)));
+    assert_eq!(last(&evs, "done")["stop"], "end_turn", "{evs:?}");
+    let seen = relay.seen();
+    assert_eq!(documents(&seen[3].body), 1, "the PDF was not dropped");
+    assert!(!texts(&seen, 3).contains("refused"));
+}
+
 // --------------------------------------------- P&ID / electrical drawings
 
 /// The map a model would draw from a P&ID of line 3: the running map
