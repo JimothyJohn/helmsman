@@ -1042,7 +1042,10 @@ fn spawn_api(state: &Path) -> (Running, std::net::SocketAddr, String) {
     while api.is_none() || token.is_none() {
         let mut line = String::new();
         assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
-        if let Some(rest) = line.strip_prefix("helmsman-plc: API on http://") {
+        if let Some(rest) = line
+            .strip_prefix("helmsman-plc: API on https://")
+            .or_else(|| line.strip_prefix("helmsman-plc: API on http://"))
+        {
             api = rest.split('/').next().and_then(|a| a.parse().ok());
         } else if line.starts_with("helmsman-plc: API token") {
             token = Some(line.trim_end().to_string());
