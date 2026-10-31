@@ -1079,6 +1079,16 @@
   id: playground
   notes: done 2026-10-31 on feat/playground. Live only after Nick merges dev → master. Rebuild the committed page with `make playground` after canvas changes. Open: playground-publish, playground-key.
 
+- [ ] **See the box UI on the Pi** — the program tree, breadcrumbs, rearranging and the live diagram, on the real box, with the line demo (two stations × two motors, parts arriving on their own) so it moves with nothing wired.
+  needs: Docker Desktop running on the Studio; the Pi's host key trusted here (the Studio has no known_hosts entry for 192.168.3.20, so SSH refuses it): read `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the Pi, then `scripts/pi-trust-host.sh 192.168.3.20 SHA256:…` (it offered SHA256:8vBxD7Qo0UB0ufxbbZFqn1gLukVcrUxZHp64iLBVlHU on 2026-10-31)
+  result: helmsman-plc on the Pi running programs/line.st with the canvas on 127.0.0.1:8080; from the Air `ssh -J nick@10.0.0.41 -L 8080:127.0.0.1:8080 nick@192.168.3.20`, then http://127.0.0.1:8080/
+  notes: `! scripts/pi-trust-host.sh 192.168.3.20 SHA256:…` runs here; then the agent (or you) runs `scripts/pi-deploy-plc.sh nick@192.168.3.20 crates/helmsman-plc/programs/line.st`, which restarts helmsman-plc on the Pi (the pick PC). Depends on #95 (tree) and #96 (line.st) being in the checkout.
+  est: 30m
+  difficulty: low
+  id: pi-ui-demo
+  asked: 2026-10-31
+  by: claude-session
+
 ## Product vision (interview 2026-10-29)
 
 Working title until naming lands. A small, opinionated controller for factory edge boxes (Pi 5 reference, headless, browser UI), for non-mission-critical work: low-frequency detection, shift-aware scheduling of its own outputs, on-floor signalling (stack light, andon, screen). Data is pushed elsewhere (webhooks, OPC UA); the box keeps no historian.
