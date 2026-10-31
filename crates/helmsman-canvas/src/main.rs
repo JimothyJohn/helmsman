@@ -28,6 +28,9 @@ mod box_tests;
 mod box_view;
 mod claude;
 mod editor;
+mod monitor;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod monitor_tests;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod playground_tests;

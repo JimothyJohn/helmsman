@@ -9,6 +9,7 @@
 //! GET  /api/modules/{name}                + ports, source, manifest
 //! GET  /api/modules/{name}/trace          asks for a traced scan; the newest one (200), or 202 until one lands
 //! GET  /api/modules/{name}/trace/events   event stream of traced scans
+//! GET  /api/traces/events                 event stream of every module's traced scans (the Monitor's one stream)
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
 //! GET  /api/devices                       device links: up, down (why), unknown
 //! GET  /api/proposals                     drafts awaiting approval
@@ -644,6 +645,8 @@ enum Reply {
     Values,
     /// A module's trace stream.
     Traces(usize),
+    /// Every module's traces, one stream.
+    AllTraces,
     /// One chat message, its conversation taken out.
     Chat(chat::Taken),
     /// One explanation for the agent.
@@ -680,13 +683,14 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
         Reply::File(asset) => {
             let _ = ui::send(&mut stream, asset);
         }
-        Reply::Values | Reply::Traces(_) => {
+        Reply::Values | Reply::Traces(_) | Reply::AllTraces => {
             let Some(_slot) = take(&ctx.streams, limits.streams) else {
                 let _ = http::respond(&mut stream, &Response::error(503, "too many event streams"));
                 return;
             };
             let _ = match reply {
                 Reply::Traces(k) => trace_stream(&mut stream, ctx, k),
+                Reply::AllTraces => all_traces_stream(&mut stream, ctx),
                 Reply::Values => value_stream(&mut stream, ctx),
                 Reply::Once(_) | Reply::Chat(_) | Reply::Explain(_) | Reply::File(_) => Ok(()),
             };
@@ -1108,7 +1112,8 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "dropins", _, "plc"]
         | ["api", "modules", _, "trace"]
         | ["api", "chat", "status"]
-        | ["api", "modules", _, "trace", "events"] => Some("GET"),
+        | ["api", "modules", _, "trace", "events"]
+        | ["api", "traces", "events"] => Some("GET"),
         _ => None,
     }
 }
@@ -1443,6 +1448,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             (Err(r), _) | (_, Err(r)) => r,
         },
         ["api", "events"] => return Reply::Values,
+        ["api", "traces", "events"] => return Reply::AllTraces,
         ["api", "projects", ..] | ["api", "running"] => projects::get(ctx, &segs[1..]),
         ["api", "forces"] => forces::get(ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
@@ -1526,6 +1532,12 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/modules/{name}", false, "one module with ports, source and manifest"),
             e("GET", "/api/modules/{name}/trace", false, "request a traced scan; 200 with the newest, 202 until one lands"),
             e("GET", "/api/modules/{name}/trace/events", false, "event stream of traced scans"),
+            e(
+                "GET",
+                "/api/traces/events",
+                false,
+                "event stream of every module's traced scans",
+            ),
             e("GET", "/api/outputs", false, "output commands, safe values, the %Q image"),
             e("GET", "/api/devices", false, "device links up or down"),
             e("GET", "/api/io_map", false, "the running I/O map file and its snapshot id"),
@@ -1740,13 +1752,25 @@ fn pump(
     ctx: &Ctx,
     mut next: impl FnMut() -> Option<(&'static str, Json)>,
 ) -> io::Result<()> {
+    pump_many(stream, ctx, || next().into_iter().collect())
+}
+
+/// [`pump`], sending every event `next` yields at once.
+fn pump_many(
+    stream: &mut TcpStream,
+    ctx: &Ctx,
+    mut next: impl FnMut() -> Vec<(&'static str, Json)>,
+) -> io::Result<()> {
     http::start_stream(stream)?;
     stream.write_all(b"retry: 2000\n\n")?;
     let mut quiet = Instant::now();
     let opened = Instant::now();
     while !ctx.stop.load(Ordering::Acquire) && opened.elapsed() < ctx.cfg.limits.stream_life {
-        if let Some((name, data)) = next() {
-            event(stream, name, &data)?;
+        let batch = next();
+        if !batch.is_empty() {
+            for (name, data) in &batch {
+                event(stream, name, data)?;
+            }
             quiet = Instant::now();
         } else if quiet.elapsed() >= KEEPALIVE {
             stream.write_all(b": keepalive\n\n")?;
@@ -1798,6 +1822,30 @@ fn trace_stream(stream: &mut TcpStream, ctx: &Ctx, k: usize) -> io::Result<()> {
         }
         last = Some(scan);
         Some(("trace", with_forces(ctx, &j)))
+    })
+}
+
+/// Every module's traced scans on one stream, each module's newest as it
+/// lands (the same `trace` events as a module's own stream): a screen
+/// watching every program holds one stream slot, not one per module.
+/// Modules come and go with deploys; each is followed by name.
+fn all_traces_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
+    let mut last: BTreeMap<String, u64> = BTreeMap::new();
+    pump_many(stream, ctx, || {
+        let names: Vec<String> = ctx.catalog().modules.iter().map(|m| m.name.clone()).collect();
+        last.retain(|n, _| names.contains(n));
+        let mut out = Vec::new();
+        for (k, name) in names.iter().enumerate() {
+            let Some((scan, j)) = latest_trace(ctx, k) else {
+                continue;
+            };
+            if last.get(name) == Some(&scan) {
+                continue;
+            }
+            last.insert(name.clone(), scan);
+            out.push(("trace", with_forces(ctx, &j)));
+        }
+        out
     })
 }
 

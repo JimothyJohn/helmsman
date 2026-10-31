@@ -118,19 +118,33 @@ impl Drop for Bench {
 
 impl Bench {
     pub fn new() -> Self {
-        let program = compile(DEMO, SIZES).unwrap();
-        let module = Slot {
-            name: "cell".into(),
-            program: program.into(),
-            period: Duration::from_millis(2),
-            i: Window::new(0, 1),
-            q: Window::new(0, 1),
-            params: Vec::new(),
-        };
+        Self::with(&[("cell", DEMO)])
+    }
+
+    /// `programs` (name, source) as modules of one box, each with a byte
+    /// of `%I` and of `%Q` of its own, in order; the scripted shift drives
+    /// the first one's.
+    pub fn with(programs: &[(&str, &str)]) -> Self {
+        let n = programs.len();
+        let slots = programs
+            .iter()
+            .enumerate()
+            .map(|(k, (name, src))| Slot {
+                name: (*name).into(),
+                program: compile(src, SIZES).unwrap().into(),
+                period: Duration::from_millis(2),
+                i: Window::new(k, 1),
+                q: Window::new(k, 1),
+                params: Vec::new(),
+            })
+            .collect();
         let parsed = helmsman_io::text::parse("in ready bool box di:0\n").unwrap();
         let table = SignalTable::new(&parsed.map, &parsed.safe).unwrap();
-        let mut rt = Runtime::with_signals(1, 1, vec![module], &table).unwrap();
-        let modules = vec![ModuleInfo::of(&rt, "cell", "cell".into(), DEMO.into(), None).unwrap()];
+        let mut rt = Runtime::with_signals(n, n, slots, &table).unwrap();
+        let modules: Vec<ModuleInfo> = programs
+            .iter()
+            .map(|(name, src)| ModuleInfo::of(&rt, name, (*name).into(), (*src).into(), None).unwrap())
+            .collect();
         let catalog = Catalog {
             signals: Catalog::signals(&table, Some(&parsed.map), &modules),
             modules,
@@ -174,7 +188,9 @@ impl Bench {
                         .fold(0u8, |b, (i, &on)| b | (u8::from(on) << i));
                     let mut t = table.lock().unwrap_or_else(PoisonError::into_inner);
                     t.set_input(ready, Some(helmsman_io::Value::Bool(true)));
-                    rt.tick_with(now, &[byte], &mut t);
+                    let mut image = vec![0u8; n];
+                    image[0] = byte;
+                    rt.tick_with(now, &image, &mut t);
                     publisher.publish(now, &rt, &t);
                     drop(t);
                     thread::sleep(Duration::from_millis(1));
