@@ -1,0 +1,4 @@
+# A 64 KiB stack instead of Rust's default 1 MiB, so the guest fits the
+# host's default 1 MiB memory cap with room to spare.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=-zstack-size=65536"]

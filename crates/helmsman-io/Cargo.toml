@@ -15,6 +15,10 @@ helmsman-proto = { path = "../helmsman-proto" }
 # The simulated E1213 (`enip-sim`): already in every build that has the
 # box's own adapter, so no new code reaches a binary.
 helmsman-adapter = { path = "../helmsman-adapter", optional = true }
+# WASM drivers (`wasm`): the interpreter the module tier already runs
+# (helmsman-plc's `wasm`), same version and features, so nothing new
+# reaches the lock.
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
 
 # Serial ports for modbus-rtu: termios through rustix (safe Rust, no C;
 # already in the lock), unix only, behind `serial`.
@@ -37,11 +41,16 @@ gpio = ["dep:gpiocdev", "dep:i2cdev"]
 enip = ["helmsman-proto/scanner"]
 # A simulated Moxa ioLogik E1213 for the conformance harness and tests.
 enip-sim = ["enip", "dep:helmsman-adapter"]
+# Drivers compiled to WebAssembly, sandboxed to their device's socket.
+wasm = ["dep:wasmi"]
 
 [dev-dependencies]
 helmsman-adapter = { path = "../helmsman-adapter" }
 # Tests and examples run the enip-io driver against the simulated E1213.
-helmsman-io = { path = ".", features = ["enip-sim"] }
+helmsman-io = { path = ".", features = ["enip-sim", "wasm"] }
+# The WASM driver tests' adversarial guests are hand-written WAT,
+# assembled in the test (as helmsman-plc's module tests do).
+wat = { version = "1.262.0", default-features = false }
 # SHA-256 of the vendor EDS files tests/eds_corpus.rs reads (already in
 # the lock through helmsman-plc).
 sha2 = { version = "0.11.1", default-features = false }
