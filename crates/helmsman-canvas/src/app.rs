@@ -69,6 +69,9 @@ pub fn wants_monitor(query: &str) -> bool {
     has(query, "monitor") || has(query, "andon")
 }
 
+// Independent UI flags (menu open, served by a box, first frame routed,
+// …), not a state machine in disguise.
+#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     pub screen: Screen,
     pub source: Source,
