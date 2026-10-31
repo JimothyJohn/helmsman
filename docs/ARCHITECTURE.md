@@ -69,7 +69,7 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
-| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header (the open project, Save, Deploy, Sign in; Proposals, Upload and Download behind its ⋯ menu) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
+| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header (the open project, Save, Deploy, Sign in; Proposals, Upload and Download behind its ⋯ menu) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
@@ -518,7 +518,9 @@ load.
 A box-driven full-screen andon view, an output kind next to GPIO lights
 (`screen.rs` in `helmsman-plc`; contract in `tests/screen.rs`). The
 box side is built; the canvas's Andon mode that drew it was removed with
-docs/UI.md's clean-up, and the Monitor (its step 3) replaces it.
+docs/UI.md's clean-up, and the Monitor (its step 3, below) replaced it.
+The Monitor builds its tiles from the program, not from this layout
+(card `andon-layout-after-monitor`).
 
 - **Tiles are outputs.** `out line1_state int screen line1` in the I/O map
   (`Binding::Screen`): an `out` signal no device takes, so no link polls or
@@ -545,7 +547,7 @@ docs/UI.md's clean-up, and the Monitor (its step 3) replaces it.
 - **Served read-only** at `GET /api/screen`: the file byte for byte (the
   canvas parses it with the same parser), the parsed layout and the palette.
 - **The view** was the served canvas at `/?andon` (now it opens the
-  Editor): a header (title, and the shift from the calendar), big tiles,
+  Monitor): a header (title, and the shift from the calendar), big tiles,
   fed by `/api/events`. Its rule carries to the Monitor: **stale data
   never shows as a colour** (the stream fails, or no event for 3 s, and
   every tile shows "NO DATA" on black under a red banner). The code is in
@@ -1703,6 +1705,19 @@ agent as ST; nothing here writes ST back).
   unreachable). Pan, zoom, drag blocks; a click on a block sends the ST
   editor ("ST", beside the diagram; read-only on a box) to its line;
   tapping an output shows its highlighted path.
+- **Monitor** (docs/UI.md; `monitor.rs`, contract in `monitor_tests.rs`
+  against the real API scanning `programs/line.st`). One `Feed` trait
+  over both sources: a box's `BoxState` (module status from
+  `/api/events`; while the Monitor shows, every module's traced scans on
+  one stream, `GET /api/traces/events`, which holds one of the box's
+  eight stream slots however many modules run, each module's source
+  fetched and lowered against its trace) and the simulation's session.
+  Tiles come from the source's declarations (`Shape`: the PROGRAM's
+  outputs, then each user FB instance, nested) and the scan's values by
+  path. A program whose newest scan is over 3 s old, or every program
+  while the values stream is down or silent for 3 s, is drawn grey with
+  the age: never a colour. It sends only GETs and stream opens (tested);
+  leaving it closes the all-modules stream and reopens the Editor's.
 
 ## Explain mode (`explain-mode`, built)
 
@@ -1927,8 +1942,9 @@ prompt. The agent never touches the Rust core.
   `apply`. `box-mcp` (built, above) wraps the same routes;
   `local-accounts` (built, above) replaces role PINs with people, keeping
   the role check and the gate.
-- `canvas-web` (built, above) → the Monitor (docs/UI.md, step 3): a
-  screen of the same app, on the same streams; it replaces the andon view.
+- `canvas-web` (built, above) → the Monitor (built, above; docs/UI.md,
+  step 3): a screen of the same app, on the same values stream plus one
+  stream of every module's traces; it replaced the andon view.
 - `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
   compile, check, swap, then `Store::commit` with the approver; the box API
   serves `list`, `diff` and `rollback`. `bundle-format` (built) exports a

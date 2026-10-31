@@ -1,8 +1,9 @@
 //! `helmsman-canvas`: the browser app (docs/UI.md). An always-on header
-//! over the Editor: a program's Structured Text and its live diagram, the
-//! ST beside it on demand, the program tree, I/O, a trend and Claude; and
-//! the agent's proposals (diffs, sim replay, approve with a PIN) behind
-//! the ⋯ menu.
+//! over the Editor (a program's Structured Text and its live diagram, the
+//! ST beside it on demand, the program tree, I/O, a trend and Claude) or
+//! the Monitor (status tiles, phone to wall TV, watch only); and the
+//! agent's proposals (diffs, sim replay, approve with a PIN) behind the ⋯
+//! menu.
 //!
 //! Where the program runs is a setting, not a mode. Served by a box
 //! (`make canvas-web`, `helmsman-plc --ui`), the page watches that box
@@ -31,6 +32,9 @@ mod box_tests;
 mod box_view;
 mod claude;
 mod editor;
+mod monitor;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod monitor_tests;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod playground_tests;

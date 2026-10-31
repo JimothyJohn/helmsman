@@ -11,13 +11,16 @@
 //!   [`BoxScan`] that the diagram annotates like an in-process trace.
 //! - `/api/events`: live values and module status; this stream's health
 //!   is the connection status.
+//! - `/api/traces/events`, while the Monitor shows: every module's traced
+//!   scans on one stream, kept per module in [`BoxState::programs`] with
+//!   each module's source (`GET /api/modules/{name}`), lowered.
 //!
 //! Reconnects work like `EventSource`'s own, but here, so the canvas can
 //! say what is happening: a failed stream is closed and reopened after
 //! [`backoff`] (2 s, doubling to 30 s), and after [`UNREACHABLE_AFTER`]
 //! failures in a row the box is called unreachable (still retrying).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
 use helmsman_diagram::{Module, Scan, StmtPos, lower_table};
@@ -41,6 +44,8 @@ pub fn backoff(failures: u32) -> f64 {
 pub enum Fetch {
     Modules,
     Module(String),
+    /// A module's source for the Monitor ([`BoxState::programs`]).
+    Source(String),
 }
 
 /// An event stream.
@@ -50,6 +55,8 @@ pub enum Stream {
     Values,
     /// `/api/modules/{name}/trace/events`: `trace` events.
     Trace,
+    /// `/api/traces/events`: every module's `trace` events (the Monitor).
+    Traces,
 }
 
 impl Stream {
@@ -59,7 +66,7 @@ impl Stream {
     pub const fn event(self) -> &'static str {
         match self {
             Self::Values => "values",
-            Self::Trace => "trace",
+            Self::Trace | Self::Traces => "trace",
         }
     }
 }
@@ -234,13 +241,17 @@ impl Scan for BoxScan {
 }
 
 /// A module as the picker lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModuleRow {
     pub name: String,
     /// `starting`, `running`, `held` or `faulted`.
     pub state: String,
     pub fault: Option<String>,
     pub scans: u64,
+    /// The scan period, ms.
+    pub scan_ms: Option<f64>,
+    /// Deadlines missed because a scan ran late.
+    pub overruns: u64,
 }
 
 impl ModuleRow {
@@ -250,7 +261,74 @@ impl ModuleRow {
             state: j["status"]["state"].as_str().unwrap_or("?").to_string(),
             fault: j["status"]["fault"]["text"].as_str().map(str::to_string),
             scans: j["stats"]["scans"].as_u64().unwrap_or(0),
+            scan_ms: j["scan_ms"].as_f64(),
+            overruns: j["stats"]["overruns"].as_u64().unwrap_or(0),
         })
+    }
+}
+
+/// One module as the Monitor watches it: its newest traced scan, when
+/// that came, and its source lowered against the scan's statements.
+#[derive(Debug, Default)]
+pub struct Watched {
+    pub scan: Option<BoxScan>,
+    /// Page time the newest scan arrived, s.
+    pub at: Option<f64>,
+    pub lowered: Option<Lowered>,
+    /// Why it cannot be drawn.
+    pub problem: Option<String>,
+    source: Option<String>,
+    /// The source fetch is in flight.
+    asking: bool,
+    fetched_for: Option<Vec<StmtPos>>,
+    detail: Retry,
+}
+
+impl Watched {
+    /// Lowers the source against the newest scan when either is new;
+    /// asks for the source (again, if the program changed under it).
+    fn relower(&mut self, name: &str, generation: &mut u64, queue: &mut Vec<Cmd>) {
+        let Some(scan) = self.scan.as_ref() else {
+            return;
+        };
+        if self.lowered.as_ref().is_some_and(|l| l.table == scan.table) {
+            return;
+        }
+        let stale = self.fetched_for.as_ref().is_some_and(|t| *t != scan.table);
+        if self.source.is_none() || stale {
+            if stale {
+                self.source = None;
+            }
+            if !self.asking && self.detail.at.is_none() {
+                self.asking = true;
+                self.fetched_for = Some(scan.table.clone());
+                queue.push(Cmd::Get(Fetch::Source(name.into()), module_url(name)));
+            }
+            return;
+        }
+        let Some(src) = self.source.clone() else {
+            return;
+        };
+        if src.trim_start().starts_with('<') {
+            self.problem = Some("a PLCopen XML project; the Monitor reads Structured Text".into());
+            return;
+        }
+        match lower_table(&src, &scan.table) {
+            Ok(module) => {
+                *generation += 1;
+                self.problem = None;
+                self.lowered = Some(Lowered {
+                    src,
+                    module,
+                    table: scan.table.clone(),
+                    generation: *generation,
+                });
+            }
+            Err(e) => {
+                self.lowered = None;
+                self.problem = Some(format!("cannot read {name}: {e}"));
+            }
+        }
     }
 }
 
@@ -385,6 +463,13 @@ pub struct BoxState {
     pub forces: Vec<ForceRow>,
     /// The values stream's last `seq`.
     pub seq: Option<u64>,
+    /// Page time the last `values` event arrived, s.
+    pub values_at: Option<f64>,
+    /// Every module, as the Monitor watches it (while it shows).
+    pub programs: BTreeMap<String, Watched>,
+    /// The Monitor shows: every module's traces are streamed.
+    monitor: bool,
+    traces: Retry,
     connected: bool,
     ever_connected: bool,
     values: Retry,
@@ -417,6 +502,10 @@ impl BoxState {
             signals: Vec::new(),
             forces: Vec::new(),
             seq: None,
+            values_at: None,
+            programs: BTreeMap::new(),
+            monitor: false,
+            traces: Retry::default(),
             connected: false,
             ever_connected: false,
             values: Retry::default(),
@@ -440,8 +529,18 @@ impl BoxState {
         if self.list.due(now) {
             self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
         }
+        if self.monitor && self.traces.due(now) {
+            self.queue.push(Cmd::Listen(Stream::Traces, TRACES_URL.into()));
+        }
+        let mut generation = self.generation;
+        for (name, w) in &mut self.programs {
+            if w.detail.due(now) {
+                w.relower(name, &mut generation, &mut self.queue);
+            }
+        }
+        self.generation = generation;
         if let Some(name) = self.selected.clone() {
-            if self.trace.due(now) {
+            if !self.monitor && self.trace.due(now) {
                 self.queue.push(Cmd::Listen(Stream::Trace, trace_url(&name)));
             }
             if self.detail.due(now) {
@@ -455,8 +554,9 @@ impl BoxState {
     /// The soonest retry, for scheduling a repaint.
     #[must_use]
     pub fn next_retry(&self) -> Option<f64> {
-        [self.values, self.trace, self.list, self.detail]
+        [self.values, self.trace, self.list, self.detail, self.traces]
             .iter()
+            .chain(self.programs.values().map(|w| &w.detail))
             .filter_map(|r| r.at)
             .reduce(f64::min)
     }
@@ -486,6 +586,33 @@ impl BoxState {
         }
     }
 
+    /// Whether the Monitor shows. On: every module's traces on one stream
+    /// (the selected module's own stream closes, a slot the box has few
+    /// of); off: back to the selected module's.
+    pub fn set_monitor(&mut self, on: bool) {
+        if self.monitor == on {
+            return;
+        }
+        self.monitor = on;
+        if on {
+            self.traces.ok();
+            self.queue.push(Cmd::Close(Stream::Trace));
+            self.queue.push(Cmd::Listen(Stream::Traces, TRACES_URL.into()));
+        } else {
+            self.queue.push(Cmd::Close(Stream::Traces));
+            if let Some(name) = self.selected.clone() {
+                self.trace.ok();
+                self.queue.push(Cmd::Listen(Stream::Trace, trace_url(&name)));
+            }
+        }
+    }
+
+    /// Forgets watched modules the box no longer runs.
+    fn prune(&mut self) {
+        let names: Vec<&str> = self.modules.iter().map(|m| m.name.as_str()).collect();
+        self.programs.retain(|n, _| names.contains(&n.as_str()));
+    }
+
     /// Reads the module list again (after a deploy changed it).
     pub fn relist(&mut self) {
         self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
@@ -507,7 +634,9 @@ impl BoxState {
         self.queue.push(Cmd::Close(Stream::Trace));
         self.queue
             .push(Cmd::Get(Fetch::Module(name.into()), module_url(name)));
-        self.queue.push(Cmd::Listen(Stream::Trace, trace_url(name)));
+        if !self.monitor {
+            self.queue.push(Cmd::Listen(Stream::Trace, trace_url(name)));
+        }
     }
 
     /// Takes in what the transport saw at page time `now` (seconds).
@@ -518,6 +647,7 @@ impl BoxState {
                     Some(list) => {
                         self.list.ok();
                         self.modules = list;
+                        self.prune();
                         let keep = self
                             .selected
                             .as_ref()
@@ -530,6 +660,27 @@ impl BoxState {
                 }
             }
             Msg::Got(Fetch::Modules, Err(_)) => self.list.failed(now),
+            Msg::Got(Fetch::Source(name), r) => {
+                let Some(w) = self.programs.get_mut(&name) else {
+                    return;
+                };
+                w.asking = false;
+                let src = r
+                    .ok()
+                    .as_deref()
+                    .and_then(parse)
+                    .and_then(|j| j["source"].as_str().map(str::to_string));
+                if let Some(src) = src {
+                    w.detail.ok();
+                    w.source = Some(src);
+                    let mut generation = self.generation;
+                    w.relower(&name, &mut generation, &mut self.queue);
+                    self.generation = generation;
+                } else {
+                    w.fetched_for = None;
+                    w.detail.failed(now);
+                }
+            }
             Msg::Got(Fetch::Module(name), r) => {
                 if self.selected.as_deref() != Some(&name) {
                     return;
@@ -554,6 +705,7 @@ impl BoxState {
                 self.ever_connected = true;
             }
             Msg::Opened(Stream::Trace) => self.trace.ok(),
+            Msg::Opened(Stream::Traces) => self.traces.ok(),
             Msg::Failed(s) => {
                 let r = match s {
                     Stream::Values => {
@@ -561,6 +713,7 @@ impl BoxState {
                         &mut self.values
                     }
                     Stream::Trace => &mut self.trace,
+                    Stream::Traces => &mut self.traces,
                 };
                 r.failed(now);
             }
@@ -570,11 +723,13 @@ impl BoxState {
                     self.connected = true;
                     self.ever_connected = true;
                     self.seq = j["seq"].as_u64();
+                    self.values_at = Some(now);
                     if let Some(s) = rows(&j["signals"], SignalRow::parse) {
                         self.signals = s;
                     }
                     if let Some(m) = rows(&j["modules"], ModuleRow::parse) {
                         self.modules = m;
+                        self.prune();
                     }
                     if let Some(f) = rows(&j["forces"], ForceRow::parse) {
                         self.forces = f;
@@ -590,6 +745,20 @@ impl BoxState {
                 }
                 self.scan = Some(scan);
                 self.relower();
+            }
+            Msg::Event(Stream::Traces, name, data) if name == "trace" => {
+                let Some(scan) = parse(&data).and_then(|j| BoxScan::parse(&j).ok()) else {
+                    return;
+                };
+                let name = scan.module.clone();
+                // A module the list does not name yet is kept: the list
+                // catches up, and prunes it if it is really gone.
+                let w = self.programs.entry(name.clone()).or_default();
+                w.scan = Some(scan);
+                w.at = Some(now);
+                let mut generation = self.generation;
+                w.relower(&name, &mut generation, &mut self.queue);
+                self.generation = generation;
             }
             // The floor screen's fetch is not this view's.
             Msg::Event(..) => {}
@@ -652,6 +821,9 @@ pub(crate) fn parse(body: &str) -> Option<Json> {
 pub fn module_url(name: &str) -> String {
     format!("/api/modules/{}", segment(name))
 }
+
+/// Every module's traces, one stream (the Monitor's).
+pub const TRACES_URL: &str = "/api/traces/events";
 
 #[must_use]
 pub fn trace_url(name: &str) -> String {
