@@ -2,8 +2,8 @@
 //! pulls in may need a C toolchain or OS entropy that wasm32-unknown-unknown
 //! lacks. The snapshot store (SQLite) and https sinks (ring) live behind
 //! helmsman-plc's `box` / `https` features for exactly this reason (the
-//! canvas runs on helmsman-iec alone today; helmsman-plc without `box`
-//! is still what it may embed). This asks cargo for the resolved wasm
+//! canvas runs on helmsman-iec and helmsman-diagram; helmsman-plc is only
+//! a native dev-dependency). This asks cargo for the resolved wasm
 //! graph rather than trusting a manifest, so a dependency that drags them
 //! back in fails here, not in a browser.
 

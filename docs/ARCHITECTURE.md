@@ -69,7 +69,7 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
-| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header over the Editor (files and program tree, the live diagram, the ST on demand, I/O / Trend / Claude tabs) and Proposals behind its ⋯ menu. Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
+| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header (the open project, Save, Deploy, Sign in; Proposals, Upload and Download behind its ⋯ menu) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
@@ -1055,6 +1055,35 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | `POST /api/projects/{p}/import?file=F[&replace=true]` | engineer | the file's bytes; 201 `{name, version, bytes}` |
 | `GET /api/running` | open | `{project, snapshot, running, current}` |
 
+**In the Editor** (`helmsman-canvas`: `box_projects.rs` decides,
+`box_view.rs` draws, `projects.rs` is the Files sidebar the simulation
+shares; contract in `box_projects_tests.rs`, against this API with real
+accounts). A box without `--projects` (`GET /api/projects` 404) keeps the
+module view. Otherwise:
+
+- **Sign in** is in the header: the box's own login panel (user and
+  password, or role and PIN), the session the browser's `HttpOnly`
+  cookie. Signed out or below engineer, the ST is read-only and every
+  write control is disabled, with why on hover; a 401 on any project
+  call signs the header out.
+- **Files** lists the projects (the running one marked), the open
+  project's files (every file is read on open; a dot marks unsaved
+  edits), and new, copy, rename and delete for both. A file rename is a
+  write of the new name (`version: null`, never over another file),
+  then a delete of the old.
+- **Save** writes every edited file with the version it read; a 409 says
+  someone else saved it and offers Reload (the box's text, the edits
+  here dropped). **Deploy** saves first, then `check`, then `replay` when
+  `approval.needs.replay` says so (or the deploy answers 428), then
+  `deploy` citing it, and says what runs (project, modules, snapshot). A
+  422 lists every error as `file:line:col`; a click opens the file at the
+  line. A click on a block of the running project's diagram opens its
+  file at its line (`(* file NAME *)` headers in the build).
+- **Upload** (⋯): a `.zip` becomes the project its file name says
+  (`projects::slug`), a taken name offers Replace; any other file is
+  imported into the open project, and a refusal (L5X, 415) is shown in
+  the box's words. **Download**: the browser fetches `GET .../zip`.
+
 Not built yet (cards): L5X to ST (`l5x-import`), and the Pi's service
 running `--projects` (`pi-projects`).
 
@@ -1088,6 +1117,13 @@ module's unit tests.
   signal) carries `forced`; the values stream carries `forced` per
   signal and a `forces` list; every trace (`GET .../trace` and its
   stream) carries `forces`, so the diagram marks forced points FORCED.
+- **In the Editor.** For an engineer, an input signal's block on the
+  diagram is a control: a BOOL flips, a number drags, and either forces
+  it. A forced input is marked FORCED in the warning colour over its
+  block and in the I/O tab, from the values stream; a banner over the
+  diagram lists every force with release and Release all (disabled, with
+  why, for anyone else). Address forces (`%IX...`) have no click: the
+  diagram's reads are variables, and only map signals are clickable.
 
 | route | who | body / answer |
 | --- | --- | --- |
