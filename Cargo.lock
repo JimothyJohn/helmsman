@@ -1546,7 +1546,6 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "helmsman-diagram",
- "helmsman-graph",
  "helmsman-iec",
  "helmsman-io",
  "helmsman-plc",
@@ -1568,15 +1567,6 @@ version = "0.1.0"
 dependencies = [
  "helmsman-iec",
  "proptest",
-]
-
-[[package]]
-name = "helmsman-graph"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "serde",
- "serde_json",
 ]
 
 [[package]]

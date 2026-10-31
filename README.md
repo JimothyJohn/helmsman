@@ -11,7 +11,7 @@ Status: early. Rust cargo workspace, crates under `crates/helmsman-*`:
 `helmsman-cli` (the `helmsman` command), `helmsman-iec` (ST compiler and
 interpreter, PLCopen XML), `helmsman-io` (I/O map, drivers, Modbus TCP),
 `helmsman-plc` (the runtime), `helmsman-diagram` (ST as a live diagram),
-`helmsman-graph` / `helmsman-canvas` (the canvas: live ST view and node editor). `make help` lists the dev targets. See `docs/SOURCES.md` for the
+`helmsman-canvas` (the browser app: ST and its live diagram, docs/UI.md). `make help` lists the dev targets. See `docs/SOURCES.md` for the
 reference stacks and ODVA documents this project draws on.
 
 ## Command line

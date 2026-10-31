@@ -50,9 +50,9 @@ test-oracle:  ## Differential test of the ST interpreter against ruSTy (needs Do
 test-plcopen-corpus:  ## PLCopen import against Beremiz/OpenPLC Editor example projects (fetched, hash-pinned).
 	./scripts/plcopen-corpus.sh
 
-# ---- Node canvas ------------------------------------------------------------
+# ---- Canvas -----------------------------------------------------------------
 
-canvas:  ## Run the node canvas as a native window.
+canvas:  ## Run the canvas (the simulation) as a native window.
 	cargo run --release -p helmsman-canvas
 
 canvas-web:  ## Build the canvas for the browser into target/canvas-dist (the box serves it: helmsman-plc --ui).

@@ -67,10 +67,9 @@ Three directions of traffic, three different rules:
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
-| `helmsman-graph` | Node-graph model and scan simulator behind the canvas's lab editor. | built (lab tool) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
-| `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame), the public ST playground (`?playground`, docs/playground/: edit, run against virtual I/O, ask Claude with the visitor's key) and the lab editor over `helmsman-graph`. | built |
+| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header over the Editor (files and program tree, the live diagram, the ST on demand, I/O / Trend / Claude tabs) and Proposals behind its ⋯ menu. Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
@@ -517,8 +516,9 @@ load.
 ## Floor screen (`andon-screen`, built)
 
 A box-driven full-screen andon view, an output kind next to GPIO lights
-(`screen.rs` in `helmsman-plc`, `andon.rs` in the canvas; contracts in
-`tests/screen.rs`, `andon_tests.rs`).
+(`screen.rs` in `helmsman-plc`; contract in `tests/screen.rs`). The
+box side is built; the canvas's Andon mode that drew it was removed with
+docs/UI.md's clean-up, and the Monitor (its step 3) replaces it.
 
 - **Tiles are outputs.** `out line1_state int screen line1` in the I/O map
   (`Binding::Screen`): an `out` signal no device takes, so no link polls or
@@ -544,15 +544,12 @@ A box-driven full-screen andon view, an output kind next to GPIO lights
   is not in snapshots (`screen-layout-snapshot` asks).
 - **Served read-only** at `GET /api/screen`: the file byte for byte (the
   canvas parses it with the same parser), the parsed layout and the palette.
-- **The view** is the served canvas at `/?andon`: a header (title, and the
-  shift from the calendar's `in_shift`/`shift_id`/`on_break`/`planned_down`
-  when the box has them), big tiles filling the window, type sized to fit
-  each tile. Fed by `/api/events`. **Stale data never shows as a colour**:
-  when the stream fails the values are dropped, and when no event arrives
-  for 3 s every tile shows "NO DATA" on black under a red banner ("BOX
-  UNREACHABLE", "NO DATA FROM THE BOX FOR n s"); a stream quiet for 10 s is
-  reopened. Full screen is the browser's (F11, or `chromium --kiosk
-  http://BOX:8080/?andon`).
+- **The view** was the served canvas at `/?andon` (now it opens the
+  Editor): a header (title, and the shift from the calendar), big tiles,
+  fed by `/api/events`. Its rule carries to the Monitor: **stale data
+  never shows as a colour** (the stream fails, or no event for 3 s, and
+  every tile shows "NO DATA" on black under a red banner). The code is in
+  git history (`crates/helmsman-canvas/src/andon.rs` before the clean-up).
 
 ## Sim replay (`sim-replay`, built)
 
@@ -774,7 +771,7 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   screens at once.
 - **The canvas** (`--ui DIR`, `api/ui.rs`; contract in `tests/ui.rs`):
   `GET /` and the files beside it are the wasm canvas `make canvas-web`
-  builds (`/?andon` is the floor screen, above), on the API's origin (no CORS). Only `GET`; a path is refused
+  builds, on the API's origin (no CORS). Only `GET`; a path is refused
   (404) before the file system is asked unless every segment is
   `[A-Za-z0-9._-]`, not empty, not dot-led (after percent-decoding, so
   `%2e%2e`, `%2f`, `%5c`, `%00` and any non-ASCII never pass), at most 8
@@ -1481,7 +1478,7 @@ agent as ST; nothing here writes ST back).
   out to the caller's argument); library FBs report their inputs. No
   assignment ran: "held", with the closed gate that stopped each. Data, not
   prose: explain-mode phrases it.
-- **Canvas**: "Live ST view" in the top bar, with two sources. **Box**
+- **Canvas**: the Editor (docs/UI.md), with two sources. **Box**
   (`canvas-web`; the default in a browser the box served): the module list
   and a module's source from the box API, its traces from
   `/api/modules/{name}/trace/events` and live values and module status
@@ -1494,16 +1491,18 @@ agent as ST; nothing here writes ST back).
   connected, reconnecting, unreachable after 3 failures; a failed stream
   is closed and reopened after 2 s doubling to 30 s (the canvas's backoff,
   not the browser's). The decisions (`remote::BoxState`) are free of I/O
-  and tested natively against the real API. **Demo** (`?demo`, native,
-  or the button when the box is unreachable): a module runs in a
-  `helmsman_plc::Runtime` on the page clock with a `TraceTap` asked for
-  the last scan of every frame; scripted or hand-switched inputs. Pan,
-  zoom, click a block for its source line, click an output for why.
+  and tested natively against the real API. **Simulation** (the ST
+  playground below: docs/playground/, `?playground` or `?demo`, native,
+  or "Simulate in this browser" from the ⋯ menu or when the box is
+  unreachable). Pan, zoom, drag blocks; a click on a block sends the ST
+  editor ("ST", beside the diagram; read-only on a box) to its line.
 
 ## Explain mode (`explain-mode`, built)
 
-Tap any block or output on the live diagram: the side panel says why it
-is in its state right now, in two layers.
+Why a variable is in its state right now, in two layers. The library and
+the box route are built; the canvas's Why panel and its "Ask why" were
+removed (docs/UI.md: the diagram itself carries why, as the highlighted
+path that drives an output).
 
 - **The box's own words** (`helmsman_diagram::phrase`, no model, works
   offline and in the demo): the `explain` facts phrased by fixed
@@ -1534,14 +1533,13 @@ is in its state right now, in two layers.
   `--relay-explain-agent V` asks the relay for an explain profile
   (default `explain-v1`: the relay's read-only, floor-language profile;
   the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
-  agent; the canvas disables Ask why with its reason (box offline, no
-  relay) and the first layer stays up. Asking rides the browser's
-  session cookie (signed in on the Proposals screen); a 401 says to sign
-  in there.
+  agent. The route takes the browser's session cookie as well as the
+  token; no canvas screen calls it now.
 
 ## Proposal review (`proposal-ui`, built)
 
-The screen an engineer approves on: "Proposals" in the canvas top bar
+The screen an engineer approves on: "Proposals" in the header's ⋯ menu,
+badged with the drafts waiting (the list is read every 30 s)
 (`review.rs` decides, `review_view.rs` draws, `web::Http` fetches; contract
 in `review.rs`'s tests and `review_tests.rs`, which runs the screen's own
 requests against a real box: runtime, recorder, store, floor policy, PIN
@@ -1619,19 +1617,19 @@ in `tests/site.rs`, `site_tests.rs`).
   It is the one route other origins may read (`Access-Control-Allow-Origin:
   *`, no credentials, no preflight), and with `--site` the canvas page's
   CSP allows `connect-src http:` (question `site-view-cors`).
-- **The view** (`?site`, or the Site tab): the list from this box, each
-  peer's status from that peer's own `/api/site` fetched by the browser
-  (no credentials, 64 KiB cap, 8 s timeout, the answering box's id must be
-  the beacon's), every row a link to `http://ADDR/` built only from a
-  parsed IPv4:port. Unreachable, silent and conflicting boxes say so.
+- **No view for now.** The canvas's Site view (`?site`) was removed with
+  docs/UI.md's clean-up; the site returns with a fleet view. The box side
+  above is unchanged.
 
 ## ST playground (`playground`, built)
 
-The public demo: the canvas in a mode of its own (`?playground`, or the
-page `scripts/build-playground.sh` builds into `docs/playground/`, which
-GitHub Pages serves from master as /helmsman/playground/). No box, no
-server: everything runs in the page (`playground.rs`, `playground_view.rs`,
-`claude.rs` in the canvas; contracts in `playground_tests.rs`).
+The public demo: the canvas's Editor with the simulation as its source
+(the page `scripts/build-playground.sh` builds into `docs/playground/`,
+which GitHub Pages serves from master as /helmsman/playground/; `?playground`
+anywhere). The same screens as on a box (`editor.rs` lays them out for
+both). No box, no server: everything runs in the page (`playground.rs`,
+`playground_view.rs`, `claude.rs` in the canvas; contracts in
+`playground_tests.rs` and `ui_tests.rs`).
 
 - **Editor → program.** A multiline ST editor with line numbers; it
   compiles 0.35 s after the last keystroke with `helmsman_iec::compile`
@@ -1650,11 +1648,10 @@ server: everything runs in the page (`playground.rs`, `playground_view.rs`,
   switch; integers: slider and field in the type's range; REAL: field;
   TIME: ms slider), each `VAR_OUTPUT` a lamp or readout; `AT %IXn.m` /
   `%QXn.m` bits and direct `%IX`/`%QX` addresses in the code likewise. A
-  value outside its type's range never reaches the program. A trend of up
-  to six chosen signals over the last 10 s.
-- **The live diagram and "on because"** are the live ST view's
-  (`st_view::Viewer`): tapping an output opens its explanation.
-- **Ask Claude.** A panel that calls the Messages API from the page:
+  value outside its type's range never reaches the program. The Trend
+  tab: up to six pinned signals over the last 10 s.
+- **The live diagram** is the box's (`st_view::Viewer`).
+- **Claude** (its tab). Calls the Messages API from the page:
   `claude-sonnet-5-5` by default (Opus 5.5 and Haiku 5.5 selectable),
   streamed, API version `2026-10-21`, `max_tokens` 16000, effort medium,
   the fixed system prompt (the playground's dialect: what helmsman-iec
@@ -1723,8 +1720,8 @@ prompt. The agent never touches the Rust core.
   `apply`. `box-mcp` (built, above) wraps the same routes;
   `local-accounts` (built, above) replaces role PINs with people, keeping
   the role check and the gate.
-- `canvas-web` (built, above) → `andon-screen`: another page the box
-  serves from the same directory, on the same streams.
+- `canvas-web` (built, above) → the Monitor (docs/UI.md, step 3): a
+  screen of the same app, on the same streams; it replaces the andon view.
 - `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
   compile, check, swap, then `Store::commit` with the approver; the box API
   serves `list`, `diff` and `rollback`. `bundle-format` (built) exports a

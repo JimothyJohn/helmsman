@@ -41,17 +41,6 @@ pub fn backoff(failures: u32) -> f64 {
 pub enum Fetch {
     Modules,
     Module(String),
-    /// `GET /api/screen`: the floor screen's layout.
-    Screen,
-    /// `GET /api/site`: this box and the peers it heard.
-    Site,
-    /// Another box's `GET /api/site`, cross-origin, without credentials:
-    /// probe number `n` of the peer with this id (a later answer to an
-    /// earlier probe is ignored).
-    Peer {
-        id: String,
-        n: u64,
-    },
 }
 
 /// An event stream.
@@ -88,7 +77,7 @@ pub enum Cmd {
 }
 
 /// What the transport saw. (Natively only tests make these: the native
-/// canvas runs the demo.)
+/// canvas runs the simulation.)
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Msg {
@@ -556,7 +545,7 @@ impl BoxState {
                 self.relower();
             }
             // The floor screen's fetch is not this view's.
-            Msg::Got(Fetch::Screen | Fetch::Site | Fetch::Peer { .. }, _) | Msg::Event(..) => {}
+            Msg::Event(..) => {}
         }
     }
 
