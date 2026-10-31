@@ -152,13 +152,13 @@ impl Ui {
 }
 
 impl Asset {
-    /// Lets an HTML page also fetch from other boxes over `http:` or `https:` (the
+    /// Lets an HTML page also fetch from other boxes over `http:` (the
     /// site view reads each peer's `GET /api/site`, which is the only
     /// route that answers another origin). Scripts stay this origin's and
     /// the page's own by hash; nothing else changes.
     pub fn allow_peers(&mut self) {
         if let Some(c) = &mut self.csp {
-            *c = c.replacen(CONNECT_SELF, "connect-src 'self' http: https:;", 1);
+            *c = c.replacen(CONNECT_SELF, "connect-src 'self' http:;", 1);
         }
     }
 }
