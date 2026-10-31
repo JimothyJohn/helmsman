@@ -26,6 +26,8 @@ pub mod brand {
     pub const WHITE: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
     /// Between black and graphite: node bodies.
     pub const PANEL: Color32 = Color32::from_rgb(0x24, 0x24, 0x24);
+    /// The warning colour: a forced input, the force banner.
+    pub const WARN: Color32 = Color32::from_rgb(0xFF, 0x8A, 0x1E);
 }
 
 use brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};

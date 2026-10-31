@@ -46,11 +46,15 @@ this; change it here first when a decision changes.
 - On a Pi: `/var/lib/helmsman-plc/projects/<name>/`. Many stored, one
   running. Opening or editing another project never disturbs the running
   one.
-- **Save** writes the files (a draft). **Deploy** compiles the open project,
-  records a snapshot in the store (history and rollback keep working) and
-  hot-swaps it in between scans.
+- **Save** writes the edited files (a draft; a file someone else saved
+  since it was read is refused, and the page offers to reload it).
+  **Deploy** saves first, compiles the open project, records a snapshot in
+  the store (history and rollback keep working) and hot-swaps it in
+  between scans; compile errors list file and line, and a click goes
+  there.
 - **Who:** only an engineer login edits, saves, deploys or forces. Anyone
-  else watches.
+  else watches: the ST is read-only and the write controls are disabled,
+  saying why. Sign in and out from the header.
 - **Download:** a `.zip` of the project folder (its `.st` files, the I/O map,
   settings). **Upload:** that `.zip` back, or single `.st`, PLCopen XML or
   L5X files into the open project (XML and L5X converted to ST).

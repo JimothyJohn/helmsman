@@ -265,6 +265,8 @@ pub struct SignalRow {
     /// `good`, `missing` or `commanded`.
     pub quality: String,
     pub point_error: Option<String>,
+    /// An engineer forced it (the box's `forced`).
+    pub forced: bool,
 }
 
 impl SignalRow {
@@ -276,7 +278,40 @@ impl SignalRow {
             value: st_value(&j["value"]),
             quality: j["quality"].as_str().unwrap_or("?").to_string(),
             point_error: j["point_error"].as_str().map(str::to_string),
+            forced: j["forced"].as_bool().unwrap_or(false),
         })
+    }
+}
+
+/// A forced input as the box lists it (`GET /api/forces`, the values
+/// stream's `forces`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ForceRow {
+    pub id: u64,
+    /// The input signal, or `None` for an address force.
+    pub signal: Option<String>,
+    /// The input image address (`%IX0.0`), for an address force.
+    pub address: Option<String>,
+    pub value: Option<Value>,
+    /// Who forced it: `alice (engineer)`.
+    pub by: String,
+}
+
+impl ForceRow {
+    pub(crate) fn parse(j: &Json) -> Option<Self> {
+        Some(Self {
+            id: j["id"].as_u64()?,
+            signal: j["signal"].as_str().map(str::to_string),
+            address: j["address"].as_str().map(str::to_string),
+            value: st_value(&j["value"]),
+            by: j["by"].as_str().unwrap_or("?").to_string(),
+        })
+    }
+
+    /// What is forced: the signal's name or the address.
+    #[must_use]
+    pub fn point(&self) -> &str {
+        self.signal.as_deref().or(self.address.as_deref()).unwrap_or("?")
     }
 }
 
@@ -320,8 +355,9 @@ impl Retry {
     }
 }
 
-/// Percent-encodes a module name for a path segment.
-fn segment(name: &str) -> String {
+/// Percent-encodes a name for one path segment.
+#[must_use]
+pub fn segment(name: &str) -> String {
     let mut out = String::new();
     for b in name.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.') {
@@ -345,6 +381,8 @@ pub struct BoxState {
     pub problem: Option<String>,
     pub scan: Option<BoxScan>,
     pub signals: Vec<SignalRow>,
+    /// The box's forced inputs, as the values stream last said.
+    pub forces: Vec<ForceRow>,
     /// The values stream's last `seq`.
     pub seq: Option<u64>,
     connected: bool,
@@ -377,6 +415,7 @@ impl BoxState {
             problem: None,
             scan: None,
             signals: Vec::new(),
+            forces: Vec::new(),
             seq: None,
             connected: false,
             ever_connected: false,
@@ -445,6 +484,11 @@ impl BoxState {
                 at: r.at.unwrap_or(0.0),
             },
         }
+    }
+
+    /// Reads the module list again (after a deploy changed it).
+    pub fn relist(&mut self) {
+        self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
     }
 
     /// Watch `name` instead.
@@ -531,6 +575,9 @@ impl BoxState {
                     }
                     if let Some(m) = rows(&j["modules"], ModuleRow::parse) {
                         self.modules = m;
+                    }
+                    if let Some(f) = rows(&j["forces"], ForceRow::parse) {
+                        self.forces = f;
                     }
                 }
             }
