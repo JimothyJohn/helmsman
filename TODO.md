@@ -918,6 +918,26 @@
   difficulty: med
   id: l5x-scope
 
+- [ ] **Monitor lamps: is TRUE always green?** docs/UI.md says a tile's outputs are green or red. Built (reversible, one function in `monitor.rs`): a BOOL output TRUE is a green lamp, FALSE a red one, whatever its name, so the line's `alarm` and a motor's `tripped` light green when they are on. Options: keep it literal; invert by name (alarm, fault, trip, jam, error, estop light red when TRUE, off otherwise); or let the source say per output (a `(* monitor: alarm *)` comment on the declaration).
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what colour an alarm-like output shows on the Monitor
+  options: literal TRUE green, FALSE red (built) | invert alarm-like names (recommended) | a per-output comment in the source
+  est: 1h
+  difficulty: low
+  id: monitor-lamp-polarity
+
+- [ ] **Monitor "scan time": the period, or the measured scan?** The box publishes each module's scan period (`scan_ms`) and its counts (scans, overruns, held), not how long a scan took: the runtime has no clock (it also runs in the canvas's wasm build). Built: the status tile shows "scan 2 ms · N scans" (the period). Measuring would time `tick_with` in the box binary's loop (behind `box`) and publish last/max per module in `/api/events`.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what the Monitor's status tile reports as scan time
+  options: the period and counts (built) | measured last/max scan time, box-side (recommended for a wall TV) | both
+  est: 3h
+  difficulty: low
+  id: monitor-scan-time
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
