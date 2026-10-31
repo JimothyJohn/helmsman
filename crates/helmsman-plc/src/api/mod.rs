@@ -24,6 +24,7 @@
 //! GET  /api/audit?after=N&limit=M         every mutating call, append-only, naming snapshot ids
 //! GET  /api/snapshots                     snapshot history (with --store), head, the running change set's id
 //! GET  /api/snapshots/head
+//! GET  /api/io_map                        the running I/O map file (to draft a new one from; card `dropin-pid`)
 //! GET  /api/snapshots/{id}                a snapshot's files
 //! GET  /api/snapshots/{a}/diff/{b}
 //! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
@@ -1038,7 +1039,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | [
             "api",
             "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
-            | "session" | "screen" | "site",
+            | "session" | "screen" | "site" | "io_map",
         ]
         | [
             "api",
@@ -1349,6 +1350,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         },
         ["api", "outputs"] => Response::json(200, &render::outputs(c, &view)),
         ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices)),
+        ["api", "io_map"] => io_map(ctx),
         ["api", "proposals"] => Response::json(
             200,
             &Json::Array(ctx.box_.proposals.list().into_iter().map(|p| p.json).collect()),
@@ -1423,6 +1425,20 @@ fn store_error(e: &snapshots::Error) -> Response {
 
 /// A snapshot's content by id (64 hex digits): from the store, or the
 /// running change set when it has that id.
+/// `GET /api/io_map`: the running map file, to draft a new one from.
+fn io_map(ctx: &Ctx) -> Response {
+    match ctx.running() {
+        Some(cs) => Response::json(
+            200,
+            &json!({ "snapshot": cs.id().to_string(), "text": cs.io_map.unwrap_or_default() }),
+        ),
+        None => Response::error(
+            404,
+            "this box does not run a change set (module directories or a store), so its map cannot be read or proposed",
+        ),
+    }
+}
+
 fn snapshot(ctx: &Ctx, id: &str) -> Result<ChangeSet, Response> {
     let Some(id) = SnapshotId::parse(id) else {
         return Err(Response::error(404, "no such snapshot"));
@@ -1450,6 +1466,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/modules/{name}/trace/events", false, "event stream of traced scans"),
             e("GET", "/api/outputs", false, "output commands, safe values, the %Q image"),
             e("GET", "/api/devices", false, "device links up or down"),
+            e("GET", "/api/io_map", false, "the running I/O map file and its snapshot id"),
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}"),

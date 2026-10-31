@@ -1020,7 +1020,7 @@ to rule-based param edits, with no model on the box (`fallback.rs`,
   logic or an output's wiring. Offline messages do not enter the
   conversation; the model sees their proposals through its tools later.
 
-## Drop-ins (`dropin-prose`, `dropin-plc`, `dropin-photo`, `dropin-pdf`, built)
+## Drop-ins (`dropin-prose`, `dropin-plc`, `dropin-photo`, `dropin-pdf`, `dropin-pid`, built)
 
 A person hands the agent a document instead of describing everything in
 chat (`api/dropin.rs`, `helmsman_iec::l5x`, the agent's v3 tools;
@@ -1134,6 +1134,22 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   a question). It binds every later proposal of its conversation, never
   makes it watch-only, and counts against the 3.5 MiB history like a
   photo: one 2 MiB PDF (2.7 MiB as base64) fits a conversation.
+- **Drawings to a signal map** (`dropin-pid`; contract in
+  `tests/dropins.rs`). A P&ID or an electrical drawing comes in as a PDF
+  (or a photo) and the model reads it there; the box reads nothing in it.
+  Two tools turn it into a draft map through the proposal path the map
+  already has (`map-reload`): `read_io_map {}` (`GET /api/io_map`, the
+  running map file and its snapshot id, enveloped like every result) and
+  `propose_io_map {text, summary}` (`POST /api/proposals`,
+  `kind: io_map`, the whole new file, citing the conversation's
+  drop-ins). The box checks that the file loads and keeps every signal a
+  running module names (a refusal goes back with its problems so the
+  model fixes the draft); a stored map is a draft like any other, always
+  output-affecting, applied only by a person with a role PIN. A
+  watch-only conversation (one that read a PLC program) proposes no map:
+  the tool refuses, and the box refuses an io_map citing a PLC drop-in.
+  The tools reach a real model with relay agent v4 (card `relay-images`
+  notes: the tool schemas and the drawing paragraph); MCP serves them now.
 - **Questions, not guesses.** What the document leaves out (a signal the
   box does not have, a shift that is not defined) comes back as questions
   in the chat; the relay's v3 prompt says so, and the module only names
