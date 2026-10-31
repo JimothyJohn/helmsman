@@ -16,6 +16,7 @@ use eframe::wasm_bindgen::closure::Closure;
 use eframe::wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
+use crate::explain::{Reply, Side, SideCmd};
 use crate::remote::{Cmd, Msg, Stream};
 use crate::review::{Answer, Call, Request as ReviewRequest};
 
@@ -48,9 +49,35 @@ pub struct Driver {
     inbox: Inbox,
     values: Option<Source>,
     trace: Option<Source>,
+    /// What the explain panel's requests brought back.
+    side: Rc<RefCell<Vec<Side>>>,
 }
 
 impl Driver {
+    /// What the explain panel's requests brought back since the last call.
+    pub fn drain_side(&mut self) -> Vec<Side> {
+        std::mem::take(&mut *self.side.borrow_mut())
+    }
+
+    /// Carries out an explain-panel request.
+    pub fn side(&mut self, cmd: SideCmd, ctx: &egui::Context) {
+        let (side, ctx) = (Rc::clone(&self.side), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let push = |m: Side| {
+                side.borrow_mut().push(m);
+                ctx.request_repaint();
+            };
+            match cmd {
+                SideCmd::Index => push(Side::Index(get("/api").await)),
+                SideCmd::Ask { token, body } => {
+                    if let Err(e) = ask(&token, &body, &push).await {
+                        push(Side::Ask(Reply::Failed(e)));
+                    }
+                }
+            }
+        });
+    }
+
     /// What arrived since the last call.
     pub fn drain(&mut self) -> Vec<Msg> {
         std::mem::take(&mut *self.inbox.borrow_mut())
@@ -163,6 +190,65 @@ pub fn wants(key: &str) -> bool {
                 .split('&')
                 .any(|kv| kv.split('=').next() == Some(key))
         })
+}
+
+/// `POST /api/explain` (same origin), the token in the header (never the
+/// URL), its body handed over chunk by chunk as it streams.
+async fn ask(token: &str, body: &str, push: &dyn Fn(Side)) -> Result<(), String> {
+    use web_sys::js_sys::{Reflect, Uint8Array};
+
+    let window = web_sys::window().ok_or("no window")?;
+    let headers = web_sys::Headers::new().map_err(|e| text(&e))?;
+    headers
+        .set("Authorization", &format!("Bearer {token}"))
+        .map_err(|e| text(&e))?;
+    headers
+        .set("Content-Type", "application/json")
+        .map_err(|e| text(&e))?;
+    let init = web_sys::RequestInit::new();
+    init.set_method("POST");
+    init.set_headers(&headers);
+    init.set_body(&JsValue::from_str(body));
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init("/api/explain", &init))
+        .await
+        .map_err(|e| text(&e))?
+        .dyn_into()
+        .map_err(|e| text(&e))?;
+    if resp.status() != 200 {
+        let b = JsFuture::from(resp.text().map_err(|e| text(&e))?)
+            .await
+            .map_err(|e| text(&e))?;
+        push(Side::Ask(Reply::Status(
+            resp.status(),
+            b.as_string().unwrap_or_default(),
+        )));
+        return Ok(());
+    }
+    let stream = resp.body().ok_or("no body")?;
+    let reader: web_sys::ReadableStreamDefaultReader =
+        stream.get_reader().dyn_into().map_err(|e| text(&e))?;
+    let decoder = web_sys::TextDecoder::new().map_err(|e| text(&e))?;
+    let opts = web_sys::TextDecodeOptions::new();
+    opts.set_stream(true);
+    loop {
+        let r = JsFuture::from(reader.read()).await.map_err(|e| text(&e))?;
+        let done = Reflect::get(&r, &JsValue::from_str("done"))
+            .map_err(|e| text(&e))?
+            .as_bool()
+            .unwrap_or(true);
+        if done {
+            push(Side::Ask(Reply::End));
+            return Ok(());
+        }
+        let value: Uint8Array = Reflect::get(&r, &JsValue::from_str("value"))
+            .map_err(|e| text(&e))?
+            .dyn_into()
+            .map_err(|e| text(&e))?;
+        let chunk = decoder
+            .decode_with_js_u8_array_and_options(&value, &opts)
+            .map_err(|e| text(&e))?;
+        push(Side::Ask(Reply::Chunk(chunk)));
+    }
 }
 
 /// The review screen's transport: one `fetch` per [`ReviewRequest`],

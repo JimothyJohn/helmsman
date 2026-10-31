@@ -1175,6 +1175,7 @@ version = "0.1.0"
 dependencies = [
  "helmsman-adapter",
  "helmsman-agent",
+ "helmsman-diagram",
  "helmsman-iec",
  "helmsman-io",
  "helmsman-proto",
