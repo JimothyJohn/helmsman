@@ -462,6 +462,33 @@ into the code.
   5000 export once one is on the bench (TODO `l5x-real-export`), and cite
   it per element as `RM014 p.<n>`.
 
+### Model Context Protocol specification, revisions 2026-07-28 and 2025-11-25
+
+- **Where:** https://modelcontextprotocol.io/specification/2026-07-28 (the
+  `latest` redirect on 2026-10-30) and
+  https://modelcontextprotocol.io/specification/2025-11-25, read as the
+  site's Markdown (`<page>.md`) on 2026-10-30. Pages read: `changelog`,
+  `basic/index` (messages, `resultType`, error codes, `_meta`
+  per-request fields, statelessness), `basic/versioning` (dual-era
+  servers, compatibility matrix), `basic/transports` and
+  `basic/transports/streamable-http` (POST-only endpoint, `Origin` check,
+  `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` headers and the
+  Base64 sentinel, `-32020` header mismatch, 405 for GET and DELETE,
+  backward compatibility), `server/discover`, `server/tools` (list and
+  call shapes, tool errors vs protocol errors, stateful tools by handle),
+  `server/utilities/caching` (`ttlMs`, `cacheScope`), `deprecated`, and
+  for the legacy era 2025-11-25 `basic/lifecycle` (`initialize`) and
+  `basic/transports` (sessions optional, `MCP-Protocol-Version` after
+  initialization). The `claude-api` skill's MCP material covers the
+  Messages API's MCP *client* side only, so the spec was the source.
+- **Leaned on by** `crates/helmsman-plc/src/api/mcp.rs` (`box-mcp`):
+  served revisions `2026-07-28` (stateless, per-request `_meta`) and
+  `2025-11-25` / `2025-06-18` (after `initialize`, no session minted);
+  JSON responses only (no SSE), no batches, no `subscriptions/listen`,
+  no resources or prompts.
+- **How to cite:** `MCP 2026-07-28 <page> § <heading>`, e.g.
+  `MCP 2026-07-28 basic/transports/streamable-http § Server Validation`.
+
 ## Test corpora (fetched, not vendored)
 
 ### Beremiz and OpenPLC Editor example projects (PLCopen TC6 XML)
