@@ -7,8 +7,9 @@
 use eframe::egui::{self, Color32, RichText};
 use helmsman_diagram::Scan;
 
+use crate::explain::{self, Ask, Side, SideCmd};
 use crate::remote::{BoxState, Cmd, Link, Msg};
-use crate::st_view::{Viewer, brand, show};
+use crate::st_view::{Action, AskUi, Viewer, brand, show};
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
@@ -19,6 +20,18 @@ pub struct BoxView {
     generation: u64,
     /// Set when the operator asks for the offline demo.
     pub wants_demo: bool,
+    /// Whether the box has an agent (`GET /api`); `None`: not known yet.
+    pub agent: Option<bool>,
+    /// `GET /api` is out.
+    index_out: bool,
+    /// The box API token for "Ask why", as typed: in memory only, never
+    /// stored or logged.
+    pub token: String,
+    /// The last "Ask why".
+    pub ask: Option<Ask>,
+    /// Explain-panel requests not carried out (tests read them).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub side_sent: Vec<SideCmd>,
     #[cfg(target_arch = "wasm32")]
     driver: crate::web::Driver,
     /// Commands not carried out (no transport here: tests read them).
@@ -40,6 +53,12 @@ impl BoxView {
             view: None,
             generation: 0,
             wants_demo: false,
+            agent: None,
+            index_out: false,
+            token: String::new(),
+            ask: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            side_sent: Vec::new(),
             #[cfg(target_arch = "wasm32")]
             driver: crate::web::Driver::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -72,9 +91,90 @@ impl BoxView {
             None => self.view = None,
             Some(_) => {}
         }
+        if let Some(v) = &mut self.view {
+            for sig in &self.state.signals {
+                let key = sig.name.to_ascii_uppercase();
+                if let Some(u) = &sig.unit {
+                    v.words.units.insert(key.clone(), u.clone());
+                }
+                if sig.dir == "in" {
+                    v.words.field.insert(key);
+                }
+            }
+        }
+        if self.agent.is_none() && !self.index_out && matches!(self.state.link(), Link::Connected) {
+            self.index_out = true;
+            self.side(ctx, SideCmd::Index);
+        }
         if let Some(at) = self.state.next_retry() {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).clamp(0.05, 60.0)));
         }
+    }
+
+    /// Takes in what the transport saw for the explain panel.
+    pub fn side_in(&mut self, msgs: Vec<Side>) {
+        for m in msgs {
+            match m {
+                Side::Index(r) => {
+                    self.index_out = false;
+                    if let Ok(body) = r {
+                        self.agent = explain::agent(&body).or(Some(false));
+                    }
+                }
+                Side::Ask(r) => {
+                    if let Some(a) = &mut self.ask {
+                        a.apply(r);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Why "Ask why" cannot be used now.
+    #[must_use]
+    pub fn blocked(&self) -> Option<&'static str> {
+        explain::blocked(
+            matches!(self.state.link(), Link::Connected),
+            self.agent,
+            self.token.trim(),
+        )
+    }
+
+    /// "Ask why" for `path` of the selected module, if it can be asked.
+    pub fn ask_why(&mut self, ctx: &egui::Context, path: &str) {
+        let Some(module) = self.state.selected.clone() else {
+            return;
+        };
+        if self.blocked().is_some() || self.ask.as_ref().is_some_and(Ask::running) {
+            return;
+        }
+        self.ask = Some(Ask::new(&module, path));
+        let cmd = SideCmd::Ask {
+            token: self.token.trim().to_string(),
+            body: explain::body(&module, path),
+        };
+        self.side(ctx, cmd);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn side(&mut self, ctx: &egui::Context, cmd: SideCmd) {
+        self.driver.side(cmd, ctx);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn side(&mut self, _ctx: &egui::Context, cmd: SideCmd) {
+        self.side_sent.push(cmd);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn side_inbox(&mut self) -> Vec<Side> {
+        self.driver.drain_side()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::unused_self)]
+    fn side_inbox(&mut self) -> Vec<Side> {
+        Vec::new()
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -107,6 +207,8 @@ impl BoxView {
         let now = ctx.input(|i| i.time);
         let msgs = self.inbox();
         self.step(&ctx, msgs, now);
+        let side = self.side_inbox();
+        self.side_in(side);
         egui::Panel::left("box-left")
             .resizable(true)
             .default_size(240.0)
@@ -114,12 +216,20 @@ impl BoxView {
                 egui::ScrollArea::vertical().show(ui, |ui| self.left(ui, now))
             });
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
+        let now_ms = self.state.scan.as_ref().map(|s| s.now_ms);
+        let blocked = self.blocked();
+        let mut action = None;
         match &mut self.view {
             Some(v) if v.drawable() => {
+                let ask = AskUi {
+                    blocked,
+                    ask: self.ask.as_ref(),
+                    token: Some(&mut self.token),
+                };
                 egui::Panel::right("box-right")
                     .resizable(true)
-                    .default_size(340.0)
-                    .show(ui, |ui| v.right(ui, scan));
+                    .default_size(360.0)
+                    .show(ui, |ui| action = v.right(ui, scan, now_ms, ask));
                 egui::CentralPanel::no_frame().show(ui, |ui| v.canvas(ui, scan));
             }
             _ => {
@@ -128,6 +238,12 @@ impl BoxView {
                     ui.vertical_centered(|ui| ui.label(RichText::new(self.waiting()).color(brand::STEEL)));
                 });
             }
+        }
+        if let Some(Action::AskWhy(path)) = action {
+            self.ask_why(&ctx, &path);
+        }
+        if self.ask.as_ref().is_some_and(Ask::running) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
 
