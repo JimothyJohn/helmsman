@@ -1205,6 +1205,9 @@ function __wbg_get_imports() {
         __wbg_set_prevent_scroll_aaa386836725b8b4: function(arg0, arg1) {
             arg0.preventScroll = arg1 !== 0;
         },
+        __wbg_set_referrer_policy_465382f52c1a03d3: function(arg0, arg1) {
+            arg0.referrerPolicy = __wbindgen_enum_ReferrerPolicy[arg1];
+        },
         __wbg_set_signal_2dbd377604627f26: function(arg0, arg1) {
             arg0.signal = arg1;
         },
@@ -1470,6 +1473,9 @@ function wasm_bindgen_f5cf5e7e6a6644f4___convert__closures_____invoke___wasm_bin
         throw takeFromExternrefTable0(ret[0]);
     }
 }
+
+
+const __wbindgen_enum_ReferrerPolicy = ["", "no-referrer", "no-referrer-when-downgrade", "origin", "origin-when-cross-origin", "unsafe-url", "same-origin", "strict-origin", "strict-origin-when-cross-origin"];
 
 
 const __wbindgen_enum_RequestCache = ["default", "no-store", "reload", "no-cache", "force-cache", "only-if-cached"];
