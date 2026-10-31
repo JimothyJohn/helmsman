@@ -1,0 +1,150 @@
+[package]
+name = "helmsman-plc"
+version = "0.1.0"
+description = "Soft PLC: an IEC 61131-3 Structured Text program behind the CIP adapter"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+helmsman-adapter = { path = "../helmsman-adapter" }
+# The chat panel's agent loop (relay client and tools), for the box API's
+# /api/chat; https follows ours.
+helmsman-agent = { path = "../helmsman-agent", default-features = false, optional = true }
+# Explain mode: the box explains its own traces (/api/explain).
+helmsman-diagram = { path = "../helmsman-diagram", optional = true }
+helmsman-iec = { path = "../helmsman-iec" }
+helmsman-io = { path = "../helmsman-io" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"], optional = true }
+sha2 = { version = "0.11.1", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"], optional = true }
+webpki-roots = { version = "1.0.11", optional = true }
+# Ed25519 for bundle signatures (bundle::sign says why ring). Already in the
+# lockfile through rustls; the `box` feature now needs it too.
+ring = { version = "0.17.14", optional = true }
+# The WASM module tier (`wasm`): a pure-Rust interpreter with fuel
+# metering; ARCHITECTURE "WASM modules" says why not wasmtime.
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
+
+[dev-dependencies]
+# The box build itself never enables `unrestricted`; its tests play scanner.
+helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
+proptest = "1.12"
+# The simulated Moxa ioLogik E1213 (tests/enip_link.rs); `enip` itself is
+# in `box`. `wasm`: a WASM driver behind a link (tests/wasm_driver.rs).
+helmsman-io = { path = "../helmsman-io", features = ["enip-sim", "wasm"] }
+# The WASM tier's test modules are hand-written WAT, assembled in the test.
+wat = { version = "1.262.0", default-features = false }
+# An independent OPC UA client to test the box's server against
+# (tests/opcua.rs). Tests only, never the box: its crypto (`rsa`) carries
+# RUSTSEC-2023-0071 (Marvin, unpatched) and it pulls tokio and ~150 crates;
+# tests/box_build.rs fails if any of it reaches the box build. Pinned:
+# pre-1.0, it breaks per minor.
+async-opcua = { version = "=0.19.0", default-features = false, features = ["client"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "time"] }
+
+[lints]
+workspace = true
+
+[features]
+# `box`: what only a real box needs: the snapshot store (SQLite, built from
+# C), the HTTP API, serial ports (modbus-rtu) and the board's GPIO / I2C
+# (Linux), EtherNet/IP adapters the box masters (helmsman-io's enip-io:
+# the Class 1 scanner, never `unrestricted`), and the binary. Without it the crate is the runtime
+# alone (scheduler, signals, links, tap, replay), which the canvas embeds
+# and which builds for wasm32.
+# `https`: https:// sinks (rustls with the ring provider, Mozilla roots
+# compiled in). On by default so the Pi can post to a cloud receiver;
+# `--no-default-features --features box` builds an http-only box.
+default = ["box", "https"]
+box = ["dep:rusqlite", "dep:ring", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "helmsman-io/enip", "wasm"]
+# `wasm`: modules compiled to WebAssembly (`module.wasm`) beside ST ones,
+# run by an interpreter under fuel and memory limits, and the map's WASM
+# drivers (`wasm:NAME`, helmsman-io's `wasm`). In `box`; the canvas's
+# wasm build never has it.
+wasm = ["dep:wasmi", "helmsman-io/wasm"]
+https = ["dep:rustls", "dep:webpki-roots", "helmsman-agent?/https"]
+
+[[bin]]
+name = "helmsman-plc"
+path = "src/main.rs"
+required-features = ["box"]
+
+[[test]]
+name = "api"
+required-features = ["box"]
+
+[[test]]
+name = "bin"
+required-features = ["box"]
+
+[[test]]
+name = "opcua"
+required-features = ["box"]
+
+[[test]]
+name = "opcua_fuzz"
+required-features = ["box"]
+
+[[test]]
+name = "sink_bin"
+required-features = ["box"]
+
+[[test]]
+name = "bundle"
+required-features = ["box"]
+
+[[test]]
+name = "store"
+required-features = ["box"]
+
+[[test]]
+name = "accounts"
+required-features = ["box"]
+
+[[test]]
+name = "approval"
+required-features = ["box"]
+
+[[test]]
+name = "policy"
+required-features = ["box"]
+
+[[test]]
+name = "ui"
+required-features = ["box"]
+
+[[test]]
+name = "reload"
+required-features = ["box"]
+
+[[test]]
+name = "agent"
+required-features = ["box"]
+
+[[test]]
+name = "dropins"
+required-features = ["box"]
+
+[[test]]
+name = "site"
+required-features = ["box"]
+
+[[test]]
+name = "mcp"
+required-features = ["box"]
+
+[[test]]
+name = "wasm"
+required-features = ["wasm"]
+
+[[test]]
+name = "driver_map"
+required-features = ["box"]
+
+[[example]]
+name = "wasm_bench"
+required-features = ["wasm"]

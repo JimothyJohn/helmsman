@@ -1,0 +1,17 @@
+# Moxa ioLogik E1213 over Modbus/TCP (modbus-tcp, port 502), the same I/O
+# as moxa-iologik-e1213-enip.map. Addresses are 0-based PDU addresses: the
+# manual's "Start Address (decimal)" column (ioLogik E1200 User's Manual
+# v15.10, p. A-7), not its 1-based "Start Register" (10001, 30017, ...).
+device e1213 modbus-tcp 192.168.3.60:502 unit=1 timeout_ms=300 poll_ms=20
+
+in  part_present  bool e1213 di:4
+in  door_closed   bool e1213 di:5
+in  clamp_closed  bool e1213 di:0
+# DI_counterValue: input registers from 16, two words a channel, "high/low
+# word" (high first, the driver's default); DI-04's at 16 + 2 * 4
+in  parts_counted int  e1213 ir:24:u32
+# DO_status reads back from the coils
+in  clamp_is_on   bool e1213 coil:0
+
+out clamp         bool e1213 coil:0 safe=false
+out beacon        bool e1213 coil:1 safe=false

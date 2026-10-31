@@ -1,0 +1,60 @@
+[package]
+name = "helmsman-io"
+version = "0.1.0"
+description = "I/O mapping for the box: devices, named signals bound to device points or box channels, a driver contract, Modbus TCP, a simulator and a driver conformance harness"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# No `unrestricted`: the box build reads observed controllers, it never
+# writes them. `enip` adds only the Class 1 scanner (`scanner`), for the
+# adapters the box masters.
+helmsman-proto = { path = "../helmsman-proto" }
+# The simulated E1213 (`enip-sim`): already in every build that has the
+# box's own adapter, so no new code reaches a binary.
+helmsman-adapter = { path = "../helmsman-adapter", optional = true }
+# WASM drivers (`wasm`): the interpreter the module tier already runs
+# (helmsman-plc's `wasm`), same version and features, so nothing new
+# reaches the lock.
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
+
+# Serial ports for modbus-rtu: termios through rustix (safe Rust, no C;
+# already in the lock), unix only, behind `serial`.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", optional = true, default-features = false, features = ["std", "termios", "fs", "event"] }
+
+# The box's own GPIO lines and I2C buses, Linux only, behind `gpio`.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpiocdev = { version = "0.8", optional = true, default-features = false, features = ["uapi_v2"] }
+i2cdev = { version = "0.6", optional = true }
+
+[features]
+# None by default: the canvas's wasm build pulls this crate in through
+# helmsman-plc, and neither belongs there. helmsman-plc's `box` turns
+# both on.
+default = []
+serial = ["dep:rustix"]
+gpio = ["dep:gpiocdev", "dep:i2cdev"]
+# `enip-io`: EtherNet/IP adapters (remote I/O) over a Class 1 connection.
+enip = ["helmsman-proto/scanner"]
+# A simulated Moxa ioLogik E1213 for the conformance harness and tests.
+enip-sim = ["enip", "dep:helmsman-adapter"]
+# Drivers compiled to WebAssembly, sandboxed to their device's socket.
+wasm = ["dep:wasmi"]
+
+[dev-dependencies]
+helmsman-adapter = { path = "../helmsman-adapter" }
+# Tests and examples run the enip-io driver against the simulated E1213.
+helmsman-io = { path = ".", features = ["enip-sim", "wasm"] }
+# The WASM driver tests' adversarial guests are hand-written WAT,
+# assembled in the test (as helmsman-plc's module tests do).
+wat = { version = "1.262.0", default-features = false }
+# SHA-256 of the vendor EDS files tests/eds_corpus.rs reads (already in
+# the lock through helmsman-plc).
+sha2 = { version = "0.11.1", default-features = false }
+proptest = "1.12"
+
+[lints]
+workspace = true

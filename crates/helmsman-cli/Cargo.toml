@@ -1,0 +1,19 @@
+[package]
+name = "helmsman-cli"
+version = "0.1.0"
+description = "Command-line originator: discover devices, read attributes, run Class 1 I/O"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "helmsman"
+path = "src/main.rs"
+
+[dependencies]
+# The CLI is the bench tool: any explicit service and Class 1 I/O.
+helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
+
+[lints]
+workspace = true

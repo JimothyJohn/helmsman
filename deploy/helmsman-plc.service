@@ -1,0 +1,43 @@
+# helmsman-plc: one IEC 61131-3 program behind the CIP adapter.
+# Installed by scripts/pi-deploy-plc.sh, which also writes the program to
+# /etc/helmsman-plc/ and its path to /etc/helmsman-plc/env, and the canvas
+# (the browser HMI) to /usr/local/share/helmsman-plc/ui (PLC_UI).
+[Unit]
+Description=Helmsman soft PLC (IEC 61131-3, CIP adapter on 44818/2222)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/helmsman-plc/env
+ExecStart=/usr/local/bin/helmsman-plc ${PLC_PROGRAM} --scan-ms ${PLC_SCAN_MS} --api ${PLC_API} --ui ${PLC_UI}
+DynamicUser=yes
+# The box API's token (api-token, 0600) lives here: /var/lib/helmsman-plc,
+# writable under ProtectSystem=strict and passed in as $STATE_DIRECTORY.
+# The API, and the canvas at /, listen on PLC_API: 127.0.0.1:8080 unless
+# the deploy was asked for the LAN (PLC_API=0.0.0.0:8080, which also opens
+# the port in the firewall). First start prints the token
+# once: journalctl -u helmsman-plc | grep 'API token'.
+StateDirectory=helmsman-plc
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=2
+# Ports are all >1024: no capabilities needed.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# Scan timing: ahead of ordinary processes, never real-time.
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

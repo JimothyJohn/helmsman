@@ -1,0 +1,19 @@
+[package]
+name = "helmsman-adapter"
+version = "0.1.0"
+description = "Target (adapter) side of CIP over TCP/UDP: sessions, explicit messaging, Forward_Open, Class 1 I/O"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+helmsman-proto = { path = "../helmsman-proto" }
+
+[dev-dependencies]
+# Tests drive the target with the full originator (scanner, any service).
+helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
+proptest = "1.12"
+
+[lints]
+workspace = true

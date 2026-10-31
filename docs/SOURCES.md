@@ -89,6 +89,30 @@ paraphrase and cite page numbers instead.
   List_Identity scanning, no Forward_Open *sending*.
 - **How to cite:** `OpENer v2.3+master (EIPStackGroup/OpENer, commit <sha>),
   source/src/cip/<file>.c`.
+- **Class 1 connection IDs and ports** (commit `0e1ab7ee`, the one
+  `docker/opener/Dockerfile` pins; read 2026-10-31 for `enip-io-port`,
+  `helmsman_proto::endpoint`):
+  - `cipconnectionobject.c` `ConnectionObjectInitializeFromMessage`: the
+    `Forward_Open`'s O->T ID becomes the consumed ID, its T->O ID the
+    produced ID; `ConnectionObjectGeneralConfiguration` then, for a
+    point-to-point O->T, replaces the consumed ID with `GetConnectionId()`
+    ("if we have a point to point connection for the O to T direction the
+    target shall choose the connection ID"). So each direction's ID is
+    the consumer's choice: O->T the target's, T->O (point-to-point) the
+    originator's.
+  - `cipconnectionmanager.c` `HandleReceivedConnectedData` /
+    `GetConnectedObject`: an incoming I/O datagram is matched to an
+    established connection by its consumed connection ID, then dropped
+    unless the sender's IP equals the connection's `originator_address`
+    (the IP only, not the port).
+  - `cipioconnection.c` `SendConnectedData`: the sequenced address item
+    carries `cip_produced_connection_id`.
+    `OpenProducingPointToPointConnection`: T->O goes to the session peer's
+    IP at `kOpenerEipIoUdpPort` (2222), "the default port to be used if
+    no port information is part of the forward open request", or at the
+    `sin_port` of a T->O socket-address item (0x8001) in it.
+    `OpenConsumingPointToPointConnection` stores the peer IP "for packet
+    scanning".
 
 ### CIPster — liftoff-sr/CIPster
 
@@ -136,6 +160,13 @@ paraphrase and cite page numbers instead.
   partner in tests (it's trivially buildable). Do not wrap it or bind to it;
   you'd inherit 42 issues and a C++20 toolchain requirement.
 - **How to cite:** `EIPScanner 1.3.0 (nimbuscontrols/EIPScanner), examples/<file>.cpp`.
+- **`src/ConnectionManager.cpp`** (master, read 2026-10-31 for
+  `enip-io-port`): `forwardOpen` sends no socket-address item (an empty
+  additional-items list), so targets use their default T->O port; it
+  reads an O->T socket-address item from the reply (address 0.0.0.0
+  meaning the session's host). Received T->O is dispatched by connection
+  ID through `_connectionMap`, keyed by the reply's T->O ID, with no check
+  of the sender's address ("TODO: Check TypeIDs and sequence").
 
 ### TI AM64x Industrial Communications SDK — EtherNet/IP Adapter quickstart
 
@@ -191,6 +222,62 @@ anything above:
 
 pycomm3 is the one to study first for the Python shape of the problem. It
 doesn't do implicit I/O, which is the gap EIPScanner's example fills.
+
+### pycomm3 — ottowayi/pycomm3 (Logix tag services, prior art)
+
+- **What:** Python client for Logix-family controllers over explicit
+  messaging. MIT (Ian Ottoway, Agostino Ruscito). Read 2026-10-30 at
+  `master` = `36aeb19b5cb47495df9fd1caa38ce9d2f6d12ea3`, for byte layouts
+  only; no code copied.
+- **Leaned on by** `crates/helmsman-proto/src/logix/` and the fixture in
+  `crates/helmsman-adapter/src/logix.rs`:
+  - `pycomm3/cip/data_types.py`: elementary type codes (BOOL `0xC1` ..
+    LREAL `0xCB`, BYTE `0xD1` .. LWORD `0xD4`); `DataSegment` extended
+    symbolic `0x91` with length byte and odd-length pad; `LogicalSegment`
+    member type and 8/16-bit widths.
+  - `pycomm3/const.py`: `STRUCTURE_READ_REPLY = b"\xa0\x02"`,
+    `INSUFFICIENT_PACKETS = 6`, `PRIORITY = b"\x0a"`,
+    `TIMEOUT_TICKS = b"\x05"`.
+  - `pycomm3/packets/logix.py`: Read Tag request (service, path, element
+    count `UINT`); Read Tag Fragmented adds a `UDINT` byte offset; reply
+    type is 2 bytes for atomics, 4 for structures;
+    `MultiServiceRequestPacket` (to Message Router instance 1, count,
+    offsets from the count field, requests) and its response parser.
+  - `pycomm3/packets/util.py`: `tag_request_path` (split on `.`, indexes
+    as member segments), `wrap_unconnected_send` (priority, timeout ticks,
+    length, message, pad if odd, route path), `parse_read_reply`.
+  - `pycomm3/logix_driver.py`: `_get_instance_attribute_list_service`
+    (Symbol object `0x6B`, Get Instance Attribute List, attribute ids),
+    `_parse_instance_attribute_list` (instance `UDINT`, name as `UINT`
+    length + bytes, then the requested attributes in order),
+    continuation on status `0x06` from `instance + 1`, `_create_tag`
+    (symbol type bits: 15 structure, 13-14 dimension count, 12 system,
+    0-11 template id, 0-7 atomic code; bits 8-10 as a BOOL's bit position
+    are read there but not used here),
+    `_send_read_fragmented` (offset advances by bytes received).
+  - `pycomm3/cip_driver.py`: the route path is encoded
+    `length=True, pad_length=True` with `PortSegment("bp", slot)` for the
+    backplane. The bytes (`words, 0x00, 0x01, slot`) are our reading of
+    those flags (the encoder itself was not read); unverified on hardware.
+  - `pycomm3/cip/status_info.py`: meanings of general status `0x04`,
+    `0x05`, `0x06`, `0x13`, `0x1E`, `0x26` and extended `0x2104`,
+    `0x2105`, `0x2107` under `0xFF` (the fixture's error choices).
+- **How to cite:** `pycomm3 <file> <function or constant>`.
+
+### libplctag — libplctag/libplctag (Logix tag paths, prior art)
+
+- **What:** C library for PLC tag access. MPL-2.0 (the repo's SPDX id;
+  older releases also offered LGPL). Read 2026-10-30 at `release` =
+  `7712ed7f1ee05ba0ebfca641b3f5c43da52a66ed`, for layouts and parsing
+  rules only; **no code copied** (copyleft).
+- **Leaned on by** `crates/helmsman-proto/src/logix/path.rs`:
+  `src/libplctag/protocols/ab/cip.c` `parse_numeric_segment` (element
+  index segments `0x28` 8-bit, `0x29 0x00` + 16-bit, `0x2A 0x00` + 32-bit),
+  `cip_encode_tag_name` (at most three dimensions; a `.N` bit suffix is
+  kept out of the encoded path), `parse_symbolic_segment` (name
+  characters: letters, digits, `_`, `:`; length byte, odd pad). This
+  repo is stricter on the first character (letter or `_`).
+- **How to cite:** `libplctag cip.c <function>`.
 
 ## Document sources
 
@@ -278,6 +365,265 @@ context only:
 Verdict: trash as a reference. Cite only §V.D if you want a quotable
 explanation of the heartbeat connection. Don't let its 2001 vocabulary leak
 into the code.
+
+### Modbus Organization, MODBUS Application Protocol Specification V1.1b3 (2012-04-26, 50 pp)
+
+- **Where:** https://www.modbus.org/file/secure/modbusprotocolspecification.pdf
+  (linked from https://www.modbus.org/modbus-specifications as "Modbus
+  Protocol Specification"). Fetched 2026-10-29, sha256
+  `f80d0d7132fd035104c3f21b01026470e3310ca3d8d493d9a9737d0d32ad2eb1`. Not
+  vendored: Modbus Organization copyright.
+- **Leaned on by** `crates/helmsman-io/src/modbus.rs` and `sim.rs`: PDU
+  limit of 253 bytes (§4.1 p.3), 0-based PDU addressing (§4.4), function codes
+  0x01-0x06 (§6.1-6.6 pp.11-19) with their quantity limits (2000 bits, 125
+  registers) and coil encoding (0xFF00/0x0000, §6.5 p.17), LSB-first bit
+  packing with zero padding (§6.1 p.11), 0x10 Write Multiple Registers (§6.12
+  p.30, 1-123 registers), exception replies and codes (§7 p.47). The same
+  application layer runs over RTU (`rtu.rs`), which also takes reply lengths
+  from it.
+- **How to cite:** `App §<x> p.<n>` in the module, after the module docs name
+  the document once.
+
+### Modbus Organization, MODBUS Messaging on TCP/IP Implementation Guide V1.0b (2006-10-24, 46 pp)
+
+- **Where:** https://www.modbus.org/file/secure/messagingimplementationguide.pdf
+  (linked as "Modbus TCP/IP"). Fetched 2026-10-29, sha256
+  `065d71170475642e82f370c648bf5135263cb20f61ce92c921add975fab6f669`. Not
+  vendored.
+- **Leaned on by** `modbus.rs` and `sim.rs`: the 7-byte MBAP header
+  (transaction id, protocol id 0, length counting unit id + PDU, unit id;
+  §3.1.3 p.5) and port 502 (p.5).
+- **How to cite:** `TCP §<x> p.<n>`.
+
+### Modbus Organization, MODBUS over Serial Line Specification and Implementation Guide V1.02 (2006-12-20, 44 pp)
+
+- **Where:** https://www.modbus.org/file/secure/modbusoverserial.pdf (linked
+  from https://www.modbus.org/modbus-specifications). Fetched 2026-10-30 with
+  WebFetch (curl gets 403), read with `pdftotext -layout`; sha256
+  `85a91e278b26d68c94a2f61a5300cd39c9e4c855034833f391abc6541fbdf7e5`. Not
+  vendored: Modbus Organization copyright.
+- **Leaned on by** `crates/helmsman-io/src/rtu.rs` and `rtu/sim.rs`:
+  - unicast and broadcast; broadcast requests are writes and get no reply
+    (§2.1 p.7); address 0 broadcast, 1-247 units, 248-255 reserved (§2.2 p.8);
+  - the master's response time-out, which keeps running past a reply from an
+    unexpected slave, and the turnaround delay after a broadcast, typically
+    100-200 ms (§2.4.1 pp.9-10); a slave sends nothing for a frame in error
+    or not addressed to it (§2.4.2 p.10);
+  - RTU characters of 11 bits: start, 8 data LSB first, parity, stop; even
+    parity the required default; no parity takes 2 stop bits (§2.5.1 p.12);
+  - the RTU frame (address, function, data, CRC low byte then high byte) and
+    its 256-byte maximum (§2.5.1 p.13);
+  - frames separated by at least t3.5 of silence, a frame with a silence over
+    t1.5 inside it discarded, and fixed 750 µs / 1.750 ms above 19200 baud
+    (§2.5.1.1 p.13);
+  - the CRC field and its byte order (§2.5.1.2 pp.14-15); the CRC procedure,
+    preset 0xFFFF and polynomial 0xA001 (§6.2.2 pp.39-40) and the worked
+    example (frame 02 07 gives register 0x1241, sent as 41 12, p.41);
+  - 9600 and 19200 baud required, 19200 the default (§3.2 p.20).
+- **Where we differ, and why:** the receiver does not apply the t1.5 rule
+  unless the device says `timing=strict`. A host behind a USB serial bridge
+  timestamps bytes in bursts several milliseconds apart (the bridge's latency
+  timer), which the rule would throw away; the CRC and the hunt for the
+  expected unit and function do the framing instead. The transmit side
+  always keeps t3.5 of silence before a frame.
+- **How to cite:** `Serial §<x> p.<n>`.
+
+### Linux GPIO character device, uAPI v2 (kernel documentation)
+
+- **Where:** https://docs.kernel.org/userspace-api/gpio/chardev.html, read
+  2026-10-30. GPL-2.0 kernel documentation; nothing copied.
+- **Leaned on by** `crates/helmsman-io/src/board/linux.rs` through the
+  `gpiocdev` crate: chips are `/dev/gpiochipX` ("Chip"), lines are requested
+  with `GPIO_V2_GET_LINE_IOCTL` and read and driven through the request's
+  file descriptor ("Line Request", "Get Line Values", "Set Line Values").
+  First added in Linux 5.10.
+- **How to cite:** the section name, e.g. `chardev "Line Request"`.
+
+### Linux I2C device interface, `/dev/i2c-N` (kernel documentation)
+
+- **Where:** https://docs.kernel.org/i2c/dev-interface.html, read 2026-10-30.
+- **Leaned on by** `board.rs` and `board/linux.rs` (through `i2cdev`):
+  adapters are named `i2c-%d`, all 256 minor numbers reserved for I2C
+  ("Implementing I2C device drivers in userspace"); `I2C_RDWR` does a combined
+  write-then-read "without stop in between", which plain read()/write()
+  cannot ("Full interface description", "C example"). The register read is
+  that combined transfer.
+- **How to cite:** the section name.
+
+### i2cdetect(8), i2c-tools (Debian trixie manual page)
+
+- **Where:** https://manpages.debian.org/trixie/i2c-tools/i2cdetect.8.en.html,
+  read 2026-10-30.
+- **Leaned on by** `board.rs`: the 7-bit addresses an `i2c:` point accepts,
+  0x08-0x77, are the range i2cdetect scans by default ("default: from 0x08 to
+  0x77"); the others it calls "non-regular addresses".
+
+### Logix 5000 Controllers Data Access, programming manual (publication 1756-PM020)
+
+- **What:** Rockwell, *Logix 5000 Controllers Data Access*, publication
+  1756-PM020I-EN-P, September 2025, 92 pp. A copy Nick downloaded
+  (2026-10-31) lives outside the repo in `~/github/helmsman-refs/`
+  (vendor copyright: never committed). Cite as `PM020 p.<n>` (printed
+  page numbers).
+- **Checked against it (2026-10-31), byte-exact in
+  `helmsman-proto/tests/logix_pm020.rs`:** Read Tag request and DINT reply
+  (p.18); Read Tag Fragmented requests at byte offsets 0 and 490, the
+  offset in bytes whatever the type (pp.20-21); Multiple Service Packet
+  request and reply to the Message Router (class 2, instance 1), offsets
+  counted from the start of the request/reply data (pp.38-39); the
+  Symbol object (class 0x6B, attribute 1 name, attribute 2 type,
+  Get_Instance_Attribute_List 0x55, status 0x06 = more instances, instance
+  ID u32 then name as UINT length + bytes then the type WORD; pp.44-49);
+  the Symbol Type word: bit 15 structure (bits 0-11 the template
+  instance), bit 12 system, bits 13-14 dimensions (p.50); the data type
+  codes (BOOL 0x0nC1 ... LINT 0x00C5; p.12); the error codes 0x04, 0x05,
+  0x06, 0x13 and 0xFF/0x2105 (pp.19-20, 26). BOOL read as 0 / 0xFF on
+  5570/5370 firmware v29 and earlier (p.18) is handled (any non-zero is
+  true).
+- **Not in PM020, still from pycomm3:** attribute 8 (array dimensions) of
+  the Symbol object (PM020's examples ask for 1 and 2 only); the
+  Unconnected_Send wrapper and the backplane route bytes: PM020 p.15 sends
+  network-specific delivery to the ODVA CIP Networks Library Vol. 1 ch. 3
+  and Vol. 2, which are not in hand. Real-controller verification waits for
+  a CompactLogix on the bench (TODO `logix-tag-read`).
+
+### Logix 5000 Controllers Import/Export, reference manual (publication 1756-RM014)
+
+- **What:** Rockwell, *Logix 5000 Controllers Import/Export*, publication
+  1756-RM014D-EN-P, September 2025, 385 pp. Same location as PM020, not
+  committed. Cite as `RM014 p.<n>`.
+- **Checked against it (2026-10-31):** what `helmsman_iec::l5x` reads is
+  the documented shape: the `RSLogix5000Content` root holding version and
+  export information around one `Controller` (pp.37-38, 55);
+  `SoftwareRevision` (p.99); `ProcessorType` (p.57); tag `TagType` with
+  `Base` / `Alias` and `AliasFor` (p.106); `Usage` (`Input`, `Output`,
+  `InOut`, `Public`) and `ExternalAccess` (`Read/Write`, `Read Only`,
+  `None`), `Constant`, `Dimensions` (p.107); `DataTypes` (p.37ff.);
+  `MainRoutineName` (p.196); `RLLContent` / `Rung` (pp.206-208);
+  `STContent` / `Line` (p.264ff.); tasks and `ScheduledProgram` (p.313).
+- **Not in RM014's text:** the root's `TargetName` and `TargetType`
+  attributes (they are in real exports and in the `l5x` package; RM014's
+  root example is not in the extracted text). Still to do: run the reader
+  over a real Studio 5000 export (TODO `l5x-real-export`).
+
+### Model Context Protocol specification, revisions 2026-07-28 and 2025-11-25
+
+- **Where:** https://modelcontextprotocol.io/specification/2026-07-28 (the
+  `latest` redirect on 2026-10-30) and
+  https://modelcontextprotocol.io/specification/2025-11-25, read as the
+  site's Markdown (`<page>.md`) on 2026-10-30. Pages read: `changelog`,
+  `basic/index` (messages, `resultType`, error codes, `_meta`
+  per-request fields, statelessness), `basic/versioning` (dual-era
+  servers, compatibility matrix), `basic/transports` and
+  `basic/transports/streamable-http` (POST-only endpoint, `Origin` check,
+  `MCP-Protocol-Version` / `Mcp-Method` / `Mcp-Name` headers and the
+  Base64 sentinel, `-32020` header mismatch, 405 for GET and DELETE,
+  backward compatibility), `server/discover`, `server/tools` (list and
+  call shapes, tool errors vs protocol errors, stateful tools by handle),
+  `server/utilities/caching` (`ttlMs`, `cacheScope`), `deprecated`, and
+  for the legacy era 2025-11-25 `basic/lifecycle` (`initialize`) and
+  `basic/transports` (sessions optional, `MCP-Protocol-Version` after
+  initialization). The `claude-api` skill's MCP material covers the
+  Messages API's MCP *client* side only, so the spec was the source.
+- **Leaned on by** `crates/helmsman-plc/src/api/mcp.rs` (`box-mcp`):
+  served revisions `2026-07-28` (stateless, per-request `_meta`) and
+  `2025-11-25` / `2025-06-18` (after `initialize`, no session minted);
+  JSON responses only (no SSE), no batches, no `subscriptions/listen`,
+  no resources or prompts.
+- **How to cite:** `MCP 2026-07-28 <page> § <heading>`, e.g.
+  `MCP 2026-07-28 basic/transports/streamable-http § Server Validation`.
+
+## Device sources
+
+### Moxa ioLogik E1213 EDS, v2.0 (EtherNet/IP Electronic Data Sheet)
+
+- **What:** `moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`,
+  647 lines, 42 906 bytes, SHA-256
+  `3895fbca8bb036c1b31a9d6b68dea69eca6892fe0a6bce7409ab76311cfd470d`.
+  EZ-EDS 3.27 generated; `[File]` Revision 2.0, ModDate 03-16-2026; device
+  revision 4.1, "corresponds to firmware v4.0" (l.20).
+- **Where:** Moxa's "EDS file software package" for the E1213/E1213-T, which
+  Nick downloaded (2026-10-30) and keeps untracked at the repo root.
+- **License:** none stated. The file has no header beyond the generator's
+  line and no terms; Moxa publishes it for download, but nothing says it
+  may be redistributed. **Not committed** (TODO.md `e1213-eds-license`):
+  `scripts/eds-corpus.sh` checks the hash and runs
+  `crates/helmsman-io/tests/eds_corpus.rs` against it, which asserts that
+  it resolves to the built-in profile. The committed fixture
+  `crates/helmsman-proto/tests/fixtures/e1213-facts.eds` is our own
+  restatement of its facts (identity, params, assemblies, connections),
+  written for this repository.
+- **Leaned on by:** `helmsman_proto::eds` (the lexical form and the field
+  order of `ParamN`, `AssemN`, `ConnectionN`, with `OpENer`'s EDS below),
+  `DeviceConfig::moxa_e1213`, `enip::Spec::moxa_e1213`, and every EDS fact
+  in `docs/devices/moxa-iologik-e1213.md`.
+- **How to cite:** `E1213 EDS v2.0 l.N` (line of the file above).
+
+### Moxa, ioLogik E1200 Series User's Manual, Version 15.10 (May 2021)
+
+- **What:** the E1200 family's manual: models and channels (pp. 1-2, 2-4 to
+  2-6), the EtherNet/IP setting and its connection limit (pp. 3-26, 3-27),
+  activation (ch. 5), RPI advice (p. 6-10), the Modbus/TCP map per model
+  (Appendix A, the E1213 on p. A-7), the EtherNet/IP assembly data map per
+  model (Appendix B, pp. B-1 to B-2), port numbers (Appendix D), factory
+  defaults (Appendix E). 10 137 362 bytes, SHA-256
+  `f8788816b2e0062a68f9b7f1ef9850a2d57f92946ac8b64077c4e77097744454`.
+- **Where:** fetched 2026-10-30 from
+  `https://pct.wiki.uib.no/images/2/29/Moxa-iologik-e1200-series-manual-v15.10.pdf`
+  (a university wiki's copy); Moxa's own links to v15.8 and v15.2 answered
+  with an HTML page, not the PDF. Not committed (© Moxa).
+- **Leaned on by:** what the E1213's 51 input bytes and 1 output byte mean
+  (`helmsman_adapter::e1213`, the device doc), the profile's channel counts
+  and connection limit, the Modbus example map. Bit positions within the
+  status words and the counters' byte order are inferred, and say so.
+- **How to cite:** `E1200 manual v15.10 p. X-N`.
+
+### OpENer sample application EDS (`data/opener_sample_app.eds`)
+
+- **What:** the EDS for `OpENer`'s POSIX sample, the layout
+  `DeviceConfig::opener_sample` copies. 359 lines, SHA-256
+  `0e0da5ddd62f571ea319dc29254be08cac5134236b389174983d80f0e370760f`.
+- **Where:** EIPStackGroup/OpENer at
+  `0e1ab7ee5c272950c0dc8daf7793008d7a518912` (the commit
+  `docker/opener/Dockerfile` builds). License: OpENer's adapted BSD
+  (above). Fetched by `scripts/eds-corpus.sh`, not committed.
+- **Leaned on by:** `helmsman_proto::eds`: a second generator's output
+  (EZ-EDS 3.23) for the lexical form; blank sizes taken from the assembly;
+  configuration assemblies; listen-only connections; and the meaning of
+  real-time formats 0, 3 and 4 (its connection words are the E1213's, and
+  `OpENer`'s code shows what each direction carries).
+- **How to cite:** `OpENer opener_sample_app.eds@0e1ab7e l.N`.
+
+## Test corpora (fetched, not vendored)
+
+### Beremiz and OpenPLC Editor example projects (PLCopen TC6 XML)
+
+- **What:** `plc.xml` files saved by the editors themselves: Beremiz's
+  `exemples/` and `tests/projects/` (44 files) and the OpenPLC Editor's
+  `examples/`, `exemples/` and `tests/projects/` (43 files). Ladder (Blink,
+  Arduino_*, MQTT_*, TCP_socket), FBD (Traffic_Light_FBD, STM32CAN_*), ST,
+  SFC and IL, as real users draw them.
+- **Where, pinned:**
+  - https://github.com/beremiz/beremiz at
+    `d7ddfb7523a53b153d74950c06c0447118f434c0`. License: GPL-2.0 (IDE,
+    `COPYING_for_IDE`) / GPL-3.0 (GitHub's reading of the repo; C runtime
+    `COPYING_for_C_Runtime`). The project files carry no header of their own.
+  - https://github.com/thiagoralves/editor at
+    `6a8e930a914e4421e8fa05966b31eb371b439243`, the `editor` submodule of
+    https://github.com/thiagoralves/OpenPLC_Editor at
+    `2b4add40ec9bdb84d0768503ce26a6b7517268ba`. License: GPL-2.0.
+  - Fetched 2026-10-30; every file's SHA-256 is in
+    `scripts/plcopen-corpus.sh`.
+- **Not vendored:** GPL data in an MIT repository is a question for Nick
+  (TODO.md `plcopen-fixture-license`). `scripts/plcopen-corpus.sh` fetches
+  the files into `target/plcopen-corpus/`, checks their hashes, and runs
+  `crates/helmsman-iec/tests/plcopen_corpus.rs` against them. Nothing in
+  them is executed.
+- **Leaned on by** the PLCopen importer and the ST compiler: 2026-10-30 they
+  exposed a nondeterministic lowering order, `BOOL := 0` refused, feedback
+  through function block instances refused, located initial values refused,
+  and stack overflows on hostile nesting; see the PR that added the script.
+- **How to cite:** `Beremiz <path>@d7ddfb7` or `OpenPLC Editor <path>@6a8e930`.
 
 ## What this means for the project
 

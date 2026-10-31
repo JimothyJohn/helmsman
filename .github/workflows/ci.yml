@@ -1,0 +1,128 @@
+# Baseline CI for Rust (cargo workspace) repos — copy to .github/workflows/ci.yml.
+# The `gate` job name is the required status check that branch protection on
+# `dev` and the automerge workflow rely on: if you rename the job or add jobs
+# (e.g. an embedded/cross build), update the protection rule's contexts to
+# match (see README.md).
+# SHA-pinned actions only (house rule). For exotic targets, add a second job
+# that generates throwaway fixtures (certs, keys) on the runner — see
+# supervictor's ci.yml `embedded` job for a worked example.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master, dev]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Format check
+        run: cargo fmt --all --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # The two builds that broke dev on 2026-10-30 without CI noticing:
+      # helmsman-plc without its `box` feature (the runtime the canvas
+      # embeds) and the canvas itself for wasm32. Same as scripts/lint.sh.
+      - name: Runtime without the box feature
+        run: cargo check -p helmsman-plc --no-default-features --all-targets
+      - name: Canvas for wasm32
+        run: cargo check --target wasm32-unknown-unknown -p helmsman-canvas
+      - name: Test workspace
+        run: cargo test --workspace --locked
+
+  # Interop against the OpENer adapter built from docker/opener/. Separate
+  # job so a Docker hiccup is distinguishable from a code failure. Added to
+  # the required checks on dev alongside `gate` (see repo-baseline README).
+  interop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: stable
+      - name: Start OpENer
+        run: docker compose up -d --build opener
+      - name: Wait for OpENer to listen
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/44818) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker compose logs opener
+          exit 1
+      - name: Interop suite
+        # Address the container directly so both TCP and UDP come from the
+        # bridge gateway, which is where OpENer sends T->O (port 2222).
+        run: |
+          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose ps -q opener)")
+          echo "OpENer at $ip"
+          HELMSMAN_OPENER_ADDR="$ip" ./scripts/test-interop.sh
+        env:
+          HELMSMAN_OPENER_IO: '1'
+      - name: OpENer logs
+        if: always()
+        run: docker compose logs opener
+      - name: Stop OpENer
+        if: always()
+        run: docker compose down
+
+  # The same interop suite against our own adapter (helmsman-adapter, which
+  # mimics OpENer's sample). Not a required check until it has a green history.
+  interop-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: stable
+      - name: Start helmsman-adapter
+        run: docker compose up -d --build adapter
+      - name: Wait for it to listen
+        run: |
+          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(docker compose ps -q adapter)")
+          for i in $(seq 1 60); do
+            if (echo > /dev/tcp/$ip/44818) 2>/dev/null; then echo "adapter at $ip"; echo "ADAPTER_IP=$ip" >> "$GITHUB_ENV"; exit 0; fi
+            sleep 1
+          done
+          docker compose logs adapter
+          exit 1
+      - name: Interop suite against helmsman-adapter
+        run: HELMSMAN_OPENER_ADDR="$ADAPTER_IP" ./scripts/test-interop.sh
+        env:
+          HELMSMAN_OPENER_IO: '1'
+      - name: Adapter logs
+        if: always()
+        run: docker compose logs adapter
+      - name: Stop
+        if: always()
+        run: docker compose down
+
+  # The Structured Text interpreter against ruSTy, an independent compiler
+  # (docker/rusty/, pinned and hash-checked). ruSTy is only executed as an
+  # oracle, never linked. Not a required check.
+  oracle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+        with:
+          toolchain: stable
+      - name: Differential test against ruSTy
+        run: ./scripts/test-oracle.sh
