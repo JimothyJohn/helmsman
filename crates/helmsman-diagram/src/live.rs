@@ -8,6 +8,11 @@
 //! Arithmetic, functions and computed indices are not re-evaluated (their
 //! overflow and rounding are the interpreter's business): no value.
 //!
+//! A negated wire ([`crate::Wire::negated`]) carries its source's value
+//! (what [`Live::wire`] gives and the drawing shows); the block it feeds
+//! sees the inverse ([`Live::input`]). A negated gate's value is the
+//! inverse of its node's output ([`Live::gate_value`]).
+//!
 //! A POU other than the program (a function block) is viewed through one
 //! instance: `prefix` is its path with a trailing dot (`M.`). Its statement
 //! counts are totals over every instance (see [`helmsman_iec::trace`]).
@@ -15,7 +20,7 @@
 use helmsman_iec::Value;
 use helmsman_iec::trace::{StmtId, Trace};
 
-use crate::model::{Diagram, NodeKind, Region, RegionKind};
+use crate::model::{Diagram, NodeKind, Region, RegionId, RegionKind};
 
 /// One traced scan, as the diagram reads it: a [`Trace`] taken in-process,
 /// or the same scan rebuilt from the box API's JSON in a browser. Its
@@ -90,11 +95,38 @@ pub struct Live {
 }
 
 impl Live {
-    /// The value on wire `w` of the diagram.
+    /// The value on wire `w` of the diagram, as its source has it (before
+    /// any negation bubble).
     #[must_use]
     pub fn wire(&self, d: &Diagram, w: usize) -> Option<Value> {
         let w = d.wires.get(w)?;
         self.values.get(w.from.0 as usize)?.get(w.out).copied().flatten()
+    }
+
+    /// What wire `w`'s consumer sees: through its bubble, if negated.
+    #[must_use]
+    pub fn input(&self, d: &Diagram, w: usize) -> Option<Value> {
+        let v = self.wire(d, w)?;
+        if d.wires[w].negated { not(v) } else { Some(v) }
+    }
+
+    /// The value region `r`'s gate tests (its condition, through its
+    /// bubble), or `None` for an ELSE or a value not re-evaluated.
+    #[must_use]
+    pub fn gate_value(&self, d: &Diagram, r: RegionId) -> Option<Value> {
+        let r = d.region(r);
+        let (n, port) = r.gate?;
+        let v = self.values.get(n.0 as usize)?.get(port).copied().flatten()?;
+        if r.negated { not(v) } else { Some(v) }
+    }
+}
+
+/// Boolean negation; nothing for a non-BOOL value.
+#[must_use]
+pub const fn not(v: Value) -> Option<Value> {
+    match v {
+        Value::Bool(b) => Some(Value::Bool(!b)),
+        _ => None,
     }
 }
 
@@ -115,18 +147,19 @@ pub fn gate(t: &dyn Scan, r: &Region) -> Gate {
 #[must_use]
 pub fn annotate(d: &Diagram, t: &dyn Scan, prefix: &str) -> Live {
     let get = |path: &str| t.get(&format!("{prefix}{path}"));
-    let mut srcs: Vec<[Option<(usize, usize)>; 2]> = vec![[None; 2]; d.nodes.len()];
+    let mut srcs: Vec<[Option<(usize, usize, bool)>; 2]> = vec![[None; 2]; d.nodes.len()];
     for w in &d.wires {
         if let Some(slot) = srcs[w.to.0 as usize].get_mut(w.inp) {
-            *slot = Some((w.from.0 as usize, w.out));
+            *slot = Some((w.from.0 as usize, w.out, w.negated));
         }
     }
     let mut values: Vec<Vec<Option<Value>>> = Vec::with_capacity(d.nodes.len());
     for n in &d.nodes {
         // Inputs come from nodes created earlier, so already valued.
         let input = |k: usize| -> Option<Value> {
-            let (from, out) = srcs[n.id.0 as usize][k]?;
-            values.get(from)?.get(out).copied().flatten()
+            let (from, out, neg) = srcs[n.id.0 as usize][k]?;
+            let v = values.get(from)?.get(out).copied().flatten()?;
+            if neg { not(v) } else { Some(v) }
         };
         let out: Vec<Option<Value>> = match &n.kind {
             NodeKind::Read { path } | NodeKind::Write { path } => vec![get(path)],

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use common::{SIZES, build, prog};
 use helmsman_diagram::explain::{Because, Step, Test, Why};
-use helmsman_diagram::{Gate, NodeKind, annotate, explain};
+use helmsman_diagram::{Drivers, Gate, NodeKind, annotate, drivers, explain};
 use helmsman_iec::trace::Trace;
 use helmsman_iec::{Image, Program, Value};
 
@@ -319,5 +319,140 @@ END_PROGRAM";
     assert_eq!(
         m.instances(),
         [("A".into(), "MOTOR".into()), ("B".into(), "MOTOR".into())]
+    );
+}
+
+#[test]
+fn a_bubble_keeps_the_source_value_on_the_wire_and_the_consumer_sees_the_inverse() {
+    let src = prog(
+        "a AT %IX0.0 : BOOL; b AT %IX0.1 : BOOL; c, y : BOOL;",
+        "c := a AND NOT b;\ny := NOT b;\nIF NOT b THEN c := c; END_IF;",
+    );
+    let (mut p, m) = build(&src);
+    let d = &m.program().unwrap().diagram;
+    let and = d
+        .nodes
+        .iter()
+        .find(|n| n.kind == NodeKind::Op { op: "AND".into() })
+        .unwrap()
+        .id;
+    let into_and = d.wires.iter().position(|w| w.to == and && w.negated).unwrap();
+    for (inputs, b) in [(0b01u8, false), (0b11, true)] {
+        let t = scan(&mut p, inputs);
+        let live = annotate(d, &t, "");
+        assert_eq!(live.wire(d, into_and), Some(Value::Bool(b)), "the wire shows B");
+        assert_eq!(live.input(d, into_and), Some(Value::Bool(!b)), "AND sees NOT B");
+        assert_eq!(live.values[and.0 as usize], [Some(Value::Bool(!b))]);
+        assert_eq!(live.gate_value(d, d.regions[0].id), Some(Value::Bool(!b)));
+        assert_eq!(live.gates[0].open(), !b);
+        let why = explain(&m, &t, "y", 2);
+        assert_eq!(
+            why.outline()[0],
+            format!(
+                "Y = {} because line 4: Y := NOT B",
+                if b { "FALSE" } else { "TRUE" }
+            )
+        );
+    }
+}
+
+/// The nodes of `d` on the path, as their kind and label.
+fn lit(d: &helmsman_diagram::Diagram, on: &Drivers) -> Vec<String> {
+    d.nodes
+        .iter()
+        .filter(|n| on.node(n.id))
+        .map(|n| match &n.kind {
+            NodeKind::Read { path } => format!("read {path}"),
+            NodeKind::Write { path } => format!("write {path}"),
+            _ => n.label.clone(),
+        })
+        .collect()
+}
+
+const LATCH: &str = "PROGRAM latch
+VAR
+  start AT %IX0.0 : BOOL;
+  stop AT %IX0.1 : BOOL;
+  motor AT %QX0.0 : BOOL;
+  other AT %IX0.2 : BOOL;
+  lamp AT %QX0.1 : BOOL;
+  count : INT;
+END_VAR
+motor := (start OR motor) AND NOT stop;
+lamp := other;
+IF other THEN count := count + 1; END_IF;
+END_PROGRAM
+";
+
+#[test]
+fn the_latchs_path_is_start_stop_and_the_seal_in_and_nothing_else() {
+    let (mut p, m) = build(LATCH);
+    let d = &m.program().unwrap().diagram;
+    let t = scan(&mut p, 0b001); // start
+    let on = drivers(&m, &t, 0, "", "motor");
+    assert_eq!(
+        lit(d, &on),
+        [
+            "read START",
+            "read MOTOR",
+            "OR",
+            "read STOP",
+            "AND",
+            "write MOTOR"
+        ]
+    );
+    assert!(on.wires[..5].iter().all(|&w| w), "every wire of the statement");
+    assert!(!on.wires[5..].iter().any(|&w| w), "{:?}", on.wires);
+    assert!(!on.region(d.regions[0].id), "the IF is not on it");
+    // Sealed in: start released, the same blocks hold it on.
+    let t = scan(&mut p, 0b000);
+    assert_eq!(drivers(&m, &t, 0, "", "MOTOR"), on);
+    // An input's path is its own blocks.
+    assert_eq!(
+        lit(d, &drivers(&m, &t, 0, "", "other")),
+        ["read OTHER", "read OTHER"]
+    );
+    // Not a variable of this scope: nothing.
+    assert!(drivers(&m, &t, 0, "M.", "MOTOR").is_empty());
+}
+
+#[test]
+fn a_held_path_is_the_closed_gate_and_what_it_tested() {
+    let src = prog(
+        "go AT %IX0.0 : BOOL; armed AT %IX0.1 : BOOL; lamp, x : BOOL;",
+        "x := armed;\nIF go THEN\n  IF NOT armed THEN lamp := TRUE; ELSE lamp := FALSE; END_IF;\nEND_IF;",
+    );
+    let (mut p, m) = build(&src);
+    let d = &m.program().unwrap().diagram;
+    // Not going: both writes skipped by the outer IF.
+    let t = scan(&mut p, 0b00);
+    let on = drivers(&m, &t, 0, "", "lamp");
+    assert_eq!(lit(d, &on), ["read GO", "write LAMP", "write LAMP"]);
+    assert_eq!(on.regions, [true, false, false]);
+    // Going and armed: the ELSE ran, so both the inner IF's condition (it
+    // had to fail) and the outer one's are on the path.
+    let t = scan(&mut p, 0b11);
+    let on = drivers(&m, &t, 0, "", "lamp");
+    assert_eq!(lit(d, &on), ["read GO", "read ARMED", "FALSE", "write LAMP"]);
+    assert_eq!(on.regions, [true, false, true]);
+    let into_gate = &d.regions[1];
+    assert!(into_gate.negated, "IF NOT ARMED");
+}
+
+#[test]
+fn a_block_instance_drives_its_outputs_in_the_caller_and_its_body_in_its_own_view() {
+    let (mut p, m) = build(MOTOR);
+    let prog_ix = m.pous.iter().position(|q| q.name == "T").unwrap();
+    let fb_ix = m.pous.iter().position(|q| q.name == "MOTOR").unwrap();
+    let t = scan(&mut p, 0b01); // start
+    let d = &m.pous[prog_ix].diagram;
+    assert_eq!(
+        lit(d, &drivers(&m, &t, prog_ix, "", "LAMP")),
+        ["read START", "read TRIP", "M : MOTOR", "write LAMP"]
+    );
+    let d = &m.pous[fb_ix].diagram;
+    assert_eq!(
+        lit(d, &drivers(&m, &t, fb_ix, "M.", "M.ON")),
+        ["read RUN", "read FAULT", "TRUE", "write ON"]
     );
 }

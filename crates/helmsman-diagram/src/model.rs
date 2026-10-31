@@ -93,12 +93,17 @@ pub struct Node {
 }
 
 /// Data flow: output `out` of `from` into input `inp` of `to`.
+///
+/// `negated`: the FBD negation bubble on the input pin. The source's
+/// output keeps its own value (the wire shows it); the consumer sees its
+/// inverse. Only BOOL wires are negated (see [`crate::lower`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wire {
     pub from: NodeId,
     pub out: usize,
     pub to: NodeId,
     pub inp: usize,
+    pub negated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,6 +134,9 @@ pub struct Region {
     /// The node output gating it: the arm's condition, the CASE selector,
     /// the WHILE or UNTIL condition, the FOR head. `None` for an ELSE.
     pub gate: Option<(NodeId, usize)>,
+    /// The gate is the inverse of that output (`IF NOT jam`): a negation
+    /// bubble where the gate's wire enters the region.
+    pub negated: bool,
     pub pos: Pos,
     /// Its statements, indices into [`Diagram::stmts`].
     pub body: Vec<usize>,

@@ -7,11 +7,13 @@
 //!   from variables to assignments, IF/CASE arms and loop bodies as gated
 //!   [`Region`]s. Every node, region and statement carries the
 //!   [`helmsman_iec::trace::StmtId`] it came from, so a scan trace maps
-//!   straight onto it.
+//!   straight onto it. A boolean `NOT` is a negation bubble on a wire or
+//!   gate, not a block (see [`lower`]).
 //! - [`layout`]: deterministic left-to-right placement, no UI needed.
 //! - [`live::annotate`]: one traced scan on the diagram (values on wires,
 //!   gates open or closed).
-//! - [`explain()`]: "on because …" for any variable, as data.
+//! - [`explain()`]: "on because …" for any variable, as data;
+//!   [`drivers()`]: the same as the blocks, wires and regions to highlight.
 //! - [`diff`]: what a proposal changes, line by line in the source and
 //!   block by block in the diagram, for the review screen.
 //!
@@ -27,7 +29,8 @@
 //! let mut prog = compile(src, sizes).unwrap();
 //! let module = helmsman_diagram::lower(src, &prog.trace_map()).unwrap();
 //! let d = &module.program().unwrap().diagram;
-//! assert_eq!(d.nodes.len(), 7, "3 reads, OR, NOT, AND, the write");
+//! assert_eq!(d.nodes.len(), 6, "3 reads, OR, AND, the write: NOT is a bubble");
+//! assert_eq!(d.wires.iter().filter(|w| w.negated).count(), 1);
 //! let (_, trace) = prog.scan_traced(&mut Image::new(sizes), Duration::ZERO);
 //! let why = helmsman_diagram::explain(&module, &trace, "run", 2);
 //! assert!(why.outline()[0].starts_with("RUN = FALSE because line 3"));
@@ -51,7 +54,7 @@ pub mod model;
 pub mod phrase;
 pub mod text;
 
-pub use explain::{Because, Why, explain};
+pub use explain::{Because, Drivers, Why, drivers, explain};
 pub use live::{Gate, Live, Scan, annotate};
 pub use lower::{LowerError, Module, Pou, StmtPos, lower, lower_table};
 pub use model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Stmt, Wire};
