@@ -26,7 +26,7 @@ fn module(name: &str, src: &str, period_ms: u64, q: Window) -> Module {
     let program = compile(src, sizes).unwrap_or_else(|d| panic!("{name}: {d:?}\n{src}"));
     Module {
         name: name.into(),
-        program,
+        program: program.into(),
         period: ms(period_ms),
         i: Window::new(0, 0),
         q,
@@ -183,7 +183,7 @@ fn a_swap_onto_another_modules_output_bytes_is_refused_and_changes_nothing() {
             let program = compile(src, ImageSizes { i: 0, q: 8, m: 4 }).unwrap();
             Module {
                 name: "b".into(),
-                program,
+                program: program.into(),
                 period: ms(10),
                 i: Window::new(0, 0),
                 q: Window::new(start, len),
@@ -778,7 +778,7 @@ fn generated(s: &Swap) -> Module {
     let program = compile(&src, ImageSizes { i: 0, q: s.len, m: 2 }).unwrap();
     Module {
         name: name.into(),
-        program,
+        program: program.into(),
         period: ms(s.period),
         i: Window::new(0, 0),
         q: Window::new(s.start, s.len),

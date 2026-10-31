@@ -73,7 +73,11 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        it the agent is offline and /api/chat answers 503
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
                        The box never holds an Anthropic key.
-  --relay-agent V      the agent version to ask the relay for (default v1)
+  --relay-agent V      the agent version to ask the relay for (default v3)
+  --relay-explain-agent V
+                       the agent version POST /api/explain asks for (an
+                       explain profile; default explain-v1). The box runs
+                       only read-only tools for it either way.
   --screen FILE        the floor screen's layout (see helmsman_plc::screen):
                        tiles showing the I/O map's `screen` outputs, served
                        at /api/screen and drawn by the canvas at /?andon
@@ -123,6 +127,7 @@ struct Opts {
     relay: Option<String>,
     relay_token: Option<PathBuf>,
     relay_agent: String,
+    relay_explain_agent: Option<String>,
     ui: Option<PathBuf>,
     screen: Option<PathBuf>,
     policy: Option<PathBuf>,
@@ -141,7 +146,7 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `--relay`, `--relay-token`, `--relay-agent`.
+/// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`.
 fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
     match flag {
         "--relay" => {
@@ -149,8 +154,9 @@ fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
             o.relay = Some(v.to_string());
         }
         "--relay-token" => once(&mut o.relay_token, flag, v)?,
-        _ if relay::version_ok(v) => v.clone_into(&mut o.relay_agent),
-        _ => return Err(format!("--relay-agent: not an agent version: {v:?}")),
+        _ if !relay::version_ok(v) => return Err(format!("{flag}: not an agent version: {v:?}")),
+        "--relay-explain-agent" => o.relay_explain_agent = Some(v.to_string()),
+        _ => v.clone_into(&mut o.relay_agent),
     }
     Ok(())
 }
@@ -172,7 +178,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         state_dir: None,
         relay: None,
         relay_token: None,
-        relay_agent: "v1".into(),
+        relay_agent: "v3".into(),
+        relay_explain_agent: None,
         ui: None,
         screen: None,
         policy: None,
@@ -226,7 +233,9 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 );
             }
             "--state-dir" => o.state_dir = Some(PathBuf::from(v)),
-            "--relay" | "--relay-token" | "--relay-agent" => relay_flag(&mut o, flag, v)?,
+            "--relay" | "--relay-token" | "--relay-agent" | "--relay-explain-agent" => {
+                relay_flag(&mut o, flag, v)?;
+            }
             "--policy" => once(&mut o.policy, flag, v)?,
             "--set-pin" => {
                 o.set_pin = Some(Role::parse(v).ok_or_else(|| {
@@ -403,6 +412,20 @@ fn specs(o: &Opts, d: &Defaults, dirs: Vec<ModuleDir>) -> Result<Vec<(Spec, Opti
 /// The module and its source text.
 fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<(Module, String), String> {
     let file = spec.path.display();
+    if let Some(md) = dir
+        && let Some(bytes) = &md.wasm
+    {
+        #[cfg(feature = "wasm")]
+        return Ok((
+            md.wasm_module(helmsman_plc::wasm::Limits::default())?,
+            wasm_note(bytes),
+        ));
+        #[cfg(not(feature = "wasm"))]
+        return Err(format!(
+            "{file}: a WASM module, and this build has no `wasm` feature ({} bytes)",
+            bytes.len()
+        ));
+    }
     let src = match dir {
         Some(md) => md.source.clone(),
         None => fs::read_to_string(&spec.path).map_err(|e| format!("{file}: {e}"))?,
@@ -426,13 +449,31 @@ fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<(Module, String), Str
     }
     let module = Module {
         name: spec.name.clone(),
-        program,
+        program: program.into(),
         period: spec.period,
         i: spec.i,
         q: spec.q,
         params: Vec::new(),
     };
     Ok((module, src))
+}
+
+#[cfg(feature = "wasm")]
+/// What the API shows as a WASM module's source: an ST comment naming
+/// the binary, so nothing mistakes it for code.
+fn wasm_note(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    use sha2::{Digest, Sha256};
+    let mut hash = String::with_capacity(64);
+    for b in Sha256::digest(bytes) {
+        let _ = write!(hash, "{b:02x}");
+    }
+    format!(
+        "(* WASM module ({}): {} bytes, sha256 {hash} *)\n",
+        helmsman_plc::wasm::ABI,
+        bytes.len()
+    )
 }
 
 fn emit_st(o: &Opts) -> Result<(), String> {
@@ -883,11 +924,13 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
         "helmsman-plc: chat agent via relay {url} (agent {})",
         o.relay_agent
     );
-    Ok(Some(api::chat::Setup::new(relay::Config::new(
-        url,
-        token.to_string(),
-        o.relay_agent.clone(),
-    ))))
+    let mut setup = api::chat::Setup::new(relay::Config::new(url, token.to_string(), o.relay_agent.clone()));
+    setup.explain_agent = Some(
+        o.relay_explain_agent
+            .clone()
+            .unwrap_or_else(|| "explain-v1".into()),
+    );
+    Ok(Some(setup))
 }
 
 /// What the API serves that is fixed once the runtime is built.

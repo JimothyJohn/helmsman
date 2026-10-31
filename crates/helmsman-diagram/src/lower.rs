@@ -59,6 +59,8 @@ pub struct Var {
     pub fb: Option<String>,
     /// Declared as an ARRAY.
     pub array: bool,
+    /// The (element) type as declared, upper-cased: `BOOL`, `TIME`, `TON`.
+    pub ty: String,
 }
 
 /// One POU of the module.
@@ -221,6 +223,10 @@ fn vars(p: &ast::Pou, fbs: &HashSet<String>) -> HashMap<String, Var> {
                 TypeRef::Named(n, _) if fbs.contains(n) => Some(n.clone()),
                 _ => None,
             };
+            let named = match ty {
+                TypeRef::Named(n, _) => n.to_ascii_uppercase(),
+                TypeRef::Array { .. } => String::new(),
+            };
             (
                 v.name.clone(),
                 Var {
@@ -228,6 +234,7 @@ fn vars(p: &ast::Pou, fbs: &HashSet<String>) -> HashMap<String, Var> {
                     located: v.at.is_some(),
                     fb,
                     array,
+                    ty: named,
                 },
             )
         })

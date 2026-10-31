@@ -47,7 +47,7 @@ impl Bench {
         let program = compile(DEMO, SIZES).unwrap();
         let module = Slot {
             name: "cell".into(),
-            program,
+            program: program.into(),
             period: Duration::from_millis(2),
             i: Window::new(0, 1),
             q: Window::new(0, 1),
@@ -264,11 +264,18 @@ fn a_box_trace_reads_exactly_like_the_trace_it_was_rendered_from() {
         for (path, _) in map.vars() {
             assert_eq!(remote.get(path), sample.trace.get(path), "{path} at scan {k}");
         }
-        for out in ["CONVEYOR", "RED", "GREEN", "LANE", "COUNT", "M.ON"] {
+        let words = helmsman_diagram::Words::of(&module);
+        for out in ["CONVEYOR", "RED", "GREEN", "LANE", "COUNT", "M.ON", "BLINK.Q"] {
             assert_eq!(
                 explain(&module, &remote, out, 4),
                 explain(&module, &sample.trace, out, 4),
                 "why {out} at scan {k}"
+            );
+            // Explain mode's first layer reads the same in the browser.
+            assert_eq!(
+                helmsman_diagram::phrase(&explain(&module, &remote, out, 4), &words),
+                helmsman_diagram::phrase(&explain(&module, &sample.trace, out, 4), &words),
+                "said for {out} at scan {k}"
             );
         }
         checked += 1;

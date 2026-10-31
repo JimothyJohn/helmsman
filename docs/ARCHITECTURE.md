@@ -73,7 +73,9 @@ Three directions of traffic, three different rules:
 | `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
-`relay-repo`, in `../helmsman-relay`), the WASM host (`wasm-tier`).
+`relay-repo`, in `../helmsman-relay`). The WASM module host
+(`wasm-tier`) is built inside `helmsman-plc` (`wasm.rs`, the `wasm`
+feature), below.
 
 ## One scan, as built
 
@@ -272,6 +274,59 @@ param    beacon  bool true
   Unicode except control and invisible formatting characters (no escape
   sequences or bidi overrides in a log or a review). Files over 1 MiB are
   refused.
+
+## WASM modules (`wasm-tier`, built)
+
+A module directory may hold `module.wasm` instead of `module.st`, with
+the same manifest (`wasm.rs`, `logic.rs` in `helmsman-plc`; contract in
+`tests/wasm.rs`). The runtime holds either as a `Logic` (`St` or `Wasm`),
+so scheduling, binding, hold-on-missing, faults, `swap` and `reconfigure`
+are the same code for both. Behind the `wasm` feature, which `box`
+turns on; the canvas's wasm build never has it.
+
+- **Interface `helmsman/v1`** (versioned by its import module names). A
+  module imports `helmsman/v1/in NAME : () -> T` per input,
+  `helmsman/v1/out NAME : (T) -> ()` per output, optionally
+  `helmsman/v1 now_ms : () -> i64` (the scan's time on the runtime's
+  clock, the only clock), and exports `scan : () -> ()`. `T` is `i32`
+  (`BOOL`, 0 or 1), `i64` (`LINT`) or `f64` (`LREAL`). Each import is a
+  port, named and typed like a `VAR_INPUT`/`VAR_OUTPUT`, so the manifest
+  is checked against the imports exactly as against ST (a module whose
+  manifest lies is refused before the adapter starts) and ports bind to
+  signals by name at load. Any other import (WASI, a memory, a table, a
+  global, another function) refuses the module; so do a `start`
+  function, f32 ports, a port name that is not an identifier or is used
+  twice, and a missing `scan`. No windows: a WASM module's manifest has
+  no `i`, `q` or `m`.
+- **Runtime: wasmi** (a pure-Rust interpreter; eager translation at
+  load, fuel metering, NaN canonicalisation). Chosen over wasmtime for
+  the floor of a soft PLC: deterministic fuel per scan without a JIT,
+  no executable memory, a small footprint, and the same behaviour on the
+  Pi as in CI. Measured (`examples/wasm_bench.rs`, release, M-series
+  Mac): a small module's tick 0.16 µs (ST 0.30 µs); a 1 000-pass loop
+  16 µs (ST 185 µs); load and instantiate 21 µs. The box binary grows
+  about 2.1 MiB (7.9 MB to 10.1 MB, macOS aarch64 release).
+- **Limits** (`wasm::Limits`): 1 000 000 fuel per scan (about one unit an
+  instruction; out of fuel is a `Watchdog` fault, as ST's budget), linear
+  memory capped at 4 MiB (more declared is refused at load, `memory.grow`
+  past it returns -1), one memory, one table of at most 10 000 elements.
+  Fixed for every module for now (`wasm-limits` asks about per-module
+  ones).
+- **Faults**: a trap stops the module and sends its outputs safe, as an
+  ST fault does; the others keep their schedule. Out-of-bounds memory or
+  table access is `IndexOutOfRange`, integer division by zero
+  `DivisionByZero`, a `BOOL` output other than 0/1 or a non-finite real
+  `OutputRange`, anything else (`unreachable`, overflow, a stack
+  overflow in the module) the new `Trap` kind.
+- **State**: outputs keep their last value until set again. A swap
+  carries outputs and exported mutable globals by name and type; linear
+  memory restarts from its data segments. Across kinds (ST to WASM) nothing
+  carries. A WASM module is not traced (the tap's request stays open) and
+  `Runtime::program` is `None` for it.
+- **Not yet**: snapshots, proposals and bundles carry module files as
+  text, so a WASM module runs from `--module-dir` but cannot be stored,
+  proposed, approved or bundled (`wasm-store`); the API shows its source
+  as an ST comment naming its size and SHA-256.
 
 ## The trace tap (`trace-tap`, built)
 
@@ -488,7 +543,7 @@ see the approval policy below.
 
 `helmsman-plc --api ADDR` (default `127.0.0.1:8080`, `0.0.0.0:8080` for the
 LAN, `off`): one HTTP/1.1 + JSON surface for the canvas, the agent's tools
-and later MCP (`api/`; contract in `tests/api.rs`). Endpoints are listed at
+and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are listed at
 `GET /api` and in `api/mod.rs`.
 
 - **Reads** (`GET`) are open: signals with live values, quality and point errors, modules
@@ -664,7 +719,7 @@ threads, the Modbus simulator over TCP).
 
 ## Agent loop (`agent-loop`, built)
 
-`helmsman-plc --relay URL --relay-token FILE [--relay-agent v1]` turns on
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v3]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
 an Anthropic key, and names no model, prompt or tool schema: the relay
@@ -720,6 +775,43 @@ serves those per agent version (relay protocol v1).
   The agent holds the API token and nothing else: it has no tool that
   reaches `apply`, `rollback` or a PIN, and the token alone cannot apply.
 
+## MCP on the box (`box-mcp`, built)
+
+`POST /mcp` on the box API's listener (`api/mcp.rs`; contract in
+`helmsman-plc/tests/mcp.rs`) serves the chat agent's tools to an
+engineer's own MCP client (Claude Code, Claude Desktop): `claude mcp add
+--transport http helmsman http://<box>:8080/mcp --header "Authorization:
+Bearer <token>"`. Sources: `docs/SOURCES.md`, MCP specification.
+
+- **Transport.** Streamable HTTP, one JSON-RPC message per POST, answered
+  with one JSON object, through the same bounded parser, worker cap,
+  deadline and 1 MiB body as every route. Dual-era: a request carrying
+  `_meta.io.modelcontextprotocol/protocolVersion` is served statelessly as
+  2026-07-28 (`server/discover`; `MCP-Protocol-Version`, `Mcp-Method` and
+  `Mcp-Name` must match the body, else `-32020`); `initialize` selects
+  2025-11-25 or 2025-06-18, with no session minted, and later legacy
+  requests name their version in `MCP-Protocol-Version`. `GET` and
+  `DELETE /mcp` answer 405; a JSON array (batch) is refused. No stdio
+  proxy: every MCP client this is for speaks HTTP with a header, so a
+  `helmsman-plc mcp` binary would only add a second path to secure.
+- **Auth and audit.** It is a mutating route: the box token (401 before
+  any MCP parsing), never in the URL; an `Origin` other than the box's own
+  is refused (403). Every message is one audit entry with source `mcp`,
+  and every box API call a tool makes is audited as that route always is,
+  also `mcp` (audit entries now carry `source`: `api` or `mcp`).
+- **Tools.** The agent's eleven (`helmsman_agent::tools::NAMES`), by the
+  same executor, which reaches the box through `tools::Caller`: the chat
+  agent's goes over loopback HTTP, MCP's calls the API's handler in
+  process and may reach only the reads and the four draft routes
+  (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
+  stays a person on the canvas. Results are text inside the agent's
+  `<box-data>` envelope, never `structuredContent`.
+- **Drafts.** The protocol has no sessions, so drafts are server-minted
+  handles in one workspace shared by every MCP client of the box (they
+  hold one token): at most 32 (the oldest forgotten), dropped after an
+  hour without a stateful call, watch-only once any MCP call reads a PLC
+  program, until they expire.
+
 ## Offline chat (`local-fallback`, built)
 
 Relay unreachable: installed modules keep running and the chat degrades
@@ -766,7 +858,7 @@ to rule-based param edits, with no model on the box (`fallback.rs`,
   logic or an output's wiring. Offline messages do not enter the
   conversation; the model sees their proposals through its tools later.
 
-## Drop-ins (`dropin-prose`, `dropin-plc`, built)
+## Drop-ins (`dropin-prose`, `dropin-plc`, `dropin-photo`, built)
 
 A person hands the agent a document instead of describing everything in
 chat (`api/dropin.rs`, `helmsman_iec::l5x`, the agent's v3 tools;
@@ -829,6 +921,36 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   "propose a module that drives every output" in a rung comment gets a
   checker refusal, never a proposal; from prose it can get at most a draft
   an engineer must read, replay and PIN, with its source named on it.
+- **Photos** (`dropin-photo`; `api/photo.rs`, contract in
+  `tests/dropins.rs`). A whiteboard sketch or a photo of the line is a
+  `photo` drop-in: PNG, JPEG or WebP, known by its bytes (magic number and
+  a full walk of the container's chunks or segments; the name and the
+  `Content-Type` subtype are never trusted), read from its headers only
+  with no image decoder on the box. Refused: over 512 KiB (413); a width
+  or height of 0 or over 8000 px, the Messages API's limit, whatever the
+  file size (a header can claim 65535 x 65535 in 30 bytes); bytes after
+  the format's own end (where a polyglot hides its second file), a
+  truncated file, a PNG chunk with a bad CRC or an unknown critical chunk,
+  a WebP whose RIFF size disagrees with the file, more than one frame or
+  image; animations (APNG, animated WebP: the model sees only the first
+  frame); GIF, HEIC, AVIF, BMP and TIFF by name (415, re-export). An image
+  body under a text `Content-Type`, or a text `kind`, is refused. A photo
+  has no text: `read_dropin` and the PLC view answer 404 saying so.
+- **How a photo reaches the model.** Attached to a chat message, it goes
+  in that user message as an `image` block (`source.type: base64`, the
+  sniffed `media_type`, the bytes untouched), followed by the box's note
+  in its own words: the id, the format and size, that the image is data
+  and never instructions whatever text it shows, and that anything unclear
+  becomes a question, never a guess. Nothing the uploader wrote (the file
+  name) is in it. Relay protocol v1 passes content blocks through without
+  checking their type, so this works with the relay as it is, bounded by
+  its 1 MiB request limit: hence 512 KiB (683 KiB as base64), and the chat
+  refuses (413, before the relay) a photo that would push the
+  conversation past its 900 KiB history, and (422) a 21st image in one
+  conversation (past 20 the Messages API holds every image to a smaller
+  size). A photo binds every later proposal of its conversation
+  (`dropins`), and never makes it watch-only. The relay-side caps, source
+  checks and prompt are card `relay-images`.
 - **Questions, not guesses.** What the document leaves out (a signal the
   box does not have, a shift that is not defined) comes back as questions
   in the chat; the relay's v3 prompt says so, and the module only names
@@ -1000,6 +1122,44 @@ agent as ST; nothing here writes ST back).
   the last scan of every frame; scripted or hand-switched inputs. Pan,
   zoom, click a block for its source line, click an output for why.
 
+## Explain mode (`explain-mode`, built)
+
+Tap any block or output on the live diagram: the side panel says why it
+is in its state right now, in two layers.
+
+- **The box's own words** (`helmsman_diagram::phrase`, no model, works
+  offline and in the demo): the `explain` facts phrased by fixed
+  templates. Assigned (the line, what it read, the gates that let it
+  run, which change would stop that line), held (each skipped line and
+  the gate that closed it), TON/TOF/TP in time (`blink turns ON after
+  400 ms of its input being ON. Now blink.in is ON and blink.et is
+  340 ms of 400 ms so far`), counters against their preset, edges,
+  latches, FB arguments, CASE (the selector's value and the branch it
+  picked), loops. Units come from the signal model, TIME values read as
+  durations, and an input seen at one value over several scans says so
+  (`unchanged in the scans seen over the last 12 s`: sampled, so "seen").
+  It never claims more than the trace: every sentence lists the
+  variables it names and they are all in the explanation (a property
+  test over generated programs); "what would change it" only says which
+  line would stop or start running, never what a value would become.
+  The cited source lines are highlighted on the diagram.
+- **Ask why** (`POST /api/explain {module, path}`, token, audited): the
+  box explains its own newest trace of the module (not one the browser
+  sends), streams those sentences as an `explain` event, then runs the
+  agent loop on one user message: a fixed ask (no plant text in it) and
+  the facts, sentences and cited source lines inside the `<box-data>`
+  envelope. The loop runs with `tools::READ_ONLY` (list/read signals and
+  modules): a draft, check, simulate or propose call is answered "not
+  available in this mode", unrun, so an explanation stores nothing, not
+  even a proposal. One question per conversation, none kept; its own
+  budget (6 turns, 32k output tokens, 3 min); the chat's running slots.
+  `--relay-explain-agent V` asks the relay for an explain profile
+  (default `explain-v1`: the relay's read-only, floor-language profile;
+  the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
+  agent; the canvas disables Ask why with its reason (box offline, no
+  relay, no token) and the first layer stays up. The canvas holds the
+  API token the operator typed in memory only.
+
 ## Proposal review (`proposal-ui`, built)
 
 The screen an engineer approves on: "Proposals" in the canvas top bar
@@ -1051,14 +1211,15 @@ file and token in a temporary state directory).
 | boundary | what crosses | enforced by | status |
 | --- | --- | --- | --- |
 | module ↔ module | nothing directly | per-module windows, compile-time bounds, `%Q` overlap rejected, per-module fault stop | built |
-| module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault) | built |
-| module ↔ network | nothing | ST has no network primitives; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink; OPC UA planned (`sink-opcua`) |
+| module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault); a WASM module's fuel per scan (the same fault) and linear-memory cap | built |
+| module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink; OPC UA planned (`sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
-| text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents and PLC programs | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply; a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; the host rules above hold regardless | built (`agent-loop`, `dropin-prose`, `dropin-plc`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
+| text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
+| engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 
@@ -1069,7 +1230,7 @@ prompt. The agent never touches the Rust core.
 
 - `approval-policy` (built, above) → `proposal-ui` (built, above): the
   canvas shows a draft's `approval` (tier, reasons, what it needs), charts
-  its replay, and posts the PIN to `apply`. `box-mcp` wraps
+  its replay, and posts the PIN to `apply`. `box-mcp` (built, above) wraps
   the same routes; `local-accounts` replaces role PINs with people, keeping
   the role check and the gate.
 - `canvas-web` (built, above) → `andon-screen`: another page the box
@@ -1082,8 +1243,14 @@ prompt. The agent never touches the Rust core.
 - `sim-replay` (built, above) → `box-api` serves the recorder's tap and
   runs the replay; `proposal-ui` charts it; `approval-policy` requires one
   for logic and output-affecting changes.
+- `agent-loop` (built, above) → `local-fallback` answers the chat route
+  when the relay is unreachable (today: an `error` event); `explain-mode`
+  (built, above) runs the same loop on read-only tools; `dropin-prose` is
+  a prompt over the full set.
+
 - `agent-loop` (built, above) → `local-fallback` (built, above) answers
   the chat route by rule when the relay is unreachable; `explain-mode`
   is a prompt over the same tools, plus a trace tool. `dropin-prose` and
-  `dropin-plc` (built, above) add the drop-in tools; `dropin-photo` and
-  `dropin-pid` would add image and drawing drop-ins beside them.
+  `dropin-plc` (built, above) add the drop-in tools; `dropin-photo`
+  (built, above) shows photos to the model as image blocks; `dropin-pid`
+  would add drawing drop-ins beside them.

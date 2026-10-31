@@ -443,7 +443,7 @@ impl Bench {
         let table = SignalTable::new(&parsed.map, &parsed.safe).unwrap();
         let module = Module {
             name: "lines".into(),
-            program: compile(LINES, ImageSizes { i: 0, q: 0, m: 0 }).unwrap(),
+            program: compile(LINES, ImageSizes { i: 0, q: 0, m: 0 }).unwrap().into(),
             period: Duration::from_millis(2),
             i: Window::new(0, 0),
             q: Window::new(0, 0),

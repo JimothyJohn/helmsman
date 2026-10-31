@@ -32,6 +32,8 @@ use std::time::Duration;
 
 use helmsman_iec::{Carry, Fault, FaultKind, Image, PortDir, Program};
 
+use crate::logic::Logic;
+
 use crate::signals::{BindError, PortBinding, SignalTable, bind, from_st, to_st};
 use crate::tap::{Sample, TraceTap};
 
@@ -78,8 +80,9 @@ impl Window {
 pub struct Module {
     /// Unique within the runtime.
     pub name: String,
-    /// Compiled against `ImageSizes { i: i.len, q: q.len, m }`.
-    pub program: Program,
+    /// Compiled against `ImageSizes { i: i.len, q: q.len, m }` (ST), or a
+    /// WASM module, which has no windows.
+    pub program: Logic,
     pub period: Duration,
     pub i: Window,
     pub q: Window,
@@ -308,7 +311,7 @@ impl Runtime {
         let ports = check(self.i_len, self.outputs.len(), &all, table)?.swap_remove(k);
         let mut module = module;
         let s = &mut self.slots[k];
-        let carry = module.program.restore(&s.module.program.state());
+        let carry = module.program.restore(&s.module.program);
 
         let (old_q, new_q) = (s.module.q, module.q);
         for (n, b) in self.outputs[old_q.start..][..old_q.len].iter_mut().enumerate() {
@@ -480,7 +483,7 @@ impl Runtime {
                 .and_then(Option::take);
             let slot = match prev {
                 Some(s) => {
-                    let _ = module.program.restore(&s.module.program.state());
+                    let _ = module.program.restore(&s.module.program);
                     let m = image.m.len().min(s.image.m.len());
                     image.m[..m].copy_from_slice(&s.image.m[..m]);
                     let mut next = s.next;
@@ -550,14 +553,17 @@ impl Runtime {
                     *b = inputs.get(w.start + k).copied().unwrap_or(0);
                 }
                 s.stats.scans = s.stats.scans.saturating_add(1);
-                let result = if s.tap.claim() {
+                // Only ST traces; a WASM module leaves the request open.
+                let result = if s.module.program.traceable() && s.tap.claim() {
                     let (r, trace) = s.module.program.scan_traced(&mut s.image, now);
                     let result = r.and_then(|()| outputs(s));
-                    s.tap.post(Sample {
-                        scan: s.stats.scans,
-                        fault: result.as_ref().err().copied(),
-                        trace,
-                    });
+                    if let Some(trace) = trace {
+                        s.tap.post(Sample {
+                            scan: s.stats.scans,
+                            fault: result.as_ref().err().copied(),
+                            trace,
+                        });
+                    }
                     result
                 } else {
                     s.module
@@ -639,10 +645,11 @@ impl Runtime {
         self.slot(name).map(|s| (s.module.period, s.module.i, s.module.q))
     }
 
-    /// A module's program, to read its variables.
+    /// A module's ST program, to read its variables; `None` for a WASM
+    /// module (read it through [`Runtime::module`]).
     #[must_use]
     pub fn program(&self, name: &str) -> Option<&Program> {
-        self.slot(name).map(|s| &s.module.program)
+        self.slot(name).and_then(|s| s.module.program.st())
     }
 
     /// A module as it runs now: program, period and windows.
@@ -691,10 +698,9 @@ fn check(
         if m.period.is_zero() || m.period > MAX_PERIOD {
             errs.push(ConfigError::BadPeriod(name()));
         }
-        let mut probe = m.program.clone();
         for (k, (p, v)) in m.params.iter().enumerate() {
             let twice = m.params[..k].iter().any(|(q, _)| q.eq_ignore_ascii_case(p));
-            if twice || probe.set_input(p, to_st(*v)).is_err() {
+            if twice || !m.program.accepts(p, to_st(*v)) {
                 errs.push(ConfigError::Param {
                     module: name(),
                     param: p.clone(),

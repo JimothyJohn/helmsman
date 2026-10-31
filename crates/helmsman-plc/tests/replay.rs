@@ -29,7 +29,7 @@ fn module(name: &str, period_ms: u64, src: &str) -> Module {
     let program = compile(src, ImageSizes { i: 0, q: 0, m: 0 }).unwrap_or_else(|d| panic!("{name}: {d:?}"));
     Module {
         name: name.into(),
-        program,
+        program: program.into(),
         period: ms(period_ms),
         i: Window::new(0, 0),
         q: Window::new(0, 0),

@@ -107,7 +107,7 @@ fn bench_tick(n: usize) -> (u64, u64) {
     let program = compile(src, ImageSizes { i: 0, q: 0, m: 0 }).unwrap();
     let m = Module {
         name: "p".into(),
-        program,
+        program: program.into(),
         period: Duration::from_millis(1),
         i: Window::new(0, 0),
         q: Window::new(0, 0),

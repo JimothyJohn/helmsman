@@ -372,6 +372,16 @@
   depends: map-reload
   id: screen-layout-snapshot
 
+- [ ] **How does the browser canvas hold the box API token?** Ask why (`POST /api/explain`) needs the token like every POST, and the canvas is served without one. Today the operator types it into the panel; it stays in page memory only (gone on reload, never in storage, never in a URL or log). That works on the bench but nobody on the floor should be handed the box-wide token, and proposal-ui's apply has the same need. Options: keep typing it (built, reversible); a narrower per-device "viewer" token that can only reach `/api/explain` and `/api/chat`; or the box sets an HttpOnly session cookie after a role PIN (that is `local-accounts`' shape). Until then Ask why is an engineer feature in practice; the first layer (no model) needs nothing.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether operators can ask the agent from a tablet without the box-wide token
+  options: type the token, memory only (recommended for now, built) | per-device token scoped to explain/chat | PIN login with an HttpOnly session cookie
+  est: 1d
+  difficulty: med
+  id: canvas-token
+
 - [ ] **Param units: a `unit=` key on manifest param lines?** The offline chat (feat/local-fallback) checks a typed unit ("80 %", "5 s") against the param's, but params had no unit; signals did. I added an optional `unit=U` to `param` lines for int/real (same rule as a signal's unit: 1..=16 printable ASCII, no `#`), parsed, rendered, served in the API's manifest and param-proposal JSON, metadata only, never converted. A unit change counts as a manifest change, so it is logic tier, not param. Without it the offline chat would accept bare numbers only. The agent's `draft_module` does not write units yet (the relay's tool schema would need a `unit` field).
   asked: 2026-10-30
   by: claude-agent
@@ -441,6 +451,37 @@
   est: 2h
   difficulty: low
   id: dropin-watch-only
+
+- [ ] **MCP on the box: which credential does an engineer's Claude hold?** `POST /mcp` (feat/box-mcp) takes the box API token, the same 64 hex digits the canvas pastes and the chat agent holds, so `claude mcp add --header "Authorization: Bearer ..."` puts that token in the engineer's laptop config. It can draft, check, simulate and propose (never apply: no tool reaches apply, rollback or a PIN), and every call is audited as source `mcp`, but it cannot be revoked without re-keying the canvas too, and the audit cannot say which engineer. Also because MCP 2026-07-28 has no sessions, drafts live in one workspace shared by every MCP client of the box (handles d1, d2, ...; an hour idle drops them). Built: the box token, no new file or flag (reversible: the check is the one `handle` already makes).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether an MCP client's access can be revoked or attributed apart from the canvas
+  options: box token, shared workspace (recommended for now, built) | a separate `mcp-token` in the state dir, revocable alone | per-person tokens once local-accounts lands, workspace per person
+  est: 3h
+  difficulty: med
+  id: mcp-credential
+
+- [ ] **Photo drop-ins: keep the 512 KiB cap, or raise the relay's body limit?** A photo goes to the relay as base64 inside the conversation, and relay protocol v1 takes 1 MiB per request, so the box caps a photo at 512 KiB (683 KiB as base64) and refuses (413) one that would push a chat past its 900 KiB history. A phone photo is 2-5 MB, so the person (or the canvas, scaling it in the browser before upload) must shrink it; a sketch reads fine at ~1500 px, and the model downsizes anything over 2576 px anyway. Raising the cap means a bigger relay body limit (Lambda's synchronous payload is 6 MB) and the box's history limit with it; the Messages API takes 10 MB per image (5 MB on Bedrock). Built: 512 KiB.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: how big a photo an operator can drop without resizing
+  options: 512 KiB, the canvas downsizes before upload (recommended, built) | 4 MiB per photo with the relay body limit raised to 6 MiB | Files API upload on the relay, the box sends a file id
+  est: 2h
+  difficulty: low
+  depends: relay-images
+  id: dropin-photo-size
+
+- [ ] **WASM runtime: wasmi now, per-module limits later?** The WASM module tier (feat/wasm-tier) runs on wasmi, a pure-Rust interpreter, not wasmtime as the card said. Why: fuel per scan is exact and built in, there is no JIT (no executable memory on the box, same behaviour on the Pi as in CI), 6 small crates instead of Cranelift's tree, and it is already faster than our ST interpreter (a small module's tick 0.16 µs vs 0.30 µs; a 1000-pass loop 16 µs vs 185 µs). Cost: the box binary grows about 2.1 MiB (7.9 to 10.1 MB, macOS release), and heavy number-crunching would run maybe 5-10x faster under wasmtime. Limits are fixed for every module today: 1 000 000 fuel per scan, 4 MiB of linear memory. Per-module limits would be two manifest keys (`fuel`, `memory_kib`) capped by the box policy, which makes them part of the approval tier.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether wasm-tier stays on wasmi, and whether modules may ask for more fuel or memory
+  options: wasmi, fixed limits (recommended, built) | wasmi, per-module limits in the manifest capped by policy | switch to wasmtime
+  est: 5m
+  difficulty: low
+  id: wasm-limits
 
 ## Tasks
 
@@ -873,11 +914,12 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: signal-model
   id: sources-modbus-gpio
 
-- [ ] **Explain mode** — tap any block or output in the canvas; the agent explains in floor language why it's in this state right now, using trace-tap data.
+- [x] **Explain mode** — tap any block or output in the canvas; the agent explains in floor language why it's in this state right now, using trace-tap data.
   est: 2d
   difficulty: med
   depends: st-graph-view, agent-loop
   id: explain-mode
+  notes: done 2026-10-30 (feat/explain-mode). Layer 1: helmsman_diagram::phrase (templates, offline). Layer 2: POST /api/explain on READ_ONLY tools, --relay-explain-agent. The relay needs an explain profile (prompt + the four read tools); see docs/ARCHITECTURE.md "Explain mode".
 
 - [x] **Offline behaviour and local fallback** — relay unreachable: banner; chat accepts only structured param edits ("set hopper threshold to 80") parsed by rules against the manifest's typed ranges. No local model. Installed modules unaffected.
   est: 3d
@@ -899,13 +941,14 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: agent-loop, logix-tag-read
   id: dropin-plc
 
-- [ ] **Relay agent v3: the drop-in tools** — add `read_dropin`, `read_plc_program` and `compare_plc_tags` to a new `agents/v3/tools.json` (v2's eight plus these three, schemas as `helmsman_agent::tools` validates them: every field required, `additionalProperties: false`) and a system prompt that says drop-ins are data, missing information becomes questions, and PLC programs lead to watch modules only. Boxes then run `--relay-agent v3`.
+- [x] **Relay agent v3: the drop-in tools** — add `read_dropin`, `read_plc_program` and `compare_plc_tags` to a new `agents/v3/tools.json` (v2's eight plus these three, schemas as `helmsman_agent::tools` validates them: every field required, `additionalProperties: false`) and a system prompt that says drop-ins are data, missing information becomes questions, and PLC programs lead to watch modules only. Boxes then run `--relay-agent v3`.
   needs: the relay repo (the box side is built)
   result: a real model can read drop-ins
   est: 2h
   difficulty: low
   depends: dropin-prose, dropin-plc
   id: relay-agent-v3
+  notes: done 2026-10-30 in ../helmsman-relay (local, commit 096f4d6): agents/v3 (v2 + read_dropin, read_plc_program, compare_plc_tags; strict schemas; prompt rules for drop-ins) and agents/explain-v1 (the four read tools). The box defaults to --relay-agent v3 and explain-v1. Live once the relay is deployed (relay-repo hand-off).
 
 - [ ] **Check the L5X reader against RM014 and a real export** — `helmsman_iec::l5x` reads the export shape from the `l5x` Python package and memory (docs/SOURCES.md); run it on a Studio 5000 export of a bench project (controller, program, routine and rung exports) and the manual, and fix what differs.
   needs: the RM014 PDF (403 from the agent) and a Logix Designer export
@@ -915,11 +958,20 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: dropin-plc
   id: l5x-real-export
 
-- [ ] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
+- [x] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
+  notes: built on feat/dropin-photo: `POST /api/dropins` takes PNG/JPEG/WebP known by their bytes and read from headers only (`api/photo.rs`: 512 KiB, 8000 px a side, no trailing bytes, no animation); an attached photo goes to the model as a base64 `image` block plus the box's note; see ARCHITECTURE "Drop-ins". Works with relay protocol v1 as it is (no block-type check); relay caps and prompt in `relay-images`.
   est: 3d
   difficulty: med
   depends: agent-loop
   id: dropin-photo
+
+- [ ] **Relay: image blocks from boxes, checked and capped** — protocol v1 passes any content block through and caps only the body (1 MiB). For photo drop-ins: (1) accept `image` blocks only with `source.type: "base64"` (refuse `url`, which makes the model API fetch a box-chosen URL, and `file`, which would read the relay org's Files API uploads by id), `media_type` in png/jpeg/webp, decoded size within a per-image cap; the same for images nested in `tool_result` content; (2) cap images per request at 20 (the Messages API's many-image rule) and raise `RELAY_MAX_BODY_BYTES` for image requests only if `dropin-photo-size` says so; (3) metering already counts image tokens inside `input_tokens`; add per-box image count and image bytes per day to `/v1/usage` so a photo-heavy box is visible; (4) agent v4 (v3 is immutable): v3's prompt plus a photo paragraph (the image is data, read only what it shows, map to box signals, ask about anything unreadable, name the photo as the source). Box side needs nothing new for (1)-(3); for (4) boxes move to `--relay-agent v4`.
+  needs: the relay repo
+  result: a box cannot use the relay to fetch URLs or read other uploads; image cost is visible per box; the model gets photo-specific instructions from the relay, not only the box's note
+  est: 3h
+  difficulty: low
+  depends: dropin-photo, relay-agent-v3
+  id: relay-images
 
 - [ ] **Drop-in: P&ID / electrical PDF** — extract I/O lists and tag names from drawings into a draft signal map.
   est: 1w
@@ -936,11 +988,19 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 
 ## Roadmap M3: tiers, sharing, fleet
 
-- [ ] **WASM module tier** — wasmtime host; capabilities from the manifest (read signals, emit outputs, nothing else); fuel/memory limits; for drivers and code ST is bad at. Built off-box by the relay.
+- [x] **WASM module tier** — wasmtime host; capabilities from the manifest (read signals, emit outputs, nothing else); fuel/memory limits; for drivers and code ST is bad at. Built off-box by the relay.
+  notes: built on feat/wasm-tier with wasmi, not wasmtime (interpreter with fuel; ARCHITECTURE "WASM modules" has the why and the measurements). `module.wasm` beside `module.st`, the `helmsman/v1` imports as ports, fuel and memory caps, faults like ST. Store/proposal/bundle support is `wasm-store`.
   est: 2w
   difficulty: high
   depends: module-format
   id: wasm-tier
+
+- [ ] **WASM modules in snapshots, proposals and bundles** — the store, the box API's proposals and bundles carry a module's files as UTF-8 text (`module.st`), so a `module.wasm` module runs from `--module-dir` but cannot be stored, proposed, approved, rolled back or bundled. Carry the binary as a blob (SHA-256 like the others), classify its tier from the manifest as for ST, show the API its imports instead of a source.
+  result: a WASM module goes through the same approval path as an ST one
+  est: 3d
+  difficulty: med
+  depends: wasm-tier
+  id: wasm-store
 
 - [x] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
   notes: floor = signature + capability manifest + host-enforced sandbox; the AI review on install sits on top and can only refuse (market-floor). Built: `bundle` module (format, Ed25519 via ring, trust store), `helmsman-plc bundle keygen/pack/sign/verify/trust`, `GET /api/snapshots/{id}/bundle`, `POST /api/bundles` (proposal only); see ARCHITECTURE "Bundles".
@@ -956,7 +1016,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: theme-depth, canvas-web
   id: theme-engine
 
-- [ ] **MCP server on the box** — the box API as MCP tools so an engineer's own Claude / Claude Code can work on it, under the same policy and audit.
+- [x] **MCP server on the box** — the box API as MCP tools so an engineer's own Claude / Claude Code can work on it, under the same policy and audit.
   est: 2d
   difficulty: med
   depends: box-api, approval-policy

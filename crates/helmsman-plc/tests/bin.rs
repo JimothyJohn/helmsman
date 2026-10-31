@@ -766,6 +766,44 @@ fn a_module_directory_whose_manifest_lies_is_refused_before_the_adapter_starts()
     }
 }
 
+#[test]
+fn a_wasm_module_directory_runs_and_one_whose_manifest_lies_is_refused() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("bin-modules")
+        .join("blink-wasm");
+    std::fs::create_dir_all(&dir).unwrap();
+    let wasm = wat::parse_str(
+        r#"(module (import "helmsman/v1" "now_ms" (func $now (result i64)))
+                   (global $t (export "t") (mut i64) (i64.const 0))
+                   (func (export "scan") (global.set $t (call $now))))"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("module.wasm"), &wasm).unwrap();
+    std::fs::write(
+        dir.join("module.manifest"),
+        "name blink\nauthor t\nscan_ms 10\nreads\ndrives\n",
+    )
+    .unwrap();
+    let args = [std::ffi::OsStr::new("--module-dir"), dir.as_os_str()];
+    let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let (_plc, _, _) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
+
+    std::fs::write(
+        dir.join("module.manifest"),
+        "name blink\nauthor t\nscan_ms 10\nreads\ndrives lamp\n",
+    )
+    .unwrap();
+    let out = plc()
+        .args([std::ffi::OsStr::new("--module-dir"), dir.as_os_str()])
+        .args(["--encap-port", "0", "--io-port", "0"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("does not match module.wasm"), "{err}");
+    assert!(!err.contains("CIP on"), "{err}");
+}
+
 // ---- --store -----------------------------------------------------------------
 
 fn store_dir(name: &str) -> PathBuf {
@@ -1124,4 +1162,14 @@ fn a_bad_screen_layout_is_refused_before_the_adapter_starts() {
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(2), "--screen needs the API");
+}
+
+/// The relay serves agent v3 (the drop-in tools) and explain-v1 (read-only
+/// tools, floor language); a box asks for them unless told otherwise.
+#[test]
+fn the_default_agent_versions_are_the_ones_the_relay_serves() {
+    let out = plc().arg("--help").output().unwrap();
+    let usage = String::from_utf8_lossy(&out.stdout);
+    assert!(usage.contains("(default v3)"), "{usage}");
+    assert!(usage.contains("default explain-v1"), "{usage}");
 }

@@ -23,7 +23,7 @@ fn module(name: &str, src: &str, period_ms: u64, i: Window, q: Window) -> Module
     let program = compile(src, sizes).unwrap_or_else(|d| panic!("{name}: {d:?}"));
     Module {
         name: name.into(),
-        program,
+        program: program.into(),
         period: ms(period_ms),
         i,
         q,
@@ -189,7 +189,7 @@ fn a_fault_zeroes_only_that_modules_outputs_and_stops_only_it() {
 #[test]
 fn a_runaway_module_hits_its_watchdog_and_the_rest_carry_on() {
     let mut spin = module("spin", ENDLESS, 10, Window::new(0, 0), Window::new(0, 1));
-    spin.program.set_budget(10_000);
+    spin.program.st_mut().unwrap().set_budget(10_000);
     let mut rt = Runtime::new(
         IMAGE,
         IMAGE,
@@ -392,7 +392,7 @@ proptest! {
                 let src = "PROGRAM p END_PROGRAM";
                 Module {
                     name: format!("m{n}"),
-                    program: compile(src, sizes).unwrap(),
+                    program: compile(src, sizes).unwrap().into(),
                     period: ms(10),
                     i: Window::new(0, 0),
                     q: Window::new(start, len),

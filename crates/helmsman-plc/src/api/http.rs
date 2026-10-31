@@ -73,6 +73,52 @@ pub struct Request {
     pub authorization: bool,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
+    /// Every other header, its name lower case, in the order sent
+    /// (never `Authorization`, which is only ever [`Request::bearer`]).
+    pub headers: Vec<(String, String)>,
+    /// Who made the call, for the audit log: `api` for a request off the
+    /// socket, `mcp` for one the MCP route makes on a tool's behalf.
+    pub source: &'static str,
+}
+
+impl Request {
+    /// The values of header `name` (lower case), in the order sent.
+    pub fn header<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.headers
+            .iter()
+            .filter(move |(n, _)| n == name)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// A request target split into its path (still percent-encoded), the
+/// path's decoded segments and the decoded query pairs.
+pub type Target = (String, Vec<String>, Vec<(String, String)>);
+
+/// Splits and decodes a request target (`/a/b?k=v`).
+///
+/// # Errors
+/// No leading `/`, a fragment, or bad percent-encoding.
+pub fn target(target: &str) -> Result<Target, &'static str> {
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if path.contains('#') || query.contains('#') {
+        return Err("fragment in target");
+    }
+    let segments = path
+        .strip_prefix('/')
+        .ok_or("malformed target")?
+        .split('/')
+        .map(decode)
+        .collect::<Result<Vec<_>, _>>()?;
+    let query = query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            let (k, v) = p.split_once('=').unwrap_or((p, ""));
+            Ok((decode(k)?, decode(v)?))
+        })
+        .collect::<Result<Vec<_>, &'static str>>()?;
+    Ok((path.to_string(), segments, query))
 }
 
 /// Why no request could be read: the status to answer with, or nothing
@@ -195,33 +241,18 @@ pub fn parse_head(head: &[u8], limits: &Limits) -> Result<(Request, usize), Read
     if !target.starts_with('/') || target.len() > 2048 || !target.bytes().all(|b| b.is_ascii_graphic()) {
         return Err(bad("malformed target"));
     }
-    let (path, query) = target.split_once('?').unwrap_or((target, ""));
-    if path.contains('#') || query.contains('#') {
-        return Err(bad("fragment in target"));
-    }
-    let segments = path[1..]
-        .split('/')
-        .map(decode)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(bad)?;
-    let query = query
-        .split('&')
-        .filter(|p| !p.is_empty())
-        .map(|p| {
-            let (k, v) = p.split_once('=').unwrap_or((p, ""));
-            Ok((decode(k)?, decode(v)?))
-        })
-        .collect::<Result<Vec<_>, &'static str>>()
-        .map_err(bad)?;
+    let (path, segments, query) = self::target(target).map_err(bad)?;
     let mut req = Request {
         method: method.into(),
-        path: path.into(),
+        path,
         segments,
         query,
         bearer: None,
         authorization: false,
         content_type: None,
         body: Vec::new(),
+        headers: Vec::new(),
+        source: "api",
     };
     let mut length: Option<usize> = None;
     let mut count = 0;
@@ -266,7 +297,7 @@ pub fn parse_head(head: &[u8], limits: &Limits) -> Result<(Request, usize), Read
                     .map(|(_, t)| t.trim().to_string());
             }
             "content-type" => req.content_type = Some(value.to_ascii_lowercase()),
-            _ => {}
+            other => req.headers.push((other.to_string(), value.to_string())),
         }
     }
     let length = length.unwrap_or(0);
