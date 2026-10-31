@@ -33,7 +33,10 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
 
 ## Next door
 
-- `../helmsman-relay`: the relay (Rust, SAM, private, not deployed; local git
-  only until Nick creates the repo). The box↔relay contract is its
-  `docs/relay-protocol.md`; agent profiles live in its `agents/`.
+- `../agent-relay`: the relay (Rust, SAM, private, not deployed; local only
+  until Nick runs its `scripts/create-github-repo.sh`, which creates
+  JimothyJohn/agent-relay). Client-agnostic; the box↔relay contract is its
+  `docs/relay-protocol.md`. Helmsman's agent profiles are
+  `agents/helmsman/<name>/` (ids `helmsman/v3`, ...); the bare `v3` and
+  `explain-v1` the box asks for are aliases.
 - `.claude/handoff.md` (untracked): where the last session stopped.
