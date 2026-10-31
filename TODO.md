@@ -267,6 +267,17 @@
   id: dev-merge-safety
   answer: merge queue on dev (recommended)
 
+- [ ] **Merge queue isn't available here: what instead?** You answered `dev-merge-safety` with "merge queue", but GitHub refuses it on this repo: a `merge_queue` ruleset rule comes back `422 Invalid rule 'merge_queue'` (probed 2026-10-31 with a disabled ruleset; nothing left behind). Merge queues aren't offered on personal-account repos. What does work: (a) require branches to be up to date on `dev` (`strict: true`) plus a small workflow that, when `dev` moves, runs `gh pr update-branch` on every open auto-merge PR into `dev`, so each PR re-runs CI on the new tip and auto-merge lands them one at a time; (b) move the repo to an organization, which gets merge queues; (c) keep fixing forward with the local test-merge rule (CLAUDE.md "Green alone != green together") and the wider CI gate in draft PR #73.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call (repo setting; (b) is a GitHub org)
+  result: dev stays green under parallel PRs
+  options: strict + auto update-branch workflow (recommended) | move the repo to an org and use the merge queue | fix forward + #73
+  est: 1h
+  difficulty: low
+  depends: dev-merge-safety
+  id: dev-merge-safety-2
+
 - [x] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
   asked: 2026-10-30
   by: claude-agent
