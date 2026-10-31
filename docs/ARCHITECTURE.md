@@ -1293,6 +1293,39 @@ file and token in a temporary state directory).
   and the history head, and an undo (`/api/snapshots/{previous}/rollback`)
   through the same replay and PIN flow.
 
+## Site view (`site-view`, built)
+
+Boxes of one site find each other on the LAN, and any box's canvas lists
+them all (`site.rs` in `helmsman-plc`, `site.rs` in the canvas; contracts
+in `tests/site.rs`, `site_tests.rs`).
+
+- **Opt-in.** `--site NAME` (off by default; needs `--api` with a fixed
+  port), `--box-name NAME` (default: the host name). The box id is a
+  labelled SHA-256 of the API token, first 8 bytes: stable, one-way.
+- **Beacon** (hand-written, no mDNS crate): six fixed text lines
+  (`helmsman-site 1`, site, id, name, API port, version), at most 512
+  bytes, every 5 s to 239.255.72.77:41910 with TTL 1. One thread sends it
+  and hears the others'.
+- **Untrusted input; a box only lists.** Strict parse (exact lines and
+  order, small alphabets, length caps); the peer's address is the
+  datagram's source IP with the beacon's port; sources outside private,
+  CGNAT, link-local and loopback IPv4 dropped; 100 datagrams a second
+  looked at, the rest dropped unread; a peer refreshed at most once a
+  second; 64 peers at most, a new id waits for one to expire (30 s); an id
+  heard from a second address stays where it was and is flagged as a
+  conflict. The box never answers a datagram, never connects to a peer,
+  never forwards what it heard. Every drop is counted and served.
+- **`GET /api/site`**: this box (beacon fields and module/device-link
+  counts by state, no names or values), the live peers, the drop counts.
+  It is the one route other origins may read (`Access-Control-Allow-Origin:
+  *`, no credentials, no preflight), and with `--site` the canvas page's
+  CSP allows `connect-src http:` (question `site-view-cors`).
+- **The view** (`?site`, or the Site tab): the list from this box, each
+  peer's status from that peer's own `/api/site` fetched by the browser
+  (no credentials, 64 KiB cap, 8 s timeout, the answering box's id must be
+  the beacon's), every row a link to `http://ADDR/` built only from a
+  parsed IPv4:port. Unreachable, silent and conflicting boxes say so.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -1304,6 +1337,7 @@ file and token in a temporary state directory).
 | driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
+| box ↔ LAN peers | site beacons in, this box's beacon out | strict parse, source-address rule, intake and refresh limits, a bounded list, no takeover of a live id; the box only lists peers and never connects to one; `/api/site` is the only cross-origin read | built (`site-view`) |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
