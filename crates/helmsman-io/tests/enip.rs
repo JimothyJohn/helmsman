@@ -666,11 +666,36 @@ fn faults_the_e1213_simulator_lists_are_its_own() {
 /// signal names over both transports.
 #[test]
 fn the_e1213_example_maps_validate() {
-    let enip = helmsman_io::text::parse(include_str!("../../../docs/devices/moxa-iologik-e1213-enip.map")).unwrap();
-    let modbus =
-        helmsman_io::text::parse(include_str!("../../../docs/devices/moxa-iologik-e1213-modbus.map")).unwrap();
+    let enip =
+        helmsman_io::text::parse(include_str!("../../../docs/devices/moxa-iologik-e1213-enip.map")).unwrap();
+    let modbus = helmsman_io::text::parse(include_str!(
+        "../../../docs/devices/moxa-iologik-e1213-modbus.map"
+    ))
+    .unwrap();
     enip.map.validate().unwrap();
     modbus.map.validate().unwrap();
-    let names = |m: &IoMap| m.signals.iter().map(|s| (s.name.clone(), s.ty, s.dir)).collect::<Vec<_>>();
+    let names = |m: &IoMap| {
+        m.signals
+            .iter()
+            .map(|s| (s.name.clone(), s.ty, s.dir))
+            .collect::<Vec<_>>()
+    };
     assert_eq!(names(&enip.map), names(&modbus.map));
+}
+
+/// Someone else holds the UDP port the inputs arrive on (on a box: its
+/// own adapter on 2222): a link error that says which port and why.
+#[test]
+fn a_taken_io_port_is_a_link_error_that_says_so() {
+    let s = E1213Sim::start().unwrap();
+    let squatter = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+    let port = squatter.local_addr().unwrap().port().to_string();
+    let mut d = EnipDriver::from_params(&s.endpoint(), &with(&s, &[("io_port", &port)])).unwrap();
+    let e = read(&mut d, "di:0").unwrap_err();
+    assert!(e.is_link(), "{e}");
+    assert!(
+        e.to_string()
+            .contains(&format!("UDP {port}, where the device sends its inputs")),
+        "{e}"
+    );
 }

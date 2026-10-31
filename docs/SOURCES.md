@@ -489,6 +489,67 @@ into the code.
 - **How to cite:** `MCP 2026-07-28 <page> § <heading>`, e.g.
   `MCP 2026-07-28 basic/transports/streamable-http § Server Validation`.
 
+## Device sources
+
+### Moxa ioLogik E1213 EDS, v2.0 (EtherNet/IP Electronic Data Sheet)
+
+- **What:** `moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`,
+  647 lines, 42 906 bytes, SHA-256
+  `3895fbca8bb036c1b31a9d6b68dea69eca6892fe0a6bce7409ab76311cfd470d`.
+  EZ-EDS 3.27 generated; `[File]` Revision 2.0, ModDate 03-16-2026; device
+  revision 4.1, "corresponds to firmware v4.0" (l.20).
+- **Where:** Moxa's "EDS file software package" for the E1213/E1213-T, which
+  Nick downloaded (2026-10-30) and keeps untracked at the repo root.
+- **License:** none stated. The file has no header beyond the generator's
+  line and no terms; Moxa publishes it for download, but nothing says it
+  may be redistributed. **Not committed** (TODO.md `e1213-eds-license`):
+  `scripts/eds-corpus.sh` checks the hash and runs
+  `crates/helmsman-io/tests/eds_corpus.rs` against it, which asserts that
+  it resolves to the built-in profile. The committed fixture
+  `crates/helmsman-proto/tests/fixtures/e1213-facts.eds` is our own
+  restatement of its facts (identity, params, assemblies, connections),
+  written for this repository.
+- **Leaned on by:** `helmsman_proto::eds` (the lexical form and the field
+  order of `ParamN`, `AssemN`, `ConnectionN`, with `OpENer`'s EDS below),
+  `DeviceConfig::moxa_e1213`, `enip::Spec::moxa_e1213`, and every EDS fact
+  in `docs/devices/moxa-iologik-e1213.md`.
+- **How to cite:** `E1213 EDS v2.0 l.N` (line of the file above).
+
+### Moxa, ioLogik E1200 Series User's Manual, Version 15.10 (May 2021)
+
+- **What:** the E1200 family's manual: models and channels (pp. 1-2, 2-4 to
+  2-6), the EtherNet/IP setting and its connection limit (pp. 3-26, 3-27),
+  activation (ch. 5), RPI advice (p. 6-10), the Modbus/TCP map per model
+  (Appendix A, the E1213 on p. A-7), the EtherNet/IP assembly data map per
+  model (Appendix B, pp. B-1 to B-2), port numbers (Appendix D), factory
+  defaults (Appendix E). 10 137 362 bytes, SHA-256
+  `f8788816b2e0062a68f9b7f1ef9850a2d57f92946ac8b64077c4e77097744454`.
+- **Where:** fetched 2026-10-30 from
+  `https://pct.wiki.uib.no/images/2/29/Moxa-iologik-e1200-series-manual-v15.10.pdf`
+  (a university wiki's copy); Moxa's own links to v15.8 and v15.2 answered
+  with an HTML page, not the PDF. Not committed (© Moxa).
+- **Leaned on by:** what the E1213's 51 input bytes and 1 output byte mean
+  (`helmsman_adapter::e1213`, the device doc), the profile's channel counts
+  and connection limit, the Modbus example map. Bit positions within the
+  status words and the counters' byte order are inferred, and say so.
+- **How to cite:** `E1200 manual v15.10 p. X-N`.
+
+### OpENer sample application EDS (`data/opener_sample_app.eds`)
+
+- **What:** the EDS for `OpENer`'s POSIX sample, the layout
+  `DeviceConfig::opener_sample` copies. 359 lines, SHA-256
+  `0e0da5ddd62f571ea319dc29254be08cac5134236b389174983d80f0e370760f`.
+- **Where:** EIPStackGroup/OpENer at
+  `0e1ab7ee5c272950c0dc8daf7793008d7a518912` (the commit
+  `docker/opener/Dockerfile` builds). License: OpENer's adapted BSD
+  (above). Fetched by `scripts/eds-corpus.sh`, not committed.
+- **Leaned on by:** `helmsman_proto::eds`: a second generator's output
+  (EZ-EDS 3.23) for the lexical form; blank sizes taken from the assembly;
+  configuration assemblies; listen-only connections; and the meaning of
+  real-time formats 0, 3 and 4 (its connection words are the E1213's, and
+  `OpENer`'s code shows what each direction carries).
+- **How to cite:** `OpENer opener_sample_app.eds@0e1ab7e l.N`.
+
 ## Test corpora (fetched, not vendored)
 
 ### Beremiz and OpenPLC Editor example projects (PLCopen TC6 XML)

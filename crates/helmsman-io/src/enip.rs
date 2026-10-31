@@ -908,7 +908,15 @@ mod driver {
                 // found" means the device already let it go.
                 let _ = c.send(&mut session);
             }
-            let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, self.params.io_port)).map_err(Error::Io)?;
+            let port = self.params.io_port;
+            let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port)).map_err(|e| {
+                // On a box, the box's own adapter holds 2222 unless its
+                // --io-port moves it (TODO.md enip-io-port).
+                Error::Io(io::Error::new(
+                    e.kind(),
+                    format!("UDP {port}, where the device sends its inputs: {e}"),
+                ))
+            })?;
             let config = self.config()?;
             let timeout = config.timeout();
             let target = SocketAddrV4::new(ip, self.params.device_io_port);
