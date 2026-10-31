@@ -505,6 +505,25 @@ impl Viewer {
         }
     }
 
+    /// Each variable the program reads, with where its block sits on
+    /// screen after the last [`Self::canvas`] (the playground puts the
+    /// inputs' controls there). Empty while a block instance is shown.
+    #[must_use]
+    pub fn reads_on_screen(&self) -> Vec<(String, Rect)> {
+        if !self.scopes[self.scope].prefix.is_empty() {
+            return Vec::new();
+        }
+        let cam = self.cams[self.scope];
+        self.diagram()
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NodeKind::Read { path } => Some((path.clone(), cam.rect(&n.rect))),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The diagram, panned, zoomed and clickable, with `scan` on it.
     pub fn canvas(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         let area = ui.available_rect_before_wrap();

@@ -989,6 +989,125 @@ impl Screen {
     }
 }
 
+impl Screen {
+    /// Where the diagram draws the first block reading `name`.
+    fn block(&self, name: &str) -> Rect {
+        let v = self.view.viewer.as_ref().expect("a diagram");
+        v.reads_on_screen()
+            .into_iter()
+            .find(|(p, _)| p.eq_ignore_ascii_case(name))
+            .unwrap_or_else(|| panic!("no block reads {name}"))
+            .1
+    }
+
+    fn input(&self, name: &str) -> Value {
+        self.view
+            .session
+            .inputs()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .unwrap_or_else(|| panic!("no input {name}"))
+            .value
+    }
+
+    fn output(&self, name: &str) -> Value {
+        self.view
+            .session
+            .outputs()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .unwrap_or_else(|| panic!("no output {name}"))
+            .value
+    }
+
+    fn button(&mut self, at: Pos2, pressed: bool) {
+        self.frame(vec![Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+    }
+}
+
+#[test]
+fn a_switch_flips_where_the_diagram_reads_it() {
+    let mut s = Screen::new();
+    assert_eq!(s.input("enable"), b(true));
+    let at = s.block("enable").center();
+    s.click(at);
+    assert_eq!(s.input("enable"), b(false), "a click on its block flips it");
+    s.click(at);
+    assert_eq!(s.input("enable"), b(true));
+    // The diagram stayed where it was: the click was the switch's, not a pan.
+    assert_eq!(s.block("enable").center(), at);
+}
+
+#[test]
+fn a_push_button_on_the_diagram_is_on_while_held() {
+    let mut s = Screen::new();
+    s.view.load(example("latch"), "latch");
+    s.view.session.set_running(true);
+    s.wait(0.1);
+    let at = s.block("start").center();
+    s.frame(vec![Event::PointerMoved(at)]);
+    s.button(at, true);
+    s.wait(0.1);
+    assert_eq!(s.input("start"), b(true), "held");
+    assert_eq!(s.output("motor"), b(true), "the motor seals in");
+    s.button(at, false);
+    s.wait(0.1);
+    assert_eq!(s.input("start"), b(false), "released");
+    assert_eq!(s.output("motor"), b(true), "and stays latched");
+}
+
+#[test]
+fn a_number_on_the_diagram_drags_sideways() {
+    let mut s = Screen::new();
+    let Value::Int(before) = s.input("period") else {
+        panic!("TIME is an Int")
+    };
+    let at = s.block("period").center();
+    s.frame(vec![Event::PointerMoved(at)]);
+    s.button(at, true);
+    for dx in 1..=8 {
+        #[allow(clippy::cast_precision_loss)]
+        s.frame(vec![Event::PointerMoved(at + Vec2::new(dx as f32 * 10.0, 0.0))]);
+    }
+    s.button(at + Vec2::new(80.0, 0.0), false);
+    let Value::Int(after) = s.input("period") else {
+        panic!("TIME is an Int")
+    };
+    assert!(after > before, "{before} -> {after}");
+}
+
+#[test]
+fn the_side_panel_keeps_only_the_inputs_the_diagram_does_not_read() {
+    let mut s = Screen::new();
+    s.view.load(
+        "PROGRAM p
+VAR_INPUT
+  used : BOOL;
+  unused : BOOL;
+END_VAR
+VAR_OUTPUT
+  q : BOOL;
+END_VAR
+q := used;
+END_PROGRAM
+",
+        "two inputs",
+    );
+    s.wait(0.1);
+    let on_map = s.view.on_map();
+    assert!(
+        on_map.iter().any(|p| p.eq_ignore_ascii_case("used")),
+        "{on_map:?}"
+    );
+    assert!(
+        !on_map.iter().any(|p| p.eq_ignore_ascii_case("unused")),
+        "{on_map:?}"
+    );
+}
+
 #[test]
 fn the_playground_opens_running_the_first_example() {
     let mut s = Screen::new();
