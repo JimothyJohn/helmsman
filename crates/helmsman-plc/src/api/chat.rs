@@ -707,6 +707,19 @@ impl Chat {
                 "error",
                 &json!({ "kind": "conversation_too_long", "message": "this conversation is too long to send; start a new chat", "retryable": false }),
             ),
+            Stop::DocumentRefused { reason, dropped } => {
+                let what = if *dropped == 1 {
+                    "the attached PDF"
+                } else {
+                    "the attached PDFs"
+                };
+                send(
+                    "error",
+                    &json!({ "kind": "document_refused", "message": format!(
+                        "the relay refused {what} ({reason}); it was left out of this chat and the model has not seen it. The chat goes on: send your next message, or attach a copy that is not encrypted and has at most 100 pages"
+                    ), "retryable": false }),
+                );
+            }
             Stop::Relay(e) => {
                 send(
                     "error",
