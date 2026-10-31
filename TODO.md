@@ -281,6 +281,7 @@
   difficulty: low
   depends: dev-merge-safety
   id: dev-merge-safety-2
+  notes: built 2026-10-31 as a draft PR (.github/workflows/update-branches.yml + scripts/dev-strict.sh). Yours, in order: create a fine-grained PAT (this repo only; Contents and Pull requests read/write), `gh secret set UPDATE_BRANCH_TOKEN -R JimothyJohn/helmsman`, merge the draft PR, then `! scripts/dev-strict.sh`. Tick this when strict is on.
   answer: strict + auto update-branch workflow (recommended)
 
 - [x] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
