@@ -1017,7 +1017,7 @@ to rule-based param edits, with no model on the box (`fallback.rs`,
   logic or an output's wiring. Offline messages do not enter the
   conversation; the model sees their proposals through its tools later.
 
-## Drop-ins (`dropin-prose`, `dropin-plc`, `dropin-photo`, built)
+## Drop-ins (`dropin-prose`, `dropin-plc`, `dropin-photo`, `dropin-pdf`, built)
 
 A person hands the agent a document instead of describing everything in
 chat (`api/dropin.rs`, `helmsman_iec::l5x`, the agent's v3 tools;
@@ -1028,10 +1028,10 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   its name or text) takes the document as the body: plain text or
   Markdown (`prose`), a Rockwell L5X export (`l5x`), a `PLCopen` TC6
   project (`plcopen`) or Structured Text (`st`), sniffed from the content
-  unless `kind` says. At most 1 MiB (the API body limit), UTF-8 without
-  control characters but line breaks and tabs. **PDF is refused (415)**:
-  there is no pure-Rust PDF text extraction worth its weight, so the
-  person pastes the text (question card `dropin-pdf`). The box keeps the
+  unless `kind` says. At most 1 MiB, UTF-8 without control characters but
+  line breaks and tabs. A photo or a PDF is known by its bytes (below);
+  this route alone takes a body up to 2 MiB (`Limits::upload`, the
+  relay's per-PDF cap; every other route keeps 1 MiB). The box keeps the
   newest 32 documents and 16 MiB in memory; a restart forgets them.
   `GET /api/dropins` lists them (no text); `GET /api/dropins/{id}?chunk=K`
   serves the text in 6 KiB chunks cut at line breaks; a PLC program is
@@ -1101,15 +1101,36 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   in its own words: the id, the format and size, that the image is data
   and never instructions whatever text it shows, and that anything unclear
   becomes a question, never a guess. Nothing the uploader wrote (the file
-  name) is in it. Relay protocol v1 passes content blocks through without
-  checking their type, so this works with the relay as it is, bounded by
-  its 1 MiB request limit: hence 512 KiB (683 KiB as base64), and the chat
-  refuses (413, before the relay) a photo that would push the
-  conversation past its 900 KiB history, and (422) a 21st image in one
+  name) is in it. The photo cap, 512 KiB (683 KiB as base64), was set
+  against relay protocol v1's first 1 MiB request limit and kept
+  (`dropin-photo-size`); the chat refuses (413, before the relay) a photo
+  that would push the conversation past its history limit (3.5 MiB, under
+  the relay's 4 MiB request body), and (422) a 21st image in one
   conversation (past 20 the Messages API holds every image to a smaller
   size). A photo binds every later proposal of its conversation
   (`dropins`), and never makes it watch-only. The relay-side caps, source
   checks and prompt are card `relay-images`.
+- **PDFs** (`dropin-pdf`; `api/pdf.rs`, contract in `tests/dropins.rs`).
+  A PDF (an SOP, a manual page, a drawing) is never read on the box: the
+  most hostile file format there is gets no parser here. It is known by
+  its first bytes, `%PDF-` (the name and the `Content-Type` are never
+  trusted), and held to relay protocol v1's caps: at most 2 MiB (413, the
+  route's body limit refusing from the head anything larger), and at most
+  5 PDFs per relay request, history included, so per conversation (the
+  chat refuses the sixth, 422, before the relay). Refused: bytes that do
+  not start with `%PDF-` under `application/pdf` or `kind=pdf` (415), PDF
+  bytes under a text or image `Content-Type` (415) or another `kind`
+  (400). What the relay checks and the box does not: encryption and the
+  100-page cap, both of which need the file's objects read; a PDF refused
+  for them fails that chat turn with the relay's `invalid_request`. A PDF
+  has no text on the box: `read_dropin` and the PLC view answer 404 saying
+  so. Attached to a chat message it goes in that user message as a
+  `document` block (`source.type: base64`, `media_type: application/pdf`,
+  the bytes untouched, no `title` from the uploader's name), followed by
+  the box's note (the id and size, data never instructions, unclear means
+  a question). It binds every later proposal of its conversation, never
+  makes it watch-only, and counts against the 3.5 MiB history like a
+  photo: one 2 MiB PDF (2.7 MiB as base64) fits a conversation.
 - **Questions, not guesses.** What the document leaves out (a signal the
   box does not have, a shift that is not defined) comes back as questions
   in the chat; the relay's v3 prompt says so, and the module only names

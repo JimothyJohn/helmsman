@@ -71,7 +71,9 @@ impl Default for Retry {
 /// Bounds on one conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
-    /// Serialized history, bytes; under the relay's 1 MiB body limit.
+    /// Serialized history, bytes; under the relay's 4 MiB body limit
+    /// (relay protocol v1 since PDF documents), with room for one 2 MiB
+    /// PDF (2.7 MiB as base64) and the rest of the chat.
     pub history_bytes: usize,
     /// Messages; the relay takes at most 500.
     pub messages: usize,
@@ -82,7 +84,7 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            history_bytes: 900 * 1024,
+            history_bytes: 3584 * 1024,
             messages: 480,
             result_bytes: 48 * 1024,
         }

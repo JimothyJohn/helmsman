@@ -38,7 +38,7 @@
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
 //! GET  /api/screen                        the floor screen's layout (with --screen FILE; see [`crate::screen`])
 //! GET  /api/site                          this box and the boxes it heard on the LAN (with --site NAME; see [`crate::site`])
-//! POST /api/dropins?name=N&kind=K         token: a document or a photo for the agent, stored in memory (see [`dropin`], [`photo`])
+//! POST /api/dropins?name=N&kind=K         token: a document, a photo or a PDF for the agent, stored in memory (see [`dropin`], [`photo`], [`pdf`])
 //! GET  /api/dropins                       the drop-ins held
 //! GET  /api/dropins/{id}?chunk=K          one chunk of a drop-in's text
 //! GET  /api/dropins/{id}/plc?view=V...    a PLC drop-in's inventory (overview, tags, routine, names)
@@ -93,6 +93,7 @@ pub mod http;
 pub mod live;
 pub mod login;
 pub mod mcp;
+pub mod pdf;
 pub mod photo;
 pub mod proposal;
 pub mod render;
@@ -1473,7 +1474,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/events", false, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
-            e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB) or a photo (PNG, JPEG, WebP; at most 512 KiB, 8000 px a side): stored in memory, 201 with its id"),
+            e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB), a photo (PNG, JPEG, WebP; at most 512 KiB, 8000 px a side) or a PDF (at most 2 MiB, passed to the model unread): stored in memory, 201 with its id"),
             e("GET", "/api/dropins", false, "the drop-ins held: id, name, kind, size, chunks"),
             e("GET", "/api/dropins/{id}?chunk=K", false, "one chunk of a drop-in's text"),
             e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", false, "a PLC drop-in's inventory: overview, tags, routine, names"),
