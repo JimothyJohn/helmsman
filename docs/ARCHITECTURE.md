@@ -69,7 +69,7 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
-| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header (the open project, Save, Deploy, Sign in; Proposals, Upload and Download behind its ⋯ menu) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
+| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header (the open project, Save, Deploy, Sign in; Proposals, Upload and Download behind its ⋯ menu) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
@@ -189,7 +189,12 @@ scan; the scheduler bounds how often.
   is a link error: the driver closes the connection (releasing exclusive
   ownership) and reopens it with the outputs it held from the first packet.
   A point past an assembly or a value its format can't hold is a point
-  error. Behind helmsman-io's `enip` feature, which `box` turns on.
+  error. Behind helmsman-io's `enip` feature, which helmsman-plc's `enip-io`
+  feature turns on; the box build (`box`) leaves it out until the E1213
+  bench passes (TODO.md `enip-in-box`), so a box map naming `enip-io` is
+  refused as "not in this build" (`helmsman_plc::drivers::not_in_build`)
+  and the E1213 runs over Modbus/TCP meanwhile. `scripts/lint.sh` lints
+  helmsman-plc with `enip-io` so it keeps compiling.
   `enip_sim` (feature `enip-sim`) is a simulated Moxa ioLogik E1213 for
   the harness: `conformance -- --sim-e1213`. The device:
   `docs/devices/moxa-iologik-e1213.md`.
@@ -518,7 +523,9 @@ load.
 A box-driven full-screen andon view, an output kind next to GPIO lights
 (`screen.rs` in `helmsman-plc`; contract in `tests/screen.rs`). The
 box side is built; the canvas's Andon mode that drew it was removed with
-docs/UI.md's clean-up, and the Monitor (its step 3) replaces it.
+docs/UI.md's clean-up, and the Monitor (its step 3, below) replaced it.
+The Monitor builds its tiles from the program, not from this layout
+(card `andon-layout-after-monitor`).
 
 - **Tiles are outputs.** `out line1_state int screen line1` in the I/O map
   (`Binding::Screen`): an `out` signal no device takes, so no link polls or
@@ -545,7 +552,7 @@ docs/UI.md's clean-up, and the Monitor (its step 3) replaces it.
 - **Served read-only** at `GET /api/screen`: the file byte for byte (the
   canvas parses it with the same parser), the parsed layout and the palette.
 - **The view** was the served canvas at `/?andon` (now it opens the
-  Editor): a header (title, and the shift from the calendar), big tiles,
+  Monitor): a header (title, and the shift from the calendar), big tiles,
   fed by `/api/events`. Its rule carries to the Monitor: **stale data
   never shows as a colour** (the stream fails, or no event for 3 s, and
   every tile shows "NO DATA" on black under a red banner). The code is in
@@ -1703,6 +1710,19 @@ agent as ST; nothing here writes ST back).
   unreachable). Pan, zoom, drag blocks; a click on a block sends the ST
   editor ("ST", beside the diagram; read-only on a box) to its line;
   tapping an output shows its highlighted path.
+- **Monitor** (docs/UI.md; `monitor.rs`, contract in `monitor_tests.rs`
+  against the real API scanning `programs/line.st`). One `Feed` trait
+  over both sources: a box's `BoxState` (module status from
+  `/api/events`; while the Monitor shows, every module's traced scans on
+  one stream, `GET /api/traces/events`, which holds one of the box's
+  eight stream slots however many modules run, each module's source
+  fetched and lowered against its trace) and the simulation's session.
+  Tiles come from the source's declarations (`Shape`: the PROGRAM's
+  outputs, then each user FB instance, nested) and the scan's values by
+  path. A program whose newest scan is over 3 s old, or every program
+  while the values stream is down or silent for 3 s, is drawn grey with
+  the age: never a colour. It sends only GETs and stream opens (tested);
+  leaving it closes the all-modules stream and reopens the Editor's.
 
 ## Explain mode (`explain-mode`, built)
 
@@ -1904,9 +1924,9 @@ both). No box, no server: everything runs in the page (`playground.rs`,
 | module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink and the OPC UA server (read-only, SecurityPolicy None; `sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
 | driver ↔ box | strings and values | the `Driver` contract; a WASM driver (`helmsman-driver/v1`) imports only its socket to its own device's endpoint (it never names a host or port; no files, clocks or WASI, refused at load otherwise), and only in `read` and `write`, under fuel and memory limits and a per-call deadline; a trap fails that point (`Error::Driver`), not the link or the runtime | built (`wasm-driver`; `helmsman-io/tests/wasm_driver.rs`, `helmsman-plc/tests/wasm_driver.rs`); a map can't name one yet (`wasm-driver-map`) |
-| box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` exist only with the feature; the Class 1 scanner (its own `scanner` feature, in the box build for the adapters the box masters, below) sends only `Forward_Open`/`Forward_Close` to an Assembly path. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
+| box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` exist only with the feature; the Class 1 scanner (its own `scanner` feature, out of the box build for now, below) sends only `Forward_Open`/`Forward_Close` to an Assembly path. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
-| box ↔ mastered EtherNet/IP adapters | Class 1 I/O: the device's output assembly, its input assembly | `helmsman-proto`'s `scanner` feature, which the box build has: it sends `Forward_Open` and `Forward_Close` to an Assembly-class path and nothing else (no other service, no `Session::request`); only devices in the I/O map, through `enip-io`, with the map's one-writer rule and approval tier. `tests/box_build.rs` checks `scanner` is in and `unrestricted` still out. | built (`enip-io`); real-device check `e1213-bench` |
+| box ↔ mastered EtherNet/IP adapters | Class 1 I/O: the device's output assembly, its input assembly | `helmsman-proto`'s `scanner` feature, which only helmsman-plc's `enip-io` feature turns on (out of the box build until `e1213-bench` passes): it sends `Forward_Open` and `Forward_Close` to an Assembly-class path and nothing else (no other service, no `Session::request`); only devices in the I/O map, through `enip-io`, with the map's one-writer rule and approval tier. `tests/box_build.rs` checks the box build has neither `scanner` nor `unrestricted`, and that `enip-io` brings `scanner` alone. | built (`enip-io`, out of the box); real-device check `e1213-bench` |
 | box ↔ LAN peers | site beacons in, this box's beacon out | strict parse, source-address rule, intake and refresh limits, a bounded list, no takeover of a live id; the box only lists peers and never connects to one; `/api/site` is the only cross-origin read | built (`site-view`) |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) and `local-accounts` (per-person logins that replace the PINs once an accounts file exists; the audit names the person) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
@@ -1927,8 +1947,9 @@ prompt. The agent never touches the Rust core.
   `apply`. `box-mcp` (built, above) wraps the same routes;
   `local-accounts` (built, above) replaces role PINs with people, keeping
   the role check and the gate.
-- `canvas-web` (built, above) → the Monitor (docs/UI.md, step 3): a
-  screen of the same app, on the same streams; it replaces the andon view.
+- `canvas-web` (built, above) → the Monitor (built, above; docs/UI.md,
+  step 3): a screen of the same app, on the same values stream plus one
+  stream of every module's traces; it replaced the andon view.
 - `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
   compile, check, swap, then `Store::commit` with the approver; the box API
   serves `list`, `diff` and `rollback`. `bundle-format` (built) exports a

@@ -43,6 +43,9 @@ pub struct BoxView {
     pub wants_sim: bool,
     /// The diagram's pick last frame (a new one sends the ST there).
     last_pick: Option<Pick>,
+    /// The scope (an instance prefix, `""` for the program) to open once
+    /// the diagram is there: the Monitor's "Open diagram".
+    pub open_at: Option<String>,
     #[cfg(target_arch = "wasm32")]
     driver: crate::web::Driver,
     #[cfg(target_arch = "wasm32")]
@@ -85,6 +88,7 @@ impl BoxView {
             generation: 0,
             wants_sim: false,
             last_pick: None,
+            open_at: None,
             #[cfg(target_arch = "wasm32")]
             driver: crate::web::Driver::default(),
             #[cfg(target_arch = "wasm32")]
@@ -147,6 +151,12 @@ impl BoxView {
             None => self.view = None,
             Some(_) => {}
         }
+        if let (Some(v), Some(p)) = (&mut self.view, &self.open_at) {
+            if let Some(k) = v.scopes.iter().position(|s| s.prefix == *p) {
+                v.open(k);
+            }
+            self.open_at = None;
+        }
         if let Some(at) = self.state.next_retry() {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).clamp(0.05, 60.0)));
         }
@@ -204,12 +214,17 @@ impl BoxView {
         (Vec::new(), Vec::new())
     }
 
-    /// One frame of the Editor.
-    pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let ctx = ui.ctx().clone();
+    /// Takes in what arrived and carries out what is due, with nothing
+    /// drawn (the Monitor draws from the same state).
+    pub fn tick(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
         let (msgs, answers) = self.inbox();
-        self.step_all(&ctx, msgs, answers, now);
+        self.step_all(ctx, msgs, answers, now);
+    }
+
+    /// One frame of the Editor.
+    pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        self.tick(&ui.ctx().clone());
         editor::show(ui, chrome, self);
     }
 

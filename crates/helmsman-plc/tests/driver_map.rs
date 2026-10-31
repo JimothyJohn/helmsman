@@ -638,6 +638,32 @@ fn map_validation_refuses_a_driver_name_that_is_not_approved() {
     assert!(Layout::build_with(Some(&bad), None, &approved).is_err());
 }
 
+/// The box build leaves `enip-io` out (TODO.md `enip-in-box`): a proposed
+/// or reloaded map that names it is refused as not in this build, used by
+/// a signal or not, while the same device over Modbus/TCP passes.
+#[cfg(not(feature = "enip-io"))]
+#[test]
+fn map_validation_refuses_enip_io_as_not_in_this_build() {
+    for text in [
+        "device rio enip-io 127.0.0.1:44818\nin start bool rio di:0\nout lamp bool box do:0\n",
+        "device rio enip-io 127.0.0.1:44818\nout lamp bool box do:0\n",
+    ] {
+        for drivers in [
+            Drivers::new(),
+            Drivers::from([("enip-io".to_string(), MODBUS.to_vec())]),
+        ] {
+            let e = Layout::build_with(Some(text), None, &drivers).unwrap_err();
+            assert!(
+                e.iter()
+                    .any(|l| l.contains("device rio:") && l.contains("enip-io: not in this build")),
+                "{text}: {e:?}"
+            );
+        }
+    }
+    let modbus = "device rio modbus-tcp 127.0.0.1:502\nin start bool rio di:0\nout lamp bool box do:0\n";
+    Layout::build_with(Some(modbus), None, &Drivers::new()).unwrap();
+}
+
 // ---- store, policy ------------------------------------------------------------
 
 #[test]

@@ -432,6 +432,32 @@ fn a_trace_is_requested_then_served_and_streamed() {
     assert!(t["stmts"].as_array().is_some_and(|a| !a.is_empty()), "{t}");
 }
 
+#[test]
+fn every_modules_traces_come_on_one_stream() {
+    let b = Bench::new();
+    let mut s = TcpStream::connect(b.addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    s.write_all(b"GET /api/traces/events HTTP/1.1\r\n\r\n").unwrap();
+    let mut head = [0u8; 50];
+    s.read_exact(&mut head).unwrap();
+    assert_eq!(&head, b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n");
+    // The same events a module's own stream carries, newer each time.
+    let first = read_event(&mut s, "trace");
+    assert_eq!(first["module"], "conveyor");
+    assert_eq!(first["values"]["LAMP"], true, "{first}");
+    assert!(
+        first["stmts"].as_array().is_some_and(|a| !a.is_empty()),
+        "{first}"
+    );
+    let next = read_event(&mut s, "trace");
+    assert!(
+        next["scan"].as_u64() > first["scan"].as_u64(),
+        "a scan is sent once: {} then {}",
+        first["scan"],
+        next["scan"]
+    );
+}
+
 /// Reads an event stream until an event called `name` has arrived whole;
 /// returns its data.
 fn read_event(s: &mut TcpStream, name: &str) -> Json {

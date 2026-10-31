@@ -281,6 +281,7 @@
   difficulty: low
   depends: dev-merge-safety
   id: dev-merge-safety-2
+  notes: built 2026-10-31 as a draft PR (.github/workflows/update-branches.yml + scripts/dev-strict.sh). Yours, in order: create a fine-grained PAT (this repo only; Contents and Pull requests read/write), `gh secret set UPDATE_BRANCH_TOKEN -R JimothyJohn/helmsman`, merge the draft PR, then `! scripts/dev-strict.sh`. Tick this when strict is on.
   answer: strict + auto update-branch workflow (recommended)
 
 - [x] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
@@ -611,7 +612,7 @@
   id: e1213-eds-license
   answer: keep it out, check by hash (recommended, built)
 
-- [ ] **The Class 1 scanner in the box build: OK?** Until now the box build could only *read* from CIP devices (`helmsman-proto` without `unrestricted`). Mastering the E1213 over EtherNet/IP means driving its outputs, so feat/moxa-e1213 split the scanner into its own feature, `scanner`, and the box's `box` feature turns it on through helmsman-io's `enip` (the `enip-io` driver). What it can send: `Forward_Open` and `Forward_Close` to an Assembly-class path, nothing else; `Session::request` (any service) still needs `unrestricted`, which `tests/box_build.rs` still forbids (and now also checks `scanner` is in). Outputs reach a device only through a map signal, so the one-writer rule and the approval tier for map changes apply, as for Modbus coils. The other way: keep `enip-io` out of the box until a later card, and use the E1213 over Modbus/TCP meanwhile (its map is in `docs/devices/moxa-iologik-e1213-modbus.map`).
+- [x] **The Class 1 scanner in the box build: OK?** Until now the box build could only *read* from CIP devices (`helmsman-proto` without `unrestricted`). Mastering the E1213 over EtherNet/IP means driving its outputs, so feat/moxa-e1213 split the scanner into its own feature, `scanner`, and the box's `box` feature turns it on through helmsman-io's `enip` (the `enip-io` driver). What it can send: `Forward_Open` and `Forward_Close` to an Assembly-class path, nothing else; `Session::request` (any service) still needs `unrestricted`, which `tests/box_build.rs` still forbids (and now also checks `scanner` is in). Outputs reach a device only through a map signal, so the one-writer rule and the approval tier for map changes apply, as for Modbus coils. The other way: keep `enip-io` out of the box until a later card, and use the E1213 over Modbus/TCP meanwhile (its map is in `docs/devices/moxa-iologik-e1213-modbus.map`).
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -952,6 +953,26 @@
   difficulty: med
   id: l5x-scope
   answer: ladder subset to ST, refuse the rest (recommended)
+
+- [ ] **Monitor lamps: is TRUE always green?** docs/UI.md says a tile's outputs are green or red. Built (reversible, one function in `monitor.rs`): a BOOL output TRUE is a green lamp, FALSE a red one, whatever its name, so the line's `alarm` and a motor's `tripped` light green when they are on. Options: keep it literal; invert by name (alarm, fault, trip, jam, error, estop light red when TRUE, off otherwise); or let the source say per output (a `(* monitor: alarm *)` comment on the declaration).
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what colour an alarm-like output shows on the Monitor
+  options: literal TRUE green, FALSE red (built) | invert alarm-like names (recommended) | a per-output comment in the source
+  est: 1h
+  difficulty: low
+  id: monitor-lamp-polarity
+
+- [ ] **Monitor "scan time": the period, or the measured scan?** The box publishes each module's scan period (`scan_ms`) and its counts (scans, overruns, held), not how long a scan took: the runtime has no clock (it also runs in the canvas's wasm build). Built: the status tile shows "scan 2 ms · N scans" (the period). Measuring would time `tick_with` in the box binary's loop (behind `box`) and publish last/max per module in `/api/events`.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what the Monitor's status tile reports as scan time
+  options: the period and counts (built) | measured last/max scan time, box-side (recommended for a wall TV) | both
+  est: 3h
+  difficulty: low
+  id: monitor-scan-time
 
 - [ ] **What does a click on an input's block force on a box?** The Editor (UI.md step 2) makes an input signal's block a control for an engineer: a BOOL flips (forced to the opposite of what it reads), a number drags (forced on every change). Built (reversible): only inputs that are signals of the map or calendar are clickable, since the diagram's reads are variables; a `%IX` address force has no click and is made through `POST /api/forces` only. A click on a forced BOOL forces it the other way; nothing but the banner releases.
   asked: 2026-10-31
@@ -1446,6 +1467,14 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: enip-in-box
   id: enip-io-port
   notes: built on fix/enip-io-port: `helmsman_proto::endpoint` (one socket, routed by connection ID, each route bound to its peer IP, a drop-oldest queue per owner), `Adapter::start_on`, `helmsman_io::open_on`; `helmsman-plc --io-port` moves the whole endpoint, and off 2222 the links' Forward_Open names the port in a T->O socket-address item. docs/ARCHITECTURE.md "One Class 1 I/O port per box". Whether the real E1213 honours that item is for `e1213-bench` off 2222.
+
+- [ ] **Put `enip-io` back in the box build** — `enip-in-box` took the EtherNet/IP Class 1 scanner out of the box until the bench passes: helmsman-plc's `box` no longer turns on helmsman-io's `enip` (so no helmsman-proto `scanner`), a box map naming `enip-io` is refused as "not in this build" (`helmsman_plc::drivers::not_in_build`), and the E1213 runs over Modbus/TCP (`docs/devices/moxa-iologik-e1213-modbus.map`). The code stays behind helmsman-plc's `enip-io` feature, which `scripts/lint.sh` lints. Once `e1213-bench` passes: add `enip-io` to `box` (or `default`), flip the `scanner` assertion in `tests/box_build.rs` back, drop the `cfg(not(feature = "enip-io"))` refusal tests in `tests/bin.rs` and `tests/driver_map.rs` (the shared-port test in `tests/bin.rs` then runs again), and restore docs/ARCHITECTURE.md's trust-boundary row.
+  needs: `e1213-bench` green on the real E1213
+  result: a box masters EtherNet/IP remote I/O again, from the default build
+  est: 1h
+  difficulty: low
+  depends: e1213-bench
+  id: enip-in-box-again
 
 ## Roadmap M2: floor-ready core
 
