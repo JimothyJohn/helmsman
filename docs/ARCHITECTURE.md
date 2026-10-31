@@ -61,8 +61,8 @@ Three directions of traffic, three different rules:
 
 | crate | owns | status |
 | --- | --- | --- |
-| `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Logix tag reads (`logix`: Read Tag, Multiple Service Packet, Read Tag Fragmented, Symbol object browse, backplane routing), Class 1 scanner, EDS reader (`eds`). Byte codecs plus socket-level session, discovery and scanner. Any-service requests sit behind the `unrestricted` feature, the scanner behind `scanner` (which `unrestricted` implies). | built |
-| `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O; layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
+| `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Logix tag reads (`logix`: Read Tag, Multiple Service Packet, Read Tag Fragmented, Symbol object browse, backplane routing), Class 1 scanner, the box's one Class 1 I/O endpoint (`endpoint`), EDS reader (`eds`). Byte codecs plus socket-level session, discovery and scanner. Any-service requests sit behind the `unrestricted` feature, the scanner behind `scanner` (which `unrestricted` implies). | built |
+| `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
@@ -194,8 +194,41 @@ scan; the scheduler bounds how often.
   `enip_sim` (feature `enip-sim`) is a simulated Moxa ioLogik E1213 for
   the harness: `conformance -- --sim-e1213`. The device:
   `docs/devices/moxa-iologik-e1213.md`.
-  Not yet: the box's own adapter and `enip-io` both want UDP 2222 on one
-  host (`enip-io-port`).
+  On a box the links share the box's one Class 1 I/O port with its adapter
+  (next item); a device line's `io_port=N` gives a link a socket of its own.
+
+- **One Class 1 I/O port per box** (`helmsman_proto::endpoint`). The box
+  is a target (scanners send its adapter O->T) and an originator (`enip-io`
+  devices send it T->O), and both arrive at UDP 2222. `helmsman-plc` binds
+  one `IoEndpoint` on `--bind:--io-port` (2222 by default) and hands it to
+  the adapter (`Adapter::start_on`) and to every `enip-io` link
+  (`helmsman_io::open_on`). One receive thread routes each datagram by the
+  connection ID in its address item. Every ID that arrives is one the box
+  chose: for point-to-point the consumer of each direction picks it (the
+  target picks O->T, `OpENer` `cipconnectionobject.c`
+  `ConnectionObjectGeneralConfiguration`; the originator's T->O ID from the
+  `Forward_Open` is what the target produces with, `cipioconnection.c`
+  `SendConnectedData`), so the endpoint allocates them for both sides
+  (`Router::allocate`; the adapter's `Device` takes its O->T IDs from it)
+  and an ID has one owner. Each route is bound to its peer's IP (the
+  scanner that opened the adapter connection, the device a link opened), as
+  `OpENer`'s `HandleReceivedConnectedData` checks the sender. Unknown IDs,
+  the wrong sender and datagrams that don't parse are dropped and counted
+  (`IoEndpoint::stats`), never delivered. Each owner (the adapter, each
+  link's connection) has its own queue of `QUEUE_LEN` (256); full, it drops
+  its oldest datagram (cyclic I/O wants the newest), and one owner's flood
+  never touches another's queue. Sends go out through the same socket, so
+  devices and scanners see the one port. Closing or timing out a
+  connection drops its route. `--io-port` moves the whole endpoint; off
+  2222 the links' `Forward_Open` carries a T->O socket-address item (CPF
+  0x8001) naming the port, which targets honour (`OpENer`
+  `OpenProducingPointToPointConnection` takes its port, else 2222), and the
+  box's adapter honours one from its scanners the same way. A real scanner
+  that sends to 2222 without one still needs the box on 2222. Tests:
+  `helmsman-proto/tests/endpoint.rs` (the router as a property, spoofing,
+  overflow), `helmsman-adapter/tests/shared_io.rs` (adapter and originator
+  flowing together, churn, a junk flood), `helmsman-plc/tests/bin.rs`
+  (`the_adapter_and_an_enip_io_link_share_one_io_port`).
 
 - **`logix`**: `logix-tag`, read-only signals from an observed Logix
   controller by tag name (`in temp real plc Program:Main.Temp@real`); the

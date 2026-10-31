@@ -89,6 +89,30 @@ paraphrase and cite page numbers instead.
   List_Identity scanning, no Forward_Open *sending*.
 - **How to cite:** `OpENer v2.3+master (EIPStackGroup/OpENer, commit <sha>),
   source/src/cip/<file>.c`.
+- **Class 1 connection IDs and ports** (commit `0e1ab7ee`, the one
+  `docker/opener/Dockerfile` pins; read 2026-10-31 for `enip-io-port`,
+  `helmsman_proto::endpoint`):
+  - `cipconnectionobject.c` `ConnectionObjectInitializeFromMessage`: the
+    `Forward_Open`'s O->T ID becomes the consumed ID, its T->O ID the
+    produced ID; `ConnectionObjectGeneralConfiguration` then, for a
+    point-to-point O->T, replaces the consumed ID with `GetConnectionId()`
+    ("if we have a point to point connection for the O to T direction the
+    target shall choose the connection ID"). So each direction's ID is
+    the consumer's choice: O->T the target's, T->O (point-to-point) the
+    originator's.
+  - `cipconnectionmanager.c` `HandleReceivedConnectedData` /
+    `GetConnectedObject`: an incoming I/O datagram is matched to an
+    established connection by its consumed connection ID, then dropped
+    unless the sender's IP equals the connection's `originator_address`
+    (the IP only, not the port).
+  - `cipioconnection.c` `SendConnectedData`: the sequenced address item
+    carries `cip_produced_connection_id`.
+    `OpenProducingPointToPointConnection`: T->O goes to the session peer's
+    IP at `kOpenerEipIoUdpPort` (2222), "the default port to be used if
+    no port information is part of the forward open request", or at the
+    `sin_port` of a T->O socket-address item (0x8001) in it.
+    `OpenConsumingPointToPointConnection` stores the peer IP "for packet
+    scanning".
 
 ### CIPster — liftoff-sr/CIPster
 
@@ -136,6 +160,13 @@ paraphrase and cite page numbers instead.
   partner in tests (it's trivially buildable). Do not wrap it or bind to it;
   you'd inherit 42 issues and a C++20 toolchain requirement.
 - **How to cite:** `EIPScanner 1.3.0 (nimbuscontrols/EIPScanner), examples/<file>.cpp`.
+- **`src/ConnectionManager.cpp`** (master, read 2026-10-31 for
+  `enip-io-port`): `forwardOpen` sends no socket-address item (an empty
+  additional-items list), so targets use their default T->O port; it
+  reads an O->T socket-address item from the reply (address 0.0.0.0
+  meaning the session's host). Received T->O is dispatched by connection
+  ID through `_connectionMap`, keyed by the reply's T->O ID, with no check
+  of the sender's address ("TODO: Check TypeIDs and sequence").
 
 ### TI AM64x Industrial Communications SDK — EtherNet/IP Adapter quickstart
 

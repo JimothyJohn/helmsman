@@ -26,6 +26,7 @@ use std::time::{Duration, Instant};
 
 use helmsman_proto::cip::{self, GeneralStatus, Request, Response, class, service};
 use helmsman_proto::codec::{DecodeError, Reader, Writer};
+use helmsman_proto::endpoint::IdAllocator;
 use helmsman_proto::io::{
     self, Class1Body, ConnectionType, ElectronicKey, ForwardClose, ForwardOpen, ForwardOpenReply, IoPacket,
     ProductionTrigger, class1_size, extended,
@@ -356,6 +357,20 @@ pub struct Device {
     pub stats: Stats,
     /// Simulator knob: misbehave on purpose (see [`Misbehave`]).
     misbehave: Option<Misbehave>,
+    /// Where O->T connection IDs come from when the I/O socket is shared
+    /// (`helmsman_proto::endpoint`); `None`: `connection_id_base` upward.
+    ids: Option<IdAllocator>,
+}
+
+/// One T->O datagram due, from [`Device::due`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Production {
+    /// Where it goes: the IP the connection was opened from.
+    pub originator: Ipv4Addr,
+    /// The connection's O->T ID (unique on this device; the T->O ID in the
+    /// datagram is the originator's and two originators may pick the same).
+    pub o_to_t_id: u32,
+    pub datagram: Vec<u8>,
 }
 
 /// Ways a simulated target misbehaves on purpose, for testing scanners.
@@ -402,6 +417,7 @@ impl Device {
             logix: None,
             misbehave: None,
             stats: Stats::default(),
+            ids: None,
         }
     }
 
@@ -412,6 +428,12 @@ impl Device {
     pub fn with_logix(mut self, controller: crate::logix::Controller) -> Self {
         self.logix = Some(controller);
         self
+    }
+
+    /// Take O->T connection IDs from a shared I/O endpoint, so they never
+    /// collide with the IDs the box chose as an originator.
+    pub fn set_id_allocator(&mut self, ids: IdAllocator) {
+        self.ids = Some(ids);
     }
 
     #[must_use]
@@ -788,8 +810,13 @@ impl Device {
             }
         }
 
-        let o_to_t_id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
+        let o_to_t_id = if let Some(id) = self.ids.as_ref().and_then(IdAllocator::allocate) {
+            id
+        } else {
+            let id = self.next_id;
+            self.next_id = self.next_id.wrapping_add(1);
+            id
+        };
         let o_to_t_rpi = Duration::from_micros(u64::from(fo.o_to_t_rpi_us));
         let t_to_o_rpi = Duration::from_micros(u64::from(fo.t_to_o_rpi_us));
         let timeout = o_to_t_rpi * (1u32 << (u32::from(fo.timeout_multiplier.min(7)) + 2));
@@ -941,6 +968,14 @@ impl Device {
 
     /// T->O datagrams due at `now`, addressed to each originator's IP.
     pub fn due_productions(&mut self, now: Instant) -> Vec<(Ipv4Addr, Vec<u8>)> {
+        self.due(now)
+            .into_iter()
+            .map(|p| (p.originator, p.datagram))
+            .collect()
+    }
+
+    /// [`Self::due_productions`] with the connection each one is for.
+    pub fn due(&mut self, now: Instant) -> Vec<Production> {
         let mut out = Vec::new();
         let header = self.cfg.produced_run_idle;
         for c in &mut self.connections {
@@ -980,7 +1015,11 @@ impl Device {
             }
             .encode();
             c.packets_out += 1;
-            out.push((c.originator, pkt));
+            out.push(Production {
+                originator: c.originator,
+                o_to_t_id: c.o_to_t_id,
+                datagram: pkt,
+            });
         }
         out
     }

@@ -20,4 +20,5 @@ pub mod logix;
 pub mod server;
 
 pub use device::{ConnectionPoint, Device, DeviceConfig, Identity, Misbehave, PointKind};
+pub use helmsman_proto::endpoint::IoEndpoint;
 pub use server::{Adapter, ServerConfig};

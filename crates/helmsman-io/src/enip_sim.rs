@@ -105,6 +105,13 @@ impl E1213Sim {
         .collect()
     }
 
+    /// Where each open connection's O->T datagrams come from: the
+    /// scanner's I/O socket.
+    #[must_use]
+    pub fn o_to_t_sources(&self) -> Vec<std::net::SocketAddrV4> {
+        self.adapter.o_to_t_sources()
+    }
+
     /// The device, to look at its connections or poke its assemblies.
     #[must_use]
     pub fn device(&self) -> Arc<Mutex<Device>> {

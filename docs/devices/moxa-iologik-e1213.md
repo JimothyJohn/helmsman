@@ -96,6 +96,16 @@ an E1213 that doesn't answer `ListIdentity` or refuses every
 `Forward_Open` may simply not be activated. Ports: 44818/tcp explicit,
 2222/udp implicit (Appendix D).
 
+What the box does about 2222: its `enip-io` link and its own adapter share
+the box's one I/O socket (docs/ARCHITECTURE.md, "One Class 1 I/O port per
+box"), so on 2222 the E1213 sends T->O where it would anyway and the
+`Forward_Open` carries no socket-address item, as EIPScanner's doesn't
+(`src/ConnectionManager.cpp`). If the box's `--io-port` moves it off 2222
+the `Forward_Open` adds a T->O socket-address item (CPF 0x8001) naming the
+port; `OpENer` honours one (`cipioconnection.c`
+`OpenProducingPointToPointConnection`), whether the E1213 does is
+unverified until `e1213-bench` runs off 2222.
+
 ## What the bytes mean (manual Appendix B, pp. B-1–B-2)
 
 Input assembly 101, 51 bytes:

@@ -19,7 +19,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::cpf;
 use crate::encap;
+use crate::endpoint::{IoEndpoint, Owner};
+use crate::identity::SocketAddress;
 use crate::io::{
     Class1Body, ConnectionPath, ElectronicKey, ForwardClose, ForwardCloseReply, ForwardOpen,
     ForwardOpenReply, IoPacket, NetworkParams, Priority, Refused, Transport, class1_size, close_result,
@@ -209,6 +212,9 @@ pub struct IoConnection {
     stop: Arc<AtomicBool>,
     producer: Option<JoinHandle<()>>,
     consumer: Option<JoinHandle<()>>,
+    /// Holds this connection's route on the shared endpoint
+    /// ([`Self::open_on`]); `None` on a socket of its own.
+    _route: Option<Arc<Owner>>,
 }
 
 impl fmt::Debug for IoConnection {
@@ -253,24 +259,91 @@ impl IoConnection {
         config: IoConfig,
         output: &[u8],
     ) -> Result<Self, Error> {
-        if output.len() != usize::from(config.output_len) {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "initial output is {} bytes, connection carries {}",
-                    output.len(),
-                    config.output_len
-                ),
-            )));
-        }
+        check_output(&config, output)?;
+        let rx = socket.try_clone()?;
+        rx.set_read_timeout(Some(config.rpi.max(Duration::from_millis(10))))?;
+        let tx = socket.try_clone()?;
         let serial = next_serial();
         let t_to_o_id = u32::from(serial) << 16 | u32::from(config.originator_vendor_id);
         let open = config.forward_open(serial, t_to_o_id);
-        let resp = send(session, &open.to_request())?;
+        let resp = send(session, &open.to_request(), &[])?;
         let reply = open_result(&resp)
             .map_err(session::Error::Decode)?
             .map_err(Error::Refused)?;
+        let mut buf = vec![0u8; 65535];
+        let recv: Recv = Box::new(move |_wait| {
+            let (n, from) = rx.recv_from(&mut buf).ok()?;
+            Some((buf[..n].to_vec(), from))
+        });
+        let send_to: Send = Box::new(move |bytes, to| tx.send_to(bytes, to).map(|_| ()));
+        Self::start(config, open, reply, target, output, send_to, recv, None)
+    }
 
+    /// As [`Self::open_with_output`], on the box's shared I/O endpoint
+    /// instead of a socket of its own: the T->O connection ID comes from
+    /// the endpoint (so it never collides with the box adapter's), is
+    /// routed to this connection from `target`'s IP only, and O->T leaves
+    /// from the endpoint's port. If the endpoint is not on 2222 the
+    /// `Forward_Open` carries a T->O socket-address item naming its port
+    /// (`OpENer` `cipioconnection.c` `OpenProducingPointToPointConnection`
+    /// sends T->O there; without one it uses 2222).
+    ///
+    /// # Errors
+    /// As [`Self::open_with_output`]; `Io(AddrInUse)` if the device
+    /// replies with a T->O connection ID the endpoint already routes.
+    pub fn open_on(
+        session: &mut Session,
+        endpoint: &IoEndpoint,
+        target: SocketAddrV4,
+        config: IoConfig,
+        output: &[u8],
+    ) -> Result<Self, Error> {
+        check_output(&config, output)?;
+        let owner = Arc::new(endpoint.owner());
+        let serial = next_serial();
+        let t_to_o_id = owner.allocate();
+        owner.register(t_to_o_id, *target.ip())?;
+        let open = config.forward_open(serial, t_to_o_id);
+        let port = endpoint.local_addr().port();
+        let sockaddr = t_to_o_sockaddr(port);
+        let item = [cpf::Item {
+            type_id: cpf::item::SOCKADDR_T_TO_O,
+            data: &sockaddr,
+        }];
+        let extra: &[cpf::Item<'_>] = if port == encap::IO_PORT { &[] } else { &item };
+        let resp = send(session, &open.to_request(), extra)?;
+        let reply = open_result(&resp)
+            .map_err(session::Error::Decode)?
+            .map_err(Error::Refused)?;
+        if reply.t_to_o_connection_id != t_to_o_id {
+            // The device chose the T->O ID itself; route that one instead.
+            let _ = owner.unregister(t_to_o_id);
+            if let Err(e) = owner.register(reply.t_to_o_connection_id, *target.ip()) {
+                let _ = closer_of(&open).send(session);
+                return Err(Error::Io(e));
+            }
+        }
+        let rx = Arc::clone(&owner);
+        let recv: Recv = Box::new(move |wait| {
+            rx.recv_timeout(wait)
+                .map(|d| (d.bytes, std::net::SocketAddr::V4(d.from)))
+        });
+        let tx = Arc::clone(&owner);
+        let send_to: Send = Box::new(move |bytes, to| tx.send_to(bytes, to).map(|_| ()));
+        Self::start(config, open, reply, target, output, send_to, recv, Some(owner))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start(
+        config: IoConfig,
+        open: ForwardOpen,
+        reply: ForwardOpenReply,
+        target: SocketAddrV4,
+        output: &[u8],
+        send_to: Send,
+        recv: Recv,
+        owner: Option<Arc<Owner>>,
+    ) -> Result<Self, Error> {
         let shared = Arc::new(Shared {
             output: Mutex::new(output.to_vec()),
             run: AtomicBool::new(true),
@@ -282,7 +355,7 @@ impl IoConnection {
         let stop = Arc::new(AtomicBool::new(false));
 
         let producer = spawn_producer(
-            socket.try_clone()?,
+            send_to,
             target,
             reply.o_to_t_connection_id,
             config.rpi,
@@ -291,7 +364,7 @@ impl IoConnection {
             Arc::clone(&stop),
         )?;
         let consumer = spawn_consumer(
-            socket.try_clone()?,
+            recv,
             reply.t_to_o_connection_id,
             config.rpi,
             config.t_to_o_run_idle,
@@ -308,6 +381,7 @@ impl IoConnection {
             stop,
             producer: Some(producer),
             consumer: Some(consumer),
+            _route: owner,
         })
     }
 
@@ -432,14 +506,7 @@ impl IoConnection {
     /// connection meanwhile answers "not found", which is fine.
     #[must_use]
     pub fn closer(&self) -> Closer {
-        Closer(ForwardClose {
-            priority_time_tick: self.open.priority_time_tick,
-            timeout_ticks: self.open.timeout_ticks,
-            connection_serial: self.open.connection_serial,
-            originator_vendor_id: self.open.originator_vendor_id,
-            originator_serial: self.open.originator_serial,
-            path: self.open.path.clone(),
-        })
+        closer_of(&self.open)
     }
 }
 
@@ -453,22 +520,67 @@ impl Closer {
     /// # Errors
     /// A refused close (unknown connection) or session error.
     pub fn send(&self, session: &mut Session) -> Result<ForwardCloseReply, Error> {
-        let resp = send(session, &self.0.to_request())?;
+        let resp = send(session, &self.0.to_request(), &[])?;
         close_result(&resp)
             .map_err(session::Error::Decode)?
             .map_err(Error::Refused)
     }
 }
 
+fn check_output(config: &IoConfig, output: &[u8]) -> Result<(), Error> {
+    if output.len() == usize::from(config.output_len) {
+        return Ok(());
+    }
+    Err(Error::Io(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "initial output is {} bytes, connection carries {}",
+            output.len(),
+            config.output_len
+        ),
+    )))
+}
+
+/// A T->O socket-address item body: `AF_INET`, `port`, address 0 (the
+/// target sends to the IP the session came from; `OpENer` reads only the
+/// port, `cipioconnection.c` `OpenProducingPointToPointConnection`).
+fn t_to_o_sockaddr(port: u16) -> Vec<u8> {
+    let mut w = crate::codec::Writer::with_capacity(SocketAddress::LEN);
+    SocketAddress {
+        family: SocketAddress::AF_INET,
+        port,
+        addr: Ipv4Addr::UNSPECIFIED,
+    }
+    .encode(&mut w);
+    w.into_inner()
+}
+
+fn closer_of(open: &ForwardOpen) -> Closer {
+    Closer(ForwardClose {
+        priority_time_tick: open.priority_time_tick,
+        timeout_ticks: open.timeout_ticks,
+        connection_serial: open.connection_serial,
+        originator_vendor_id: open.originator_vendor_id,
+        originator_serial: open.originator_serial,
+        path: open.path.clone(),
+    })
+}
+
+/// Sends one datagram to an address.
+type Send = Box<dyn FnMut(&[u8], SocketAddrV4) -> io::Result<()> + std::marker::Send>;
+/// Waits up to the given time for the next datagram.
+type Recv = Box<dyn FnMut(Duration) -> Option<(Vec<u8>, std::net::SocketAddr)> + std::marker::Send>;
+
 /// The only requests this module puts on the wire: `Forward_Open` and
 /// `Forward_Close`, built above with an Assembly-class path.
 fn send(
     session: &mut Session,
     request: &crate::cip::Request,
+    extra: &[cpf::Item<'_>],
 ) -> Result<crate::cip::Response, session::Error> {
     let mut mr = crate::codec::Writer::default();
     request.encode(&mut mr);
-    session.exchange(&mr.into_inner())
+    session.exchange_with(&mr.into_inner(), extra)
 }
 
 impl Drop for IoConnection {
@@ -478,7 +590,7 @@ impl Drop for IoConnection {
 }
 
 fn spawn_producer(
-    socket: UdpSocket,
+    mut send_to: Send,
     target: SocketAddrV4,
     id: u32,
     rpi: Duration,
@@ -514,7 +626,7 @@ fn spawn_producer(
                     body: &body,
                 }
                 .encode();
-                if socket.send_to(&pkt, target).is_ok() {
+                if send_to(&pkt, target).is_ok() {
                     shared.packets_out.fetch_add(1, Ordering::Relaxed);
                 }
                 thread::sleep(rpi);
@@ -523,23 +635,22 @@ fn spawn_producer(
 }
 
 fn spawn_consumer(
-    socket: UdpSocket,
+    mut recv: Recv,
     id: u32,
     rpi: Duration,
     header: bool,
     shared: Arc<Shared>,
     stop: Arc<AtomicBool>,
 ) -> io::Result<JoinHandle<()>> {
-    socket.set_read_timeout(Some(rpi.max(Duration::from_millis(10))))?;
+    let wait = rpi.max(Duration::from_millis(10));
     thread::Builder::new()
         .name("helmsman-consumer".into())
         .spawn(move || {
-            let mut buf = vec![0u8; 65535];
             while !stop.load(Ordering::Relaxed) {
-                let Ok((n, _from)) = socket.recv_from(&mut buf) else {
+                let Some((bytes, _from)) = recv(wait) else {
                     continue;
                 };
-                let parsed = IoPacket::decode(&buf[..n])
+                let parsed = IoPacket::decode(&bytes)
                     .ok()
                     .filter(|p| p.connection_id == id)
                     .and_then(|p| {

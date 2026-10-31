@@ -9,13 +9,14 @@
 
 use std::fs;
 use std::io::BufRead as _;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use helmsman_adapter::IoEndpoint;
 use helmsman_adapter::device::lock_ref;
 use helmsman_adapter::{Adapter, Device, DeviceConfig, ServerConfig};
 use helmsman_agent::relay;
@@ -118,7 +119,8 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
   --serial HEX         identity serial number (default 1)
   --bind IP            CIP interface address (default 0.0.0.0)
   --encap-port N       TCP/UDP encapsulation port (default 44818, 0 = any)
-  --io-port N          local UDP I/O port (default 2222, 0 = any)
+  --io-port N          the box's Class 1 I/O port, shared by its adapter and
+                       its enip-io links (default 2222, 0 = any)
   --peer-io-port N     scanner's UDP I/O port (default 2222)
 Process image: %I = assembly 150 (32 B from the scanner), %Q = assembly
 100 (32 B to the scanner); a module's windows default to all 32 B of each,
@@ -781,11 +783,13 @@ fn plan_io(
     table: &Arc<Mutex<SignalTable>>,
     devices: &Arc<Devices>,
     channels: helmsman_plc::link::Channels,
+    io: &IoEndpoint,
 ) -> Result<(LinkSet, Plan), String> {
     let devices = Arc::clone(devices);
+    let io = io.clone();
     let set = LinkSet::new(
         Arc::clone(table),
-        Arc::new(helmsman_io::open),
+        Arc::new(move |d: &helmsman_io::Device| helmsman_io::open_on(d, Some(&io))),
         channels,
         Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
             match err {
@@ -1225,11 +1229,16 @@ fn run(o: &Opts) -> Result<(), String> {
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
     let devices = Arc::new(Devices::new(Vec::new()));
+    // One Class 1 I/O socket for the box: its adapter's connections and its
+    // enip-io links' are routed by connection ID (helmsman_proto::endpoint).
+    let io = IoEndpoint::bind(SocketAddrV4::new(o.server.bind, o.server.io_port))
+        .map_err(|e| format!("CIP sockets: UDP {} (Class 1 I/O): {e}", o.server.io_port))?;
     let (link_set, io_plan) = plan_io(
         map.as_ref(),
         &table,
         &devices,
         box_channels(o.gpio_chip.as_deref())?,
+        &io,
     )?;
     for name in io_plan.starts() {
         devices.add(name);
@@ -1237,7 +1246,8 @@ fn run(o: &Opts) -> Result<(), String> {
     browsers(map.as_ref(), &devices);
     let link_set = Arc::new(Mutex::new(link_set));
     let live = Arc::new(Live::default());
-    let adapter = Adapter::start(Device::new(cfg), &o.server).map_err(|e| format!("CIP sockets: {e}"))?;
+    let adapter =
+        Adapter::start_on(Device::new(cfg), &o.server, &io).map_err(|e| format!("CIP sockets: {e}"))?;
     announce(
         &adapter,
         &specs,

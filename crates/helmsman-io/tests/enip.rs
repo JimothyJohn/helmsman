@@ -683,8 +683,55 @@ fn the_e1213_example_maps_validate() {
     assert_eq!(names(&enip.map), names(&modbus.map));
 }
 
-/// Someone else holds the UDP port the inputs arrive on (on a box: its
-/// own adapter on 2222): a link error that says which port and why.
+/// On a box: two `enip-io` links and the box's own adapter consume on one
+/// I/O endpoint, with no `io_port` anywhere; each link's O->T leaves from
+/// the shared port and its T->O comes back to it.
+#[test]
+fn links_and_the_adapter_share_the_boxs_one_io_port() {
+    use helmsman_adapter::{Adapter, Device as Target, ServerConfig};
+    use helmsman_proto::endpoint::IoEndpoint;
+    use std::net::{Ipv4Addr, SocketAddrV4};
+
+    let ep = IoEndpoint::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let _adapter = Adapter::start_on(
+        Target::new(DeviceConfig::opener_sample()),
+        &ServerConfig {
+            bind: Ipv4Addr::LOCALHOST,
+            encap_port: 0,
+            ..ServerConfig::default()
+        },
+        &ep,
+    )
+    .unwrap();
+    let sims = [E1213Sim::start().unwrap(), E1213Sim::start().unwrap()];
+    let mut links: Vec<Box<dyn Driver + Send>> = sims
+        .iter()
+        .map(|s| {
+            let mut params = s.params();
+            params.remove("io_port");
+            let device = Device {
+                id: "rio".into(),
+                driver: "enip-io".into(),
+                endpoint: s.endpoint(),
+                params,
+            };
+            helmsman_io::open_on(&device, Some(&ep)).unwrap()
+        })
+        .collect();
+    for (i, (s, d)) in sims.iter().zip(links.iter_mut()).enumerate() {
+        s.force_di(9, i == 1);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while d.read(&["di:9"]).ok() != Some(vec![Value::Bool(i == 1)]) {
+            assert!(Instant::now() < deadline, "link {i} never read its DI-09");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(s.o_to_t_sources(), vec![ep.local_addr()], "link {i}");
+    }
+    assert_eq!(ep.stats().wrong_peer, 0);
+}
+
+/// Someone else holds the UDP port the inputs arrive on: a link error
+/// that says which port and why.
 #[test]
 fn a_taken_io_port_is_a_link_error_that_says_so() {
     let s = E1213Sim::start().unwrap();
