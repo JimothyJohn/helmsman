@@ -309,8 +309,11 @@ impl IoMap {
                 let (device, point, driver) = target;
                 let mut clash = None;
                 for key in output_keys(&driver, &point) {
-                    if let Some(other) = writers.insert((device.clone(), key), &s.name) {
-                        clash = clash.or(Some(other));
+                    match writers.entry((device.clone(), key)) {
+                        std::collections::btree_map::Entry::Occupied(o) => clash = clash.or(Some(*o.get())),
+                        std::collections::btree_map::Entry::Vacant(v) => {
+                            v.insert(&s.name);
+                        }
                     }
                 }
                 if let Some(other) = clash {

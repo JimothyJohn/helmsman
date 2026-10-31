@@ -42,6 +42,9 @@ enip-sim = ["enip", "dep:helmsman-adapter"]
 helmsman-adapter = { path = "../helmsman-adapter" }
 # Tests and examples run the enip-io driver against the simulated E1213.
 helmsman-io = { path = ".", features = ["enip-sim"] }
+# SHA-256 of the vendor EDS files tests/eds_corpus.rs reads (already in
+# the lock through helmsman-plc).
+sha2 = { version = "0.11.1", default-features = false }
 proptest = "1.12"
 
 [lints]

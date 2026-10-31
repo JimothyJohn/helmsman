@@ -33,6 +33,9 @@ wasmi = { version = "2.0.0", default-features = false, features = ["std", "valid
 # The box build itself never enables `unrestricted`; its tests play scanner.
 helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
+# The simulated Moxa ioLogik E1213 (tests/enip_link.rs); `enip` itself is
+# in `box`.
+helmsman-io = { path = "../helmsman-io", features = ["enip-sim"] }
 # The WASM tier's test modules are hand-written WAT, assembled in the test.
 wat = { version = "1.262.0", default-features = false }
 # An independent OPC UA client to test the box's server against

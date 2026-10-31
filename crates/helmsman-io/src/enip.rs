@@ -50,8 +50,8 @@
 //! | `out:OFFSET:FMT` | int / real, writable | the same in the output assembly |
 //!
 //! A point past the end of its assembly, a channel the profile doesn't
-//! have, or a value its format can't hold is a point error; an input-only
-//! connection has no writable points.
+//! have, a value its format can't hold, or an output point on an
+//! input-only connection is a point error.
 //!
 //! # Errors
 //!
@@ -103,7 +103,7 @@ impl Format {
     }
 
     #[must_use]
-    pub const fn len(self) -> usize {
+    pub const fn width(self) -> usize {
         match self {
             Self::U8 | Self::I8 => 1,
             Self::U16 | Self::I16 => 2,
@@ -277,11 +277,11 @@ impl Point {
     }
 
     /// The byte range it occupies, and for a bit, which bit.
-    fn bytes(&self) -> (usize, usize, Option<u8>) {
+    fn bytes(self) -> (usize, usize, Option<u8>) {
         match self.kind {
             Kind::Channel(n) => (usize::from(n / 8), 1, Some(u8::try_from(n % 8).unwrap_or(0))),
             Kind::Bit { byte, bit } => (usize::from(byte), 1, Some(bit)),
-            Kind::Word { offset, format } => (usize::from(offset), format.len(), None),
+            Kind::Word { offset, format } => (usize::from(offset), format.width(), None),
         }
     }
 
@@ -300,38 +300,52 @@ impl Point {
         }
     }
 
-    fn get(&self, data: &[u8]) -> Value {
-        match self.bytes() {
-            (byte, _, Some(bit)) => Value::Bool(data[byte] & (1 << bit) != 0),
-            (start, len, None) => match self.kind {
-                Kind::Word { format, .. } => format.decode(&data[start..start + len]),
-                _ => Value::Bool(false),
-            },
-        }
+    /// The value at this point in an assembly's data; `None` if the data
+    /// is too short for it.
+    #[must_use]
+    pub fn read_from(&self, data: &[u8]) -> Option<Value> {
+        let (start, len, bit) = self.bytes();
+        let b = data.get(start..start + len)?;
+        Some(match (bit, self.kind) {
+            (Some(bit), _) => Value::Bool(b[0] & (1 << bit) != 0),
+            (None, Kind::Word { format, .. }) => format.decode(b),
+            (None, _) => return None,
+        })
     }
 
-    fn set(&self, data: &mut [u8], v: Value) -> Result<(), Error> {
-        match (self.bytes(), v) {
-            ((byte, _, Some(bit)), Value::Bool(on)) => {
+    /// Puts `v` at this point in an assembly's data.
+    ///
+    /// # Errors
+    /// `Type` for a value of another type, `Point` for one the format
+    /// can't hold or data too short for the point; `data` is unchanged.
+    pub fn write_into(&self, data: &mut [u8], v: Value) -> Result<(), Error> {
+        if v.ty() != self.ty() {
+            return Err(Error::Type {
+                want: self.ty(),
+                got: v.ty(),
+            });
+        }
+        let (start, len, bit) = self.bytes();
+        let n = data.len();
+        let short = || Error::Point(format!("past the end of {n} bytes"));
+        match (bit, self.kind, v) {
+            (Some(bit), _, Value::Bool(on)) => {
+                let byte = data.get_mut(start).ok_or_else(short)?;
                 if on {
-                    data[byte] |= 1 << bit;
+                    *byte |= 1 << bit;
                 } else {
-                    data[byte] &= !(1 << bit);
+                    *byte &= !(1 << bit);
                 }
                 Ok(())
             }
-            ((start, len, None), v) => match self.kind {
-                Kind::Word { format, .. } => {
-                    let b = format.encode(v).map_err(Error::Point)?;
-                    data[start..start + len].copy_from_slice(&b);
-                    Ok(())
-                }
-                _ => Err(Error::Point("unreachable point shape".into())),
-            },
-            (_, v) => Err(Error::Type {
-                want: self.ty(),
-                got: v.ty(),
-            }),
+            (None, Kind::Word { format, .. }, v) => {
+                let b = format.encode(v).map_err(Error::Point)?;
+                data.get_mut(start..start + len)
+                    .ok_or_else(short)?
+                    .copy_from_slice(&b);
+                Ok(())
+            }
+            _ => Err(short()),
         }
     }
 }
@@ -481,6 +495,11 @@ impl Spec {
     /// # Errors
     /// A point error naming the limit.
     pub fn check(&self, addr: &str, p: &Point) -> Result<PointInfo, Error> {
+        if p.side == Side::Out && self.connection == Connection::InputOnly {
+            return Err(Error::Point(format!(
+                "{addr}: an input-only connection has no outputs"
+            )));
+        }
         let (len, what) = match p.side {
             Side::In => (self.t_to_o_len, "input"),
             Side::Out => (self.o_to_t_len, "output"),
@@ -555,6 +574,7 @@ impl Params {
     /// # Errors
     /// An unknown key, a value that doesn't parse, or not exactly one of
     /// `profile`, `eds` and the explicit `config`/`o2t`/`t2o`.
+    #[allow(clippy::too_many_lines)] // one param after another
     pub fn parse(params: &BTreeMap<String, String>) -> Result<Self, Error> {
         let bad = |k: &str, why: &str| Error::Address(format!("{k}: {why}"));
         if let Some(k) = params.keys().find(|k| !KNOWN.contains(&k.as_str())) {
@@ -639,7 +659,7 @@ impl Params {
         } else {
             None
         };
-        if params.contains_key("run_idle") && !(explicit > 0) {
+        if params.contains_key("run_idle") && explicit == 0 {
             return Err(bad("run_idle", "only with explicit config= o2t= t2o="));
         }
         let rpi = int("rpi_ms", 3_600_000)?.map(Duration::from_millis);
@@ -980,13 +1000,16 @@ mod driver {
                 .map(|a| self.point(a).map(|(p, _)| p))
                 .collect::<Result<_, _>>()?;
             let input = self.input()?;
-            Ok(points
+            points
                 .iter()
-                .map(|p| match p.side {
-                    Side::In => p.get(&input),
-                    Side::Out => p.get(&self.out),
+                .map(|p| {
+                    match p.side {
+                        Side::In => p.read_from(&input),
+                        Side::Out => p.read_from(&self.out),
+                    }
+                    .ok_or_else(|| Error::Point("past the end of its assembly".into()))
                 })
-                .collect())
+                .collect()
         }
 
         fn write(&mut self, addr: &str, value: Value) -> Result<(), Error> {
@@ -1001,7 +1024,7 @@ mod driver {
                 });
             }
             let mut out = self.out.clone();
-            p.set(&mut out, value)?;
+            p.write_into(&mut out, value)?;
             // A live link takes it from the next packet.
             self.input()?;
             let link = self.link.as_ref().expect("live after input()");

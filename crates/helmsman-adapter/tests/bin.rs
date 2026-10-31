@@ -20,9 +20,14 @@ impl Drop for Running {
 
 /// Starts the binary on free loopback ports and reads back where it bound.
 fn spawn(peer_io_port: u16) -> (Running, SocketAddrV4, SocketAddrV4) {
+    spawn_with(peer_io_port, &[])
+}
+
+fn spawn_with(peer_io_port: u16, extra: &[&str]) -> (Running, SocketAddrV4, SocketAddrV4) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_helmsman-adapter"))
         .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
         .args(["--peer-io-port", &peer_io_port.to_string()])
+        .args(extra)
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -58,9 +63,43 @@ fn output_comes_back_as_input() {
     s.close();
 }
 
+/// `--profile moxa-e1213`: the E1213's assemblies, DO-00..03 wired to
+/// DI-00..03, DO status in byte 50; and its RPI floor.
+#[test]
+fn the_e1213_profile_loops_its_outputs_back() {
+    let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let (_bin, encap, io) = spawn_with(0, &["--profile", "moxa-e1213"]);
+    let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
+
+    let fast = IoConfig::exclusive_owner(100, 102, 101, 1, 51, Duration::from_millis(10));
+    let refused = IoConnection::open(&mut s, &scanner_sock, io, fast).unwrap_err();
+    assert!(refused.to_string().contains("0x0111"), "{refused}");
+
+    let cfg = IoConfig::exclusive_owner(100, 102, 101, 1, 51, Duration::from_millis(100));
+    let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
+    conn.set_output(&[0b1000_0101]).unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let got = conn.wait_for_input(Duration::from_secs(1)).expect("no input");
+        assert_eq!(got.data.len(), 51);
+        // DI-00 and DI-02 from the wires (DO-07 is not wired), DO status.
+        if got.data[0] == 0b101 && got.data[50] == 0b1000_0101 {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "input {:?}", got.data);
+    }
+    conn.close(&mut s).unwrap();
+    s.close();
+}
+
 #[test]
 fn bad_flags_exit_2_with_usage() {
-    for args in [&["--encap-port", "x"][..], &["--bogus", "1"], &["--bind"]] {
+    for args in [
+        &["--encap-port", "x"][..],
+        &["--bogus", "1"],
+        &["--bind"],
+        &["--profile", "acme"],
+    ] {
         let out = Command::new(env!("CARGO_BIN_EXE_helmsman-adapter"))
             .args(args)
             .output()

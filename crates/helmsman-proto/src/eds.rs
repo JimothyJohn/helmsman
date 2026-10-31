@@ -712,7 +712,7 @@ impl Assembly {
             return bad("members come in bits, reference pairs".into());
         }
         let mut members = Vec::with_capacity(rest.len() / 2);
-        for pair in rest.chunks_exact(2) {
+        for pair in rest.as_chunks::<2>().0 {
             let bits = match &pair[0] {
                 Field::Empty => None,
                 x => match x.uint().and_then(|v| u32::try_from(v).ok()) {
@@ -732,8 +732,7 @@ impl Assembly {
             let total: u64 = members.iter().filter_map(|m| m.bits).map(u64::from).sum();
             if total != u64::from(size) * 8 {
                 return bad(format!(
-                    "members add up to {total} bits, the size says {} bytes",
-                    size
+                    "members add up to {total} bits, the size says {size} bytes"
                 ));
             }
         }

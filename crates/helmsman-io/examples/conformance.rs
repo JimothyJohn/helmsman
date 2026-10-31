@@ -273,7 +273,11 @@ fn enip_conformance(
             return ExitCode::from(2);
         }
     };
-    let what = if running.is_some() { "the simulated E1213" } else { endpoint.as_str() };
+    let what = if running.is_some() {
+        "the simulated E1213"
+    } else {
+        endpoint.as_str()
+    };
     let c = driver.connection();
     println!(
         "enip-io conformance against {what}: config {} O->T {} ({} B) T->O {} ({} B)",

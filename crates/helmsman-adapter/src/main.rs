@@ -79,8 +79,7 @@ fn run(cfg: &ServerConfig, profile: Profile) -> Result<(), String> {
         Profile::Opener => DeviceConfig::opener_sample(),
         Profile::MoxaE1213 => DeviceConfig::moxa_e1213(),
     };
-    let adapter = Adapter::start(Device::new(device), cfg)
-        .map_err(|e| format!("CIP sockets: {e}"))?;
+    let adapter = Adapter::start(Device::new(device), cfg).map_err(|e| format!("CIP sockets: {e}"))?;
     eprintln!(
         "helmsman-adapter: CIP on {} (I/O {})",
         adapter.encap_addr(),
