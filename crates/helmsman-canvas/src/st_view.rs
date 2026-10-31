@@ -189,7 +189,26 @@ pub struct Viewer {
     pub steady: Steady,
     /// The source lines the explanation is about (drawn highlighted).
     pub highlight: Vec<u32>,
+    /// What the drag in progress holds.
+    grab: Option<Grab>,
+    /// How far the operator moved each block from where the layout put it,
+    /// per POU. The view's own; the program is untouched.
+    moved: Vec<Vec<(NodeId, Vec2)>>,
 }
+
+/// What a drag on the diagram holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Grab {
+    Node(NodeId),
+    Region(RegionId),
+    Pan,
+}
+
+/// Where the operator moved blocks, by what they are rather than their
+/// ids, so it survives an edit that renumbers them: (POU, the block's
+/// label and source text, which of the same, offset).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Arrangement(Vec<(String, String, String, usize, Vec2)>);
 
 /// The smallest thing a finger can hit, in points.
 pub const TAP: f32 = 44.0;
@@ -256,6 +275,7 @@ impl Viewer {
             });
         }
         let cams = vec![Cam::default(); scopes.len()];
+        let moved = vec![Vec::new(); module.pous.len()];
         Self {
             src: src.to_string(),
             module,
@@ -267,8 +287,102 @@ impl Viewer {
             words: Words::default(),
             steady: Steady::default(),
             highlight: Vec::new(),
+            grab: None,
+            moved,
         }
         .with_words()
+    }
+
+    /// Moves block `n` of the shown POU by `by` (diagram units).
+    pub fn move_node(&mut self, n: NodeId, by: Vec2) {
+        let pou = self.scopes[self.scope].pou;
+        self.shift(pou, &[n], by);
+        helmsman_diagram::layout::refit(&mut self.module.pous[pou].diagram);
+    }
+
+    /// Moves everything in region `r` of the shown POU by `by`.
+    pub fn move_region(&mut self, r: RegionId, by: Vec2) {
+        let pou = self.scopes[self.scope].pou;
+        let members = helmsman_diagram::layout::inside(&self.module.pous[pou].diagram, r);
+        self.shift(pou, &members, by);
+        helmsman_diagram::layout::refit(&mut self.module.pous[pou].diagram);
+    }
+
+    fn shift(&mut self, pou: usize, nodes: &[NodeId], by: Vec2) {
+        let d = &mut self.module.pous[pou].diagram;
+        for &n in nodes {
+            let Some(node) = d.nodes.get_mut(n.0 as usize) else {
+                continue;
+            };
+            node.rect.x += by.x;
+            node.rect.y += by.y;
+            match self.moved[pou].iter_mut().find(|(m, _)| *m == n) {
+                Some((_, total)) => *total += by,
+                None => self.moved[pou].push((n, by)),
+            }
+        }
+    }
+
+    /// Whether the operator moved anything.
+    #[must_use]
+    pub fn rearranged(&self) -> bool {
+        self.moved.iter().any(|m| m.iter().any(|(_, v)| *v != Vec2::ZERO))
+    }
+
+    /// Every block back where the layout put it.
+    pub fn reset_arrangement(&mut self) {
+        for pou in 0..self.moved.len() {
+            for (n, v) in std::mem::take(&mut self.moved[pou]) {
+                if let Some(node) = self.module.pous[pou].diagram.nodes.get_mut(n.0 as usize) {
+                    node.rect.x -= v.x;
+                    node.rect.y -= v.y;
+                }
+            }
+            helmsman_diagram::layout::refit(&mut self.module.pous[pou].diagram);
+        }
+    }
+
+    /// Where the operator moved blocks, to carry onto the next version of
+    /// the program.
+    #[must_use]
+    pub fn arrangement(&self) -> Arrangement {
+        let mut out = Vec::new();
+        for (pou, moved) in self.module.pous.iter().zip(&self.moved) {
+            for &(n, v) in moved {
+                let Some(node) = pou.diagram.nodes.get(n.0 as usize) else {
+                    continue;
+                };
+                let k = pou.diagram.nodes[..n.0 as usize]
+                    .iter()
+                    .filter(|m| m.label == node.label && m.text == node.text)
+                    .count();
+                out.push((pou.name.clone(), node.label.clone(), node.text.clone(), k, v));
+            }
+        }
+        Arrangement(out)
+    }
+
+    /// Moves the blocks `a` names, wherever they still are; the rest stay
+    /// where the layout puts them.
+    pub fn arrange(&mut self, a: &Arrangement) {
+        for (name, label, text, k, v) in &a.0 {
+            let Some(pou) = self.module.pous.iter().position(|p| &p.name == name) else {
+                continue;
+            };
+            let n = self.module.pous[pou]
+                .diagram
+                .nodes
+                .iter()
+                .filter(|m| &m.label == label && &m.text == text)
+                .nth(*k)
+                .map(|m| m.id);
+            if let Some(n) = n {
+                self.shift(pou, &[n], *v);
+            }
+        }
+        for p in &mut self.module.pous {
+            helmsman_diagram::layout::refit(&mut p.diagram);
+        }
     }
 
     fn with_words(mut self) -> Self {
@@ -506,8 +620,9 @@ impl Viewer {
     }
 
     /// Each variable the program reads, with where its block sits on
-    /// screen after the last [`Self::canvas`] (the playground puts the
-    /// inputs' controls there). Empty while a block instance is shown.
+    /// screen after the last [`Self::canvas`], under its header (the
+    /// playground puts the inputs' controls there; the header stays free
+    /// to drag the block by). Empty while a block instance is shown.
     #[must_use]
     pub fn reads_on_screen(&self) -> Vec<(String, Rect)> {
         if !self.scopes[self.scope].prefix.is_empty() {
@@ -518,10 +633,29 @@ impl Viewer {
             .nodes
             .iter()
             .filter_map(|n| match &n.kind {
-                NodeKind::Read { path } => Some((path.clone(), cam.rect(&n.rect))),
+                NodeKind::Read { path } => {
+                    let mut r = cam.rect(&n.rect);
+                    r.min.y += HEADER * cam.zoom;
+                    Some((path.clone(), r))
+                }
                 _ => None,
             })
             .collect()
+    }
+
+    /// What a drag starting at screen point `p` takes hold of.
+    fn grab_at(&self, cam: Cam, p: Pos2) -> Grab {
+        let (x, y) = cam.to_world(p);
+        let d = self.diagram();
+        if let Some(n) = d.node_at(x, y) {
+            return Grab::Node(n);
+        }
+        // The innermost region whose label strip is under the pointer.
+        d.regions
+            .iter()
+            .filter(|r| r.rect.contains(x, y) && y <= r.rect.y + LABEL_H)
+            .min_by(|a, b| (a.rect.w * a.rect.h).total_cmp(&(b.rect.w * b.rect.h)))
+            .map_or(Grab::Pan, |r| Grab::Region(r.id))
     }
 
     /// The diagram, panned, zoomed and clickable, with `scan` on it.
@@ -547,13 +681,28 @@ impl Viewer {
                 cam.offset += scroll;
             }
         }
-        if response.dragged() {
-            cam.offset += response.drag_delta();
-        }
         if response.double_clicked() {
             cam.fitted = false;
         }
         let cam = *cam;
+        // A drag that starts on a block moves it, on a region's label moves
+        // the region with all it holds, anywhere else pans.
+        if response.drag_started() {
+            let at = ui.ctx().input(|i| i.pointer.press_origin());
+            self.grab = Some(at.map_or(Grab::Pan, |p| self.grab_at(cam, p)));
+        }
+        if response.dragged() {
+            let by = response.drag_delta();
+            match self.grab {
+                Some(Grab::Node(n)) => self.move_node(n, by / cam.zoom),
+                Some(Grab::Region(r)) => self.move_region(r, by / cam.zoom),
+                _ => self.cams[self.scope].offset += by,
+            }
+        }
+        if response.drag_stopped() {
+            self.grab = None;
+        }
+        let cam = self.cams[self.scope];
         if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
         {

@@ -125,6 +125,16 @@ proptest! {
                 prop_assert!(w.from < w.to, "producers come first: {:?}", w);
             }
             check(d);
+            // A refit of an untouched layout keeps every box where it was.
+            let mut r = d.clone();
+            helmsman_diagram::layout::refit(&mut r);
+            for (a, b) in d.regions.iter().zip(&r.regions) {
+                let same = (a.rect.x - b.rect.x).abs() < 0.01
+                    && (a.rect.y - b.rect.y).abs() < 0.01
+                    && (a.rect.w - b.rect.w).abs() < 0.01
+                    && (a.rect.h - b.rect.h).abs() < 0.01;
+                prop_assert!(same, "{} {:?} -> {:?}\n{}", a.label, a.rect, b.rect, src);
+            }
         }
         p.set_budget(5_000);
         let mut img = Image::new(SIZES);
