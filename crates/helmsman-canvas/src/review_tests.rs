@@ -23,6 +23,7 @@ use helmsman_plc::api::{
     Publisher, Shared, swap, token,
 };
 use helmsman_plc::manifest::ModuleDir;
+use helmsman_plc::policy::account::{Accounts, Logins};
 use helmsman_plc::policy::pin::{Gate, Pins};
 use helmsman_plc::policy::{FLOOR, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
@@ -206,7 +207,14 @@ impl Bench {
         let t0 = Instant::now();
         let approval = Approval {
             policy: FLOOR,
-            gate: Gate::new(pins, FLOOR.lockout, Arc::new(Instant::now)),
+            // Logins wired as the binary wires them: PINs until an
+            // accounts file appears in the state directory.
+            gate: Gate::new(pins, FLOOR.lockout, Arc::new(Instant::now)).with_logins(Logins::new(
+                state.clone(),
+                1,
+                FLOOR.lockout,
+                Arc::new(Instant::now),
+            )),
             plant: Plant {
                 table: table.clone(),
                 i_len: 32,
@@ -627,6 +635,146 @@ fn review_replay_approve_and_undo_against_the_real_box() {
     // No PIN and no token ever reached the box's log or its audit.
     let (logs, audit) = (b.logs(), b.audit());
     for secret in [OPERATOR, ENGINEER, "guess-000", "not-the-pin", b.token.as_str()] {
+        assert!(!logs.contains(secret), "{secret} in the log");
+        assert!(!audit.contains(secret), "{secret} in the audit");
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn on_a_box_with_accounts_the_screen_logs_in_and_approves_as_the_person() {
+    const ALICE: &str = "alice-pass-31337";
+    let b = Bench::new();
+    let id = b.horn();
+    let mut accounts = Accounts::default();
+    accounts.add("alice", Role::Engineer, ALICE, 1, [1; 16]).unwrap();
+    accounts
+        .add("bob", Role::Operator, "bob-pass-27182", 1, [2; 16])
+        .unwrap();
+    accounts.save(&b.dirs[0]).unwrap();
+    let mut r = Review::new();
+    settle(&b, &mut r, 0.0);
+    assert!(r.accounts(), "the policy says so: {:?}", r.policy);
+    let step = |r: &Review| r.open.as_ref().unwrap().step.clone();
+
+    // Nothing typed: nothing sent.
+    r.login("alice", String::new());
+    assert_eq!(r.poll(), Vec::<Request>::new());
+    assert!(r.login_problem.is_some());
+    // A wrong password: the box's words, no session.
+    r.login("alice", "not-her-password".into());
+    let sent = r.poll();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].bearer, None, "a login carries no token");
+    assert!(
+        !format!("{sent:?}").contains("not-her-password"),
+        "Debug redacts the body"
+    );
+    let a = b.send(&sent[0]);
+    r.answer(sent[0].call.clone(), &a, 0.0);
+    assert_eq!(r.login_problem.as_deref(), Some("wrong user or password"));
+    assert!(r.session.is_none() && !r.logging_in);
+
+    // Her password: signed in, and no PIN anywhere after.
+    r.login("  alice ", ALICE.into());
+    settle(&b, &mut r, 0.0);
+    assert_eq!(r.signed_in().as_deref(), Some("alice (engineer)"));
+    assert!(!format!("{r:?}").contains(ALICE), "{r:?}");
+    let t = Target::Proposal(id);
+    r.open(id);
+    settle(&b, &mut r, 0.0);
+    r.replay(&t, 1.0);
+    let sent = r.poll();
+    assert_eq!(sent.len(), 1);
+    assert_ne!(
+        sent[0].bearer.as_deref(),
+        Some(b.token.as_str()),
+        "the session, not the box token"
+    );
+    for q in sent {
+        let a = b.send(&q);
+        r.answer(q.call, &a, 1.0);
+    }
+    assert!(
+        matches!(step(&r).replay, Replay::Done(_)),
+        "{:?}",
+        step(&r).replay
+    );
+    r.approve(&t, 2.0);
+    let sent = r.poll();
+    assert_eq!(sent.len(), 1);
+    let body: Json = serde_json::from_str(sent[0].body.as_deref().unwrap()).unwrap();
+    assert!(body.get("pin").is_none() && body.get("role").is_none(), "{body}");
+    for q in sent {
+        let a = b.send(&q);
+        r.answer(q.call, &a, 2.0);
+    }
+    settle(&b, &mut r, 2.0);
+    let Phase::Applied(done) = step(&r).phase else {
+        panic!("{:?}", step(&r).phase)
+    };
+    assert_eq!(
+        (done.user.as_deref(), done.role.as_str()),
+        (Some("alice"), "engineer")
+    );
+    assert_eq!(r.head.as_ref().unwrap()["approver"], "alice (engineer)");
+    let audit = b.audit();
+    assert!(
+        audit.contains("\"user\":\"alice\""),
+        "the audit names her: {audit}"
+    );
+
+    // A PIN, even the right one, is refused by the box, and the screen
+    // does not offer one: with the token alone it sends nothing.
+    let p = b.draft(&json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 0.5 }));
+    let a = b.send(&Request {
+        call: Call::Apply(Target::Proposal(p)),
+        method: Method::Post,
+        url: Target::Proposal(p).apply_url(),
+        bearer: Some(b.token.clone()),
+        body: Some(json!({ "role": "engineer", "pin": ENGINEER }).to_string()),
+    });
+    assert_eq!(a.status, 403, "{a:?}");
+    assert!(a.body.contains("role PINs are off"), "{a:?}");
+    let mut by_pin = Review::new();
+    settle(&b, &mut by_pin, 3.0);
+    assert!(by_pin.set_token(&b.token));
+    by_pin.open(p);
+    settle(&b, &mut by_pin, 3.0);
+    by_pin.open.as_mut().unwrap().step.pin = ENGINEER.into();
+    by_pin.approve(&Target::Proposal(p), 3.0);
+    assert_eq!(by_pin.poll(), Vec::<Request>::new());
+    assert_eq!(refused(&by_pin.open.as_ref().unwrap().step.phase).0, Why::Token);
+
+    // The account disabled while she is logged in: the next call is 401
+    // and the screen drops the session.
+    let undo = r.open.as_ref().unwrap().undo.as_ref().unwrap().target.clone();
+    accounts.set_disabled("alice", true).unwrap();
+    accounts.save(&b.dirs[0]).unwrap();
+    r.replay(&undo, 4.0);
+    settle(&b, &mut r, 4.0);
+    assert!(r.session.is_none(), "a refused session is forgotten");
+    accounts.set_disabled("alice", false).unwrap();
+    accounts.save(&b.dirs[0]).unwrap();
+
+    // Sign out: gone here at once, then on the box.
+    r.login("alice", ALICE.into());
+    settle(&b, &mut r, 5.0);
+    assert!(r.session.is_some());
+    r.logout();
+    assert!(r.session.is_none());
+    let sent = r.poll();
+    assert_eq!(sent.len(), 1);
+    let token = sent[0].bearer.clone().unwrap();
+    let a = b.send(&sent[0]);
+    assert_eq!(a.status, 200, "{a:?}");
+    let again = b.send(&sent[0]);
+    assert_eq!(again.status, 401, "the box ended it too: {again:?}");
+    r.approve(&undo, 6.0);
+    assert_eq!(r.poll(), Vec::<Request>::new(), "signed out: nothing sent");
+
+    let (logs, audit) = (b.logs(), b.audit());
+    for secret in [ALICE, "bob-pass-27182", "not-her-password", token.as_str()] {
         assert!(!logs.contains(secret), "{secret} in the log");
         assert!(!audit.contains(secret), "{secret} in the audit");
     }

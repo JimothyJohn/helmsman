@@ -14,14 +14,18 @@
 //! - `POST /api/proposals/{id}/replay`, `POST /api/snapshots/{id}/replay`:
 //!   the sim replay, charted.
 //! - `POST /api/proposals/{id}/apply`, `POST /api/snapshots/{id}/rollback`:
-//!   approve and undo, with the API token and `{role, pin, replay}`.
+//!   approve and undo: with a login session and `{replay}` on a box with
+//!   accounts, else with the API token and `{role, pin, replay}`.
+//! - `POST /api/login`, `POST /api/logout`: a person's session (boxes
+//!   with accounts; `GET /api/policy` says `credentials: accounts`).
 //!
-//! **Secrets.** The API token is typed in once per page load and held
+//! **Secrets.** The API token, or the session a login returns, is held
 //! here, in memory only (never browser storage, never egui's persisted
-//! state); "Forget" or a reload drops it. A PIN is held only while it is
-//! typed: [`Review::approve`] moves it into the request body and leaves
-//! the field empty, whatever the answer. Neither is ever in a `Debug`
-//! output ([`Request`]'s redacts both) or a log line.
+//! state); "Forget", "Sign out", a reload or a 401 drops it. A PIN or
+//! password is held only while it is typed: [`Review::approve`] and
+//! [`Review::login`] move it into the request body and leave the field
+//! empty, whatever the answer. None of them is ever in a `Debug` output
+//! ([`Request`]'s redacts bearer and body) or a log line.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -99,6 +103,25 @@ pub enum Call {
     Snapshots,
     Replay(Target),
     Apply(Target),
+    Login,
+    Logout,
+}
+
+/// A person logged in for this page load. `Debug` never shows the token.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Session {
+    token: String,
+    pub user: String,
+    pub role: String,
+}
+
+impl fmt::Debug for Session {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Session")
+            .field("user", &self.user)
+            .field("role", &self.role)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One HTTP call for the transport. Its token and body never show in
@@ -420,7 +443,7 @@ pub fn refusal(a: &Answer, now: f64) -> Refusal {
         ),
         401 => (
             Why::Token,
-            "The box did not take the API token. Enter it again: it is in api-token in the box's state directory, and printed once in its journal.".into(),
+            "The box did not take the API token or the login session. Log in again (boxes with accounts), or enter the token again: it is in api-token in the box's state directory, and printed once in its journal.".into(),
         ),
         403 if error == "wrong PIN" => (
             Why::Pin,
@@ -468,6 +491,8 @@ pub struct Applied {
     pub previous: String,
     pub tier: String,
     pub role: String,
+    /// The person, when a login session approved it.
+    pub user: Option<String>,
 }
 
 impl Applied {
@@ -477,6 +502,7 @@ impl Applied {
             previous: j["previous"].as_str()?.to_string(),
             tier: j["tier"].as_str().unwrap_or("?").to_string(),
             role: j["role"].as_str().unwrap_or("?").to_string(),
+            user: j["user"].as_str().map(str::to_string),
         })
     }
 }
@@ -618,6 +644,12 @@ pub struct Review {
     token: Option<String>,
     /// Why the last token typed was not taken.
     pub token_problem: Option<String>,
+    /// Who is logged in (boxes with accounts).
+    pub session: Option<Session>,
+    /// Why the last login did not work.
+    pub login_problem: Option<String>,
+    /// A login is on its way.
+    pub logging_in: bool,
     queue: Vec<Request>,
 }
 
@@ -669,6 +701,70 @@ impl Review {
         self.token = None;
     }
 
+    /// Whether the box approves by login (it has accounts) rather than by
+    /// role PIN, as its policy says.
+    #[must_use]
+    pub fn accounts(&self) -> bool {
+        self.policy
+            .as_ref()
+            .is_some_and(|p| p["credentials"] == "accounts")
+    }
+
+    /// `alice (engineer)`, while someone is logged in.
+    #[must_use]
+    pub fn signed_in(&self) -> Option<String> {
+        self.session.as_ref().map(|s| format!("{} ({})", s.user, s.role))
+    }
+
+    /// Logs `user` in; the password goes into the request body and nowhere
+    /// else.
+    pub fn login(&mut self, user: &str, password: String) {
+        let user = user.trim();
+        if user.is_empty() || password.is_empty() || self.logging_in {
+            self.login_problem = Some("Type your user name and password.".into());
+            return;
+        }
+        self.login_problem = None;
+        self.logging_in = true;
+        let body = json!({ "user": user, "password": password }).to_string();
+        drop(password);
+        self.queue.push(Request {
+            call: Call::Login,
+            method: Method::Post,
+            url: "/api/login".into(),
+            bearer: None,
+            body: Some(body),
+        });
+    }
+
+    /// Ends the session here at once, and on the box.
+    pub fn logout(&mut self) {
+        if let Some(s) = self.session.take() {
+            self.queue.push(Request {
+                call: Call::Logout,
+                method: Method::Post,
+                url: "/api/logout".into(),
+                bearer: Some(s.token),
+                body: None,
+            });
+        }
+    }
+
+    /// What goes in `Authorization: Bearer`: the session, else the token.
+    fn bearer(&self) -> Option<String> {
+        self.session
+            .as_ref()
+            .map(|s| s.token.clone())
+            .or_else(|| self.token.clone())
+    }
+
+    /// The box refused the credential (401): drop whichever was used.
+    fn credential_refused(&mut self) {
+        if self.session.take().is_none() {
+            self.token = None;
+        }
+    }
+
     /// Opens proposal `id`.
     pub fn open(&mut self, id: u64) {
         if self.open.as_ref().is_some_and(|o| o.id == id) {
@@ -692,14 +788,14 @@ impl Review {
             call,
             method: Method::Post,
             url,
-            bearer: self.token.clone(),
+            bearer: self.bearer(),
             body: Some(body),
         }
     }
 
     /// Asks the box to replay `target` (the open proposal, or its undo).
     pub fn replay(&mut self, target: &Target, now: f64) {
-        let no_token = self.token.is_none();
+        let no_token = self.bearer().is_none();
         let Some(step) = self.step_mut(target) else { return };
         if no_token {
             step.replay = Replay::Failed(no_token_refusal(now));
@@ -710,16 +806,30 @@ impl Review {
         self.queue.push(req);
     }
 
-    /// Sends the approval of `target` with the role and PIN typed. The PIN
-    /// leaves the form here, whatever happens next.
+    /// Sends the approval of `target`: as the person logged in, or with
+    /// the role and PIN typed. The PIN leaves the form here, whatever
+    /// happens next.
     pub fn approve(&mut self, target: &Target, now: f64) {
-        let token = self.token.clone();
+        let token = self.bearer();
+        let session = self.session.is_some();
+        let accounts = self.accounts();
         let Some(step) = self.step_mut(target) else { return };
         let pin = std::mem::take(&mut step.pin);
         if step.locked_for(now).is_some() || matches!(step.phase, Phase::Sending) {
             return;
         }
-        if token.is_none() {
+        if session {
+            // The account's role is the session's; nothing else is sent.
+            let mut body = json!({});
+            if let Replay::Done(c) = &step.replay {
+                body["replay"] = json!(c.id);
+            }
+            step.phase = Phase::Sending;
+            let req = self.post(Call::Apply(target.clone()), target.apply_url(), body.to_string());
+            self.queue.push(req);
+            return;
+        }
+        if token.is_none() || accounts {
             step.phase = Phase::Refused(no_token_refusal(now));
             return;
         }
@@ -816,7 +926,7 @@ impl Review {
                     _ => Replay::Failed(refusal(a, now)),
                 };
                 if matches!(&step.replay, Replay::Failed(r) if r.why == Why::Token) {
-                    self.token = None;
+                    self.credential_refused();
                 }
             }
             Call::Apply(target) => {
@@ -842,10 +952,38 @@ impl Review {
                     let forget = r.why == Why::Token;
                     step.phase = Phase::Refused(r);
                     if forget {
-                        self.token = None;
+                        self.credential_refused();
                     }
                 }
             }
+            Call::Login => {
+                self.logging_in = false;
+                let session = j.as_ref().filter(|_| a.status == 200).and_then(|j| {
+                    Some(Session {
+                        token: j["token"].as_str()?.to_string(),
+                        user: j["user"].as_str()?.to_string(),
+                        role: j["role"].as_str()?.to_string(),
+                    })
+                });
+                if let Some(s) = session {
+                    self.session = Some(s);
+                    self.login_problem = None;
+                    return;
+                }
+                let error = j
+                    .as_ref()
+                    .and_then(|j| j["error"].as_str())
+                    .map_or_else(|| short(a), str::to_string);
+                let wait = a
+                    .retry_after
+                    .or_else(|| j.as_ref().and_then(|j| j["retry_after_s"].as_u64()));
+                self.login_problem = Some(match (a.status, wait) {
+                    (429, Some(s)) => format!("{error}. Try again in {s} s."),
+                    _ => error,
+                });
+            }
+            // Ended here already; the box's answer changes nothing.
+            Call::Logout => {}
         }
     }
 
@@ -893,8 +1031,8 @@ fn no_token_refusal(_now: f64) -> Refusal {
     Refusal {
         status: 0,
         why: Why::Token,
-        error: "no API token entered".into(),
-        hint: "Enter the box's API token first (left panel). It is kept in this page only, until it is closed or reloaded.".into(),
+        error: "not logged in, and no API token entered".into(),
+        hint: "Log in first (left panel) if this box has accounts; otherwise enter its API token. Either is kept in this page only, until it is closed or reloaded.".into(),
         retry_at: None,
         tier: None,
     }

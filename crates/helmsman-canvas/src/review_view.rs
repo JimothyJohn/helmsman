@@ -62,11 +62,15 @@ pub struct ReviewView {
     pub state: Review,
     /// The token field, until "Use" takes it (then emptied).
     pub token_input: String,
+    /// The login fields; the password is emptied when "Log in" sends it.
+    pub user_input: String,
+    pub password_input: String,
     /// Which POU of the diagram diff is shown.
     pub pou: usize,
     pub cam: Cam,
-    /// Where this frame drew its controls (`token`, `use`, `row N`,
-    /// `replay T`, `pin T`, `go T` for target `T`'s `Debug`): what a
+    /// Where this frame drew its controls (`token`, `use`, `user`,
+    /// `password`, `login`, `logout`, `row N`, `replay T`, `pin T`, `go T`
+    /// for target `T`'s `Debug`): what a
     /// headless test clicks.
     pub rects: Vec<(String, Rect)>,
     #[cfg(target_arch = "wasm32")]
@@ -109,6 +113,8 @@ impl ReviewView {
         Self {
             state: Review::new(),
             token_input: String::new(),
+            user_input: String::new(),
+            password_input: String::new(),
             pou: 0,
             cam: Cam::default(),
             rects: Vec::new(),
@@ -184,6 +190,66 @@ impl ReviewView {
             RichText::new("drafts the agent made; approving one goes through the box's policy").color(STEEL),
         );
         ui.separator();
+        if self.state.accounts() || self.state.session.is_some() {
+            self.login_ui(ui);
+        } else {
+            self.token_ui(ui);
+        }
+        ui.separator();
+        self.drafts_ui(ui);
+    }
+
+    /// Boxes with accounts: who is approving.
+    fn login_ui(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Signed in").strong());
+        if let Some(who) = self.state.signed_in() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(format!("● {who}")).color(YELLOW));
+                let out = ui
+                    .button("Sign out")
+                    .on_hover_text("end the session now, here and on the box");
+                self.rects.push(("logout".into(), out.rect));
+                if out.clicked() {
+                    self.state.logout();
+                }
+            });
+            return;
+        }
+        let user = ui.add(
+            egui::TextEdit::singleline(&mut self.user_input)
+                .hint_text("user")
+                .desired_width(f32::INFINITY),
+        );
+        self.rects.push(("user".into(), user.rect));
+        let pass = ui.add(
+            egui::TextEdit::singleline(&mut self.password_input)
+                .password(true)
+                .hint_text("password")
+                .desired_width(f32::INFINITY),
+        );
+        self.rects.push(("password".into(), pass.rect));
+        let enter = pass.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let go = ui.add_enabled(!self.state.logging_in, egui::Button::new("Log in"));
+        self.rects.push(("login".into(), go.rect));
+        if go.clicked() || enter {
+            let password = std::mem::take(&mut self.password_input);
+            self.state.login(&self.user_input, password);
+        }
+        if self.state.logging_in {
+            ui.spinner();
+        }
+        if let Some(p) = &self.state.login_problem {
+            ui.colored_label(RED, p);
+        }
+        ui.label(
+            RichText::new("Your own account on this box. The session is kept in this page's memory only, until you sign out, it expires, or the page is closed or reloaded.")
+                .small()
+                .color(STEEL),
+        );
+    }
+
+    /// Boxes without accounts: the API token, then a role PIN per approval.
+    fn token_ui(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("API token").strong());
         if self.state.has_token() {
             ui.horizontal(|ui| {
@@ -220,7 +286,9 @@ impl ReviewView {
                     .color(STEEL),
             );
         }
-        ui.separator();
+    }
+
+    fn drafts_ui(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Drafts").strong());
             if ui.small_button("Refresh").clicked() {
@@ -256,6 +324,7 @@ impl ReviewView {
     }
 
     fn center(&mut self, ui: &mut egui::Ui, now: f64) {
+        let signed_in = self.state.signed_in();
         let Some(o) = self.state.open.as_mut() else {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
@@ -304,14 +373,17 @@ impl ReviewView {
                 diagram(ui, d, &mut self.pou, &mut self.cam);
             }
         }
-        let mut out = Out::default();
+        let mut out = Out {
+            signed_in,
+            ..Out::default()
+        };
         section(ui, "Sim replay");
         replay_ui(ui, &o.step, &mut out);
         section(ui, "Approve");
         approve_ui(ui, o, now, &mut out);
         if let Some(u) = o.undo.as_mut() {
             section(ui, "Undo");
-            ui.label("Roll back to what ran before, through the same PIN check.");
+            ui.label("Roll back to what ran before, through the same approval check.");
             replay_ui(ui, u, &mut out);
             step_ui(ui, u, now, "Undo", &mut out);
         }
@@ -350,6 +422,8 @@ enum Act {
 struct Out {
     act: Vec<Act>,
     rects: Vec<(String, Rect)>,
+    /// `alice (engineer)` while someone is logged in: approvals are theirs.
+    signed_in: Option<String>,
 }
 
 fn section(ui: &mut egui::Ui, title: &str) {
@@ -816,11 +890,14 @@ fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut O
             .fill(YELLOW)
             .inner_margin(egui::Margin::same(8))
             .show(ui, |ui| {
+                let by = a
+                    .user
+                    .as_ref()
+                    .map_or_else(|| format!("{} PIN", a.role), |u| format!("by {u}, {}", a.role));
                 ui.label(
                     RichText::new(format!(
-                        "Done ({} change, {} PIN). Now running snapshot {}; before it: {}.",
+                        "Done ({} change, {by}). Now running snapshot {}; before it: {}.",
                         a.tier,
-                        a.role,
                         short_id(&a.snapshot),
                         short_id(&a.previous)
                     ))
@@ -832,6 +909,29 @@ fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut O
     }
     let locked = step.locked_for(now);
     let sending = matches!(step.phase, Phase::Sending);
+    if let Some(who) = &out.signed_in {
+        // A session approves as its account: no role to pick, no PIN.
+        let mut go = false;
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(format!("as {who}")).color(STEEL));
+            let button = ui.add_enabled(
+                locked.is_none() && !sending,
+                egui::Button::new(RichText::new(verb).strong()),
+            );
+            out.rects.push((format!("go {:?}", step.target), button.rect));
+            go = button.clicked();
+            if sending {
+                ui.spinner();
+            }
+        });
+        if go {
+            out.act.push(Act::Approve(step.target.clone()));
+        }
+        if let Phase::Refused(r) = &step.phase {
+            refusal_ui(ui, r, now);
+        }
+        return;
+    }
     ui.horizontal_wrapped(|ui| {
         ui.label("Role");
         for r in ROLES {
