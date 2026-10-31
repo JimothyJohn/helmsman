@@ -1243,3 +1243,13 @@ fn a_bad_screen_layout_is_refused_before_the_adapter_starts() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2), "--screen needs the API");
 }
+
+/// The relay serves agent v3 (the drop-in tools) and explain-v1 (read-only
+/// tools, floor language); a box asks for them unless told otherwise.
+#[test]
+fn the_default_agent_versions_are_the_ones_the_relay_serves() {
+    let out = plc().arg("--help").output().unwrap();
+    let usage = String::from_utf8_lossy(&out.stdout);
+    assert!(usage.contains("(default v3)"), "{usage}");
+    assert!(usage.contains("default explain-v1"), "{usage}");
+}

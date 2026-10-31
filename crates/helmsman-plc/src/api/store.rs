@@ -31,7 +31,12 @@ pub struct AuditEntry {
     pub base: Option<String>,
     /// The role the call acted as: the PIN's, or the session's account's.
     pub role: Option<String>,
-    /// The person whose login session made the call (or who logged in).
+    /// Who made the call: `api` (a request off the socket: the canvas,
+    /// the chat agent's tools, a script) or `mcp` (the MCP route, and every
+    /// box API call one of its tools made).
+    pub source: String,
+    /// The person whose login session made the call (or who logged in);
+    /// never set for an MCP call.
     pub user: Option<String>,
 }
 

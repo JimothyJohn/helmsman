@@ -827,6 +827,19 @@ fn the_box_token_alone_never_approves_once_accounts_exist() {
         "{}",
     );
     assert_eq!(r.status, 403, "{r:?}");
+    // MCP takes the box token only: a person's session is refused there.
+    let alice = login(b.addr, "alice", ALICE).json()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let r = request(
+        b.addr,
+        "POST",
+        "/mcp",
+        Some(&alice),
+        &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string(),
+    );
+    assert_eq!(r.status, 401, "{r:?}");
     let r = request(b.addr, "POST", "/api/login", None, "not json");
     assert_eq!(r.status, 400);
     assert_eq!(r.error(), "expected JSON {\"user\": ..., \"password\": ...}");
