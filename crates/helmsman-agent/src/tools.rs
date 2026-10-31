@@ -215,9 +215,9 @@ impl Drafts {
     }
 
     /// Drop-in `id` was shown to the model in the user's message (a
-    /// photo's image block): it binds every proposal like one a tool read.
-    /// A photo is never a PLC program, so this never makes the
-    /// conversation watch-only.
+    /// photo's image block or a PDF's document block): it binds every
+    /// proposal like one a tool read. Neither is a PLC program, so this
+    /// never makes the conversation watch-only.
     pub fn attached(&mut self, id: u64) {
         self.dropins.insert(id);
     }

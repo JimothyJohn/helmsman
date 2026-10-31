@@ -12,8 +12,9 @@
 //!
 //! **What is refused.**
 //! - Anything over [`MAX_PHOTO`] bytes. The image goes to the relay as
-//!   base64 inside the conversation, and relay protocol v1 takes 1 MiB per
-//!   request ([`MAX_PHOTO`] is what leaves room for the rest of a chat);
+//!   base64 inside the conversation; relay protocol v1 first took 1 MiB
+//!   per request ([`MAX_PHOTO`] is what left room for the rest of a chat,
+//!   kept since the limit became 4 MiB: card `dropin-photo-size`);
 //!   the model API's own per-image limit (10 MB base64, 5 MB on Bedrock) is
 //!   far above it.
 //! - A declared width or height of 0 or over [`MAX_SIDE`] (the model API's
