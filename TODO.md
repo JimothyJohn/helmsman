@@ -785,7 +785,7 @@
   id: relay-deploy
   answer: dev stage now, bench Pi only (recommended)
 
-- [ ] **Playground: publish now, or after a review pass?** The public page is master's docs/playground (GitHub Pages, https://jimothyjohn.github.io/helmsman/playground/), so it goes live when dev reaches master. It now has the diagram controls (#92) and rearranging (#93). Publishing puts the visitor-key design (`playground-key`) and the Helmsman name in public. Options: publish with the next dev→master merge (recommended; the page has no secrets and the key is the visitor's); keep it unlisted (no link from the README) until you've used it; hold docs/playground out of master until then.
+- [x] **Playground: publish now, or after a review pass?** The public page is master's docs/playground (GitHub Pages, https://jimothyjohn.github.io/helmsman/playground/), so it goes live when dev reaches master. It now has the diagram controls (#92) and rearranging (#93). Publishing puts the visitor-key design (`playground-key`) and the Helmsman name in public. Options: publish with the next dev→master merge (recommended; the page has no secrets and the key is the visitor's); keep it unlisted (no link from the README) until you've used it; hold docs/playground out of master until then.
   asked: 2026-10-31
   by: claude-session
   needs: your call, and your dev→master merge
@@ -952,6 +952,26 @@
   difficulty: med
   id: l5x-scope
   answer: ladder subset to ST, refuse the rest (recommended)
+
+- [ ] **Monitor lamps: is TRUE always green?** docs/UI.md says a tile's outputs are green or red. Built (reversible, one function in `monitor.rs`): a BOOL output TRUE is a green lamp, FALSE a red one, whatever its name, so the line's `alarm` and a motor's `tripped` light green when they are on. Options: keep it literal; invert by name (alarm, fault, trip, jam, error, estop light red when TRUE, off otherwise); or let the source say per output (a `(* monitor: alarm *)` comment on the declaration).
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what colour an alarm-like output shows on the Monitor
+  options: literal TRUE green, FALSE red (built) | invert alarm-like names (recommended) | a per-output comment in the source
+  est: 1h
+  difficulty: low
+  id: monitor-lamp-polarity
+
+- [ ] **Monitor "scan time": the period, or the measured scan?** The box publishes each module's scan period (`scan_ms`) and its counts (scans, overruns, held), not how long a scan took: the runtime has no clock (it also runs in the canvas's wasm build). Built: the status tile shows "scan 2 ms · N scans" (the period). Measuring would time `tick_with` in the box binary's loop (behind `box`) and publish last/max per module in `/api/events`.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what the Monitor's status tile reports as scan time
+  options: the period and counts (built) | measured last/max scan time, box-side (recommended for a wall TV) | both
+  est: 3h
+  difficulty: low
+  id: monitor-scan-time
 
 - [ ] **What does a click on an input's block force on a box?** The Editor (UI.md step 2) makes an input signal's block a control for an engineer: a BOOL flips (forced to the opposite of what it reads), a number drags (forced on every change). Built (reversible): only inputs that are signals of the map or calendar are clickable, since the diagram's reads are variables; a `%IX` address force has no click and is made through `POST /api/forces` only. A click on a forced BOOL forces it the other way; nothing but the banner releases.
   asked: 2026-10-31

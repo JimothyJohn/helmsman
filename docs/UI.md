@@ -73,6 +73,21 @@ this; change it here first when a decision changes.
   away.
 - **Watch only.** The Monitor never writes.
 
+As built (step 3): a group per PROGRAM (a module on a box), each with its
+status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
+period and count), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
+and located `%Q` variables), then a tile per user function block
+instance in declaration order (standard blocks such as TON are not
+tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
+`monitor-lamp-polarity`), a number its value. "Open diagram" opens the
+Editor's diagram at the level shown. Stale data is never a colour: a
+program with no new scan for 3 s, or every program while the box is out
+of reach, goes grey with "stale" and the age, under a red NO DATA banner
+when the box itself is the problem; a stopped simulation is grey too.
+Phones (under 600 points wide), `?monitor` and the old `?andon` open on
+it; the header switches either way. Tiles are at least a finger wide,
+one column on a phone, and grow with the screen up to 4K.
+
 ## Elsewhere
 
 - **Proposals** (agent changes approved with a PIN) sit behind the ⋯ menu

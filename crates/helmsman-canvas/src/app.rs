@@ -1,12 +1,15 @@
 //! The app: the always-on header over one screen, as docs/UI.md lays it
-//! out. The screen is the Editor (or Proposals, from the ⋯ menu); what it
-//! watches is the [`Source`], a setting rather than a mode: the box that
-//! served the page, or the simulation running in it.
+//! out. The screen is the Editor or the Monitor (or Proposals, from the ⋯
+//! menu); what it watches is the [`Source`], a setting rather than a mode:
+//! the box that served the page, or the simulation running in it. A phone
+//! (a narrow window) opens on the Monitor, as do `?monitor` and the old
+//! `?andon`.
 
 use eframe::egui::{self, Rect, RichText, Vec2};
 
 use crate::box_view::BoxView;
 use crate::editor::{CHROME_KEY, Chrome};
+use crate::monitor::{Monitor, NARROW, Wish};
 use crate::playground_view::PlaygroundView;
 use crate::projects::Workspace;
 use crate::review_view::ReviewView;
@@ -34,27 +37,41 @@ pub enum Source {
 pub enum Screen {
     #[default]
     Editor,
+    /// Status tiles, phone to wall TV; watch only.
+    Monitor,
     /// The box's proposals: diffs, sim replay, approve with a PIN.
     Proposals,
+}
+
+fn has(query: &str, key: &str) -> bool {
+    query
+        .trim_start_matches('?')
+        .split('&')
+        .any(|kv| kv.split('=').next() == Some(key))
 }
 
 /// Whether a page with this query string (`?a&b=c`) and canvas `data-mode`
 /// runs the simulation rather than watching the box that served it:
 /// docs/playground/'s page says `data-mode="playground"`, and the old
-/// links' `?playground` and `?demo` still lead there. Nothing else in the
-/// query picks a screen (the old `?andon`, `?site` are gone).
+/// links' `?playground` and `?demo` still lead there.
 #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 #[must_use]
 pub fn wants_sim(query: &str, mode: Option<&str>) -> bool {
-    let has = |key: &str| {
-        query
-            .trim_start_matches('?')
-            .split('&')
-            .any(|kv| kv.split('=').next() == Some(key))
-    };
-    mode == Some("playground") || has("playground") || has("demo")
+    mode == Some("playground") || has(query, "playground") || has(query, "demo")
 }
 
+/// Whether a page with this query string opens on the Monitor: `?monitor`
+/// (a wall TV's link), and the old floor screen's `?andon`. (`?site` is
+/// gone.)
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[must_use]
+pub fn wants_monitor(query: &str) -> bool {
+    has(query, "monitor") || has(query, "andon")
+}
+
+// Independent UI flags (menu open, served by a box, first frame routed,
+// …), not a state machine in disguise.
+#[allow(clippy::struct_excessive_bools)]
 pub struct App {
     pub screen: Screen,
     pub source: Source,
@@ -72,6 +89,10 @@ pub struct App {
     pub sim: Option<PlaygroundView>,
     /// The box's proposals, read from the start for the ⋯ badge.
     pub review: Option<ReviewView>,
+    /// Which level the Monitor shows.
+    pub monitor: Monitor,
+    /// The first frame chose the screen (a phone opens the Monitor).
+    routed: bool,
     /// When the proposal list was last asked for (page time, s).
     listed: Option<f64>,
 }
@@ -93,6 +114,10 @@ impl App {
         if let Some(saved) = cc.storage.and_then(|s| s.get_string(CHROME_KEY)) {
             app.chrome = Chrome::restored(&saved);
         }
+        #[cfg(target_arch = "wasm32")]
+        if crate::web::wants_monitor() {
+            app.open_monitor();
+        }
         app
     }
 
@@ -112,8 +137,17 @@ impl App {
             boxv: None,
             sim: None,
             review: None,
+            monitor: Monitor::default(),
+            routed: false,
             listed: None,
         }
+    }
+
+    /// Opens on the Monitor, whatever the window's width.
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub fn open_monitor(&mut self) {
+        self.screen = Screen::Monitor;
+        self.routed = true;
     }
 
     /// The box that served the page.
@@ -190,6 +224,16 @@ impl App {
         if self.source == Source::Sim && self.screen == Screen::Proposals {
             self.screen = Screen::Editor;
         }
+        // A phone opens on the Monitor; the header switches either way.
+        if !self.routed {
+            self.routed = true;
+            if ctx.content_rect().width() < NARROW {
+                self.screen = Screen::Monitor;
+            }
+        }
+        if let Some(b) = &mut self.boxv {
+            b.state.set_monitor(self.screen == Screen::Monitor);
+        }
         // Proposals are read from the start, so the badge knows.
         if self.source == Source::Box {
             let r = self.review.get_or_insert_with(ReviewView::new);
@@ -238,8 +282,45 @@ impl App {
                     .get_or_insert_with(PlaygroundView::new)
                     .show(ui, &mut self.chrome);
             }
+            (Screen::Monitor, Source::Box) => {
+                let b = self.boxv.get_or_insert_with(BoxView::new);
+                b.state.set_monitor(true);
+                b.tick(&ctx);
+                self.monitor.show(ui, &b.state, &mut self.chrome);
+            }
+            (Screen::Monitor, Source::Sim) => {
+                let s = self.sim.get_or_insert_with(PlaygroundView::new);
+                s.tick(&ctx);
+                self.monitor.show(ui, &*s, &mut self.chrome);
+            }
+        }
+        if let Some(Wish::Diagram { program, prefix }) = self.monitor.wish.take() {
+            self.open_diagram(&program, &prefix);
         }
         self.chrome.hits.extend(header);
+    }
+
+    /// The Editor's diagram of `program` (empty: the one open), at the
+    /// instance `prefix` (empty: the program).
+    pub fn open_diagram(&mut self, program: &str, prefix: &str) {
+        self.screen = Screen::Editor;
+        match self.source {
+            Source::Box => {
+                let b = self.boxv.get_or_insert_with(BoxView::new);
+                b.state.set_monitor(false);
+                if !program.is_empty() {
+                    b.state.select(program);
+                }
+                b.open_at = Some(prefix.to_string());
+            }
+            Source::Sim => {
+                if let Some(v) = self.sim.as_mut().and_then(|s| s.viewer.as_mut())
+                    && let Some(k) = v.scopes.iter().position(|s| s.prefix == prefix)
+                {
+                    v.open(k);
+                }
+            }
+        }
     }
 
     /// The header: the mark, what is open, the screens, and the ⋯ menu.
@@ -267,6 +348,18 @@ impl App {
                 hits.push(("editor".to_string(), e.rect));
                 if e.clicked() {
                     self.screen = Screen::Editor;
+                    self.menu = false;
+                }
+                let m = ui.add(
+                    egui::Button::selectable(
+                        self.screen == Screen::Monitor,
+                        RichText::new("Monitor").strong(),
+                    )
+                    .min_size(Vec2::new(TAP * 1.5, 0.0)),
+                );
+                hits.push(("monitor".to_string(), m.rect));
+                if m.clicked() {
+                    self.screen = Screen::Monitor;
                     self.menu = false;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
