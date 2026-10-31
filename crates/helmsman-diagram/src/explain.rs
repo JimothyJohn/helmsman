@@ -11,7 +11,7 @@
 //! CTU, ...). No assignment ran: the variable held its value, and each
 //! assignment says which gate kept it from running.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use helmsman_iec::Value;
 use helmsman_iec::trace::StmtId;
@@ -204,7 +204,7 @@ impl Explainer<'_> {
             };
         }
         self.stack.push(full.clone());
-        let ran = writes.iter().rev().copied().find(|&w| self.t.ran(d.node(w).stmt));
+        let ran = last_ran(d, self.t, &writes);
         let why = match ran {
             Some(w) => {
                 let n = d.node(w);
@@ -225,11 +225,7 @@ impl Explainer<'_> {
                     .iter()
                     .map(|&w| {
                         let n = d.node(w);
-                        let chain: Vec<RegionId> = d.chain(n.region).map(|r| r.id).collect();
-                        let closed = chain
-                            .into_iter()
-                            .rev()
-                            .find(|&r| !live::gate(self.t, d.region(r)).open());
+                        let closed = closed_gate(d, self.t, n.region);
                         Blocked {
                             stmt: n.stmt,
                             line: self.line(n.stmt),
@@ -363,25 +359,22 @@ impl Explainer<'_> {
         let d: &Diagram = &self.m.pous[pou].diagram;
         let region: &Region = d.region(r);
         let open = live::gate(self.t, region).open();
-        // (gate node output, wanted)
-        let mut want: Vec<((NodeId, usize), bool)> = Vec::new();
+        // (the region whose gate is tested, wanted)
+        let mut want: Vec<(RegionId, bool)> = Vec::new();
         match region.kind {
             RegionKind::If | RegionKind::Elsif | RegionKind::Else => {
                 for s in &d.regions {
-                    if s.stmt == region.stmt
-                        && s.arm < region.arm
-                        && let Some(g) = s.gate
-                    {
-                        want.push((g, false));
+                    if s.stmt == region.stmt && s.arm < region.arm && s.gate.is_some() {
+                        want.push((s.id, false));
                     }
                 }
-                if let Some(g) = region.gate {
-                    want.push((g, true));
+                if region.gate.is_some() {
+                    want.push((r, true));
                 }
             }
             RegionKind::Case | RegionKind::CaseElse | RegionKind::While => {
-                if let Some(g) = region.gate {
-                    want.push((g, true));
+                if region.gate.is_some() {
+                    want.push((r, true));
                 }
             }
             RegionKind::For | RegionKind::Repeat => {}
@@ -389,13 +382,11 @@ impl Explainer<'_> {
         let (stmt, label, kind) = (region.stmt, region.label.clone(), region.kind);
         let tests = want
             .into_iter()
-            .map(|((g, port), wanted)| {
-                let value = self.live(pou, prefix).values[g.0 as usize]
-                    .get(port)
-                    .copied()
-                    .flatten();
-                let d = &self.m.pous[pou].diagram;
-                let text = d.node(g).text.clone();
+            .map(|(gr, wanted)| {
+                let m = self.m;
+                let d = &m.pous[pou].diagram;
+                let value = self.live(pou, prefix).gate_value(d, gr);
+                let (text, g) = gate_text(d, gr);
                 let inputs = if depth == 0 {
                     Vec::new()
                 } else {
@@ -422,6 +413,33 @@ impl Explainer<'_> {
             tests,
         }
     }
+}
+
+/// What region `r`'s gate tests, as text (`NOT JAM` for a negated gate),
+/// and the node it reads. `r` has a gate.
+fn gate_text(d: &Diagram, r: RegionId) -> (String, NodeId) {
+    let region = d.region(r);
+    let (g, port) = region.gate.unwrap_or((NodeId(0), 0));
+    let n = d.node(g);
+    // A read wired from an earlier write or call reads that variable.
+    let base = match &n.kind {
+        NodeKind::Write { path } => path.clone(),
+        NodeKind::Fb { instance, .. } => n
+            .outs
+            .get(port)
+            .map_or_else(|| n.text.clone(), |o| format!("{instance}.{o}")),
+        _ => n.text.clone(),
+    };
+    let text = if region.negated {
+        // NOT binds tighter than any binary operator.
+        match &n.kind {
+            NodeKind::Op { .. } if n.ins.len() == 2 => format!("NOT ({base})"),
+            _ => format!("NOT {base}"),
+        }
+    } else {
+        base
+    };
+    (text, g)
 }
 
 /// The ports of a standard library block, inputs first; empty for any
@@ -575,6 +593,232 @@ impl Step {
             for i in &t.inputs {
                 i.lines(indent + 2, out);
             }
+        }
+    }
+}
+
+/// The assignment among `writes` that ran last this scan (source order).
+fn last_ran(d: &Diagram, t: &dyn Scan, writes: &[NodeId]) -> Option<NodeId> {
+    writes.iter().rev().copied().find(|&w| t.ran(d.node(w).stmt))
+}
+
+/// The outermost closed gate around `region`, if any.
+fn closed_gate(d: &Diagram, t: &dyn Scan, region: Option<RegionId>) -> Option<RegionId> {
+    let chain: Vec<RegionId> = d.chain(region).map(|r| r.id).collect();
+    chain
+        .into_iter()
+        .rev()
+        .find(|&r| !live::gate(t, d.region(r)).open())
+}
+
+/// What drives a variable's value now, on one diagram: the blocks, wires
+/// and regions the "because" path draws at full strength. Indexed like
+/// the diagram's nodes, wires and regions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Drivers {
+    pub nodes: Vec<bool>,
+    pub wires: Vec<bool>,
+    pub regions: Vec<bool>,
+}
+
+impl Drivers {
+    #[must_use]
+    pub fn node(&self, n: NodeId) -> bool {
+        self.nodes.get(n.0 as usize).copied().unwrap_or(false)
+    }
+
+    #[must_use]
+    pub fn wire(&self, k: usize) -> bool {
+        self.wires.get(k).copied().unwrap_or(false)
+    }
+
+    #[must_use]
+    pub fn region(&self, r: RegionId) -> bool {
+        self.regions.get(r.0 as usize).copied().unwrap_or(false)
+    }
+
+    /// Nothing on this diagram drives it (the variable lives in another
+    /// scope).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        !self
+            .nodes
+            .iter()
+            .chain(&self.wires)
+            .chain(&self.regions)
+            .any(|&b| b)
+    }
+}
+
+/// The blocks, wires and regions of POU `pou`'s diagram (viewed through
+/// the instance at `prefix`, `""` for the program) that drive `path` (a
+/// program path, as for [`explain()`]) in scan `t`: "why it is in this
+/// state now", drawn rather than said.
+///
+/// The same rules as [`explain()`]: the last assignment to it that ran,
+/// what that assignment read (through operators, functions, block calls
+/// and the earlier assignments it is wired from), the gates around it (an
+/// IF arm's own condition and the earlier arms' that had to fail, a CASE
+/// selector, a loop head) and, for every variable read, the same again. A
+/// variable no assignment set this scan is held by the gates that closed:
+/// those, their conditions and the assignments they skipped. An
+/// instance's output is driven by its last call. The variable's own reads
+/// are on the path too. Every node and variable is visited once, so the
+/// cost is linear in the diagram: cheap enough for every frame.
+#[must_use]
+pub fn drivers(m: &Module, t: &dyn Scan, pou: usize, prefix: &str, path: &str) -> Drivers {
+    let Some(p) = m.pous.get(pou) else {
+        return Drivers::default();
+    };
+    let d = &p.diagram;
+    let mut out = Drivers {
+        nodes: vec![false; d.nodes.len()],
+        wires: vec![false; d.wires.len()],
+        regions: vec![false; d.regions.len()],
+    };
+    let path: String = path
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    let Some(local) = path.strip_prefix(&prefix.to_ascii_uppercase()) else {
+        return out;
+    };
+    let mut into: Vec<Vec<usize>> = vec![Vec::new(); d.nodes.len()];
+    for (k, w) in d.wires.iter().enumerate() {
+        into[w.to.0 as usize].push(k);
+    }
+    let mut w = Walk {
+        d,
+        t,
+        into,
+        out: &mut out,
+        seen: HashSet::new(),
+        vars: vec![local.to_string()],
+        nodes: Vec::new(),
+    };
+    for n in &d.nodes {
+        if matches!(&n.kind, NodeKind::Read { path } if path == local) {
+            w.nodes.push(n.id);
+        }
+    }
+    w.run(p);
+    out
+}
+
+struct Walk<'a, 'o> {
+    d: &'a Diagram,
+    t: &'a dyn Scan,
+    /// Per node, the wires into it.
+    into: Vec<Vec<usize>>,
+    out: &'o mut Drivers,
+    seen: HashSet<String>,
+    vars: Vec<String>,
+    nodes: Vec<NodeId>,
+}
+
+impl Walk<'_, '_> {
+    fn run(&mut self, p: &Pou) {
+        loop {
+            if let Some(n) = self.nodes.pop() {
+                self.node(n);
+            } else if let Some(v) = self.vars.pop() {
+                if self.seen.insert(v.clone()) {
+                    self.var(p, &v);
+                }
+            } else {
+                return;
+            }
+        }
+    }
+
+    fn var(&mut self, p: &Pou, v: &str) {
+        let d = self.d;
+        let writes: Vec<NodeId> = d
+            .nodes
+            .iter()
+            .filter(|n| matches!(&n.kind, NodeKind::Write { path } if path == v))
+            .map(|n| n.id)
+            .collect();
+        if writes.is_empty() {
+            // An instance's output: its last call drives it.
+            if let Some(dot) = v.rfind('.') {
+                let inst = &v[..dot];
+                if p.vars
+                    .get(crate::lower::root_of(inst))
+                    .is_some_and(|x| x.fb.is_some())
+                {
+                    let calls: Vec<NodeId> = d
+                        .nodes
+                        .iter()
+                        .filter(|n| matches!(&n.kind, NodeKind::Fb { instance, .. } if instance == inst))
+                        .map(|n| n.id)
+                        .collect();
+                    if let Some(c) = last_ran(d, self.t, &calls).or_else(|| calls.last().copied()) {
+                        self.nodes.push(c);
+                    }
+                }
+            }
+            return;
+        }
+        if let Some(w) = last_ran(d, self.t, &writes) {
+            self.nodes.push(w);
+            return;
+        }
+        // Held: the gates that kept each assignment from running.
+        for w in writes {
+            self.out.nodes[w.0 as usize] = true;
+            if let Some(closed) = closed_gate(d, self.t, d.node(w).region) {
+                self.region(closed);
+            }
+        }
+    }
+
+    /// Node `n`, everything feeding it, and the gates it sits behind.
+    fn node(&mut self, n: NodeId) {
+        let k = n.0 as usize;
+        if self.out.nodes[k] {
+            return;
+        }
+        self.out.nodes[k] = true;
+        for &w in &self.into[k] {
+            self.out.wires[w] = true;
+            self.nodes.push(self.d.wires[w].from);
+        }
+        let node = self.d.node(n);
+        if let NodeKind::Read { path } = &node.kind {
+            self.vars.push(path.clone());
+        }
+        if let Some(r) = node.region {
+            self.region(r);
+        }
+    }
+
+    /// Region `r`, the regions around it, and what each gate tests: its
+    /// condition (an IF arm's, with the earlier arms' that had to fail),
+    /// selector or loop head.
+    fn region(&mut self, r: RegionId) {
+        let mut at = Some(r);
+        while let Some(r) = at {
+            if self.out.regions[r.0 as usize] {
+                return;
+            }
+            self.out.regions[r.0 as usize] = true;
+            let region = self.d.region(r);
+            if matches!(region.kind, RegionKind::Elsif | RegionKind::Else) {
+                for s in &self.d.regions {
+                    if s.stmt == region.stmt
+                        && s.arm < region.arm
+                        && let Some((g, _)) = s.gate
+                    {
+                        self.nodes.push(g);
+                    }
+                }
+            }
+            if let Some((g, _)) = region.gate {
+                self.nodes.push(g);
+            }
+            at = region.parent;
         }
     }
 }

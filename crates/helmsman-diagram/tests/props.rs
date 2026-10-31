@@ -13,8 +13,8 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use common::{SIZES, check};
-use helmsman_diagram::{annotate, diff, explain, lower};
-use helmsman_iec::{Image, compile};
+use helmsman_diagram::{Diagram, NodeId, NodeKind, Why, annotate, diff, drivers, explain, lower};
+use helmsman_iec::{Image, Program, Ty, Value, compile};
 use proptest::prelude::*;
 
 fn stmt() -> impl Strategy<Value = String> {
@@ -28,18 +28,22 @@ fn stmt() -> impl Strategy<Value = String> {
         5 => format!("LIMIT(0, {v}, {k})"),
         _ => format!("{v} MOD 7"),
     });
-    let cond = (var.clone(), 0..6u8, -5i32..6).prop_map(|(v, op, k)| match op {
+    let cond = (var.clone(), 0..7u8, -5i32..6).prop_map(|(v, op, k)| match op {
         0 => format!("{v} > {k}"),
         1 => format!("{v} = {k}"),
         2 => "x".to_string(),
         3 => "f.q AND NOT y".to_string(),
-        4 => format!("tm.Q OR {v} <= {k}"),
+        4 => "NOT tm.Q AND NOT NOT x".to_string(),
+        5 => format!("tm.Q OR {v} <= {k}"),
         _ => format!("y AND {v} < {k}"),
     });
     let leaf = prop_oneof![
         (var.clone(), expr.clone()).prop_map(|(v, e)| format!("{v} := {e};")),
         cond.clone().prop_map(|c| format!("x := {c};")),
         Just("y := NOT y;".to_string()),
+        Just("x := NOT bs[a MOD 4] OR NOT bs[1] OR NOT TRUE;".to_string()),
+        Just("wd := NOT wd AND 16#FF;".to_string()),
+        cond.clone().prop_map(|c| format!("y := NOT ({c});")),
         Just("f(in := x);".to_string()),
         Just("f(in := y, q => x);".to_string()),
         Just("tm(IN := x, PT := T#5ms, ET => et);".to_string()),
@@ -83,7 +87,7 @@ q := t.Q;
 END_FUNCTION_BLOCK
 PROGRAM t
 VAR inp AT %IB0 : BYTE; a, b, c, i, n : INT; x, y : BOOL; f : pulse; tm : TON; et : TIME;
-arr : ARRAY[0..3] OF INT; o AT %QW0 : INT; END_VAR
+arr : ARRAY[0..3] OF INT; o AT %QW0 : INT; bs : ARRAY[0..3] OF BOOL; wd : WORD; END_VAR
 ",
     );
     for st in body {
@@ -125,6 +129,27 @@ proptest! {
                 prop_assert!(w.from < w.to, "producers come first: {:?}", w);
             }
             check(d);
+            let prefix = if pou.name == "PULSE" { "F." } else { "" };
+            for w in d.wires.iter().filter(|w| w.negated) {
+                prop_assert!(
+                    feeds_bool(&p, prefix, d, w.from, w.out),
+                    "a negated wire carries a BOOL: {:?} from {:?}\n{}",
+                    w,
+                    d.node(w.from),
+                    src
+                );
+            }
+            for n in &d.nodes {
+                if n.kind == (NodeKind::Op { op: "NOT".into() }) {
+                    let w = d.inputs(n.id).next().unwrap();
+                    prop_assert!(
+                        !feeds_bool(&p, prefix, d, w.from, w.out),
+                        "no NOT block on a BOOL: {:?}\n{}",
+                        n,
+                        src
+                    );
+                }
+            }
             // A refit of an untouched layout keeps every box where it was.
             let mut r = d.clone();
             helmsman_diagram::layout::refit(&mut r);
@@ -144,13 +169,78 @@ proptest! {
             for pou in &m.pous {
                 let live = annotate(&pou.diagram, &t, if pou.name == "PULSE" { "F." } else { "" });
                 prop_assert_eq!(live.values.len(), pou.diagram.nodes.len());
+                for (k, w) in pou.diagram.wires.iter().enumerate() {
+                    if w.negated && let Some(v) = live.wire(&pou.diagram, k) {
+                        prop_assert!(matches!(v, Value::Bool(_)), "{:?} carries {:?}", w, v);
+                    }
+                }
             }
+            let top = m.pous.iter().position(|q| q.name == "T").unwrap();
             for (path, _) in map.vars() {
                 let why = explain(&m, &t, path, 4);
                 prop_assert_eq!(why.path.as_str(), path);
                 prop_assert!(!why.outline().is_empty());
+                // The highlighted path holds the assignment explain names.
+                let on = drivers(&m, &t, top, "", path);
+                if let Why::Assigned { pou, stmt, .. } = &why.why
+                    && pou == "T"
+                {
+                    let d = &m.pous[top].diagram;
+                    prop_assert!(
+                        d.nodes.iter().any(|n| n.stmt == *stmt
+                            && matches!(n.kind, NodeKind::Write { .. })
+                            && on.node(n.id)),
+                        "{} {:?}\n{}",
+                        path,
+                        why.outline(),
+                        src
+                    );
+                }
             }
         }
+    }
+}
+
+/// Whether output `out` of node `n` (POU viewed at `prefix`) is BOOL, by
+/// the compiled program's own types, not lowering's.
+fn feeds_bool(p: &Program, prefix: &str, d: &Diagram, n: NodeId, out: usize) -> bool {
+    let node = d.node(n);
+    let ty = |path: &str| {
+        // An element's type: any element's.
+        let mut plain = String::new();
+        let mut depth = 0;
+        for c in path.chars() {
+            match c {
+                '[' => {
+                    depth += 1;
+                    if depth == 1 {
+                        plain.push_str("[0");
+                    }
+                }
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        plain.push(']');
+                    }
+                }
+                _ if depth == 0 => plain.push(c),
+                _ => {}
+            }
+        }
+        p.ty(&format!("{prefix}{plain}"))
+    };
+    match &node.kind {
+        NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
+            ty(path) == Some(Ty::Bool)
+        }
+        NodeKind::Fb { instance, .. } => ty(&format!("{instance}.{}", node.outs[out])) == Some(Ty::Bool),
+        NodeKind::Const { value } => matches!(value, Some(Value::Bool(_))),
+        NodeKind::Op { op } => match op.as_str() {
+            "=" | "<>" | "<" | "<=" | ">" | ">=" => true,
+            "AND" | "OR" | "XOR" | "NOT" => d.inputs(n).all(|w| feeds_bool(p, prefix, d, w.from, w.out)),
+            _ => false,
+        },
+        NodeKind::Func { .. } | NodeKind::For { .. } | NodeKind::Jump => false,
     }
 }
 
