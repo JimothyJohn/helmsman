@@ -163,10 +163,12 @@ END_FUNCTION_BLOCK
      4  double flash: on, off, on for PERIOD / 8 each, then off for the
         rest of PERIOD
    EN FALSE forces Q FALSE, and so does any other MODE. A blinking mode with
-   PERIOD <= 0 (or one too short to divide into its steps) is steady on: the
-   light still says something is up, it never chatters at scan rate, and
-   nothing divides by zero. A pattern starts from its beginning (on) when EN
-   rises, when MODE changes, and after a steady or off spell. Time is the
+   PERIOD <= 0 (or one too short to divide into its steps) faults the
+   module (FaultKind::BadParam, at the line that called the block): a bad
+   param or an uninitialised TIME is loud, not a light that looks right.
+   Off, steady, and EN FALSE never look at PERIOD, so they never fault. A
+   pattern starts from its beginning (on) when EN rises, when MODE
+   changes, and after a steady or off spell. Time is the
    scan clock (__NOW), like the timers'; the phase runs on across scans, so a
    long scan gap lands where the pattern would be, and a PERIOD change keeps
    the phase (within the new cycle). *)
@@ -192,8 +194,7 @@ FUNCTION_BLOCK BLINK_PATTERN
       STEP := CYCLE / 2;
     END_IF;
     IF STEP <= T#0s THEN
-      Q := TRUE;
-      RUNNING := FALSE;
+      Q := __BAD_BLINK_PERIOD();
     ELSE
       IF NOT RUNNING OR MODE <> SHOWN THEN
         RUNNING := TRUE;
