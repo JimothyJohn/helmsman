@@ -994,6 +994,36 @@
   difficulty: low
   id: save-scope
 
+- [ ] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether the simulation's editor behaves like the box's
+  options: typing runs, Deploy marks (built) | typing only checks (errors marked), Deploy runs, like a box
+  est: 1h
+  difficulty: low
+  id: sim-typing-runs
+
+- [ ] **A project with two PROGRAMs in the simulation?** On a box each PROGRAM of a project is a module of its own. The simulation's interpreter runs one program, so a project with two PROGRAMs fails there with "only one PROGRAM is supported". Built: that error, pointing at the second PROGRAM's file and line.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what the simulation runs for a multi-PROGRAM project
+  options: refuse, as built | run the first PROGRAM and say so | run each as its own task, like a box (simulation runtime work)
+  est: 1d
+  difficulty: med
+  id: sim-multi-program
+
+- [ ] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether a fresh box runs the demo or waits for an engineer's first deploy
+  options: seed and deploy (built) | seed the project only, nothing runs until an engineer deploys | no seed
+  est: 30m
+  difficulty: low
+  id: seed-deploys
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -1224,10 +1254,11 @@
   asked: 2026-10-31
   by: claude-agent
 
-- [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc) instead of one PLC_PROGRAM file, once the editor UI can deploy.
-  needs: the editor UI (UI.md step 2, canvas side)
-  result: the Pi boots the deployed project; the first boot runs nothing until a deploy
-  est: 1h
+- [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc); a first install seeds project `line` from programs/line.st, deployed (`helmsman-plc project seed`, the unit's ExecStartPre); `PLC_MODE=program` keeps the old one-file mode. Built and tested here; yours to run against the Pi (native terminal or `!`: it needs Docker, trunk, and SSH with sudo on the Pi, and the firewall step is refused from an agent).
+  needs: you to run the two commands (the Pi's IP); the Pi on Debian Trixie with key SSH and passwordless sudo (scripts/pi-prep.sh)
+  result: the Pi serves the editor with projects, running `line`; you can sign in as an engineer and edit, deploy and force
+  notes: PLC_API=0.0.0.0:8080 scripts/pi-deploy-plc.sh nick@<pi-ip>   then   scripts/pi-account.sh nick@<pi-ip> nick engineer
+  est: 15m
   difficulty: low
   id: pi-projects
   asked: 2026-10-31

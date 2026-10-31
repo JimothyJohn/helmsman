@@ -12,8 +12,10 @@ use helmsman_iec::{Ty, Value};
 use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{
-    EXAMPLES, MAX_PERIOD, MAX_SOURCE, MIN_PERIOD, Point, Session, TREND_MS, TREND_SIGNALS, Widget,
+    MAX_PERIOD, MAX_SOURCE, MIN_PERIOD, Point, Session, TREND_MS, TREND_SIGNALS, Widget,
 };
+use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
+use crate::sim_projects::{SimProjects, Storage};
 use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 
@@ -99,17 +101,35 @@ pub struct PlaygroundView {
     pub notice: Option<String>,
     /// Why the last "Ask" could not be sent.
     pub ask_error: Option<String>,
+    /// The projects, kept in the browser's storage.
+    pub proj: SimProjects,
+    pub files_ui: FilesUi,
+    /// Downloads made (natively nothing saves them: tests read them).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub downloads: Vec<(String, Vec<u8>)>,
 }
 
 impl PlaygroundView {
     #[must_use]
     pub fn new() -> Self {
         #[cfg(target_arch = "wasm32")]
+        let projects: Box<dyn Storage> = Box::new(crate::web::LocalProjects);
+        #[cfg(not(target_arch = "wasm32"))]
+        let projects: Box<dyn Storage> = Box::new(crate::sim_projects::MemStorage::default());
+        Self::with_storage(projects)
+    }
+
+    /// The simulation with its projects kept in `projects`; it opens the
+    /// project open last (else the first example), running.
+    #[must_use]
+    pub fn with_storage(projects: Box<dyn Storage>) -> Self {
+        #[cfg(target_arch = "wasm32")]
         let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::web::LocalKeyStore);
         #[cfg(not(target_arch = "wasm32"))]
         let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::claude::NoStore);
+        let proj = SimProjects::load(projects);
         let mut v = Self {
-            session: Session::new(EXAMPLES[0].src),
+            session: Session::new(&proj.build_src()),
             viewer: None,
             viewer_of: String::new(),
             pending: None,
@@ -119,10 +139,99 @@ impl PlaygroundView {
             proxy_asked: false,
             notice: None,
             ask_error: None,
+            proj,
+            files_ui: FilesUi::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            downloads: Vec::new(),
         };
         v.session.set_running(true);
+        v.proj.running = Some(v.proj.open.clone());
         v.sync_viewer();
         v
+    }
+
+    /// Loads the open project's build into the session, compiled and
+    /// stopped.
+    fn reload(&mut self) {
+        let src = self.proj.build_src();
+        self.session.load(&src);
+        self.pending = None;
+        self.sync_viewer();
+    }
+
+    /// Opens project `name`, compiled and stopped (Deploy runs it).
+    pub fn open_project(&mut self, name: &str) {
+        self.proj.open_project(name);
+        self.reload();
+        self.notice = None;
+    }
+
+    /// The editor's text changed: the session's source follows at once
+    /// and compiles after the pause.
+    fn edited(&mut self, t: f64) {
+        self.session.src = self.proj.build_src();
+        self.pending = Some(t);
+        self.notice = None;
+    }
+
+    /// The compile errors, each with its file and line.
+    #[must_use]
+    pub fn diags(&self) -> Vec<Diag> {
+        self.session
+            .diags
+            .iter()
+            .map(|d| {
+                let (file, line) = self
+                    .proj
+                    .locate(d.pos.line)
+                    .unwrap_or_else(|| (self.proj.current.clone(), d.pos.line));
+                Diag {
+                    file,
+                    line,
+                    col: d.pos.col,
+                    message: d.msg.clone(),
+                }
+            })
+            .collect()
+    }
+
+    /// Opens `file` at `line` in the ST editor.
+    fn goto(&mut self, file: &str, line: u32, chrome: &mut Chrome) {
+        self.proj.open_file(file);
+        chrome.goto(line);
+    }
+
+    /// Carries out what the Files sidebar asked.
+    fn act(&mut self, a: Act) {
+        match a {
+            Act::OpenProject(p) => self.open_project(&p),
+            Act::OpenFile(f) => self.proj.open_file(&f),
+            Act::NewProject(p) => {
+                self.proj.create(&p, None);
+                self.reload();
+            }
+            Act::CopyProject { from, to } => {
+                self.proj.create(&to, Some(&from));
+                self.reload();
+            }
+            Act::RenameProject { from, to } => self.proj.rename(&from, &to),
+            Act::DeleteProject(p) => {
+                let open = self.proj.open == p;
+                self.proj.delete(&p);
+                if open {
+                    self.reload();
+                }
+            }
+            Act::NewFile(f) => self.proj.new_file(&f),
+            Act::RenameFile { from, to } => {
+                self.proj.rename_file(&from, &to);
+                self.edited(f64::NEG_INFINITY);
+            }
+            Act::DeleteFile(f) => {
+                self.proj.delete_file(&f);
+                self.edited(f64::NEG_INFINITY);
+            }
+        }
     }
 
     /// Rebuilds the diagram when the program running changed.
@@ -148,9 +257,28 @@ impl PlaygroundView {
         });
     }
 
-    /// Loads `src` into the editor, compiled and stopped.
+    /// Loads `src` into the editor (the open file, or the project's first
+    /// program file when a map or settings file is open), compiled and
+    /// stopped.
     pub fn load(&mut self, src: &str, what: &str) {
-        let ok = self.session.load(src);
+        if crate::sim_projects::is_st(&self.proj.current) {
+            if let Some(t) = self.proj.current_text_mut() {
+                src.clone_into(t);
+            }
+        } else if let Some(f) = self
+            .proj
+            .files
+            .keys()
+            .find(|f| crate::sim_projects::is_st(f))
+            .cloned()
+        {
+            self.proj.files.insert(f.clone(), src.to_string());
+            self.proj.current = f;
+        } else {
+            self.proj.files.insert("main.st".into(), src.to_string());
+            self.proj.current = "main.st".into();
+        }
+        let ok = self.session.load(&self.proj.build_src());
         self.pending = None;
         self.sync_viewer();
         self.notice = Some(if ok {
@@ -179,13 +307,20 @@ impl PlaygroundView {
         }
     }
 
-    /// What the header names: the program.
+    /// What the header names: the open project.
     #[must_use]
     pub fn title(&self) -> String {
+        self.proj.open.clone()
+    }
+
+    /// The PROGRAM running, in lower case (the Monitor's name for it);
+    /// the project's name while nothing compiled.
+    #[must_use]
+    pub fn program_name(&self) -> String {
         self.viewer
             .as_ref()
             .and_then(|v| v.module.program())
-            .map_or_else(|| "Simulation".into(), |p| p.name.to_ascii_lowercase())
+            .map_or_else(|| self.title(), |p| p.name.to_ascii_lowercase())
     }
 
     /// Sends the typed question about the editor's program.
@@ -240,21 +375,8 @@ impl PlaygroundView {
 }
 
 impl Body for PlaygroundView {
-    fn toolbar(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
+    fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         {
-            let mut pick = None;
-            egui::ComboBox::from_id_salt("pg-examples")
-                .selected_text("Examples")
-                .show_ui(ui, |ui| {
-                    for (k, e) in EXAMPLES.iter().enumerate() {
-                        if ui.selectable_label(false, e.name).clicked() {
-                            pick = Some(k);
-                        }
-                    }
-                });
-            if let Some(k) = pick {
-                self.load(EXAMPLES[k].src, &format!("the {} example", EXAMPLES[k].name));
-            }
             let moved = self.viewer.as_ref().is_some_and(Viewer::rearranged);
             if ui
                 .add_enabled(moved, egui::Button::new("Reset layout"))
@@ -327,6 +449,22 @@ impl Body for PlaygroundView {
         if let Some(n) = &self.notice {
             ui.label(RichText::new(n).color(STEEL));
         }
+        if let Some((n, error)) = self.proj.notice.clone() {
+            let r = ui.label(RichText::new(n).color(if error { RED } else { STEEL }));
+            chrome.hit("notice", r.rect);
+            if error && self.proj.pending.is_some() {
+                let r = ui.button("Replace");
+                chrome.hit("replace", r.rect);
+                if r.clicked() {
+                    self.proj.replace();
+                    self.reload();
+                }
+            }
+        }
+        if let Some(why) = &self.proj.storage_problem {
+            let r = ui.label(RichText::new(format!("⚠ {why}")).color(STEEL));
+            chrome.hit("storage", r.rect);
+        }
     }
 
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -349,21 +487,26 @@ impl Body for PlaygroundView {
                     .color(STEEL),
             );
         }
-        let diags: Vec<(u32, u32)> = self
-            .session
-            .diags
+        let all = self.diags();
+        let current = self.proj.current.clone();
+        let diags: Vec<(u32, u32)> = all
             .iter()
-            .map(|d| (d.pos.line, d.pos.col))
+            .filter(|d| d.file == current)
+            .map(|d| (d.line, d.col))
             .collect();
         let avail = ui.available_height();
         let list_h = if self.session.diags.is_empty() { 0.0 } else { 110.0 };
         let size = Vec2::new(ui.available_width(), (avail - list_h).max(120.0));
+        let Some(text) = self.proj.current_text_mut() else {
+            ui.label(RichText::new("No file open: make one in Files.").color(STEEL));
+            return;
+        };
         let r = ui
             .allocate_ui(size, |ui| {
                 editor::st_editor(
                     ui,
                     egui::Id::unique("pg-source"),
-                    &mut self.session.src,
+                    text,
                     &diags,
                     MAX_SOURCE,
                     chrome,
@@ -371,8 +514,7 @@ impl Body for PlaygroundView {
             })
             .inner;
         if r.changed() {
-            self.pending = Some(t);
-            self.notice = None;
+            self.edited(t);
         }
         if !self.session.diags.is_empty() {
             ui.separator();
@@ -380,22 +522,39 @@ impl Body for PlaygroundView {
                 .id_salt("pg-diags")
                 .max_height(list_h)
                 .show(ui, |ui| {
-                    for d in &self.session.diags {
-                        ui.label(
-                            RichText::new(format!("{}:{}  {}", d.pos.line, d.pos.col, d.msg))
-                                .monospace()
-                                .color(RED),
-                        );
+                    if let Some(d) = projects::diags_ui(ui, &all, chrome) {
+                        self.goto(&d.file, d.line, chrome);
                     }
                 });
         }
     }
 
-    /// The program (one file until projects come) and its outline: every
-    /// block instance it calls, nested; a click shows that one's diagram.
-    fn files(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
-        let name = self.title();
-        ui.label(RichText::new(format!("▾ {name}.st")).monospace().color(WHITE));
+    /// The projects (the visitor's, then the examples), the open one's
+    /// files, and under them the program's outline: every block instance
+    /// it calls, nested; a click shows that one's diagram.
+    fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let rows = self.proj.rows();
+        let files: Vec<(String, bool)> = self
+            .proj
+            .files
+            .keys()
+            .map(|f| (f.clone(), self.proj.file_dirty(f)))
+            .collect();
+        let open = self.proj.open.clone();
+        let current = self.proj.current.clone();
+        let listing = Listing {
+            projects: &rows,
+            open: Some(&open),
+            files,
+            current: Some(&current),
+            write: Ok(()),
+            dirty: self.proj.dirty(),
+        };
+        if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
+            self.act(a);
+        }
+        ui.separator();
+        ui.label(RichText::new("Program").strong().color(STEEL));
         match &mut self.viewer {
             Some(v) => {
                 ui.indent("pg-tree", |ui| v.tree_ui(ui));
@@ -424,14 +583,21 @@ impl Body for PlaygroundView {
             v.crumbs_ui(ui, &[]);
             let area = ui.available_rect_before_wrap();
             v.canvas(ui, scan);
+            let mut jump = None;
             if v.pick != self.last_pick {
                 self.last_pick = v.pick;
                 if let Some((line, _)) = v.picked() {
-                    chrome.goto(line);
+                    jump = Some(line);
                 }
             }
             let reads = v.reads_on_screen();
             self.map_inputs(ui, area, &reads);
+            if let Some(line) = jump {
+                match self.proj.locate(line) {
+                    Some((file, l)) => self.goto(&file, l, chrome),
+                    None => chrome.goto(line),
+                }
+            }
             return;
         }
         let rect = ui.available_rect_before_wrap();
@@ -919,6 +1085,71 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
 }
 
 const DRAG_HINT: &str = "drag sideways to change, or click to type";
+
+impl Workspace for PlaygroundView {
+    fn dirty(&self) -> bool {
+        self.proj.dirty()
+    }
+
+    fn writable(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn save(&mut self) {
+        self.proj.save();
+    }
+
+    /// Compiles the open project and runs it in the page.
+    fn deploy(&mut self) {
+        let src = self.proj.build_src();
+        let ok = self.session.set_source(&src);
+        self.pending = None;
+        self.sync_viewer();
+        if ok {
+            self.session.set_running(true);
+            self.proj.running = Some(self.proj.open.clone());
+            let program = self
+                .viewer
+                .as_ref()
+                .and_then(|v| v.module.program())
+                .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
+            self.notice = Some(format!("{} is running in this page{program}.", self.proj.open));
+        } else {
+            self.notice = Some(format!(
+                "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
+                self.proj.open,
+                self.session.diags.len()
+            ));
+        }
+    }
+
+    fn busy(&self) -> bool {
+        false
+    }
+
+    fn upload(&mut self, file: &str, bytes: Vec<u8>) {
+        let before = (self.proj.open.clone(), self.proj.build_src());
+        self.proj.upload(file, &bytes);
+        if before.0 != self.proj.open {
+            self.reload();
+        } else if before.1 != self.proj.build_src() {
+            self.session.src = self.proj.build_src();
+            self.pending = Some(f64::NEG_INFINITY);
+        }
+    }
+
+    fn download(&mut self) {
+        match self.proj.zip() {
+            Ok((name, bytes)) => {
+                #[cfg(target_arch = "wasm32")]
+                crate::web::download_bytes(&name, &bytes, "application/zip");
+                #[cfg(not(target_arch = "wasm32"))]
+                self.downloads.push((name, bytes));
+            }
+            Err(e) => self.proj.notice = Some((format!("Cannot download: {e}"), true)),
+        }
+    }
+}
 
 impl Default for PlaygroundView {
     fn default() -> Self {

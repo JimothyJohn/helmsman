@@ -59,7 +59,10 @@ this; change it here first when a decision changes.
   settings). **Upload:** that `.zip` back, or single `.st`, PLCopen XML or
   L5X files into the open project (XML and L5X converted to ST).
 - In the browser simulation, projects persist in the browser's storage, with
-  the same Upload and Download.
+  the same Upload and Download (the box's `.zip`). The built-in examples are
+  read-only starter projects: Save keeps your own copy. Deploy compiles and
+  runs the project in the page. A browser that keeps nothing (a private
+  window) still works; the projects last until the page closes.
 
 ## Monitor (phone to wall TV; replaces Andon)
 

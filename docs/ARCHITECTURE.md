@@ -65,6 +65,7 @@ Three directions of traffic, three different rules:
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
+| `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
@@ -1018,7 +1019,8 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   that is and whether it is still what runs (a later apply or rollback
   moves the head, and `current` goes false). The running project cannot
   be deleted; a rename carries the record.
-- **ZIP** (`project::zip`, hand-written on APPNOTE 6.3.10; DEFLATE through
+- **ZIP** (`project::zip`, in the `helmsman-project` crate since the
+  simulation uses it too; hand-written on APPNOTE 6.3.10; DEFLATE through
   `miniz_oxide`, already in the lockfile): a download is the files
   stored, sorted, with fixed timestamps, so download, upload, download is
   byte-identical. An upload (2 MiB body) is hostile: at most 128 entries
@@ -1091,8 +1093,29 @@ module view. Otherwise:
   imported into the open project, and a refusal (L5X, 415) is shown in
   the box's words. **Download**: the browser fetches `GET .../zip`.
 
-Not built yet (cards): L5X to ST (`l5x-import`), and the Pi's service
-running `--projects` (`pi-projects`).
+**In the simulation** (`sim_projects.rs`, the same Files sidebar and
+header; contract in `sim_projects_tests.rs`): projects live in the page's
+`localStorage` (`helmsman-projects 1` JSON, every project held to the
+rules on read; every access wrapped, and a page whose storage throws
+keeps them in memory and says so). The built-in examples are read-only
+projects (named after their PROGRAM): they open and edit like any other,
+and Save keeps a copy under a free name. The build is the box's (one
+`.st` as it is; several in name order under `(* file NAME *)` lines), so
+errors and block clicks map to a file and line. Deploy compiles and runs
+it in the page. Upload and Download use `helmsman-project`'s `.zip`;
+`.st` and `PLCopen` `.xml` import into the open project; L5X is refused
+as the box refuses it.
+
+**The Pi** (`pi-projects`): `scripts/pi-deploy-plc.sh` installs the
+binary and the canvas and runs `helmsman-plc --projects`
+(`PLC_MODE=program` keeps one program file). Its unit runs `helmsman-plc
+project seed NAME FILE.st` before every start (`project::seed`): only on
+a first install (no project, nothing deployed) it makes the project and
+commits its build as the store's first snapshot (approver `first
+install`), so the box boots running `line`; afterwards it touches
+nothing. `scripts/pi-account.sh` makes the engineer login.
+
+Not built yet (cards): L5X to ST (`l5x-import`).
 
 ### Forced inputs (`force-inputs`, built)
 
