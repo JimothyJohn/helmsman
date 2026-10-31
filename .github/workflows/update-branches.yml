@@ -9,7 +9,8 @@
 # Token: an update pushed with GITHUB_TOKEN starts no workflows, so the
 # updated PR would wait forever for its checks. UPDATE_BRANCH_TOKEN is a
 # fine-grained PAT on this repo only, with Contents and Pull requests
-# read/write. Without it the job fails and says so.
+# read/write. Until it is set the job only leaves a notice and succeeds, so
+# the 15-minute schedule doesn't fail (and mail) every run.
 # Triggers: a push to dev; and every 15 minutes, because a merge that
 # automerge.yml enabled (GITHUB_TOKEN) fires no push event either.
 # Nothing here checks out or runs PR code: only `gh` calls.
@@ -40,8 +41,8 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::UPDATE_BRANCH_TOKEN is not set (see the header of this workflow)"
-            exit 1
+            echo "::notice::UPDATE_BRANCH_TOKEN is not set yet; nothing updated (see the header of this workflow)"
+            exit 0
           fi
           prs="$(gh pr list -R "$REPO" --base dev --state open --limit 100 \
             --json number,isDraft,autoMergeRequest,isCrossRepository,mergeStateStatus \
