@@ -44,7 +44,7 @@ fn ctx() -> Arc<Ctx> {
     ))
 }
 
-fn frame(head: &[u8; 4], body: &[u8]) -> Vec<u8> {
+fn frame(head: [u8; 4], body: &[u8]) -> Vec<u8> {
     let mut v = head.to_vec();
     v.extend_from_slice(&u32::try_from(body.len() + 8).unwrap().to_le_bytes());
     v.extend_from_slice(body);
@@ -59,7 +59,7 @@ fn hello() -> Vec<u8> {
         .u32(0)
         .u32(0)
         .string(Some("opc.tcp://127.0.0.1:4840/"));
-    frame(b"HELF", &w.buf)
+    frame(*b"HELF", &w.buf)
 }
 
 fn header(w: &mut Writer, auth: &NodeId, handle: u32) {
@@ -78,14 +78,14 @@ fn open() -> Vec<u8> {
     w.node_id(&NodeId::ns0(446));
     header(&mut w, &NodeId::ns0(0), 1);
     w.u32(0).u32(0).u32(1).bytes(Some(&[])).u32(60_000);
-    frame(b"OPNF", &w.buf)
+    frame(*b"OPNF", &w.buf)
 }
 
 /// A `MSG` on channel `channel` (token 1).
 fn msg(channel: u32, seq: u32, request_id: u32, body: &[u8]) -> Vec<u8> {
     let mut w = Writer::new();
     w.u32(channel).u32(1).u32(seq).u32(request_id).raw(body);
-    frame(b"MSGF", &w.buf)
+    frame(*b"MSGF", &w.buf)
 }
 
 fn create_session() -> Vec<u8> {
@@ -246,7 +246,7 @@ fn security_policies_other_than_none_are_refused() {
         .bytes(None)
         .u32(1)
         .u32(1);
-    c.feed(&frame(b"OPNF", &w.buf), now);
+    c.feed(&frame(*b"OPNF", &w.buf), now);
     let out = c.take_output();
     assert!(out.windows(4).any(|w| w == b"ERRF"), "{out:?}");
     assert!(c.is_closed());

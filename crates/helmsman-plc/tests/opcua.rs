@@ -214,7 +214,7 @@ fn writes_are_refused_and_change_nothing() {
         let write = |id: NodeId, v: Variant| WriteValue {
             node_id: id,
             attribute_id: AttributeId::Value as u32,
-            index_range: Default::default(),
+            index_range: opcua::types::NumericRange::default(),
             value: DataValue {
                 value: Some(v),
                 ..Default::default()
@@ -290,14 +290,14 @@ fn a_subscription_delivers_changes() {
         // The initial value, then each change the box publishes.
         let mut seen = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut next = 1.0;
+        let mut next: u32 = 1;
         while Instant::now() < deadline && !seen.contains(&Variant::Double(3.0)) {
             if let Ok(dv) = rx.recv_timeout(Duration::from_millis(50)) {
                 seen.push(dv.value.unwrap_or(Variant::Empty));
             }
-            if next <= 3.0 && seen.len() as f64 >= next {
-                feed.offer(snapshot(&shape, 1 + next as u64, next));
-                next += 1.0;
+            if next <= 3 && seen.len() >= next as usize {
+                feed.offer(snapshot(&shape, 1 + u64::from(next), f64::from(next)));
+                next += 1;
             }
         }
         assert_eq!(seen.first(), Some(&Variant::Double(12.5)), "{seen:?}");

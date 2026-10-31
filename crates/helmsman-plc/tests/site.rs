@@ -599,6 +599,7 @@ fn plc_err(args: &[&str]) -> String {
         .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st"))
         .arg("--state-dir")
         .arg(tmp("state"))
+        .args(["--opcua", "off"])
         .args(args)
         .output()
         .unwrap();
