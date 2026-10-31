@@ -565,19 +565,16 @@ impl SiteView {
                     }
                     ui.end_row();
                     for l in &lines {
-                        match &l.url {
-                            Some(url) => {
-                                ui.hyperlink_to(RichText::new(&l.name).strong(), url)
-                                    .on_hover_text(format!("open {} (id {})", url, l.id));
-                            }
-                            None => {
-                                let name = if l.this {
-                                    format!("{} (this box)", l.name)
-                                } else {
-                                    l.name.clone()
-                                };
-                                ui.label(RichText::new(name).strong());
-                            }
+                        if let Some(url) = &l.url {
+                            ui.hyperlink_to(RichText::new(&l.name).strong(), url)
+                                .on_hover_text(format!("open {} (id {})", url, l.id));
+                        } else {
+                            let name = if l.this {
+                                format!("{} (this box)", l.name)
+                            } else {
+                                l.name.clone()
+                            };
+                            ui.label(RichText::new(name).strong());
                         }
                         ui.label(&l.address);
                         ui.label(RichText::new(&l.status).strong().color(colour(l.health)));

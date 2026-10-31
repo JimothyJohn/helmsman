@@ -219,7 +219,12 @@ fn a_peer_is_listed_at_the_packets_address_and_forgotten_after_expiry() {
     assert_eq!(peers.list(s(6.0))[0].first, s(1.0));
     // Silent: still listed just before expiry, gone at it.
     let gone = s(6.0) + EXPIRY;
-    assert_eq!(peers.list(gone.checked_sub(Duration::from_millis(1)).unwrap()).len(), 1);
+    assert_eq!(
+        peers
+            .list(gone.checked_sub(Duration::from_millis(1)).unwrap())
+            .len(),
+        1
+    );
     assert_eq!(peers.list(gone), Vec::new());
     // Back again: a new peer.
     assert_eq!(peers.datagram(&b.encode(), lan(7), gone), Heard::New);
