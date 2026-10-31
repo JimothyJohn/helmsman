@@ -785,7 +785,7 @@
   id: relay-deploy
   answer: dev stage now, bench Pi only (recommended)
 
-- [ ] **Playground: publish now, or after a review pass?** The public page is master's docs/playground (GitHub Pages, https://jimothyjohn.github.io/helmsman/playground/), so it goes live when dev reaches master. It now has the diagram controls (#92) and rearranging (#93). Publishing puts the visitor-key design (`playground-key`) and the Helmsman name in public. Options: publish with the next dev→master merge (recommended; the page has no secrets and the key is the visitor's); keep it unlisted (no link from the README) until you've used it; hold docs/playground out of master until then.
+- [x] **Playground: publish now, or after a review pass?** The public page is master's docs/playground (GitHub Pages, https://jimothyjohn.github.io/helmsman/playground/), so it goes live when dev reaches master. It now has the diagram controls (#92) and rearranging (#93). Publishing puts the visitor-key design (`playground-key`) and the Helmsman name in public. Options: publish with the next dev→master merge (recommended; the page has no secrets and the key is the visitor's); keep it unlisted (no link from the README) until you've used it; hold docs/playground out of master until then.
   asked: 2026-10-31
   by: claude-session
   needs: your call, and your dev→master merge
