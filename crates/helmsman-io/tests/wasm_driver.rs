@@ -48,7 +48,7 @@ fn wat_driver(src: &str, endpoint: &str) -> Result<WasmDriver, Error> {
     let wasm = wat::parse_str(src).unwrap();
     WasmDriver::load(
         &wasm,
-        &device(endpoint, &[("timeout_ms", "300")]),
+        &device(endpoint, &[("timeout_ms", "1000")]),
         Limits::default(),
     )
 }
@@ -147,14 +147,14 @@ fn harness_bench() -> Bench {
 #[test]
 fn the_modbus_guest_passes_the_harness_the_native_driver_passes() {
     let s = harness_sim();
-    let checks = harness::run(&mut guest(&s.endpoint(), "200"), &harness_bench(), Some(&s));
+    let checks = harness::run(&mut guest(&s.endpoint(), "1000"), &harness_bench(), Some(&s));
     assert!(
         checks.iter().all(|c| c.outcome == Outcome::Pass),
         "{}",
         harness::render(&checks)
     );
     let n = harness_sim();
-    let native_checks = harness::run(&mut native(&n.endpoint(), "200"), &harness_bench(), Some(&n));
+    let native_checks = harness::run(&mut native(&n.endpoint(), "1000"), &harness_bench(), Some(&n));
     let names = |cs: &[harness::Check]| cs.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&checks), names(&native_checks), "the same checks ran");
 }
@@ -801,8 +801,8 @@ fn a_guest_that_reports_errors_gets_them_back_as_the_contract_says() {
 #[test]
 fn a_guest_that_waits_on_a_silent_device_is_cut_off_by_the_calls_deadline() {
     // The device accepts and never answers; the guest ignores every
-    // failed recv and tries again, so only the host's deadline (and then
-    // fuel) can end the call.
+    // failure and sends (reconnecting) and waits again, so only the
+    // host's deadline (and then fuel) can end the call.
     let device = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = device.local_addr().unwrap().to_string();
     thread::spawn(move || {
@@ -813,22 +813,21 @@ fn a_guest_that_waits_on_a_silent_device_is_cut_off_by_the_calls_deadline() {
     });
     let src = guest_src(
         r#"(func (export "read") (param i32 i32)
-             (drop (call $send (i32.const 64) (i32.const 1)))
-             (loop $again (drop (call $recv (i32.const 64) (i32.const 1))) (br $again)))"#,
+             (loop $again (drop (call $send (i32.const 64) (i32.const 1))) (drop (call $recv (i32.const 64) (i32.const 1))) (br $again)))"#,
     );
     let mut d = wat_driver(&src, &addr).unwrap();
     let started = Instant::now();
     let e = d.read(&["x"]).unwrap_err();
     assert!(matches!(&e, Error::Driver(m) if m.contains("fuel")), "{e}");
-    // The call's deadline is two time-outs of 300 ms (one address, plus
-    // one); after it every recv fails at once, and fuel ends the loop.
-    // Without the deadline each recv would wait 300 ms, for ever.
+    // The call's deadline is two time-outs of 1 s (one address, plus
+    // one); after it every send and recv fails at once, and fuel ends
+    // the loop. Without the deadline each recv would wait 1 s, for ever.
     let took = started.elapsed();
     assert!(
-        took >= Duration::from_millis(500),
+        took >= Duration::from_millis(1900),
         "it did wait for the device: {took:?}"
     );
-    assert!(took < Duration::from_secs(5), "{took:?}");
+    assert!(took < Duration::from_secs(15), "{took:?}");
 }
 
 #[test]
