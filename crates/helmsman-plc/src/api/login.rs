@@ -439,6 +439,8 @@ pub(super) fn logout(req: &Request, ctx: &Ctx) -> Response {
         Some(_) => Response::json(status, &body),
         None => audit_full(),
     };
+    // That session's forces end with it.
+    super::forces::sweep(ctx);
     if req.by_cookie {
         r.with("Set-Cookie", clear_cookie())
     } else {

@@ -1055,9 +1055,46 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | `POST /api/projects/{p}/import?file=F[&replace=true]` | engineer | the file's bytes; 201 `{name, version, bytes}` |
 | `GET /api/running` | open | `{project, snapshot, running, current}` |
 
-Not built yet (cards): forcing inputs (`force-inputs`), L5X to ST
-(`l5x-import`), and the Pi's service running `--projects`
-(`pi-projects`).
+Not built yet (cards): L5X to ST (`l5x-import`), and the Pi's service
+running `--projects` (`pi-projects`).
+
+### Forced inputs (`force-inputs`, built)
+
+`helmsman_plc::force` (the set and how it applies) and `api/forces.rs`
+(routes); contract in `tests/projects.rs` (`force` tests) and the
+module's unit tests.
+
+- **What.** An engineer pins an input to a value: an input signal (an
+  `in` signal of the map or the calendar, never another module's output)
+  with a value of its type, or an address of the box's input image
+  (`%IXb.n`, `%IBn`, `%IWn`, `%IDn`, little-endian as the image is) with
+  a value that fits. Forcing a forced point again replaces it; at most 64
+  at once.
+- **When.** Every scan, after the I/O read (the assembly copied into
+  `%I`, the calendar evaluated) and before any module runs, the scan
+  thread writes every force over what was read (`force::Reader::apply`).
+  The API publishes a new immutable set on each change and bumps a
+  generation; the scan picks it up with a `try_lock` and otherwise keeps
+  applying the set it has, so it never waits on the API.
+- **Who and how long.** `POST /api/forces` and the releases need an
+  engineer session (the box token and lesser roles are 403). A force
+  belongs to the session that made it (kept as the session token's
+  SHA-256): it ends at that session's logout, and the API sweeps once a
+  second for sessions that expired or were revoked (`Logins::live`, which
+  never restarts a session's idle time). Every force ends when a project
+  is deployed. Making, replacing and releasing are audited with the
+  person; an automatic release is audited as the box's, with why.
+- **Seen.** `GET /api/forces` lists them; `/api/signals` (and each
+  signal) carries `forced`; the values stream carries `forced` per
+  signal and a `forces` list; every trace (`GET .../trace` and its
+  stream) carries `forces`, so the diagram marks forced points FORCED.
+
+| route | who | body / answer |
+| --- | --- | --- |
+| `GET /api/forces` | open | `{forces: [{id, signal, address, value, by, at}]}` |
+| `POST /api/forces` | engineer | `{signal, value}` or `{address, value}`; 201 the force |
+| `DELETE /api/forces/{id}` | engineer | `{released: [id]}` |
+| `DELETE /api/forces` | engineer | `{released: [ids]}` |
 
 ## Agent loop (`agent-loop`, built)
 

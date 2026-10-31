@@ -26,6 +26,7 @@ use helmsman_plc::api::{
     Api, Approval, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, ModuleInfo, More,
     Plant, Publisher, Shared, swap,
 };
+use helmsman_plc::force::{self, Forces};
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::policy::account::{self, Accounts, Logins};
 use helmsman_plc::policy::pin::{Gate, Pins};
@@ -147,6 +148,10 @@ struct Bench {
     state: PathBuf,
     /// Seconds added to the login clock.
     clock: Arc<AtomicU64>,
+    table: Arc<Mutex<SignalTable>>,
+    /// The input image the last scan ran on, forces applied.
+    image: Arc<Mutex<Vec<u8>>>,
+    ticks: Arc<AtomicU64>,
 }
 
 impl Bench {
@@ -231,26 +236,38 @@ impl Bench {
             approval: Some(approval),
             chat: None,
         };
+        let forces = Arc::new(Forces::default());
         let more = More {
             projects: Some(Projects::in_state_dir(&state).unwrap()),
+            forces: Some(Arc::clone(&forces)),
         };
+        let image = Arc::new(Mutex::new(vec![0u8; 32]));
         let api = Api::start_box(cfg, shared, Extras::default(), None, more).unwrap();
         let addr = api.addr();
         let stop = Arc::new(AtomicBool::new(false));
         let ticks = Arc::new(AtomicU64::new(0));
         let scan = {
             let (stop, table, ticks) = (Arc::clone(&stop), Arc::clone(&table), Arc::clone(&ticks));
+            let (forces, image) = (Arc::clone(&forces), Arc::clone(&image));
             let mut publisher = Publisher::new(live, Duration::from_millis(5));
+            let mut reader = force::Reader::default();
             thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     {
                         let mut t = table.lock().unwrap_or_else(PoisonError::into_inner);
+                        // The I/O read: start is held on, the image zero.
                         t.set_input(start, Some(Value::Bool(true)));
+                        let mut inputs = vec![0u8; 32];
                         swapper.serve(&mut rt, &mut t);
+                        reader.apply(&forces, &mut inputs, &mut t);
                         let now = t0.elapsed();
                         recorder.observe(now, &t);
-                        rt.tick_with(now, &[], &mut t);
+                        rt.tick_with(now, &inputs, &mut t);
                         publisher.publish(now, &rt, &t);
+                        image
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .clone_from(&inputs);
                     }
                     ticks.fetch_add(1, Ordering::Relaxed);
                     thread::sleep(Duration::from_millis(1));
@@ -266,7 +283,22 @@ impl Bench {
             store,
             state,
             clock,
+            table,
+            image,
+            ticks,
         }
+    }
+
+    fn cmd(&self, signal: &str) -> Option<Value> {
+        let t = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        t.command(t.index(signal).unwrap())
+    }
+
+    fn forces(&self) -> Vec<Json> {
+        get(self.addr, "/api/forces").json()["forces"]
+            .as_array()
+            .unwrap()
+            .clone()
     }
 
     fn login(&self, user: &str, password: &str) -> String {
@@ -1656,4 +1688,202 @@ fn projects_takes_no_other_module_source() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&out.stderr).contains("--projects"));
+}
+
+// ---- forcing ---------------------------------------------------------------------
+
+fn force(addr: SocketAddr, s: &str, body: &Json) -> Resp {
+    post_json(addr, "/api/forces", Some(s), body)
+}
+
+fn release(addr: SocketAddr, s: &str, path: &str) -> Resp {
+    send(addr, "DELETE", path, Some(s), "application/json", b"")
+}
+
+impl Bench {
+    /// Waits `scans` more scans, asserting `ok` at every look.
+    fn holds(&self, scans: u64, what: &str, mut ok: impl FnMut() -> bool) {
+        let from = self.ticks.load(Ordering::Relaxed);
+        wait(what, || {
+            assert!(ok(), "{what} broke");
+            self.ticks.load(Ordering::Relaxed) > from + scans
+        });
+    }
+
+    fn audited(&self, needle: &str) -> bool {
+        get(self.addr, "/api/audit?limit=1000")
+            .json()
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["detail"].as_str().unwrap_or_default().contains(needle))
+    }
+}
+
+#[test]
+fn a_force_holds_across_scans_until_released() {
+    let b = Bench::new();
+    let s = b.alice();
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+    let r = force(b.addr, &s, &json!({ "signal": "start", "value": false }));
+    assert_eq!(r.status, 201, "{r:?}");
+    let id = r.json()["id"].as_u64().unwrap();
+    wait("the lamp off", || b.cmd("lamp") == Some(Value::Bool(false)));
+    // The I/O read sets start every scan; the force wins every scan.
+    b.holds(50, "the lamp held off", || {
+        b.cmd("lamp") == Some(Value::Bool(false))
+    });
+    // Reads mark it.
+    let start = get(b.addr, "/api/signals/start").json();
+    assert_eq!(
+        (start["forced"].as_bool(), start["value"].as_bool()),
+        (Some(true), Some(false)),
+        "{start}"
+    );
+    let lamp = get(b.addr, "/api/signals/lamp").json();
+    assert_eq!(lamp["forced"], false, "{lamp}");
+    assert_eq!(b.forces()[0]["signal"], "start");
+    assert_eq!(b.forces()[0]["by"], "alice (engineer)");
+    let mut trace = get(b.addr, "/api/modules/conveyor/trace");
+    wait("a trace", || {
+        trace = get(b.addr, "/api/modules/conveyor/trace");
+        trace.status == 200
+    });
+    assert_eq!(trace.json()["forces"][0]["signal"], "start", "{trace:?}");
+    // An address in the input image, after the read, before the scan.
+    let r = force(b.addr, &s, &json!({ "address": "%IX0.3", "value": true }));
+    assert_eq!(r.status, 201, "{r:?}");
+    let r = force(b.addr, &s, &json!({ "address": "%IW2", "value": 4660 }));
+    assert_eq!(r.status, 201, "{r:?}");
+    wait("the image forced", || {
+        let img = b.image.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        img[0] == 0b1000 && img[2..4] == [0x34, 0x12]
+    });
+    // Forcing the same point again replaces it.
+    let r = force(b.addr, &s, &json!({ "address": "%ix0.3", "value": false }));
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(b.forces().len(), 3);
+    // What is refused.
+    let refused = [
+        (json!({ "signal": "lamp", "value": true }), 409),
+        (json!({ "signal": "nope", "value": true }), 404),
+        (json!({ "signal": "start", "value": 5 }), 422),
+        (json!({ "signal": "start" }), 400),
+        (json!({ "signal": "start", "value": "true" }), 400),
+        (
+            json!({ "signal": "start", "address": "%IX0.0", "value": true }),
+            400,
+        ),
+        (json!({ "address": "%QX0.0", "value": true }), 422),
+        (json!({ "address": "%IX32.0", "value": true }), 422),
+        (json!({ "address": "%IX0.8", "value": true }), 422),
+        (json!({ "address": "%IB0", "value": 256 }), 422),
+        (json!({ "address": "%IB0", "value": -1 }), 422),
+        (json!({ "address": "%IX0.0", "value": 1 }), 422),
+        (json!({ "address": "../%IX0.0", "value": true }), 422),
+        (json!({ "value": true }), 400),
+        (json!({ "signal": "start", "value": true, "extra": 1 }), 400),
+    ];
+    for (body, status) in refused {
+        let r = force(b.addr, &s, &body);
+        assert_eq!(r.status, status, "{body}: {r:?}");
+    }
+    assert_eq!(b.forces().len(), 3);
+    // Release one: the lamp follows the read again.
+    let r = release(b.addr, &s, &format!("/api/forces/{id}"));
+    assert_eq!(r.status, 200, "{r:?}");
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+    assert_eq!(get(b.addr, "/api/signals/start").json()["forced"], false);
+    assert_eq!(release(b.addr, &s, &format!("/api/forces/{id}")).status, 404);
+    assert_eq!(release(b.addr, &s, "/api/forces/x1").status, 404);
+    // Release all.
+    let r = release(b.addr, &s, "/api/forces");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(b.forces(), Vec::<Json>::new());
+    wait("the image free", || {
+        b.image
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .all(|x| *x == 0)
+    });
+    assert!(b.audited(&format!("force {id}: signal start := false")));
+    assert!(b.audited(&format!("force {id} released: signal start")));
+    assert!(b.audited("forces released: all (2)"));
+}
+
+#[test]
+fn forcing_needs_an_engineer_session() {
+    let b = Bench::new();
+    let bob = b.login("bob", BOB);
+    let body = json!({ "signal": "start", "value": false }).to_string();
+    for (method, path) in [
+        ("POST", "/api/forces"),
+        ("DELETE", "/api/forces"),
+        ("DELETE", "/api/forces/1"),
+    ] {
+        let r = send(b.addr, method, path, None, "application/json", body.as_bytes());
+        assert_eq!(r.status, 401, "{method} {path}: {r:?}");
+        let r = send(
+            b.addr,
+            method,
+            path,
+            Some(TOKEN),
+            "application/json",
+            body.as_bytes(),
+        );
+        assert_eq!(r.status, 403, "{method} {path}: {r:?}");
+        let r = send(
+            b.addr,
+            method,
+            path,
+            Some(&bob),
+            "application/json",
+            body.as_bytes(),
+        );
+        assert_eq!(r.status, 403, "{method} {path}: {r:?}");
+    }
+    assert_eq!(b.forces(), Vec::<Json>::new());
+    b.holds(20, "the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+}
+
+#[test]
+fn forces_end_on_logout_on_expiry_and_on_deploy() {
+    let b = Bench::new();
+    let a = b.alice();
+    let carol = b.login("carol", CAROL);
+    let r = force(b.addr, &a, &json!({ "signal": "start", "value": false }));
+    assert_eq!(r.status, 201, "{r:?}");
+    let r = force(b.addr, &carol, &json!({ "address": "%IX0.1", "value": true }));
+    assert_eq!(r.status, 201, "{r:?}");
+    wait("the lamp off", || b.cmd("lamp") == Some(Value::Bool(false)));
+    // Alice logs out: her force ends with her session, Carol's stays.
+    let r = post_json(b.addr, "/api/logout", Some(&a), &json!({}));
+    assert_eq!(r.status, 200, "{r:?}");
+    let left = b.forces();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!(left[0]["address"], "%IX0.1");
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+    assert!(b.audited("released by the box (its session ended): signal start"));
+    // Idle past the limit: the sweep ends Carol's.
+    b.clock
+        .fetch_add(account::SESSION_IDLE.as_secs(), Ordering::SeqCst);
+    wait("the expired session's force gone", || b.forces().is_empty());
+    assert!(b.audited("released by the box (its session ended): %IX0.1"));
+    // A deploy ends every force.
+    let a = b.alice();
+    b.project(
+        &a,
+        "p",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    let r = force(b.addr, &a, &json!({ "signal": "start", "value": false }));
+    assert_eq!(r.status, 201, "{r:?}");
+    let r = b.deploy(&a, "p");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(b.forces(), Vec::<Json>::new());
+    assert!(b.audited("released by the box (a project was deployed): signal start"));
+    wait("the lamp on under the new program", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
 }

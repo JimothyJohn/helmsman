@@ -30,6 +30,7 @@ use helmsman_plc::api::{
 };
 use helmsman_plc::bundle::TrustStore;
 use helmsman_plc::calendar::{self, Source};
+use helmsman_plc::force::{self, Forces};
 use helmsman_plc::link::{LinkSet, Plan};
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::opcua;
@@ -931,6 +932,7 @@ fn start_api(
     devices: &Arc<Devices>,
     approval: Approval,
     screen: Option<api::Screen>,
+    forces: &Arc<Forces>,
 ) -> Result<(Api, Option<Site>), String> {
     let ui =
         o.ui.as_deref()
@@ -1000,7 +1002,10 @@ fn start_api(
             p.root().display()
         );
     }
-    let more = api::More { projects };
+    let more = api::More {
+        projects,
+        forces: Some(Arc::clone(forces)),
+    };
     let server = Api::start_box(cfg, shared, extras, site.as_ref().map(Site::handle), more)
         .map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
@@ -1333,6 +1338,8 @@ fn run(o: &Opts) -> Result<(), String> {
         },
         swap,
     });
+    let forces = Arc::new(Forces::default());
+    let mut force_reader = force::Reader::default();
     let started = o
         .api
         .zip(approval)
@@ -1346,6 +1353,7 @@ fn run(o: &Opts) -> Result<(), String> {
                 &devices,
                 approval,
                 screen,
+                &forces,
             )
         })
         .transpose()?;
@@ -1418,6 +1426,8 @@ fn run(o: &Opts) -> Result<(), String> {
             if let Some(c) = &scene.calendar {
                 c.update(scene.wall, &mut t);
             }
+            // After the I/O read, before any module runs.
+            force_reader.apply(&forces, &mut inputs, &mut t);
             let now = start.elapsed();
             if let Some(r) = &mut scene.recorder {
                 r.observe(now, &t);

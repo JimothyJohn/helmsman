@@ -46,6 +46,7 @@
 //! POST /api/devices/{name}/browse         token: an observed controller's tag list, read-only
 //! GET  /api/projects ...                  the editor's projects; PUT, DELETE, deploy and uploads need an engineer session (see [`projects`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
+//! GET  /api/forces                        forced inputs; POST and DELETE need an engineer session (see [`forces`])
 //! POST /mcp                               token: MCP Streamable HTTP, the agent's tools for an engineer's own client (see [`mcp`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
@@ -94,6 +95,7 @@ pub mod catalog;
 pub mod chat;
 pub mod dropin;
 pub mod explain;
+pub mod forces;
 pub mod http;
 pub mod live;
 pub mod login;
@@ -212,6 +214,9 @@ pub struct More {
     /// The projects folder ([`crate::project`], `--projects`): the
     /// project routes ([`projects`]).
     pub projects: Option<crate::project::Projects>,
+    /// Forced inputs ([`crate::force`]): the scan thread applies them
+    /// through a [`crate::force::Reader`] on the same set.
+    pub forces: Option<Arc<crate::force::Forces>>,
 }
 
 /// A floor screen layout as loaded: the file, byte for byte, and what it
@@ -288,6 +293,8 @@ struct Ctx {
     /// The editor's projects (see [`projects`]); `None`: those routes
     /// answer 404.
     projects: Option<crate::project::Projects>,
+    /// Forced inputs (see [`forces`]); `None`: those routes answer 404.
+    forces: Option<Arc<crate::force::Forces>>,
 }
 
 impl Ctx {
@@ -505,7 +512,7 @@ impl Api {
         more: More,
     ) -> io::Result<Self> {
         let Extras { ui, screen, trust } = extras;
-        let More { projects } = more;
+        let More { projects, forces } = more;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -540,6 +547,7 @@ impl Api {
             site,
             mcp: Mutex::new(mcp::Workspace::default()),
             projects,
+            forces,
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
@@ -573,7 +581,12 @@ impl Drop for Api {
 
 fn accept(listener: &TcpListener, ctx: &Arc<Ctx>) {
     let workers = Arc::new(AtomicUsize::new(0));
+    let mut swept = Instant::now();
     while !ctx.stop.load(Ordering::Acquire) {
+        if swept.elapsed() >= Duration::from_secs(1) {
+            forces::sweep(ctx);
+            swept = Instant::now();
+        }
         let (mut stream, _) = match listener.accept() {
             Ok(s) => s,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -1025,6 +1038,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         (_, ["api", "projects", ..]) => return projects::mutate(req, ctx, &segs[1..]),
+        (_, ["api", "forces", ..]) => return forces::mutate(req, ctx, &segs[1..]),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
@@ -1065,6 +1079,11 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
 fn allowed(path: &[&str]) -> Option<&'static str> {
     if let Some(allow) = projects::allowed(path) {
         return Some(allow);
+    }
+    match path {
+        ["api", "forces"] => return Some("GET, POST, DELETE"),
+        ["api", "forces", _] => return Some("DELETE"),
+        _ => {}
     }
     match path {
         ["api", "proposals" | "dropins"] => Some("GET, POST"),
@@ -1355,14 +1374,17 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
     let module = |name: &str| c.module(name);
     let r = match segs.as_slice() {
         ["api"] => Response::json(200, &index(ctx.chat.is_some())),
-        ["api", "signals"] => Response::json(200, &render::signals(c, &view)),
+        ["api", "signals"] => Response::json(200, &forces::mark(ctx, render::signals(c, &view))),
         ["api", "signals", name] => match c.signal(name) {
             Some(i) => Response::json(
                 200,
-                &render::signal(
-                    &c.signals[i],
-                    view.signals.get(i).copied().flatten(),
-                    view.errors.get(i).and_then(Option::as_deref),
+                &forces::mark(
+                    ctx,
+                    render::signal(
+                        &c.signals[i],
+                        view.signals.get(i).copied().flatten(),
+                        view.errors.get(i).and_then(Option::as_deref),
+                    ),
                 ),
             ),
             None => Response::error(404, "no such signal"),
@@ -1374,7 +1396,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         },
         ["api", "modules", name, "trace"] => match module(name) {
             Some(k) => match latest_trace(ctx, k) {
-                Some((_, j)) => Response::json(200, &j),
+                Some((_, j)) => Response::json(200, &with_forces(ctx, &j)),
                 None => Response::json(
                     202,
                     &json!({ "pending": true, "why": "the module's next scan is traced; ask again" }),
@@ -1422,6 +1444,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         },
         ["api", "events"] => return Reply::Values,
         ["api", "projects", ..] | ["api", "running"] => projects::get(ctx, &segs[1..]),
+        ["api", "forces"] => forces::get(ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "screen"] => match &ctx.screen {
@@ -1552,7 +1575,11 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/projects/{p}/zip", false, "the project as a .zip (its .st files, io.map, project.settings)"),
             e("POST", "/api/projects/{p}/zip?replace=true", true, "engineer session: a .zip (application/zip) as project p, new or (replace=true) in its place"),
             e("POST", "/api/projects/{p}/import?file=F&replace=true", true, "engineer session: one file into the project: F.st as it is, F.xml (PLCopen TC6) lowered to F.st"),
-            e("GET", "/api/running", false, "the project deployed last, its snapshot, and whether it is what runs"),
+            e("GET", "/api/forces", false, "active forced inputs: {id, signal | address, value, by, at}"),
+            e("POST", "/api/forces", true, "engineer session: force an input {signal, value} or {address: %IX0.0 | %IBn | %IWn | %IDn, value}; ends at that session's logout or expiry and on deploy"),
+            e("DELETE", "/api/forces/{id}", true, "engineer session: release one force"),
+            e("DELETE", "/api/forces", true, "engineer session: release every force"),
+            e("GET", "/api/running", false,"the project deployed last, its snapshot, and whether it is what runs"),
             e("POST", "/mcp", true,"MCP (Streamable HTTP, 2026-07-28 or 2025-11-25): the agent's read, draft, check, simulate and propose tools for an engineer's own client; no apply"),
         ],
         "agent": agent,
@@ -1753,9 +1780,10 @@ fn value_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
             json!({
                 "seq": view.seq,
                 "at_ms": u64::try_from(view.at.as_millis()).unwrap_or(u64::MAX),
-                "signals": render::signals(c, &view),
+                "signals": forces::mark(ctx, render::signals(c, &view)),
                 "modules": render::modules(c, &view),
                 "outputs": view.outputs,
+                "forces": forces::list(ctx),
             }),
         ))
     })
@@ -1769,6 +1797,16 @@ fn trace_stream(stream: &mut TcpStream, ctx: &Ctx, k: usize) -> io::Result<()> {
             return None;
         }
         last = Some(scan);
-        Some(("trace", (*j).clone()))
+        Some(("trace", with_forces(ctx, &j)))
     })
+}
+
+/// A rendered trace with the active forces beside it, so a viewer marks
+/// forced points FORCED.
+fn with_forces(ctx: &Ctx, trace: &Json) -> Json {
+    let mut j = trace.clone();
+    if ctx.forces.is_some() {
+        j["forces"] = forces::list(ctx);
+    }
+    j
 }
