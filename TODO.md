@@ -255,10 +255,11 @@
   est: 5m
   difficulty: low
   id: relay-repo
+  notes: left (2026-10-31, later): run ../agent-relay `scripts/create-github-repo.sh`, then merge its `feat/images-metering` branch; deploying is `relay-deploy`.
   notes: 2026-10-31: the local repo is now ../agent-relay (renamed, client-agnostic, profiles namespaced helmsman/<name> with the old bare names as aliases). Tick once the GitHub repo exists: run its scripts/create-github-repo.sh.
   answer: private repo JimothyJohn/agent-relay (recommended), an agnostic endpoint that happens to work with helmsman
 
-- [ ] **Stop parallel PRs breaking dev?** Twice on 2026-10-30 two PRs that were each green merged back to back and broke dev's build (trace-tap + signal-model; fixed by #39). Branch protection on dev doesn't require branches to be up to date. Options: require up-to-date branches (each PR re-runs CI after every merge; slow with many agents), or GitHub's merge queue (tests each PR on top of the ones ahead of it; built for this), or leave it and fix forward.
+- [x] **Stop parallel PRs breaking dev?** Twice on 2026-10-30 two PRs that were each green merged back to back and broke dev's build (trace-tap + signal-model; fixed by #39). Branch protection on dev doesn't require branches to be up to date. Options: require up-to-date branches (each PR re-runs CI after every merge; slow with many agents), or GitHub's merge queue (tests each PR on top of the ones ahead of it; built for this), or leave it and fix forward.
   asked: 2026-10-30
   by: claude-session
   needs: your call (repo setting)
@@ -268,6 +269,7 @@
   difficulty: low
   id: dev-merge-safety
   answer: merge queue on dev (recommended)
+  notes: acted on 2026-10-31: GitHub refuses a merge queue on a personal-account repo (422); the follow-up is `dev-merge-safety-2`.
 
 - [ ] **Merge queue isn't available here: what instead?** You answered `dev-merge-safety` with "merge queue", but GitHub refuses it on this repo: a `merge_queue` ruleset rule comes back `422 Invalid rule 'merge_queue'` (probed 2026-10-31 with a disabled ruleset; nothing left behind). Merge queues aren't offered on personal-account repos. What does work: (a) require branches to be up to date on `dev` (`strict: true`) plus a small workflow that, when `dev` moves, runs `gh pr update-branch` on every open auto-merge PR into `dev`, so each PR re-runs CI on the new tip and auto-merge lands them one at a time; (b) move the repo to an organization, which gets merge queues; (c) keep fixing forward with the local test-merge rule (CLAUDE.md "Green alone != green together") and the wider CI gate in draft PR #73.
   asked: 2026-10-31
@@ -624,6 +626,7 @@
   est: 15m
   difficulty: low
   id: store-schema-2
+  notes: drivers (#89) followed the same rule: schema 3 is marked inside the first commit that holds a driver. Your answer here applies to both.
 
 - [ ] **WASM over the box API: is ~750 KiB enough?** A proposal carries `module.wasm` as base64 in the JSON body, and the API's request body limit is 1 MiB, so the largest WASM module the API takes is about 750 KiB, though the store and bundles take 1 MiB (`MAX_FILE`). `POST /api/dropins` already has its own larger body cap (`http::Limits::upload`, 2 MiB for PDFs); the same mechanism would serve here. Bundles have the same ceiling over `POST /api/bundles`. Hand-written and `no_std` Rust modules are a few KiB; a Rust module with `std` and formatting can pass 1 MiB. Built: unchanged limit.
   asked: 2026-10-31
@@ -646,6 +649,234 @@
   depends: wasm-driver
   id: wasm-driver-home
   notes: built as the recommended option on feat/wasm-driver-map (reversible; card left open for your call): a driver is a `wasm-driver` blob in the change set, proposed as `{kind: driver, name, wasm}`, checked at proposal (`wasm::check` + `wasm::sandbox`, and the running map must still load), output-affecting so engineer PIN + replay, carried by bundles, rolled back like anything else. The Modbus guest stays a test fixture. To undo: drop `ChangeSet::drivers` and the `driver` proposal kind; the store's schema 3 only matters to stores that hold a driver.
+
+- [ ] **BLINK_PATTERN with PERIOD 0 or negative: steady on, off, or a fault?** The stack-light block (#88, `BLINK_PATTERN(EN, MODE, PERIOD) -> Q` in helmsman-iec's library.st) has to do something when a blinking mode (slow, fast, double flash) gets a PERIOD of zero or below, which a bad param or an uninitialised TIME produces. Built: steady on, so a misconfigured alarm light still lights and nothing divides by zero. The alternatives are off (quiet, but a bad setting hides the alarm) or a runtime fault on the module (loud, but one bad param stops every output that module drives). Reversible: one branch in library.st and its property test.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: what a stack light does when its blink period is invalid
+  options: steady on (recommended, built) | off | fault the module
+  est: 10m
+  difficulty: low
+  id: blink-period-zero
+
+- [ ] **Drop-in size limits: keep 2 MiB per upload and 3.5 MiB of chat history?** For PDF drop-ins (#81) `POST /api/dropins` alone now takes a 2 MiB body (the relay's per-PDF cap; every other route keeps 1 MiB), and the agent's history limit went from 900 KiB to 3.5 MiB, just under the relay's 4 MiB request body. So one maximum-size PDF fits per conversation, and a second is refused (413) before it reaches the relay. The cost: a long chat about a PDF resends up to 3.5 MiB to the relay on every turn (tokens are cached by the API, bytes are still uploaded, which matters on a slow site uplink). Smaller caps mean manuals must be split; larger ones need the relay's body limit raised (Lambda's synchronous payload limit is 6 MB) or the Files API on the relay (box sends a file id once).
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: how big a manual an operator can drop, and how much each chat turn uploads
+  options: 2 MiB per PDF, 3.5 MiB history (recommended, built) | 1 MiB per PDF, history back to 900 KiB | Files API on the relay: upload once, send a file id (relay change)
+  est: 1d
+  difficulty: med
+  id: dropin-size-caps
+
+- [ ] **A drop-in the relay refused: should proposals still cite it?** When the relay refuses a PDF (encrypted, over 100 pages), #87 swaps the document in the chat history for a note so the chat goes on. The refused drop-in stays in the conversation's proposal binding (`Drafts::dropins`), so a proposal drafted later in that chat lists it as a source even though the model never read it. Built that way because over-citing is the safe side: a reviewer sees everything the conversation touched. The other way drops it from the binding, so the proposal lists only what the model actually saw.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: what a proposal's "sources" means to the engineer approving it
+  options: keep it, marked refused (recommended; the mark is a small change) | keep it as is (built) | drop it from the binding
+  est: 1h
+  difficulty: low
+  id: refused-dropin-binding
+
+- [ ] **Removing a WASM driver: only by rollback, or a proposal of its own?** Since #89 a driver is a store blob proposed as `{kind: driver, name, wasm}` and approved at the engineer tier. There is no proposal that removes one: an engineer rolls back to a snapshot from before the driver was added, which also undoes everything after it. A `{kind: driver, name, remove: true}` proposal would take it out alone (refused while a map line still names it), at the same tier.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: whether a bad driver can be taken out without losing later changes
+  options: a remove proposal, refused while the map uses it (recommended) | rollback only (built) | remove by replacing the map, drivers no map names are dropped at the next commit
+  est: 3h
+  difficulty: low
+  depends: wasm-driver-home
+  id: driver-remove
+
+- [ ] **WASM drivers on a box with no store (`--module-dir`)?** A box started with `--module-dir` (modules as files, no snapshot store) has nowhere to keep an approved driver, so a map line naming `wasm:NAME` is refused there (#89). The bench Pi deploy (`scripts/pi-deploy-plc.sh`) runs that way today. Options: require the store for drivers (as now; the store is the box's normal mode), let a `--driver-dir` of `.wasm` files load unapproved (bench only, never with a store), or move the Pi deploy to the store so it doesn't matter.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: whether a store-less bench box can run an agent-written driver
+  options: store only; move the Pi deploy to the store (recommended) | store only, leave the deploy as is | a --driver-dir for store-less boxes
+  est: 2h
+  difficulty: low
+  depends: wasm-driver-home
+  id: driver-module-dir
+
+- [ ] **UDP for WASM drivers: build a datagram import now, or when a device needs it?** A WASM driver gets one capability, a TCP stream to its own device's endpoint (`helmsman-driver/v1`). Protocols over UDP (BACnet/IP, some vendor discovery, SNMP for switch health) would need a datagram import bound to the same endpoint, with its own reply-source check. Nothing on the bench needs it: Modbus/TCP, EtherNet/IP (native driver) and Logix reads are all TCP or native.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: which protocols an agent-written driver can speak
+  options: when a device on a real job needs it (recommended) | now, as helmsman-driver/v2 | never: UDP protocols get native drivers
+  est: 2d
+  difficulty: med
+  id: driver-udp
+
+- [ ] **Diagram arrangement on the box: where is it kept?** Since #93 anyone can drag blocks and IF/CASE boxes in the live diagram to make it easier to read; it changes only the drawing, never the program. In the playground the arrangement survives edits. On the box it lives in that browser tab's memory and is gone on reload, and every operator starts from the automatic layout. Options: per browser (localStorage, no box change), per box and shared (stored with the snapshot or beside it, so the engineer arranges once and every screen shows that), or both (shared default, personal tweaks on top).
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: whether an engineer's tidy layout is what the floor sees
+  options: shared per box, set by an engineer, beside the snapshot (recommended) | per browser, localStorage | both: shared default + personal tweaks | in memory only (built)
+  est: 1d
+  difficulty: med
+  depends: ui-roles-view
+  id: arrangement-persist
+
+- [ ] **Who may rearrange the diagram and use the program browser: everyone, or engineers?** The live diagram (#93) and the program browser (in progress) change only what a screen shows, so they're built for every role. Two reasons to restrict: a shared arrangement (`arrangement-persist`) is something an operator could make worse for everyone, and some plants want the floor screen locked to one view. Options: viewing tools for all, saving a shared layout for engineers (recommended); everything for all; a "kiosk" floor screen that can't navigate or rearrange.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: what operators can do on the canvas beyond watching and asking
+  options: all can view, browse and rearrange; only engineers save a shared layout (recommended) | everything for everyone | kiosk mode for floor screens on top of either
+  est: 2h
+  difficulty: low
+  id: ui-roles-view
+
+- [ ] **Forcing values from the diagram: playground only, or on the box too?** In the playground (#92) inputs are switched, pressed and dragged on their blocks in the diagram; it's a simulation, so nothing is at stake, and forcing internal variables and %M there would help people learn. On a real box, forcing (overriding an input or memory bit while the program runs) is a classic PLC feature and a classic way to hurt someone: today the box has no forcing at all, and changes reach outputs only through approved proposals. Options: playground only, internal vars and %M added there (recommended); box forcing for engineers with an audit line, a visible "FORCED" banner and an automatic timeout; never on the box.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: whether the diagram can override live values on a real box
+  options: playground only, extend to internal vars and %M there (recommended) | box too: engineer PIN, audited, banner, auto-timeout | inputs only in the playground (built)
+  est: 1d
+  difficulty: med
+  id: diagram-forcing
+
+- [ ] **Switch the box's default agent to `v4`, and when?** The relay branch `feat/images-metering` (../agent-relay-images, not merged) adds profile `helmsman/v4`: v3 plus the photo and P&ID paragraphs and the two map tools `read_io_map` / `propose_io_map` (#84). Boxes ask for `--relay-agent v3` by default, so until the default moves, the relay model can't use the map tools or the drawing instructions (MCP clients can). The move is one default in helmsman-plc's main.rs plus a test, and a box asking for v4 from a relay that doesn't have it gets `unknown_agent_version`.
+  asked: 2026-10-31
+  by: claude-session
+  needs: the relay branch merged and deployed with v4
+  result: whether boxes use the drawing and map tools by default
+  options: right after the relay with v4 is deployed (recommended) | now, ahead of the deploy | keep v3, v4 opt-in per box
+  est: 30m
+  difficulty: low
+  depends: relay-deploy
+  id: relay-agent-v4-default
+
+- [ ] **Deploy the relay: when, and as which stage?** The relay (../agent-relay: Rust on Lambda, DynamoDB, SAM) is built and tested locally but has no GitHub remote and no stack. Its scripts are yours to run: `scripts/create-github-repo.sh` (private JimothyJohn/agent-relay), `scripts/put-anthropic-key.sh`, `scripts/deploy.sh` (account 403059190476, us-east-1 per `relay-repo`). Its own TODO.md has the hosting details (`relay-fn-url-vs-apigw`, `relay-large-pdfs`). Until it's deployed, a box's chat, explain, drop-ins and drawings only work against a relay on this machine. Options: deploy a `dev` stage now, used by the bench Pi only (recommended); wait for the M1 demo; deploy straight to a `prod` stage.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your AWS session; the relay's `feat/images-metering` branch merged into its main
+  result: the Pi's chat works without the Studio; usage metering is real
+  options: dev stage now, bench Pi only (recommended) | at the M1 demo | prod stage now
+  est: 1h
+  difficulty: low
+  depends: relay-repo
+  id: relay-deploy
+
+- [ ] **Playground: publish now, or after a review pass?** The public page is master's docs/playground (GitHub Pages, https://jimothyjohn.github.io/helmsman/playground/), so it goes live when dev reaches master. It now has the diagram controls (#92) and rearranging (#93). Publishing puts the visitor-key design (`playground-key`) and the Helmsman name in public. Options: publish with the next dev→master merge (recommended; the page has no secrets and the key is the visitor's); keep it unlisted (no link from the README) until you've used it; hold docs/playground out of master until then.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call, and your dev→master merge
+  result: when the public playground goes up and whether it's linked
+  options: publish with the next master merge, linked from the README (recommended) | publish unlisted | hold it back
+  est: 10m
+  difficulty: low
+  depends: playground-key
+  id: playground-go-live
+
+- [ ] **Playground: which Claude model by default?** "Ask Claude" defaults to `claude-sonnet-5-5` and offers a picker. On the public page the visitor's own key pays; on your local proxy (`make playground-serve`) your key does. Sonnet writes good ST at moderate cost; Haiku is cheaper and faster but weaker on IEC subtleties; Opus is best and most expensive.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: cost and quality of a visitor's first question
+  options: Sonnet 5.5 default, picker kept (recommended, built) | Haiku 5.5 default | Opus 5.5 default
+  est: 5m
+  difficulty: low
+  id: playground-model
+
+- [ ] **The bench Pi: deploy by hand, on every dev merge, or on master?** `scripts/pi-deploy-plc.sh nick@192.168.3.20` builds for arm64 here and restarts `helmsman-plc` on the Pi; you run it. The Pi is also the pick PC, so a restart can interrupt a demo. Options: by hand (recommended until the M1 demo); a scheduled job here that deploys master when it moves (needs the Studio to stay up and a quiet hour); OTA from the relay later (`fleet-console`).
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: whether the Pi always runs the latest, and who restarts it
+  options: by hand until M1 (recommended) | auto-deploy master from the Studio at a set hour | wait for OTA (fleet-console)
+  est: 2h
+  difficulty: low
+  id: pi-deploy-cadence
+
+- [ ] **Is the Moxa E1213 the tabletop I/O bench?** `io-bench` asks for "one Modbus TCP remote I/O block with 24 V DI/DO", and `driver-agent` and `e1213-bench` wait on it. The ioLogik E1213 you have speaks Modbus/TCP (its map is in `docs/devices/moxa-iologik-e1213-modbus.map`) and EtherNet/IP, with 12 DI and 8 DIO, so it can be that block: wire DO-00..03 back to DI-00..03 with field power and both protocols are tested on one device. Buying a second block is only needed for a second vendor's quirks.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call; then the E1213 wired on the Studio link with 24 V field power
+  result: io-bench is unblocked with hardware you already have
+  options: the E1213 is the bench (recommended) | buy a separate Modbus TCP block too | both, the second one later
+  est: 10m
+  difficulty: low
+  id: io-bench-e1213
+
+- [ ] **The M1 stack light: which hardware?** `gpio-outputs` needs a light the Pi can drive; the software (GPIO backend, `BLINK_PATTERN`) is in. A Pi GPIO can't drive a 24 V stack light directly. Options: a relay HAT on the Pi driving a 24 V light (simplest, clicks, fine at blink rates); a DIN-rail 24 V output module driven over Modbus (the E1213's DO channels already do this, so no Pi GPIO at all); a 5 V USB/LED tower for the desk demo.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call, then a purchase or wiring
+  result: the light in the M1 demo
+  options: drive a 24 V light from the E1213's DO (recommended: no new hardware, exercises the map) | a relay HAT on the Pi | a 5 V LED tower on GPIO
+  est: 1h
+  difficulty: low
+  depends: io-bench-e1213
+  id: stack-light-hw
+
+- [ ] **The M1 demo: when, and with the CompactLogix or without?** M1's sentence is "flash the light when CompactLogix tag X is high for 5 s". Everything in it is built except the bench: the CompactLogix and the light aren't wired (`bench-devices`: "I haven't hooked them up yet"), and the relay isn't deployed. A version without the CompactLogix ("flash the light when the E1213's DI-04 is high for 5 s") could run as soon as the E1213 is wired and the relay is up, and swap the trigger later.
+  asked: 2026-10-31
+  by: claude-session
+  needs: a date from you, the bench wired, the relay deployed
+  result: a recorded demo to show people
+  options: E1213-only demo first, CompactLogix version after (recommended) | wait and do the full sentence once | a date you pick: tell me and I'll plan back from it
+  est: 1d
+  difficulty: med
+  depends: relay-deploy, io-bench-e1213
+  id: m1-demo-plan
+
+- [ ] **A real L5X export: from your CompactLogix project, or another source?** `l5x-real-export` checks the L5X reader against a real Studio 5000 export (we have RM014 now). Sources: your own bench project (any small one with controller and program tags, a UDT, an AOI, a ladder routine and an ST routine; put it in ~/github/helmsman-refs/); a public L5X from GitHub (license per repo, read-only test corpus like the PLCopen one); or a sample you write in a Studio 5000 trial. Yours is best: it matches the CompactLogix the demo reads.
+  asked: 2026-10-31
+  by: claude-session
+  needs: Studio 5000 access, or your call on a public corpus
+  result: the L5X inventory proven on a real customer-shaped file
+  options: export one from your bench project (recommended) | a fetched public corpus, never committed | both
+  est: 30m
+  difficulty: low
+  id: l5x-source
+
+- [ ] **Fieldbus next: buy EtherCAT bench hardware, and PROFINET later?** `ethercat-master` (ethercrab) needs a USB 3 gigabit NIC for the Pi (its one port is the Studio link) and one EtherCAT slave, e.g. a bus coupler with a digital in and a digital out terminal. `profinet-device` needs a PROFINET controller to test against (a Siemens S7-1200 or a software controller) and either PI membership for the spec or a decision to work from public captures. EtherCAT is the cheaper, better-documented first step; PROFINET device certification needs a PI vendor ID, so it stays a lab feature either way.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call and a purchase
+  result: which fieldbus the box speaks after Modbus and EtherNet/IP
+  options: EtherCAT hardware now, PROFINET after M2 (recommended) | both now | neither until a customer asks
+  est: 15m
+  difficulty: low
+  id: fieldbus-hardware
+
+- [ ] **How is the relay charged for?** The vision's business is open core: runtime and canvas MIT; relay, fleet and the verified marketplace paid; plus a preloaded box. The relay meters tokens per box per day (`/v1/usage`), and its `feat/images-metering` branch adds image and PDF counts and bytes, so any of these models can be billed from what it records. Options: a flat subscription per box per month with a fair-use token cap (simple to sell, you carry model-cost risk); metered pass-through of model cost plus a margin (no risk, harder to budget for a plant); the first year of relay bundled into the box price.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call (pricing; I won't pick numbers)
+  result: what the relay's metering has to report and what a customer budgets
+  options: flat per box per month with a fair-use cap (recommended) | metered pass-through + margin | bundled with the box for year 1, then flat
+  est: 1h
+  difficulty: med
+  id: relay-pricing
+
+- [ ] **Licenses: helmsman stays MIT, the relay closed?** `open-core-split` is blocked on relay-v0, but the relay already lives in its own private repo (../agent-relay, "client-agnostic"). What's left to decide: the relay's license (proprietary and private, or source-available such as BSL so customers can audit what holds their data), and whether everything in this repo stays MIT, including the agent client (`helmsman-agent`) and the bundle signing that a paid marketplace leans on. Once answered, `open-core-split` can be ticked.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: the license line for each repo, written into both READMEs
+  options: helmsman all MIT, relay proprietary and private (recommended) | helmsman MIT, relay source-available (BSL or similar) | relay MIT too, sell hosting only
+  est: 30m
+  difficulty: low
+  id: license-split
+
+- [ ] **HTTPS on the box's own web UI?** The box serves its API and canvas over plain HTTP; sign-in uses an `HttpOnly; SameSite=Strict` session cookie, without the `Secure` flag because the page isn't HTTPS. On a flat plant LAN anyone who can sniff traffic can lift a session (1 h max, 15 min idle). Options: a self-signed certificate made at first boot, with its fingerprint shown on the box's screen for the browser to trust once; a local CA you install on plant PCs; or stay HTTP on the LAN and loopback-only by default (`canvas-lan-default`), which is what's built.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call
+  result: whether sign-in on a LAN box can be sniffed
+  options: self-signed cert at first boot, fingerprint on screen (recommended) | local CA on plant PCs | HTTP, loopback default (built)
+  est: 2d
+  difficulty: med
+  id: box-https
 
 ## Tasks
 
