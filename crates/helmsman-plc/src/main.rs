@@ -35,6 +35,7 @@ use helmsman_plc::policy::pin::{self, Gate, Pins};
 use helmsman_plc::policy::{Policy, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
 use helmsman_plc::sink::{self, Sinks};
+use helmsman_plc::site::{self, Site};
 use helmsman_plc::spec::{Defaults, Spec};
 use helmsman_plc::store::{ChangeSet, Kind, Store};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
@@ -77,6 +78,15 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
   --screen FILE        the floor screen's layout (see helmsman_plc::screen):
                        tiles showing the I/O map's `screen` outputs, served
                        at /api/screen and drawn by the canvas at /?andon
+  --site NAME          announce this box on the LAN as part of site NAME
+                       (a UDP multicast beacon to 239.255.72.77:41910, TTL
+                       1, every 5 s) and list the boxes of that site it
+                       hears at /api/site, which other boxes' canvases may
+                       read cross-origin; the canvas gets a Site view. Off
+                       by default; needs a fixed --api port. A box only
+                       lists what it hears, it never acts on it
+  --box-name NAME      this box's name in its site (default: the host
+                       name, else box-<id>)
   --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
                        at / on the API's address: a browser on the LAN is
                        the HMI (read-only, like the API's reads)
@@ -125,6 +135,8 @@ struct Opts {
     relay_agent: String,
     ui: Option<PathBuf>,
     screen: Option<PathBuf>,
+    site: Option<String>,
+    box_name: Option<String>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
     scan: Duration,
@@ -175,6 +187,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_agent: "v1".into(),
         ui: None,
         screen: None,
+        site: None,
+        box_name: None,
         policy: None,
         set_pin: None,
         scan: Duration::from_millis(10),
@@ -243,6 +257,14 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--store" => once(&mut o.store, flag, v)?,
             "--ui" => once(&mut o.ui, flag, v)?,
             "--screen" => once(&mut o.screen, flag, v)?,
+            "--site" if site::valid_token(v) => o.site = Some(v.clone()),
+            "--site" => return Err(format!("--site: 1 to 32 of A-Z a-z 0-9 . _ -, got {v:?}")),
+            "--box-name" if site::valid_name(v) => o.box_name = Some(v.clone()),
+            "--box-name" => {
+                return Err(format!(
+                    "--box-name: 1 to 48 of A-Z a-z 0-9 space . _ -, no space at either end, got {v:?}"
+                ));
+            }
             "--encap-port" => o.server.encap_port = port()?,
             "--io-port" => o.server.io_port = port()?,
             "--peer-io-port" => o.server.peer_io_port = port()?,
@@ -258,6 +280,12 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.screen.is_some() && o.api.is_none() {
         return Err("--screen is served by the API; it does not go with --api off".into());
+    }
+    if o.site.is_some() && o.api.is_none_or(|a| a.port() == 0) {
+        return Err("--site announces the API's port; it needs --api IP:PORT with a fixed port".into());
+    }
+    if o.box_name.is_some() && o.site.is_none() {
+        return Err("--box-name names this box in its site; it needs --site NAME".into());
     }
     if o.sinks.is_some() != o.sink_dir.is_some() {
         return Err("--sinks and --sink-dir go together".into());
@@ -795,7 +823,7 @@ fn start_api(
     devices: &Arc<Devices>,
     approval: Approval,
     screen: Option<api::Screen>,
-) -> Result<Api, String> {
+) -> Result<(Api, Option<Site>), String> {
     let ui =
         o.ui.as_deref()
             .map(|d| api::ui::Ui::open(d).map_err(|e| format!("--ui {}: {e}", d.display())))
@@ -841,7 +869,13 @@ fn start_api(
         screen,
         trust: Some(trust),
     };
-    let server = Api::start_with(cfg, shared, extras).map_err(|e| format!("--api {bind}: {e}"))?;
+    let site = o
+        .site
+        .as_deref()
+        .map(|name| start_site(o, name, bind.port(), &token.token))
+        .transpose()?;
+    let server = Api::start_in_site(cfg, shared, extras, site.as_ref().map(Site::handle))
+        .map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
         "helmsman-plc: API on http://{}/api (reads open; changes need the token)",
         server.addr()
@@ -861,7 +895,44 @@ fn start_api(
     } else {
         eprintln!("helmsman-plc: API token in {}", token.path.display());
     }
-    Ok(server)
+    Ok((server, site))
+}
+
+/// The host's name as a site box name, if it is one.
+fn host_name() -> Option<String> {
+    let n = fs::read_to_string("/etc/hostname").ok()?;
+    let n = n.trim();
+    site::valid_name(n).then(|| n.to_string())
+}
+
+/// Starts announcing this box in site `name` and hearing its peers.
+fn start_site(o: &Opts, name: &str, api_port: u16, token: &str) -> Result<Site, String> {
+    let id = site::box_id(token);
+    let box_name = o
+        .box_name
+        .clone()
+        .or_else(host_name)
+        .unwrap_or_else(|| format!("box-{}", &id[..8]));
+    let me = site::Beacon::new(name, &id, &box_name, api_port, env!("CARGO_PKG_VERSION"))?;
+    let group = SocketAddr::from((site::GROUP, site::PORT));
+    let socket = site::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, site::PORT)), group)
+        .map_err(|e| format!("--site: cannot hear beacons on {group}: {e}"))?;
+    let started = Site::start(
+        socket,
+        me,
+        group,
+        site::EVERY,
+        Arc::new(|line: &str| eprintln!("helmsman-plc: {line}")),
+    )
+    .map_err(|e| format!("--site: {e}"))?;
+    eprintln!("helmsman-plc: site {name}: announcing {box_name} (id {id}) on {group}; peers at /api/site");
+    if o.api.is_some_and(|a| a.ip().is_loopback()) {
+        eprintln!(
+            "helmsman-plc: site {name}: the API is on loopback only, so other boxes' canvases \
+             will list this one as unreachable (--api 0.0.0.0:PORT)"
+        );
+    }
+    Ok(started)
 }
 
 /// The chat route's relay, from `--relay` and `--relay-token`.
@@ -1096,7 +1167,7 @@ fn run(o: &Opts) -> Result<(), String> {
         },
         swap,
     });
-    let server = o
+    let started = o
         .api
         .zip(approval)
         .map(|(bind, approval)| {
@@ -1112,6 +1183,8 @@ fn run(o: &Opts) -> Result<(), String> {
             )
         })
         .transpose()?;
+    // The site runs as long as the API does.
+    let (server, _site) = started.map_or((None, None), |(api, site)| (Some(api), site));
     let swapper: Option<Swapper> = server.as_ref().map(|_| swapper);
     let mut publisher = server
         .as_ref()

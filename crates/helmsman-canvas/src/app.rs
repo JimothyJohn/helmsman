@@ -12,6 +12,7 @@ use crate::canvas::{Interaction, View};
 use crate::example;
 use crate::look;
 use crate::review_view::ReviewView;
+use crate::site::SiteView;
 use crate::st_view::{StView, brand};
 
 const STORAGE_KEY: &str = "helmsman-canvas/project";
@@ -55,6 +56,8 @@ pub struct App {
     pub review: Option<ReviewView>,
     /// The floor screen, likewise.
     pub andon: Option<AndonView>,
+    /// The site view, likewise.
+    pub site: Option<SiteView>,
 }
 
 /// Where the live ST view's scans come from.
@@ -79,6 +82,8 @@ pub enum Mode {
     Review,
     /// The floor screen: the box's andon tiles, full screen (`?andon`).
     Andon,
+    /// Every box of this box's site, with a link to each (`?site`).
+    Site,
 }
 
 impl App {
@@ -104,6 +109,8 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let mode = if crate::web::wants("andon") {
             Mode::Andon
+        } else if crate::web::wants("site") {
+            Mode::Site
         } else {
             Mode::Live
         };
@@ -141,6 +148,7 @@ impl App {
             boxv: None,
             review: None,
             andon: None,
+            site: None,
         }
     }
 
@@ -1047,7 +1055,7 @@ impl App {
             self.andon.get_or_insert_with(AndonView::new).show(ui);
             return;
         }
-        if matches!(self.mode, Mode::Live | Mode::Review) {
+        if matches!(self.mode, Mode::Live | Mode::Review | Mode::Site) {
             self.show_live(ui);
             return;
         }
@@ -1108,6 +1116,13 @@ impl App {
                 {
                     self.mode = Mode::Review;
                 }
+                if ui
+                    .selectable_label(self.mode == Mode::Site, "Site")
+                    .on_hover_text("every box of this box's site (--site), each a link to its canvas")
+                    .clicked()
+                {
+                    self.mode = Mode::Site;
+                }
                 ui.separator();
                 ui.label(
                     RichText::new("live ST view · read-only: changes go through the agent as ST")
@@ -1120,6 +1135,10 @@ impl App {
             Mode::Lab | Mode::Andon => return,
             Mode::Review => {
                 self.review.get_or_insert_with(ReviewView::new).show(ui);
+                return;
+            }
+            Mode::Site => {
+                self.site.get_or_insert_with(SiteView::new).show(ui);
                 return;
             }
             Mode::Live => {}

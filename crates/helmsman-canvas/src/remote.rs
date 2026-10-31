@@ -43,6 +43,15 @@ pub enum Fetch {
     Module(String),
     /// `GET /api/screen`: the floor screen's layout.
     Screen,
+    /// `GET /api/site`: this box and the peers it heard.
+    Site,
+    /// Another box's `GET /api/site`, cross-origin, without credentials:
+    /// probe number `n` of the peer with this id (a later answer to an
+    /// earlier probe is ignored).
+    Peer {
+        id: String,
+        n: u64,
+    },
 }
 
 /// An event stream.
@@ -547,7 +556,7 @@ impl BoxState {
                 self.relower();
             }
             // The floor screen's fetch is not this view's.
-            Msg::Got(Fetch::Screen, _) | Msg::Event(..) => {}
+            Msg::Got(Fetch::Screen | Fetch::Site | Fetch::Peer { .. }, _) | Msg::Event(..) => {}
         }
     }
 
