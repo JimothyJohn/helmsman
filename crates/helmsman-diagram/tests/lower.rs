@@ -18,9 +18,8 @@ fn assignment_reads_left_operators_middle_write_right() {
         "\
 #0 read A
 #1 read B
-#2 op NOT <- #1
-#3 op AND <- #0 #2
-#4 write C := <- #3
+#2 op AND <- #0 !#1
+#3 write C := <- #2
 "
     );
 }
@@ -118,13 +117,11 @@ fn an_fb_output_read_before_the_call_is_a_plain_read() {
         ),
         "\
 #0 read PULSE.Q
-#1 op NOT <- #0
-#2 const T#500ms
-#3 fb PULSE : TON <- #1 #2
-#4 read ON [R0]
-#5 op NOT [R0] <- #4
-#6 write ON := [R0] <- #5
-R0 IF PULSE.Q gate=#3 body=1
+#1 const T#500ms
+#2 fb PULSE : TON <- !#0 #1
+#3 read ON [R0]
+#4 write ON := [R0] <- !#3
+R0 IF PULSE.Q gate=#2 body=1
 "
     );
 }
@@ -426,4 +423,137 @@ END_PROGRAM
     // A table from another source does not map this one.
     let short = &table[..table.len() - 1];
     assert!(lower_table(src, short).is_err());
+}
+
+#[test]
+fn not_assigned_directly_is_a_bubble_on_the_writes_pin() {
+    assert_eq!(
+        lowered("x, y : BOOL;", "y := NOT x;"),
+        "\
+#0 read X
+#1 write Y := <- !#0
+"
+    );
+}
+
+#[test]
+fn double_negation_is_a_plain_wire() {
+    assert_eq!(
+        lowered("x, y, z : BOOL;", "y := NOT NOT x;\nz := NOT (NOT x);"),
+        "\
+#0 read X
+#1 write Y := <- #0
+#2 read X
+#3 write Z := <- #2
+"
+    );
+}
+
+#[test]
+fn not_on_a_literal_folds_into_the_constant() {
+    let (_, m) = build(&prog("y, z : BOOL;", "y := NOT TRUE;\nz := NOT NOT FALSE;"));
+    assert_eq!(
+        program_shape(&m),
+        "\
+#0 const FALSE
+#1 write Y := <- #0
+#2 const FALSE
+#3 write Z := <- #2
+"
+    );
+    let d = &m.program().unwrap().diagram;
+    assert_eq!(
+        d.nodes[0].kind,
+        NodeKind::Const {
+            value: Some(helmsman_iec::Value::Bool(false))
+        }
+    );
+    assert_eq!(d.nodes[0].text, "NOT TRUE", "the source text stays");
+}
+
+#[test]
+fn a_negated_condition_is_a_bubble_on_the_gate() {
+    let (_, m) = build(&prog(
+        "jam, done, a, b, y : BOOL;",
+        "IF NOT jam THEN y := TRUE; ELSIF NOT (a AND b) THEN y := FALSE; END_IF;\n\
+         WHILE NOT done DO done := TRUE; END_WHILE;",
+    ));
+    assert_eq!(
+        program_shape(&m),
+        "\
+#0 read JAM
+#1 const TRUE [R0]
+#2 write Y := [R0] <- #1
+#3 read A
+#4 read B
+#5 op AND <- #3 #4
+#6 const FALSE [R1]
+#7 write Y := [R1] <- #6
+#8 read DONE
+#9 const TRUE [R2]
+#10 write DONE := [R2] <- #9
+R0 IF NOT JAM gate=!#0 body=1
+R1 ELSIF NOT (A AND B) gate=!#5 body=1
+R2 WHILE NOT DONE gate=!#8 body=1
+"
+    );
+}
+
+#[test]
+fn not_on_fb_outputs_array_elements_bits_fields_and_bool_functions_is_a_bubble() {
+    let src = "TYPE cell : STRUCT ok : BOOL; n : INT; END_STRUCT; END_TYPE
+FUNCTION hot : BOOL
+VAR_INPUT v : INT; END_VAR
+hot := v > 3;
+END_FUNCTION
+PROGRAM t
+VAR t1 : TON; go, y : BOOL; flags : ARRAY[0..3] OF BOOL; i : INT; w : WORD; c : cell; END_VAR
+t1(IN := go, PT := T#1s);
+y := NOT t1.Q;
+y := NOT flags[i] OR NOT flags[2];
+y := NOT w.3 AND NOT c.ok;
+y := NOT hot(i) OR NOT %IX0.0;
+END_PROGRAM
+";
+    let (_, m) = build(src);
+    assert_eq!(
+        program_shape(&m),
+        "\
+#0 read GO
+#1 const T#1s
+#2 fb T1 : TON <- #0 #1
+#3 write Y := <- !#2.Q
+#4 read I
+#5 access FLAGS[I] <- #4
+#6 read FLAGS[2]
+#7 op OR <- !#5 !#6
+#8 write Y := <- #7
+#9 read W.3
+#10 read C.OK
+#11 op AND <- !#9 !#10
+#12 write Y := <- #11
+#13 read I
+#14 func HOT <- #13
+#15 read %IX0.0
+#16 op OR <- !#14 !#15
+#17 write Y := <- #16
+"
+    );
+}
+
+#[test]
+fn bitwise_not_on_a_word_stays_a_block() {
+    assert_eq!(
+        lowered("w, v : WORD; b : BYTE;", "w := NOT v;\nb := NOT b AND 16#0F;"),
+        "\
+#0 read V
+#1 op NOT <- #0
+#2 write W := <- #1
+#3 read B
+#4 op NOT <- #3
+#5 const 15
+#6 op AND <- #4 #5
+#7 write B := <- #6
+"
+    );
 }

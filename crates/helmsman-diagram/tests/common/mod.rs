@@ -19,7 +19,8 @@ pub fn prog(vars: &str, body: &str) -> String {
 }
 
 /// The program's diagram as text: one line per node (`#id kind label
-/// [region] <- inputs`), then one per region (`R#id label gate=#node body=n`).
+/// [region] <- inputs`, `!#3` a negated input), then one per region
+/// (`R#id label gate=#node body=n`, `gate=!#node` a negated gate).
 /// Structure only, no positions.
 pub fn shape(d: &Diagram) -> String {
     let mut s = String::new();
@@ -39,10 +40,11 @@ pub fn shape(d: &Diagram) -> String {
             .inputs(n.id)
             .map(|w| {
                 let port = &d.node(w.from).outs[w.out];
+                let not = if w.negated { "!" } else { "" };
                 if port.is_empty() {
-                    format!("#{}", w.from.0)
+                    format!("{not}#{}", w.from.0)
                 } else {
-                    format!("#{}.{port}", w.from.0)
+                    format!("{not}#{}.{port}", w.from.0)
                 }
             })
             .collect();
@@ -54,7 +56,8 @@ pub fn shape(d: &Diagram) -> String {
         s.push('\n');
     }
     for r in &d.regions {
-        let gate = r.gate.map_or("-".to_string(), |(n, _)| format!("#{}", n.0));
+        let not = if r.negated { "!" } else { "" };
+        let gate = r.gate.map_or("-".to_string(), |(n, _)| format!("{not}#{}", n.0));
         writeln!(s, "R{} {} gate={gate} body={}", r.id.0, r.label, r.body.len()).unwrap();
     }
     s

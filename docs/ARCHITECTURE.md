@@ -1462,6 +1462,16 @@ agent as ST; nothing here writes ST back).
   selector); each loop is a region gated by its head or condition. Every
   node, region and statement carries its `StmtId`, found by POU, line and
   column in the `TraceMap`, so a trace maps straight onto it.
+- **NOT is a bubble**, the FBD convention, not a block: a boolean `NOT`
+  is `Wire::negated` (a circle on the pin it feeds; `y := NOT x` puts it
+  on the write's pin) or `Region::negated` (`IF NOT jam`). `NOT NOT x` is
+  a plain wire, `NOT TRUE` folds into the constant `FALSE`, and FB
+  outputs, array elements, bits, struct fields and BOOL functions get a
+  bubble like any variable. NOT on a BYTE/WORD/DWORD/LWORD stays a block
+  (a bitwise complement; a bubble would hide that every bit flips), as
+  does NOT on an operand whose type the declarations do not give.
+  Properties over generated programs: every negated wire carries a BOOL
+  (by the compiled program's types), and no NOT block has a BOOL input.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label
@@ -1470,14 +1480,31 @@ agent as ST; nothing here writes ST back).
 - **Live**: `annotate` puts one `Trace` on a diagram (FB bodies viewed
   through one instance's prefix): variable values at scan end, logic and
   comparisons re-evaluated from them, arithmetic left blank; gates open,
-  closed or not reached from arm hits and loop passes.
+  closed or not reached from arm hits and loop passes. A negated wire
+  shows its source's value; the block it feeds sees the inverse
+  (`Live::input`, `Live::gate_value`), and the bubble is outlined in the
+  colour of what the consumer sees.
 - **"On because"** (`explain`): the last assignment to the variable that
   ran, the gates around it with the conditions they needed TRUE or FALSE
   and their values, and the same question for every variable read, to a
   depth. FB outputs are followed into user FB bodies (and FB inputs back
   out to the caller's argument); library FBs report their inputs. No
   assignment ran: "held", with the closed gate that stopped each. Data, not
-  prose: explain-mode phrases it.
+  prose: explain-mode phrases it. Negated gates read as such (`NOT JAM`
+  with its inverted value), so the phrases are unchanged.
+- **The highlighted path** (`drivers`): the same rules as `explain`, as
+  sets of nodes, wires and regions of the diagram shown (one POU, one
+  instance prefix): the assignment that ran last, everything wired into
+  it, the gates around it (an ELSIF/ELSE with the earlier arms' conditions
+  that had to fail), and the same for every variable read; held, the
+  closed gates, their conditions and the skipped assignments; an
+  instance's output, its last call. Each node and variable is visited
+  once, so it runs every frame. Tapping an output, an assignment or a
+  variable's block sets the "because" variable and the canvas draws its
+  path at full strength and dims the rest; tapping empty space clears it.
+  Contract: `tests/live.rs` (the latch's MOTOR is start, stop and the
+  seal-in, nothing else), a property that the path holds the assignment
+  `explain` names, and a headless canvas test in `st_view.rs`.
 - **Canvas**: the Editor (docs/UI.md), with two sources. **Box**
   (`canvas-web`; the default in a browser the box served): the module list
   and a module's source from the box API, its traces from
@@ -1495,7 +1522,8 @@ agent as ST; nothing here writes ST back).
   playground below: docs/playground/, `?playground` or `?demo`, native,
   or "Simulate in this browser" from the ⋯ menu or when the box is
   unreachable). Pan, zoom, drag blocks; a click on a block sends the ST
-  editor ("ST", beside the diagram; read-only on a box) to its line.
+  editor ("ST", beside the diagram; read-only on a box) to its line;
+  tapping an output shows its highlighted path.
 
 ## Explain mode (`explain-mode`, built)
 

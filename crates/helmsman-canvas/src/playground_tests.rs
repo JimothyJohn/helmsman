@@ -1242,8 +1242,21 @@ fn the_playground_opens_running_the_first_example() {
     s.wait(0.5);
     assert!(s.view.session.scans >= 30, "{}", s.view.session.scans);
     assert!(s.view.viewer.is_some(), "the diagram is up");
-    assert_eq!(s.view.viewer.as_ref().unwrap().because.as_deref(), Some("LAMP"));
+    assert_eq!(s.view.viewer.as_ref().unwrap().because, None, "no path lit");
     assert!(s.view.chat.proxy == Proxy::No, "no proxy natively");
+}
+
+#[test]
+fn a_pick_survives_an_edit_while_its_variable_does() {
+    let mut s = Screen::new();
+    s.view.pick("LAMP");
+    // An edit that keeps lamp: still picked.
+    let src = s.view.session.src.replace("(* A timer", "(* Still a timer");
+    s.view.load(&src, "an edit");
+    assert_eq!(s.view.viewer.as_ref().unwrap().because.as_deref(), Some("LAMP"));
+    // A program without it: nothing lit.
+    s.view.load(example("latch"), "latch");
+    assert_eq!(s.view.viewer.as_ref().unwrap().because, None);
 }
 
 #[test]

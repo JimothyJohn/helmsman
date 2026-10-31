@@ -141,8 +141,9 @@ impl PlaygroundView {
         self.viewer = b.module.clone().map(|m| {
             let mut v = Viewer::new(&b.src, m);
             v.arrange(&arranged);
-            let outs = v.outputs();
-            v.because = old.filter(|o| outs.contains(o)).or_else(|| outs.first().cloned());
+            // Opens with no path lit; the user's pick survives an edit
+            // while its variable does.
+            v.because = old.filter(|o| v.knows(o));
             v
         });
     }

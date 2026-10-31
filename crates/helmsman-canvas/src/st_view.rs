@@ -11,7 +11,9 @@ use eframe::egui::{
     epaint::CubicBezierShape,
 };
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
-use helmsman_diagram::{Diagram, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate};
+use helmsman_diagram::{
+    Diagram, Drivers, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, drivers,
+};
 use helmsman_iec::Value;
 
 /// Brand colours (docs/brand/index.html).
@@ -108,6 +110,8 @@ pub struct Viewer {
     pub because: Option<String>,
     /// Source lines drawn highlighted.
     pub highlight: Vec<u32>,
+    /// The "because" path the last frame drew (see [`Self::highlighted`]).
+    lit: Option<Drivers>,
     /// What the drag in progress holds.
     grab: Option<Grab>,
     /// Instances folded in the tree (their prefixes).
@@ -189,6 +193,7 @@ impl Viewer {
             pick: None,
             because: None,
             highlight: Vec::new(),
+            lit: None,
             grab: None,
             folded: Vec::new(),
             moved,
@@ -318,6 +323,14 @@ impl Viewer {
                 (r.pos.line, r.label.clone())
             }
         })
+    }
+
+    /// Whether `path` (a program path; `M.ON` for an instance's) names a
+    /// variable of the program: a pick that survives a new version.
+    #[must_use]
+    pub fn knows(&self, path: &str) -> bool {
+        let head = path.split('.').next().unwrap_or(path).to_ascii_uppercase();
+        self.module.program().is_some_and(|p| p.vars.contains_key(&head))
     }
 
     /// Program paths the outputs list offers: located outputs and
@@ -650,22 +663,50 @@ impl Viewer {
             self.pick = node_near(d, x, y, slop)
                 .map(Pick::Node)
                 .or_else(|| d.region_at(x, y).map(Pick::Region));
-            if let Some(Pick::Node(n)) = self.pick
-                && let Some(path) = self.tapped(n)
-            {
-                self.because = Some(path);
+            match self.pick {
+                // An output, an assignment or a variable's block: its path.
+                Some(Pick::Node(n)) => {
+                    if let Some(path) = self.tapped(n) {
+                        self.because = Some(path);
+                    }
+                }
+                // Empty space (a region's inside counts): no path.
+                _ => self.because = None,
             }
         }
         let live = self.live(scan);
+        self.lit = self.path(scan);
         draw(
             &painter,
             area,
             cam,
             self.diagram(),
             live.as_ref(),
-            self.pick,
-            &self.highlight,
+            Marks {
+                pick: self.pick,
+                lines: &self.highlight,
+                lit: self.lit.as_ref(),
+            },
         );
+    }
+
+    /// What drives the "because" variable's value in `scan`, on the
+    /// diagram shown: `None` with no variable or scan, or when nothing on
+    /// this diagram drives it (it lives in another scope).
+    #[must_use]
+    pub fn path(&self, scan: Option<&dyn Scan>) -> Option<Drivers> {
+        let path = self.because.as_deref()?;
+        let s = &self.scopes[self.scope];
+        let on = drivers(&self.module, scan?, s.pou, &s.prefix, path);
+        (!on.is_empty()).then_some(on)
+    }
+
+    /// The path the last [`Self::canvas`] drew at full strength (the rest
+    /// dimmed); `None`: nothing dimmed.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn highlighted(&self) -> Option<&Drivers> {
+        self.lit.as_ref()
     }
 }
 
@@ -723,22 +764,51 @@ pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw(
-    painter: &egui::Painter,
-    area: Rect,
-    cam: Cam,
-    d: &Diagram,
-    live: Option<&Live>,
+/// What [`draw`] marks on the diagram beside the scan.
+#[derive(Clone, Copy)]
+struct Marks<'a> {
     pick: Option<Pick>,
-    lines: &[u32],
-) {
+    /// Source lines the explanation cites.
+    lines: &'a [u32],
+    /// The "because" path: drawn at full strength, the rest dimmed.
+    lit: Option<&'a Drivers>,
+}
+
+/// How strongly what is off the "because" path is drawn.
+const DIMMED: f32 = 0.22;
+
+/// The FBD negation bubble's radius, in diagram units.
+const BUBBLE: f32 = 4.0;
+
+/// The negation bubble on a pin at `p` (screen), entered from the left:
+/// outlined in the colour of the value its consumer sees.
+fn bubble(painter: &egui::Painter, p: Pos2, z: f32, seen: Option<Value>, fade: f32) {
+    let (c, _) = wire_color(seen);
+    painter.circle(
+        p - Vec2::new(BUBBLE * z, 0.0),
+        BUBBLE * z,
+        BLACK,
+        Stroke::new(1.5 * z.max(0.5), c.gamma_multiply(fade)),
+    );
+}
+
+fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option<&Live>, marks: Marks<'_>) {
+    let Marks { pick, lines, lit } = marks;
     let z = cam.zoom;
+    let strength = |on: bool| if lit.is_none() || on { 1.0 } else { DIMMED };
+    // Pins entered through a bubble: no pin dot over it.
+    let bubbled: std::collections::HashSet<(NodeId, usize)> = d
+        .wires
+        .iter()
+        .filter(|w| w.negated)
+        .map(|w| (w.to, w.inp))
+        .collect();
     painter.rect_filled(area, CornerRadius::ZERO, BLACK);
     let text = z > 0.35;
     // Regions, outermost first.
     for r in &d.regions {
         let gate = live.map(|l| l.gates[r.id.0 as usize]);
+        let f = strength(lit.is_some_and(|l| l.region(r.id)));
         let rect = cam.rect(&r.rect);
         let (stroke, fill, state) = match gate {
             Some(Gate::Open(n)) => (YELLOW, YELLOW.gamma_multiply(0.06), format!("taken ×{n}")),
@@ -746,6 +816,7 @@ fn draw(
             Some(Gate::NotReached) => (GRAPHITE, Color32::TRANSPARENT, "not reached".into()),
             None => (STEEL, Color32::TRANSPARENT, String::new()),
         };
+        let (stroke, fill) = (stroke.gamma_multiply(f), fill.gamma_multiply(f));
         painter.rect_filled(rect, CornerRadius::same(6), fill);
         let width = if pick == Some(Pick::Region(r.id)) {
             2.5
@@ -769,31 +840,49 @@ fn draw(
                 stroke,
             );
         }
-        // The gate's wire into the region's label.
+        // The gate's wire into the region's label, through its bubble.
         if let Some((g, port)) = r.gate {
             let n = d.node(g);
             let (x, y) = out_port(&n.rect, port);
             let v = live.and_then(|l| l.values[g.0 as usize].get(port).copied().flatten());
             let (c, w) = wire_color(v);
-            bezier(
-                painter,
-                cam.to_screen(x, y),
-                cam.to_screen(r.rect.x, r.rect.y + LABEL_H / 2.0),
-                z,
-                c,
-                w,
-            );
+            let end = cam.to_screen(r.rect.x, r.rect.y + LABEL_H / 2.0);
+            let wire_end = if r.negated {
+                end - Vec2::new(2.0 * BUBBLE * z, 0.0)
+            } else {
+                end
+            };
+            bezier(painter, cam.to_screen(x, y), wire_end, z, c.gamma_multiply(f), w);
+            if r.negated {
+                bubble(painter, end, z, live.and_then(|l| l.gate_value(d, r.id)), f);
+            }
         }
     }
-    // Wires.
-    for (k, w) in d.wires.iter().enumerate() {
+    // Wires, the path's last so they sit on top.
+    let mut order: Vec<usize> = (0..d.wires.len()).collect();
+    order.sort_by_key(|&k| lit.is_some_and(|l| l.wire(k)));
+    for k in order {
+        let w = &d.wires[k];
+        let f = strength(lit.is_some_and(|l| l.wire(k)));
         let (a, b) = (d.node(w.from), d.node(w.to));
         let (ax, ay) = out_port(&a.rect, w.out);
         let (bx, by) = in_port(&b.rect, w.inp);
         let v = live.and_then(|l| l.wire(d, k));
         let (c, width) = wire_color(v);
         let (pa, pb) = (cam.to_screen(ax, ay), cam.to_screen(bx, by));
-        bezier(painter, pa, pb, z, c, width);
+        if w.negated {
+            bezier(
+                painter,
+                pa,
+                pb - Vec2::new(2.0 * BUBBLE * z, 0.0),
+                z,
+                c.gamma_multiply(f),
+                width,
+            );
+            bubble(painter, pb, z, live.and_then(|l| l.input(d, k)), f);
+        } else {
+            bezier(painter, pa, pb, z, c.gamma_multiply(f), width);
+        }
         if text
             && let Some(v) = v
             && !matches!(v, Value::Bool(_))
@@ -803,7 +892,7 @@ fn draw(
                 Align2::LEFT_CENTER,
                 v.to_string(),
                 font(10.0 * z),
-                WHITE,
+                WHITE.gamma_multiply(f),
             );
         }
     }
@@ -814,6 +903,7 @@ fn draw(
             continue;
         }
         let ran = live.is_none_or(|l| l.ran[n.id.0 as usize]);
+        let on_path = strength(lit.is_some_and(|l| l.node(n.id)));
         let (head, ink) = match &n.kind {
             NodeKind::Fb { .. } | NodeKind::For { .. } => (YELLOW, BLACK),
             NodeKind::Write { .. } => (WHITE, BLACK),
@@ -823,9 +913,9 @@ fn draw(
             }
             NodeKind::Jump => (STEEL, BLACK),
         };
-        let fade: f32 = if ran { 1.0 } else { 0.4 };
+        let fade: f32 = if ran { 1.0 } else { 0.4 } * on_path;
         let radius = CornerRadius::same(4);
-        painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7)));
+        painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7) * on_path));
         let h = Rect::from_min_size(r.min, Vec2::new(r.width(), HEADER * z));
         painter.rect_filled(
             h,
@@ -842,7 +932,7 @@ fn draw(
             painter.rect_stroke(
                 r.expand(4.0 * z),
                 CornerRadius::same(6),
-                Stroke::new(2.0 * z, YELLOW.gamma_multiply(0.6)),
+                Stroke::new(2.0 * z, YELLOW.gamma_multiply(0.6 * on_path)),
                 StrokeKind::Outside,
             );
         }
@@ -863,14 +953,16 @@ fn draw(
             for (k, name) in n.ins.iter().enumerate() {
                 let (x, y) = in_port(&n.rect, k);
                 let p = cam.to_screen(x, y);
-                painter.circle_filled(p, 3.0 * z, STEEL);
+                if !bubbled.contains(&(n.id, k)) {
+                    painter.circle_filled(p, 3.0 * z, STEEL.gamma_multiply(on_path));
+                }
                 if !name.is_empty() {
                     painter.text(
                         p + Vec2::new(6.0 * z, 0.0),
                         Align2::LEFT_CENTER,
                         name,
                         font(10.0 * z),
-                        STEEL,
+                        STEEL.gamma_multiply(on_path),
                     );
                 }
             }
@@ -878,14 +970,14 @@ fn draw(
                 let (x, y) = out_port(&n.rect, k);
                 let p = cam.to_screen(x, y);
                 let v = live.and_then(|l| l.values[n.id.0 as usize].get(k).copied().flatten());
-                painter.circle_filled(p, 3.5 * z, wire_color(v).0);
+                painter.circle_filled(p, 3.5 * z, wire_color(v).0.gamma_multiply(on_path));
                 if !name.is_empty() {
                     painter.text(
                         p - Vec2::new(6.0 * z, 0.0),
                         Align2::RIGHT_CENTER,
                         name,
                         font(10.0 * z),
-                        STEEL,
+                        STEEL.gamma_multiply(on_path),
                     );
                 }
             }
@@ -899,9 +991,173 @@ fn draw(
                     Align2::CENTER_CENTER,
                     v.to_string(),
                     font(11.0 * z),
-                    if on { YELLOW } else { WHITE },
+                    (if on { YELLOW } else { WHITE }).gamma_multiply(on_path),
                 );
             }
         }
+    }
+}
+
+/// The "because" path, driven headlessly through egui: taps on the
+/// diagram, asserting on what the canvas drew at full strength.
+#[cfg(test)]
+mod path_tests {
+    use eframe::egui::{self, Event, PointerButton, Pos2, RawInput, Rect, Vec2};
+    use helmsman_diagram::NodeKind;
+    use helmsman_iec::Value;
+
+    use super::{Scan, Viewer};
+    use crate::playground::Session;
+
+    /// The playground's latch, with two unrelated statements.
+    const LATCH: &str = "PROGRAM latch
+VAR
+  start AT %IX0.0 : BOOL;
+  stop AT %IX0.1 : BOOL;
+  motor AT %QX0.0 : BOOL;
+  other AT %IX0.2 : BOOL;
+  lamp AT %QX0.1 : BOOL;
+  count : INT;
+END_VAR
+motor := (start OR motor) AND NOT stop;
+lamp := other;
+IF other THEN count := count + 1; END_IF;
+END_PROGRAM
+";
+
+    /// The simulation's session (stopped, stepped by hand) and its view.
+    struct Sim {
+        session: Session,
+        view: Viewer,
+    }
+
+    struct Harness {
+        ctx: egui::Context,
+        sv: Sim,
+        time: f64,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            let mut session = Session::new(LATCH);
+            assert!(session.set_input("start", Value::Bool(true)));
+            for _ in 0..3 {
+                session.step();
+            }
+            let module = session.build.as_ref().unwrap().module.clone().unwrap();
+            let mut view = Viewer::new(LATCH, module);
+            // Something not on this diagram, as a box's first output can be.
+            view.because = Some("CONVEYOR".into());
+            let mut h = Self {
+                ctx: egui::Context::default(),
+                sv: Sim { session, view },
+                time: 0.0,
+            };
+            h.frame(vec![]);
+            h.frame(vec![]);
+            h
+        }
+
+        fn frame(&mut self, events: Vec<Event>) {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            self.time += 1.0 / 60.0;
+            let Sim { view, session } = &mut self.sv;
+            let scan = session.trace.as_ref().map(|t| t as &dyn Scan);
+            let mut out = self.ctx.run_ui(input, |ui| {
+                egui::CentralPanel::no_frame().show(ui, |ui| view.canvas(ui, scan));
+            });
+            out.textures_delta.clear();
+        }
+
+        fn click(&mut self, at: Pos2) {
+            let button = |pressed| Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.frame(vec![Event::PointerMoved(at)]);
+            self.frame(vec![button(true)]);
+            self.frame(vec![button(false)]);
+            // Far enough apart not to make a double click.
+            self.time += 1.0;
+            self.frame(vec![]);
+        }
+
+        /// The screen centre of the first node of kind `k`.
+        fn at(&self, k: &NodeKind) -> Pos2 {
+            let v = &self.sv.view;
+            let n = v.diagram().nodes.iter().find(|n| n.kind == *k).unwrap();
+            v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+        }
+
+        /// The nodes drawn at full strength, by label.
+        fn lit(&self) -> Vec<String> {
+            let v = &self.sv.view;
+            let Some(on) = v.highlighted() else {
+                return Vec::new();
+            };
+            v.diagram()
+                .nodes
+                .iter()
+                .filter(|n| on.node(n.id))
+                .map(|n| n.label.clone())
+                .collect()
+        }
+    }
+
+    fn write(path: &str) -> NodeKind {
+        NodeKind::Write { path: path.into() }
+    }
+
+    #[test]
+    fn tapping_an_output_dims_all_but_its_path_and_empty_space_clears_it() {
+        let mut h = Harness::new();
+        assert_eq!(
+            h.sv.view.because.as_deref(),
+            Some("CONVEYOR"),
+            "a variable elsewhere"
+        );
+        assert!(
+            h.sv.view.highlighted().is_none(),
+            "not on this diagram: nothing dimmed"
+        );
+
+        h.click(h.at(&write("MOTOR")));
+        assert_eq!(h.sv.view.because.as_deref(), Some("MOTOR"));
+        assert_eq!(
+            h.lit(),
+            ["START", "MOTOR", "OR", "STOP", "AND", "MOTOR :="],
+            "start, stop and the seal-in"
+        );
+        let v = &h.sv.view;
+        let on = v.highlighted().unwrap();
+        let d = v.diagram();
+        for n in &d.nodes {
+            let unrelated = n.pos.line > 10;
+            assert_eq!(on.node(n.id), !unrelated, "{} on line {}", n.label, n.pos.line);
+        }
+        assert!(!on.region(d.regions[0].id), "the IF is dimmed");
+        let negated = d.wires.iter().position(|w| w.negated).unwrap();
+        assert!(on.wire(negated), "the bubbled STOP wire is on the path");
+
+        // A read's block: that variable's path.
+        h.click(h.at(&NodeKind::Read { path: "OTHER".into() }));
+        assert_eq!(h.sv.view.because.as_deref(), Some("OTHER"));
+        assert_eq!(h.lit(), ["OTHER", "OTHER"]);
+
+        // Empty space, far from every block: cleared, nothing dimmed.
+        let v = &h.sv.view;
+        let (w, hgt) = v.diagram().size;
+        let empty = v.cams[v.scope].to_screen(w + 60.0, hgt + 60.0);
+        h.click(empty);
+        assert_eq!(h.sv.view.because, None);
+        assert!(h.sv.view.highlighted().is_none());
+        assert_eq!(h.lit(), Vec::<String>::new());
     }
 }

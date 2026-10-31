@@ -469,7 +469,7 @@ mod boxed {
         assert_eq!(h.app.title(), "cell", "the module open");
         let b = boxed(&h);
         let v = b.view.as_ref().expect("the module is drawn");
-        assert_eq!(v.because.as_deref(), Some("CONVEYOR"), "the first output");
+        assert_eq!(v.because, None, "opens with no path lit");
         assert_eq!(b.status(h.time).0, "● connected");
         assert!(
             !h.has("tab trend") && !h.has("tab claude"),

@@ -313,7 +313,8 @@ pub fn signatures(pou: &str, d: &Diagram) -> Vec<Sig> {
             let mut ins = vec![String::new(); n.ins.len()];
             for w in d.inputs(n.id) {
                 let from = d.node(w.from);
-                let s = format!("{}.{}", what(&from.kind, &from.label), w.out);
+                let not = if w.negated { "NOT " } else { "" };
+                let s = format!("{not}{}.{}", what(&from.kind, &from.label), w.out);
                 match ins.get_mut(w.inp) {
                     Some(slot) => *slot = s,
                     None => ins.push(s),

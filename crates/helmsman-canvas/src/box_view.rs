@@ -67,15 +67,15 @@ impl BoxView {
                 // The same source again (refetched): keep what was being
                 // looked at, as arranged. A new version keeps the blocks
                 // the operator moved that are still there.
+                // Opens with no path lit; the operator's pick survives a
+                // new version while its variable does.
                 if let Some(old) = self.view.take() {
                     if old.src == v.src {
                         v = old;
                     } else {
                         v.arrange(&old.arrangement());
+                        v.because = old.because.filter(|b| v.knows(b));
                     }
-                }
-                if v.because.is_none() {
-                    v.because = v.outputs().into_iter().next();
                 }
                 self.last_pick = v.pick;
                 self.view = Some(v);
