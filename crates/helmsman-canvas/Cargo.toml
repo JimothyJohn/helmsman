@@ -10,6 +10,9 @@ repository.workspace = true
 [dependencies]
 helmsman-diagram = { path = "../helmsman-diagram" }
 helmsman-iec = { path = "../helmsman-iec" }
+# A project's rules and its .zip, the box's own (the simulation's
+# Upload and Download).
+helmsman-project = { path = "../helmsman-project" }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 # The box API's JSON (already in the workspace through helmsman-plc).
 serde_json = "1.0"

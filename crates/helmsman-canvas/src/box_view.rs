@@ -601,6 +601,7 @@ impl Body for BoxView {
                 files,
                 current: open.as_ref().and_then(|o| o.current.as_deref()),
                 write,
+                dirty: self.projects.dirty(),
             };
             let act = self.files_ui.show(ui, &listing, chrome);
             match act {

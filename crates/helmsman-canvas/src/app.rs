@@ -146,7 +146,7 @@ impl App {
                 .as_mut()
                 .filter(|b| b.has_projects())
                 .map(|b| b as &mut dyn Workspace),
-            Source::Sim => None,
+            Source::Sim => self.sim.as_mut().map(|s| s as &mut dyn Workspace),
         }
     }
 

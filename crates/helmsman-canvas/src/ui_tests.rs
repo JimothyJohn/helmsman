@@ -195,8 +195,8 @@ mod chrome {
         h.press("menu");
         assert_eq!(
             h.menu_items(),
-            ["menu box", "menu editor"],
-            "no proposals without a box"
+            ["menu box", "menu download", "menu editor", "menu upload"],
+            "no proposals without a box; the simulation's projects upload and download"
         );
         h.press("menu box");
         assert_eq!(h.app.source, Source::Box);
@@ -204,7 +204,7 @@ mod chrome {
         // The public page: no box to go back to, no proposals.
         let mut h = Harness::new(App::sim());
         h.press("menu");
-        assert_eq!(h.menu_items(), ["menu editor"]);
+        assert_eq!(h.menu_items(), ["menu download", "menu editor", "menu upload"]);
         h.app.screen = Screen::Proposals;
         h.frame(vec![]);
         assert_eq!(h.app.screen, Screen::Editor, "proposals need a box");
