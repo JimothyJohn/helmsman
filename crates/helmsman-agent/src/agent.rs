@@ -181,6 +181,8 @@ impl Conversation {
     /// document block, replace that block (and the box's note after it)
     /// with a note saying it was refused and why, so the conversation can
     /// go on. Returns how many were replaced (0: nothing was touched).
+    /// A replaced drop-in stays in the conversation's proposal binding,
+    /// marked refused ([`Drafts::refused`]): proposals still cite it.
     ///
     /// Only a refusal of the request itself (`invalid_request`,
     /// `upstream_rejected`) counts. When it names a block
@@ -226,6 +228,8 @@ impl Conversation {
                 .and_then(|(id, _)| id.parse::<u64>().ok());
             let note = if let Some(id) = id {
                 content.remove(j + 1);
+                // Still cited by the conversation's proposals, marked refused.
+                self.drafts.refuse(id);
                 format!("[box] The user attached drop-in {id} (PDF) here, but the relay refused it")
             } else {
                 "[box] A PDF the user attached here was refused by the relay".to_string()
@@ -611,6 +615,7 @@ mod tests {
         ] {
             assert_eq!(c.drop_refused_documents(&e), 0, "{e}");
             assert_eq!(c.messages, before, "{e}");
+            assert!(c.drafts.refused().is_empty(), "{e}");
         }
         let e = refusal(
             "invalid_request",
@@ -627,6 +632,13 @@ mod tests {
             "{note}"
         );
         assert_eq!(c.drop_refused_documents(&e), 0, "nothing left to replace");
+        // It stays cited, marked refused (`refused-dropin-binding`).
+        assert!(c.drafts.dropins().contains(&7));
+        assert_eq!(c.drafts.refused().iter().copied().collect::<Vec<_>>(), [7]);
+        // Attached again and taken, it is no longer marked.
+        c.drafts.attached(7);
+        assert!(c.drafts.refused().is_empty());
+        assert!(c.drafts.dropins().contains(&7));
     }
 
     #[test]
