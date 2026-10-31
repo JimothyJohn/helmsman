@@ -667,8 +667,17 @@ pub fn from_zip(entries: Vec<zip::Entry>) -> Result<Files, String> {
     let prefix = keep
         .first()
         .and_then(|e| e.name.split_once('/'))
-        .map(|(p, _)| format!("{p}/"))
-        .filter(|p| p.len() > 1 && keep.iter().all(|e| e.name.starts_with(p.as_str())));
+        .map(|(p, _)| p)
+        // A folder a zipper made: a plain name, never `..`, `.`, a drive.
+        .filter(|p| {
+            let b = p.as_bytes();
+            (1..=128).contains(&b.len())
+                && b[0].is_ascii_alphanumeric()
+                && b.iter()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.' | b' '))
+        })
+        .map(|p| format!("{p}/"))
+        .filter(|p| keep.iter().all(|e| e.name.starts_with(p.as_str())));
     let mut files = BTreeMap::new();
     for e in keep {
         let name = prefix

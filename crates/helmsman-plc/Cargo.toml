@@ -152,3 +152,7 @@ required-features = ["box"]
 [[example]]
 name = "wasm_bench"
 required-features = ["wasm"]
+
+[[test]]
+name = "projects"
+required-features = ["box"]

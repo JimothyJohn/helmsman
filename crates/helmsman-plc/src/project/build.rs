@@ -446,6 +446,7 @@ pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape)
         });
         modules.insert(module, ModuleFiles::st(text, src));
     }
+    summary.sort_by(|a, b| a.name.cmp(&b.name));
     if !diags.is_empty() {
         diags.sort();
         return Err(diags);
