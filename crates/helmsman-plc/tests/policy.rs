@@ -613,6 +613,41 @@ fn clock() -> (Arc<AtomicU64>, helmsman_plc::policy::pin::Clock) {
     )
 }
 
+/// Regression: PBKDF2 rehashes a key longer than a block on every
+/// iteration, so a 1 MiB "PIN" in an apply body held the gate (and every
+/// other approver) for minutes. A PIN past 1 KiB is wrong and costs one
+/// ordinary PBKDF2.
+#[test]
+fn an_oversized_pin_is_wrong_and_costs_no_more_than_a_short_one() {
+    let mut p = Pins::default();
+    p.set(Role::Engineer, "eng-135797", 2000, [2; 16]).unwrap();
+    let (_, clk) = clock();
+    let g = Gate::new(
+        p,
+        Lockout {
+            attempts: 1000,
+            first: Duration::from_secs(30),
+        },
+        clk,
+    );
+    let time = |pin: &str| {
+        let t = Instant::now();
+        let r = g.check(Role::Engineer, pin);
+        (r, t.elapsed())
+    };
+    let (_, short) = time("guess-000");
+    let (r, long) = time(&"x".repeat(1 << 20));
+    assert_eq!(r, Err(Refused::Wrong));
+    assert!(
+        long < short * 4 + Duration::from_millis(50),
+        "{long:?} vs {short:?}"
+    );
+    // Exactly at the cap is still hashed as typed (and wrong); the right
+    // PIN still works.
+    assert_eq!(time(&"y".repeat(1024)).0, Err(Refused::Wrong));
+    assert_eq!(time("eng-135797").0, Ok(()));
+}
+
 #[test]
 fn wrong_pins_lock_entry_with_doubling_backoff_and_a_right_one_clears_it() {
     let (off, clk) = clock();

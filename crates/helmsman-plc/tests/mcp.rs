@@ -875,6 +875,11 @@ fn draft_check_simulate_propose_stores_a_draft_and_applies_nothing() {
     assert_eq!(mcp_calls, 7, "{audit:#?}");
     for e in &audit {
         assert_eq!(e["source"], "mcp", "{e}");
+        assert_eq!(
+            e["user"],
+            Json::Null,
+            "MCP calls are the box's, never a person's: {e}"
+        );
     }
     let inner: Vec<(&str, u64)> = audit
         .iter()

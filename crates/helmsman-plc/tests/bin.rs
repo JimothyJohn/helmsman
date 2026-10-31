@@ -1077,6 +1077,124 @@ fn set_pin_stores_a_slow_salted_private_hash_and_never_prints_the_pin() {
     );
 }
 
+/// `helmsman-plc account ARGS... --state-dir DIR`, `stdin` on its stdin.
+fn account(dir: &Path, args: &[&str], stdin: &str) -> (Option<i32>, String) {
+    use std::io::Write as _;
+    let mut child = plc()
+        .arg("account")
+        .args(args)
+        .arg("--state-dir")
+        .arg(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(stdin.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    (
+        out.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ),
+    )
+}
+
+#[test]
+fn account_cli_reads_passwords_from_stdin_only_and_keeps_the_file_private() {
+    use helmsman_plc::policy::account::{self, Accounts};
+    use helmsman_plc::policy::pin;
+    let dir = state_dir();
+    let (code, out) = account(&dir, &["list"], "");
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("role PINs"), "{out}");
+    let (code, out) = account(&dir, &["add", "alice", "engineer"], "alice-secret-9\n");
+    assert_eq!(code, Some(0), "{out}");
+    assert!(out.contains("role PINs are refused"), "the switch is said: {out}");
+    let mut shown = out;
+    // A password on the command line is a usage error, never stored.
+    let (code, out) = account(&dir, &["add", "bob", "operator", "bob-secret-77"], "");
+    assert_ne!(code, Some(0), "{out}");
+    shown.push_str(&out);
+    for (args, stdin) in [
+        (vec!["add", "alice", "operator"], "another-pass-1\n"),
+        (vec!["add", "Bob", "operator"], "bob-secret-77\n"),
+        (vec!["add", "bob", "root"], "bob-secret-77\n"),
+        (vec!["add", "bob", "operator"], "short\n"),
+        (vec!["passwd", "nobody"], "whatever-pass\n"),
+        (vec!["disable", "nobody"], ""),
+    ] {
+        let (code, out) = account(&dir, &args, stdin);
+        assert_ne!(code, Some(0), "{args:?}: {out}");
+        shown.push_str(&out);
+    }
+    let (code, out) = account(&dir, &["disable", "alice"], "");
+    assert_eq!(code, Some(0), "{out}");
+    let (code, out) = account(&dir, &["list"], "");
+    assert_eq!(code, Some(0), "{out}");
+    assert_eq!(out, "alice engineer disabled\n");
+    let text = std::fs::read_to_string(dir.join(account::FILE)).unwrap();
+    shown.push_str(&text);
+    for secret in ["alice-secret-9", "bob-secret-77", "another-pass-1"] {
+        assert!(!shown.contains(secret), "{secret}: {shown}");
+    }
+    assert!(
+        text.contains(&format!(
+            "alice engineer disabled pbkdf2-sha256 {} ",
+            pin::ITERATIONS
+        )),
+        "{text}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.join(account::FILE))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let a = Accounts::load(&dir, pin::MIN_ITERATIONS).unwrap().unwrap();
+    assert_eq!(a.len(), 1);
+    // An accounts file others can read, or one that does not parse, stops
+    // the box before it is on the network.
+    let echo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.join(account::FILE), std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let bad = state_dir();
+    std::fs::create_dir_all(&bad).unwrap();
+    Accounts::default().save(&bad).unwrap();
+    std::fs::write(
+        bad.join(account::FILE),
+        "helmsman-accounts 1\nmallory integrator enabled\n",
+    )
+    .unwrap();
+    for (state, want) in [(&dir, "readable by others"), (&bad, ":2: expected")] {
+        if cfg!(not(unix)) && want == "readable by others" {
+            continue;
+        }
+        let out = plc()
+            .arg(&echo)
+            .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
+            .args(["--api", "127.0.0.1:0", "--state-dir"])
+            .arg(state)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{want}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(want), "{want}: {err}");
+        assert!(
+            !err.contains("CIP on"),
+            "refused before the adapter started: {err}"
+        );
+    }
+}
+
 #[test]
 fn a_policy_that_loosens_the_floor_stops_the_box_before_it_is_on_the_network() {
     let echo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");

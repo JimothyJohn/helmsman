@@ -31,6 +31,7 @@ use helmsman_plc::bundle::TrustStore;
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{LinkSet, Plan};
 use helmsman_plc::manifest::ModuleDir;
+use helmsman_plc::policy::account::{self, Accounts, Logins};
 use helmsman_plc::policy::pin::{self, Gate, Pins};
 use helmsman_plc::policy::{Policy, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
@@ -43,6 +44,9 @@ use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 const USAGE: &str = "\
 usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-dir DIR ...] [options]
        helmsman-plc bundle COMMAND ...   (signed bundles: `helmsman-plc bundle help`)
+       helmsman-plc account add USER ROLE | passwd USER | disable USER | enable USER | list
+                    [--state-dir DIR]   (per-person logins; passwords on stdin. Once
+                    any account exists, approvers log in and role PINs are refused)
   --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
@@ -798,11 +802,13 @@ fn describe(s: &Spec) -> String {
 /// Where the token lives: `--state-dir`, systemd's `$STATE_DIRECTORY`,
 /// or `./helmsman-state`.
 fn state_dir(o: &Opts) -> PathBuf {
-    o.state_dir.clone().unwrap_or_else(|| {
-        std::env::var_os("STATE_DIRECTORY")
-            .filter(|v| !v.is_empty())
-            .map_or_else(|| PathBuf::from("helmsman-state"), PathBuf::from)
-    })
+    o.state_dir.clone().unwrap_or_else(default_state_dir)
+}
+
+fn default_state_dir() -> PathBuf {
+    std::env::var_os("STATE_DIRECTORY")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| PathBuf::from("helmsman-state"), PathBuf::from)
 }
 
 /// Starts the API on `bind` over the loaded box; prints the token if it
@@ -847,6 +853,7 @@ fn load_policy(o: &Opts) -> Result<Policy, String> {
 fn load_access(o: &Opts) -> Result<(Policy, Pins), String> {
     let policy = load_policy(o)?;
     let pins = Pins::load(&state_dir(o), pin::MIN_ITERATIONS)?;
+    Accounts::load(&state_dir(o), pin::MIN_ITERATIONS)?;
     // Checked now so a bad trust store stops the box before it is on the
     // network; the API reads it again when it starts.
     TrustStore::load(&state_dir(o))?;
@@ -877,7 +884,12 @@ fn start_api(
         .as_deref()
         .map(|d| Store::open(d).map(Mutex::new).map_err(|e| e.to_string()))
         .transpose()?;
-    if Role::ALL.iter().all(|r| !approval.gate.pins().has(*r)) {
+    if Accounts::load(&dir, pin::MIN_ITERATIONS).is_ok_and(|a| a.is_some()) {
+        eprintln!(
+            "helmsman-plc: accounts in {}: approvers log in (POST /api/login); role PINs are refused",
+            dir.join(account::FILE).display()
+        );
+    } else if Role::ALL.iter().all(|r| !approval.gate.pins().has(*r)) {
         eprintln!(
             "helmsman-plc: no role PINs in {}: nothing can be applied until one is set (--set-pin ROLE)",
             dir.display()
@@ -1199,7 +1211,12 @@ fn run(o: &Opts) -> Result<(), String> {
     let (swap, swapper) = api::swap::channel(Duration::from_secs(5));
     let swap = swap.with_links(Arc::clone(&link_set));
     let approval = access.map(|(policy, pins)| Approval {
-        gate: Gate::new(pins, policy.lockout, Arc::new(Instant::now)),
+        gate: Gate::new(pins, policy.lockout, Arc::new(Instant::now)).with_logins(Logins::new(
+            state_dir(o),
+            pin::MIN_ITERATIONS,
+            policy.lockout,
+            Arc::new(Instant::now),
+        )),
         policy,
         plant: Plant {
             table: table.lock().unwrap_or_else(PoisonError::into_inner).clone(),
@@ -1304,6 +1321,19 @@ fn run(o: &Opts) -> Result<(), String> {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "account") {
+        let stdin = std::io::stdin();
+        return match account::cli(&args[1..], &mut stdin.lock(), default_state_dir()) {
+            Ok(out) => {
+                print!("{out}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     if args.first().is_some_and(|a| a == "bundle") {
         return match helmsman_plc::bundle::cli::run(&args[1..]) {
             Ok(out) => {

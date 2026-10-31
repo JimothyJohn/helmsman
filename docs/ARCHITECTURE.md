@@ -556,9 +556,11 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
 - **Everything else** needs `Authorization: Bearer <token>` (64 hex
   digits, made on first start in `api-token`, mode 0600, under
   `--state-dir` or systemd's `StateDirectory=`, printed once to the
-  journal). A token in a query string is refused on any request. Every
+  journal), or a login session from `POST /api/login` on a box with
+  accounts (below). A token, password, PIN or session in a query string
+  is refused on any request. Every
   authenticated call is appended to the audit log whatever its outcome,
-  with the snapshot id it concerns.
+  with the snapshot id it concerns and, for a session, the person.
 - **No write path.** There is no route that writes a signal, an output, a
   param or a module. `POST /api/proposals` stores a checked draft (a module
   directory's two files, or one param's value): parsed, compiled against its
@@ -636,6 +638,44 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   so parallel guessing is no faster. While locked no PIN is checked
   (429, `Retry-After`). A PIN is only ever in a request body: never logged,
   audited or echoed (malformed bodies get a fixed message, not serde's).
+  A PIN past 1 KiB is wrong without being hashed as typed (PBKDF2
+  rehashes a long key every iteration).
+- **Accounts replace PINs (`local-accounts`, built).** `policy/account.rs`,
+  `api/login.rs`; contracts in `tests/accounts.rs`. `accounts` in the
+  state directory (`helmsman-accounts 1`, mode 0600, refused if others may
+  read it, hand-parsed): one `USER ROLE enabled|disabled pbkdf2-sha256
+  ITERATIONS SALT HASH` line per person, the PIN file's hash and
+  iteration floor. `helmsman-plc account add USER ROLE | passwd USER |
+  disable USER | enable USER | list` edits it, passwords on stdin only.
+  **Once the file exists the box refuses every role PIN** (403, even a
+  right one) and approvals come from a login session; without it, PINs
+  work exactly as before. The file is read again on every login and every
+  use of a session, so disabling an account, changing its password or
+  role, or removing the file ends its sessions at their next use, without
+  a restart; a file that will not load stops the box at startup, and one
+  that breaks while it runs refuses every login, session and PIN (503).
+  `POST /api/login {user, password}` (no token) answers a session token:
+  32 random bytes, kept server-side only as their SHA-256, ending 1 h
+  after login, after 15 min unused, on `POST /api/logout`, or when the
+  account changes; at most 8 per account (a further login ends the
+  oldest) and 256 per box. A wrong password counts toward a lockout of
+  that account (the policy's `lockout`, doubling to 1 h) and toward a
+  box-wide one (4 times the allowance within an hour, any accounts,
+  known or not); checks are serialized; an unknown user costs the same
+  PBKDF2 as a known one; compares are constant-time; a disabled account
+  looks like a wrong password. A session carries its account's role: an
+  apply or rollback with one sends only `{replay?}`, and a role or PIN
+  beside it is refused (400), so nothing in a request raises it. A
+  session goes wherever the box token goes (replays, drafts, chat),
+  except `/mcp`, which takes the box token only and audits no person.
+  Logins that worked and wrong passwords are audited with the account; a
+  name is logged or audited only if it is an account (a password typed
+  as a user name never lands in a log); refusals while locked are only
+  logged, so an unauthenticated flood cannot fill the audit log.
+  `GET /api/policy` says which applies (`credentials`: `pins`,
+  `accounts`, `unavailable`); the canvas's review screen logs in with a
+  user and masked password, holds the session in memory only, and drops
+  it on a 401.
 - **Evidence bound to content.** `POST /api/proposals/{id}/replay` (or
   `/api/snapshots/{id}/replay` for a rollback) replays what runs and the
   target over the recorder's window (`replay::replay` twice, then
@@ -648,15 +688,19 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   is exactly what runs and its content exactly the target, over at least
   `min-replay`: an old replay, or one of other content, never counts.
 - **Apply = check, swap, commit, as one.** `POST .../apply` and
-  `POST /api/snapshots/{id}/rollback` take the token and `{role, pin,
-  replay?}`; in order: target known; draft not stale (its base is what
-  runs, else 409); tier and rule; role at least the rule's (403, no PIN
-  spent); evidence (428); PIN (403/429); every module compiles (422); another map or calendar
+  `POST /api/snapshots/{id}/rollback` take a login session and
+  `{replay?}`, or (no accounts) the token and `{role, pin, replay?}`; in
+  order: target known; draft not stale (its base is what
+  runs, else 409); tier and rule; role (the session's, or the one named)
+  at least the rule's (403, no PIN
+  spent); evidence (428); PIN (403/429; a session's password was checked
+  at login); every module compiles (422); another map or calendar
   loads (422) and the modules bind to it (409). Then the scan thread runs
   `Runtime::reconfigure` between ticks (or, with another map or calendar,
   the reload below) (refused: nothing changed, 409; not
   taken within 5 s: the job is withdrawn and can never land later), the
-  store commits the target with author, prompt, approver (`ROLE (PIN)`) and
+  store commits the target with author, prompt, approver (`USER (ROLE)`
+  for a session, `ROLE (PIN)` for a PIN) and
   time, and the API's view of the box moves to it; if the commit fails the
   scan thread is swapped back (500). Applies are serialized, so of two
   racing conflicting proposals one wins and the other is stale. Needs
@@ -664,6 +708,7 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   undo.
 - **Audited, every path.** Every apply, rollback and replay, refused or
   not, is an audit entry with time, status, role (once the body parsed),
+  the person (`user`, for every call made with a login session), and
   target and base snapshot ids; an apply that acts writes one entry before
   (so a full log stops it) and one after.
 
@@ -1251,7 +1296,7 @@ in `tests/site.rs`, `site_tests.rs`).
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` and the Class 1 scanner exist only with the feature. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | box ↔ LAN peers | site beacons in, this box's beacon out | strict parse, source-address rule, intake and refresh limits, a bounded list, no takeover of a live id; the box only lists peers and never connects to one; `/api/site` is the only cross-origin read | built (`site-view`) |
-| agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) |
+| agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) and `local-accounts` (per-person logins that replace the PINs once an accounts file exists; the audit names the person) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
@@ -1264,8 +1309,9 @@ prompt. The agent never touches the Rust core.
 
 - `approval-policy` (built, above) → `proposal-ui` (built, above): the
   canvas shows a draft's `approval` (tier, reasons, what it needs), charts
-  its replay, and posts the PIN to `apply`. `box-mcp` (built, above) wraps
-  the same routes; `local-accounts` replaces role PINs with people, keeping
+  its replay, and posts the PIN (or, with accounts, the login session) to
+  `apply`. `box-mcp` (built, above) wraps the same routes;
+  `local-accounts` (built, above) replaces role PINs with people, keeping
   the role check and the gate.
 - `canvas-web` (built, above) → `andon-screen`: another page the box
   serves from the same directory, on the same streams.
