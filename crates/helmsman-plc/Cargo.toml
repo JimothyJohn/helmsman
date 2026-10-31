@@ -161,3 +161,7 @@ required-features = ["wasm"]
 [[test]]
 name = "projects"
 required-features = ["box"]
+
+[[test]]
+name = "https"
+required-features = ["box", "https"]

@@ -1609,7 +1609,10 @@ fn plc_projects(state: &Path) -> Plc {
     while addr.is_none() {
         let mut line = String::new();
         assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
-        if let Some(rest) = line.strip_prefix("helmsman-plc: API on http://") {
+        if let Some(rest) = line
+            .strip_prefix("helmsman-plc: API on https://")
+            .or_else(|| line.strip_prefix("helmsman-plc: API on http://"))
+        {
             addr = rest.split('/').next().and_then(|a| a.parse().ok());
         }
     }

@@ -94,6 +94,107 @@ pub struct Request {
     /// Who made the call, for the audit log: `api` for a request off the
     /// socket, `mcp` for one the MCP route makes on a tool's behalf.
     pub source: &'static str,
+    /// It came over TLS (the box's HTTPS, [`Conn::Tls`]): set by the API.
+    pub tls: bool,
+}
+
+/// One accepted connection: plain TCP, or the box's HTTPS over it
+/// ([`super::tls`]). Timeouts are the socket's either way.
+pub enum Conn {
+    Plain(TcpStream),
+    #[cfg(feature = "https")]
+    Tls(Box<rustls::StreamOwned<rustls::ServerConnection, TcpStream>>),
+}
+
+impl Conn {
+    /// The socket under it.
+    #[must_use]
+    pub fn tcp(&self) -> &TcpStream {
+        match self {
+            Self::Plain(s) => s,
+            #[cfg(feature = "https")]
+            Self::Tls(s) => &s.sock,
+        }
+    }
+
+    /// Whether it is TLS with its handshake not done: nothing can be
+    /// said to that client, not even an error.
+    #[must_use]
+    pub fn handshaking(&self) -> bool {
+        match self {
+            Self::Plain(_) => false,
+            #[cfg(feature = "https")]
+            Self::Tls(s) => s.conn.is_handshaking(),
+        }
+    }
+
+    /// Whether it is TLS.
+    #[must_use]
+    pub const fn is_tls(&self) -> bool {
+        !matches!(self, Self::Plain(_))
+    }
+
+    /// The socket's read timeout.
+    ///
+    /// # Errors
+    /// The socket's.
+    pub fn set_read_timeout(&self, d: Option<Duration>) -> io::Result<()> {
+        self.tcp().set_read_timeout(d)
+    }
+
+    /// The socket's write timeout.
+    ///
+    /// # Errors
+    /// The socket's.
+    pub fn set_write_timeout(&self, d: Option<Duration>) -> io::Result<()> {
+        self.tcp().set_write_timeout(d)
+    }
+}
+
+impl Read for Conn {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(s) => s.read(buf),
+            #[cfg(feature = "https")]
+            Self::Tls(s) => s.read(buf),
+        }
+    }
+}
+
+impl Write for Conn {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(s) => s.write(buf),
+            #[cfg(feature = "https")]
+            Self::Tls(s) => s.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Self::Plain(s) => s.flush(),
+            #[cfg(feature = "https")]
+            Self::Tls(s) => s.flush(),
+        }
+    }
+}
+
+#[cfg(feature = "https")]
+impl Drop for Conn {
+    /// Ends TLS properly (`close_notify`), within the write timeout, so a
+    /// client can tell the end of a response from a cut connection.
+    fn drop(&mut self) {
+        if let Self::Tls(s) = self
+            && !s.conn.is_handshaking()
+        {
+            s.conn.send_close_notify();
+            while s.conn.wants_write() {
+                if !matches!(s.conn.write_tls(&mut s.sock), Ok(n) if n > 0) {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 impl Request {
@@ -167,7 +268,7 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Reads into `buf` until `done(buf)` or the deadline.
 fn fill(
-    stream: &mut TcpStream,
+    stream: &mut Conn,
     buf: &mut Vec<u8>,
     deadline: Instant,
     cap: usize,
@@ -284,6 +385,7 @@ pub fn parse_head(head: &[u8], limits: &Limits) -> Result<(Request, usize), Read
         by_cookie: false,
         headers: Vec::new(),
         source: "api",
+        tls: false,
     };
     let mut length: Option<usize> = None;
     let mut count = 0;
@@ -373,11 +475,7 @@ fn body_cap(req: &Request, limits: &Limits) -> usize {
 ///
 /// # Errors
 /// See [`ReadError`].
-pub fn read_request(
-    stream: &mut TcpStream,
-    limits: &Limits,
-    accepted: Instant,
-) -> Result<Request, ReadError> {
+pub fn read_request(stream: &mut Conn, limits: &Limits, accepted: Instant) -> Result<Request, ReadError> {
     let deadline = accepted + limits.deadline;
     let mut buf = Vec::with_capacity(1024);
     fill(stream, &mut buf, deadline, limits.head, |b| {
@@ -439,6 +537,7 @@ pub const fn reason(code: u16) -> &'static str {
         200 => "OK",
         201 => "Created",
         202 => "Accepted",
+        301 => "Moved Permanently",
         400 => "Bad Request",
         401 => "Unauthorized",
         403 => "Forbidden",
@@ -469,7 +568,7 @@ Referrer-Policy: no-referrer\r\n";
 ///
 /// # Errors
 /// The socket's.
-pub fn respond(stream: &mut TcpStream, r: &Response) -> io::Result<()> {
+pub fn respond(stream: &mut Conn, r: &Response) -> io::Result<()> {
     let mut head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n{SECURITY}Cache-Control: no-store\r\n",
         r.status,
@@ -496,7 +595,7 @@ pub fn respond(stream: &mut TcpStream, r: &Response) -> io::Result<()> {
 ///
 /// # Errors
 /// The socket's.
-pub fn start_stream(stream: &mut TcpStream) -> io::Result<()> {
+pub fn start_stream(stream: &mut Conn) -> io::Result<()> {
     let head = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n{SECURITY}Cache-Control: no-store\r\n\r\n"
     );

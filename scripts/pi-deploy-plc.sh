@@ -195,11 +195,22 @@ echo "box API answers on the Pi's $local_api; token: ssh $target journalctl -u h
 ssh "$target" "curl -fsS --max-time 2 http://$local_api/ | grep -q '<canvas' \
     && curl -fsS --max-time 5 -o /dev/null -w '%{content_type}' http://$local_api/$wasm | grep -qx application/wasm" \
     || { echo "FAIL: the canvas is not served at http://$local_api/" >&2; exit 1; }
+# HTTPS on the same port (box-https): plain HTTP above is served only
+# because it comes from the Pi itself. -k: the certificate is self-signed;
+# its fingerprint, printed below, is what a person checks instead.
+# shellcheck disable=SC2029 # $local_api is meant to expand here.
+ssh "$target" "curl -fsSk --max-time 2 -o /dev/null https://$local_api/api/modules" \
+    || { echo "FAIL: the box API does not answer over HTTPS on the Pi's $local_api" >&2; exit 1; }
+# shellcheck disable=SC2029 # $local_api is meant to expand here.
+fingerprint=$(ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/policy" \
+    | grep -o '"fingerprint":"[0-9A-F:]*"' | cut -d'"' -f4 || true)
 host="${target#*@}"
 echo
 echo "PLC is up on $host running $(basename "$program") every ${scan_ms} ms"
 echo "  from here:  scripts/adapter-smoke.sh $host"
 case "$api" in
-    127.*) echo "  canvas:     ssh -L $api_port:127.0.0.1:$api_port $target, then http://localhost:$api_port/" ;;
-    *) echo "  canvas:     http://$host:$api_port/ from $allow" ;;
+    127.*) echo "  canvas:     ssh -L $api_port:127.0.0.1:$api_port $target, then https://localhost:$api_port/" ;;
+    *) echo "  canvas:     https://$host:$api_port/ from $allow" ;;
 esac
+echo "  HTTPS certificate SHA-256 (self-signed: check the browser shows this, then trust it):"
+echo "              ${fingerprint:-unknown; ssh $target journalctl -u helmsman-plc | grep fingerprint}"

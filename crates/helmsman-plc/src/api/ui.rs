@@ -27,13 +27,12 @@
 
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest as _, Sha256};
 
-use super::http::{Response, SECURITY};
+use super::http::{Conn, Response, SECURITY};
 
 /// Longest path segment, bytes.
 pub const MAX_SEGMENT: usize = 128;
@@ -153,13 +152,13 @@ impl Ui {
 }
 
 impl Asset {
-    /// Lets an HTML page also fetch from other boxes over `http:` (the
+    /// Lets an HTML page also fetch from other boxes over `http:` or `https:` (the
     /// site view reads each peer's `GET /api/site`, which is the only
     /// route that answers another origin). Scripts stay this origin's and
     /// the page's own by hash; nothing else changes.
     pub fn allow_peers(&mut self) {
         if let Some(c) = &mut self.csp {
-            *c = c.replacen(CONNECT_SELF, "connect-src 'self' http:;", 1);
+            *c = c.replacen(CONNECT_SELF, "connect-src 'self' http: https:;", 1);
         }
     }
 }
@@ -273,7 +272,7 @@ fn base64(bytes: &[u8]) -> String {
 ///
 /// # Errors
 /// The socket's or the file's, or `TimedOut` past the deadline.
-pub fn send(stream: &mut TcpStream, mut asset: Asset) -> io::Result<()> {
+pub fn send(stream: &mut Conn, mut asset: Asset) -> io::Result<()> {
     let started = Instant::now();
     let csp = asset
         .csp
