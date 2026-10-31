@@ -4,7 +4,11 @@
 //! ZIP download and upload against hostile archives, deploy through the
 //! approval path (compile errors with file and line, nothing changed on
 //! failure, rollback after), concurrent saves and a deploy racing them,
-//! PLCopen import, and the binary booting the deployed project.
+//! `PLCopen` import, and the binary booting the deployed project.
+#![allow(clippy::many_single_char_names)] // bench, session, response, file
+#![allow(clippy::too_many_lines)] // each test walks one whole flow
+#![allow(clippy::option_option)] // a save: no version, null (new only), or one
+#![allow(clippy::type_complexity)] // tables of (files, file, line)
 
 use std::collections::BTreeMap;
 use std::io::{BufRead as _, BufReader, Read, Write};
@@ -1404,7 +1408,7 @@ fn a_deploy_racing_saves_runs_one_whole_version() {
         thread::spawn(move || {
             let mut k = 0usize;
             while !stop.load(Ordering::Relaxed) {
-                let t = if k % 2 == 0 { &v2 } else { &v1 };
+                let t = if k.is_multiple_of(2) { &v2 } else { &v1 };
                 assert_eq!(put_file(b.addr, &s, "p", "counter.st", t, None).status, 200);
                 k += 1;
             }
