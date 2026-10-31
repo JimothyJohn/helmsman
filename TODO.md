@@ -613,6 +613,17 @@
   difficulty: low
   id: enip-in-box
 
+- [ ] **Where does an agent-written WASM driver live?** The sandbox and the first guest are built (`wasm-driver`), but nothing in a map can name one yet (`wasm-driver-map`). A driver reaches a device, so it should be reviewed like a map change. Recommended: a driver is a module-like blob in the store (`wasm-store` adds WASM blobs for modules), proposed and approved through the same policy at the engineer tier, carried by bundles, and named in the map as `wasm:NAME`; the box ships none built in (the Modbus guest stays a test fixture, since the native driver is the one that runs). Alternatives: a file path on the box (`module=/etc/helmsman/drivers/x.wasm`), simplest but outside snapshots, approval and audit; or bundles only, no local authoring. Nothing is built for this yet: it sits on `wasm-store`, which another branch is building now.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: how `wasm-driver-map` loads a driver, and what approving one takes
+  options: store blob, proposed and approved at the engineer tier (recommended) | file path on the box | bundles only
+  est: 10m
+  difficulty: low
+  depends: wasm-driver
+  id: wasm-driver-home
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -995,12 +1006,20 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: io-map
   id: io-bench
 
-- [ ] **Drivers in the WASM tier** — the driver contract across the sandbox: parse/read/write by address string, one capability (a socket to its own device's endpoint), fuel and memory limits. The Modbus driver ported as the first guest, passing the same harness.
+- [x] **Drivers in the WASM tier** — the driver contract across the sandbox: parse/read/write by address string, one capability (a socket to its own device's endpoint), fuel and memory limits. The Modbus driver ported as the first guest, passing the same harness.
   result: drivers the agent writes can't touch anything but their device
   est: 1w
   difficulty: high
   depends: wasm-tier, io-map
   id: wasm-driver
+  notes: built on feat/wasm-driver: `helmsman_io::wasm` (feature `wasm`), interface `helmsman-driver/v1`; the Modbus/TCP guest in `crates/helmsman-io/guests/modbus-tcp/` (committed .wasm, `scripts/build-wasm-drivers.sh`); docs/ARCHITECTURE.md "WASM drivers". A map can't name one yet: `wasm-driver-map`.
+
+- [ ] **A map names a WASM driver** — `device rio wasm:NAME 10.0.0.5:502 unit=1`: the I/O map points a device at a WASM driver module, `IoMap::validate` parses its points through the guest, and `LinkSet` opens it with `WasmDriver::load`. Where the module bytes come from is `wasm-driver-home` (open question). The agent's `driver-agent` loop then writes a guest, runs `wasm::check` and the harness, and proposes the map change.
+  result: a device in the running map driven by an agent-written driver
+  est: 1d
+  difficulty: med
+  depends: wasm-driver, wasm-store, wasm-driver-home
+  id: wasm-driver-map
 
 - [ ] **Agent writes a driver from the manual** — give the agent a device's documentation (PDF to text, as done for the Modbus spec); it writes the point map and, for a new protocol, a WASM driver, and iterates on harness output: simulator first, then the bench. Engineer approves the map before any output is bound.
   result: a new device or protocol without hand-written driver code

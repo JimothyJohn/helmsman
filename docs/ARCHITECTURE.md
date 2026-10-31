@@ -35,7 +35,7 @@ roadmap card, by id).
  │          ▼                               ▼ (built)                  ▼ (built)  │
  │  ┌─ CIP adapter ───────────┐   ┌─ I/O map + drivers: helmsman-io ────┐         │
  │  │ helmsman-adapter        │   │ IoMap · Driver · modbus-tcp (built) │         │
- │  │ assembly 150 in, 100 out│   │ WASM drivers (planned: wasm-driver) │         │
+ │  │ assembly 150 in, 100 out│   │ WASM drivers (built: wasm-driver)   │         │
  │  └───────▲─────────────────┘   └───────┬──────────────┬──────────────┘         │
  └──────────┼─────────────────────────────┼──────────────┼────────────────────────┘
             │ EtherNet/IP, box is target  │ box is master│ box GPIO (do:N/di:N)
@@ -66,7 +66,7 @@ Three directions of traffic, three different rules:
 | `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
-| `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
+| `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-graph` | Node-graph model and scan simulator behind the canvas's lab editor. | built (lab tool) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
@@ -380,6 +380,54 @@ turns on; the canvas's wasm build never has it.
   text, so a WASM module runs from `--module-dir` but cannot be stored,
   proposed, approved or bundled (`wasm-store`); the API shows its source
   as an ST comment naming its size and SHA-256.
+
+## WASM drivers (`wasm-driver`, built)
+
+The `Driver` contract across the same interpreter (wasmi, same version
+and features as the module tier), so a driver the agent writes reaches
+its own device and nothing else. `helmsman_io::wasm::WasmDriver`, behind
+helmsman-io's `wasm` feature (off by default, so the canvas never has
+it); the interface is in the module docs of `wasm.rs`.
+
+- **Interface `helmsman-driver/v1`.** The guest exports `memory`,
+  `buffer(len) -> ptr` (where the host puts a call's input), `parse`,
+  `read` (addresses as `u16` LE length + bytes), `write` (address, a type
+  code and the value's 64 bits) and optionally `configure` (the device's
+  params as `key=value` lines). It answers through imports: `point`
+  (parse), `value` (once per address, in order), `fail` (an error kind
+  that maps onto `Error`, a code, a message of up to 256 bytes).
+- **One capability**: `send(ptr, len)`, `recv(ptr, len)` (exactly `len`
+  bytes) and `close()`, a TCP stream to the device's endpoint from the
+  map. No argument names a peer, so there is no other host or port to
+  ask for; any other import (WASI, a clock, a memory, a table, a global,
+  a `connect`) and a `start` function refuse the guest at load, every
+  problem listed (`wasm::check`). `parse` and `configure` get no socket.
+  Time-outs are the host's: each socket wait is at most `timeout_ms`, a
+  whole call at most that times one more than its addresses.
+- **Limits** (`wasm::Limits`): 1 000 000 fuel per call, linear memory
+  capped at 1 MiB (declaring more is refused, `memory.grow` past it
+  traps), one table of at most 10 000 elements, 64 KiB per `send`/`recv`
+  and per call's input, addresses of up to 255 bytes.
+- **Faults.** A trap (fuel, the memory cap, a pointer outside its memory
+  handed to an import, `unreachable`) or a contract breach (more or fewer
+  values than addresses, `parse` answering nothing, a `BOOL` of 2) fails
+  the call with `Error::Driver`, a point error: the link reading the
+  device marks that point bad (`io-point-errors`) and keeps the others,
+  and the runtime carries on. The instance and its connection are
+  dropped; the next call starts a fresh one.
+- **The first guest**: `crates/helmsman-io/guests/modbus-tcp/`, the
+  Modbus/TCP driver ported to `no_std` Rust (same point syntax, PDUs and
+  reply checks, no dependencies), 10 KB of WASM. It is not a workspace
+  member; `scripts/build-wasm-drivers.sh` rebuilds it for
+  `wasm32-unknown-unknown` and the `.wasm` is committed beside it, so the
+  tests need no wasm toolchain. It passes the conformance harness the
+  native driver passes, and agrees with the native driver, on the same
+  simulator and on hostile peers, call for call (property tests in
+  `tests/wasm_driver.rs`).
+- **Not yet** (`wasm-driver-map`): a map cannot name a WASM driver, and
+  driver modules have no home in the store; today a caller builds one
+  with `WasmDriver::load` and hands it to `link::links` as the opener.
+  Stream sockets only: a protocol over UDP would need a datagram import.
 
 ## The trace tap (`trace-tap`, built)
 
@@ -1553,7 +1601,7 @@ server: everything runs in the page (`playground.rs`, `playground_view.rs`,
 | module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault); a WASM module's fuel per scan (the same fault) and linear-memory cap | built |
 | module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink and the OPC UA server (read-only, SecurityPolicy None; `sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
-| driver ↔ box | strings and values | the `Driver` contract; WASM drivers get one capability, a socket to their own device's endpoint, plus fuel and memory limits | contract built; sandbox `wasm-driver` |
+| driver ↔ box | strings and values | the `Driver` contract; a WASM driver (`helmsman-driver/v1`) imports only its socket to its own device's endpoint (it never names a host or port; no files, clocks or WASI, refused at load otherwise), and only in `read` and `write`, under fuel and memory limits and a per-call deadline; a trap fails that point (`Error::Driver`), not the link or the runtime | built (`wasm-driver`; `helmsman-io/tests/wasm_driver.rs`, `helmsman-plc/tests/wasm_driver.rs`); a map can't name one yet (`wasm-driver-map`) |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` exist only with the feature; the Class 1 scanner (its own `scanner` feature, in the box build for the adapters the box masters, below) sends only `Forward_Open`/`Forward_Close` to an Assembly path. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | box ↔ mastered EtherNet/IP adapters | Class 1 I/O: the device's output assembly, its input assembly | `helmsman-proto`'s `scanner` feature, which the box build has: it sends `Forward_Open` and `Forward_Close` to an Assembly-class path and nothing else (no other service, no `Session::request`); only devices in the I/O map, through `enip-io`, with the map's one-writer rule and approval tier. `tests/box_build.rs` checks `scanner` is in and `unrestricted` still out. | built (`enip-io`); real-device check `e1213-bench` |
