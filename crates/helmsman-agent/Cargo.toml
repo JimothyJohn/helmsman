@@ -21,6 +21,16 @@ proptest = "1.12"
 [lints]
 workspace = true
 
+# The ST playground on localhost with Claude behind a same-origin proxy
+# that adds the API key (scripts/playground-serve.sh). An example, not a
+# binary: a dev tool, never on a box. `test = true` so `cargo test` runs
+# its tests.
+[[example]]
+name = "playground-proxy"
+path = "examples/playground_proxy.rs"
+required-features = ["https"]
+test = true
+
 [features]
 # https:// relays (rustls with the ring provider, Mozilla roots compiled in).
 # Without it the agent reaches only an http:// relay (a dev relay on the LAN).
