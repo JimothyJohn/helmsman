@@ -766,7 +766,7 @@ impl Review {
     }
 
     /// The box no longer knows the session (401): back to signing in.
-    fn session_ended(&mut self) {
+    pub fn session_ended(&mut self) {
         if self.session.take().is_some() {
             self.login_problem =
                 Some("The session ended (signed out, expired, or the box restarted). Sign in again.".into());

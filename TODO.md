@@ -938,6 +938,26 @@
   difficulty: low
   id: monitor-scan-time
 
+- [ ] **What does a click on an input's block force on a box?** The Editor (UI.md step 2) makes an input signal's block a control for an engineer: a BOOL flips (forced to the opposite of what it reads), a number drags (forced on every change). Built (reversible): only inputs that are signals of the map or calendar are clickable, since the diagram's reads are variables; a `%IX` address force has no click and is made through `POST /api/forces` only. A click on a forced BOOL forces it the other way; nothing but the banner releases.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what the diagram's input controls do on a box
+  options: signals only, click flips, banner releases (built) | a click on a forced input releases it | also address forces from a menu on `AT %I` variables
+  est: 1h
+  difficulty: low
+  id: force-click
+
+- [ ] **Save writes every edited file at once?** A project is several files; the header has one Save. Built (reversible): Save writes every file with unsaved edits (a dot marks each in Files), each with the version it read, and Deploy saves first. A stale file (someone else saved it) is refused alone and offers Reload; the others land.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what Save means in a multi-file project
+  options: every edited file (built) | only the file open | every edited file, all or nothing
+  est: 30m
+  difficulty: low
+  id: save-scope
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.

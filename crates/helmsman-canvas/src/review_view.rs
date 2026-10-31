@@ -206,7 +206,7 @@ impl ReviewView {
 
     /// Who is approving: signed in, or the way in this box takes (a user
     /// and password with accounts, else a role and its PIN).
-    fn login_ui(&mut self, ui: &mut egui::Ui) {
+    pub fn login_ui(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Signed in").strong());
         if let Some(who) = self.state.signed_in() {
             ui.horizontal_wrapped(|ui| {

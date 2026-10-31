@@ -24,6 +24,9 @@
 )]
 
 mod app;
+mod box_projects;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod box_projects_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_tests;
 mod box_view;
@@ -36,6 +39,7 @@ mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod playground_tests;
 mod playground_view;
+mod projects;
 mod remote;
 mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]

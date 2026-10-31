@@ -469,6 +469,12 @@ fn the_monitor_never_writes() {
             "a write from the Monitor: {c:?}"
         );
     }
+    // Projects and forces: reads at most, never a save, deploy or force.
+    let psent = &h.app.boxv.as_ref().unwrap().psent;
+    assert!(
+        psent.iter().all(|r| r.method == "GET" && r.body.is_none()),
+        "{psent:?}"
+    );
     let review = &h.app.review.as_ref().unwrap().sent;
     assert!(review.iter().all(|r| r.method == Method::Get), "{review:?}");
     // In the simulation: no input moved, nothing sent to Claude.

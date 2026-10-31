@@ -1,21 +1,40 @@
 //! The Editor on a real box: the page was served by the box's API
 //! (`--ui`), so it talks to the same origin. [`BoxState`] decides what to
-//! ask for; in the browser `web::Driver` asks (fetch, `EventSource`) and
-//! hands back what came, so this whole view also runs headless in tests,
-//! fed messages instead. The ST is read-only here: changes reach a box as
-//! proposals.
+//! watch and [`BoxProjects`] what to edit; in the browser `web::Driver`
+//! and `web::ProjHttp` ask (fetch, `EventSource`) and hand back what came,
+//! so this whole view also runs headless in tests, fed messages instead.
+//!
+//! On a box with projects (`--projects`) the Files sidebar lists them and
+//! the ST editor edits the open project's files, for an engineer; anyone
+//! else reads. The diagram is always what runs, live, and an engineer
+//! forces an input by clicking its block. On a box without projects the
+//! sidebar lists its modules and the ST is read-only, as before.
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, Color32, Rect, RichText, Sense, Vec2};
 use helmsman_diagram::Scan;
+use helmsman_iec::Value;
+use serde_json::json;
 
+use crate::box_projects::{Answer, BoxProjects, Deploy, PCall, PReq};
 use crate::editor::{self, Body, Chrome, Tab};
-use crate::remote::{BoxState, Cmd, Link, Msg};
+use crate::projects::{self, Act, FilesUi, Listing, Workspace};
+use crate::remote::{BoxState, Cmd, Link, Msg, SignalRow};
+use crate::review::Session;
+use crate::st_view::brand::{BLACK, GRAPHITE, WARN};
 use crate::st_view::{Pick, Viewer, brand, show};
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
+/// Largest file the editor takes (the box's `project::MAX_FILE`).
+const MAX_FILE: usize = 256 * 1024;
 
 pub struct BoxView {
     pub state: BoxState,
+    /// The box's projects, when it runs with them.
+    pub projects: BoxProjects,
+    pub files_ui: FilesUi,
+    /// Who the page is signed in as: the header's session, set by the app
+    /// before every frame.
+    pub session: Option<Session>,
     pub view: Option<Viewer>,
     /// The lowering the view was built from.
     generation: u64,
@@ -29,9 +48,14 @@ pub struct BoxView {
     pub open_at: Option<String>,
     #[cfg(target_arch = "wasm32")]
     driver: crate::web::Driver,
+    #[cfg(target_arch = "wasm32")]
+    http: crate::web::ProjHttp,
     /// Commands not carried out (no transport here: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub sent: Vec<Cmd>,
+    /// Project and force requests not carried out (tests carry them out).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub psent: Vec<PReq>,
 }
 
 impl Default for BoxView {
@@ -40,11 +64,26 @@ impl Default for BoxView {
     }
 }
 
+/// Whether `s` may edit, save, deploy and force: an engineer or above.
+pub fn is_engineer(s: Option<&Session>) -> Result<(), String> {
+    match s {
+        None => Err("Sign in as an engineer (top right) to edit, save, deploy or force.".into()),
+        Some(s) if matches!(s.role.as_str(), "engineer" | "integrator") => Ok(()),
+        Some(s) => Err(format!(
+            "Signed in as {}: only an engineer edits, saves, deploys or forces.",
+            s.label()
+        )),
+    }
+}
+
 impl BoxView {
     #[must_use]
     pub fn new() -> Self {
         Self {
             state: BoxState::new(),
+            projects: BoxProjects::new(),
+            files_ui: FilesUi::default(),
+            session: None,
             view: None,
             generation: 0,
             wants_sim: false,
@@ -52,18 +91,43 @@ impl BoxView {
             open_at: None,
             #[cfg(target_arch = "wasm32")]
             driver: crate::web::Driver::default(),
+            #[cfg(target_arch = "wasm32")]
+            http: crate::web::ProjHttp::default(),
             #[cfg(not(target_arch = "wasm32"))]
             sent: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            psent: Vec::new(),
         }
     }
 
     /// Takes in `msgs` at page time `now`, then carries out what is due.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn step(&mut self, ctx: &egui::Context, msgs: Vec<Msg>, now: f64) {
+        self.step_all(ctx, msgs, Vec::new(), now);
+    }
+
+    /// [`Self::step`], with the project and force answers too.
+    pub fn step_all(&mut self, ctx: &egui::Context, msgs: Vec<Msg>, answers: Vec<(PCall, Answer)>, now: f64) {
         for m in msgs {
             self.state.apply(m, now);
         }
+        for (call, a) in answers {
+            self.projects.answer(call, &a);
+        }
+        if std::mem::take(&mut self.projects.deployed) {
+            self.state.relist();
+        }
+        if let Some(f) = self.projects.forces.take() {
+            for s in &mut self.state.signals {
+                s.forced = f.iter().any(|f| f.signal.as_deref() == Some(s.name.as_str()));
+            }
+            self.state.forces = f;
+        }
         let cmds = self.state.poll(now);
         self.run(ctx, cmds);
+        let reqs = self.projects.poll();
+        self.send(ctx, reqs);
+        self.downloads();
         match &self.state.lowered {
             Some(l) if l.generation != self.generation => {
                 self.generation = l.generation;
@@ -112,22 +176,50 @@ impl BoxView {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn inbox(&mut self) -> Vec<Msg> {
-        self.driver.drain()
+    fn send(&mut self, ctx: &egui::Context, reqs: Vec<PReq>) {
+        for r in reqs {
+            self.http.send(r, ctx);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn send(&mut self, _ctx: &egui::Context, reqs: Vec<PReq>) {
+        self.psent.extend(reqs);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn downloads(&mut self) {
+        for url in std::mem::take(&mut self.projects.downloads) {
+            let name = format!(
+                "{}.zip",
+                self.projects.open.as_ref().map_or("project", |o| o.name.as_str())
+            );
+            crate::web::download_url(&url, &name);
+        }
+    }
+
+    /// Natively the links stay in `projects.downloads` for tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::unused_self)]
+    const fn downloads(&mut self) {}
+
+    #[cfg(target_arch = "wasm32")]
+    fn inbox(&mut self) -> (Vec<Msg>, Vec<(PCall, Answer)>) {
+        (self.driver.drain(), self.http.drain())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::unused_self)]
-    fn inbox(&mut self) -> Vec<Msg> {
-        Vec::new()
+    fn inbox(&mut self) -> (Vec<Msg>, Vec<(PCall, Answer)>) {
+        (Vec::new(), Vec::new())
     }
 
     /// Takes in what arrived and carries out what is due, with nothing
     /// drawn (the Monitor draws from the same state).
     pub fn tick(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
-        let msgs = self.inbox();
-        self.step(ctx, msgs, now);
+        let (msgs, answers) = self.inbox();
+        self.step_all(ctx, msgs, answers, now);
     }
 
     /// One frame of the Editor.
@@ -136,9 +228,18 @@ impl BoxView {
         editor::show(ui, chrome, self);
     }
 
-    /// What the header names: the module open.
+    /// The box runs with projects.
+    #[must_use]
+    pub fn has_projects(&self) -> bool {
+        self.projects.available == Some(true)
+    }
+
+    /// What the header names: the open project, else the module open.
     #[must_use]
     pub fn title(&self) -> String {
+        if let Some(o) = self.projects.open.as_ref().filter(|_| self.has_projects()) {
+            return o.name.clone();
+        }
         self.state.selected.clone().unwrap_or_else(|| "This box".into())
     }
 
@@ -152,6 +253,9 @@ impl BoxView {
         match (&s.selected, &s.scan) {
             _ if !matches!(s.link(), Link::Connected) && s.modules.is_empty() => {
                 "Looking for the box…".into()
+            }
+            (None, _) if s.modules.is_empty() && self.has_projects() => {
+                "Nothing runs yet: open a project and Deploy it.".into()
             }
             (None, _) if s.modules.is_empty() => "No modules on this box.".into(),
             (None, _) => "Pick a module.".into(),
@@ -172,6 +276,240 @@ impl BoxView {
             }
             Link::Unreachable { at, .. } => (format!("● box unreachable (retry in {}s)", retry(at)), RED),
         }
+    }
+
+    /// The input signal a diagram read of `path` is, if the box forces it.
+    fn input(&self, path: &str) -> Option<&SignalRow> {
+        self.state
+            .signals
+            .iter()
+            .find(|s| s.dir == "in" && s.name.eq_ignore_ascii_case(path))
+    }
+
+    /// Whether `name` is forced, as the box last said.
+    #[must_use]
+    pub fn forced(&self, name: &str) -> bool {
+        self.state
+            .forces
+            .iter()
+            .any(|f| f.signal.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(name)))
+            || self
+                .state
+                .signals
+                .iter()
+                .any(|s| s.forced && s.name.eq_ignore_ascii_case(name))
+    }
+
+    /// Forces input `name` to `v` (an engineer's click on its block).
+    pub fn force(&mut self, name: &str, v: Value) {
+        if is_engineer(self.session.as_ref()).is_err() {
+            return;
+        }
+        let value = match v {
+            Value::Bool(b) => json!(b),
+            Value::Int(n) => i64::try_from(n).map_or_else(|_| json!(n.to_string()), |n| json!(n)),
+            Value::Real(r) => json!(r),
+        };
+        self.projects.force(name, &value);
+    }
+
+    /// Opens `file` of the open project at `line`.
+    fn goto(&mut self, file: &str, line: u32, chrome: &mut Chrome) {
+        self.projects.open_file(file);
+        if self.projects.current().is_some() {
+            chrome.st = true;
+            chrome.goto(line);
+        }
+    }
+
+    /// The forced inputs, each with release, and release all.
+    fn banner(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        if self.state.forces.is_empty() {
+            return;
+        }
+        let can = is_engineer(self.session.as_ref());
+        let mut release = None;
+        egui::Frame::new()
+            .fill(WARN)
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let r = ui.label(RichText::new("FORCED").strong().color(BLACK));
+                    chrome.hit("forces", r.rect);
+                    for f in &self.state.forces {
+                        ui.label(
+                            RichText::new(format!("{} = {} ({})", f.point(), show(f.value), f.by))
+                                .monospace()
+                                .color(BLACK),
+                        );
+                        let b = egui::Button::new("release");
+                        let r = match &can {
+                            Ok(()) => ui.add(b),
+                            Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
+                        };
+                        chrome.hit(format!("release {}", f.id), r.rect);
+                        if r.clicked() {
+                            release = Some(Some(f.id));
+                        }
+                    }
+                    let b = egui::Button::new(RichText::new("Release all").strong());
+                    let r = match &can {
+                        Ok(()) => ui.add(b),
+                        Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
+                    };
+                    chrome.hit("release all", r.rect);
+                    if r.clicked() {
+                        release = Some(None);
+                    }
+                });
+            });
+        if let Some(id) = release {
+            self.projects.release(id);
+        }
+    }
+
+    /// Over each input's block: FORCED in the warning colour when forced,
+    /// and for an engineer a control that forces it.
+    fn input_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        area: Rect,
+        reads: &[(String, Rect)],
+        chrome: &mut Chrome,
+    ) {
+        let engineer = is_engineer(self.session.as_ref()).is_ok();
+        let mut wants = Vec::new();
+        for (k, (path, rect)) in reads.iter().enumerate() {
+            if !area.intersects(*rect) {
+                continue;
+            }
+            let Some(sig) = self.input(path).cloned() else {
+                continue;
+            };
+            let forced = self.forced(&sig.name);
+            if engineer {
+                let builder = egui::UiBuilder::new().max_rect(*rect).id_salt(("box-force", k));
+                let r = ui
+                    .scope_builder(builder, |ui| force_ui(ui, *rect, &sig, forced))
+                    .inner;
+                chrome.hit(format!("force {}", sig.name), *rect);
+                if let Some(v) = r {
+                    wants.push((sig.name.clone(), v));
+                }
+            }
+            if forced {
+                let tag = Rect::from_min_size(
+                    egui::pos2(rect.max.x - 58.0, rect.min.y - 16.0),
+                    Vec2::new(58.0, 15.0),
+                );
+                ui.painter().rect_filled(tag, 2.0, WARN);
+                ui.painter().text(
+                    tag.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "FORCED",
+                    egui::FontId::monospace(11.0),
+                    BLACK,
+                );
+                chrome.hit(format!("forced {}", sig.name), tag);
+            }
+        }
+        for (name, v) in wants {
+            self.force(&name, v);
+        }
+    }
+}
+
+/// An input's force control over its block: a BOOL flips, a number drags.
+/// The value to force it to, if one was asked for.
+fn force_ui(ui: &mut egui::Ui, rect: Rect, s: &SignalRow, forced: bool) -> Option<Value> {
+    let label = s.name.to_ascii_lowercase();
+    let size = (rect.height() * 0.35).clamp(7.0, 16.0);
+    let tip = "force this input on the box (an engineer only; ends on logout or deploy)";
+    match s.value {
+        Some(Value::Bool(on)) => {
+            let fill = if forced { WARN } else { GRAPHITE };
+            let ink = if forced { BLACK } else { brand::WHITE };
+            let b = egui::Button::new(
+                RichText::new(format!("{label} {}", if on { "TRUE" } else { "FALSE" }))
+                    .strong()
+                    .size(size)
+                    .color(ink),
+            )
+            .fill(fill)
+            .sense(Sense::click());
+            ui.add_sized(rect.size(), b)
+                .on_hover_text(tip)
+                .clicked()
+                .then_some(Value::Bool(!on))
+        }
+        Some(Value::Int(n)) => {
+            let mut v = i64::try_from(n).unwrap_or(0);
+            let before = v;
+            ui.add_sized(
+                rect.size(),
+                egui::DragValue::new(&mut v).prefix(format!("{label} = ")),
+            )
+            .on_hover_text(tip);
+            (v != before).then_some(Value::Int(i128::from(v)))
+        }
+        Some(Value::Real(r)) => {
+            let mut v = r;
+            ui.add_sized(
+                rect.size(),
+                egui::DragValue::new(&mut v)
+                    .speed(0.1)
+                    .prefix(format!("{label} = ")),
+            )
+            .on_hover_text(tip);
+            (v.to_bits() != r.to_bits() && v.is_finite()).then_some(Value::Real(v))
+        }
+        _ => None,
+    }
+}
+
+impl Workspace for BoxView {
+    fn dirty(&self) -> bool {
+        self.projects.dirty()
+    }
+
+    fn writable(&self) -> Result<(), String> {
+        is_engineer(self.session.as_ref())?;
+        match self.projects.available {
+            Some(true) if self.projects.open.is_some() => Ok(()),
+            Some(true) => Err("Open a project first.".into()),
+            _ => Err("This box runs without projects (helmsman-plc --projects): nothing to edit.".into()),
+        }
+    }
+
+    fn save(&mut self) {
+        if self.writable().is_ok() {
+            self.projects.save();
+        }
+    }
+
+    fn deploy(&mut self) {
+        if self.writable().is_ok() {
+            self.projects.deploy();
+        }
+    }
+
+    fn busy(&self) -> bool {
+        self.projects.deploy.busy()
+            || self
+                .projects
+                .open
+                .as_ref()
+                .is_some_and(|o| o.bufs.values().any(|b| b.saving.is_some()))
+    }
+
+    fn upload(&mut self, file: &str, bytes: Vec<u8>) {
+        if is_engineer(self.session.as_ref()).is_ok() && self.has_projects() {
+            self.projects.upload(file, bytes, false);
+        }
+    }
+
+    fn download(&mut self) {
+        self.projects.download();
     }
 }
 
@@ -209,11 +547,92 @@ impl Body for BoxView {
         {
             v.reset_arrangement();
         }
+        match &self.projects.deploy {
+            Deploy::Idle => {}
+            Deploy::Saving => {
+                ui.label(RichText::new("saving…").color(brand::STEEL));
+            }
+            Deploy::Checking => {
+                ui.label(RichText::new("checking…").color(brand::STEEL));
+            }
+            Deploy::Replaying => {
+                ui.label(RichText::new("replaying in the sim…").color(brand::STEEL));
+            }
+            Deploy::Deploying => {
+                ui.label(RichText::new("deploying…").color(brand::STEEL));
+            }
+            Deploy::Done(what) => {
+                let r = ui.label(RichText::new(format!("✔ {what}")).color(brand::YELLOW));
+                chrome.hit("deployed", r.rect);
+            }
+            Deploy::Failed(why) => {
+                let r = ui.label(RichText::new(format!("✖ {why}")).color(RED));
+                chrome.hit("deploy failed", r.rect);
+            }
+        }
+        if let Some((text, error)) = self.projects.notice.clone() {
+            ui.separator();
+            let r = ui.label(RichText::new(text).color(if error { RED } else { brand::STEEL }));
+            chrome.hit("notice", r.rect);
+            if self.projects.pending.is_some() && error {
+                let r = ui.button("Replace");
+                chrome.hit("replace", r.rect);
+                if r.clicked() {
+                    self.projects.replace();
+                }
+            }
+            if let Some(f) = self.projects.conflict.clone() {
+                let r = ui.button(format!("Reload {f}"));
+                chrome.hit("reload", r.rect);
+                if r.clicked() {
+                    self.projects.reload(&f);
+                    self.projects.notice = None;
+                }
+            }
+        }
     }
 
-    /// The box's modules, each a program; the open one with every block
+    /// The box's projects and the open one's files; under them the
+    /// modules that run, each a program, the open one with every block
     /// instance it calls, nested; a click opens any of them.
-    fn files(&mut self, ui: &mut egui::Ui) {
+    fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        if self.has_projects() {
+            let write = self.writable().or_else(|e| {
+                // Opening is a read; only the writes need an engineer.
+                if self.projects.open.is_none() && is_engineer(self.session.as_ref()).is_ok() {
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            });
+            let open = self.projects.open.clone();
+            let files: Vec<(String, bool)> = open
+                .as_ref()
+                .map(|o| o.bufs.iter().map(|(n, b)| (n.clone(), b.dirty())).collect())
+                .unwrap_or_default();
+            let listing = Listing {
+                projects: &self.projects.projects,
+                open: open.as_ref().map(|o| o.name.as_str()),
+                files,
+                current: open.as_ref().and_then(|o| o.current.as_deref()),
+                write,
+            };
+            let act = self.files_ui.show(ui, &listing, chrome);
+            match act {
+                Some(Act::OpenProject(p)) => self.projects.open_project(&p),
+                Some(Act::OpenFile(f)) => self.projects.open_file(&f),
+                Some(Act::NewProject(p)) => self.projects.create(&p, None),
+                Some(Act::CopyProject { from, to }) => self.projects.create(&to, Some(&from)),
+                Some(Act::RenameProject { from, to }) => self.projects.rename(&from, &to),
+                Some(Act::DeleteProject(p)) => self.projects.delete(&p),
+                Some(Act::NewFile(f)) => self.projects.new_file(&f),
+                Some(Act::RenameFile { from, to }) => self.projects.rename_file(&from, &to),
+                Some(Act::DeleteFile(f)) => self.projects.delete_file(&f),
+                None => {}
+            }
+            ui.separator();
+            ui.label(RichText::new("Running").strong().color(brand::STEEL));
+        }
         let mut chosen = None;
         let modules = self.state.modules.clone();
         if modules.is_empty() {
@@ -226,6 +645,7 @@ impl Body for BoxView {
                 .monospace()
                 .color(if m.state == "faulted" { RED } else { brand::WHITE });
             let r = ui.selectable_label(selected, text);
+            chrome.hit(format!("module {}", m.name), r.rect);
             let r = match &m.fault {
                 Some(f) => r.on_hover_text(f),
                 None => r,
@@ -243,6 +663,69 @@ impl Body for BoxView {
     }
 
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        if self.has_projects() {
+            let write = self.writable();
+            let Some(o) = self.projects.open.clone() else {
+                ui.label(RichText::new("Open a project in Files.").color(brand::STEEL));
+                return;
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Structured Text").strong());
+                match &write {
+                    Ok(()) => {}
+                    Err(why) => {
+                        let r = ui.label(RichText::new(format!("read-only: {why}")).color(brand::STEEL));
+                        chrome.hit("read-only", r.rect);
+                    }
+                }
+            });
+            let Some(file) = o.current.clone() else {
+                ui.label(RichText::new("No files in this project yet.").color(brand::STEEL));
+                return;
+            };
+            let diags: Vec<(u32, u32)> = self
+                .projects
+                .diags
+                .iter()
+                .filter(|d| d.file == file)
+                .map(|d| (d.line, d.col))
+                .collect();
+            let list_h = if self.projects.diags.is_empty() {
+                0.0
+            } else {
+                110.0
+            };
+            let size = Vec2::new(ui.available_width(), (ui.available_height() - list_h).max(120.0));
+            let id = egui::Id::unique(("box-st", &o.name, &file));
+            let Some(buf) = self.projects.current_mut() else {
+                return;
+            };
+            if !buf.loaded {
+                ui.spinner();
+                return;
+            }
+            ui.allocate_ui(size, |ui| {
+                if write.is_ok() {
+                    editor::st_editor(ui, id, &mut buf.text, &diags, MAX_FILE, chrome);
+                } else {
+                    let mut text: &str = &buf.text;
+                    editor::st_editor(ui, id, &mut text, &diags, usize::MAX, chrome);
+                }
+            });
+            if !self.projects.diags.is_empty() {
+                ui.separator();
+                let diags = self.projects.diags.clone();
+                let mut go = None;
+                egui::ScrollArea::vertical()
+                    .id_salt("box-diags")
+                    .max_height(list_h)
+                    .show(ui, |ui| go = projects::diags_ui(ui, &diags, chrome));
+                if let Some(d) = go {
+                    self.goto(&d.file, d.line, chrome);
+                }
+            }
+            return;
+        }
         ui.horizontal(|ui| {
             ui.label(RichText::new("Structured Text").strong());
             ui.label(RichText::new("read-only: changes reach the box as proposals").color(brand::STEEL));
@@ -259,7 +742,7 @@ impl Body for BoxView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        // Trend and Claude come to the box with projects (docs/UI.md, step 2).
+        // Trend and Claude come to the box later (docs/UI.md).
         &[Tab::Io]
     }
 
@@ -273,8 +756,10 @@ impl Body for BoxView {
             ui.label(RichText::new("Signals").strong());
             for s in &self.state.signals {
                 let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
-                let text = format!("{} {} = {}{unit}", s.dir, s.name, show(s.value));
+                let forced = if s.forced { "  FORCED" } else { "" };
+                let text = format!("{} {} = {}{unit}{forced}", s.dir, s.name, show(s.value));
                 let color = match s.quality.as_str() {
+                    _ if s.forced => WARN,
                     "missing" => RED,
                     _ if s.value == Some(helmsman_iec::Value::Bool(true)) => brand::YELLOW,
                     _ => brand::WHITE,
@@ -288,7 +773,11 @@ impl Body for BoxView {
     }
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        self.banner(ui, chrome);
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
+        let mut jump = None;
+        let mut reads = Vec::new();
+        let mut area = Rect::NOTHING;
         match &mut self.view {
             Some(v) if v.drawable() => {
                 let outer = vec![
@@ -298,18 +787,37 @@ impl Body for BoxView {
                 if v.crumbs_ui(ui, &outer).is_some() {
                     v.open(0);
                 }
+                area = ui.available_rect_before_wrap();
                 v.canvas(ui, scan);
                 if v.pick != self.last_pick {
                     self.last_pick = v.pick;
                     if let Some((line, _)) = v.picked() {
-                        chrome.goto(line);
+                        jump = Some((projects::file_line(&v.src, line), line));
                     }
                 }
+                reads = v.reads_on_screen();
             }
             _ => {
                 ui.add_space(40.0);
                 ui.vertical_centered(|ui| ui.label(RichText::new(self.waiting()).color(brand::STEEL)));
             }
+        }
+        if let Some((at, line)) = jump {
+            match at {
+                // A project build: the file and line, when the project
+                // open is the one running.
+                Some((file, l))
+                    if self.has_projects()
+                        && self.projects.open.as_ref().map(|o| &o.name) == self.projects.running.as_ref() =>
+                {
+                    self.goto(&file, l, chrome);
+                }
+                None if !self.has_projects() => chrome.goto(line),
+                _ => {}
+            }
+        }
+        if !reads.is_empty() {
+            self.input_controls(ui, area, &reads, chrome);
         }
     }
 }

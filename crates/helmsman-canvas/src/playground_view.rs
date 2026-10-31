@@ -393,7 +393,7 @@ impl Body for PlaygroundView {
 
     /// The program (one file until projects come) and its outline: every
     /// block instance it calls, nested; a click shows that one's diagram.
-    fn files(&mut self, ui: &mut egui::Ui) {
+    fn files(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
         let name = self.title();
         ui.label(RichText::new(format!("▾ {name}.st")).monospace().color(WHITE));
         match &mut self.viewer {
