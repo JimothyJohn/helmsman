@@ -97,6 +97,10 @@ name = "store"
 required-features = ["box"]
 
 [[test]]
+name = "accounts"
+required-features = ["box"]
+
+[[test]]
 name = "approval"
 required-features = ["box"]
 

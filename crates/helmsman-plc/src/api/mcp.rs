@@ -179,6 +179,7 @@ fn marked(req: &Request) -> Request {
         body: Vec::new(),
         headers: Vec::new(),
         source: "mcp",
+        session: None,
     }
 }
 
@@ -619,7 +620,7 @@ impl Caller for InProcess<'_> {
         }
         let (path, segments, query) = http::target(path).map_err(str::to_string)?;
         let write = method != "GET";
-        let req = Request {
+        let mut req = Request {
             method: method.into(),
             path,
             segments,
@@ -632,8 +633,9 @@ impl Caller for InProcess<'_> {
                 .unwrap_or_default(),
             headers: Vec::new(),
             source: "mcp",
+            session: None,
         };
-        match super::handle(&req, self.ctx) {
+        match super::handle(&mut req, self.ctx) {
             Reply::Once(r) => Ok((r.status, serde_json::from_slice(&r.body).unwrap_or(Json::Null))),
             // Streams, chat and explain turns, files: never reachable.
             _ => Err("that route streams; the MCP tools do not use it".into()),

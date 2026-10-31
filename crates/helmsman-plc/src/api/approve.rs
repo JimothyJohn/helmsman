@@ -41,6 +41,7 @@ use super::store::Stored;
 use super::swap::{Plant, Reloaded, SwapHandle, compile_set};
 use super::{Ctx, Note, Request, Response, audit_full, record, wall};
 use crate::layout::Layout;
+use crate::policy::account::{Logins, Mode, Principal};
 use crate::policy::pin::{Gate, Refused};
 use crate::policy::{Policy, Role, Tier, classify};
 use crate::replay;
@@ -112,14 +113,84 @@ pub enum Target<'a> {
     Snapshot(&'a str),
 }
 
-/// What the approver sends. The PIN never leaves this struct except into
-/// the [`Gate`].
+/// What the approver sends: `{replay?}` with a login session, `{role, pin,
+/// replay?}` with the box token on a box without accounts. The PIN never
+/// leaves this struct except into the [`Gate`].
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Body {
-    role: String,
-    pin: String,
+    role: Option<String>,
+    pin: Option<String>,
     replay: Option<u64>,
+}
+
+/// Whose approval this is.
+enum Approver {
+    /// A login session: the account's role, nothing the body says.
+    Session(Principal),
+    /// A role PIN (only on a box without accounts), checked at step 5.
+    Pin(Role, String),
+}
+
+impl Approver {
+    const fn role(&self) -> Role {
+        match self {
+            Self::Session(p) => p.role,
+            Self::Pin(r, _) => *r,
+        }
+    }
+
+    /// For details and the store's history: `alice (engineer)`, or the
+    /// PIN's role.
+    fn who(&self) -> String {
+        match self {
+            Self::Session(p) => format!("{} ({})", p.user, p.role),
+            Self::Pin(r, _) => r.to_string(),
+        }
+    }
+}
+
+/// Who the request approves as, or the refusal: a session must not name
+/// a role or PIN (its account's role is the one it has), and a PIN is
+/// refused once the box has accounts.
+fn approver(req: &Request, appr: &Approval, body: Body) -> Result<Approver, (u16, String)> {
+    if let Some(p) = &req.session {
+        if body.role.is_some() || body.pin.is_some() {
+            return Err((
+                400,
+                format!(
+                    "a login session approves as its account ({}, {}); send only {{\"replay\": N}}, no role or PIN",
+                    p.user, p.role
+                ),
+            ));
+        }
+        return Ok(Approver::Session(p.clone()));
+    }
+    match appr.gate.logins().map(Logins::mode) {
+        Some(Mode::Accounts(_)) => {
+            return Err((
+                403,
+                "this box has accounts: role PINs are off; log in (POST /api/login) and approve with that session"
+                    .into(),
+            ));
+        }
+        Some(Mode::Broken(_)) => {
+            return Err((
+                503,
+                "the box's accounts file cannot be used, so nothing can be approved (see its journal)".into(),
+            ));
+        }
+        None | Some(Mode::Pins) => {}
+    }
+    let (Some(role), Some(pin)) = (body.role, body.pin) else {
+        return Err((
+            400,
+            "expected JSON {\"role\": ..., \"pin\": ..., \"replay\": N}".into(),
+        ));
+    };
+    let role =
+        Role::parse(&role).ok_or((400, "role must be operator, engineer or integrator".to_string()))?;
+    Ok(Approver::Pin(role, pin))
 }
 
 /// A refusal: audited, then answered (507 if the audit log is full).
@@ -410,7 +481,7 @@ fn track_json(t: Option<&replay::Track>) -> Json {
 }
 
 /// Who approved, for the store's history.
-fn meta(p: Option<&Stored>, role: Role) -> Meta {
+fn meta(p: Option<&Stored>, by: &Approver) -> Meta {
     let (author, prompt) = p.map_or_else(
         || ("box API (rollback)".to_string(), String::new()),
         |p| {
@@ -435,7 +506,10 @@ fn meta(p: Option<&Stored>, role: Role) -> Meta {
     Meta {
         author,
         prompt,
-        approver: Some(format!("{role} (PIN)")),
+        approver: Some(match by {
+            Approver::Session(_) => by.who(),
+            Approver::Pin(role, _) => format!("{role} (PIN)"),
+        }),
         time_ms: i64::try_from(wall()).unwrap_or(i64::MAX).saturating_mul(1000),
     }
 }
@@ -457,22 +531,30 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
                 ctx,
                 req,
                 400,
-                &err("expected JSON {\"role\": ..., \"pin\": ..., \"replay\": N}"),
+                &err(
+                    "expected JSON {\"replay\": N} with a login session, or {\"role\": ..., \"pin\": ..., \"replay\": N}",
+                ),
                 &format!("{label}: malformed approval"),
                 Note::target(content, None),
             );
         }
     };
-    let Some(role) = Role::parse(&body.role) else {
-        return refuse(
-            ctx,
-            req,
-            400,
-            &err("role must be operator, engineer or integrator"),
-            &format!("{label}: unknown role"),
-            Note::target(content, None),
-        );
+    let replay_id = body.replay;
+    let by = match approver(req, appr, body) {
+        Ok(a) => a,
+        Err((status, why)) => {
+            return refuse(
+                ctx,
+                req,
+                status,
+                &err(&why),
+                &format!("{label} refused: {why}"),
+                Note::target(content, None),
+            );
+        }
     };
+    let role = by.role();
+    let who = by.who();
     if ctx.box_.snapshots.is_none() {
         return refuse(
             ctx,
@@ -523,7 +605,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             req,
             status,
             &json!({ "error": why, "tier": tier.as_str(), "reasons": reasons, "changed": false }),
-            &format!("{label} refused ({tier}, {role}): {why}"),
+            &format!("{label} refused ({tier}, {who}): {why}"),
             note,
         )
     };
@@ -534,7 +616,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         );
     }
     if needed.replay {
-        let Some(n) = body.replay else {
+        let Some(n) = replay_id else {
             return refused(
                 428,
                 &format!("a {tier} change needs a sim replay of exactly this change first (POST .../replay)"),
@@ -560,7 +642,13 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             );
         }
     }
-    match appr.gate.check(role, &body.pin) {
+    // A session's password was checked at login, and the session itself
+    // (live, account unchanged) before routing.
+    let checked = match &by {
+        Approver::Session(_) => Ok(()),
+        Approver::Pin(role, pin) => appr.gate.check(*role, pin),
+    };
+    match checked {
         Ok(()) => {}
         Err(Refused::Wrong) => return refused(403, "wrong PIN"),
         Err(Refused::Locked(wait)) => {
@@ -569,7 +657,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
                 ctx,
                 req,
                 429,
-                &format!("{label} refused ({tier}, {role}): PIN entry locked"),
+                &format!("{label} refused ({tier}, {who}): PIN entry locked"),
                 note,
             ) {
                 Some(_) => Response::json(
@@ -590,7 +678,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
                 req,
                 422,
                 &json!({ "error": "a module does not compile", "problems": e, "changed": false }),
-                &format!("{label} failed ({tier}, {role}): does not compile; nothing was changed"),
+                &format!("{label} failed ({tier}, {who}): does not compile; nothing was changed"),
                 note,
             );
         }
@@ -604,7 +692,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
                 422,
                 &json!({ "error": "the I/O map or calendar does not load", "problems": problems, "changed": false }),
                 &format!(
-                    "{label} failed ({tier}, {role}): the I/O map or calendar does not load; nothing was changed"
+                    "{label} failed ({tier}, {who}): the I/O map or calendar does not load; nothing was changed"
                 ),
                 note,
             );
@@ -617,7 +705,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             409,
             &json!({ "error": "the floor screen's layout does not fit the new I/O map", "problems": problems, "tier": tier.as_str(), "changed": false }),
             &format!(
-                "{label} failed ({tier}, {role}): the floor screen's layout does not fit the new I/O map; nothing was changed"
+                "{label} failed ({tier}, {who}): the floor screen's layout does not fit the new I/O map; nothing was changed"
             ),
             note,
         );
@@ -632,7 +720,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
                 409,
                 &json!({ "error": "the modules do not fit the new I/O map or calendar", "problems": problems, "tier": tier.as_str(), "changed": false }),
                 &format!(
-                    "{label} failed ({tier}, {role}): the modules do not fit the new I/O map or calendar; nothing was changed"
+                    "{label} failed ({tier}, {who}): the modules do not fit the new I/O map or calendar; nothing was changed"
                 ),
                 note,
             );
@@ -642,7 +730,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         ctx,
         req,
         202,
-        &format!("{label}: approved ({tier}) by {role}; applying"),
+        &format!("{label}: approved ({tier}) by {who}; applying"),
         note,
     )
     .is_none()
@@ -664,7 +752,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
                 ctx,
                 req,
                 409,
-                &format!("{label} failed ({tier}, {role}): {why}; nothing was changed"),
+                &format!("{label} failed ({tier}, {who}): {why}; nothing was changed"),
                 note,
             );
             return Response::json(
@@ -676,7 +764,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     if let Some((_, _, links)) = &reloaded {
         ctx.links_changed(links);
     }
-    let m = meta(proposal.as_ref(), role);
+    let m = meta(proposal.as_ref(), &by);
     let committed = {
         let store = ctx.box_.snapshots.as_ref().expect("checked above");
         let mut store = store.lock().unwrap_or_else(PoisonError::into_inner);
@@ -696,7 +784,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             ctx,
             req,
             500,
-            &format!("{label} failed ({tier}, {role}): {why}"),
+            &format!("{label} failed ({tier}, {who}): {why}"),
             note,
         );
         return Response::json(500, &json!({ "error": why, "changed": back.is_err() }));
@@ -716,10 +804,13 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     if let Some(mut p) = proposal {
         p.json["status"] = json!("applied");
         p.json["applied_by"] = json!(role.as_str());
+        if let Approver::Session(s) = &by {
+            p.json["approved_by"] = json!(s.user);
+        }
         ctx.box_.proposals.update(p);
     }
     let undo = format!("/api/snapshots/{base}/rollback");
-    let mut detail = format!("{label}: applied ({tier}) by {role}, {base} -> {content}");
+    let mut detail = format!("{label}: applied ({tier}) by {who}, {base} -> {content}");
     if let Some(r) = &reload {
         let _ = write!(detail, "; I/O map or calendar reloaded");
         for n in r["notes"]
@@ -739,6 +830,10 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             "tier": tier.as_str(),
             "reasons": reasons,
             "role": role.as_str(),
+            "user": match &by {
+                Approver::Session(s) => json!(s.user),
+                Approver::Pin(..) => Json::Null,
+            },
             "snapshot": content.to_string(),
             "previous": base.to_string(),
             "undo": undo,

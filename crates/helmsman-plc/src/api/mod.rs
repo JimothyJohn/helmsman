@@ -17,7 +17,9 @@
 //! POST /api/proposals/check               token: check a draft as POST /api/proposals would; nothing stored
 //! POST /api/proposals/replay              token: sim replay of a draft {draft, minutes}; nothing stored, not evidence
 //! POST /api/proposals/{id}/replay         token: sim replay of the draft against what runs; evidence for apply
-//! POST /api/proposals/{id}/apply          token + {role, pin, replay?}: apply through the approval policy
+//! POST /api/login                         {user, password}: a session token (boxes with accounts; see [`login`])
+//! POST /api/logout                        session: ends it
+//! POST /api/proposals/{id}/apply          session + {replay?}, or token + {role, pin, replay?} without accounts: apply through the approval policy
 //! GET  /api/audit?after=N&limit=M         every mutating call, append-only, naming snapshot ids
 //! GET  /api/snapshots                     snapshot history (with --store), head, the running change set's id
 //! GET  /api/snapshots/head
@@ -26,7 +28,7 @@
 //! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
 //! POST /api/bundles                       token: a bundle file, verified, bound by name, stored as a draft
 //! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
-//! POST /api/snapshots/{id}/rollback       token + {role, pin, replay?}: roll back through the approval policy
+//! POST /api/snapshots/{id}/rollback       as apply: roll back through the approval policy
 //! GET  /api/replays/{n}                   a replay kept as evidence
 //! GET  /api/policy                        the policy this box enforces
 //! GET  /api/events                        event stream of live values and module status
@@ -54,9 +56,11 @@
 //!
 //! **Auth.** Reads (`GET`) are open to whoever can reach the socket (the
 //! default bind is loopback; the LAN only when asked). Every other method
-//! needs `Authorization: Bearer <token>` ([`token`]) and is written to the
-//! audit log whatever its outcome; without the token it is refused with
-//! 401 before any routing. A token in the query string is refused
+//! needs `Authorization: Bearer <token>` ([`token`]), or a login session
+//! from `POST /api/login` ([`login`], which takes a session wherever it
+//! takes the token), and is written to the audit log whatever its
+//! outcome, naming the session's person; without either it is refused
+//! with 401 before any routing. A token in the query string is refused
 //! outright (400), on any request, so it never lands in a log or a
 //! browser history.
 //!
@@ -82,6 +86,7 @@ pub mod dropin;
 pub mod explain;
 pub mod http;
 pub mod live;
+pub mod login;
 pub mod mcp;
 pub mod photo;
 pub mod proposal;
@@ -104,6 +109,7 @@ use serde_json::{Value as Json, json};
 
 use crate::bundle::TrustStore;
 use crate::policy::Role;
+use crate::policy::account::{Logins, Mode, SessionRefused};
 use crate::store::{self as snapshots, ChangeSet, SnapshotId, Store};
 
 pub use approve::{Approval, Replays};
@@ -598,7 +604,7 @@ fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
         return;
     }
     let reply = match http::read_request(&mut stream, &limits, accepted) {
-        Ok(req) => handle(&req, ctx),
+        Ok(mut req) => handle(&mut req, ctx),
         Err(http::ReadError::Status(code, why)) => Reply::Once(Response::error(code, why)),
         Err(http::ReadError::Closed) => return,
     };
@@ -645,11 +651,33 @@ fn secret(key: &str) -> bool {
         "bearer",
         "key",
         "api_key",
+        "password",
+        "pin",
+        "session",
     ]
     .contains(&k.as_str())
 }
 
-fn handle(req: &Request, ctx: &Ctx) -> Reply {
+/// `GET /api/policy`: the policy, and what approvals take on this box now
+/// (`accounts`: a login session; `pins`: a role PIN; `unavailable`: an
+/// accounts file that cannot be used).
+fn policy_json(a: &Approval) -> Json {
+    let mut j = approve::policy_json(&a.policy);
+    j["credentials"] = json!(match a.gate.logins().map(Logins::mode) {
+        None | Some(Mode::Pins) => "pins",
+        Some(Mode::Accounts(_)) => "accounts",
+        Some(Mode::Broken(_)) => "unavailable",
+    });
+    j
+}
+
+/// The login sessions, when the box has an approval path with accounts
+/// wired in.
+fn logins(ctx: &Ctx) -> Option<&crate::policy::account::Logins> {
+    ctx.approval.as_ref().and_then(|a| a.gate.logins())
+}
+
+fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
     if req.query.iter().any(|(k, _)| secret(k)) {
         return Reply::Once(Response::error(
             400,
@@ -674,22 +702,37 @@ fn handle(req: &Request, ctx: &Ctx) -> Reply {
     if req.method == "GET" {
         return get(req, ctx);
     }
-    let authorized = req
-        .bearer
-        .as_deref()
-        .is_some_and(|t| token::eq(t, &ctx.cfg.token));
-    if !authorized {
-        (ctx.cfg.log)(&format!(
-            "api: refused {} {} (no or wrong token)",
-            clean(&req.method),
-            clean(&req.path)
-        ));
-        let why = if req.authorization {
-            "wrong token"
-        } else {
-            "this call needs Authorization: Bearer <token>"
-        };
-        return Reply::Once(Response::error(401, why).with("WWW-Authenticate", "Bearer".into()));
+    if req.method == "POST" && req.segments == ["api", "login"] {
+        // Its own credential: no token, no session.
+        return Reply::Once(login::login(req, ctx));
+    }
+    let bearer = req.bearer.as_deref();
+    let box_token = bearer.is_some_and(|t| token::eq(t, &ctx.cfg.token));
+    let session = match (box_token, bearer, logins(ctx)) {
+        (false, Some(t), Some(l)) => Some(l.session(t)),
+        _ => None,
+    };
+    match session {
+        // MCP takes the box token only: its calls are the box's, never a
+        // person's (and are audited with no user).
+        Some(Ok(who)) if !mcp_route => req.session = Some(who),
+        _ if box_token => {}
+        refused => {
+            (ctx.cfg.log)(&format!(
+                "api: refused {} {} (no or wrong token)",
+                clean(&req.method),
+                clean(&req.path)
+            ));
+            let why = match refused {
+                Some(Err(SessionRefused::Expired)) => "session expired; log in again",
+                Some(Err(SessionRefused::Revoked)) => {
+                    "session ended: the account was disabled or changed; log in again"
+                }
+                _ if req.authorization => "wrong token",
+                _ => "this call needs Authorization: Bearer <token>",
+            };
+            return Reply::Once(Response::error(401, why).with("WWW-Authenticate", "Bearer".into()));
+        }
     }
     if req.method == "POST"
         && req.segments.len() == 2
@@ -854,6 +897,8 @@ fn record(ctx: &Ctx, req: &Request, status: u16, detail: &str, note: Note) -> Op
     )
 }
 
+/// Appends an entry; the person and role are the session's, when the
+/// call came with one (a role the call names itself, as a PIN does, wins).
 fn append(
     ctx: &Ctx,
     req: &Request,
@@ -861,6 +906,29 @@ fn append(
     detail: &str,
     snapshot: Option<String>,
     base: Option<String>,
+    role: Option<Role>,
+) -> Option<u64> {
+    let s = req.session.as_ref();
+    let role = role.or(s.map(|p| p.role));
+    append_as(
+        ctx,
+        req,
+        status,
+        detail,
+        (snapshot, base),
+        s.map(|p| p.user.clone()),
+        role,
+    )
+}
+
+/// [`append`], naming `user` whatever the request carried (a login).
+fn append_as(
+    ctx: &Ctx,
+    req: &Request,
+    status: u16,
+    detail: &str,
+    (snapshot, base): (Option<String>, Option<String>),
+    user: Option<String>,
     role: Option<Role>,
 ) -> Option<u64> {
     let seq = ctx
@@ -877,6 +945,7 @@ fn append(
             base,
             role: role.map(|r| r.as_str().to_string()),
             source: req.source.into(),
+            user,
         })
         .ok();
     (ctx.cfg.log)(&format!(
@@ -898,6 +967,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let segs: Vec<&str> = req.segments.iter().map(String::as_str).collect();
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         ("POST", ["api", "proposals"]) => return create(req, ctx),
+        ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
         ("POST", ["api", "dropins"]) => return dropin::post(req, ctx),
         ("POST", ["api", "devices", name, "browse"]) => return dropin::browse(req, ctx, name),
@@ -939,7 +1009,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat" | "explain" | "bundles"]
+        | ["api", "chat" | "explain" | "bundles" | "login" | "logout"]
         | ["api", "devices", _, "browse"] => Some("POST"),
         ["api"]
         | [
@@ -1296,7 +1366,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         },
         ["api", "site"] => site_route(ctx, c, &view),
         ["api", "policy"] => match &ctx.approval {
-            Some(a) => Response::json(200, &approve::policy_json(&a.policy)),
+            Some(a) => Response::json(200, &policy_json(a)),
             None => Response::error(404, "no approval path on this box"),
         },
         ["api", "replays", id] => match proposal_id(id).and_then(|id| ctx.replays.get(id)) {
@@ -1362,7 +1432,9 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
-            e("POST", "/api/proposals/{id}/apply", true, "apply: {role, pin, replay?}, checked against the policy"),
+            e("POST", "/api/login", false, "log in {user, password} (with an accounts file): a session token for Authorization: Bearer"),
+            e("POST", "/api/logout", true, "end the session it is sent with"),
+            e("POST", "/api/proposals/{id}/apply", true, "apply: with a session {replay?}, else {role, pin, replay?} (PINs only while the box has no accounts), checked against the policy"),
             e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),
             e("GET", "/api/snapshots", false, "snapshot history (needs --store), head, and the running change set's id"),
             e("GET", "/api/snapshots/head", false, "the head entry"),
@@ -1371,7 +1443,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/snapshots/{id}/bundle", false, "that snapshot as an unsigned bundle file (sign it off the box)"),
             e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
-            e("POST", "/api/snapshots/{id}/rollback", true, "roll back: {role, pin, replay?}, checked against the policy"),
+            e("POST", "/api/snapshots/{id}/rollback", true, "roll back: as apply, checked against the policy"),
             e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
             e("GET", "/api/policy", false, "the approval policy this box enforces"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
@@ -1502,7 +1574,7 @@ fn audit_list(req: &Request, ctx: &Ctx) -> Response {
             json!({
                 "seq": e.seq, "at": e.at, "method": e.method, "path": e.path,
                 "status": e.status, "detail": e.detail, "snapshot": e.snapshot,
-                "base": e.base, "role": e.role, "source": e.source,
+                "base": e.base, "role": e.role, "source": e.source, "user": e.user,
             })
         })
         .collect();

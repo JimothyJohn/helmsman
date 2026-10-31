@@ -359,6 +359,7 @@
   options: paste the box token once per page load, memory only (recommended for now, built) | PIN login exchange for a short-lived session token (API change) | the box injects the token into the page it serves on loopback only
   est: 1d
   difficulty: med
+  notes: local-accounts (feat/local-accounts) built the login alternative per person rather than per role PIN: on a box with an accounts file the review screen logs in (user + masked password, memory only) via POST /api/login and uses the session token as bearer, so operators never see the box token; boxes without accounts still paste the token. What's left to decide is only the PIN-only boxes.
   id: canvas-token
 
 - [ ] **Floor screen layout: a startup file, or part of the snapshot?** The andon view (feat/andon-screen) reads its layout from `--screen FILE` at startup, like the sinks file: tile titles, which signal each tile shows, and the state code → colour/message table. It is not in the snapshot store, so changing a message is a file edit plus a restart, outside the approval path and the history. What the tiles *are* (the `screen` outputs and their safe states) is in the I/O map, which is snapshotted and output-affecting, so nothing that drives a tile bypasses approval; only the words and colours do. Putting the layout in a change set means a store schema bump (a `screen` blob beside `io-map` and `calendar`), a tier for it (I'd say `param`: it moves no output), and a live reload in the canvas. I kept it a startup file (reversible: the API already serves it by content).
@@ -451,6 +452,17 @@
   est: 2h
   difficulty: low
   id: dropin-watch-only
+
+- [ ] **Login sessions: how long, and as wide as the box token?** Local accounts (feat/local-accounts) issue a session from `POST /api/login` that lasts 1 h from login and ends after 15 min unused (constants in `policy/account.rs`), and that is accepted wherever the box token is (drafts, replays, chat, drop-ins), plus apply/rollback as the account's role. Shorter means more re-logins on a tablet at the line; making sessions apply-only would mean the canvas still needs the box token to replay. The box-wide login lockout trips at 4x the per-account allowance (20 wrong passwords) within an hour. Built as described.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: session lifetime and what a logged-in person may do besides approve
+  options: 1 h / 15 min idle, session as wide as the token (recommended, built) | 8 h shift / 30 min idle | sessions only for replay, apply and rollback
+  est: 30m
+  difficulty: low
+  depends: local-accounts
+  id: session-scope
 
 - [ ] **Site view: let browsers read /api/site cross-origin, or have the box fetch its peers?** The site view (feat/site-view) shows each peer's status by fetching that peer's `GET /api/site` straight from the browser. So with `--site` on, `/api/site` (and nothing else) answers `Access-Control-Allow-Origin: *`, with no credentials and no preflight (OPTIONS and POST still get 401), and the canvas page's CSP widens to `connect-src 'self' http:`. The body is the beacon's fields, the peer list, and module/device counts only: no names, no values, no source. The cost: any web page a browser on the floor opens can read that summary from every box. The alternative is the box fetching its peers on the browser's behalf: no CORS, no CSP change, but every box then opens HTTP connections to addresses it learned from untrusted UDP beacons (SSRF-shaped), and "reachable" would mean reachable from the box, not from the tablet doing the click-through. I built CORS (reversible: one header in `site_route`, one CSP swap in `Asset::allow_peers`).
   asked: 2026-10-30
@@ -1054,10 +1066,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: box-api, approval-policy
   id: box-mcp
 
-- [ ] **Local accounts** — per-person logins replacing PINs; audit carries the person.
+- [x] **Local accounts** — per-person logins replacing PINs; audit carries the person.
   est: 3d
   difficulty: med
   depends: approval-policy
+  notes: built on feat/local-accounts: helmsman-plc policy/account.rs (accounts file, PBKDF2 like the PINs, per-account + box-wide lockout, server-side sessions with TTL/idle/logout/revocation), api/login.rs (POST /api/login, /api/logout), `helmsman-plc account add|passwd|disable|enable|list`; PINs refused once an accounts file exists; audit `user`; canvas review screen logs in; docs/ARCHITECTURE.md "Approval policy"
   id: local-accounts
 
 - [x] **Multi-box site view** — boxes discover each other on the LAN; one canvas shows the floor.
