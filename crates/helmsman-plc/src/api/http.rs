@@ -73,11 +73,19 @@ pub struct Request {
     pub authorization: bool,
     pub content_type: Option<String>,
     pub body: Vec<u8>,
-    /// Who the bearer is when it is a login session rather than the box
-    /// token: set by the API once the request is read, never by a client.
+    /// Who the bearer (or the session cookie) is when it is a login
+    /// session rather than the box token: set by the API once the request
+    /// is read, never by a client.
     pub session: Option<crate::policy::account::Principal>,
-    /// Every other header, its name lower case, in the order sent
-    /// (never `Authorization`, which is only ever [`Request::bearer`]).
+    /// Every [`SESSION_COOKIE`] value the `Cookie` headers carried, in
+    /// the order sent (more than one is refused where it matters). The
+    /// other cookies are dropped unread.
+    pub cookies: Vec<String>,
+    /// Whether [`Request::session`] came from the cookie: set by the API.
+    pub by_cookie: bool,
+    /// Every other header, its name lower case, in the order sent (never
+    /// `Authorization` or `Cookie`, which are only ever
+    /// [`Request::bearer`] and [`Request::cookies`]).
     pub headers: Vec<(String, String)>,
     /// Who made the call, for the audit log: `api` for a request off the
     /// socket, `mcp` for one the MCP route makes on a tool's behalf.
@@ -92,6 +100,19 @@ impl Request {
             .filter(move |(n, _)| n == name)
             .map(|(_, v)| v.as_str())
     }
+}
+
+/// The cookie a browser login sets: the session, `HttpOnly`, never seen by
+/// the page's code.
+pub const SESSION_COOKIE: &str = "helmsman_session";
+
+/// The values of [`SESSION_COOKIE`] in one `Cookie` header
+/// (`a=1; helmsman_session=...; b=2`).
+fn session_cookies(value: &str) -> impl Iterator<Item = &str> {
+    value.split(';').filter_map(|pair| {
+        let (name, v) = pair.split_once('=')?;
+        (name.trim() == SESSION_COOKIE).then(|| v.trim().trim_matches('"'))
+    })
 }
 
 /// A request target split into its path (still percent-encoded), the
@@ -255,6 +276,8 @@ pub fn parse_head(head: &[u8], limits: &Limits) -> Result<(Request, usize), Read
         content_type: None,
         body: Vec::new(),
         session: None,
+        cookies: Vec::new(),
+        by_cookie: false,
         headers: Vec::new(),
         source: "api",
     };
@@ -301,6 +324,7 @@ pub fn parse_head(head: &[u8], limits: &Limits) -> Result<(Request, usize), Read
                     .map(|(_, t)| t.trim().to_string());
             }
             "content-type" => req.content_type = Some(value.to_ascii_lowercase()),
+            "cookie" => req.cookies.extend(session_cookies(value).map(str::to_string)),
             other => req.headers.push((other.to_string(), value.to_string())),
         }
     }

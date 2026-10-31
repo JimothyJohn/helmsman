@@ -140,28 +140,37 @@ impl Approver {
         }
     }
 
-    /// For details and the store's history: `alice (engineer)`, or the
-    /// PIN's role.
+    /// The person approving, when an account's session is.
+    fn person(&self) -> Option<&str> {
+        match self {
+            Self::Session(p) => p.person(),
+            Self::Pin(..) => None,
+        }
+    }
+
+    /// For details and the store's history: `alice (engineer)`, `operator
+    /// (PIN)` for a role-PIN session, or the PIN's role.
     fn who(&self) -> String {
         match self {
-            Self::Session(p) => format!("{} ({})", p.user, p.role),
+            Self::Session(p) => p.label(),
             Self::Pin(r, _) => r.to_string(),
         }
     }
 }
 
 /// Who the request approves as, or the refusal: a session must not name
-/// a role or PIN (its account's role is the one it has), and a PIN is
-/// refused once the box has accounts.
+/// a role or PIN (its account's role, or the role its PIN opened, is the
+/// one it has), and a PIN is refused once the box has accounts.
 fn approver(req: &Request, appr: &Approval, body: Body) -> Result<Approver, (u16, String)> {
     if let Some(p) = &req.session {
         if body.role.is_some() || body.pin.is_some() {
+            let what = match p.person() {
+                Some(user) => format!("its account ({user}, {})", p.role),
+                None => format!("the role its PIN opened ({})", p.role),
+            };
             return Err((
                 400,
-                format!(
-                    "a login session approves as its account ({}, {}); send only {{\"replay\": N}}, no role or PIN",
-                    p.user, p.role
-                ),
+                format!("a login session approves as {what}; send only {{\"replay\": N}}, no role or PIN"),
             ));
         }
         return Ok(Approver::Session(p.clone()));
@@ -804,8 +813,8 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
     if let Some(mut p) = proposal {
         p.json["status"] = json!("applied");
         p.json["applied_by"] = json!(role.as_str());
-        if let Approver::Session(s) = &by {
-            p.json["approved_by"] = json!(s.user);
+        if let Some(user) = by.person() {
+            p.json["approved_by"] = json!(user);
         }
         ctx.box_.proposals.update(p);
     }
@@ -830,10 +839,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             "tier": tier.as_str(),
             "reasons": reasons,
             "role": role.as_str(),
-            "user": match &by {
-                Approver::Session(s) => json!(s.user),
-                Approver::Pin(..) => Json::Null,
-            },
+            "user": by.person(),
             "snapshot": content.to_string(),
             "previous": base.to_string(),
             "undo": undo,

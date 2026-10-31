@@ -195,13 +195,12 @@ pub struct Viewer {
 pub const TAP: f32 = 44.0;
 
 /// What the explain panel offers beside the box's own explanation.
+#[derive(Clone, Copy)]
 pub struct AskUi<'a> {
     /// Why "Ask why" cannot be used now; `None`: it can.
     pub blocked: Option<&'a str>,
     /// The ask in flight or answered.
     pub ask: Option<&'a Ask>,
-    /// The API token, to type in (box only; memory only).
-    pub token: Option<&'a mut String>,
 }
 
 impl AskUi<'_> {
@@ -211,7 +210,6 @@ impl AskUi<'_> {
         Self {
             blocked: Some("The demo runs in this page: asking the agent needs a box with a relay."),
             ask: None,
-            token: None,
         }
     }
 }
@@ -818,17 +816,6 @@ fn action_ui(ui: &mut egui::Ui, path: &str, ask: AskUi<'_>) -> Option<Action> {
     }
     if let Some(why) = ask.blocked {
         ui.label(RichText::new(why).color(STEEL));
-    }
-    if let Some(token) = ask.token {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("API token").color(STEEL));
-            ui.add(
-                egui::TextEdit::singleline(token)
-                    .password(true)
-                    .desired_width(160.0)
-                    .min_size(Vec2::new(0.0, TAP * 0.75)),
-            );
-        });
     }
     if let Some(a) = answered {
         ui.add_space(4.0);
