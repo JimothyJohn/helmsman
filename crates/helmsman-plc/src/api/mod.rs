@@ -1543,7 +1543,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/io_map", false, "the running I/O map file and its snapshot id"),
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
-            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, {kind: io_map|calendar, text}, or {kind: driver, name, wasm (base64)}: a WASM driver the map names as wasm:NAME"),
+            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, {kind: io_map|calendar, text}, or {kind: driver, name, wasm (base64)}: a WASM driver the map names as wasm:NAME; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),

@@ -1421,7 +1421,12 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   or the model API's `messages.i.content.j`), or names no block but is
   about PDFs (the per-request page and document caps: the documents of
   the trailing, unanswered user message go); any other refusal touches
-  nothing. A PDF
+  nothing. A refused drop-in stays in the conversation's proposal binding,
+  marked refused (`Drafts::refused`, `refused-dropin-binding`): every
+  later proposal of that chat cites it in `dropins` and lists it again in
+  `refused_dropins`, so the engineer sees everything the conversation
+  touched and which of it the model never read (the box refuses a
+  `refused_dropins` that is not a subset of `dropins`, 400). A PDF
   has no text on the box: `read_dropin` and the PLC view answer 404 saying
   so. Attached to a chat message it goes in that user message as a
   `document` block (`source.type: base64`, `media_type: application/pdf`,
