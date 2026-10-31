@@ -6,8 +6,9 @@
 //! **Reach.** The executor only ever sends these requests, whatever the
 //! input: `GET /api/signals`, `GET /api/modules`, `GET /api/modules/{name}`
 //! and `.../trace` (the name percent-encoded as one segment, after a name
-//! check), `POST /api/proposals/check`, `POST /api/proposals/replay` and
-//! `POST /api/proposals` (a module or a param draft). No route it can
+//! check), `GET /api/io_map`, `POST /api/proposals/check`,
+//! `POST /api/proposals/replay` and `POST /api/proposals` (a module, a
+//! param or an I/O map draft). No route it can
 //! reach applies, rolls back or writes anything but a stored draft; the
 //! box API enforces the token, limits and audit on each of them.
 //!
@@ -21,6 +22,15 @@
 //! change. Every proposal names the drop-ins its conversation read; the
 //! box holds a proposal citing a PLC drop-in to the watch rule whatever
 //! the request says.
+//!
+//! **Signal maps** (card `dropin-pid`, relay agent v4): `read_io_map`
+//! (`GET /api/io_map`, the running map file) and `propose_io_map`
+//! (`POST /api/proposals` with `kind: io_map`, the whole new file). A map
+//! drawn from a P&ID or an electrical drawing is a proposal like any
+//! other: the box checks that it loads and keeps every signal a running
+//! module names, stores it as a draft citing the conversation's drop-ins,
+//! and only a person with a role PIN applies it (always
+//! output-affecting). A watch-only conversation proposes no map.
 //!
 //! **Data, not instructions.** Everything a tool returns comes from the
 //! plant: tag names, units, ST source and its comments, manifests and
@@ -40,7 +50,7 @@ use serde_json::{Map, Value as Json, json};
 use crate::http::{self, Timeouts, Url};
 
 /// The tools the box runs, as named in the relay's `tools.json`.
-pub const NAMES: [&str; 11] = [
+pub const NAMES: [&str; 13] = [
     "list_signals",
     "read_signals",
     "list_modules",
@@ -52,6 +62,8 @@ pub const NAMES: [&str; 11] = [
     "read_dropin",
     "read_plc_program",
     "compare_plc_tags",
+    "read_io_map",
+    "propose_io_map",
 ];
 
 /// The tools explain mode runs: reads only. Nothing in it drafts,
@@ -321,7 +333,7 @@ pub fn validate(name: &str, input: &Json) -> Result<(), String> {
     match name {
         "list_signals" => parse::<ListSignals>(input).map(drop),
         "read_signals" => parse::<ReadSignals>(input).map(drop),
-        "list_modules" => parse::<Empty>(input).map(drop),
+        "list_modules" | "read_io_map" => parse::<Empty>(input).map(drop),
         "read_module" => parse::<ReadModule>(input).map(drop),
         "draft_module" => parse::<DraftModule>(input).map(drop),
         "check_module" => parse::<DraftRef>(input).map(drop),
@@ -330,6 +342,7 @@ pub fn validate(name: &str, input: &Json) -> Result<(), String> {
         "read_dropin" => parse::<ReadDropin>(input).map(drop),
         "read_plc_program" => parse::<ReadPlc>(input).map(drop),
         "compare_plc_tags" => parse::<ComparePlc>(input).map(drop),
+        "propose_io_map" => parse::<ProposeIoMap>(input).map(drop),
         _ => Err(format!("no tool named {name:?}")),
     }
 }
@@ -416,6 +429,13 @@ struct ComparePlc {
     device: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposeIoMap {
+    text: String,
+    summary: String,
+}
+
 /// A module name as the box takes it: 1..=64 of `A-Z a-z 0-9 _ -`.
 #[must_use]
 pub fn module_name_ok(n: &str) -> bool {
@@ -438,6 +458,8 @@ pub fn run(api: &dyn Caller, drafts: &mut Drafts, name: &str, input: &Json) -> O
         "read_dropin" => parse(input).map(|i| read_dropin(api, drafts, &i)),
         "read_plc_program" => parse(input).map(|i| read_plc_program(api, drafts, &i)),
         "compare_plc_tags" => parse(input).map(|i| compare_plc_tags(api, drafts, &i)),
+        "read_io_map" => parse::<Empty>(input).map(|_| read_io_map(api)),
+        "propose_io_map" => parse(input).map(|i| propose_io_map(api, drafts, &i)),
         _ => {
             return fail(format!(
                 "no tool named {name:?}; the tools are {}",
@@ -789,16 +811,20 @@ fn param_value(s: &str) -> Json {
         .map_or_else(|| json!(t), |x| json!(x))
 }
 
-fn propose_change(api: &dyn Caller, drafts: &mut Drafts, i: &Propose) -> Outcome {
-    let summary: String = i
-        .summary
-        .chars()
+/// A proposal's summary as the box stores it: control characters as
+/// spaces, trimmed, at most 1000 characters.
+fn clean_summary(s: &str) -> String {
+    s.chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect::<String>()
         .trim()
         .chars()
         .take(1000)
-        .collect();
+        .collect()
+}
+
+fn propose_change(api: &dyn Caller, drafts: &mut Drafts, i: &Propose) -> Outcome {
+    let summary = clean_summary(&i.summary);
     if summary.is_empty() {
         return fail("a proposal needs a summary an engineer can approve");
     }
@@ -1011,4 +1037,69 @@ fn compare_plc_tags(api: &dyn Caller, drafts: &mut Drafts, i: &ComparePlc) -> Ou
         }),
         summary,
     )
+}
+
+fn read_io_map(api: &dyn Caller) -> Outcome {
+    match api.get("/api/io_map") {
+        Ok((200, m)) => {
+            let lines = m["text"].as_str().map_or(0, |t| t.lines().count());
+            ok(
+                json!({
+                    "snapshot": m["snapshot"], "text": m["text"],
+                    "next": "propose_io_map takes the whole new file: keep every line that stays, add or change the points the drawing shows",
+                }),
+                format!("the running I/O map: {lines} line(s)"),
+            )
+        }
+        Ok((s, b)) => unexpected("reading the I/O map", s, &b),
+        Err(e) => fail(e),
+    }
+}
+
+fn propose_io_map(api: &dyn Caller, drafts: &mut Drafts, i: &ProposeIoMap) -> Outcome {
+    let summary = clean_summary(&i.summary);
+    if summary.is_empty() {
+        return fail("a proposal needs a summary an engineer can approve");
+    }
+    if drafts.watch_only() {
+        return fail(
+            "this conversation read an existing PLC program, so it proposes watch modules only (no map change); start a new chat for a map",
+        );
+    }
+    if i.text.trim().is_empty() {
+        return fail("the map is empty; propose the whole file (read_io_map gives the running one)");
+    }
+    if i.text.len() > MAX_SOURCE {
+        return fail("the map is larger than a change set file may be (1 MiB)");
+    }
+    let body = json!({ "kind": "io_map", "text": i.text, "note": summary, "dropins": drafts.binding().1 });
+    match api.post("/api/proposals", &body) {
+        Ok((201, p)) => {
+            let id = p["id"].as_u64();
+            let ids: Vec<u64> = id.into_iter().collect();
+            Outcome {
+                ok: true,
+                data: json!({
+                    "proposals": ids, "signals": p["signals"], "devices": p["devices"], "applied": false,
+                    "next": "an engineer reviews and approves on the box (a map change is always output-affecting); nothing changes until then",
+                }),
+                summary: format!("proposed I/O map {ids:?} for approval"),
+                proposals: ids,
+            }
+        }
+        Ok((status @ (400 | 422), b)) => {
+            let problems = b["problems"].as_array().cloned().unwrap_or_default();
+            Outcome {
+                ok: false,
+                data: json!({
+                    "proposals": [], "status": status, "error": b["error"], "problems": problems,
+                    "next": "fix the problems and propose the whole file again",
+                }),
+                summary: format!("the I/O map does not check: {} problem(s)", problems.len().max(1)),
+                proposals: Vec::new(),
+            }
+        }
+        Ok((s, b)) => unexpected("proposing the I/O map", s, &b),
+        Err(e) => fail(e),
+    }
 }
