@@ -73,7 +73,7 @@ Three directions of traffic, three different rules:
 | `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
-`relay-repo`, in `../helmsman-relay`). The WASM module host
+`relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
 (`wasm-tier`) is built inside `helmsman-plc` (`wasm.rs`, the `wasm`
 feature), below.
 

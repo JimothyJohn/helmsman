@@ -200,7 +200,7 @@
   id: iomap-format
   answer: keep the line format until box-api, then JSON from the API (recommended)
 
-- [ ] **Shift calendar time zones: fixed offsets, or read the OS tz database?** The shift calendar (feat/shift-calendar) takes `zone +01:00` plus each DST change written out as `zone +02:00 from 2026-03-29T01:00Z`; `zone Europe/Berlin` is refused with a message saying so. No new dependency, and evaluation stays a pure function of the instant, but someone has to add next year's change dates by hand and a forgotten one shifts every shift by an hour. Two ways to accept zone names: hand-parse the TZif files already on the Pi (`/usr/share/zoneinfo`, a few hundred lines, no crate, but the box then depends on the OS tzdata being current), or add `jiff` (well-maintained, bundles or reads tzdata, a sizeable new dependency). I kept fixed offsets for now (reversible: a zone name would only add a parser branch).
+- [x] **Shift calendar time zones: fixed offsets, or read the OS tz database?** The shift calendar (feat/shift-calendar) takes `zone +01:00` plus each DST change written out as `zone +02:00 from 2026-03-29T01:00Z`; `zone Europe/Berlin` is refused with a message saying so. No new dependency, and evaluation stays a pure function of the instant, but someone has to add next year's change dates by hand and a forgotten one shifts every shift by an hour. Two ways to accept zone names: hand-parse the TZif files already on the Pi (`/usr/share/zoneinfo`, a few hundred lines, no crate, but the box then depends on the OS tzdata being current), or add `jiff` (well-maintained, bundles or reads tzdata, a sizeable new dependency). I kept fixed offsets for now (reversible: a zone name would only add a parser branch).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -209,8 +209,9 @@
   est: 1d
   difficulty: med
   id: calendar-timezones
+  answer: keep fixed offsets with explicit changes (recommended for now)
 
-- [ ] **Hot swap of a faulted module: carry its state, or start it cold?** Built in feat/hot-swap: `Runtime::swap` replaces a module's program between scans, carrying every retained variable whose name and type match. A Faulted (or Held) module may be swapped and restarts Running with the fault cleared, and I chose to carry its state like any other swap: a parts counter survives the fix, as tags do after a Logix online edit and fault clear. The cost: the variables are as the fault left them, so a bad index that caused the fault can fault the new program again on its first scan (outputs are already zero, so that is safe, just noisy). `%M` keeps its bytes over the shared length, as an address means the same byte in both programs. Switching to cold start for faulted modules is one branch in `swap`.
+- [x] **Hot swap of a faulted module: carry its state, or start it cold?** Built in feat/hot-swap: `Runtime::swap` replaces a module's program between scans, carrying every retained variable whose name and type match. A Faulted (or Held) module may be swapped and restarts Running with the fault cleared, and I chose to carry its state like any other swap: a parts counter survives the fix, as tags do after a Logix online edit and fault clear. The cost: the variables are as the fault left them, so a bad index that caused the fault can fault the new program again on its first scan (outputs are already zero, so that is safe, just noisy). `%M` keeps its bytes over the shared length, as an address means the same byte in both programs. Switching to cold start for faulted modules is one branch in `swap`.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -219,8 +220,9 @@
   est: 5m
   difficulty: low
   id: hot-swap-faulted-state
+  answer: carry state, as for a running module (recommended)
 
-- [ ] **Logix point syntax: require `@TYPE`?** The `logix-tag` driver (feat/logix-tag-read) binds a signal to `TAG@TYPE`, e.g. `in temp real plc Program:Main.Temp@real`, `in fault bool plc Status.5@bool`. The map validator needs a point's type without touching the device, and the declared Logix type is checked against every reply, so a tag that turns out to be a DINT is an error rather than a REAL read as garbage. The alternative is a bare tag path whose type is learned on connect (browse), which reads nicer but makes `IoMap::validate` unable to catch a bool/int/real mismatch until the box talks to the PLC. Built with `@TYPE` required; switching later is a change in `helmsman-io/src/logix.rs` and the map files that use it.
+- [x] **Logix point syntax: require `@TYPE`?** The `logix-tag` driver (feat/logix-tag-read) binds a signal to `TAG@TYPE`, e.g. `in temp real plc Program:Main.Temp@real`, `in fault bool plc Status.5@bool`. The map validator needs a point's type without touching the device, and the declared Logix type is checked against every reply, so a tag that turns out to be a DINT is an error rather than a REAL read as garbage. The alternative is a bare tag path whose type is learned on connect (browse), which reads nicer but makes `IoMap::validate` unable to catch a bool/int/real mismatch until the box talks to the PLC. Built with `@TYPE` required; switching later is a change in `helmsman-io/src/logix.rs` and the map files that use it.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -229,8 +231,9 @@
   est: 5m
   difficulty: low
   id: logix-point-syntax
+  answer: keep TAG@TYPE required (recommended)
 
-- [ ] **Download 1756-PM020 by hand?** The Logix 5000 Controllers Data Access manual (the reference for Read Tag, fragmented reads, Multiple Service Packet and the Symbol object) returns HTTP 403 to scripted fetches, like the Modbus PDFs did. The tag-read code cites pycomm3 and libplctag for its byte layouts instead (`docs/SOURCES.md`). If you save the PDF anywhere on the Studio, the next session checks every layout and error code against it and adds `PM020 p.<n>` citations.
+- [x] **Download 1756-PM020 by hand?** The Logix 5000 Controllers Data Access manual (the reference for Read Tag, fragmented reads, Multiple Service Packet and the Symbol object) returns HTTP 403 to scripted fetches, like the Modbus PDFs did. The tag-read code cites pycomm3 and libplctag for its byte layouts instead (`docs/SOURCES.md`). If you save the PDF anywhere on the Studio, the next session checks every layout and error code against it and adds `PM020 p.<n>` citations.
   asked: 2026-10-30
   by: claude-agent
   needs: the PDF from the vendor's literature library (publication 1756-PM020), dropped under `~/Downloads` or `docs/`
@@ -239,6 +242,9 @@
   est: 5m
   difficulty: low
   id: logix-pm020
+  result-note: PM020 and RM014 read 2026-10-31: tests/logix_pm020.rs holds 7 byte-exact vectors from PM020; docs/SOURCES.md cites both by page. The L5X export is still wanted for l5x-real-export.
+  notes: what I need, exactly (2026-10-31): (1) Rockwell pub 1756-PM020, "Logix 5000 Controllers Data Access" programming manual, latest PDF (Read Tag, Read Tag Fragmented, Multiple Service Packet, Symbol object: I cite its pages in docs/SOURCES.md); (2) Rockwell pub 1756-RM014, "Logix 5000 Controllers Import/Export" reference manual, latest PDF (the L5X format, for l5x-real-export); (3) one real .L5X exported from Studio 5000 / Logix Designer: any small project with controller and program tags, one UDT, one AOI, a ladder routine and an ST routine. Put them in ~/github/helmsman-refs/ (outside the repo: vendor copyright, never committed). I read and cite them; the L5X becomes a sanitized test fixture only if you say so.
+  answer: I'll store these files somewhere if you can tell me explicitly what you need.
 
 - [ ] **Where does the relay live?** The relay holds the Anthropic key and meters boxes, which the vision puts on the paid side of open core, and the `open-core-split` card says to decide before paid code lands in this MIT repo. So relay v0 is being built in a NEW local repo `../helmsman-relay` (Rust, SAM template, no remote, nothing deployed). Creating the private GitHub repo and deploying the stack (account 403059190476, us-east-1) are your steps; scripts and cards are in that repo's TODO.md.
   asked: 2026-10-30
@@ -249,6 +255,8 @@
   est: 5m
   difficulty: low
   id: relay-repo
+  notes: 2026-10-31: the local repo is now ../agent-relay (renamed, client-agnostic, profiles namespaced helmsman/<name> with the old bare names as aliases). Tick once the GitHub repo exists: run its scripts/create-github-repo.sh.
+  answer: private repo JimothyJohn/agent-relay (recommended), an agnostic endpoint that happens to work with helmsman
 
 - [ ] **Stop parallel PRs breaking dev?** Twice on 2026-10-30 two PRs that were each green merged back to back and broke dev's build (trace-tap + signal-model; fixed by #39). Branch protection on dev doesn't require branches to be up to date. Options: require up-to-date branches (each PR re-runs CI after every merge; slow with many agents), or GitHub's merge queue (tests each PR on top of the ones ahead of it; built for this), or leave it and fix forward.
   asked: 2026-10-30
@@ -259,8 +267,20 @@
   est: 15m
   difficulty: low
   id: dev-merge-safety
+  answer: merge queue on dev (recommended)
 
-- [ ] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
+- [ ] **Merge queue isn't available here: what instead?** You answered `dev-merge-safety` with "merge queue", but GitHub refuses it on this repo: a `merge_queue` ruleset rule comes back `422 Invalid rule 'merge_queue'` (probed 2026-10-31 with a disabled ruleset; nothing left behind). Merge queues aren't offered on personal-account repos. What does work: (a) require branches to be up to date on `dev` (`strict: true`) plus a small workflow that, when `dev` moves, runs `gh pr update-branch` on every open auto-merge PR into `dev`, so each PR re-runs CI on the new tip and auto-merge lands them one at a time; (b) move the repo to an organization, which gets merge queues; (c) keep fixing forward with the local test-merge rule (CLAUDE.md "Green alone != green together") and the wider CI gate in draft PR #73.
+  asked: 2026-10-31
+  by: claude-session
+  needs: your call (repo setting; (b) is a GitHub org)
+  result: dev stays green under parallel PRs
+  options: strict + auto update-branch workflow (recommended) | move the repo to an org and use the merge queue | fix forward + #73
+  est: 1h
+  difficulty: low
+  depends: dev-merge-safety
+  id: dev-merge-safety-2
+
+- [x] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
   asked: 2026-10-30
   by: claude-agent
   needs: your call on licensing
@@ -269,8 +289,9 @@
   est: 10m
   difficulty: low
   id: plcopen-fixture-license
+  answer: fetch only, run via make test-plcopen-corpus (recommended, current)
 
-- [ ] **Webhook sinks: keep `https` (rustls + ring) on by default?** The webhook sink (feat/sink-webhook) posts over a hand-written std HTTP/1.1 client so every SSRF rule is ours; `https://` needs TLS, so the `https` cargo feature adds rustls 0.23 (ring provider, TLS 1.2+1.3) and webpki-roots: 15 third-party crates in all (ring, rustls, rustls-webpki, rustls-pki-types, webpki-roots, untrusted, subtle, zeroize, once_cell, getrandom, libc, cfg-if; build-only cc, shlex, find-msvc-tools). ring compiles C and assembly, which the deploy image (rust:*-slim-trixie ships gcc and libc6-dev) handles; the Docker arm64 build was not run in this session (Docker Desktop was not running and the session was over SSH), so the first `scripts/pi-deploy-plc.sh` run is the proof. I made it a default feature so the Pi build can reach a cloud receiver; `--no-default-features` gives an http-only box with zero third-party crates. Alternative: off by default and the deploy script opts in, or roots from the OS (`rustls-native-certs`) instead of compiled in.
+- [x] **Webhook sinks: keep `https` (rustls + ring) on by default?** The webhook sink (feat/sink-webhook) posts over a hand-written std HTTP/1.1 client so every SSRF rule is ours; `https://` needs TLS, so the `https` cargo feature adds rustls 0.23 (ring provider, TLS 1.2+1.3) and webpki-roots: 15 third-party crates in all (ring, rustls, rustls-webpki, rustls-pki-types, webpki-roots, untrusted, subtle, zeroize, once_cell, getrandom, libc, cfg-if; build-only cc, shlex, find-msvc-tools). ring compiles C and assembly, which the deploy image (rust:*-slim-trixie ships gcc and libc6-dev) handles; the Docker arm64 build was not run in this session (Docker Desktop was not running and the session was over SSH), so the first `scripts/pi-deploy-plc.sh` run is the proof. I made it a default feature so the Pi build can reach a cloud receiver; `--no-default-features` gives an http-only box with zero third-party crates. Alternative: off by default and the deploy script opts in, or roots from the OS (`rustls-native-certs`) instead of compiled in.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -279,8 +300,9 @@
   est: 15m
   difficulty: low
   id: sink-https-default
+  answer: keep https on by default, compiled-in Mozilla roots (recommended)
 
-- [ ] **Should the canvas open on the live ST view or the lab editor?** st-graph-view added "Live ST view" (a module's ST as a live, read-only diagram, with "on because") as a second mode beside the node editor. Per canvas-edit-scope the live view is the product and the editor a lab tool, so the canvas now opens on the live view (the editor is one click away, "Lab editor", and is unchanged). Reversible: one line in `App::new` in crates/helmsman-canvas/src/app.rs.
+- [x] **Should the canvas open on the live ST view or the lab editor?** st-graph-view added "Live ST view" (a module's ST as a live, read-only diagram, with "on because") as a second mode beside the node editor. Per canvas-edit-scope the live view is the product and the editor a lab tool, so the canvas now opens on the live view (the editor is one click away, "Lab editor", and is unchanged). Reversible: one line in `App::new` in crates/helmsman-canvas/src/app.rs.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -289,8 +311,9 @@
   est: 2m
   difficulty: low
   id: canvas-default-mode
+  answer: open on the live ST view (recommended, done)
 
-- [ ] **Sim replay: record at the scan's ticks, or at every link read?** The recorder (feat/sim-replay) samples the signal table just before each runtime tick, stamped with the tick's `now`: exactly what the running modules scanned against, one clock, nothing added to the device links, and replaying the running modules over a recording made from a deterministic run reproduces their outputs exactly (property-tested against the Modbus simulator). The cost: a change that came and went between two ticks is not recorded, so a *proposed* module scanning faster than every running one sees the data at the running modules' tick rate (at most 1 s apart with a calendar loaded). Recording at each link read instead would catch every polled value but needs the links and the scheduler on one clock and puts a handoff in every link thread. Defaults are 10 minutes and 4 MiB of changes (about 100 000); neither is on the command line yet. Reversible: the recording format and replay don't change either way.
+- [x] **Sim replay: record at the scan's ticks, or at every link read?** The recorder (feat/sim-replay) samples the signal table just before each runtime tick, stamped with the tick's `now`: exactly what the running modules scanned against, one clock, nothing added to the device links, and replaying the running modules over a recording made from a deterministic run reproduces their outputs exactly (property-tested against the Modbus simulator). The cost: a change that came and went between two ticks is not recorded, so a *proposed* module scanning faster than every running one sees the data at the running modules' tick rate (at most 1 s apart with a calendar loaded). Recording at each link read instead would catch every polled value but needs the links and the scheduler on one clock and puts a handoff in every link thread. Defaults are 10 minutes and 4 MiB of changes (about 100 000); neither is on the command line yet. Reversible: the recording format and replay don't change either way.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -299,8 +322,9 @@
   est: 1d
   difficulty: med
   id: replay-granularity
+  answer: tick-time sampling (recommended, built)
 
-- [ ] **Box API on the LAN: keep reads open?** The box API (feat/box-api) answers `GET` without a token: signals, outputs, modules with their ST source, proposals, the audit log, snapshots. Mutations need the token. The default bind is 127.0.0.1:8080, so this only matters once you run it with `--api 0.0.0.0:8080` for the canvas on a tablet. Open reads mean anyone on the plant LAN can read every module's source and live values (no writes). The alternative is a second, read-only token (or the same one) for reads too, which the canvas would need to be given once per browser. I kept reads open per the brief (reversible: one check in `handle`).
+- [x] **Box API on the LAN: keep reads open?** The box API (feat/box-api) answers `GET` without a token: signals, outputs, modules with their ST source, proposals, the audit log, snapshots. Mutations need the token. The default bind is 127.0.0.1:8080, so this only matters once you run it with `--api 0.0.0.0:8080` for the canvas on a tablet. Open reads mean anyone on the plant LAN can read every module's source and live values (no writes). The alternative is a second, read-only token (or the same one) for reads too, which the canvas would need to be given once per browser. I kept reads open per the brief (reversible: one check in `handle`).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -309,8 +333,9 @@
   est: 2h
   difficulty: low
   id: api-lan-reads
+  answer: keep reads open, loopback default (recommended for now)
 
-- [ ] **Param changes: may an operator apply them?** The approval floor (feat/approval-policy) lets an operator PIN apply a `param` change (a value within the range the running manifest declares; undo is one rollback), reading the vision's "operator: view, ask" plus "param changes go live with undo". Logic and output-affecting need at least engineer, which the policy file can only raise. If params should be engineer-only by default, the floor moves up one line in `policy/mod.rs` (`FLOOR.param.role`); any box can already require it with `param engineer replay=no` in its policy file.
+- [x] **Param changes: may an operator apply them?** The approval floor (feat/approval-policy) lets an operator PIN apply a `param` change (a value within the range the running manifest declares; undo is one rollback), reading the vision's "operator: view, ask" plus "param changes go live with undo". Logic and output-affecting need at least engineer, which the policy file can only raise. If params should be engineer-only by default, the floor moves up one line in `policy/mod.rs` (`FLOOR.param.role`); any box can already require it with `param engineer replay=no` in its policy file.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -319,8 +344,9 @@
   est: 5m
   difficulty: low
   id: param-apply-role
+  answer: operator may apply params (recommended, built)
 
-- [ ] **Pick PC deploys: canvas on the LAN by default?** `scripts/pi-deploy-plc.sh` now builds the canvas and the unit serves it with the API (`--ui`), but on the API's address, which stays 127.0.0.1:8080 unless you deploy with `PLC_API=0.0.0.0:8080` (that also opens 8080/tcp from `PLC_ALLOW` in the perceptronics firewall). So out of the box a tablet cannot see it; from a laptop, `ssh -L 8080:127.0.0.1:8080 nick@<pi>` then http://localhost:8080/. Defaulting to the LAN means every reader on `PLC_ALLOW` sees module source and live values without a token, which is `api-lan-reads`. I kept loopback as the default (reversible: one default in the script).
+- [x] **Pick PC deploys: canvas on the LAN by default?** `scripts/pi-deploy-plc.sh` now builds the canvas and the unit serves it with the API (`--ui`), but on the API's address, which stays 127.0.0.1:8080 unless you deploy with `PLC_API=0.0.0.0:8080` (that also opens 8080/tcp from `PLC_ALLOW` in the perceptronics firewall). So out of the box a tablet cannot see it; from a laptop, `ssh -L 8080:127.0.0.1:8080 nick@<pi>` then http://localhost:8080/. Defaulting to the LAN means every reader on `PLC_ALLOW` sees module source and live values without a token, which is `api-lan-reads`. I kept loopback as the default (reversible: one default in the script).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -330,8 +356,9 @@
   difficulty: low
   depends: api-lan-reads
   id: canvas-lan-default
+  answer: loopback default, PLC_API=0.0.0.0:8080 to opt in (recommended for now, built)
 
-- [ ] **Agent drafts: keep them out of the proposal list until proposed?** The agent loop (feat/agent-loop) keeps a module draft in its chat conversation; `check_module` and `simulate_module` call new read-only routes (`POST /api/proposals/check`, `POST /api/proposals/replay`) that store nothing, and only `propose_change` stores a proposal, with the agent's summary as its note. So the proposal list only ever shows drafts that checked clean and were simulated, and a failed attempt leaves no clutter to approve by mistake. The other way (each draft stored as a proposal at once, replayed by id) shows the engineer every attempt but fills the 1000-proposal store with dead drafts. I built the first; the evidence an apply needs is still a replay of the stored proposal (`POST /api/proposals/{id}/replay`, approval-policy's), so nothing about apply changes either way. Drafts are lost if the box restarts mid-conversation (conversations are in memory).
+- [x] **Agent drafts: keep them out of the proposal list until proposed?** The agent loop (feat/agent-loop) keeps a module draft in its chat conversation; `check_module` and `simulate_module` call new read-only routes (`POST /api/proposals/check`, `POST /api/proposals/replay`) that store nothing, and only `propose_change` stores a proposal, with the agent's summary as its note. So the proposal list only ever shows drafts that checked clean and were simulated, and a failed attempt leaves no clutter to approve by mistake. The other way (each draft stored as a proposal at once, replayed by id) shows the engineer every attempt but fills the 1000-proposal store with dead drafts. I built the first; the evidence an apply needs is still a replay of the stored proposal (`POST /api/proposals/{id}/replay`, approval-policy's), so nothing about apply changes either way. Drafts are lost if the box restarts mid-conversation (conversations are in memory).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -340,8 +367,9 @@
   est: 2h
   difficulty: low
   id: agent-drafts
+  answer: drafts stay in the conversation until proposed (recommended, built)
 
-- [ ] **Dev bundles: switch in the trust store, not the policy file?** Bundle import (feat/bundle-format) refuses unsigned bundles and bundles signed by no trusted publisher. The brief said "unless policy explicitly allows local dev bundles"; I put that switch in the box's trust store (`dev-bundles allow` in `trusted-publishers`, state dir, 0600, set with `helmsman-plc bundle trust dev-bundles allow`) rather than the `--policy` file, because the policy file's rule is that it can only be stricter than the floor, and allowing dev bundles loosens. Dev bundles are marked `DEV BUNDLE` in the proposal, its note and the audit log, and still go through the approval policy like any proposal. A broken signature is refused either way.
+- [x] **Dev bundles: switch in the trust store, not the policy file?** Bundle import (feat/bundle-format) refuses unsigned bundles and bundles signed by no trusted publisher. The brief said "unless policy explicitly allows local dev bundles"; I put that switch in the box's trust store (`dev-bundles allow` in `trusted-publishers`, state dir, 0600, set with `helmsman-plc bundle trust dev-bundles allow`) rather than the `--policy` file, because the policy file's rule is that it can only be stricter than the floor, and allowing dev bundles loosens. Dev bundles are marked `DEV BUNDLE` in the proposal, its note and the audit log, and still go through the approval policy like any proposal. A broken signature is refused either way.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -350,6 +378,7 @@
   est: 30m
   difficulty: low
   id: dev-bundles-switch
+  answer: trust store `dev-bundles allow` (recommended, built)
 
 - [ ] **Canvas approvals: how does the browser get the API token?** The review screen (feat/proposal-ui) needs the box's bearer token to replay and apply, on top of the role PIN. The token lives in `api-token` in the box's state directory and is printed once to the journal. Built: the operator pastes it once per page load into a masked field; it is held in the page's memory only (never localStorage, never egui's persisted state), dropped on "Forget", a reload, or a 401, and sent only in the `Authorization` header. Trade-off: 64 hex digits is awkward on a tablet, and anyone who can read the journal or state dir can hand it out; but nothing new is stored in the browser and no API change was needed. The better long-term shape is a login exchange: `POST /api/session` with role + PIN returns a short-lived, role-scoped session token (memory only), so operators never see the box token; that is an API change under the same lockout, and overlaps `local-accounts`. Reversible: the token only enters through `Review::set_token` in crates/helmsman-canvas/src/review.rs.
   asked: 2026-10-30
@@ -361,8 +390,9 @@
   difficulty: med
   notes: local-accounts (feat/local-accounts) built the login alternative per person rather than per role PIN: on a box with an accounts file the review screen logs in (user + masked password, memory only) via POST /api/login and uses the session token as bearer, so operators never see the box token; boxes without accounts still paste the token. What's left to decide is only the PIN-only boxes.
   id: canvas-token
+  answer: PIN login exchange for a short-lived session token (API change)
 
-- [ ] **Floor screen layout: a startup file, or part of the snapshot?** The andon view (feat/andon-screen) reads its layout from `--screen FILE` at startup, like the sinks file: tile titles, which signal each tile shows, and the state code → colour/message table. It is not in the snapshot store, so changing a message is a file edit plus a restart, outside the approval path and the history. What the tiles *are* (the `screen` outputs and their safe states) is in the I/O map, which is snapshotted and output-affecting, so nothing that drives a tile bypasses approval; only the words and colours do. Putting the layout in a change set means a store schema bump (a `screen` blob beside `io-map` and `calendar`), a tier for it (I'd say `param`: it moves no output), and a live reload in the canvas. I kept it a startup file (reversible: the API already serves it by content).
+- [x] **Floor screen layout: a startup file, or part of the snapshot?** The andon view (feat/andon-screen) reads its layout from `--screen FILE` at startup, like the sinks file: tile titles, which signal each tile shows, and the state code → colour/message table. It is not in the snapshot store, so changing a message is a file edit plus a restart, outside the approval path and the history. What the tiles *are* (the `screen` outputs and their safe states) is in the I/O map, which is snapshotted and output-affecting, so nothing that drives a tile bypasses approval; only the words and colours do. Putting the layout in a change set means a store schema bump (a `screen` blob beside `io-map` and `calendar`), a tier for it (I'd say `param`: it moves no output), and a live reload in the canvas. I kept it a startup file (reversible: the API already serves it by content).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -372,6 +402,7 @@
   difficulty: med
   depends: map-reload
   id: screen-layout-snapshot
+  answer: startup file, like sinks (recommended for now, built)
 
 - [ ] **How does the browser canvas hold the box API token?** Ask why (`POST /api/explain`) needs the token like every POST, and the canvas is served without one. Today the operator types it into the panel; it stays in page memory only (gone on reload, never in storage, never in a URL or log). That works on the bench but nobody on the floor should be handed the box-wide token, and proposal-ui's apply has the same need. Options: keep typing it (built, reversible); a narrower per-device "viewer" token that can only reach `/api/explain` and `/api/chat`; or the box sets an HttpOnly session cookie after a role PIN (that is `local-accounts`' shape). Until then Ask why is an engineer feature in practice; the first layer (no model) needs nothing.
   asked: 2026-10-30
@@ -382,8 +413,9 @@
   est: 1d
   difficulty: med
   id: canvas-token
+  answer: PIN login with an HttpOnly session cookie
 
-- [ ] **Param units: a `unit=` key on manifest param lines?** The offline chat (feat/local-fallback) checks a typed unit ("80 %", "5 s") against the param's, but params had no unit; signals did. I added an optional `unit=U` to `param` lines for int/real (same rule as a signal's unit: 1..=16 printable ASCII, no `#`), parsed, rendered, served in the API's manifest and param-proposal JSON, metadata only, never converted. A unit change counts as a manifest change, so it is logic tier, not param. Without it the offline chat would accept bare numbers only. The agent's `draft_module` does not write units yet (the relay's tool schema would need a `unit` field).
+- [x] **Param units: a `unit=` key on manifest param lines?** The offline chat (feat/local-fallback) checks a typed unit ("80 %", "5 s") against the param's, but params had no unit; signals did. I added an optional `unit=U` to `param` lines for int/real (same rule as a signal's unit: 1..=16 printable ASCII, no `#`), parsed, rendered, served in the API's manifest and param-proposal JSON, metadata only, never converted. A unit change counts as a manifest change, so it is logic tier, not param. Without it the offline chat would accept bare numbers only. The agent's `draft_module` does not write units yet (the relay's tool schema would need a `unit` field).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -392,6 +424,7 @@
   est: 10m
   difficulty: low
   id: param-units
+  answer: unit= on param lines (recommended, built)
 
 - [ ] **Relay health route for the offline probe?** While the agent is offline the box probes `GET {relay}/v1/health` with its box token every 15 s and on each chat message. Today any answer below 500 except 401/403 counts as "online", so a relay without the route (404) still counts as up. If the relay's upstream (the model API) is down but the relay itself answers, the box flips online, the next turn fails, and it goes offline again: one failed message per flap. A real `/v1/health` on the relay that reflects its upstream (503 when it cannot serve turns) closes that.
   asked: 2026-10-30
@@ -402,8 +435,9 @@
   est: 1h
   difficulty: low
   id: relay-health
+  answer: add GET /v1/health to the relay, 200/503 by upstream (recommended)
 
-- [ ] **No relay configured: should chat still take param edits by rule?** A box started without `--relay` answers `POST /api/chat` with 503 ("no relay configured"), as before; `GET /api/chat/status` says `unconfigured`. The rule-based param edits only run for a box that has a relay and lost it. An air-gapped box could use them too, but then "chat" exists on a box that never has an agent. Kept as is (reversible: the chat route would be built without a relay).
+- [x] **No relay configured: should chat still take param edits by rule?** A box started without `--relay` answers `POST /api/chat` with 503 ("no relay configured"), as before; `GET /api/chat/status` says `unconfigured`. The rule-based param edits only run for a box that has a relay and lost it. An air-gapped box could use them too, but then "chat" exists on a box that never has an agent. Kept as is (reversible: the chat route would be built without a relay).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -412,8 +446,9 @@
   est: 1h
   difficulty: low
   id: offline-without-relay
+  answer: only boxes with a relay (recommended for now, built)
 
-- [ ] **Modbus RTU: enforce the t1.5 inter-character rule by default?** Serial §2.5.1.1 p.13 says a frame with a silence over 1.5 character times inside it is discarded. `modbus-rtu` (feat/sources-modbus-rtu) applies that only with `timing=strict` on the device line; by default it frames by CRC and by hunting for the expected unit and function. Reason: a USB-RS485 adapter's latency timer (1-16 ms on FTDI) delivers a reply in bursts the host sees milliseconds apart, so strict timing would throw good replies away; a native UART (the Pi's ttyAMA*) can take strict. The transmit side keeps t3.5 either way. Reversible: one default in `rtu::Params`.
+- [x] **Modbus RTU: enforce the t1.5 inter-character rule by default?** Serial §2.5.1.1 p.13 says a frame with a silence over 1.5 character times inside it is discarded. `modbus-rtu` (feat/sources-modbus-rtu) applies that only with `timing=strict` on the device line; by default it frames by CRC and by hunting for the expected unit and function. Reason: a USB-RS485 adapter's latency timer (1-16 ms on FTDI) delivers a reply in bursts the host sees milliseconds apart, so strict timing would throw good replies away; a native UART (the Pi's ttyAMA*) can take strict. The transmit side keeps t3.5 either way. Reversible: one default in `rtu::Params`.
   asked: 2026-10-30
   by: claude-agent
   needs: your call (and which adapter the bench uses)
@@ -422,6 +457,7 @@
   est: 15m
   difficulty: low
   id: rtu-strict-timing
+  answer: relaxed by default, timing=strict opt-in (recommended, built)
 
 - [ ] **Drop-ins: PDF through the relay as a document block, or text only?** `POST /api/dropins` refuses PDF (415, "paste the text"): a pure-Rust PDF text extractor is either heavy (`pdf-extract` pulls `lopdf` and font tables) or poor on real SOPs, and the box would be parsing the most hostile file format there is. The Messages API reads PDFs itself as `document` content blocks, so the box could pass the bytes through the relay untouched (the relay would need to accept a document block from a box and cap its size). Built: text only.
   asked: 2026-10-30
@@ -432,8 +468,9 @@
   est: 1d
   difficulty: med
   id: dropin-pdf
+  answer: PDF as a document block through the relay (relay protocol change)
 
-- [ ] **Drop-ins: should reading one need the token?** Drop-in text and PLC inventories are served on `GET`, which the box API leaves open to whoever reaches the socket (loopback by default, the LAN only when asked), like module source. A customer's L5X is their IP, so a token on `GET /api/dropins/...` would be stricter; the canvas then needs the token to show a drop-in back. Built: open like every other read.
+- [x] **Drop-ins: should reading one need the token?** Drop-in text and PLC inventories are served on `GET`, which the box API leaves open to whoever reaches the socket (loopback by default, the LAN only when asked), like module source. A customer's L5X is their IP, so a token on `GET /api/dropins/...` would be stricter; the canvas then needs the token to show a drop-in back. Built: open like every other read.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -442,8 +479,9 @@
   est: 1h
   difficulty: low
   id: dropin-reads
+  answer: open like every GET (built)
 
-- [ ] **Drop-ins: watch-only for the whole conversation once a PLC program is read?** A chat that has read an L5X/PLCopen/ST drop-in can only check, simulate and propose watch modules (drive no output, no `%Q`) and no param change, for the rest of that conversation; a control change starts a new chat. The box enforces the same for any proposal citing a PLC drop-in. Stricter than "watch modules from the drop-in" alone, because a hostile rung comment read early could steer a later "unrelated" draft. Built: whole conversation.
+- [x] **Drop-ins: watch-only for the whole conversation once a PLC program is read?** A chat that has read an L5X/PLCopen/ST drop-in can only check, simulate and propose watch modules (drive no output, no `%Q`) and no param change, for the rest of that conversation; a control change starts a new chat. The box enforces the same for any proposal citing a PLC drop-in. Stricter than "watch modules from the drop-in" alone, because a hostile rung comment read early could steer a later "unrelated" draft. Built: whole conversation.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -452,8 +490,9 @@
   est: 2h
   difficulty: low
   id: dropin-watch-only
+  answer: whole conversation watch-only (recommended, built)
 
-- [ ] **Login sessions: how long, and as wide as the box token?** Local accounts (feat/local-accounts) issue a session from `POST /api/login` that lasts 1 h from login and ends after 15 min unused (constants in `policy/account.rs`), and that is accepted wherever the box token is (drafts, replays, chat, drop-ins), plus apply/rollback as the account's role. Shorter means more re-logins on a tablet at the line; making sessions apply-only would mean the canvas still needs the box token to replay. The box-wide login lockout trips at 4x the per-account allowance (20 wrong passwords) within an hour. Built as described.
+- [x] **Login sessions: how long, and as wide as the box token?** Local accounts (feat/local-accounts) issue a session from `POST /api/login` that lasts 1 h from login and ends after 15 min unused (constants in `policy/account.rs`), and that is accepted wherever the box token is (drafts, replays, chat, drop-ins), plus apply/rollback as the account's role. Shorter means more re-logins on a tablet at the line; making sessions apply-only would mean the canvas still needs the box token to replay. The box-wide login lockout trips at 4x the per-account allowance (20 wrong passwords) within an hour. Built as described.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -463,8 +502,9 @@
   difficulty: low
   depends: local-accounts
   id: session-scope
+  answer: 1 h / 15 min idle, session as wide as the token (recommended, built)
 
-- [ ] **Site view: let browsers read /api/site cross-origin, or have the box fetch its peers?** The site view (feat/site-view) shows each peer's status by fetching that peer's `GET /api/site` straight from the browser. So with `--site` on, `/api/site` (and nothing else) answers `Access-Control-Allow-Origin: *`, with no credentials and no preflight (OPTIONS and POST still get 401), and the canvas page's CSP widens to `connect-src 'self' http:`. The body is the beacon's fields, the peer list, and module/device counts only: no names, no values, no source. The cost: any web page a browser on the floor opens can read that summary from every box. The alternative is the box fetching its peers on the browser's behalf: no CORS, no CSP change, but every box then opens HTTP connections to addresses it learned from untrusted UDP beacons (SSRF-shaped), and "reachable" would mean reachable from the box, not from the tablet doing the click-through. I built CORS (reversible: one header in `site_route`, one CSP swap in `Asset::allow_peers`).
+- [x] **Site view: let browsers read /api/site cross-origin, or have the box fetch its peers?** The site view (feat/site-view) shows each peer's status by fetching that peer's `GET /api/site` straight from the browser. So with `--site` on, `/api/site` (and nothing else) answers `Access-Control-Allow-Origin: *`, with no credentials and no preflight (OPTIONS and POST still get 401), and the canvas page's CSP widens to `connect-src 'self' http:`. The body is the beacon's fields, the peer list, and module/device counts only: no names, no values, no source. The cost: any web page a browser on the floor opens can read that summary from every box. The alternative is the box fetching its peers on the browser's behalf: no CORS, no CSP change, but every box then opens HTTP connections to addresses it learned from untrusted UDP beacons (SSRF-shaped), and "reachable" would mean reachable from the box, not from the tablet doing the click-through. I built CORS (reversible: one header in `site_route`, one CSP swap in `Asset::allow_peers`).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -474,8 +514,9 @@
   difficulty: low
   depends: site-view
   id: site-view-cors
+  answer: CORS on /api/site only, with --site (recommended, built)
 
-- [ ] **MCP on the box: which credential does an engineer's Claude hold?** `POST /mcp` (feat/box-mcp) takes the box API token, the same 64 hex digits the canvas pastes and the chat agent holds, so `claude mcp add --header "Authorization: Bearer ..."` puts that token in the engineer's laptop config. It can draft, check, simulate and propose (never apply: no tool reaches apply, rollback or a PIN), and every call is audited as source `mcp`, but it cannot be revoked without re-keying the canvas too, and the audit cannot say which engineer. Also because MCP 2026-07-28 has no sessions, drafts live in one workspace shared by every MCP client of the box (handles d1, d2, ...; an hour idle drops them). Built: the box token, no new file or flag (reversible: the check is the one `handle` already makes).
+- [x] **MCP on the box: which credential does an engineer's Claude hold?** `POST /mcp` (feat/box-mcp) takes the box API token, the same 64 hex digits the canvas pastes and the chat agent holds, so `claude mcp add --header "Authorization: Bearer ..."` puts that token in the engineer's laptop config. It can draft, check, simulate and propose (never apply: no tool reaches apply, rollback or a PIN), and every call is audited as source `mcp`, but it cannot be revoked without re-keying the canvas too, and the audit cannot say which engineer. Also because MCP 2026-07-28 has no sessions, drafts live in one workspace shared by every MCP client of the box (handles d1, d2, ...; an hour idle drops them). Built: the box token, no new file or flag (reversible: the check is the one `handle` already makes).
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -484,8 +525,9 @@
   est: 3h
   difficulty: med
   id: mcp-credential
+  answer: box token, shared workspace (recommended for now, built)
 
-- [ ] **Photo drop-ins: keep the 512 KiB cap, or raise the relay's body limit?** A photo goes to the relay as base64 inside the conversation, and relay protocol v1 takes 1 MiB per request, so the box caps a photo at 512 KiB (683 KiB as base64) and refuses (413) one that would push a chat past its 900 KiB history. A phone photo is 2-5 MB, so the person (or the canvas, scaling it in the browser before upload) must shrink it; a sketch reads fine at ~1500 px, and the model downsizes anything over 2576 px anyway. Raising the cap means a bigger relay body limit (Lambda's synchronous payload is 6 MB) and the box's history limit with it; the Messages API takes 10 MB per image (5 MB on Bedrock). Built: 512 KiB.
+- [x] **Photo drop-ins: keep the 512 KiB cap, or raise the relay's body limit?** A photo goes to the relay as base64 inside the conversation, and relay protocol v1 takes 1 MiB per request, so the box caps a photo at 512 KiB (683 KiB as base64) and refuses (413) one that would push a chat past its 900 KiB history. A phone photo is 2-5 MB, so the person (or the canvas, scaling it in the browser before upload) must shrink it; a sketch reads fine at ~1500 px, and the model downsizes anything over 2576 px anyway. Raising the cap means a bigger relay body limit (Lambda's synchronous payload is 6 MB) and the box's history limit with it; the Messages API takes 10 MB per image (5 MB on Bedrock). Built: 512 KiB.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -495,8 +537,9 @@
   difficulty: low
   depends: relay-images
   id: dropin-photo-size
+  answer: 512 KiB, the canvas downsizes before upload (recommended, built)
 
-- [ ] **WASM runtime: wasmi now, per-module limits later?** The WASM module tier (feat/wasm-tier) runs on wasmi, a pure-Rust interpreter, not wasmtime as the card said. Why: fuel per scan is exact and built in, there is no JIT (no executable memory on the box, same behaviour on the Pi as in CI), 6 small crates instead of Cranelift's tree, and it is already faster than our ST interpreter (a small module's tick 0.16 µs vs 0.30 µs; a 1000-pass loop 16 µs vs 185 µs). Cost: the box binary grows about 2.1 MiB (7.9 to 10.1 MB, macOS release), and heavy number-crunching would run maybe 5-10x faster under wasmtime. Limits are fixed for every module today: 1 000 000 fuel per scan, 4 MiB of linear memory. Per-module limits would be two manifest keys (`fuel`, `memory_kib`) capped by the box policy, which makes them part of the approval tier.
+- [x] **WASM runtime: wasmi now, per-module limits later?** The WASM module tier (feat/wasm-tier) runs on wasmi, a pure-Rust interpreter, not wasmtime as the card said. Why: fuel per scan is exact and built in, there is no JIT (no executable memory on the box, same behaviour on the Pi as in CI), 6 small crates instead of Cranelift's tree, and it is already faster than our ST interpreter (a small module's tick 0.16 µs vs 0.30 µs; a 1000-pass loop 16 µs vs 185 µs). Cost: the box binary grows about 2.1 MiB (7.9 to 10.1 MB, macOS release), and heavy number-crunching would run maybe 5-10x faster under wasmtime. Limits are fixed for every module today: 1 000 000 fuel per scan, 4 MiB of linear memory. Per-module limits would be two manifest keys (`fuel`, `memory_kib`) capped by the box policy, which makes them part of the approval tier.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -505,8 +548,9 @@
   est: 5m
   difficulty: low
   id: wasm-limits
+  answer: wasmi, fixed limits (recommended, built)
 
-- [ ] **OPC UA: offer Sign / SignAndEncrypt, or stay None-only?** The OPC UA server (feat/sink-opcua) is hand-written and speaks only SecurityPolicy#None with anonymous access, read-only. Anyone on the path can read what a client reads, and could alter what the client *sees*, but nothing a client sends can change the box. By default it listens on loopback (127.0.0.1:4840), and `--opcua 0.0.0.0:4840` puts it on the plant LAN. Many SCADA/MES installs require Basic256Sha256 (or the newer Aes128/Aes256 RSA policies). Those need RSA-OAEP decryption and RSA signatures plus X.509 handling. `ring` (already in the box) signs and verifies RSA but cannot decrypt it. The pure-Rust `rsa` crate carries RUSTSEC-2023-0071 (Marvin timing side channel, unpatched as of 2026-09), which is exactly the network-observable case. aws-lc-rs or OpenSSL would bring C crypto into the build. The ECC policies (ECC_nistP256) work with `ring` but few clients support them yet.
+- [x] **OPC UA: offer Sign / SignAndEncrypt, or stay None-only?** The OPC UA server (feat/sink-opcua) is hand-written and speaks only SecurityPolicy#None with anonymous access, read-only. Anyone on the path can read what a client reads, and could alter what the client *sees*, but nothing a client sends can change the box. By default it listens on loopback (127.0.0.1:4840), and `--opcua 0.0.0.0:4840` puts it on the plant LAN. Many SCADA/MES installs require Basic256Sha256 (or the newer Aes128/Aes256 RSA policies). Those need RSA-OAEP decryption and RSA signatures plus X.509 handling. `ring` (already in the box) signs and verifies RSA but cannot decrypt it. The pure-Rust `rsa` crate carries RUSTSEC-2023-0071 (Marvin timing side channel, unpatched as of 2026-09), which is exactly the network-observable case. aws-lc-rs or OpenSSL would bring C crypto into the build. The ECC policies (ECC_nistP256) work with `ring` but few clients support them yet.
   asked: 2026-10-30
   by: claude-agent
   needs: your call, and which SCADA/MES clients the first sites run
@@ -515,8 +559,9 @@
   est: 1w
   difficulty: high
   id: opcua-security
+  answer: None-only, loopback default, LAN at your own risk (recommended for now, built)
 
-- [ ] **OPC UA: should a port that won't bind stop the box?** OPC UA is on by default (127.0.0.1:4840). If something else holds that port, `helmsman-plc` exits with `--opcua 127.0.0.1:4840: Address already in use (--opcua off runs without it)`, the same as the box API does with its port. A box that won't start over an optional read-only interface is harsh. The other way, though, a SCADA that silently gets no data looks just as broken on the floor, and the journal line is easy to miss.
+- [x] **OPC UA: should a port that won't bind stop the box?** OPC UA is on by default (127.0.0.1:4840). If something else holds that port, `helmsman-plc` exits with `--opcua 127.0.0.1:4840: Address already in use (--opcua off runs without it)`, the same as the box API does with its port. A box that won't start over an optional read-only interface is harsh. The other way, though, a SCADA that silently gets no data looks just as broken on the floor, and the journal line is easy to miss.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -525,6 +570,7 @@
   est: 15m
   difficulty: low
   id: opcua-bind-fatal
+  answer: fatal, like the API (recommended, built)
 
 - [ ] **Commit Moxa's E1213 EDS, or keep it out?** The E1213's EDS (`moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`, the one you put at the repo root) has no license or terms in it at all, only the EZ-EDS generator line, and Moxa's download page is where its terms would be. EDS files are meant to be passed around (every PLC tool imports them), but "meant to" isn't permission. Built (feat/moxa-e1213) without it: the facts are restated in our own fixture (`crates/helmsman-proto/tests/fixtures/e1213-facts.eds`), the profile is built in, and `scripts/eds-corpus.sh` checks the real file by SHA-256 and proves it resolves to that profile. Committing it would let CI run that check and let the box ship a vetted copy.
   asked: 2026-10-31
@@ -936,6 +982,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: wasm-driver, io-bench, agent-loop
   notes: EDS part started (feat/moxa-e1213): `helmsman_proto::eds` reads a vendor EDS and resolves its Class 1 connections, `enip-io` takes `eds=PATH`, so for an EtherNet/IP device the agent's job is choosing points, not writing a driver. Still to do here: the agent reading a manual's data map (Appendix B for the E1213) into points, and iterating on harness output.
   id: driver-agent
+  needs: I put this is in tcpethernet: moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds
 
 - [ ] **Bench: the Moxa ioLogik E1213 over EtherNet/IP** — `scripts/bench-e1213.sh` against the real E1213: ListIdentity (vendor 991, product 515), the Identity object, then the conformance harness over a Class 1 exclusive-owner connection at 100 ms (DI reads, DI-00's counter, the DO status byte, the four DO->DI loops, a point past the 51-byte input assembly). Turns the inferred parts of docs/devices/moxa-iologik-e1213.md into facts (bit order, counter byte order, DIO numbering): note what the run shows there.
   needs: the E1213 on the Studio link with its IP; EtherNet/IP enabled on its web console and activated for this unit (manual pp. 3-26, 5-1); DO-00..03 wired to DI-00..03 with field power (or `LOOPS="do:0=di:4 ..."`); UDP 2222 free on the Studio; the Moxa EDS at the repo root to check it too (optional)

@@ -429,38 +429,51 @@ into the code.
 
 ### Logix 5000 Controllers Data Access, programming manual (publication 1756-PM020)
 
-- **Where:** the controller vendor's literature library,
-  `literature.rockwellautomation.com/idc/groups/literature/documents/pm/1756-pm020_-en-p.pdf`.
-  **Not read:** the fetch on 2026-10-30 returned HTTP 403 (as with the
-  Modbus documents before they were fetched by hand). It is the primary
-  reference for Read Tag, Read Tag Fragmented, Multiple Service Packet,
-  the Symbol object and their error codes.
-- **Status:** every layout in `helmsman-proto::logix` is taken from the
-  pycomm3 and libplctag entries above instead, and checked only against
-  our own fixture. Once the PDF is in hand, check the reader against it
-  and cite it per item as `PM020 p.<n>`; real-controller verification
-  waits for a CompactLogix on the bench (TODO `logix-tag-read`).
+- **What:** Rockwell, *Logix 5000 Controllers Data Access*, publication
+  1756-PM020I-EN-P, September 2025, 92 pp. A copy Nick downloaded
+  (2026-10-31) lives outside the repo in `~/github/helmsman-refs/`
+  (vendor copyright: never committed). Cite as `PM020 p.<n>` (printed
+  page numbers).
+- **Checked against it (2026-10-31), byte-exact in
+  `helmsman-proto/tests/logix_pm020.rs`:** Read Tag request and DINT reply
+  (p.18); Read Tag Fragmented requests at byte offsets 0 and 490, the
+  offset in bytes whatever the type (pp.20-21); Multiple Service Packet
+  request and reply to the Message Router (class 2, instance 1), offsets
+  counted from the start of the request/reply data (pp.38-39); the
+  Symbol object (class 0x6B, attribute 1 name, attribute 2 type,
+  Get_Instance_Attribute_List 0x55, status 0x06 = more instances, instance
+  ID u32 then name as UINT length + bytes then the type WORD; pp.44-49);
+  the Symbol Type word: bit 15 structure (bits 0-11 the template
+  instance), bit 12 system, bits 13-14 dimensions (p.50); the data type
+  codes (BOOL 0x0nC1 ... LINT 0x00C5; p.12); the error codes 0x04, 0x05,
+  0x06, 0x13 and 0xFF/0x2105 (pp.19-20, 26). BOOL read as 0 / 0xFF on
+  5570/5370 firmware v29 and earlier (p.18) is handled (any non-zero is
+  true).
+- **Not in PM020, still from pycomm3:** attribute 8 (array dimensions) of
+  the Symbol object (PM020's examples ask for 1 and 2 only); the
+  Unconnected_Send wrapper and the backplane route bytes: PM020 p.15 sends
+  network-specific delivery to the ODVA CIP Networks Library Vol. 1 ch. 3
+  and Vol. 2, which are not in hand. Real-controller verification waits for
+  a CompactLogix on the bench (TODO `logix-tag-read`).
 
 ### Logix 5000 Controllers Import/Export, reference manual (publication 1756-RM014)
 
-- **Where:** the controller vendor's literature library,
-  `literature.rockwellautomation.com/idc/groups/literature/documents/rm/1756-rm014_-en-p.pdf`.
-  **Not read:** the fetch on 2026-10-30 returned HTTP 403, as for PM020.
-  It is the primary reference for the L5X format.
-- **Used instead:** the open-source `l5x` Python package
-  (https://github.com/jvalenzuela/l5x, `l5x/project.py` and `l5x/tag.py`,
-  read 2026-10-30) for `RSLogix5000Content` > `Controller` > `Programs` /
-  `Tags`, tag `Name`, `TagType` (`Alias`, `Consumed`), `DataType`,
-  `Dimensions`, `AliasFor` and `Data Format`. The rest of what
-  `helmsman_iec::l5x` reads (`DataTypes`/`Members`, `Routines`/`Routine
-  Type`, `RLLContent`/`Rung`/`Text`/`Comment`, `STContent`/`Line`,
-  `Tasks`/`ScheduledPrograms`, `Usage`, `ExternalAccess`) is the export
-  shape as the agent remembers Studio 5000 writing it, **not verified**
-  against the manual or a real export: the fixtures in
-  `helmsman-iec/tests/fixtures/l5x/` are hand-written in that shape.
-- **Status:** check the reader against RM014 and against a real Studio
-  5000 export once one is on the bench (TODO `l5x-real-export`), and cite
-  it per element as `RM014 p.<n>`.
+- **What:** Rockwell, *Logix 5000 Controllers Import/Export*, publication
+  1756-RM014D-EN-P, September 2025, 385 pp. Same location as PM020, not
+  committed. Cite as `RM014 p.<n>`.
+- **Checked against it (2026-10-31):** what `helmsman_iec::l5x` reads is
+  the documented shape: the `RSLogix5000Content` root holding version and
+  export information around one `Controller` (pp.37-38, 55);
+  `SoftwareRevision` (p.99); `ProcessorType` (p.57); tag `TagType` with
+  `Base` / `Alias` and `AliasFor` (p.106); `Usage` (`Input`, `Output`,
+  `InOut`, `Public`) and `ExternalAccess` (`Read/Write`, `Read Only`,
+  `None`), `Constant`, `Dimensions` (p.107); `DataTypes` (p.37ff.);
+  `MainRoutineName` (p.196); `RLLContent` / `Rung` (pp.206-208);
+  `STContent` / `Line` (p.264ff.); tasks and `ScheduledProgram` (p.313).
+- **Not in RM014's text:** the root's `TargetName` and `TargetType`
+  attributes (they are in real exports and in the `l5x` package; RM014's
+  root example is not in the extracted text). Still to do: run the reader
+  over a real Studio 5000 export (TODO `l5x-real-export`).
 
 ### Model Context Protocol specification, revisions 2026-07-28 and 2025-11-25
 
