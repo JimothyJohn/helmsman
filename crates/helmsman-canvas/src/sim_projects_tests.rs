@@ -355,3 +355,20 @@ fn opening_another_project_with_unsaved_edits_asks_first() {
     assert!(!SimProjects::load(Box::new(Shared::default())).dirty());
     assert!(Files(BTreeMap::new()).check().is_ok());
 }
+
+#[test]
+fn two_programs_in_the_simulation_are_refused_at_the_second() {
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.proj.create("pair", None);
+    v.open_project("pair");
+    v.proj.new_file("other.st");
+    *v.proj.current_text_mut().unwrap() =
+        "PROGRAM other\nVAR x : INT; END_VAR\nx := 1;\nEND_PROGRAM\n".into();
+    v.deploy();
+    let d = v.diags();
+    assert!(
+        d.iter()
+            .any(|d| d.message.contains("only one PROGRAM") && d.file == "other.st" && d.line == 1),
+        "{d:?}"
+    );
+}
