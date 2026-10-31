@@ -281,6 +281,7 @@
   difficulty: low
   depends: dev-merge-safety
   id: dev-merge-safety-2
+  answer: strict + auto update-branch workflow (recommended)
 
 - [x] **Commit GPL editor examples as fixtures?** The real PLCopen exports that prove the importer (OpenPLC Editor's Blink ladder and Traffic_Light_FBD, Beremiz's test projects) are GPL-2.0/GPL-3.0 project files with no header of their own; this repo is MIT. I did not copy them in: `scripts/plcopen-corpus.sh` fetches 87 of them pinned by commit and SHA-256 into target/ and runs `tests/plcopen_corpus.rs` (`make test-plcopen-corpus`), so CI without network never sees them. Committing two small ones (Blink, Traffic_Light_FBD) would make them run on every `cargo test`, at the cost of GPL files in the tree.
   asked: 2026-10-30
@@ -586,6 +587,7 @@
   est: 2h
   difficulty: low
   id: playground-publish
+  answer: commit the built assets, rebuild by hand (built)
 
 - [ ] **Playground: is the visitor's own API key in the browser OK on a public page?** "Ask Claude" calls the Messages API straight from the page with the key the visitor pastes (`anthropic-dangerous-direct-browser-access: true`). It stays in page memory; an explicit "Remember on this device" (off by default, with a warning) keeps it in localStorage. It goes only in the `x-api-key` header to api.anthropic.com (the page's CSP allows no other host). Risks: any script that ever runs on jimothyjohn.github.io can read a remembered key (the site has no third-party scripts today); a visitor's key pays for their own questions. Alternatives: memory only (no remember box), or no direct calls at all and a hosted proxy (the relay) with per-IP limits on your credits.
   asked: 2026-10-31
@@ -596,6 +598,7 @@
   est: 1h
   difficulty: low
   id: playground-key
+  answer: visitor's key, memory by default, opt-in remember (built)
 
 - [ ] **Commit Moxa's E1213 EDS, or keep it out?** The E1213's EDS (`moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`, the one you put at the repo root) has no license or terms in it at all, only the EZ-EDS generator line, and Moxa's download page is where its terms would be. EDS files are meant to be passed around (every PLC tool imports them), but "meant to" isn't permission. Built (feat/moxa-e1213) without it: the facts are restated in our own fixture (`crates/helmsman-proto/tests/fixtures/e1213-facts.eds`), the profile is built in, and `scripts/eds-corpus.sh` checks the real file by SHA-256 and proves it resolves to that profile. Committing it would let CI run that check and let the box ship a vetted copy.
   asked: 2026-10-31
@@ -606,6 +609,7 @@
   est: 10m
   difficulty: low
   id: e1213-eds-license
+  answer: keep it out, check by hash (recommended, built)
 
 - [ ] **The Class 1 scanner in the box build: OK?** Until now the box build could only *read* from CIP devices (`helmsman-proto` without `unrestricted`). Mastering the E1213 over EtherNet/IP means driving its outputs, so feat/moxa-e1213 split the scanner into its own feature, `scanner`, and the box's `box` feature turns it on through helmsman-io's `enip` (the `enip-io` driver). What it can send: `Forward_Open` and `Forward_Close` to an Assembly-class path, nothing else; `Session::request` (any service) still needs `unrestricted`, which `tests/box_build.rs` still forbids (and now also checks `scanner` is in). Outputs reach a device only through a map signal, so the one-writer rule and the approval tier for map changes apply, as for Modbus coils. The other way: keep `enip-io` out of the box until a later card, and use the E1213 over Modbus/TCP meanwhile (its map is in `docs/devices/moxa-iologik-e1213-modbus.map`).
   asked: 2026-10-31
@@ -616,6 +620,7 @@
   est: 5m
   difficulty: low
   id: enip-in-box
+  answer: out of the box until the bench passes, Modbus/TCP meanwhile
 
 - [ ] **Snapshot store schema 2: mark it on the first WASM commit, or on open?** WASM modules in the store (`wasm-store`) add a `wasm-module` tree line, which a build from before would read as a corrupt snapshot. So the schema goes 1 → 2, with no table changes. Built: a schema 1 store opens untouched and is marked 2 inside the first commit that holds a WASM module; until then you can still roll the box's binary back to an older build, and after it the older build says "newer schema, run a newer helmsman-plc" instead of "corrupt". The other way, mark every store 2 the first time a new build opens it: simpler to reason about, but a binary rollback then fails even on a box that never ran WASM.
   asked: 2026-10-31
@@ -627,6 +632,7 @@
   difficulty: low
   id: store-schema-2
   notes: drivers (#89) followed the same rule: schema 3 is marked inside the first commit that holds a driver. Your answer here applies to both.
+  answer: on the first WASM commit (recommended, built)
 
 - [ ] **WASM over the box API: is ~750 KiB enough?** A proposal carries `module.wasm` as base64 in the JSON body, and the API's request body limit is 1 MiB, so the largest WASM module the API takes is about 750 KiB, though the store and bundles take 1 MiB (`MAX_FILE`). `POST /api/dropins` already has its own larger body cap (`http::Limits::upload`, 2 MiB for PDFs); the same mechanism would serve here. Bundles have the same ceiling over `POST /api/bundles`. Hand-written and `no_std` Rust modules are a few KiB; a Rust module with `std` and formatting can pass 1 MiB. Built: unchanged limit.
   asked: 2026-10-31
@@ -637,6 +643,7 @@
   est: 1h
   difficulty: low
   id: wasm-api-size
+  answer: keep 1 MiB bodies, ~750 KiB WASM (recommended, built)
 
 - [ ] **Where does an agent-written WASM driver live?** The sandbox and the first guest are built (`wasm-driver`), but nothing in a map can name one yet (`wasm-driver-map`). A driver reaches a device, so it should be reviewed like a map change. Recommended: a driver is a module-like blob in the store (as `wasm-store` now stores WASM modules), proposed and approved through the same policy at the engineer tier, carried by bundles, and named in the map as `wasm:NAME`; the box ships none built in (the Modbus guest stays a test fixture, since the native driver is the one that runs). Alternatives: a file path on the box (`module=/etc/helmsman/drivers/x.wasm`), simplest but outside snapshots, approval and audit; or bundles only, no local authoring. Nothing is built for this yet.
   asked: 2026-10-31
