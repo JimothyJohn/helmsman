@@ -427,7 +427,7 @@
   id: param-units
   answer: unit= on param lines (recommended, built)
 
-- [ ] **Relay health route for the offline probe?** While the agent is offline the box probes `GET {relay}/v1/health` with its box token every 15 s and on each chat message. Today any answer below 500 except 401/403 counts as "online", so a relay without the route (404) still counts as up. If the relay's upstream (the model API) is down but the relay itself answers, the box flips online, the next turn fails, and it goes offline again: one failed message per flap. A real `/v1/health` on the relay that reflects its upstream (503 when it cannot serve turns) closes that.
+- [x] **Relay health route for the offline probe?** While the agent is offline the box probes `GET {relay}/v1/health` with its box token every 15 s and on each chat message. Today any answer below 500 except 401/403 counts as "online", so a relay without the route (404) still counts as up. If the relay's upstream (the model API) is down but the relay itself answers, the box flips online, the next turn fails, and it goes offline again: one failed message per flap. A real `/v1/health` on the relay that reflects its upstream (503 when it cannot serve turns) closes that.
   asked: 2026-10-30
   by: claude-agent
   needs: your call, then a relay change in the relay repo
@@ -437,6 +437,7 @@
   difficulty: low
   id: relay-health
   answer: add GET /v1/health to the relay, 200/503 by upstream (recommended)
+  notes: relay side done in ../agent-relay (3af804b). Box side on fix/relay-health: `relay::probe` counts only a 2xx as up; a 5xx carries the relay's error kind, message and `upstream` category into the banner; 404 and every other answer are `relay_unhealthy`. Contract in helmsman-agent/tests/probe.rs.
 
 - [x] **No relay configured: should chat still take param edits by rule?** A box started without `--relay` answers `POST /api/chat` with 503 ("no relay configured"), as before; `GET /api/chat/status` says `unconfigured`. The rule-based param edits only run for a box that has a relay and lost it. An air-gapped box could use them too, but then "chat" exists on a box that never has an agent. Kept as is (reversible: the chat route would be built without a relay).
   asked: 2026-10-30

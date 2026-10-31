@@ -171,14 +171,18 @@ fn from_http(e: http::Error) -> Error {
 /// Longest a [`probe`] may take, whatever the turn timeouts are.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Whether the relay answers: `GET {prefix}/v1/health` with the box
-/// token. Any HTTP answer below 500 other than 401/403 counts (a relay
-/// without the route answers 404, which still means it is there); the
-/// body is never read. Never sends a conversation and costs no tokens.
+/// Whether the relay can serve turns: `GET {prefix}/v1/health` with the
+/// box token. Only a 2xx counts (relay protocol v1: 200 when the relay
+/// reaches the model API with its key, 503 when it cannot); a relay
+/// without the route (404) or any other answer is not up. Never sends a
+/// conversation and costs no tokens.
 ///
 /// # Errors
 /// [`Error::Unreachable`] or [`Error::Timeout`] when nothing answers;
-/// [`Error::Status`] for a 5xx, 401 or 403.
+/// [`Error::Status`] for anything but a 2xx: a 5xx is the relay's own
+/// error kind and message (`upstream_unavailable`, naming the `upstream`
+/// category) when its body has them, else `relay_unavailable`; 401 and
+/// 403 are `relay_refused_token`; the rest `relay_unhealthy`.
 pub fn probe(cfg: &Config) -> Result<(), Error> {
     let path = format!("{}/v1/health", cfg.url.prefix);
     let auth = format!("Bearer {}", cfg.token);
@@ -195,20 +199,47 @@ pub fn probe(cfg: &Config) -> Result<(), Error> {
     };
     let resp = http::send(&cfg.url, &req, t).map_err(from_http)?;
     let status = resp.status;
-    if status >= 500 || status == 401 || status == 403 {
+    if (200..300).contains(&status) {
+        return Ok(());
+    }
+    let said = format!("the relay answered {status} to a health check");
+    if status >= 500 {
+        let body = resp.read_body(MAX_ERROR_BODY).unwrap_or_default();
+        let j: Json = serde_json::from_slice(&body).unwrap_or(Json::Null);
+        let e = &j["error"];
+        let (kind, message) = match (e["type"].as_str(), e["message"].as_str()) {
+            (Some(kind), Some(message)) => {
+                let upstream = j["upstream"]
+                    .as_str()
+                    .map(|u| format!(" (upstream: {u})"))
+                    .unwrap_or_default();
+                (kind.to_string(), format!("{said}: {message}{upstream}"))
+            }
+            _ => ("relay_unavailable".to_string(), said),
+        };
         return Err(Error::Status {
             status,
-            kind: if status >= 500 {
-                "relay_unavailable"
-            } else {
-                "relay_refused_token"
-            }
-            .into(),
-            message: format!("the relay answered {status} to a health check"),
-            retryable: status >= 500,
+            kind,
+            message,
+            retryable: true,
         });
     }
-    Ok(())
+    let (kind, message) = if status == 401 || status == 403 {
+        ("relay_refused_token", said)
+    } else {
+        (
+            "relay_unhealthy",
+            format!(
+                "{said}; only a 2xx means it can serve turns (a relay without GET /v1/health is too old)"
+            ),
+        )
+    };
+    Err(Error::Status {
+        status,
+        kind: kind.into(),
+        message,
+        retryable: false,
+    })
 }
 
 /// Runs one model turn over `messages`, calling `on` as text and tool
