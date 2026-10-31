@@ -460,7 +460,7 @@
   id: rtu-strict-timing
   answer: relaxed by default, timing=strict opt-in (recommended, built)
 
-- [ ] **Drop-ins: PDF through the relay as a document block, or text only?** `POST /api/dropins` refuses PDF (415, "paste the text"): a pure-Rust PDF text extractor is either heavy (`pdf-extract` pulls `lopdf` and font tables) or poor on real SOPs, and the box would be parsing the most hostile file format there is. The Messages API reads PDFs itself as `document` content blocks, so the box could pass the bytes through the relay untouched (the relay would need to accept a document block from a box and cap its size). Built: text only.
+- [x] **Drop-ins: PDF through the relay as a document block, or text only?** `POST /api/dropins` refuses PDF (415, "paste the text"): a pure-Rust PDF text extractor is either heavy (`pdf-extract` pulls `lopdf` and font tables) or poor on real SOPs, and the box would be parsing the most hostile file format there is. The Messages API reads PDFs itself as `document` content blocks, so the box could pass the bytes through the relay untouched (the relay would need to accept a document block from a box and cap its size). Built: text only.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -470,6 +470,7 @@
   difficulty: med
   id: dropin-pdf
   answer: PDF as a document block through the relay (relay protocol change)
+  notes: built on feat/dropin-pdf: `api/pdf.rs` checks `%PDF-` and the relay's 2 MiB, never parses; the chat sends it as a base64 `document` block and refuses a sixth PDF per conversation; `POST /api/dropins` alone takes a 2 MiB body; history limit 3.5 MiB under the relay's 4 MiB. See ARCHITECTURE "Drop-ins".
 
 - [x] **Drop-ins: should reading one need the token?** Drop-in text and PLC inventories are served on `GET`, which the box API leaves open to whoever reaches the socket (loopback by default, the LAN only when asked), like module source. A customer's L5X is their IP, so a token on `GET /api/dropins/...` would be stricter; the canvas then needs the token to show a drop-in back. Built: open like every other read.
   asked: 2026-10-30

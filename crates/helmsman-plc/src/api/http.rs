@@ -24,6 +24,9 @@ pub struct Limits {
     pub head: usize,
     /// Body, bytes.
     pub body: usize,
+    /// Body, bytes, for `POST /api/dropins` only: a PDF drop-in is up to
+    /// the relay's 2 MiB per PDF ([`super::pdf::MAX_PDF`]).
+    pub upload: usize,
     /// Headers, count.
     pub headers: usize,
     /// From accept to the last byte of the body.
@@ -47,6 +50,7 @@ impl Default for Limits {
         Self {
             head: 16 * 1024,
             body: 1 << 20,
+            upload: super::pdf::MAX_PDF,
             headers: 64,
             deadline: Duration::from_secs(5),
             workers: 32,
@@ -329,10 +333,34 @@ pub fn parse_head(head: &[u8], limits: &Limits) -> Result<(Request, usize), Read
         }
     }
     let length = length.unwrap_or(0);
-    if length > limits.body {
-        return Err(ReadError::Status(413, "body too large"));
+    if length > body_cap(&req, limits) {
+        return Err(ReadError::Status(
+            413,
+            if is_upload(&req) {
+                "a drop-in is at most 2 MiB (a PDF; text 1 MiB, a photo 512 KiB)"
+            } else {
+                "body too large"
+            },
+        ));
     }
     Ok((req, length))
+}
+
+/// `POST /api/dropins`: the one route whose body may be [`Limits::upload`].
+fn is_upload(req: &Request) -> bool {
+    req.method == "POST"
+        && req.segments.len() == 2
+        && req.segments[0] == "api"
+        && req.segments[1] == "dropins"
+}
+
+/// The largest body `req` may carry.
+fn body_cap(req: &Request, limits: &Limits) -> usize {
+    if is_upload(req) {
+        limits.upload.max(limits.body)
+    } else {
+        limits.body
+    }
 }
 
 /// Reads one request from `stream`, within `limits`.
@@ -355,7 +383,9 @@ pub fn read_request(
     }
     let (mut req, length) = parse_head(&buf[..end], limits)?;
     let mut body = buf.split_off(end + 4);
-    fill(stream, &mut body, deadline, limits.body, |b| b.len() >= length)?;
+    fill(stream, &mut body, deadline, body_cap(&req, limits), |b| {
+        b.len() >= length
+    })?;
     body.truncate(length);
     req.body = body;
     Ok(req)
