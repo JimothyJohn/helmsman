@@ -40,7 +40,7 @@ use helmsman_plc::record::{RecordConfig, Recorder};
 use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::site::{self, Site};
 use helmsman_plc::spec::{Defaults, Spec};
-use helmsman_plc::store::{ChangeSet, Kind, Store};
+use helmsman_plc::store::{ChangeSet, Code, Kind, Store};
 use helmsman_plc::{Module, Runtime, SignalTable, Status, Window};
 
 const USAGE: &str = "\
@@ -408,7 +408,10 @@ fn from_store(dir: &Path, d: &Defaults) -> Result<Content, String> {
     let dirs = cs
         .modules
         .into_iter()
-        .map(|(name, f)| ModuleDir::from_text(&at.join(name), &f.manifest, f.source, d))
+        .map(|(name, f)| match f.code {
+            Code::St(source) => ModuleDir::from_text(&at.join(name), &f.manifest, source, d),
+            Code::Wasm(bytes) => ModuleDir::from_wasm(&at.join(name), &f.manifest, bytes, d),
+        })
         .collect::<Result<_, _>>()?;
     Ok(Content {
         dirs,
@@ -466,7 +469,7 @@ fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<(Module, String), Str
         #[cfg(feature = "wasm")]
         return Ok((
             md.wasm_module(helmsman_plc::wasm::Limits::default())?,
-            wasm_note(bytes),
+            helmsman_plc::store::wasm_note(bytes),
         ));
         #[cfg(not(feature = "wasm"))]
         return Err(format!(
@@ -504,24 +507,6 @@ fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<(Module, String), Str
         params: Vec::new(),
     };
     Ok((module, src))
-}
-
-#[cfg(feature = "wasm")]
-/// What the API shows as a WASM module's source: an ST comment naming
-/// the binary, so nothing mistakes it for code.
-fn wasm_note(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
-    use sha2::{Digest, Sha256};
-    let mut hash = String::with_capacity(64);
-    for b in Sha256::digest(bytes) {
-        let _ = write!(hash, "{b:02x}");
-    }
-    format!(
-        "(* WASM module ({}): {} bytes, sha256 {hash} *)\n",
-        helmsman_plc::wasm::ABI,
-        bytes.len()
-    )
 }
 
 fn emit_st(o: &Opts) -> Result<(), String> {

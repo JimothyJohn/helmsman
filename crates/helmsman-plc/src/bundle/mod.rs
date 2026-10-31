@@ -9,6 +9,7 @@
 //! T len tree                            the snapshot tree (store::ChangeSet::tree)
 //! M len manifest                        the bundle manifest ([`manifest`])
 //! B len blob   (zero or more)           each file the tree names, ascending by SHA-256
+//!                                       (bytes; text but a `wasm-module`'s program)
 //! S len key+sig (zero or more)          Ed25519 signatures ([`sign`]), ascending by key
 //! ```
 //!
@@ -23,7 +24,9 @@
 //! than the file has left; records out of order, repeated, or of an unknown
 //! type; a blob the tree does not name or a name the tree gives no blob;
 //! module names that are not module names (no `/`, `..`, or non-ASCII
-//! lookalikes: `store`'s rule); a tree or manifest not in canonical form.
+//! lookalikes: `store`'s rule); a tree or manifest not in canonical form;
+//! a blob over [`MAX_FILE`], or one the tree reads as text (a manifest, an
+//! ST program, the map, the calendar) that is not UTF-8.
 //! [`verify`] then checks every signature, the signer against the box's
 //! [`sign::TrustStore`], and the content: every module compiled and held to
 //! its own manifest, and the capability manifest exactly what the content
@@ -44,7 +47,7 @@ use sha2::{Digest, Sha256};
 
 use crate::manifest::MAX_FILE;
 use crate::spec::{Defaults, name_ok};
-use crate::store::{ChangeSet, MAX_MODULES, ModuleFiles, SnapshotId};
+use crate::store::{ChangeSet, Code, MAX_MODULES, ModuleFiles, SnapshotId};
 
 pub use manifest::{BundleManifest, Capabilities, capabilities};
 pub use sign::{Signature, SigningKey, TrustStore};
@@ -201,7 +204,8 @@ fn utf8<'a>(b: &'a [u8], what: &str) -> Result<&'a str, Error> {
 
 /// What a tree names, in order.
 enum Line {
-    Module(String, [u8; 32], [u8; 32]),
+    /// Name, manifest, program, and whether the program is WASM.
+    Module(String, [u8; 32], [u8; 32], bool),
     Map([u8; 32]),
     Calendar([u8; 32]),
 }
@@ -221,7 +225,7 @@ fn tree_lines(tree: &str) -> Result<Vec<Line>, Error> {
         }
         let w: Vec<&str> = line.split(' ').collect();
         match w.as_slice() {
-            ["module", name, m, s] => {
+            [kind @ ("module" | "wasm-module"), name, m, s] => {
                 if !name_ok(name) {
                     return Err(bad(format!(
                         "{name:?} is not a module name (1..=64 of A-Z a-z 0-9 _ -)"
@@ -233,7 +237,12 @@ fn tree_lines(tree: &str) -> Result<Vec<Line>, Error> {
                 if modules.len() > MAX_MODULES {
                     return Err(bad(format!("more than {MAX_MODULES} modules")));
                 }
-                out.push(Line::Module((*name).to_string(), hash(m)?, hash(s)?));
+                out.push(Line::Module(
+                    (*name).to_string(),
+                    hash(m)?,
+                    hash(s)?,
+                    *kind == "wasm-module",
+                ));
             }
             ["io-map", h] => out.push(Line::Map(hash(h)?)),
             ["calendar", h] => out.push(Line::Calendar(hash(h)?)),
@@ -288,17 +297,17 @@ impl Bundle {
         };
         put(b'T', self.content.tree().as_bytes());
         put(b'M', self.manifest.render().as_bytes());
-        let blobs: BTreeMap<[u8; 32], &str> = self
+        let blobs: BTreeMap<[u8; 32], &[u8]> = self
             .content
             .modules
             .values()
-            .flat_map(|f| [f.manifest.as_str(), f.source.as_str()])
-            .chain(self.content.io_map.as_deref())
-            .chain(self.content.calendar.as_deref())
-            .map(|b| (sha256(b.as_bytes()), b))
+            .flat_map(|f| [f.manifest.as_bytes(), f.code.bytes()])
+            .chain(self.content.io_map.as_deref().map(str::as_bytes))
+            .chain(self.content.calendar.as_deref().map(str::as_bytes))
+            .map(|b| (sha256(b), b))
             .collect();
         for b in blobs.values() {
-            put(b'B', b.as_bytes());
+            put(b'B', b);
         }
         let mut sigs = self.signatures.clone();
         sigs.sort_by_key(|s| s.key);
@@ -427,7 +436,7 @@ impl Bundle {
 fn content(tree: &str, blobs: &BTreeMap<[u8; 32], &[u8]>) -> Result<ChangeSet, Error> {
     let lines = tree_lines(tree)?;
     let mut used = BTreeSet::new();
-    let mut file = |h: [u8; 32], what: &str| -> Result<String, Error> {
+    let mut bytes = |h: [u8; 32], what: &str| -> Result<Vec<u8>, Error> {
         let data = blobs.get(&h).ok_or_else(|| {
             Error::Tampered(format!(
                 "{what}: the tree names blob {}, which the bundle does not carry (a file was altered or removed)",
@@ -435,20 +444,27 @@ fn content(tree: &str, blobs: &BTreeMap<[u8; 32], &[u8]>) -> Result<ChangeSet, E
             ))
         })?;
         used.insert(h);
-        String::from_utf8(data.to_vec()).map_err(|_| Error::Malformed(format!("{what} is not UTF-8")))
+        Ok(data.to_vec())
+    };
+    let text = |data: Vec<u8>, what: &str| {
+        String::from_utf8(data).map_err(|_| Error::Malformed(format!("{what} is not UTF-8")))
     };
     let mut cs = ChangeSet::default();
     for l in lines {
         match l {
-            Line::Module(name, m, s) => {
-                let files = ModuleFiles {
-                    manifest: file(m, &format!("module {name} manifest"))?,
-                    source: file(s, &format!("module {name} source"))?,
+            Line::Module(name, m, s, wasm) => {
+                let manifest = format!("module {name} manifest");
+                let manifest = text(bytes(m, &manifest)?, &manifest)?;
+                let code = if wasm {
+                    Code::Wasm(bytes(s, &format!("module {name} wasm"))?)
+                } else {
+                    let what = format!("module {name} source");
+                    Code::St(text(bytes(s, &what)?, &what)?)
                 };
-                cs.modules.insert(name, files);
+                cs.modules.insert(name, ModuleFiles { manifest, code });
             }
-            Line::Map(h) => cs.io_map = Some(file(h, "io-map")?),
-            Line::Calendar(h) => cs.calendar = Some(file(h, "calendar")?),
+            Line::Map(h) => cs.io_map = Some(text(bytes(h, "io-map")?, "io-map")?),
+            Line::Calendar(h) => cs.calendar = Some(text(bytes(h, "calendar")?, "calendar")?),
         }
     }
     if let Some(h) = blobs.keys().find(|h| !used.contains(*h)) {

@@ -30,7 +30,7 @@ use helmsman_plc::policy::FLOOR;
 use helmsman_plc::policy::Role;
 use helmsman_plc::policy::pin::{Gate, Pins};
 use helmsman_plc::spec::Defaults;
-use helmsman_plc::store::{ChangeSet, Meta, ModuleFiles, Store};
+use helmsman_plc::store::{ChangeSet, Code, Meta, ModuleFiles, Store};
 use helmsman_plc::{Runtime, SignalTable, Window};
 use proptest::prelude::*;
 use serde_json::{Value as Json, json};
@@ -100,7 +100,7 @@ fn d() -> Defaults {
 fn files(m: &str, s: &str) -> ModuleFiles {
     ModuleFiles {
         manifest: m.into(),
-        source: s.into(),
+        code: s.into(),
     }
 }
 
@@ -247,7 +247,8 @@ fn content_swapped_and_readdressed_keeps_addressing_but_fails_the_signature() {
     // content addressing passes, the signature over the old id does not.
     let good = signed(horner_content());
     let mut evil = horner_content();
-    evil.modules.get_mut("horner").unwrap().source = HORNER_SOURCE.replace("horn := start", "horn := TRUE");
+    evil.modules.get_mut("horner").unwrap().code =
+        HORNER_SOURCE.replace("horn := start", "horn := TRUE").into();
     let forged = Bundle {
         manifest: good.manifest.clone(),
         content: evil,
@@ -433,7 +434,7 @@ fn a_module_whose_own_manifest_hides_an_output_is_refused_as_content() {
     // drives lamp. The bundle manifest agrees with the module manifest,
     // and both are signed: the compiled program is what decides.
     let mut cs = horner_content();
-    cs.modules.get_mut("horner").unwrap().source = "
+    cs.modules.get_mut("horner").unwrap().code = "
 PROGRAM horner
 VAR_INPUT start : BOOL; END_VAR
 VAR_OUTPUT horn : BOOL; lamp : BOOL; END_VAR
@@ -451,7 +452,7 @@ END_PROGRAM"
 #[test]
 fn a_module_that_does_not_compile_is_refused_as_content() {
     let mut cs = horner_content();
-    cs.modules.get_mut("horner").unwrap().source = "PROGRAM horner\n horn := ;\nEND_PROGRAM".into();
+    cs.modules.get_mut("horner").unwrap().code = "PROGRAM horner\n horn := ;\nEND_PROGRAM".into();
     let b = Bundle {
         manifest: manifest_for(&horner_content()),
         content: cs,
@@ -748,7 +749,7 @@ prop_compose! {
         calendar in prop::option::of(arb_text()),
     ) -> ChangeSet {
         ChangeSet {
-            modules: modules.into_iter().map(|(n, (m, s))| (n, ModuleFiles { manifest: m, source: s })).collect(),
+            modules: modules.into_iter().map(|(n, (m, s))| (n, ModuleFiles::st(m, s))).collect(),
             io_map,
             calendar,
         }
@@ -1361,4 +1362,235 @@ fn a_box_refuses_to_start_with_a_trust_store_others_can_read() {
             "{err}"
         );
     }
+}
+
+// ---- WASM modules -----------------------------------------------------------------
+
+/// `horner` as WASM: `horn := start`, and `lamp := start` too when
+/// `lamp`. A custom section of every byte value makes it no UTF-8 at all.
+fn horner_wasm(lamp: bool) -> Vec<u8> {
+    let (import, call) = if lamp {
+        (
+            r#"(import "helmsman/v1/out" "lamp" (func $lamp (param i32)))"#,
+            "(call $lamp (call $start))",
+        )
+    } else {
+        ("", "")
+    };
+    let mut b = wat::parse_str(format!(
+        r#"(module
+             (import "helmsman/v1/in" "start" (func $start (result i32)))
+             (import "helmsman/v1/out" "horn" (func $horn (param i32)))
+             {import}
+             (func (export "scan") (call $horn (call $start)) {call}))"#
+    ))
+    .unwrap();
+    // Custom section "x": id 0, size 258 (LEB128), name, 256 bytes.
+    b.extend_from_slice(&[0, 0x82, 0x02, 1, b'x']);
+    b.extend(0..=255u8);
+    assert!(std::str::from_utf8(&b).is_err());
+    b
+}
+
+fn horner_wasm_content() -> ChangeSet {
+    ChangeSet {
+        modules: BTreeMap::from([(
+            "horner".to_string(),
+            ModuleFiles::wasm(HORNER_MANIFEST, horner_wasm(false)),
+        )]),
+        io_map: Some(TEMPLATE.into()),
+        calendar: None,
+    }
+}
+
+#[test]
+fn a_wasm_module_bundles_verifies_and_round_trips_byte_identical() {
+    let cs = horner_wasm_content();
+    let b = signed(cs.clone());
+    assert_eq!(b.manifest.caps.drives.iter().collect::<Vec<_>>(), ["horn"]);
+    let file = b.encode();
+    let v = verify(&file, &trust(), &d()).unwrap();
+    assert_eq!(v.bundle.content, cs);
+    assert_eq!(
+        v.bundle.content.modules["horner"].code.wasm(),
+        Some(horner_wasm(false).as_slice())
+    );
+    assert_eq!(v.bundle.id(), cs.id());
+    // Through a store and out again: the same file, byte for byte.
+    let dir = tmp("wasm-bundle-store");
+    let mut s = Store::open(&dir).unwrap();
+    let meta = Meta {
+        author: "Test".into(),
+        prompt: String::new(),
+        approver: None,
+        time_ms: 1,
+    };
+    let id = s.commit(&v.bundle.content, &meta).unwrap();
+    let mut again = Bundle::new(b.manifest.clone(), s.get(&id).unwrap());
+    again.signatures.clone_from(&b.signatures);
+    assert_eq!(again.encode(), file);
+}
+
+#[test]
+fn a_tampered_wasm_blob_is_refused_as_tampered() {
+    let file = signed(horner_wasm_content()).encode();
+    let wasm = horner_wasm(false);
+    let at = find(&file, &wasm);
+    for k in [at, at + 8, at + wasm.len() - 1] {
+        let mut evil = file.clone();
+        evil[k] ^= 0x40;
+        assert!(matches!(refused(&evil), Error::Tampered(_)), "byte {k}");
+    }
+}
+
+#[test]
+fn a_wasm_blob_the_tree_calls_text_is_refused_as_not_utf8() {
+    let cs = horner_wasm_content();
+    let manifest = manifest_for(&cs).render();
+    let tree = cs.tree().replace("wasm-module horner", "module horner");
+    let wasm = horner_wasm(false);
+    let blobs = sorted_blobs(&[HORNER_MANIFEST.as_bytes(), &wasm, TEMPLATE.as_bytes()]);
+    let e = refused(&raw(&tree, &manifest, &blobs, &[]));
+    assert!(
+        matches!(&e, Error::Malformed(w) if w.contains("module horner source is not UTF-8")),
+        "{e}"
+    );
+    // A manifest pointing at the binary: the same.
+    let (m, w) = (sha(HORNER_MANIFEST.as_bytes()), sha(&wasm));
+    let tree = cs.tree().replace(&format!("{m} {w}"), &format!("{w} {w}"));
+    let blobs = sorted_blobs(&[&wasm, TEMPLATE.as_bytes()]);
+    let e = refused(&raw(&tree, &manifest, &blobs, &[]));
+    assert!(
+        matches!(&e, Error::Malformed(w) if w.contains("manifest is not UTF-8")),
+        "{e}"
+    );
+    // An unknown program kind is not guessed at.
+    let tree = cs.tree().replace("wasm-module horner", "elf-module horner");
+    let blobs = sorted_blobs(&[HORNER_MANIFEST.as_bytes(), &wasm, TEMPLATE.as_bytes()]);
+    assert!(matches!(
+        refused(&raw(&tree, &manifest, &blobs, &[])),
+        Error::Malformed(_)
+    ));
+}
+
+#[test]
+fn an_oversized_wasm_blob_is_refused() {
+    let cap = usize::try_from(helmsman_plc::manifest::MAX_FILE).unwrap();
+    let mut cs = horner_wasm_content();
+    // Size is refused before anything parses it: the bytes past the
+    // module need not be WASM.
+    let mut big = horner_wasm(false);
+    big.resize(cap + 1, 0);
+    cs.modules.get_mut("horner").unwrap().code = Code::Wasm(big.clone());
+    assert!(cs.validate().is_err(), "the store would not take it");
+    let tree = cs.tree();
+    let manifest = manifest_for(&horner_wasm_content()).render();
+    let blobs = sorted_blobs(&[HORNER_MANIFEST.as_bytes(), &big, TEMPLATE.as_bytes()]);
+    let e = refused(&raw(&tree, &manifest, &blobs, &[]));
+    assert!(
+        matches!(&e, Error::Malformed(w) if w.contains("more than a blob may hold")),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_wasm_module_whose_manifest_hides_an_import_is_refused_as_content() {
+    // horner's manifest says it drives horn; the binary also imports lamp
+    // as an output. The bundle manifest agrees with the module manifest
+    // and both are signed: the loaded binary is what decides.
+    let mut cs = horner_wasm_content();
+    cs.modules.get_mut("horner").unwrap().code = Code::Wasm(horner_wasm(true));
+    let e = capabilities(&cs, &d()).unwrap_err();
+    assert!(e.join("\n").to_lowercase().contains("lamp"), "{e:?}");
+    let mut b = Bundle::new(manifest_for(&horner_wasm_content()), cs);
+    b.sign(&publisher());
+    let e = verify(&b.encode(), &trust(), &d()).unwrap_err();
+    assert!(matches!(e, Error::Content(_)), "{e}");
+    // Not a WASM module at all: refused as content too.
+    let mut cs = horner_wasm_content();
+    cs.modules.get_mut("horner").unwrap().code = Code::Wasm(b"\0asm junk".to_vec());
+    let mut b = Bundle::new(manifest_for(&horner_wasm_content()), cs);
+    b.sign(&publisher());
+    assert!(matches!(
+        verify(&b.encode(), &trust(), &d()),
+        Err(Error::Content(_))
+    ));
+}
+
+#[test]
+fn the_api_exports_a_wasm_snapshot_and_imports_it_signed_as_a_proposal() {
+    let b = bench(Some(trust()));
+    let mut cs = running();
+    cs.modules.extend(horner_wasm_content().modules);
+    let id = Store::open(&b.store)
+        .unwrap()
+        .commit(
+            &cs,
+            &Meta {
+                author: "Test".into(),
+                prompt: String::new(),
+                approver: None,
+                time_ms: 2,
+            },
+        )
+        .unwrap()
+        .to_string();
+    let r = request(
+        b.addr,
+        "GET",
+        &format!("/api/snapshots/{id}/bundle"),
+        false,
+        "application/json",
+        b"",
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    let mut exported = Bundle::decode(&r.body).unwrap();
+    assert_eq!(exported.content, cs, "byte for byte");
+    assert_eq!(exported.id().to_string(), id);
+    // The snapshot as JSON shows the imports, never the binary.
+    let j = request(
+        b.addr,
+        "GET",
+        &format!("/api/snapshots/{id}"),
+        false,
+        "application/json",
+        b"",
+    )
+    .json();
+    let horner = &j["modules"]["horner"];
+    assert_eq!(horner["source"], Json::Null, "{j}");
+    assert_eq!(horner["wasm"]["bytes"], horner_wasm(false).len(), "{j}");
+    let imports: Vec<String> = horner["wasm"]["imports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            format!(
+                "{} {} {}",
+                i["module"].as_str().unwrap(),
+                i["name"].as_str().unwrap(),
+                i["type"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        imports,
+        [
+            "helmsman/v1/in start () -> (i32)",
+            "helmsman/v1/out horn (i32) -> ()"
+        ],
+        "{j}"
+    );
+    // Signed off the box and imported: a proposal carrying the binary.
+    exported.sign(&publisher());
+    let r = import(&b, &exported.encode());
+    assert_eq!(r.status, 201, "{r:?}");
+    let p = r.json();
+    assert_eq!(p["modules"], json!(["conveyor", "horner"]), "{p}");
+    assert_eq!(p["snapshot"], json!(id), "the same content, the same id: {p}");
+    assert_eq!(
+        p["base"],
+        json!(running().id().to_string()),
+        "what the box runs: {p}"
+    );
 }

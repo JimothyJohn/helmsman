@@ -47,7 +47,8 @@ use crate::link::{Finished, LinkSet};
 use crate::manifest::ModuleDir;
 use crate::record::{RecordTap, Recorder};
 use crate::spec::Defaults;
-use crate::store::ChangeSet;
+use crate::store::{ChangeSet, Code};
+use crate::wasm::Limits;
 use crate::{Module, Runtime, SignalTable};
 
 /// What a replay or an apply needs to know about the box that does not
@@ -65,27 +66,33 @@ pub struct Plant {
     pub record: Option<RecordTap>,
 }
 
-/// Every module of `cs`, compiled and checked against its manifest, in
-/// name order: what the box would run.
+/// Every module of `cs`, compiled (ST) or loaded under the default
+/// [`Limits`] (WASM) and checked against its manifest, in name order: what
+/// the box would run.
 ///
 /// # Errors
-/// Every module that does not parse, compile or match its manifest.
+/// Every module that does not parse, compile, load or match its manifest.
 pub fn compile_set(cs: &ChangeSet, d: &Defaults) -> Result<Vec<Module>, Vec<String>> {
     let mut out = Vec::new();
     let mut errs = Vec::new();
     for (name, f) in &cs.modules {
-        let built = ModuleDir::from_text(Path::new(name), &f.manifest, f.source.clone(), d).and_then(|md| {
-            let sizes = ImageSizes {
-                i: md.spec.i.len,
-                q: md.spec.q.len,
-                m: md.spec.m,
-            };
-            let program = compile(&md.source, sizes).map_err(|diags| {
-                let lines: Vec<String> = diags.iter().map(|d| format!("{name}: {d}")).collect();
-                lines.join("; ")
-            })?;
-            md.module(program)
-        });
+        let dir = Path::new(name);
+        let built = match &f.code {
+            Code::Wasm(bytes) => ModuleDir::from_wasm(dir, &f.manifest, bytes.clone(), d)
+                .and_then(|md| md.wasm_module(Limits::default())),
+            Code::St(source) => ModuleDir::from_text(dir, &f.manifest, source.clone(), d).and_then(|md| {
+                let sizes = ImageSizes {
+                    i: md.spec.i.len,
+                    q: md.spec.q.len,
+                    m: md.spec.m,
+                };
+                let program = compile(&md.source, sizes).map_err(|diags| {
+                    let lines: Vec<String> = diags.iter().map(|d| format!("{name}: {d}")).collect();
+                    lines.join("; ")
+                })?;
+                md.module(program)
+            }),
+        };
         match built {
             Ok(m) => out.push(m),
             Err(e) => errs.push(e),
@@ -188,7 +195,7 @@ pub fn catalog_of(rt: &Runtime, table: &SignalTable, change: &ChangeSet) -> Cata
         .filter_map(|name| {
             let f = change.modules.get(name)?;
             let manifest = crate::manifest::Manifest::parse(&f.manifest).ok();
-            ModuleInfo::of(rt, name, origin.clone(), f.source.clone(), manifest)
+            ModuleInfo::of(rt, name, origin.clone(), f.code.shown(), manifest)
         })
         .collect();
     let map = change

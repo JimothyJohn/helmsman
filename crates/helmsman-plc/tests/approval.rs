@@ -95,7 +95,7 @@ fn running() -> ChangeSet {
             "conveyor".to_string(),
             ModuleFiles {
                 manifest: MANIFEST.into(),
-                source: SOURCE.into(),
+                code: SOURCE.into(),
             },
         )]),
         io_map: Some(MAP.into()),
@@ -879,4 +879,263 @@ fn without_a_store_nothing_is_applied() {
     assert_eq!(r.status, 409, "{r:?}");
     assert!(r.error().contains("no store"), "{r:?}");
     assert_eq!(b.speed(), 1.5);
+}
+
+// ---- WASM modules ---------------------------------------------------------------
+
+/// `conveyor` compiled to WASM: the lamp lights at a lower speed than
+/// [`SOURCE`] (a logic change), and with `horn` it drives the horn too.
+/// A trailing custom section of every byte value: no UTF-8 anywhere.
+fn conveyor_wasm(horn: bool) -> Vec<u8> {
+    let (import, call) = if horn {
+        (
+            r#"(import "helmsman/v1/out" "horn" (func $horn (param i32)))"#,
+            "(call $horn (call $start))",
+        )
+    } else {
+        ("", "")
+    };
+    let mut b = wat::parse_str(format!(
+        r#"(module
+             (import "helmsman/v1/in" "start" (func $start (result i32)))
+             (import "helmsman/v1/in" "speed" (func $speed (result f64)))
+             (import "helmsman/v1/out" "lamp" (func $lamp (param i32)))
+             {import}
+             (func (export "scan")
+               (call $lamp (i32.and (call $start) (f64.gt (call $speed) (f64.const 0.25))))
+               {call}))"#
+    ))
+    .unwrap();
+    b.extend_from_slice(&[0, 0x82, 0x02, 1, b'x']);
+    b.extend(0..=255u8);
+    b
+}
+
+fn b64(b: &[u8]) -> String {
+    helmsman_plc::api::photo::base64(b)
+}
+
+fn stored(b: &Bench, id: &str) -> ChangeSet {
+    Store::open(b.store.as_ref().unwrap())
+        .unwrap()
+        .get(&helmsman_plc::store::SnapshotId::parse(id).unwrap())
+        .unwrap()
+}
+
+#[test]
+fn a_wasm_module_is_proposed_approved_rolled_back_and_restored_byte_identical() {
+    let b = Bench::new();
+    let first = b.head().unwrap();
+    let wasm = conveyor_wasm(false);
+    let (id, d) = b.propose(&json!({ "kind": "module", "manifest": MANIFEST, "wasm": b64(&wasm) }));
+    // The API shows what the binary imports, never a source.
+    assert_eq!(d["source"], Json::Null, "{d}");
+    assert_eq!(d["wasm"]["bytes"], wasm.len(), "{d}");
+    assert_eq!(d["wasm"]["abi"], "helmsman/v1", "{d}");
+    let imports: Vec<String> = d["wasm"]["imports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            format!(
+                "{} {}",
+                i["module"].as_str().unwrap(),
+                i["name"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        imports,
+        [
+            "helmsman/v1/in start",
+            "helmsman/v1/in speed",
+            "helmsman/v1/out lamp"
+        ],
+        "{d}"
+    );
+    assert_eq!(d["diff"]["modules"][0]["source"], true, "{d}");
+    // The same policy as an ST program change: logic, a replay first.
+    assert_eq!(d["approval"]["tier"], "logic", "{d}");
+    assert_eq!(b.apply(id, "operator", OPERATOR, None).status, 403);
+    assert_eq!(b.apply(id, "engineer", ENGINEER, None).status, 428);
+    let rep = b.replay(&format!("/api/proposals/{id}"));
+    let r = b.apply(id, "engineer", ENGINEER, Some(rep));
+    assert_eq!(r.status, 200, "{r:?}");
+    let applied = b.head().unwrap();
+    assert_eq!(r.json()["snapshot"], json!(applied));
+    assert_eq!(
+        stored(&b, &applied).modules["conveyor"].code.wasm(),
+        Some(wasm.as_slice())
+    );
+    let module = get(b.addr, "/api/modules/conveyor").json();
+    let note = module["source"].as_str().unwrap();
+    assert!(note.starts_with("(* WASM module (helmsman/v1)"), "{module}");
+    assert_eq!(module["ports"].as_array().unwrap().len(), 3, "{module}");
+    assert_eq!(
+        module["stats"]["scans"].as_u64().map(|n| n > 0),
+        Some(true),
+        "{module}"
+    );
+    wait("the WASM module lighting the lamp", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
+    // Its snapshot as JSON: imports, not bytes.
+    let snap = get(b.addr, &format!("/api/snapshots/{applied}")).json();
+    assert_eq!(snap["modules"]["conveyor"]["source"], Json::Null, "{snap}");
+    assert_eq!(
+        snap["modules"]["conveyor"]["wasm"]["imports"][2]["type"],
+        "(i32) -> ()"
+    );
+
+    // Back to ST, through the same policy.
+    let path = format!("/api/snapshots/{first}/rollback");
+    assert_eq!(
+        post(b.addr, &path, &approve_body("operator", OPERATOR, None)).status,
+        403
+    );
+    let back = b.replay(&format!("/api/snapshots/{first}"));
+    let r = post(b.addr, &path, &approve_body("engineer", ENGINEER, Some(back)));
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(b.head().unwrap(), first);
+    assert_eq!(get(b.addr, "/api/modules/conveyor").json()["source"], SOURCE);
+
+    // And forward to the WASM snapshot again: the same bytes.
+    let path = format!("/api/snapshots/{applied}/rollback");
+    let again = b.replay(&format!("/api/snapshots/{applied}"));
+    let r = post(b.addr, &path, &approve_body("engineer", ENGINEER, Some(again)));
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(b.head().unwrap(), applied);
+    assert_eq!(
+        stored(&b, &applied).modules["conveyor"].code.wasm(),
+        Some(wasm.as_slice())
+    );
+    assert!(
+        get(b.addr, "/api/modules/conveyor").json()["source"]
+            .as_str()
+            .unwrap()
+            .starts_with("(* WASM module")
+    );
+    // A param proposal on a WASM module keeps its binary.
+    let param = b.param(0.5);
+    let r = b.apply(param, "operator", OPERATOR, None);
+    assert_eq!(r.status, 200, "{r:?}");
+    let now = stored(&b, r.json()["snapshot"].as_str().unwrap());
+    assert_eq!(now.modules["conveyor"].code.wasm(), Some(wasm.as_slice()));
+    assert_eq!(b.entries(), 5, "initial, apply, rollback, rollback, param");
+    assert_audit_complete(&b);
+}
+
+#[test]
+fn a_wasm_module_cannot_understate_what_it_drives() {
+    let b = Bench::new();
+    let head = b.head();
+    let refused = |body: Json| {
+        let r = post(b.addr, "/api/proposals", &body);
+        assert_eq!(r.status, 422, "{r:?}");
+        r.json()
+    };
+    // The binary drives the horn; the manifest says only the lamp.
+    let horn = b64(&conveyor_wasm(true));
+    let j = refused(json!({ "kind": "module", "manifest": MANIFEST, "wasm": horn }));
+    assert_eq!(j["error"], "manifest does not match the program", "{j}");
+    assert!(j["problems"].to_string().to_lowercase().contains("horn"), "{j}");
+    // Declared, it is output-affecting.
+    let declared = MANIFEST.replace("drives   lamp", "drives   lamp horn");
+    let (_, d) = b.propose(&json!({ "kind": "module", "manifest": declared, "wasm": horn }));
+    assert_eq!(d["approval"]["tier"], "output-affecting", "{d}");
+    // A watch module drives nothing, whatever it is written in.
+    let j = refused(json!({ "kind": "module", "manifest": declared, "wasm": horn, "watch": true }));
+    assert!(j["error"].as_str().unwrap().contains("watch"), "{j}");
+    // Windows would hide a %Q a WASM module cannot have.
+    let windowed = format!("{MANIFEST}q 0+1\n");
+    let j = refused(json!({ "kind": "module", "manifest": windowed, "wasm": b64(&conveyor_wasm(false)) }));
+    assert!(j["problems"].to_string().contains("no i, q or m windows"), "{j}");
+    // Not WASM, or WASM that reaches past the interface.
+    let j = refused(
+        json!({ "kind": "module", "manifest": MANIFEST, "wasm": b64(b"PROGRAM conveyor END_PROGRAM") }),
+    );
+    assert_eq!(j["error"], "wasm does not load", "{j}");
+    let wasi = wat::parse_str(
+        r#"(module (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))
+                   (func (export "scan")))"#,
+    )
+    .unwrap();
+    let j = refused(json!({ "kind": "module", "manifest": MANIFEST, "wasm": b64(&wasi) }));
+    assert!(
+        j["problems"]
+            .to_string()
+            .contains("not part of the helmsman/v1 interface"),
+        "{j}"
+    );
+    assert_eq!(b.head(), head, "nothing applied");
+}
+
+#[test]
+fn malformed_wasm_proposals_are_refused() {
+    let b = Bench::new();
+    let wasm = b64(&conveyor_wasm(false));
+    let bad = |body: Json, status: u16| {
+        let r = post(b.addr, "/api/proposals", &body);
+        assert_eq!(r.status, status, "{body}: {r:?}");
+        r.json()
+    };
+    let j = bad(
+        json!({ "kind": "module", "manifest": MANIFEST, "source": SOURCE, "wasm": wasm }),
+        400,
+    );
+    assert!(j["error"].as_str().unwrap().contains("not both"), "{j}");
+    bad(json!({ "kind": "module", "manifest": MANIFEST }), 400);
+    bad(json!({ "kind": "module", "wasm": wasm }), 400);
+    // One binary, one spelling: unpadded, URL-safe, wrapped or
+    // whitespace-padded base64 is refused, as is anything else.
+    for spelled in [
+        wasm.trim_end_matches('=').to_string(),
+        wasm.replace('+', "-").replace('/', "_"),
+        format!("{}\n{}", &wasm[..8], &wasm[8..]),
+        format!(" {wasm}"),
+        format!("{wasm}===="),
+        "!!!!".to_string(),
+    ] {
+        if spelled == wasm {
+            continue;
+        }
+        let j = bad(
+            json!({ "kind": "module", "manifest": MANIFEST, "wasm": spelled }),
+            400,
+        );
+        assert!(j["error"].as_str().unwrap().contains("base64"), "{j}");
+    }
+    bad(
+        json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 2.0, "wasm": wasm }),
+        400,
+    );
+    bad(json!({ "kind": "io_map", "text": MAP, "wasm": wasm }), 400);
+    assert_eq!(get(b.addr, "/api/proposals").json(), json!([]), "nothing stored");
+}
+
+#[test]
+fn a_wasm_proposal_over_the_file_cap_is_refused_whatever_the_body_limit() {
+    // Over HTTP the default body limit (1 MiB) refuses it first; the
+    // proposal check holds the cap on its own, for any limit.
+    let cap = usize::try_from(helmsman_plc::manifest::MAX_FILE).unwrap();
+    let check = |len: usize| {
+        let new: helmsman_plc::api::proposal::New = serde_json::from_value(
+            json!({ "kind": "module", "manifest": MANIFEST, "wasm": b64(&vec![0; len]) }),
+        )
+        .unwrap();
+        helmsman_plc::api::proposal::check(&new, &Catalog::default(), 16, Some(&running()))
+    };
+    let (status, j) = check(cap + 1).unwrap_err();
+    assert_eq!(status, 422);
+    assert_eq!(
+        j["error"], "manifest or wasm larger than a module file may be",
+        "{j}"
+    );
+    // At the cap it is size-checked through, and refused as not WASM.
+    let (status, j) = check(cap).unwrap_err();
+    assert_eq!(
+        (status, j["error"].as_str()),
+        (422, Some("wasm does not load")),
+        "{j}"
+    );
 }
