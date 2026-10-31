@@ -387,6 +387,37 @@ fn the_trend_records_chosen_signals_in_a_bounded_window() {
 
 // ---- Claude: the request ----------------------------------------------
 
+/// A real answer (claude-sonnet-5-5 through the local proxy, 2026-10-31)
+/// to this request's shape, asked "Write a start/stop latch with a 2 s
+/// run-on timer." about the blink example: its program loads and runs.
+const RECORDED: &str = include_str!("fixtures/claude-answer.sse");
+
+#[test]
+fn a_recorded_answer_loads_compiles_and_runs() {
+    let a = feed(RECORDED, &[]);
+    assert_eq!(a.phase, Phase::Done);
+    assert_eq!(a.model.as_deref(), Some("claude-sonnet-5-5"));
+    let program = a.program().expect("a program to load");
+    let mut s = Session::new(&program);
+    assert_eq!(s.diag_lines(), Vec::<String>::new());
+    let ins: Vec<_> = s.inputs().map(|p| (p.name.clone(), p.widget)).collect();
+    assert_eq!(
+        ins,
+        [
+            ("START".to_string(), Some(Widget::Push)),
+            ("STOP".to_string(), Some(Widget::Push))
+        ]
+    );
+    s.set_input("start", b(true));
+    s.step();
+    s.set_input("start", b(false));
+    s.set_input("stop", b(true));
+    scans(&mut s, 150);
+    assert_eq!(s.value("motor"), Some(b(true)), "still running on at 1.5 s");
+    scans(&mut s, 60);
+    assert_eq!(s.value("motor"), Some(b(false)), "off after 2 s");
+}
+
 fn ctx<'a>(source: &'a str, diags: &'a [String]) -> Context<'a> {
     Context {
         question: "Make it blink faster",

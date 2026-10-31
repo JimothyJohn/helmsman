@@ -69,8 +69,8 @@ Three directions of traffic, three different rules:
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`). | built |
 | `helmsman-graph` | Node-graph model and scan simulator behind the canvas's lab editor. | built (lab tool) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
-| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. | built |
-| `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame) and the lab editor over `helmsman-graph`. | built |
+| `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
+| `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame), the public ST playground (`?playground`, docs/playground/: edit, run against virtual I/O, ask Claude with the visitor's key) and the lab editor over `helmsman-graph`. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../helmsman-relay`). The WASM module host
@@ -1371,6 +1371,72 @@ in `tests/site.rs`, `site_tests.rs`).
   the beacon's), every row a link to `http://ADDR/` built only from a
   parsed IPv4:port. Unreachable, silent and conflicting boxes say so.
 
+## ST playground (`playground`, built)
+
+The public demo: the canvas in a mode of its own (`?playground`, or the
+page `scripts/build-playground.sh` builds into `docs/playground/`, which
+GitHub Pages serves from master as /helmsman/playground/). No box, no
+server: everything runs in the page (`playground.rs`, `playground_view.rs`,
+`claude.rs` in the canvas; contracts in `playground_tests.rs`).
+
+- **Editor → program.** A multiline ST editor with line numbers; it
+  compiles 0.35 s after the last keystroke with `helmsman_iec::compile`
+  (image: 8 bytes of `%I` and `%Q`). Diagnostics are drawn on their line
+  (dark red ground, the column's word underlined, the line number red) and
+  listed under the editor. A source that does not compile leaves the last
+  good program running. Four starter examples: blink (TON), start/stop
+  latch (located), counter (CTU), traffic light (CASE + TON).
+- **Run / Stop / Step**, scan period 1-1000 ms, Restart (cold). The
+  program is a `helmsman_iec::Program` scanned directly on the page's
+  clock (at most 500 scans a frame); the last scan of each frame is
+  traced for the diagram. A fault stops it; Run or Step restarts it cold.
+  Loading an example or Claude's code compiles it and leaves it stopped.
+- **Virtual I/O** from the program itself: each `VAR_INPUT` a control
+  (BOOL: a push button when named like start/stop/reset/pulse, else a
+  switch; integers: slider and field in the type's range; REAL: field;
+  TIME: ms slider), each `VAR_OUTPUT` a lamp or readout; `AT %IXn.m` /
+  `%QXn.m` bits and direct `%IX`/`%QX` addresses in the code likewise. A
+  value outside its type's range never reaches the program. A trend of up
+  to six chosen signals over the last 10 s.
+- **The live diagram and "on because"** are the live ST view's
+  (`st_view::Viewer`): tapping an output opens its explanation.
+- **Ask Claude.** A panel that calls the Messages API from the page:
+  `claude-sonnet-5-5` by default (Opus 5.5 and Haiku 5.5 selectable),
+  streamed, API version `2026-10-21`, `max_tokens` 16000, effort medium,
+  the fixed system prompt (the playground's dialect: what helmsman-iec
+  supports and does not, how ports and `%IX`/`%QX` become I/O, "answer
+  with one complete program in a ```st block") cached with
+  `cache_control`, and `fallbacks: "default"` (beta
+  `server-side-fallback-2026-07-01`; not for Haiku). Each question
+  carries the editor's source and compile errors inside
+  `<current_program>`/`<compile_errors>` tags the source cannot close,
+  plus the last six exchanges. "Use this code" loads the last closed
+  fenced block holding a whole `PROGRAM … END_PROGRAM` (ST-tagged first;
+  64 KiB at most; no control characters) and never runs it.
+- **The key.** Pasted into a password field, held in page memory; an
+  explicit "Remember on this device" (off by default, with a warning)
+  keeps it in `localStorage`, and unticking or Forget removes it. It goes
+  only into the `x-api-key` header of a request to
+  `https://api.anthropic.com/v1/messages` with
+  `anthropic-dangerous-direct-browser-access: true`; never into a URL, a
+  body or a log (`ApiKey`'s and the request's `Debug` redact it). The
+  page's CSP allows `connect-src 'self' https://api.anthropic.com` only.
+- **Local proxy** (`scripts/playground-serve.sh`): the playground built
+  for `/`, served on 127.0.0.1 by helmsman-agent's `playground-proxy`
+  example, whose `POST /proxy/v1/messages` adds `x-api-key` from
+  `ANTHROPIC_API_KEY` and streams the answer back (the agent crate's
+  rustls client, no new crate). The page finds it (`GET /proxy/health`,
+  asked only when served from localhost) and hides the key field. It
+  requires its own `Host`, a `x-helmsman-playground: 1` header (forcing a
+  preflight it never grants), a same-origin `Origin` when one is sent,
+  1 MiB bodies; it passes on only `anthropic-version` and `anthropic-beta`
+  and serves files only from its directory.
+- **Publishing.** The built page, loader and wasm (wasm-opt `-Oz` through
+  trunk, LTO and `opt-level=s` for this build only: 4.7 MB, 1.9 MB
+  gzipped) are committed under `docs/playground/`; rebuild with
+  `make playground` after a canvas change. Live once dev is merged to
+  master.
+
 ## Trust boundaries
 
 | boundary | what crosses | enforced by | status |
@@ -1386,6 +1452,7 @@ in `tests/site.rs`, `site_tests.rs`).
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) and `local-accounts` (per-person logins that replace the PINs once an accounts file exists; the audit names the person) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
+| playground visitor ↔ Claude | the visitor's own key, program and question | the key only in `x-api-key` to api.anthropic.com (redacted `Debug`, page CSP `connect-src` to that host and self), memory unless "remember" is ticked; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run; or the local proxy holds the key | built (`playground`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
 | bundle ↔ box | modules, params, maps | signature + manifest checked by the host; AI review can only refuse | built: `bundle-format` (Ed25519 signatures against the box's trusted publishers, capability manifest held to the compiled modules, import only as a proposal through the approval policy); AI review planned (`marketplace`) |
 

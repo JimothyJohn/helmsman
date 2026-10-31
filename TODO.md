@@ -559,6 +559,26 @@
   id: opcua-bind-fatal
   answer: fatal, like the API (recommended, built)
 
+- [ ] **Playground: commit the built wasm into docs/, or deploy Pages from a workflow?** The public ST playground (feat/playground) is the canvas built for the browser; GitHub Pages serves master's docs/ as is, so the built page, loader and wasm are committed under docs/playground/ (4.7 MB wasm, 1.9 MB gzipped, after LTO + wasm-opt). Every canvas change that should reach the public page means `make playground` and another ~4.7 MB blob in git history (the file name is content-hashed, so unchanged code rebuilds to the same file). A Pages workflow (build with trunk in Actions, deploy the artifact) keeps binaries out of git but is a deploy-chain change and switches Pages from "deploy from branch" to "GitHub Actions". Built: committed assets.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: how the public playground gets rebuilt and how big the repo grows
+  options: commit the built assets, rebuild by hand (built) | Pages from an Actions workflow on master | a gh-pages branch the build pushes to
+  est: 2h
+  difficulty: low
+  id: playground-publish
+
+- [ ] **Playground: is the visitor's own API key in the browser OK on a public page?** "Ask Claude" calls the Messages API straight from the page with the key the visitor pastes (`anthropic-dangerous-direct-browser-access: true`). It stays in page memory; an explicit "Remember on this device" (off by default, with a warning) keeps it in localStorage. It goes only in the `x-api-key` header to api.anthropic.com (the page's CSP allows no other host). Risks: any script that ever runs on jimothyjohn.github.io can read a remembered key (the site has no third-party scripts today); a visitor's key pays for their own questions. Alternatives: memory only (no remember box), or no direct calls at all and a hosted proxy (the relay) with per-IP limits on your credits.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether the public page keeps direct browser calls and the remember option
+  options: visitor's key, memory by default, opt-in remember (built) | visitor's key, memory only | no key in the page: a hosted proxy on your credits, rate limited
+  est: 1h
+  difficulty: low
+  id: playground-key
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -753,6 +773,12 @@
   notes: GitHub Pages builds from master/docs, so nothing goes live until Nick's own dev → master merge; don't change the Pages source or add a deploy workflow without asking. Helmsmand brand guide is here bt that should be in another corktree already: https://claude.ai/artifact/WB1uKtP1NRHHfGoWw95tBt#page-dcb81aee8d83
   notes: done 2026-10-30. docs/brand/index.html reproduces all eight canvas boards with computed WCAG ratios; mark SVGs are helmsman-mark-{black,yellow,white}.svg (full, 32 px and up) plus helmsman-mark-20-* and helmsman-mark-16-* (the board's two heavier small-size cuts). The pages are hand-maintained static HTML, no generator.
 
+- [x] **Public ST playground** — a live demo anyone can try on the web: write simple ST, play with I/O, ask Claude with an API key field (default Sonnet).
+  result: `?playground` and docs/playground/ (Pages, from master): ST editor with inline diagnostics and four examples, Run/Stop/Step and scan period, virtual I/O from the program's ports and %IX/%QX bits, a trend, the live diagram with "on because", and an Ask Claude panel (visitor's key, page memory, direct to api.anthropic.com; or `make playground-serve` with a local proxy that holds the key)
+  est: 1d
+  difficulty: med
+  id: playground
+  notes: done 2026-10-31 on feat/playground. Live only after Nick merges dev → master. Rebuild the committed page with `make playground` after canvas changes. Open: playground-publish, playground-key.
 
 ## Product vision (interview 2026-10-29)
 

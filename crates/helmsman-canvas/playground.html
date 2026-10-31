@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Helmsman ST playground</title>
+    <meta name="description" content="Write IEC 61131-3 Structured Text, run it in your browser against virtual I/O, and see why each output is on. Helmsman Factory Automation.">
+    <!-- Scripts and the wasm from this site only; the network only to this
+         site and the Claude API (the visitor's key goes nowhere else). -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.anthropic.com; base-uri 'none'; form-action 'none'; object-src 'none'">
+    <meta name="referrer" content="no-referrer">
+    <link data-trunk rel="copy-file" href="../../docs/brand/helmsman-mark-16-yellow.svg">
+    <link rel="icon" type="image/svg+xml" href="helmsman-mark-16-yellow.svg">
+    <!-- trunk builds the crate to wasm and injects the loader here -->
+    <link data-trunk rel="rust" data-wasm-opt="z">
+    <style>
+        html, body { margin: 0; height: 100%; overflow: hidden; background: #141414; }
+        canvas { display: block; width: 100%; height: 100%; position: relative; }
+        #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+                   color: #8C8C8C; font: 15px ui-monospace, Menlo, Consolas, monospace; margin: 0; }
+    </style>
+</head>
+<body>
+    <p id="loading">Loading the Helmsman ST playground…</p>
+    <noscript><p style="color:#fff;font-family:sans-serif;padding:16px">The playground runs in your browser and needs JavaScript and WebAssembly.</p></noscript>
+    <canvas id="canvas" data-mode="playground"></canvas>
+</body>
+</html>

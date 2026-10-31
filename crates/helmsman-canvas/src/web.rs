@@ -242,11 +242,16 @@ impl ClaudeLink {
         std::mem::take(&mut *self.inbox.borrow_mut())
     }
 
-    /// Asks the page's origin whether the local proxy is there.
+    /// Asks the page's origin whether the local proxy is there; only a
+    /// page served from this machine can have one (a public host is not
+    /// even asked).
     pub fn check_proxy(&mut self, ctx: &egui::Context) {
+        let local = web_sys::window()
+            .and_then(|w| w.location().hostname().ok())
+            .is_some_and(|h| matches!(h.as_str(), "127.0.0.1" | "localhost" | "[::1]"));
         let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
-            let yes = get(PROXY_HEALTH).await.is_ok_and(|b| b.trim() == PROXY_HELLO);
+            let yes = local && get(PROXY_HEALTH).await.is_ok_and(|b| b.trim() == PROXY_HELLO);
             inbox.borrow_mut().push(Incoming::Proxy(yes));
             ctx.request_repaint();
         });
