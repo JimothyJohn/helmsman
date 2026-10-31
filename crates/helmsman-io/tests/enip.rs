@@ -725,6 +725,11 @@ fn links_and_the_adapter_share_the_boxs_one_io_port() {
             assert!(Instant::now() < deadline, "link {i} never read its DI-09");
             std::thread::sleep(Duration::from_millis(5));
         }
+        // Inputs can arrive before the link's first O->T packet does.
+        while s.o_to_t_sources().is_empty() {
+            assert!(Instant::now() < deadline, "link {i} never sent O->T");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert_eq!(s.o_to_t_sources(), vec![ep.local_addr()], "link {i}");
     }
     assert_eq!(ep.stats().wrong_peer, 0);
