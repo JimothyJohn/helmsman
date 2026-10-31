@@ -558,6 +558,24 @@ impl App {
                             close = true;
                         }
                     }
+                    // The box's HTTPS certificate, to compare with the
+                    // browser's and the box's startup line (`box-https`).
+                    let policy = self.review.as_ref().and_then(|r| r.state.policy.as_ref());
+                    if let Some(fp) = policy.and_then(|p| p["transport"]["fingerprint"].as_str()) {
+                        ui.separator();
+                        let (a, b) = fp.split_at(if fp.is_char_boundary(48) { 48 } else { fp.len() });
+                        let l = ui
+                            .label(
+                                RichText::new(format!("HTTPS certificate SHA-256\n{a}\n{b}"))
+                                    .small()
+                                    .monospace()
+                                    .color(STEEL),
+                            )
+                            .on_hover_text(
+                                "the browser shows this page's certificate fingerprint too: they must match",
+                            );
+                        hits.push(("tls fingerprint".to_string(), l.rect));
+                    }
                 });
             });
         // A click outside closes it, except on ⋯ itself (which toggles it).

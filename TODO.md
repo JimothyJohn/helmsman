@@ -899,7 +899,7 @@
   id: license-split
   answer: helmsman MIT, relay source-available (BSL or similar)
 
-- [ ] **HTTPS on the box's own web UI?** The box serves its API and canvas over plain HTTP; sign-in uses an `HttpOnly; SameSite=Strict` session cookie, without the `Secure` flag because the page isn't HTTPS. On a flat plant LAN anyone who can sniff traffic can lift a session (1 h max, 15 min idle). Options: a self-signed certificate made at first boot, with its fingerprint shown on the box's screen for the browser to trust once; a local CA you install on plant PCs; or stay HTTP on the LAN and loopback-only by default (`canvas-lan-default`), which is what's built.
+- [x] **HTTPS on the box's own web UI?** The box serves its API and canvas over plain HTTP; sign-in uses an `HttpOnly; SameSite=Strict` session cookie, without the `Secure` flag because the page isn't HTTPS. On a flat plant LAN anyone who can sniff traffic can lift a session (1 h max, 15 min idle). Options: a self-signed certificate made at first boot, with its fingerprint shown on the box's screen for the browser to trust once; a local CA you install on plant PCs; or stay HTTP on the LAN and loopback-only by default (`canvas-lan-default`), which is what's built.
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -1024,6 +1024,17 @@
   est: 30m
   difficulty: low
   id: seed-deploys
+
+- [ ] **HTTPS box: plain HTTP from the LAN refused, and a certificate without the box's IP: OK?** `box-https` (built) serves TLS on the API's port. Plain HTTP is served only from the box's own host (loopback or its own address: local scripts, the agent, the deploy script's curl, an SSH tunnel). From the LAN, a GET is redirected to https:// and anything else, `POST /mcp` from an engineer's MCP client included, is 403. The certificate names `localhost`, the host name (and NAME.local), 127.0.0.1 and ::1, not the LAN IP, because a bind of 0.0.0.0 doesn't say which address that is. A browser asks once either way. A strict client reaching the box by IP (an MCP client with the cert in `NODE_EXTRA_CA_CERTS`) fails the name check, and one using the host name passes. Built: as described.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether LAN scripts and MCP clients must use https://<box-name>, or the box bends for them
+  options: as built: HTTPS by name from the LAN, plain HTTP from the box itself (recommended) | a --tls-name NAME/IP flag adding names to the certificate (a new cert, so a new fingerprint) | also serve plain HTTP from the LAN to a bearer-token request (no cookie) for scripts
+  est: 2h
+  difficulty: low
+  depends: box-https
+  id: box-https-lan-clients
 
 ## Tasks
 

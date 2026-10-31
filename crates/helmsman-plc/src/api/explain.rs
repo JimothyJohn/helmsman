@@ -25,7 +25,6 @@
 //! event: error        {"kind", "message", "retryable"}
 //! ```
 
-use std::net::TcpStream;
 use std::time::Duration;
 
 use helmsman_agent::tools::{self, READ_ONLY};
@@ -38,7 +37,7 @@ use serde_json::{Value as Json, json};
 
 use super::catalog::Catalog;
 use super::chat::{Chat, event};
-use super::http::{self, Response};
+use super::http::{self, Conn, Response};
 use crate::Sample;
 use helmsman_io::Dir;
 
@@ -250,7 +249,7 @@ fn skipped(b: &Blocked) -> Json {
 
 /// Runs one explanation on `stream`: the box's own answer first, then the
 /// agent's, streamed. A client that goes away does not stop the turn.
-pub fn serve(chat: &Chat, stream: &mut TcpStream, job: Job) {
+pub fn serve(chat: &Chat, stream: &mut Conn, job: Job) {
     let Some(_slot) = chat.slot() else {
         let _ = http::respond(
             stream,
