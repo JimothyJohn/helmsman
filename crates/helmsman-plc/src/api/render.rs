@@ -65,6 +65,7 @@ const fn fault_kind(k: FaultKind) -> &'static str {
         FaultKind::Watchdog => "watchdog",
         FaultKind::OutputRange => "output_range",
         FaultKind::Trap => "trap",
+        FaultKind::BadParam(_) => "bad_param",
     }
 }
 

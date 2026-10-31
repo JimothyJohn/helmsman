@@ -180,7 +180,7 @@ impl App {
                 .as_mut()
                 .filter(|b| b.has_projects())
                 .map(|b| b as &mut dyn Workspace),
-            Source::Sim => None,
+            Source::Sim => self.sim.as_mut().map(|s| s as &mut dyn Workspace),
         }
     }
 
@@ -399,8 +399,13 @@ impl App {
     }
 
     /// The open project's name with its dirty marker, Save and Deploy;
-    /// disabled, with why on hover, when this page may not write.
+    /// disabled, with why on hover, when this page may not write. Not on
+    /// a phone's width.
     fn project_controls(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        // A phone is the Monitor's: no room, and nothing to edit there.
+        if ui.ctx().content_rect().width() < NARROW {
+            return;
+        }
         let Some(w) = self.workspace() else { return };
         let dirty = w.dirty();
         let write = w.writable();

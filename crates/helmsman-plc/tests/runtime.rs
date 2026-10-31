@@ -186,6 +186,56 @@ fn a_fault_zeroes_only_that_modules_outputs_and_stops_only_it() {
     assert_eq!(count(&rt, "good"), 11);
 }
 
+/// A stack light whose blink PERIOD is unusable faults its module (TODO.md
+/// `blink-period-zero`): the light goes safe (off) rather than steady on,
+/// the fault names the block and the parameter at the line that called
+/// it, and the other module carries on. Steady on with the same PERIOD
+/// runs.
+#[test]
+fn a_blink_pattern_with_no_period_faults_its_module_and_only_it() {
+    const LIGHT: &str = "
+PROGRAM light
+VAR b : BLINK_PATTERN; mode : INT := 2; lamp AT %QX0.0 : BOOL; END_VAR
+  lamp := TRUE;
+  b(EN := TRUE, MODE := mode, PERIOD := T#0s);
+  lamp := b.Q;
+END_PROGRAM";
+    let mut rt = Runtime::new(
+        IMAGE,
+        IMAGE,
+        vec![
+            module("light", LIGHT, 10, Window::new(0, 0), Window::new(0, 1)),
+            module("good", COUNTER, 10, Window::new(0, 0), Window::new(1, 1)),
+        ],
+    )
+    .unwrap();
+    let faults = rt.tick(ms(0), &[]);
+    assert_eq!(faults.len(), 1, "{faults:?}");
+    assert_eq!(faults[0].0, "light");
+    let f = faults[0].1;
+    assert_eq!(f.kind, FaultKind::BadParam(helmsman_iec::BadParam::BlinkPeriod));
+    assert_eq!(f.line, 5, "the call, not a line of library.st");
+    let text = f.to_string();
+    assert!(text.starts_with("line 5: BLINK_PATTERN: PERIOD"), "{text}");
+    assert_eq!(rt.outputs()[0], 0, "the lamp's window is safe (off)");
+    assert_eq!(rt.outputs()[1], 1, "good scanned in the same tick");
+    assert!(matches!(rt.status("light"), Some(Status::Faulted(_))));
+    assert_eq!(rt.status("good"), Some(Status::Running));
+
+    // MODE 1 (steady) with the same PERIOD never looks at it.
+    let steady = LIGHT.replace("mode : INT := 2", "mode : INT := 1");
+    let mut rt = Runtime::new(
+        IMAGE,
+        IMAGE,
+        vec![module("light", &steady, 10, Window::new(0, 0), Window::new(0, 1))],
+    )
+    .unwrap();
+    for t in (0..=50).step_by(10) {
+        assert_eq!(rt.tick(ms(t), &[]), none());
+        assert_eq!(rt.outputs()[0], 1, "steady on at {t} ms");
+    }
+}
+
 #[test]
 fn a_runaway_module_hits_its_watchdog_and_the_rest_carry_on() {
     let mut spin = module("spin", ENDLESS, 10, Window::new(0, 0), Window::new(0, 1));

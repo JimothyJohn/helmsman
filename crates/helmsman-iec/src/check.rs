@@ -280,6 +280,10 @@ pub enum Builtin {
     Trunc,
     /// Time since the program started (the built-in library's clock).
     Now,
+    /// Faults the scan with [`crate::interp::BadParam`]: how a built-in
+    /// library block refuses a parameter (library code only, like `__NOW`).
+    /// Typed BOOL so it can stand where a value goes; it never returns one.
+    Fault(crate::interp::BadParam),
 }
 
 /// Typed expression.
@@ -435,6 +439,10 @@ const BUILTINS: &[(&str, Builtin)] = &[
     ("ROR", Builtin::Ror),
     ("TRUNC", Builtin::Trunc),
     ("__NOW", Builtin::Now),
+    (
+        "__BAD_BLINK_PERIOD",
+        Builtin::Fault(crate::interp::BadParam::BlinkPeriod),
+    ),
 ];
 
 /// Named types before resolution.
@@ -1779,7 +1787,7 @@ impl<'a> Ck<'a> {
             self.err(a.pos, format!("{name} takes positional arguments only"));
             return false;
         }
-        if args.is_empty() && name != "__NOW" {
+        if args.is_empty() && !name.starts_with("__") {
             self.err(pos, format!("{name} needs arguments"));
             return false;
         }
@@ -1833,6 +1841,15 @@ impl<'a> Ck<'a> {
                 Some((
                     Ex::Builtin(b, Vec::new(), Ty::Time),
                     T::Known(Type::Elem(Ty::Time)),
+                ))
+            }
+            Builtin::Fault(_) => {
+                if !arity(0, args.is_empty(), self) {
+                    return None;
+                }
+                Some((
+                    Ex::Builtin(b, Vec::new(), Ty::Bool),
+                    T::Known(Type::Elem(Ty::Bool)),
                 ))
             }
             Builtin::Abs => {
