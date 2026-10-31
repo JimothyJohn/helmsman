@@ -164,7 +164,7 @@ impl Feed for PlaygroundView {
             ),
         };
         vec![Program {
-            name: self.title(),
+            name: self.program_name(),
             run,
             period_ms: Some(s.period_ms as f64),
             scans: s.scans,

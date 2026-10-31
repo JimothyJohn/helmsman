@@ -313,6 +313,16 @@ impl PlaygroundView {
         self.proj.open.clone()
     }
 
+    /// The PROGRAM running, in lower case (the Monitor's name for it);
+    /// the project's name while nothing compiled.
+    #[must_use]
+    pub fn program_name(&self) -> String {
+        self.viewer
+            .as_ref()
+            .and_then(|v| v.module.program())
+            .map_or_else(|| self.title(), |p| p.name.to_ascii_lowercase())
+    }
+
     /// Sends the typed question about the editor's program.
     pub fn ask(&mut self, ctx: &egui::Context) {
         let diags = self.session.diag_lines();
