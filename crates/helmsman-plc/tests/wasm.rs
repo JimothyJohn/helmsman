@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use helmsman_iec::{FaultKind, ImageSizes, Value as St, compile};
+use helmsman_iec::{FaultKind, ImageSizes, PortDir, Ty as StTy, Value as St, compile};
 use helmsman_io::{Binding, Dir, IoMap, Signal, Ty, Value};
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::spec::Defaults;
@@ -164,7 +164,6 @@ fn dir_module(manifest: &str, wat: &str) -> Result<Module, String> {
 fn ports_come_from_the_imports_with_their_st_types() {
     let p = load(THRESHOLD);
     let ports: Vec<_> = p.ports().into_iter().map(|p| (p.name, p.dir, p.ty)).collect();
-    use helmsman_iec::{PortDir, Ty as StTy};
     assert_eq!(
         ports,
         vec![
@@ -349,7 +348,7 @@ fn counter_and_threshold_run_on_signals() {
     set(&mut t, "start", Value::Bool(true));
     set(&mut t, "level", Value::Real(10.0));
     for k in 0..3 {
-        assert!(rt.tick_with(ms(10 * k), &[], &mut t).is_empty());
+        assert_eq!(rt.tick_with(ms(10 * k), &[], &mut t), Vec::new());
     }
     assert_eq!(cmd(&t, "count"), Some(Value::Int(3)));
     assert_eq!(cmd(&t, "alarm"), Some(Value::Bool(false)));
@@ -616,7 +615,7 @@ fn a_faulted_wasm_module_restarts_on_swap_and_st_can_replace_wasm() {
         "PROGRAM p VAR_OUTPUT lamp : BOOL; END_VAR lamp := FALSE; END_PROGRAM",
     );
     let carry = rt.swap(as_st, &mut t).unwrap();
-    assert!(carry.kept.first().is_none(), "{carry:?}");
+    assert_eq!(carry.kept, Vec::<String>::new(), "{carry:?}");
     rt.tick_with(ms(20), &[], &mut t);
     assert_eq!(cmd(&t, "lamp"), Some(Value::Bool(false)));
 }
@@ -723,4 +722,3 @@ proptest! {
         prop_assert!(w.set_input("nosuch", St::Bool(true)).is_err());
     }
 }
-

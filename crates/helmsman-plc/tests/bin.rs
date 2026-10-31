@@ -768,7 +768,9 @@ fn a_module_directory_whose_manifest_lies_is_refused_before_the_adapter_starts()
 
 #[test]
 fn a_wasm_module_directory_runs_and_one_whose_manifest_lies_is_refused() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bin-modules").join("blink-wasm");
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("bin-modules")
+        .join("blink-wasm");
     std::fs::create_dir_all(&dir).unwrap();
     let wasm = wat::parse_str(
         r#"(module (import "helmsman/v1" "now_ms" (func $now (result i64)))
@@ -777,12 +779,20 @@ fn a_wasm_module_directory_runs_and_one_whose_manifest_lies_is_refused() {
     )
     .unwrap();
     std::fs::write(dir.join("module.wasm"), &wasm).unwrap();
-    std::fs::write(dir.join("module.manifest"), "name blink\nauthor t\nscan_ms 10\nreads\ndrives\n").unwrap();
+    std::fs::write(
+        dir.join("module.manifest"),
+        "name blink\nauthor t\nscan_ms 10\nreads\ndrives\n",
+    )
+    .unwrap();
     let args = [std::ffi::OsStr::new("--module-dir"), dir.as_os_str()];
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (_plc, _, _) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
 
-    std::fs::write(dir.join("module.manifest"), "name blink\nauthor t\nscan_ms 10\nreads\ndrives lamp\n").unwrap();
+    std::fs::write(
+        dir.join("module.manifest"),
+        "name blink\nauthor t\nscan_ms 10\nreads\ndrives lamp\n",
+    )
+    .unwrap();
     let out = plc()
         .args([std::ffi::OsStr::new("--module-dir"), dir.as_os_str()])
         .args(["--encap-port", "0", "--io-port", "0"])
