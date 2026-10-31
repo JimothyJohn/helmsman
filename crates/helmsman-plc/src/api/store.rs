@@ -31,6 +31,10 @@ pub struct AuditEntry {
     pub base: Option<String>,
     /// The role whose PIN the call carried, if it carried one.
     pub role: Option<String>,
+    /// Who made the call: `api` (a request off the socket: the canvas,
+    /// the chat agent's tools, a script) or `mcp` (the MCP route, and every
+    /// box API call one of its tools made).
+    pub source: String,
 }
 
 /// The store is full; nothing was recorded.

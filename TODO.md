@@ -452,6 +452,16 @@
   difficulty: low
   id: dropin-watch-only
 
+- [ ] **MCP on the box: which credential does an engineer's Claude hold?** `POST /mcp` (feat/box-mcp) takes the box API token, the same 64 hex digits the canvas pastes and the chat agent holds, so `claude mcp add --header "Authorization: Bearer ..."` puts that token in the engineer's laptop config. It can draft, check, simulate and propose (never apply: no tool reaches apply, rollback or a PIN), and every call is audited as source `mcp`, but it cannot be revoked without re-keying the canvas too, and the audit cannot say which engineer. Also because MCP 2026-07-28 has no sessions, drafts live in one workspace shared by every MCP client of the box (handles d1, d2, ...; an hour idle drops them). Built: the box token, no new file or flag (reversible: the check is the one `handle` already makes).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether an MCP client's access can be revoked or attributed apart from the canvas
+  options: box token, shared workspace (recommended for now, built) | a separate `mcp-token` in the state dir, revocable alone | per-person tokens once local-accounts lands, workspace per person
+  est: 3h
+  difficulty: med
+  id: mcp-credential
+
 - [ ] **WASM runtime: wasmi now, per-module limits later?** The WASM module tier (feat/wasm-tier) runs on wasmi, a pure-Rust interpreter, not wasmtime as the card said. Why: fuel per scan is exact and built in, there is no JIT (no executable memory on the box, same behaviour on the Pi as in CI), 6 small crates instead of Cranelift's tree, and it is already faster than our ST interpreter (a small module's tick 0.16 µs vs 0.30 µs; a 1000-pass loop 16 µs vs 185 µs). Cost: the box binary grows about 2.1 MiB (7.9 to 10.1 MB, macOS release), and heavy number-crunching would run maybe 5-10x faster under wasmtime. Limits are fixed for every module today: 1 000 000 fuel per scan, 4 MiB of linear memory. Per-module limits would be two manifest keys (`fuel`, `memory_kib`) capped by the box policy, which makes them part of the approval tier.
   asked: 2026-10-30
   by: claude-agent
@@ -986,7 +996,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: theme-depth, canvas-web
   id: theme-engine
 
-- [ ] **MCP server on the box** — the box API as MCP tools so an engineer's own Claude / Claude Code can work on it, under the same policy and audit.
+- [x] **MCP server on the box** — the box API as MCP tools so an engineer's own Claude / Claude Code can work on it, under the same policy and audit.
   est: 2d
   difficulty: med
   depends: box-api, approval-policy

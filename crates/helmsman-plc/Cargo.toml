@@ -106,6 +106,10 @@ name = "dropins"
 required-features = ["box"]
 
 [[test]]
+name = "mcp"
+required-features = ["box"]
+
+[[test]]
 name = "wasm"
 required-features = ["wasm"]
 
