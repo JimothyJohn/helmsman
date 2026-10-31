@@ -11,6 +11,9 @@
 //!
 //! Without the `wasm` feature (the canvas) no driver loads: a map that
 //! names one is refused as naming a driver this build does not have.
+//!
+//! So is `enip-io` without helmsman-plc's `enip-io` feature, which the box
+//! build leaves out until the E1213 bench passes ([`not_in_build`]).
 
 use std::collections::BTreeMap;
 
@@ -107,14 +110,29 @@ pub fn check(bytes: &[u8]) -> Result<(), Vec<String>> {
     helmsman_io::wasm::sandbox(bytes, helmsman_io::wasm::Limits::default())
 }
 
+/// A built-in driver that `device` names but this build leaves out:
+/// `enip-io` (the EtherNet/IP Class 1 scanner) without helmsman-plc's
+/// `enip-io` feature. `None` for every other driver.
+#[must_use]
+pub fn not_in_build(device: &Device) -> Option<Error> {
+    (device.driver == helmsman_io::enip::DRIVER && !cfg!(feature = "enip-io")).then(|| {
+        Error::UnknownDriver(format!(
+            "{}: not in this build (the EtherNet/IP scanner is out of the box until \
+             the E1213 bench passes; use modbus-tcp, or build helmsman-plc with `enip-io`)",
+            device.driver
+        ))
+    })
+}
+
 /// Every device of `map` that names a WASM driver the box has not
-/// approved, one line each, whether or not a signal uses it.
+/// approved, or a driver this build leaves out ([`not_in_build`]), one
+/// line each, whether or not a signal uses it.
 #[must_use]
 pub fn unknown(map: &IoMap, drivers: &Drivers) -> Vec<String> {
     map.devices
         .iter()
-        .filter_map(|d| match guest(drivers, d) {
-            Some(Err(e)) => Some(format!("device {}: {e}", d.id)),
+        .filter_map(|d| match (not_in_build(d), guest(drivers, d)) {
+            (Some(e), _) | (None, Some(Err(e))) => Some(format!("device {}: {e}", d.id)),
             _ => None,
         })
         .collect()
@@ -143,6 +161,9 @@ impl<'a> Points<'a> {
     /// As the driver's parse; for a `wasm:` device also an unapproved
     /// driver, or one that does not load for this device.
     pub fn parse(&mut self, device: &Device, addr: &str) -> Result<PointInfo, Error> {
+        if let Some(e) = not_in_build(device) {
+            return Err(e);
+        }
         let Some(bytes) = guest(self.drivers, device) else {
             return parse_point_on(device, addr);
         };
