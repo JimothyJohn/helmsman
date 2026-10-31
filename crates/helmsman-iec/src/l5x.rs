@@ -135,6 +135,31 @@ pub struct Tag {
     pub constant: bool,
     /// Clipped to [`MAX_DESCRIPTION`] characters.
     pub description: Option<String>,
+    /// The value the export holds, from its decorated data (RM014
+    /// pp.43-46), when it has some.
+    pub data: Option<TagData>,
+}
+
+/// A tag's decorated data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagData {
+    pub value: Data,
+    /// Some value in it carries a `ForceValue` (RM014 p.46).
+    pub forced: bool,
+}
+
+/// A value in decorated form. Atomic values stay text as exported
+/// (`Value`, clipped to 64 characters); the reader of the value decides
+/// what it means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Data {
+    /// `DataValue` / `DataValueMember`: an atomic value.
+    Value(String),
+    /// `Structure` / `StructureMember`: members by name, in order.
+    Structure(Vec<(String, Data)>),
+    /// `Array` / `ArrayMember`: elements with their `Index` text
+    /// (`[0]`, `[1,2]`), in order.
+    Array(Vec<(String, Data)>),
 }
 
 /// What a routine is written in.
@@ -338,6 +363,15 @@ impl Cx {
             .child("Description")
             .map(|d| clip(&d.text().0, MAX_DESCRIPTION))
             .filter(|d| !d.is_empty());
+        let mut forced = false;
+        let mut value = None;
+        if let Some(d) = e
+            .children_named("Data")
+            .find(|d| d.attr("Format") == Some("Decorated"))
+            .and_then(|d| d.elements().next())
+        {
+            value = self.data(d, &mut forced, 0)?;
+        }
         Ok(Some(Tag {
             name,
             data_type,
@@ -347,7 +381,54 @@ impl Cx {
             external_access,
             constant: e.attr("Constant") == Some("true"),
             description,
+            data: value.map(|value| TagData { value, forced }),
         }))
+    }
+
+    /// Decorated data (RM014 pp.43-46): `DataValue`, `Structure`,
+    /// `Array` and their members and elements. Anything else is left out
+    /// (`None`); every value counts toward [`MAX_ITEMS`].
+    fn data(&mut self, e: &Element, forced: &mut bool, depth: usize) -> Result<Option<Data>, Error> {
+        self.count(e)?;
+        if depth > 8 {
+            return Ok(None);
+        }
+        *forced |= e.attr("ForceValue").is_some();
+        Ok(match e.name.as_str() {
+            "DataValue" | "DataValueMember" => e.attr("Value").map(|v| Data::Value(clip(v, 64))),
+            "Structure" | "StructureMember" => {
+                let mut members = Vec::new();
+                for m in e.elements() {
+                    let Some(n) = m.attr("Name").filter(|n| is_name(n)) else {
+                        continue;
+                    };
+                    if let Some(d) = self.data(m, forced, depth + 1)? {
+                        members.push((n.to_string(), d));
+                    }
+                }
+                Some(Data::Structure(members))
+            }
+            "Array" | "ArrayMember" => {
+                let mut elems = Vec::new();
+                for el in e.children_named("Element") {
+                    self.count(el)?;
+                    *forced |= el.attr("ForceValue").is_some();
+                    let Some(ix) = el.attr("Index").filter(|i| is_ref(i)) else {
+                        continue;
+                    };
+                    let d = match (el.attr("Value"), el.elements().next()) {
+                        (Some(v), _) => Some(Data::Value(clip(v, 64))),
+                        (None, Some(inner)) => self.data(inner, forced, depth + 1)?,
+                        (None, None) => None,
+                    };
+                    if let Some(d) = d {
+                        elems.push((ix.to_string(), d));
+                    }
+                }
+                Some(Data::Array(elems))
+            }
+            _ => None,
+        })
     }
 
     fn tags(&mut self, parent: &Element) -> Result<Vec<Tag>, Error> {
