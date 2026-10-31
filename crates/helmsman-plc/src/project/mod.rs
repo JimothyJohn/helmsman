@@ -551,7 +551,8 @@ pub fn seed(
     shape: &build::Shape,
     time_ms: i64,
 ) -> Result<Seeded, String> {
-    let projects = Projects::in_state_dir(state).map_err(|e| format!("projects in {}: {e}", state.display()))?;
+    let projects =
+        Projects::in_state_dir(state).map_err(|e| format!("projects in {}: {e}", state.display()))?;
     let store_dir = state.join("store");
     let mut store =
         crate::store::Store::open(&store_dir).map_err(|e| format!("store {}: {e}", store_dir.display()))?;
@@ -563,7 +564,10 @@ pub fn seed(
         )));
     }
     if let Some(h) = store.head().map_err(|e| e.to_string())? {
-        return Ok(Seeded::Left(format!("snapshot {} already deployed; nothing seeded", h.id)));
+        return Ok(Seeded::Left(format!(
+            "snapshot {} already deployed; nothing seeded",
+            h.id
+        )));
     }
     projects.create(name).map_err(|r| r.why)?;
     for (file, text) in files {
