@@ -216,13 +216,13 @@ impl Conn {
     fn error(&mut self, code: u32, reason: &str) {
         let mut body = Writer::new();
         body.u32(code).string(Some(reason));
-        self.frame(b"ERRF", &body.buf);
+        self.frame(*b"ERRF", &body.buf);
         self.closed = true;
     }
 
-    fn frame(&mut self, head: &[u8; 4], body: &[u8]) {
+    fn frame(&mut self, head: [u8; 4], body: &[u8]) {
         let size = u32::try_from(body.len() + 8).unwrap_or(u32::MAX);
-        self.out.extend_from_slice(head);
+        self.out.extend_from_slice(&head);
         self.out.extend_from_slice(&size.to_le_bytes());
         self.out.extend_from_slice(body);
     }
@@ -276,7 +276,7 @@ impl Conn {
             .u32(send)
             .u32(limits.max_message)
             .u32(limits.max_chunks);
-        self.frame(b"ACKF", &ack.buf);
+        self.frame(*b"ACKF", &ack.buf);
     }
 
     /// Checks and records the client's sequence number: one more than the
@@ -363,7 +363,7 @@ impl Conn {
             .u32(o.request_id)
             .raw(&w.buf);
         c.send_seq = c.send_seq.wrapping_add(1).max(1);
-        self.frame(b"OPNF", &msg.buf);
+        self.frame(*b"OPNF", &msg.buf);
     }
 
     fn msg(&mut self, chunk: u8, body: &[u8], now: Instant) {

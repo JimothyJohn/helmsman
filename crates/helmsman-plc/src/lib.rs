@@ -14,6 +14,8 @@ pub mod link;
 pub mod logic;
 pub mod manifest;
 #[cfg(feature = "box")]
+pub mod opcua;
+#[cfg(feature = "box")]
 pub mod policy;
 pub mod record;
 pub mod replay;

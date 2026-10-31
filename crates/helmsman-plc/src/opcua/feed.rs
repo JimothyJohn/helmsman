@@ -209,24 +209,24 @@ impl FeedPublisher {
         let Some((_, shape)) = &self.shape else {
             return;
         };
-        let n = table.len();
-        self.prev.resize(n, (None, false));
-        self.changed.resize(n, wall_ms);
-        let mut values = Vec::with_capacity(n);
-        let mut errors = Vec::with_capacity(n);
-        for i in 0..n {
-            let v = table.value(i);
-            let e = table.point_error(i).is_some();
-            let same = match (self.prev[i].0, v) {
-                (Some(Value::Real(a)), Some(Value::Real(b))) => a.to_bits() == b.to_bits(),
-                (a, b) => a == b,
+        let count = table.len();
+        self.prev.resize(count, (None, false));
+        self.changed.resize(count, wall_ms);
+        let mut values = Vec::with_capacity(count);
+        let mut errors = Vec::with_capacity(count);
+        for i in 0..count {
+            let value = table.value(i);
+            let refused = table.point_error(i).is_some();
+            let same = match (self.prev[i].0, value) {
+                (Some(Value::Real(was)), Some(Value::Real(is))) => was.to_bits() == is.to_bits(),
+                (was, is) => was == is,
             };
-            if !same || self.prev[i].1 != e {
+            if !same || self.prev[i].1 != refused {
                 self.changed[i] = wall_ms;
-                self.prev[i] = (v, e);
+                self.prev[i] = (value, refused);
             }
-            values.push(v);
-            errors.push(e);
+            values.push(value);
+            errors.push(refused);
         }
         self.seq += 1;
         let snap = Snapshot {

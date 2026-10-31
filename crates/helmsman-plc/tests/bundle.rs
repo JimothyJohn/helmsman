@@ -1349,6 +1349,8 @@ fn a_box_refuses_to_start_with_a_trust_store_others_can_read() {
                 "0",
                 "--io-port",
                 "0",
+                "--opcua",
+                "off",
             ])
             .output()
             .unwrap();

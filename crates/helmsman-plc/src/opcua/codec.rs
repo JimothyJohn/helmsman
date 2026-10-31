@@ -311,7 +311,7 @@ impl<'a> Reader<'a> {
     /// Skips one value of built-in type `ty` (Part 6 Table 1).
     fn skip_builtin(&mut self, ty: u8, depth: u32) -> Result<()> {
         match ty {
-            1 | 2 | 3 => {
+            1..=3 => {
                 self.take(1)?;
             }
             4 | 5 => {
@@ -628,14 +628,14 @@ impl Writer {
             Variant::QName(ns, s) => self.u8(20).qualified_name(*ns, s),
             Variant::Text(s) => self.u8(21).localized_text(Some(s)),
             Variant::StrArray(a) => {
-                self.u8(0x80 | 12).len(a.len());
+                self.u8(0x80 | 0x0C).len(a.len());
                 for s in a {
                     self.string(Some(s));
                 }
                 self
             }
             Variant::U32Array(a) => {
-                self.u8(0x80 | 7).len(a.len());
+                self.u8(0x80 | 0x07).len(a.len());
                 for n in a {
                     self.u32(*n);
                 }

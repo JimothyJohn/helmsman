@@ -46,7 +46,10 @@ fn ladder() -> PathBuf {
 }
 
 fn plc() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
+    let mut c = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"));
+    // The OPC UA server's default port is shared; tests/opcua.rs covers it.
+    c.args(["--opcua", "off"]);
+    c
 }
 
 /// A fresh, empty state directory for one PLC process.

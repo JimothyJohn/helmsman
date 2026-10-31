@@ -413,6 +413,7 @@ impl Session {
     ///
     /// # Errors
     /// The status for a service fault.
+    #[allow(clippy::too_many_arguments)] // one request's parts, and where its replies go
     pub fn service(
         &mut self,
         ctx: &Ctx,

@@ -31,6 +31,7 @@ use helmsman_plc::bundle::TrustStore;
 use helmsman_plc::calendar::{self, Source};
 use helmsman_plc::link::{LinkSet, Plan};
 use helmsman_plc::manifest::ModuleDir;
+use helmsman_plc::opcua;
 use helmsman_plc::policy::pin::{self, Gate, Pins};
 use helmsman_plc::policy::{Policy, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
@@ -68,6 +69,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
                        for the LAN), or `off`. Reads are open; anything
                        else needs the token from the state directory.
+  --opcua ADDR         read-only OPC UA server (see helmsman_plc::opcua) on
+                       ADDR (default 127.0.0.1:4840: loopback only), or `off`.
+                       Anonymous, SecurityPolicy None: nothing is signed or
+                       encrypted, so bind it to the plant LAN only.
   --relay URL          the relay the chat panel's agent talks to (POST
                        /api/chat), e.g. https://relay.example.com; without
                        it the agent is offline and /api/chat answers 503
@@ -123,6 +128,7 @@ struct Opts {
     store: Option<PathBuf>,
     emit_st: bool,
     api: Option<SocketAddr>,
+    opcua: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
     relay: Option<String>,
     relay_token: Option<PathBuf>,
@@ -175,6 +181,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         store: None,
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
+        opcua: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 4840))),
         state_dir: None,
         relay: None,
         relay_token: None,
@@ -226,6 +233,13 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     .map_err(|_| format!("--bind: not an IPv4 address: {v:?}"))?;
             }
             "--api" if v == "off" => o.api = None,
+            "--opcua" if v == "off" => o.opcua = None,
+            "--opcua" => {
+                o.opcua = Some(
+                    v.parse::<SocketAddr>()
+                        .map_err(|_| format!("--opcua: expected IP:PORT or off, got {v:?}"))?,
+                );
+            }
             "--api" => {
                 o.api = Some(
                     v.parse::<SocketAddr>()
@@ -905,6 +919,29 @@ fn start_api(
     Ok(server)
 }
 
+/// The OPC UA server on `bind`, if any, and the scan side of its feed.
+fn start_opcua(bind: Option<SocketAddr>) -> Result<(Option<opcua::Server>, Option<opcua::FeedPublisher>), String> {
+    let Some(bind) = bind else {
+        return Ok((None, None));
+    };
+    let feed = Arc::new(opcua::Feed::default());
+    let server = opcua::Server::start(opcua::Config::new(bind), Arc::clone(&feed))
+        .map_err(|e| format!("--opcua {bind}: {e} (`--opcua off` runs without it)"))?;
+    eprintln!(
+        "helmsman-plc: OPC UA on opc.tcp://{}/ (read-only, anonymous, SecurityPolicy None)",
+        server.addr()
+    );
+    if !server.addr().ip().is_loopback() {
+        eprintln!(
+            "helmsman-plc: OPC UA is reachable off this box with no signing or encryption: plant LAN only"
+        );
+    }
+    Ok((
+        Some(server),
+        Some(opcua::FeedPublisher::new(feed, opcua::PUBLISH_EVERY)),
+    ))
+}
+
 /// The chat route's relay, from `--relay` and `--relay-token`.
 fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
     let (Some(url), Some(path)) = (&o.relay, &o.relay_token) else {
@@ -1159,8 +1196,15 @@ fn run(o: &Opts) -> Result<(), String> {
     let mut publisher = server
         .as_ref()
         .map(|_| Publisher::new(Arc::clone(&live), api::PUBLISH_EVERY));
+    let (_opcua, mut feed) = start_opcua(o.opcua)?;
     let every = publisher.as_ref().map(|p| p.every);
-    let cap = |cal: Option<&Source>| [cal.map(|_| CALENDAR_TICK), every].into_iter().flatten().min();
+    let ua_every = feed.as_ref().map(|f| f.every);
+    let cap = |cal: Option<&Source>| {
+        [cal.map(|_| CALENDAR_TICK), every, ua_every]
+            .into_iter()
+            .flatten()
+            .min()
+    };
     let mut said = false;
     {
         let mut set = link_set.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1189,6 +1233,11 @@ fn run(o: &Opts) -> Result<(), String> {
             scene.wall = wall();
             if let Some(sw) = &swapper {
                 let did = sw.serve_scene(&mut rt, &mut t, Some(&mut scene));
+                if (did.modules || did.reloaded)
+                    && let Some(f) = &mut feed
+                {
+                    f.invalidate();
+                }
                 if did.modules {
                     names = rt.names().map(str::to_string).collect();
                     eprintln!(
@@ -1217,6 +1266,9 @@ fn run(o: &Opts) -> Result<(), String> {
             let faults = rt.tick_with(now, &inputs, &mut t);
             if let Some(p) = &mut publisher {
                 p.publish(now, &rt, &t);
+            }
+            if let Some(f) = &mut feed {
+                f.publish(now, sink::wall_ms(SystemTime::now()), &rt, &t);
             }
             if let Some(sk) = &mut sinks {
                 sk.observe(&t, now, sink::wall_ms(SystemTime::now()));
