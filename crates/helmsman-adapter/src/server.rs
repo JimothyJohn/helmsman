@@ -101,6 +101,23 @@ impl std::fmt::Debug for Adapter {
     }
 }
 
+/// The encapsulation port, TCP and UDP on one number. With `port` 0 the OS
+/// picks the TCP port and its UDP twin may already be someone else's, so
+/// pick again (a bounded number of times) until both bind.
+fn bind_encap(ip: Ipv4Addr, port: u16) -> io::Result<(TcpListener, UdpSocket)> {
+    const TRIES: usize = 64;
+    let mut last = None;
+    for _ in 0..if port == 0 { TRIES } else { 1 } {
+        let tcp = TcpListener::bind((ip, port))?;
+        match UdpSocket::bind((ip, tcp.local_addr()?.port())) {
+            Ok(udp) => return Ok((tcp, udp)),
+            Err(e) if port == 0 && e.kind() == io::ErrorKind::AddrInUse => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| io::Error::from(io::ErrorKind::AddrInUse)))
+}
+
 fn v4(a: SocketAddr) -> io::Result<SocketAddrV4> {
     match a {
         SocketAddr::V4(a) => Ok(a),
@@ -126,9 +143,8 @@ impl Adapter {
     /// # Errors
     /// Any bind failure (port in use, permission).
     pub fn start_on(mut device: Device, cfg: &ServerConfig, endpoint: &IoEndpoint) -> io::Result<Self> {
-        let tcp = TcpListener::bind((cfg.bind, cfg.encap_port))?;
+        let (tcp, udp_encap) = bind_encap(cfg.bind, cfg.encap_port)?;
         let encap_addr = v4(tcp.local_addr()?)?;
-        let udp_encap = UdpSocket::bind((cfg.bind, encap_addr.port()))?;
         device.set_id_allocator(endpoint.allocator());
         let owner = Arc::new(endpoint.owner());
         let dest = Arc::new(Mutex::new(Dest::default()));
@@ -564,6 +580,30 @@ fn io_loop(io: &Io, device: &Mutex<Device>, stop: &AtomicBool, peer_port: u16) {
             let _ = io
                 .owner
                 .send_to(&p.datagram, SocketAddrV4::new(p.originator, port));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_zero_binds_tcp_and_udp_on_one_number() {
+        for _ in 0..32 {
+            let (tcp, udp) = bind_encap(Ipv4Addr::LOCALHOST, 0).unwrap();
+            assert_eq!(tcp.local_addr().unwrap().port(), udp.local_addr().unwrap().port());
+        }
+    }
+
+    #[test]
+    fn a_named_port_whose_udp_half_is_taken_is_an_error_not_another_port() {
+        let squatter = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = squatter.local_addr().unwrap().port();
+        match bind_encap(Ipv4Addr::LOCALHOST, port) {
+            // Someone may hold the TCP half too; either way, no other port.
+            Err(e) => assert_eq!(e.kind(), io::ErrorKind::AddrInUse, "{e}"),
+            Ok((tcp, _)) => panic!("bound {:?} with UDP {port} taken", tcp.local_addr()),
         }
     }
 }
