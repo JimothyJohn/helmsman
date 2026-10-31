@@ -33,6 +33,19 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   overlapping PRs on a throwaway branch and run the gate before both land.
 - **Protocol claims** get a docs/SOURCES.md entry and a § / page citation.
 
+## Voice (anything a user reads: the site, README intro, UI text, release notes)
+
+The reader is a controls or plant engineer, not a developer. Benefits, not
+features: **robust** (few dependencies, CI), **simple** (one controller, no
+microservices), **safe** (memory-safe, approval and audit, friction hidden
+to keep the user in flow), **reliable** (native performance, fixed scan,
+watchdog). The headline is agentic programming: you write specs and
+validate results, you don't write code. Proven IEC 61131-3 Structured Text,
+no ladder and proud of it. EtherNet/IP (CIP) and Modbus TCP, Ethernet only;
+a pure soft PLC with I/O in remote modules (e.g. Moxa ioLogik). Say "early
+release". Never mention Rust, crates, the Raspberry Pi or the model vendor
+by name. Claims must be true of what is built.
+
 ## Next door
 
 - `../agent-relay`: the relay (Rust, SAM, private, not deployed; local only

@@ -1186,6 +1186,16 @@
   asked: 2026-10-31
   by: claude-session
 
+- [ ] **Move the site to helmsman.advin.io** — the public page (master's docs/, GitHub Pages) moves to Nick's domain.
+  needs: a DNS record at advin.io's DNS host: `helmsman` CNAME `jimothyjohn.github.io.`; check with `dig +short helmsman.advin.io` (it should answer jimothyjohn.github.io)
+  result: the site and playground at https://helmsman.advin.io/ and /playground/; github.io redirects there
+  notes: order matters. DNS first; then the agent adds `docs/CNAME` (helmsman.advin.io) in a PR into dev, and the README link; it goes live at Nick's next dev → master merge. A CNAME before DNS sends visitors to a name that doesn't resolve. After it is live: Pages settings → Enforce HTTPS once GitHub has issued the certificate.
+  est: 30m
+  difficulty: low
+  id: site-domain
+  asked: 2026-10-31
+  by: claude-session
+
 - [x] **Force inputs from the editor** — docs/UI.md step 2's last part: an engineer forces an input (a signal and/or a %I address) to a value, applied every scan after the I/O read and before the programs run.
   result: `GET/POST/DELETE /api/forces` (engineer session, audited per force and release), forces end on that engineer's logout or session expiry and on deploy, and the live and trace APIs mark forced points so the UI shows FORCED
   notes: the scan thread reads a published force set (try_lock, keeps the last copy), so it never waits on the API; a sweep ends forces whose session is gone. Projects (#this PR) are in.
