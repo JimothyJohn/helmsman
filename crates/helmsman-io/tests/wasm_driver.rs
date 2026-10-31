@@ -838,3 +838,98 @@ fn modbus_constants_the_guest_mirrors_have_not_moved() {
     assert!(MODBUS.starts_with(b"\0asm"));
     assert_eq!(wasm::check(MODBUS), Ok(()));
 }
+
+// ---- sandbox: what a box asks of a driver before it is proposed ----
+
+#[test]
+fn sandbox_takes_a_driver_that_starts_and_never_runs_its_configure() {
+    wasm::sandbox(MODBUS, Limits::default()).unwrap();
+    // A configure that always traps: the device's params are not the
+    // proposal's to judge, so the sandbox never calls it.
+    let picky = guest_src(r#"(func (export "configure") (param i32 i32) unreachable)"#);
+    let bytes = wat::parse_str(&picky).unwrap();
+    wasm::sandbox(&bytes, Limits::default()).unwrap();
+    assert!(
+        wat_driver(&picky, &nowhere()).is_err(),
+        "loading on a device does call it"
+    );
+}
+
+#[test]
+fn sandbox_refuses_what_check_refuses_and_what_does_not_start() {
+    let refused = |src: &str| wasm::sandbox(&wat::parse_str(src).unwrap(), Limits::default()).unwrap_err();
+    // Not the interface: check's own refusal.
+    let e = refused(r#"(module (memory (export "memory") 1))"#);
+    assert!(e.iter().any(|l| l.contains("buffer")), "{e:?}");
+    // Starts past the memory cap (2 MiB declared, 1 MiB allowed).
+    let big = guest_src("").replace(
+        r#"(memory (export "memory") 1)"#,
+        r#"(memory (export "memory") 32)"#,
+    );
+    assert!(wasm::sandbox(&wat::parse_str(&big).unwrap(), Limits::default()).is_err());
+    // A data segment outside its memory: instantiation traps.
+    let data = guest_src(r#"(data (i32.const 65535) "xx")"#);
+    assert!(
+        wasm::check(&wat::parse_str(&data).unwrap()).is_ok(),
+        "check alone passes it"
+    );
+    assert!(wasm::sandbox(&wat::parse_str(&data).unwrap(), Limits::default()).is_err());
+    // A tighter cap is the caller's to set.
+    let two_pages = guest_src("").replace(
+        r#"(memory (export "memory") 1)"#,
+        r#"(memory (export "memory") 2)"#,
+    );
+    let tight = Limits {
+        memory: 1 << 16,
+        ..Limits::default()
+    };
+    assert!(wasm::sandbox(&wat::parse_str(&two_pages).unwrap(), tight).is_err());
+    assert!(wasm::sandbox(&wat::parse_str(&two_pages).unwrap(), Limits::default()).is_ok());
+}
+
+#[test]
+fn a_map_checked_with_a_parser_that_knows_a_wasm_driver_takes_its_points() {
+    let src = "device rio wasm:rio-x 127.0.0.1:9 unit=1\nin level int rio hr:0\nout lamp bool rio coil:0\n";
+    let file = helmsman_io::text::parse(src).unwrap();
+    // On its own the map knows no WASM driver.
+    let e = file.map.validate().unwrap_err();
+    assert!(
+        e.iter()
+            .all(|e| e.to_string().contains("not a WASM driver this box has approved")),
+        "{e:?}"
+    );
+    // With the guest parsing: its answers, its refusals.
+    let d = WasmDriver::load(
+        MODBUS,
+        &device("127.0.0.1:9", &[("unit", "1")]),
+        Limits::default(),
+    )
+    .unwrap();
+    file.map.validate_with(&mut |_, a| d.parse(a)).unwrap();
+    let bad = helmsman_io::text::parse(&src.replace("hr:0", "hr:x")).unwrap();
+    assert_eq!(
+        bad.map.validate_with(&mut |_, a| d.parse(a)).unwrap_err().len(),
+        1
+    );
+    // A guest that calls every point read-only: the output is refused.
+    let ro = WasmDriver::load(
+        &wat::parse_str(guest_src(
+            r#"(func (export "parse") (param i32 i32) (call $point (i32.const 1) (i32.const 0)))"#,
+        ))
+        .unwrap(),
+        &device("127.0.0.1:9", &[]),
+        Limits::default(),
+    )
+    .unwrap();
+    let e = file.map.validate_with(&mut |_, a| ro.parse(a)).unwrap_err();
+    assert!(
+        matches!(
+            e.as_slice(),
+            [
+                helmsman_io::MapError::TypeMismatch { .. },
+                helmsman_io::MapError::NotWritable(_)
+            ]
+        ),
+        "{e:?}"
+    );
+}

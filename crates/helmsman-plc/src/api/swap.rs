@@ -281,6 +281,7 @@ fn reload(
         table: mut next,
         calendar,
         map: _,
+        drivers: _,
     } = layout;
     next.carry_from(table);
     rt.rebind(modules, &mut next)
@@ -375,7 +376,7 @@ impl SwapHandle {
             });
         };
         let mut links = links.lock().unwrap_or_else(PoisonError::into_inner);
-        let plan = links.plan(&map).map_err(SwapError::Links)?;
+        let plan = links.plan_with(&map, &layout.drivers).map_err(SwapError::Links)?;
         let stopped = links.stop(&plan);
         match self.send(modules, change, Some(layout)) {
             Ok(swapped) => Ok(Reloaded {

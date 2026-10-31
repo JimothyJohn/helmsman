@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 
 use helmsman_io::{Device, Dir, Driver, Error, IoMap, Value};
 
+use crate::drivers::{self, Drivers};
 use crate::signals::{Polled, SignalTable, by_device};
 
 /// Poll period when a device sets no `poll_ms`.
@@ -405,9 +406,12 @@ struct Group {
     points: Vec<String>,
     /// Output points: signal name and address.
     outputs: Vec<(String, String)>,
+    /// For a `wasm:` device, SHA-256 of the driver binary it runs on: a
+    /// newly approved version of the driver is another link.
+    guest: Option<[u8; 32]>,
 }
 
-fn groups(map: &IoMap) -> Vec<(Group, Vec<Polled>)> {
+fn groups(map: &IoMap, drivers: &Drivers) -> Vec<(Group, Vec<Polled>)> {
     by_device(map)
         .into_iter()
         .map(|(dev, sigs)| {
@@ -431,11 +435,13 @@ fn groups(map: &IoMap) -> Vec<(Group, Vec<Polled>)> {
                 .filter(|p| p.dir == Dir::Out)
                 .map(|p| (map.signals[p.signal].name.clone(), p.addr.clone()))
                 .collect();
+            let guest = device.as_ref().and_then(|d| drivers::digest(drivers, d));
             let group = Group {
                 name: dev.unwrap_or_else(|| BOX.to_string()),
                 device,
                 points,
                 outputs,
+                guest,
             };
             (group, sigs)
         })
@@ -611,9 +617,21 @@ impl LinkSet {
     /// A device whose driver will not open or whose `poll_ms` is out of
     /// range, with its id.
     pub fn plan(&self, map: &IoMap) -> Result<Plan, String> {
+        self.plan_with(map, &Drivers::new())
+    }
+
+    /// [`LinkSet::plan`] for a map that may name the approved WASM
+    /// `drivers` (`wasm:NAME`): such a device's link runs on its guest
+    /// ([`drivers::open`]), not the box's opener, and a link whose
+    /// driver's bytes changed is replaced like one whose device line did.
+    ///
+    /// # Errors
+    /// As [`LinkSet::plan`], plus a device naming a driver not in
+    /// `drivers`.
+    pub fn plan_with(&self, map: &IoMap, drivers: &Drivers) -> Result<Plan, String> {
         let mut keep = Vec::new();
         let mut start = Vec::new();
-        for (group, sigs) in groups(map) {
+        for (group, sigs) in groups(map, drivers) {
             if self.running.iter().any(|r| r.group == group) {
                 keep.push(group.name);
                 continue;
@@ -622,7 +640,9 @@ impl LinkSet {
                 None => (DEFAULT_POLL, (self.channels)()),
                 Some(d) => (
                     device_poll(d)?,
-                    (self.open)(d).map_err(|e| format!("{}: {e}", d.id))?,
+                    drivers::open(drivers, d)
+                        .unwrap_or_else(|| (self.open)(d))
+                        .map_err(|e| format!("{}: {e}", d.id))?,
                 ),
             };
             let link = build(group.name.clone(), poll, driver, map, sigs);
@@ -728,9 +748,12 @@ impl LinkSet {
                 }
             }
             match next {
-                // Same device line: the connection (for `box`, the
-                // channels themselves) carries over.
-                Some((g, fresh)) if g.device == group.device => fresh.driver = link.driver,
+                // Same device line on the same driver: the connection (for
+                // `box`, the channels themselves) carries over. A new
+                // version of a WASM driver starts on its own fresh guest.
+                Some((g, fresh)) if g.device == group.device && g.guest == group.guest => {
+                    fresh.driver = link.driver;
+                }
                 Some(_) => {}
                 None => {
                     if !start.iter().any(|(g, _)| g.name == group.name) {

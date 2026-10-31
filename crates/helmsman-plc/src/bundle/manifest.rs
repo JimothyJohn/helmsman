@@ -24,8 +24,9 @@
 //! are sorted, without repeats, and may be empty (the key alone). Signal
 //! names are lowercase (ST is case-insensitive). `reads` and `drives` are
 //! the union over the modules (plus the calendar's `drive` lines), `q-bytes`
-//! the total of their `%Q` windows, `devices` and `drivers` what the
-//! bundle's signal-map template names. The file is canonical: one space
+//! the total of their `%Q` windows, `devices` what the bundle's signal-map
+//! template names, and `drivers` the drivers those devices use plus each
+//! WASM driver the bundle carries, as a map names it (`wasm:NAME`). The file is canonical: one space
 //! after each key, no comments, a newline after every line, so one meaning
 //! has one byte string and a signature covers exactly what is shown.
 
@@ -61,7 +62,8 @@ pub struct Capabilities {
     pub q_bytes: usize,
     /// Device ids the signal-map template declares.
     pub devices: BTreeSet<String>,
-    /// Driver names those devices use.
+    /// Driver names those devices use, and `wasm:NAME` for each WASM
+    /// driver the bundle carries.
     pub drivers: BTreeSet<String>,
 }
 
@@ -339,6 +341,19 @@ pub fn capabilities(cs: &ChangeSet, d: &Defaults) -> Result<Capabilities, Vec<St
                 caps.drivers.insert(dev.driver.clone());
             }
         }
+    }
+    for (name, bytes) in &cs.drivers {
+        let named = format!("{}{name}", helmsman_io::driver::WASM);
+        if let Err(e) = crate::drivers::check(bytes) {
+            errs.push(format!(
+                "driver {name}: not a driver a box can run: {}",
+                e.join("; ")
+            ));
+        }
+        if !word_ok(&named) {
+            errs.push(format!("driver {name:?} cannot be named in a bundle manifest"));
+        }
+        caps.drivers.insert(named);
     }
     for s in caps.reads.iter().chain(&caps.drives) {
         if !signal_ok(s) {

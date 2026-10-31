@@ -104,8 +104,25 @@ impl SignalTable {
     /// Every problem: the map's own ([`IoMap::validate`]), names equal but
     /// for case, and safe values that name no output or have the wrong type.
     pub fn new(map: &IoMap, safe: &BTreeMap<String, Value>) -> Result<Self, Vec<TableError>> {
+        Self::with_points(map, safe, &mut helmsman_io::driver::parse_point_on)
+    }
+
+    /// [`SignalTable::new`], device points parsed by `parse`
+    /// ([`IoMap::validate_with`]): how a box checks a map that names its
+    /// WASM drivers ([`crate::drivers::Points`]).
+    ///
+    /// # Errors
+    /// As [`SignalTable::new`].
+    pub fn with_points(
+        map: &IoMap,
+        safe: &BTreeMap<String, Value>,
+        parse: &mut dyn FnMut(
+            &helmsman_io::Device,
+            &str,
+        ) -> Result<helmsman_io::PointInfo, helmsman_io::Error>,
+    ) -> Result<Self, Vec<TableError>> {
         let mut errs: Vec<TableError> = map
-            .validate()
+            .validate_with(parse)
             .err()
             .unwrap_or_default()
             .into_iter()

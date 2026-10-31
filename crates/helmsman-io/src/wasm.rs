@@ -514,6 +514,27 @@ pub fn check(wasm: &[u8]) -> Result<(), Vec<String>> {
     compile(wasm).map(|_| ())
 }
 
+/// Whether `wasm` would run as a driver: [`check`], then one instance
+/// started under `limits` (its declared memory within the cap, its data
+/// and element segments in bounds), with no device and without calling
+/// `configure`, whose params are the device's. What a box asks of a
+/// driver before it is proposed; nothing runs that could reach a socket.
+///
+/// # Errors
+/// Every problem [`check`] finds, or why the instance does not start.
+pub fn sandbox(wasm: &[u8], limits: Limits) -> Result<(), Vec<String>> {
+    let module = compile(wasm)?;
+    let d = WasmDriver {
+        module,
+        endpoint: String::new(),
+        params: BTreeMap::new(),
+        timeout: Duration::from_millis(1),
+        limits,
+        guest: RefCell::new(None),
+    };
+    d.instance().map(drop).map_err(|e| vec![e.to_string()])
+}
+
 /// One instance of the guest and its exports.
 struct Guest {
     store: Store<Host>,
@@ -720,7 +741,30 @@ impl WasmDriver {
         self.limits
     }
 
+    /// A fresh instance with its device's params handed to `configure`.
     fn instantiate(&self) -> Result<Guest, Error> {
+        let mut g = self.instance()?;
+        let mut params = String::new();
+        for (k, v) in &self.params {
+            let _ = writeln!(params, "{k}={v}");
+        }
+        if params.len() > MAX_IO {
+            return Err(Error::Driver("device params over 64 KiB".into()));
+        }
+        let call = Call {
+            phase: Phase::Configure,
+            input: params.as_bytes(),
+            points: 0,
+            value: None,
+            subject: "",
+        };
+        g.invoke(&call, self.limits, self.timeout)
+            .map_err(Error::Driver)??;
+        Ok(g)
+    }
+
+    /// A fresh instance, not yet configured.
+    fn instance(&self) -> Result<Guest, Error> {
         let engine = self.module.engine();
         let host = Host {
             endpoint: self.endpoint.clone(),
@@ -757,7 +801,7 @@ impl WasmDriver {
         let read = instance.get_typed_func(&store, "read").map_err(bad)?;
         let write = instance.get_typed_func(&store, "write").map_err(bad)?;
         let configure = instance.get_typed_func(&store, "configure").ok();
-        let mut g = Guest {
+        Ok(Guest {
             store,
             memory,
             buffer,
@@ -765,24 +809,7 @@ impl WasmDriver {
             read,
             write,
             configure,
-        };
-        let mut params = String::new();
-        for (k, v) in &self.params {
-            let _ = writeln!(params, "{k}={v}");
-        }
-        if params.len() > MAX_IO {
-            return Err(Error::Driver("device params over 64 KiB".into()));
-        }
-        let call = Call {
-            phase: Phase::Configure,
-            input: params.as_bytes(),
-            points: 0,
-            value: None,
-            subject: "",
-        };
-        g.invoke(&call, self.limits, self.timeout)
-            .map_err(Error::Driver)??;
-        Ok(g)
+        })
     }
 
     fn call(&self, call: &Call<'_>) -> Result<Outcome, Error> {

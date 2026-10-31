@@ -62,9 +62,10 @@ workspace = true
 default = ["box", "https"]
 box = ["dep:rusqlite", "dep:ring", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "helmsman-io/enip", "wasm"]
 # `wasm`: modules compiled to WebAssembly (`module.wasm`) beside ST ones,
-# run by an interpreter under fuel and memory limits. In `box`; the
-# canvas's wasm build never has it.
-wasm = ["dep:wasmi"]
+# run by an interpreter under fuel and memory limits, and the map's WASM
+# drivers (`wasm:NAME`, helmsman-io's `wasm`). In `box`; the canvas's
+# wasm build never has it.
+wasm = ["dep:wasmi", "helmsman-io/wasm"]
 https = ["dep:rustls", "dep:webpki-roots", "helmsman-agent?/https"]
 
 [[bin]]
@@ -139,6 +140,10 @@ required-features = ["box"]
 [[test]]
 name = "wasm"
 required-features = ["wasm"]
+
+[[test]]
+name = "driver_map"
+required-features = ["box"]
 
 [[example]]
 name = "wasm_bench"

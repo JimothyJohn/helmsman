@@ -345,10 +345,17 @@ pub fn diff(d: &Diff) -> Json {
         "devices": named(d.devices.iter().map(|f| presence(&f.name, f.from.as_ref(), f.to.as_ref())).collect()),
         "bindings": named(d.bindings.iter().map(|f| presence(&f.name, f.from.as_ref(), f.to.as_ref())).collect()),
         "calendar": d.calendar,
+        "drivers": named(d.drivers.iter().map(|f| {
+            let mut j = presence(&f.name, f.from.as_ref(), f.to.as_ref());
+            j["from_sha256"] = json!(f.from);
+            j["to_sha256"] = json!(f.to);
+            j
+        }).collect()),
     })
 }
 
-/// A change set's content: each module's two files, the map, the calendar.
+/// A change set's content: each module's two files, the map, the calendar,
+/// and each WASM driver as [`driver`] shows it.
 /// A WASM module's binary is not shown: `source` is null and `wasm` says
 /// what it is and imports ([`wasm`]).
 #[must_use]
@@ -369,6 +376,7 @@ pub fn change_set(cs: &ChangeSet) -> Json {
         "modules": modules,
         "io_map": cs.io_map,
         "calendar": cs.calendar,
+        "drivers": cs.drivers.iter().map(|(n, b)| (n.clone(), driver(b))).collect::<serde_json::Map<_, _>>(),
     })
 }
 
@@ -378,6 +386,18 @@ pub fn change_set(cs: &ChangeSet) -> Json {
 /// null, with `error`, for a binary that does not parse.
 #[must_use]
 pub fn wasm(bytes: &[u8]) -> Json {
+    binary(bytes, crate::wasm::ABI)
+}
+
+/// [`wasm`] for a WASM driver (`helmsman-driver/v1`): what it is, and
+/// every import, which for a driver that loads is part of its device
+/// socket interface and nothing else.
+#[must_use]
+pub fn driver(bytes: &[u8]) -> Json {
+    binary(bytes, helmsman_io::wasm::ABI)
+}
+
+fn binary(bytes: &[u8], abi: &str) -> Json {
     let sha = Sha256::digest(bytes)
         .iter()
         .fold(String::with_capacity(64), |mut s, b| {
@@ -407,7 +427,7 @@ pub fn wasm(bytes: &[u8]) -> Json {
         Err(e) => (Json::Null, json!(format!("not a valid WASM module: {e}"))),
     };
     json!({
-        "abi": crate::wasm::ABI,
+        "abi": abi,
         "bytes": bytes.len(),
         "sha256": sha,
         "imports": imports,

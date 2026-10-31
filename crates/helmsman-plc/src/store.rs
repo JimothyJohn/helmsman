@@ -4,14 +4,16 @@
 //! A [`ChangeSet`] is everything the box runs: each module's
 //! `module.manifest` and its program, `module.st` or `module.wasm` (params
 //! live in the manifest), the I/O map (the signal bindings) and the shift
-//! calendar, as the exact bytes of their files. Its [`SnapshotId`] is the
-//! SHA-256 of a canonical *tree*:
+//! calendar, as the exact bytes of their files, and the WASM drivers the
+//! map may name (`wasm:NAME`, [`crate::drivers`]). Its [`SnapshotId`] is
+//! the SHA-256 of a canonical *tree*:
 //!
 //! ```text
 //! helmsman-snapshot 1
 //! module conveyor <sha256 of module.manifest> <sha256 of module.st>
 //! wasm-module lamp <sha256 of module.manifest> <sha256 of module.wasm>
 //!                                              (modules sorted by name, one space)
+//! wasm-driver rio-x <sha256 of the driver>     (drivers sorted by name)
 //! io-map <sha256>                              (if present)
 //! calendar <sha256>                            (if present)
 //! ```
@@ -20,8 +22,8 @@
 //! metadata, and a tree plus its blobs is all a bundle needs to carry.
 //! Every read re-hashes the tree and each blob, so a tampered or corrupted
 //! row is an [`Error::Corrupt`], never wrong content. Blobs are bytes; the
-//! tree says which must be UTF-8 text (all but `module.wasm`), and a blob
-//! read as text that is not is corrupt too.
+//! tree says which must be UTF-8 text (all but `module.wasm` and a
+//! driver), and a blob read as text that is not is corrupt too.
 //!
 //! History is an append-only **log**: one [`Entry`] per apply or rollback,
 //! with who, why, who approved and when ([`Meta`]). Each entry's hash covers
@@ -38,7 +40,9 @@
 //! So a version 1 store opens as it is and is marked 2 by the first commit
 //! that holds a WASM module (in that commit's transaction): until then an
 //! older build still opens it, after that it says to run a newer one.
-//! Writers serialize on SQLite's write lock (`BEGIN IMMEDIATE`), so
+//! Version 3 adds `wasm-driver` lines the same way: a store is marked 3
+//! by the first commit that holds a driver. A new store starts at
+//! [`SCHEMA`]. Writers serialize on SQLite's write lock (`BEGIN IMMEDIATE`), so
 //! concurrent commits from threads or processes never lose an entry. A [`Store`] is one connection: open one per thread.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,9 +63,11 @@ use crate::spec::name_ok;
 pub const DB_FILE: &str = "snapshots.db";
 /// The schema version this build writes; it reads every one back to
 /// [`SCHEMA_V1`].
-pub const SCHEMA: i64 = 2;
+pub const SCHEMA: i64 = 3;
 /// The first schema version: no WASM modules.
 pub const SCHEMA_V1: i64 = 1;
+/// WASM modules (`wasm-module` lines), no WASM drivers.
+pub const SCHEMA_V2: i64 = 2;
 /// `PRAGMA application_id`: "HLMS".
 const APP_ID: i64 = 0x484C_4D53;
 /// Most modules in one change set.
@@ -287,6 +293,9 @@ pub struct ChangeSet {
     pub io_map: Option<String>,
     /// The shift calendar file, stored as given.
     pub calendar: Option<String>,
+    /// WASM drivers by name (`helmsman-driver/v1` binaries), which the
+    /// map names as `wasm:NAME`.
+    pub drivers: BTreeMap<String, Vec<u8>>,
 }
 
 impl ChangeSet {
@@ -333,6 +342,7 @@ impl ChangeSet {
             modules,
             io_map: io_map.map(read_capped).transpose()?,
             calendar: calendar.map(read_capped).transpose()?,
+            drivers: BTreeMap::new(),
         })
     }
 
@@ -353,6 +363,9 @@ impl ChangeSet {
                 h(f.code.bytes())
             );
         }
+        for (name, bytes) in &self.drivers {
+            let _ = writeln!(t, "wasm-driver {name} {}", h(bytes));
+        }
         if let Some(m) = &self.io_map {
             let _ = writeln!(t, "io-map {}", h(m.as_bytes()));
         }
@@ -369,8 +382,10 @@ impl ChangeSet {
     }
 
     /// Whether the store will take it: module names the runtime accepts,
-    /// each manifest parses and names its module, the I/O map parses, no
-    /// file over [`MAX_FILE`] (a `module.wasm` included). Programs are not
+    /// each manifest parses and names its module, the I/O map parses,
+    /// driver names are module names and there are at most
+    /// [`crate::drivers::MAX_DRIVERS`], no file over [`MAX_FILE`] (a
+    /// `module.wasm` and a driver included). Programs and drivers are not
     /// compiled or loaded here; whoever applies a change set does that
     /// before committing.
     ///
@@ -415,6 +430,19 @@ impl ChangeSet {
         }
         if self.calendar.as_deref().is_some_and(|c| big(c.as_bytes())) {
             errs.push(format!("calendar: larger than {MAX_FILE} bytes"));
+        }
+        let most = crate::drivers::MAX_DRIVERS;
+        if self.drivers.len() > most {
+            errs.push(format!("{} drivers, more than {most}", self.drivers.len()));
+        }
+        for (name, bytes) in &self.drivers {
+            if !name_ok(name) {
+                errs.push(format!(
+                    "driver {name:?}: not a driver name (1..=64 of A-Z a-z 0-9 _ -)"
+                ));
+            } else if big(bytes) {
+                errs.push(format!("driver {name}: larger than {MAX_FILE} bytes"));
+            }
         }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
@@ -698,6 +726,9 @@ fn load(conn: &Connection, id: &SnapshotId) -> Result<ChangeSet, Error> {
                 };
                 cs.modules.insert((*name).to_string(), files);
             }
+            ["wasm-driver", name, h] => {
+                cs.drivers.insert((*name).to_string(), blob(conn, h)?);
+            }
             ["io-map", h] => cs.io_map = Some(text(conn, h)?),
             ["calendar", h] => cs.calendar = Some(text(conn, h)?),
             _ => return Err(bad()),
@@ -764,7 +795,8 @@ impl Store {
     }
 
     /// The file's schema version: [`SCHEMA_V1`] for a store made by an
-    /// older build until it holds a WASM module, then [`SCHEMA`].
+    /// older build until it holds a WASM module, then [`SCHEMA_V2`] until
+    /// it holds a WASM driver, then [`SCHEMA`].
     ///
     /// # Errors
     /// A storage error.
@@ -793,11 +825,16 @@ impl Store {
         if head.as_ref().is_some_and(|(e, _)| e.id == id) {
             return Ok(id);
         }
-        if cs.modules.values().any(|f| f.code.wasm().is_some()) {
-            let ver: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
-            if ver < SCHEMA {
-                tx.pragma_update(None, "user_version", SCHEMA)?;
-            }
+        let needs = if !cs.drivers.is_empty() {
+            SCHEMA
+        } else if cs.modules.values().any(|f| f.code.wasm().is_some()) {
+            SCHEMA_V2
+        } else {
+            SCHEMA_V1
+        };
+        let ver: i64 = tx.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        if ver < needs {
+            tx.pragma_update(None, "user_version", needs)?;
         }
         {
             let mut put = tx.prepare("INSERT OR IGNORE INTO blobs (hash, data) VALUES (?1, ?2)")?;
@@ -805,6 +842,7 @@ impl Store {
                 .modules
                 .values()
                 .flat_map(|f| [f.manifest.as_bytes(), f.code.bytes()])
+                .chain(cs.drivers.values().map(Vec::as_slice))
                 .chain(cs.io_map.as_deref().map(str::as_bytes))
                 .chain(cs.calendar.as_deref().map(str::as_bytes));
             for data in files {
@@ -967,6 +1005,9 @@ pub struct Diff {
     pub bindings: Vec<Field<(Signal, Option<Value>)>>,
     /// The calendar file changed.
     pub calendar: bool,
+    /// WASM drivers added, removed or changed, by name, each side the
+    /// SHA-256 of its binary (hex).
+    pub drivers: Vec<Field<String>>,
 }
 
 impl Diff {
@@ -977,6 +1018,7 @@ impl Diff {
             && self.devices.is_empty()
             && self.bindings.is_empty()
             && !self.calendar
+            && self.drivers.is_empty()
     }
 }
 
@@ -1051,11 +1093,18 @@ pub fn diff(a: &ChangeSet, b: &ChangeSet) -> Diff {
         (Some((da, sa)), Some((db, sb))) if io_map => (fields(&da, &db), fields(&sa, &sb)),
         _ => (Vec::new(), Vec::new()),
     };
+    let hashes = |cs: &ChangeSet| -> BTreeMap<String, String> {
+        cs.drivers
+            .iter()
+            .map(|(n, b)| (n.clone(), hex(&sha256(b))))
+            .collect()
+    };
     Diff {
         modules,
         io_map,
         devices,
         bindings,
         calendar: a.calendar != b.calendar,
+        drivers: fields(&hashes(a), &hashes(b)),
     }
 }

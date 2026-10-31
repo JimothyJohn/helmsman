@@ -97,6 +97,18 @@ pub trait Driver {
     fn write(&mut self, addr: &str, value: Value) -> Result<(), Error>;
 }
 
+/// How a map names a driver compiled to WebAssembly: `wasm:NAME`, NAME
+/// being a driver the box has approved. No built-in driver knows these;
+/// a box that has the driver parses and opens it through the guest
+/// (`helmsman_plc::drivers`).
+pub const WASM: &str = "wasm:";
+
+/// The NAME of a `wasm:NAME` driver name.
+#[must_use]
+pub fn wasm_name(driver: &str) -> Option<&str> {
+    driver.strip_prefix(WASM)
+}
+
 /// Parses an address for a driver by name, without a connection: what
 /// [`crate::IoMap::validate`] uses.
 ///
@@ -109,6 +121,9 @@ pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
         }
         crate::logix::DRIVER => crate::logix::Point::parse(addr).map(|p| p.info()),
         crate::enip::DRIVER => crate::enip::Point::parse(addr).map(|p| p.info()),
+        other if wasm_name(other).is_some() => Err(Error::UnknownDriver(format!(
+            "{other}: not a WASM driver this box has approved"
+        ))),
         other => Err(Error::UnknownDriver(other.into())),
     }
 }

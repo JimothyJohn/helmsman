@@ -1,7 +1,9 @@
 //! Checking a proposal before it is stored. A proposal is a draft: a new
 //! or replacement module (manifest + ST, or manifest + WASM binary as
-//! base64), one param's new value, or a new
-//! I/O map or calendar file (applied as a reload; `map-reload`). It is
+//! base64), one param's new value, a new
+//! I/O map or calendar file (applied as a reload; `map-reload`), or a new
+//! or replacement WASM driver (name + binary as base64, which the map
+//! names as `wasm:NAME`; `wasm-driver-map`). It is
 //! checked here exactly as the runtime would check it at load (manifest
 //! parse, compile against its windows or load under the default limits,
 //! manifest against the program's ports, signals known), so the agent
@@ -35,6 +37,8 @@ pub struct New {
     pub value: Option<Json>,
     /// `io_map` and `calendar`: the whole new file.
     pub text: Option<String>,
+    /// `driver`: the driver's name, as the map names it (`wasm:NAME`).
+    pub name: Option<String>,
     pub note: Option<String>,
     /// A watch module: it reads and reports, and drives no output signal
     /// and no `%Q` (refused otherwise).
@@ -76,6 +80,7 @@ enum Edit {
     Module(String, ModuleFiles),
     IoMap(String),
     Calendar(String),
+    Driver(String, Vec<u8>),
 }
 
 /// A module's files as a proposal would leave them.
@@ -102,15 +107,16 @@ pub fn check(
     let watch = new.watch == Some(true);
     let (mut p, edit) = match new.kind.as_str() {
         "module" => as_edit(module(new, catalog, memory)?),
-        "param" | "io_map" | "calendar" if watch => {
+        "param" | "io_map" | "calendar" | "driver" if watch => {
             return Err((400, json!({ "error": "watch is for module proposals" })));
         }
         "param" => as_edit(param(new, catalog, running)?),
         "io_map" | "calendar" => file(new, catalog, running)?,
+        "driver" => driver(new, running)?,
         _ => {
             return Err((
                 400,
-                json!({ "error": "kind must be \"module\", \"param\", \"io_map\" or \"calendar\"" }),
+                json!({ "error": "kind must be \"module\", \"param\", \"io_map\", \"calendar\" or \"driver\"" }),
             ));
         }
     };
@@ -125,6 +131,13 @@ pub fn check(
             }
             Edit::IoMap(text) => cs.io_map = Some(text),
             Edit::Calendar(text) => cs.calendar = Some(text),
+            Edit::Driver(name, bytes) => {
+                cs.drivers.insert(name, bytes);
+                // The running map against the new driver set: a new
+                // version must still parse every point its devices have.
+                crate::layout::Layout::build_with(cs.io_map.as_deref(), cs.calendar.as_deref(), &cs.drivers)
+                    .map_err(|errs| refuse("the running I/O map does not load with this driver", &errs))?;
+            }
         }
         cs.validate()
             .map_err(|errs| refuse("the change set would not be stored", &errs))?;
@@ -150,6 +163,7 @@ fn only(new: &New, allowed: &[&str]) -> Result<(), Refusal> {
         ("module", new.module.is_some()),
         ("param", new.param.is_some()),
         ("value", new.value.is_some()),
+        ("name", new.name.is_some()),
     ];
     let extra: Vec<String> = given
         .iter()
@@ -391,7 +405,9 @@ fn file(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(Js
     } else {
         (map, Some(text.as_str()), Edit::Calendar(text.clone()))
     };
-    let layout = crate::layout::Layout::build(map, cal).map_err(|errs| refuse("does not load", &errs))?;
+    // A map names WASM drivers only by approved ones: the running set.
+    let layout = crate::layout::Layout::build_with(map, cal, &base.drivers)
+        .map_err(|errs| refuse("does not load", &errs))?;
     let missing: Vec<String> = catalog
         .modules
         .iter()
@@ -411,4 +427,71 @@ fn file(new: &New, catalog: &Catalog, running: Option<&ChangeSet>) -> Result<(Js
         "text": text,
     });
     Ok((j, Some(edit)))
+}
+
+/// A new or replacement WASM driver: a driver name, and a binary that
+/// exports `helmsman-driver/v1`, imports nothing else and starts under the
+/// driver sandbox's limits ([`crate::drivers::check`]). The running map
+/// must still load with it (in [`check`], once the change set is built).
+fn driver(new: &New, running: Option<&ChangeSet>) -> Result<(Json, Option<Edit>), Refusal> {
+    only(new, &["name", "wasm"])?;
+    let (Some(name), Some(b64)) = (&new.name, &new.wasm) else {
+        return Err((
+            400,
+            json!({ "error": "a driver proposal needs name and wasm (the binary as base64)" }),
+        ));
+    };
+    if !crate::spec::name_ok(name) {
+        return Err(refuse("not a driver name", &["1..=64 of A-Z a-z 0-9 _ -".into()]));
+    }
+    let bytes = unbase64(b64).ok_or_else(|| {
+        (
+            400,
+            json!({ "error": "wasm must be the driver binary as standard base64 (padded, nothing else)" }),
+        )
+    })?;
+    let cap = usize::try_from(manifest::MAX_FILE).unwrap_or(usize::MAX);
+    if bytes.len() > cap {
+        return Err(refuse(
+            "driver larger than a change set may hold",
+            &[format!("at most {cap} bytes")],
+        ));
+    }
+    crate::drivers::check(&bytes).map_err(|errs| {
+        let lines: Vec<String> = errs
+            .iter()
+            .map(|e| format!("{}: {e}", helmsman_io::wasm::ABI))
+            .collect();
+        refuse("not a driver this box can run", &lines)
+    })?;
+    let Some(base) = running else {
+        return Err(refuse(
+            "this box does not run a change set (module directories or a store), so it cannot take a driver",
+            &[],
+        ));
+    };
+    let named = format!("{}{name}", helmsman_io::driver::WASM);
+    let devices: Vec<String> = base
+        .io_map
+        .as_deref()
+        .and_then(|m| helmsman_io::text::parse(m).ok())
+        .map(|f| {
+            f.map
+                .devices
+                .into_iter()
+                .filter(|d| d.driver == named)
+                .map(|d| d.id)
+                .collect()
+        })
+        .unwrap_or_default();
+    let j = json!({
+        "kind": "driver",
+        "name": name,
+        "map_name": named,
+        "replaces": base.drivers.contains_key(name),
+        "touches_outputs": true,
+        "devices": devices,
+        "wasm": render::driver(&bytes),
+    });
+    Ok((j, Some(Edit::Driver(name.clone(), bytes))))
 }

@@ -431,10 +431,38 @@ it); the interface is in the module docs of `wasm.rs`.
   native driver passes, and agrees with the native driver, on the same
   simulator and on hostile peers, call for call (property tests in
   `tests/wasm_driver.rs`).
-- **Not yet** (`wasm-driver-map`): a map cannot name a WASM driver, and
-  driver modules have no home in the store; today a caller builds one
-  with `WasmDriver::load` and hands it to `link::links` as the opener.
-  Stream sockets only: a protocol over UDP would need a datagram import.
+- **Stored, approved and named by the map** (`wasm-driver-map`; where
+  it lives is `wasm-driver-home`, built as its recommended option and
+  still open): a driver is a blob in the change set under a name
+  (`ChangeSet::drivers`, a `wasm-driver NAME SHA256` tree line after the
+  modules; store schema 3, which a store reaches with its first driver as
+  it reached 2 with its first WASM module). `POST /api/proposals` takes
+  `{kind: driver, name, wasm}` (base64); the proposal is refused unless the
+  binary passes `wasm::check` and starts under the default limits without
+  a device (`wasm::sandbox`: memory within the cap, segments in bounds,
+  `configure` not called), and unless the running map still loads with it.
+  Adding, removing or changing a driver is `output-affecting`
+  (`policy::classify`): engineer PIN and a replay, like a map change. A
+  map device line names one as `device ID wasm:NAME ENDPOINT ...`; the
+  map is checked against the approved set (`Layout::build_with`,
+  `drivers::Points`: an unapproved name is refused, even on a device no
+  signal uses, and each point is parsed by the guest loaded with that
+  device's params), and the link opens on the guest (`drivers::open`,
+  `LinkSet::plan_with`). A link's identity includes the driver's SHA-256,
+  so approving a new version under an unchanged map line is a reload that
+  replaces those links (outputs the new link still has are written by it,
+  as for any changed device, and the old guest's connection is not
+  carried); rollback brings back the old bytes and the old links.
+  Bundles carry drivers as `wasm-driver` blobs, list each as `wasm:NAME`
+  under `drivers` in the capability manifest, and are refused as content
+  if one would not pass the proposal's check; an imported bundle's drivers
+  join the box's. The API shows a driver as `render::driver` (interface,
+  size, SHA-256, imports), never the binary. The box ships none built in:
+  the Modbus guest is a test fixture (`tests/driver_map.rs` reads the
+  simulator through it, end to end).
+- **Not yet**: stream sockets only: a protocol over UDP would need a
+  datagram import. Removing a driver is a rollback, not a proposal kind.
+  A driver from `--module-dir` files (no store) has nowhere to live.
 
 ## The trace tap (`trace-tap`, built)
 
@@ -599,7 +627,8 @@ module, map or calendar source).
 - **Content-addressed**: blobs are keyed by SHA-256; a snapshot's id is the
   SHA-256 of a canonical text tree (`helmsman-snapshot 1`, then one
   `module NAME MANIFEST SOURCE` or `wasm-module NAME MANIFEST WASM` line
-  per module by name, `io-map H`, `calendar H`). Same content, same id, in
+  per module by name, `wasm-driver NAME H` per WASM driver by name,
+  `io-map H`, `calendar H`). Same content, same id, in
   any store; an ST snapshot's id is what it was before WASM modules. Blobs
   are bytes; the tree says which are text, and one read as text that is not
   UTF-8 is an error. Every read re-hashes
@@ -613,12 +642,14 @@ module, map or calendar source).
   changed (source, manifest, which params), devices and signal bindings
   changed, and whether the calendar changed.
 - **Guarded**: triggers refuse `UPDATE` and `DELETE` on every table; the
-  file carries an application id and `user_version` (schema 2), and a
+  file carries an application id and `user_version` (schema 3), and a
   newer schema is refused rather than misread. Schema 2 is schema 1's
   tables plus `wasm-module` lines: a schema 1 store opens as it is and is
   marked 2 by the first commit holding a WASM module, so an older build
   keeps opening it until then and is told to upgrade after
-  (`tests/fixtures/store-v1` is a store from before). Writers take SQLite's write
+  (`tests/fixtures/store-v1` is a store from before). Schema 3 adds
+  `wasm-driver` lines the same way, marked by the first commit holding a
+  driver. Writers take SQLite's write
   lock up front (`BEGIN IMMEDIATE`, WAL), so concurrent commits never lose
   an entry. Author and approver are one line, prompt may span lines; none
   may carry controls or invisible formatting characters (as the manifest).
@@ -769,7 +800,8 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   every module drives the same signals and `%Q` bytes, the map is the same,
   and the calendar's `drive` lines are the same; `output-affecting` for
   anything else that can move an output: the I/O map changed at all
-  (bindings, devices, safe values), a module's `drives` or `%Q` window
+  (bindings, devices, safe values), a WASM driver added, removed or
+  changed (it is what reaches a device), a module's `drives` or `%Q` window
   changed, a module that drives something was added or removed, the
   calendar's `drive` lines changed, or a manifest or calendar does not
   parse. When in doubt, up. What a proposal says about itself is never
@@ -876,8 +908,8 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
 
 ## Map and calendar reload (`map-reload`, built)
 
-An apply or rollback whose I/O map or calendar differs from what runs
-reloads them on the running box, through the same approval path
+An apply or rollback whose I/O map, calendar or WASM drivers differ from
+what runs reloads them on the running box, through the same approval path
 (always `output-affecting` for a map, `logic` for a calendar with the same
 `drive` lines). `POST /api/proposals` takes `{kind: io_map|calendar, text}`;
 any snapshot can be rolled back to. Contract in `tests/reload.rs` (real
