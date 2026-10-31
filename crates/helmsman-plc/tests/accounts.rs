@@ -5,6 +5,7 @@
 //! the lockouts and sessions read (so an hour does not take an hour).
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -842,7 +843,667 @@ fn the_box_token_alone_never_approves_once_accounts_exist() {
     assert_eq!(r.status, 401, "{r:?}");
     let r = request(b.addr, "POST", "/api/login", None, "not json");
     assert_eq!(r.status, 400);
-    assert_eq!(r.error(), "expected JSON {\"user\": ..., \"password\": ...}");
+    assert_eq!(
+        r.error(),
+        "expected JSON {\"user\": ..., \"password\": ...} or {\"role\": ..., \"pin\": ...}"
+    );
+}
+
+// ---- browser sessions: role-PIN logins, the cookie, CSRF -------------------------
+
+/// What the canvas's `fetch` sends on the box's own page: the custom
+/// header and the page's origin (the bench's requests say `Host: box`).
+const PAGE: [(&str, &str); 2] = [("X-Helmsman-Request", "1"), ("Origin", "http://box")];
+
+/// The exact cookie a browser login sets for `token`.
+fn cookie_for(token: &str) -> String {
+    format!("helmsman_session={token}; HttpOnly; SameSite=Strict; Path=/api; Max-Age=3600")
+}
+
+/// A request with these headers (beside `Host: box` and a JSON
+/// `Content-Type` unless one is given).
+fn raw(addr: SocketAddr, method: &str, path: &str, headers: &[(&str, &str)], body: &str) -> Resp {
+    let mut head = format!("{method} {path} HTTP/1.1\r\nHost: box\r\n");
+    for (k, v) in headers {
+        let _ = write!(head, "{k}: {v}\r\n");
+    }
+    if !headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+    {
+        head.push_str("Content-Type: application/json\r\n");
+    }
+    let raw = format!("{head}Content-Length: {}\r\n\r\n{body}", body.len());
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
+    s.write_all(raw.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    let _ = s.read_to_end(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+    Resp {
+        status: head.get(9..12).and_then(|s| s.parse().ok()).unwrap_or(0),
+        head: head.into(),
+        body: body.into(),
+    }
+}
+
+/// The page's request with its session cookie.
+fn page(addr: SocketAddr, method: &str, path: &str, session: &str, body: &str) -> Resp {
+    let cookie = format!("helmsman_session={session}");
+    let mut h = PAGE.to_vec();
+    h.push(("Cookie", &cookie));
+    raw(addr, method, path, &h, body)
+}
+
+impl Resp {
+    /// The `Set-Cookie` lines, as sent.
+    fn set_cookies(&self) -> Vec<&str> {
+        self.head
+            .lines()
+            .filter_map(|l| l.strip_prefix("Set-Cookie: "))
+            .collect()
+    }
+
+    /// The session a browser login set.
+    fn session(&self) -> String {
+        let c = self.set_cookies();
+        assert_eq!(c.len(), 1, "{self:?}");
+        c[0].strip_prefix("helmsman_session=")
+            .and_then(|r| r.split(';').next())
+            .unwrap()
+            .to_string()
+    }
+
+    fn cleared(&self) -> bool {
+        self.set_cookies() == ["helmsman_session=; HttpOnly; SameSite=Strict; Path=/api; Max-Age=0"]
+    }
+}
+
+fn pin_login(addr: SocketAddr, role: &str, pin: &str) -> Resp {
+    raw(
+        addr,
+        "POST",
+        "/api/login",
+        &PAGE,
+        &json!({ "role": role, "pin": pin }).to_string(),
+    )
+}
+
+fn is_hex64(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+#[test]
+fn a_pin_login_sets_an_httponly_cookie_the_page_never_sees() {
+    let b = Bench::with_accounts(None);
+    let r = pin_login(b.addr, "operator", OPERATOR_PIN);
+    assert_eq!(r.status, 200, "{r:?}");
+    let s = r.session();
+    assert!(is_hex64(&s), "{s}");
+    assert_eq!(r.set_cookies(), [cookie_for(&s).as_str()], "the flags, exactly");
+    assert!(
+        !r.head.to_ascii_lowercase().contains("secure"),
+        "plain http: {}",
+        r.head
+    );
+    assert!(r.head.contains("Cache-Control: no-store"), "{}", r.head);
+    assert!(!r.body.contains(&s), "the token is never in the body: {r:?}");
+    let body = r.json();
+    assert_eq!(body.get("token"), None, "{body}");
+    assert_eq!(
+        (
+            body["user"].clone(),
+            body["role"].as_str(),
+            body["credential"].as_str()
+        ),
+        (Json::Null, Some("operator"), Some("pin"))
+    );
+    assert_eq!(body["expires_in_s"], 3600);
+    assert_eq!(body["idle_s"], 900);
+
+    // Who is this? The page asks after a reload.
+    let who = page(b.addr, "GET", "/api/session", &s, "");
+    assert_eq!(who.status, 200, "{who:?}");
+    let me = who.json();
+    assert_eq!(
+        (me["role"].as_str(), me["credential"].as_str(), me["via"].as_str()),
+        (Some("operator"), Some("pin"), Some("cookie"))
+    );
+    assert_eq!(get(b.addr, "/api/session").status, 401, "no cookie: nobody");
+
+    // The cookie session approves as its role, with no PIN in the body.
+    let id = b.param(0.5);
+    let r = page(b.addr, "POST", &format!("/api/proposals/{id}/apply"), &s, "{}");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        (r.json()["role"].as_str(), r.json()["user"].clone()),
+        (Some("operator"), Json::Null)
+    );
+    assert_eq!(b.speed(), json!(0.5));
+    assert_eq!(b.approver().as_deref(), Some("operator (PIN)"));
+    // As wide as the token: it drafts and replays too.
+    let r = page(
+        b.addr,
+        "POST",
+        "/api/proposals",
+        &s,
+        &json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 0.6 }).to_string(),
+    );
+    assert_eq!(r.status, 201, "{r:?}");
+    let log = audit(b.addr);
+    let login = log.iter().find(|e| e["path"] == "/api/login").unwrap();
+    assert_eq!(
+        (login["status"].as_u64(), login["role"].as_str()),
+        (Some(200), Some("operator"))
+    );
+    assert_eq!(login["user"], Json::Null, "a PIN names a role, not a person");
+    assert!(log.iter().any(|e| e["path"].as_str().unwrap().ends_with("/apply")
+        && e["status"] == 200
+        && e["role"] == "operator"));
+
+    // A machine logging in with a PIN (no browser header) gets a bearer
+    // token in the body and no cookie, as account logins always did.
+    let machine = raw(
+        b.addr,
+        "POST",
+        "/api/login",
+        &[],
+        &json!({ "role": "engineer", "pin": ENGINEER_PIN }).to_string(),
+    );
+    assert_eq!(machine.status, 200, "{machine:?}");
+    assert_eq!(machine.set_cookies(), Vec::<&str>::new());
+    let bearer_tok = machine.json()["token"].as_str().unwrap().to_string();
+    assert!(is_hex64(&bearer_tok));
+    let me = request(b.addr, "GET", "/api/session", Some(&bearer_tok), "");
+    assert_eq!(
+        (me.json()["role"].as_str(), me.json()["via"].as_str()),
+        (Some("engineer"), Some("bearer"))
+    );
+    assert_secrets_kept(&b, &[&s, &bearer_tok]);
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn a_cookie_without_a_same_origin_proof_is_refused() {
+    let b = Bench::with_accounts(None);
+    let s = pin_login(b.addr, "operator", OPERATOR_PIN).session();
+    let id = b.param(0.5);
+    let apply = format!("/api/proposals/{id}/apply");
+    let cookie = format!("helmsman_session={s}");
+    let c = cookie.as_str();
+    let forged: Vec<(&str, Vec<(&str, &str)>)> = vec![
+        ("no custom header", vec![("Origin", "http://box"), ("Cookie", c)]),
+        (
+            "custom header not 1",
+            vec![
+                ("X-Helmsman-Request", "0"),
+                ("Origin", "http://box"),
+                ("Cookie", c),
+            ],
+        ),
+        (
+            "custom header twice",
+            vec![
+                ("X-Helmsman-Request", "1"),
+                ("X-Helmsman-Request", "1"),
+                ("Origin", "http://box"),
+                ("Cookie", c),
+            ],
+        ),
+        (
+            "another site",
+            vec![
+                ("X-Helmsman-Request", "1"),
+                ("Origin", "http://evil.example"),
+                ("Cookie", c),
+            ],
+        ),
+        (
+            "another port",
+            vec![
+                ("X-Helmsman-Request", "1"),
+                ("Origin", "http://box:8081"),
+                ("Cookie", c),
+            ],
+        ),
+        (
+            "https is another origin",
+            vec![
+                ("X-Helmsman-Request", "1"),
+                ("Origin", "https://box"),
+                ("Cookie", c),
+            ],
+        ),
+        (
+            "an opaque origin",
+            vec![("X-Helmsman-Request", "1"), ("Origin", "null"), ("Cookie", c)],
+        ),
+        (
+            "two origins",
+            vec![
+                ("X-Helmsman-Request", "1"),
+                ("Origin", "http://box"),
+                ("Origin", "http://evil.example"),
+                ("Cookie", c),
+            ],
+        ),
+        (
+            "cross-site referer",
+            vec![
+                ("X-Helmsman-Request", "1"),
+                ("Referer", "http://evil.example/x"),
+                ("Cookie", c),
+            ],
+        ),
+        (
+            "a referer that only starts like the box",
+            vec![
+                ("X-Helmsman-Request", "1"),
+                ("Referer", "http://box.evil.example/"),
+                ("Cookie", c),
+            ],
+        ),
+        (
+            "neither origin nor referer",
+            vec![("X-Helmsman-Request", "1"), ("Cookie", c)],
+        ),
+        (
+            "a form post",
+            vec![
+                ("Content-Type", "application/x-www-form-urlencoded"),
+                ("Origin", "http://evil.example"),
+                ("Cookie", c),
+            ],
+        ),
+    ];
+    for (what, headers) in &forged {
+        let r = raw(b.addr, "POST", &apply, headers, "{}");
+        assert_eq!(r.status, 403, "{what}: {r:?}");
+        assert_eq!(
+            r.set_cookies(),
+            Vec::<&str>::new(),
+            "a forgery cannot clear it: {what}"
+        );
+        let r = raw(b.addr, "POST", "/api/logout", headers, "");
+        assert_eq!(r.status, 403, "logout CSRF, {what}: {r:?}");
+    }
+    let r = raw(b.addr, "POST", &apply, &forged[11].1, "role=operator&pin=x");
+    assert_eq!(r.status, 403, "{r:?}");
+    assert_eq!(b.speed(), json!(1.5), "nothing applied");
+    // A forged login is refused too (login CSRF), and a form cannot log in.
+    let r = raw(
+        b.addr,
+        "POST",
+        "/api/login",
+        &[("X-Helmsman-Request", "1"), ("Origin", "http://evil.example")],
+        &json!({ "role": "operator", "pin": OPERATOR_PIN }).to_string(),
+    );
+    assert_eq!((r.status, r.set_cookies().len()), (403, 0), "{r:?}");
+    let r = raw(
+        b.addr,
+        "POST",
+        "/api/login",
+        &[("Content-Type", "text/plain")],
+        &json!({ "role": "operator", "pin": OPERATOR_PIN }).to_string(),
+    );
+    assert_eq!(r.status, 415, "{r:?}");
+    // None of that ended the session: the real page still works, by Origin
+    // or (no Origin) by a Referer on the box.
+    let r = raw(
+        b.addr,
+        "POST",
+        &apply,
+        &[
+            ("X-Helmsman-Request", "1"),
+            ("Referer", "http://box/?review"),
+            ("Cookie", c),
+        ],
+        "{}",
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    // CSRF refusals are logged, not audited: no flood can fill the log.
+    assert!(
+        !audit(b.addr).iter().any(|e| e["status"] == 403),
+        "{:?}",
+        audit(b.addr)
+    );
+    assert!(b.logs().iter().any(|l| l.contains("another site")));
+    assert_secrets_kept(&b, &[&s]);
+}
+
+#[test]
+fn an_authorization_header_wins_over_the_cookie() {
+    let b = Bench::with_accounts(None);
+    let engineer = pin_login(b.addr, "engineer", ENGINEER_PIN).session();
+    let cookie = format!("helmsman_session={engineer}");
+    let c = cookie.as_str();
+    let id = b.param(0.5);
+    let apply = format!("/api/proposals/{id}/apply");
+    // A wrong token is not rescued by a good cookie.
+    let r = raw(
+        b.addr,
+        "POST",
+        &apply,
+        &[PAGE[0], PAGE[1], ("Cookie", c), ("Authorization", "Bearer nope")],
+        "{}",
+    );
+    assert_eq!((r.status, r.error().as_str()), (401, "wrong token"), "{r:?}");
+    // The box token with a cookie beside it: the token's call, with no
+    // same-origin proof needed (no other site can send the header) and no
+    // person; the cookie's role is not used.
+    let bearer = format!("Bearer {TOKEN}");
+    let r = raw(
+        b.addr,
+        "POST",
+        &apply,
+        &[("Cookie", c), ("Authorization", &bearer)],
+        "{}",
+    );
+    assert_eq!(
+        r.status, 400,
+        "the token approves only with a role and PIN: {r:?}"
+    );
+    // A bearer session and a cookie session: the bearer's.
+    let machine = raw(
+        b.addr,
+        "POST",
+        "/api/login",
+        &[],
+        &json!({ "role": "operator", "pin": OPERATOR_PIN }).to_string(),
+    );
+    let op = machine.json()["token"].as_str().unwrap().to_string();
+    let bearer = format!("Bearer {op}");
+    let me = raw(
+        b.addr,
+        "GET",
+        "/api/session",
+        &[("Cookie", c), ("Authorization", &bearer)],
+        "",
+    );
+    assert_eq!(
+        (me.json()["role"].as_str(), me.json()["via"].as_str()),
+        (Some("operator"), Some("bearer"))
+    );
+    // MCP never takes a cookie, even from the box's own page.
+    let r = raw(
+        b.addr,
+        "POST",
+        "/mcp",
+        &[PAGE[0], PAGE[1], ("Cookie", c)],
+        &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string(),
+    );
+    assert_eq!(r.status, 401, "{r:?}");
+    // A GET is a read: the cookie is neither needed nor checked.
+    assert_eq!(get(b.addr, "/api/proposals").status, 200);
+    assert_secrets_kept(&b, &[&engineer, &op]);
+}
+
+#[test]
+fn a_cookie_the_box_did_not_issue_is_refused_and_a_login_rotates_it() {
+    let b = Bench::with_accounts(None);
+    let s = pin_login(b.addr, "operator", OPERATOR_PIN).session();
+    let id = b.param(0.5);
+    let apply = format!("/api/proposals/{id}/apply");
+    let mut off = s.clone().into_bytes();
+    off[63] = if off[63] == b'a' { b'b' } else { b'a' };
+    let off = String::from_utf8(off).unwrap();
+    for forged in [
+        "f".repeat(64),
+        TOKEN.to_string(),
+        String::new(),
+        off,
+        s.to_uppercase(),
+    ] {
+        let r = page(b.addr, "POST", &apply, &forged, "{}");
+        assert_eq!(r.status, 401, "{forged}: {r:?}");
+        assert!(r.cleared(), "the browser is told to drop it: {r:?}");
+    }
+    // Two session cookies (one of them good): refused, never guessed at.
+    let two = format!("helmsman_session=ffff; helmsman_session={s}");
+    let r = raw(
+        b.addr,
+        "POST",
+        &apply,
+        &[PAGE[0], PAGE[1], ("Cookie", &two)],
+        "{}",
+    );
+    assert_eq!(r.status, 401, "{r:?}");
+    let r = raw(
+        b.addr,
+        "POST",
+        &apply,
+        &[
+            PAGE[0],
+            PAGE[1],
+            ("Cookie", &format!("helmsman_session={s}")),
+            ("Cookie", "helmsman_session=ffff"),
+        ],
+        "{}",
+    );
+    assert_eq!(r.status, 401, "{r:?}");
+    // Other cookies beside it are ignored.
+    let mixed = format!("theme=dark; helmsman_session={s}; x=1");
+    let r = raw(b.addr, "GET", "/api/session", &[("Cookie", &mixed)], "");
+    assert_eq!(r.status, 200, "{r:?}");
+    // A login over a live cookie ends the old session and sets a new one.
+    let cookie = format!("helmsman_session={s}");
+    let again = raw(
+        b.addr,
+        "POST",
+        "/api/login",
+        &[PAGE[0], PAGE[1], ("Cookie", &cookie)],
+        &json!({ "role": "operator", "pin": OPERATOR_PIN }).to_string(),
+    );
+    assert_eq!(again.status, 200, "{again:?}");
+    let fresh = again.session();
+    assert_ne!(fresh, s);
+    assert_eq!(
+        page(b.addr, "GET", "/api/session", &s, "").status,
+        401,
+        "the old one is gone"
+    );
+    assert_eq!(page(b.addr, "POST", &apply, &fresh, "{}").status, 200);
+    assert_eq!(b.speed(), json!(0.5));
+    assert_secrets_kept(&b, &[&s, &fresh]);
+}
+
+#[test]
+fn pin_logins_share_the_pin_lockout() {
+    let b = Bench::with_accounts(None);
+    for k in 0..FLOOR.lockout.attempts {
+        let r = pin_login(b.addr, "engineer", &format!("guess-{k}"));
+        assert_eq!((r.status, r.error().as_str()), (403, "wrong PIN"), "{r:?}");
+        assert_eq!(r.set_cookies(), Vec::<&str>::new());
+    }
+    // Locked: the right PIN is not even checked, here or at an apply.
+    let r = pin_login(b.addr, "engineer", ENGINEER_PIN);
+    assert_eq!(r.status, 429, "{r:?}");
+    assert!(r.head.contains("Retry-After: 30"), "{}", r.head);
+    assert_eq!(r.set_cookies(), Vec::<&str>::new());
+    let id = b.param(0.5);
+    assert_eq!(b.apply_pin(id, "operator", OPERATOR_PIN).status, 429, "one gate");
+    b.clock.fetch_add(31, Ordering::SeqCst);
+    // A PIN past 1 KiB is wrong (and counts), however it starts.
+    let too_long = format!("{ENGINEER_PIN}{}", "0".repeat(2000));
+    assert_eq!(pin_login(b.addr, "engineer", &too_long).status, 403);
+    assert_eq!(
+        pin_login(b.addr, "engineer", ENGINEER_PIN).status,
+        429,
+        "backed off further"
+    );
+    b.clock.fetch_add(61, Ordering::SeqCst);
+    let ok = pin_login(b.addr, "engineer", ENGINEER_PIN);
+    assert_eq!(ok.status, 200, "{ok:?}");
+    // A role with no PIN set, a made-up role, mixed or partial bodies.
+    assert_eq!(pin_login(b.addr, "integrator", "anything-at-all").status, 403);
+    assert_eq!(pin_login(b.addr, "root", ENGINEER_PIN).status, 400);
+    for body in [
+        json!({ "role": "engineer" }),
+        json!({ "pin": ENGINEER_PIN }),
+        json!({ "role": "engineer", "pin": ENGINEER_PIN, "user": "x" }),
+        json!({ "user": "x", "password": "y", "pin": ENGINEER_PIN }),
+        json!({ "role": "engineer", "pin": ENGINEER_PIN, "session": "x" }),
+    ] {
+        let r = raw(b.addr, "POST", "/api/login", &PAGE, &body.to_string());
+        assert_eq!(r.status, 400, "{body}: {r:?}");
+        assert!(!r.body.contains(ENGINEER_PIN));
+    }
+    // Wrong PINs are audited with the role; locked refusals only logged.
+    let log = audit(b.addr);
+    let wrong = log
+        .iter()
+        .filter(|e| e["path"] == "/api/login" && e["status"] == 403)
+        .count();
+    assert!(
+        wrong >= usize::try_from(FLOOR.lockout.attempts).unwrap(),
+        "{log:?}"
+    );
+    assert!(
+        !log.iter()
+            .any(|e| e["path"] == "/api/login" && e["status"] == 429)
+    );
+    assert_secrets_kept(&b, &[&ok.session(), &too_long]);
+}
+
+#[test]
+fn logout_ends_the_cookie_session_on_the_box() {
+    let b = Bench::with_accounts(None);
+    let s = pin_login(b.addr, "operator", OPERATOR_PIN).session();
+    let r = page(b.addr, "POST", "/api/logout", &s, "");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert!(r.cleared(), "{r:?}");
+    let id = b.param(0.5);
+    let r = page(b.addr, "POST", &format!("/api/proposals/{id}/apply"), &s, "{}");
+    assert_eq!(r.status, 401, "{r:?}");
+    assert_eq!(page(b.addr, "POST", "/api/logout", &s, "").status, 401);
+    assert_eq!(page(b.addr, "GET", "/api/session", &s, "").status, 401);
+    assert!(
+        audit(b.addr)
+            .iter()
+            .any(|e| e["path"] == "/api/logout" && e["detail"] == "logout: operator (PIN)")
+    );
+}
+
+#[test]
+fn cookie_sessions_expire_idle_and_old_and_are_cleared() {
+    let b = Bench::with_accounts(None);
+    let id = b.param(0.5);
+    let apply = format!("/api/proposals/{id}/apply");
+    let s = pin_login(b.addr, "operator", OPERATOR_PIN).session();
+    b.clock
+        .fetch_add(account::SESSION_IDLE.as_secs(), Ordering::SeqCst);
+    let r = page(b.addr, "POST", &apply, &s, "{}");
+    assert_eq!(
+        (r.status, r.error().as_str()),
+        (401, "session expired; log in again"),
+        "{r:?}"
+    );
+    assert!(r.cleared());
+    // Used every 14 minutes it stays, until the hour is up.
+    let s = pin_login(b.addr, "operator", OPERATOR_PIN).session();
+    for _ in 0..4 {
+        b.clock.fetch_add(14 * 60, Ordering::SeqCst);
+        assert_eq!(page(b.addr, "GET", "/api/session", &s, "").status, 200);
+    }
+    b.clock.fetch_add(5 * 60, Ordering::SeqCst);
+    let r = page(b.addr, "POST", &apply, &s, "{}");
+    assert_eq!(r.status, 401, "past the hour: {r:?}");
+    assert_eq!(b.speed(), json!(1.5));
+}
+
+#[test]
+fn a_cookie_session_never_takes_a_role_from_the_body() {
+    let b = Bench::with_accounts(None);
+    let s = pin_login(b.addr, "operator", OPERATOR_PIN).session();
+    let (id, _) = b.propose(&json!({ "kind": "module", "manifest": MANIFEST, "source": SOURCE_V2 }));
+    let r = page(b.addr, "POST", &format!("/api/proposals/{id}/replay"), &s, "{}");
+    assert_eq!(r.status, 201, "{r:?}");
+    let replay = r.json()["replay"].as_u64().unwrap();
+    let apply = format!("/api/proposals/{id}/apply");
+    for body in [
+        json!({ "role": "engineer", "pin": ENGINEER_PIN, "replay": replay }),
+        json!({ "role": "integrator", "replay": replay }),
+        json!({ "pin": ENGINEER_PIN, "replay": replay }),
+    ] {
+        let r = page(b.addr, "POST", &apply, &s, &body.to_string());
+        assert_eq!(r.status, 400, "{body}: {r:?}");
+        assert!(r.error().contains("the role its PIN opened (operator)"), "{r:?}");
+    }
+    let r = page(
+        b.addr,
+        "POST",
+        &apply,
+        &s,
+        &json!({ "replay": replay }).to_string(),
+    );
+    assert_eq!(
+        r.status, 403,
+        "an operator session is below a logic change: {r:?}"
+    );
+    assert_eq!(b.source(), SOURCE);
+    let e = pin_login(b.addr, "engineer", ENGINEER_PIN).session();
+    let r = page(
+        b.addr,
+        "POST",
+        &apply,
+        &e,
+        &json!({ "replay": replay }).to_string(),
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(b.approver().as_deref(), Some("engineer (PIN)"));
+    assert_secrets_kept(&b, &[&s, &e]);
+}
+
+#[test]
+fn accounts_end_role_pin_sessions_and_log_in_by_cookie_themselves() {
+    let b = Bench::with_accounts(None);
+    let s = pin_login(b.addr, "engineer", ENGINEER_PIN).session();
+    accounts().save(&b.state).unwrap();
+    let r = page(b.addr, "GET", "/api/session", &s, "");
+    assert_eq!(
+        r.status, 401,
+        "the PIN session ended with the accounts file: {r:?}"
+    );
+    for _ in 0..(FLOOR.lockout.attempts * 2) {
+        let r = pin_login(b.addr, "engineer", ENGINEER_PIN);
+        assert_eq!(r.status, 403, "{r:?}");
+        assert!(r.error().contains("role PINs are off"), "{r:?}");
+    }
+    let r = raw(
+        b.addr,
+        "POST",
+        "/api/login",
+        &PAGE,
+        &json!({ "user": "alice", "password": ALICE }).to_string(),
+    );
+    assert_eq!(r.status, 200, "refused PIN logins counted toward nothing: {r:?}");
+    let alice_s = r.session();
+    assert_eq!(r.set_cookies(), [cookie_for(&alice_s).as_str()]);
+    let body = r.json();
+    assert_eq!(
+        (
+            body["user"].as_str(),
+            body["credential"].as_str(),
+            body.get("token")
+        ),
+        (Some("alice"), Some("account"), None)
+    );
+    let id = b.param(0.5);
+    let r = page(
+        b.addr,
+        "POST",
+        &format!("/api/proposals/{id}/apply"),
+        &alice_s,
+        "{}",
+    );
+    assert_eq!(
+        (r.status, r.json()["user"].as_str()),
+        (200, Some("alice")),
+        "{r:?}"
+    );
+    assert_eq!(b.approver().as_deref(), Some("alice (engineer)"));
+    assert_secrets_kept(&b, &[&s, &alice_s]);
 }
 
 /// No password, PIN or session token in any audit entry or log line.

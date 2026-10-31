@@ -17,8 +17,9 @@
 //! POST /api/proposals/check               token: check a draft as POST /api/proposals would; nothing stored
 //! POST /api/proposals/replay              token: sim replay of a draft {draft, minutes}; nothing stored, not evidence
 //! POST /api/proposals/{id}/replay         token: sim replay of the draft against what runs; evidence for apply
-//! POST /api/login                         {user, password}: a session token (boxes with accounts; see [`login`])
-//! POST /api/logout                        session: ends it
+//! POST /api/login                         {user, password} (accounts) or {role, pin} (none): a session, as a token or a cookie (see [`login`])
+//! POST /api/logout                        session: ends it (and clears its cookie)
+//! GET  /api/session                       who the session sent is (cookie or bearer), or 401
 //! POST /api/proposals/{id}/apply          session + {replay?}, or token + {role, pin, replay?} without accounts: apply through the approval policy
 //! GET  /api/audit?after=N&limit=M         every mutating call, append-only, naming snapshot ids
 //! GET  /api/snapshots                     snapshot history (with --store), head, the running change set's id
@@ -58,9 +59,13 @@
 //! default bind is loopback; the LAN only when asked). Every other method
 //! needs `Authorization: Bearer <token>` ([`token`]), or a login session
 //! from `POST /api/login` ([`login`], which takes a session wherever it
-//! takes the token), and is written to the audit log whatever its
-//! outcome, naming the session's person; without either it is refused
-//! with 401 before any routing. A token in the query string is refused
+//! takes the token, except `/mcp`): as a bearer, or as the browser's
+//! `HttpOnly` cookie with a same-origin proof ([`login::same_origin`];
+//! an `Authorization` header, when sent, is the credential and the cookie
+//! is not read). Each call is written to the audit log whatever its
+//! outcome, naming the session's person; without a credential it is
+//! refused with 401 before any routing, and a cookie without the proof
+//! with 403. A token in the query string is refused
 //! outright (400), on any request, so it never lands in a log or a
 //! browser history.
 //!
@@ -706,33 +711,15 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         // Its own credential: no token, no session.
         return Reply::Once(login::login(req, ctx));
     }
-    let bearer = req.bearer.as_deref();
-    let box_token = bearer.is_some_and(|t| token::eq(t, &ctx.cfg.token));
-    let session = match (box_token, bearer, logins(ctx)) {
-        (false, Some(t), Some(l)) => Some(l.session(t)),
-        _ => None,
+    // An Authorization header is the credential whenever one is sent: the
+    // cookie is then not read (see [`login`]). MCP never takes a cookie.
+    let authed = if req.authorization || mcp_route || req.cookies.is_empty() {
+        by_bearer(req, ctx, mcp_route)
+    } else {
+        login::by_cookie(req, ctx)
     };
-    match session {
-        // MCP takes the box token only: its calls are the box's, never a
-        // person's (and are audited with no user).
-        Some(Ok(who)) if !mcp_route => req.session = Some(who),
-        _ if box_token => {}
-        refused => {
-            (ctx.cfg.log)(&format!(
-                "api: refused {} {} (no or wrong token)",
-                clean(&req.method),
-                clean(&req.path)
-            ));
-            let why = match refused {
-                Some(Err(SessionRefused::Expired)) => "session expired; log in again",
-                Some(Err(SessionRefused::Revoked)) => {
-                    "session ended: the account was disabled or changed; log in again"
-                }
-                _ if req.authorization => "wrong token",
-                _ => "this call needs Authorization: Bearer <token>",
-            };
-            return Reply::Once(Response::error(401, why).with("WWW-Authenticate", "Bearer".into()));
-        }
+    if let Err(r) = authed {
+        return Reply::Once(r);
     }
     if req.method == "POST"
         && req.segments.len() == 2
@@ -752,6 +739,41 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         return Reply::Once(mcp::post(req, ctx));
     }
     Reply::Once(mutate(req, ctx))
+}
+
+/// Authenticates `req` by its `Authorization: Bearer`: the box token, or
+/// a login session (not on `/mcp`, which takes the box token only: its
+/// calls are the box's, never a person's, and are audited with no user).
+fn by_bearer(req: &mut Request, ctx: &Ctx, mcp_route: bool) -> Result<(), Response> {
+    let bearer = req.bearer.as_deref();
+    let box_token = bearer.is_some_and(|t| token::eq(t, &ctx.cfg.token));
+    let session = match (box_token, bearer, logins(ctx)) {
+        (false, Some(t), Some(l)) => Some(l.session(t)),
+        _ => None,
+    };
+    match session {
+        Some(Ok(who)) if !mcp_route => {
+            req.session = Some(who);
+            Ok(())
+        }
+        _ if box_token => Ok(()),
+        refused => {
+            (ctx.cfg.log)(&format!(
+                "api: refused {} {} (no or wrong token)",
+                clean(&req.method),
+                clean(&req.path)
+            ));
+            let why = match refused {
+                Some(Err(SessionRefused::Expired)) => "session expired; log in again",
+                Some(Err(SessionRefused::Revoked)) => {
+                    "session ended: the account was disabled or changed; log in again"
+                }
+                _ if req.authorization => "wrong token",
+                _ => "this call needs Authorization: Bearer <token>, or a login session",
+            };
+            Err(Response::error(401, why).with("WWW-Authenticate", "Bearer".into()))
+        }
+    }
 }
 
 /// `GET /api/chat/status`: `unconfigured` without a relay.
@@ -916,7 +938,7 @@ fn append(
         status,
         detail,
         (snapshot, base),
-        s.map(|p| p.user.clone()),
+        s.and_then(|p| p.person().map(str::to_string)),
         role,
     )
 }
@@ -1015,7 +1037,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | [
             "api",
             "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
-            | "screen" | "site",
+            | "session" | "screen" | "site",
         ]
         | [
             "api",
@@ -1369,6 +1391,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             Some(a) => Response::json(200, &policy_json(a)),
             None => Response::error(404, "no approval path on this box"),
         },
+        ["api", "session"] => login::whoami(req, ctx),
         ["api", "replays", id] => match proposal_id(id).and_then(|id| ctx.replays.get(id)) {
             Some(e) => Response::json(200, &e.json),
             None => Response::error(404, "no such replay"),
@@ -1432,8 +1455,9 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
-            e("POST", "/api/login", false, "log in {user, password} (with an accounts file): a session token for Authorization: Bearer"),
-            e("POST", "/api/logout", true, "end the session it is sent with"),
+            e("POST", "/api/login", false, "log in {user, password} (with an accounts file) or {role, pin} (without): a session token for Authorization: Bearer, or with X-Helmsman-Request: 1 from the box's own page an HttpOnly cookie"),
+            e("POST", "/api/logout", true, "end the session it is sent with (and clear its cookie)"),
+            e("GET", "/api/session", false, "who the session sent (cookie or bearer) is, or 401"),
             e("POST", "/api/proposals/{id}/apply", true, "apply: with a session {replay?}, else {role, pin, replay?} (PINs only while the box has no accounts), checked against the policy"),
             e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),
             e("GET", "/api/snapshots", false, "snapshot history (needs --store), head, and the running change set's id"),

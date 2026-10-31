@@ -351,7 +351,7 @@
   difficulty: low
   id: dev-bundles-switch
 
-- [ ] **Canvas approvals: how does the browser get the API token?** The review screen (feat/proposal-ui) needs the box's bearer token to replay and apply, on top of the role PIN. The token lives in `api-token` in the box's state directory and is printed once to the journal. Built: the operator pastes it once per page load into a masked field; it is held in the page's memory only (never localStorage, never egui's persisted state), dropped on "Forget", a reload, or a 401, and sent only in the `Authorization` header. Trade-off: 64 hex digits is awkward on a tablet, and anyone who can read the journal or state dir can hand it out; but nothing new is stored in the browser and no API change was needed. The better long-term shape is a login exchange: `POST /api/session` with role + PIN returns a short-lived, role-scoped session token (memory only), so operators never see the box token; that is an API change under the same lockout, and overlaps `local-accounts`. Reversible: the token only enters through `Review::set_token` in crates/helmsman-canvas/src/review.rs.
+- [x] **Canvas approvals: how does the browser get the API token?** The review screen (feat/proposal-ui) needs the box's bearer token to replay and apply, on top of the role PIN. The token lives in `api-token` in the box's state directory and is printed once to the journal. Built: the operator pastes it once per page load into a masked field; it is held in the page's memory only (never localStorage, never egui's persisted state), dropped on "Forget", a reload, or a 401, and sent only in the `Authorization` header. Trade-off: 64 hex digits is awkward on a tablet, and anyone who can read the journal or state dir can hand it out; but nothing new is stored in the browser and no API change was needed. The better long-term shape is a login exchange: `POST /api/session` with role + PIN returns a short-lived, role-scoped session token (memory only), so operators never see the box token; that is an API change under the same lockout, and overlaps `local-accounts`. Reversible: the token only enters through `Review::set_token` in crates/helmsman-canvas/src/review.rs.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -359,8 +359,9 @@
   options: paste the box token once per page load, memory only (recommended for now, built) | PIN login exchange for a short-lived session token (API change) | the box injects the token into the page it serves on loopback only
   est: 1d
   difficulty: med
-  notes: local-accounts (feat/local-accounts) built the login alternative per person rather than per role PIN: on a box with an accounts file the review screen logs in (user + masked password, memory only) via POST /api/login and uses the session token as bearer, so operators never see the box token; boxes without accounts still paste the token. What's left to decide is only the PIN-only boxes.
+  notes: local-accounts (feat/local-accounts) built the login alternative per person rather than per role PIN: on a box with an accounts file the review screen logs in (user + masked password, memory only) via POST /api/login and uses the session token as bearer, so operators never see the box token; boxes without accounts still paste the token. What's left to decide is only the PIN-only boxes. Built on feat/canvas-session: `POST /api/login {role, pin}` on a box without accounts (the PIN gate and its lockout) opens a role session; the canvas gets it as an HttpOnly cookie (with the next card's answer), never the box token; docs/ARCHITECTURE.md "Box API".
   id: canvas-token
+  answer: PIN login exchange for a short-lived session token (API change)
 
 - [ ] **Floor screen layout: a startup file, or part of the snapshot?** The andon view (feat/andon-screen) reads its layout from `--screen FILE` at startup, like the sinks file: tile titles, which signal each tile shows, and the state code → colour/message table. It is not in the snapshot store, so changing a message is a file edit plus a restart, outside the approval path and the history. What the tiles *are* (the `screen` outputs and their safe states) is in the I/O map, which is snapshotted and output-affecting, so nothing that drives a tile bypasses approval; only the words and colours do. Putting the layout in a change set means a store schema bump (a `screen` blob beside `io-map` and `calendar`), a tier for it (I'd say `param`: it moves no output), and a live reload in the canvas. I kept it a startup file (reversible: the API already serves it by content).
   asked: 2026-10-30
@@ -373,7 +374,7 @@
   depends: map-reload
   id: screen-layout-snapshot
 
-- [ ] **How does the browser canvas hold the box API token?** Ask why (`POST /api/explain`) needs the token like every POST, and the canvas is served without one. Today the operator types it into the panel; it stays in page memory only (gone on reload, never in storage, never in a URL or log). That works on the bench but nobody on the floor should be handed the box-wide token, and proposal-ui's apply has the same need. Options: keep typing it (built, reversible); a narrower per-device "viewer" token that can only reach `/api/explain` and `/api/chat`; or the box sets an HttpOnly session cookie after a role PIN (that is `local-accounts`' shape). Until then Ask why is an engineer feature in practice; the first layer (no model) needs nothing.
+- [x] **How does the browser canvas hold the box API token?** Ask why (`POST /api/explain`) needs the token like every POST, and the canvas is served without one. Today the operator types it into the panel; it stays in page memory only (gone on reload, never in storage, never in a URL or log). That works on the bench but nobody on the floor should be handed the box-wide token, and proposal-ui's apply has the same need. Options: keep typing it (built, reversible); a narrower per-device "viewer" token that can only reach `/api/explain` and `/api/chat`; or the box sets an HttpOnly session cookie after a role PIN (that is `local-accounts`' shape). Until then Ask why is an engineer feature in practice; the first layer (no model) needs nothing.
   asked: 2026-10-30
   by: claude-agent
   needs: your call
@@ -381,7 +382,9 @@
   options: type the token, memory only (recommended for now, built) | per-device token scoped to explain/chat | PIN login with an HttpOnly session cookie
   est: 1d
   difficulty: med
+  notes: built on feat/canvas-session: a browser login (X-Helmsman-Request: 1 + same-origin) gets `helmsman_session` as HttpOnly; SameSite=Strict; Path=/api; Max-Age=3600 (no Secure on plain-http LAN boxes), never in the body; cookie calls need X-Helmsman-Request: 1 and the box's Origin/Referer (403 otherwise); a bearer wins over the cookie; /mcp takes the box token only. The canvas's token field is gone; Ask why and approvals ride the cookie. Tests: helmsman-plc/tests/accounts.rs (browser sessions), the canvas's review_tests.rs and ui_tests.rs.
   id: canvas-token
+  answer: PIN login with an HttpOnly session cookie
 
 - [ ] **Param units: a `unit=` key on manifest param lines?** The offline chat (feat/local-fallback) checks a typed unit ("80 %", "5 s") against the param's, but params had no unit; signals did. I added an optional `unit=U` to `param` lines for int/real (same rule as a signal's unit: 1..=16 printable ASCII, no `#`), parsed, rendered, served in the API's manifest and param-proposal JSON, metadata only, never converted. A unit change counts as a manifest change, so it is logic tier, not param. Without it the offline chat would accept bare numbers only. The agent's `draft_module` does not write units yet (the relay's tool schema would need a `unit` field).
   asked: 2026-10-30

@@ -69,8 +69,8 @@ impl Driver {
             };
             match cmd {
                 SideCmd::Index => push(Side::Index(get("/api").await)),
-                SideCmd::Ask { token, body } => {
-                    if let Err(e) = ask(&token, &body, &push).await {
+                SideCmd::Ask { body } => {
+                    if let Err(e) = ask(&body, &push).await {
                         push(Side::Ask(Reply::Failed(e)));
                     }
                 }
@@ -234,21 +234,16 @@ pub fn wants(key: &str) -> bool {
         })
 }
 
-/// `POST /api/explain` (same origin), the token in the header (never the
-/// URL), its body handed over chunk by chunk as it streams.
-async fn ask(token: &str, body: &str, push: &dyn Fn(Side)) -> Result<(), String> {
+/// `POST /api/explain` (same origin, the session cookie, see [`init`]),
+/// its body handed over chunk by chunk as it streams.
+async fn ask(body: &str, push: &dyn Fn(Side)) -> Result<(), String> {
     use web_sys::js_sys::{Reflect, Uint8Array};
 
     let window = web_sys::window().ok_or("no window")?;
-    let headers = web_sys::Headers::new().map_err(|e| text(&e))?;
-    headers
-        .set("Authorization", &format!("Bearer {token}"))
-        .map_err(|e| text(&e))?;
+    let (init, headers) = init("POST")?;
     headers
         .set("Content-Type", "application/json")
         .map_err(|e| text(&e))?;
-    let init = web_sys::RequestInit::new();
-    init.set_method("POST");
     init.set_headers(&headers);
     init.set_body(&JsValue::from_str(body));
     let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init("/api/explain", &init))
@@ -322,20 +317,32 @@ impl Http {
     }
 }
 
-/// Carries out `req` on the page's origin. The token goes only in the
-/// `Authorization` header; nothing is cached or stored.
-async fn send(req: ReviewRequest) -> Result<Answer, String> {
-    let window = web_sys::window().ok_or("no window")?;
+/// What every call to the box sends: same-origin only, the browser's
+/// session cookie with it (`HttpOnly`: this code never sees it), nothing
+/// cached, and the page's origin. The box serves its pages with
+/// `Referrer-Policy: no-referrer`, under which a browser sends `Origin:
+/// null` even to the same origin; `same-origin` here makes it send the
+/// real one, which the box checks beside the cookie. A mutating call
+/// carries `X-Helmsman-Request: 1`, a header no cross-site form can send.
+fn init(method: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String> {
     let init = web_sys::RequestInit::new();
-    init.set_method(req.method.as_str());
+    init.set_method(method);
+    init.set_mode(web_sys::RequestMode::SameOrigin);
     init.set_cache(web_sys::RequestCache::NoStore);
     init.set_credentials(web_sys::RequestCredentials::SameOrigin);
+    init.set_referrer_policy(web_sys::ReferrerPolicy::SameOrigin);
     let headers = web_sys::Headers::new().map_err(|e| text(&e))?;
-    if let Some(t) = &req.bearer {
-        headers
-            .set("Authorization", &format!("Bearer {t}"))
-            .map_err(|e| text(&e))?;
+    if method != "GET" {
+        headers.set("X-Helmsman-Request", "1").map_err(|e| text(&e))?;
     }
+    Ok((init, headers))
+}
+
+/// Carries out `req` on the page's origin with the session cookie (see
+/// [`init`]); nothing is cached or stored.
+async fn send(req: ReviewRequest) -> Result<Answer, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let (init, headers) = init(req.method.as_str())?;
     if let Some(b) = &req.body {
         headers
             .set("Content-Type", "application/json")

@@ -6,8 +6,9 @@
 //!   seen over the last 12 s").
 //! - [`Sse`]: the event-stream parser for `POST /api/explain`'s body,
 //!   fed whatever chunks the browser's reader hands over.
-//! - [`Ask`]: one "Ask why": whether it can be asked at all (relay, link,
-//!   token), and the box's and the agent's answers as they stream in.
+//! - [`Ask`]: one "Ask why": whether it can be asked at all (relay,
+//!   link; the session is the browser's cookie, and a 401 says to sign
+//!   in), and the box's and the agent's answers as they stream in.
 
 use std::collections::HashMap;
 
@@ -119,17 +120,16 @@ pub enum SideCmd {
     /// `GET /api` (whether the box has an agent); answered with
     /// [`Side::Index`].
     Index,
-    /// `POST /api/explain` with this token and body; answered with
-    /// [`Side::Ask`]s.
-    Ask { token: String, body: String },
+    /// `POST /api/explain` with this body, under the browser's session
+    /// cookie; answered with [`Side::Ask`]s.
+    Ask { body: String },
 }
 
 impl std::fmt::Display for SideCmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Index => f.write_str("GET /api"),
-            // Never the token.
-            Self::Ask { body, .. } => write!(f, "POST /api/explain {body}"),
+            Self::Ask { body } => write!(f, "POST /api/explain {body}"),
         }
     }
 }
@@ -174,30 +174,23 @@ pub struct Ask {
     sse: Sse,
 }
 
-/// Why "Ask why" cannot be used now, in the operator's words; `None`: it can.
+/// Why "Ask why" cannot be used now, in the operator's words; `None`: it
+/// can (whether the page is signed in is the box's to say: a 401).
 #[must_use]
-pub fn blocked(connected: bool, agent: Option<bool>, token: &str) -> Option<&'static str> {
+pub const fn blocked(connected: bool, agent: Option<bool>) -> Option<&'static str> {
     if !connected {
         return Some("The box is offline: asking needs the box. The explanation above still works.");
     }
     match agent {
-        Some(false) => {
-            return Some("No agent on this box (no relay configured). The explanation above still works.");
-        }
-        None => return Some("Checking whether this box has an agent…"),
-        Some(true) => {}
+        Some(false) => Some("No agent on this box (no relay configured). The explanation above still works."),
+        None => Some("Checking whether this box has an agent…"),
+        Some(true) => None,
     }
-    if !token_ok(token) {
-        return Some("Enter the box's API token to ask the agent.");
-    }
-    None
 }
 
-/// Whether `t` looks like the box API token (64 hex digits).
-#[must_use]
-pub fn token_ok(t: &str) -> bool {
-    t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
-}
+/// What a 401 to "Ask why" means.
+pub const SIGN_IN: &str =
+    "Not signed in, or the session ended: sign in on the Proposals screen (top bar), then ask again.";
 
 /// The request body for `module` and `path`.
 #[must_use]
@@ -241,7 +234,7 @@ impl Ask {
                     .and_then(|j| j["error"].as_str().map(str::to_string))
                     .unwrap_or_else(|| format!("the box answered {code}"));
                 let why = match code {
-                    401 => "The API token was refused; check it and ask again.".to_string(),
+                    401 => SIGN_IN.to_string(),
                     _ => why,
                 };
                 self.fail(why);
@@ -380,11 +373,12 @@ mod tests {
     #[test]
     fn failures_say_what_to_do() {
         let mut a = Ask::new("cell", "X");
-        a.apply(Reply::Status(401, "{\"error\":\"wrong token\"}".into()));
-        assert_eq!(
-            a.phase,
-            Phase::Failed("The API token was refused; check it and ask again.".into())
-        );
+        a.apply(Reply::Status(
+            401,
+            "{\"error\":\"not logged in, or the session ended; log in again\"}".into(),
+        ));
+        assert_eq!(a.phase, Phase::Failed(SIGN_IN.into()));
+        assert!(SIGN_IN.contains("sign in on the Proposals screen"));
         let mut a = Ask::new("cell", "X");
         a.apply(Reply::Status(
             503,
@@ -413,14 +407,15 @@ mod tests {
     }
 
     #[test]
-    fn asking_is_blocked_with_a_reason_until_box_agent_and_token_are_there() {
-        let token = "a".repeat(64);
-        assert!(blocked(false, Some(true), &token).unwrap().contains("offline"));
-        assert!(blocked(true, Some(false), &token).unwrap().contains("No agent"));
-        assert!(blocked(true, None, &token).is_some());
-        assert!(blocked(true, Some(true), "").unwrap().contains("token"));
-        assert!(blocked(true, Some(true), &"g".repeat(64)).is_some());
-        assert_eq!(blocked(true, Some(true), &token), None);
+    fn asking_is_blocked_with_a_reason_until_box_and_agent_are_there() {
+        assert!(blocked(false, Some(true)).unwrap().contains("offline"));
+        assert!(blocked(true, Some(false)).unwrap().contains("No agent"));
+        assert!(blocked(true, None).is_some());
+        assert_eq!(
+            blocked(true, Some(true)),
+            None,
+            "no token to type: the cookie is the browser's"
+        );
         assert_eq!(body("cell", "M.ON"), r#"{"module":"cell","path":"M.ON"}"#);
     }
 }

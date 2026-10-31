@@ -699,7 +699,7 @@ mod explained {
     }
 
     #[test]
-    fn on_a_box_ask_why_waits_for_agent_and_token_then_streams_the_answer() {
+    fn on_a_box_ask_why_waits_for_the_agent_then_streams_the_answer() {
         let bench = Bench::new();
         let (state, _) = watch(&bench);
         let mut h = Harness::new(Project::default());
@@ -717,29 +717,35 @@ mod explained {
         b.side_in(vec![Side::Index(Ok(index))]);
         assert_eq!(b.agent, Some(false), "this bench has no relay");
         assert!(b.blocked().unwrap().contains("No agent"));
-        b.agent = Some(true);
-        assert!(b.blocked().unwrap().contains("token"));
         let ctx = h.ctx.clone();
         let b = h.app.boxv.as_mut().unwrap();
         b.ask_why(&ctx, "CONVEYOR");
         assert_eq!(b.side_sent.len(), 1, "blocked: nothing sent");
-        b.token = format!(" {} ", "ab".repeat(32));
+        // No token to type: the session is the browser's cookie.
+        b.agent = Some(true);
         assert_eq!(b.blocked(), None);
+        // Not signed in: the box's 401 says where to sign in.
+        b.ask_why(&ctx, "CONVEYOR");
+        b.side_in(vec![Side::Ask(Reply::Status(
+            401,
+            r#"{"error":"not logged in, or the session ended; log in again"}"#.into(),
+        ))]);
+        assert_eq!(
+            b.ask.as_ref().unwrap().phase,
+            Phase::Failed(crate::explain::SIGN_IN.into())
+        );
+        h.frame(vec![]);
+        let b = h.app.boxv.as_mut().unwrap();
         b.ask_why(&ctx, "CONVEYOR");
         let sent = b.side_sent.last().unwrap().clone();
         assert_eq!(
             sent,
             SideCmd::Ask {
-                token: "ab".repeat(32),
                 body: r#"{"module":"cell","path":"CONVEYOR"}"#.into(),
             }
         );
-        assert!(
-            !format!("{sent:?}").contains(&"ab".repeat(32)),
-            "the token never reaches a log line"
-        );
         b.ask_why(&ctx, "CONVEYOR");
-        assert_eq!(b.side_sent.len(), 2, "one ask at a time");
+        assert_eq!(b.side_sent.len(), 3, "one ask at a time");
         b.side_in(vec![
             Side::Ask(Reply::Chunk(
                 "event: explain\ndata: {\"scan\":9,\"sentences\":[{\"text\":\"Conveyor is ON.\"}]}\n\nevent: text\ndata: {\"delta\":\"The belt runs: \"}\n\n".into(),
@@ -833,7 +839,7 @@ mod reviewing {
     }
 
     #[test]
-    fn an_engineer_reviews_replays_and_approves_with_a_pin_by_clicking() {
+    fn an_engineer_signs_in_with_a_pin_reviews_replays_and_approves_by_clicking() {
         let b = Bench::new();
         let id = b.horn();
         let mut h = Harness::new(Project::default());
@@ -846,30 +852,59 @@ mod reviewing {
         pump(&mut h, &b);
         assert_eq!(rv(&mut h).state.open.as_ref().map(|o| o.id), Some(id));
 
-        type_into(&mut h, "token", &b.token);
-        click(&mut h, "use");
-        assert!(rv(&mut h).state.has_token());
-        assert_eq!(rv(&mut h).token_input, "", "the field does not keep it");
-
+        // Not signed in: no token field anywhere, approving is off, and the
+        // panel asks for a role and its PIN (the box has no accounts).
+        let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
+        for gone in ["token", "use", "user", "password"] {
+            assert!(!keys.contains(&gone.to_string()), "{gone} on screen: {keys:?}");
+        }
+        for k in [
+            "role operator",
+            "role engineer",
+            "role integrator",
+            "pin",
+            "login",
+        ] {
+            assert!(keys.contains(&k.to_string()), "no {k}: {keys:?}");
+        }
         let t = Target::Proposal(id);
+        click(&mut h, &format!("go {t:?}"));
+        pump(&mut h, &b);
+        assert!(
+            matches!(rv(&mut h).state.open.as_ref().unwrap().step.phase, Phase::Idle),
+            "a disabled button sends nothing"
+        );
+
+        click(&mut h, "role engineer");
+        assert_eq!(rv(&mut h).role_input, "engineer");
+        type_into(&mut h, "pin", "eng-135797");
+        assert_eq!(rv(&mut h).pin_input, "eng-135797");
+        click(&mut h, "login");
+        h.frame(vec![]);
+        let sent = rv(&mut h).sent.clone();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(sent[0].body.as_deref().unwrap().contains("eng-135797"));
+        assert!(!format!("{sent:?}").contains("eng-135797"), "redacted in Debug");
+        assert_eq!(rv(&mut h).pin_input, "", "cleared on submit");
+        pump(&mut h, &b);
+        assert_eq!(rv(&mut h).state.signed_in().as_deref(), Some("engineer (PIN)"));
+        assert!(b.jar.session().is_some(), "the browser holds the cookie");
+        let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
+        assert!(keys.contains(&"logout".to_string()), "{keys:?}");
+        assert!(!keys.contains(&"pin".to_string()), "{keys:?}");
+
         click(&mut h, &format!("replay {t:?}"));
         pump(&mut h, &b);
         let replay = rv(&mut h).state.open.as_ref().unwrap().step.replay.clone();
         assert!(matches!(replay, Replay::Done(_)), "{replay:?}");
 
-        // Engineer is already picked (the tier needs it); type the PIN, click.
-        type_into(&mut h, &format!("pin {t:?}"), "eng-135797");
-        assert_eq!(rv(&mut h).state.open.as_ref().unwrap().step.pin, "eng-135797");
+        // Approve as the engineer signed in: no role, no PIN in the body.
         click(&mut h, &format!("go {t:?}"));
         h.frame(vec![]);
         let sent = rv(&mut h).sent.clone();
         assert_eq!(sent.len(), 1, "{sent:?}");
-        assert!(sent[0].body.as_deref().unwrap().contains("eng-135797"));
-        assert_eq!(
-            rv(&mut h).state.open.as_ref().unwrap().step.pin,
-            "",
-            "cleared on submit"
-        );
+        let body = sent[0].body.as_deref().unwrap();
+        assert!(!body.contains("pin") && !body.contains("role"), "{body}");
         pump(&mut h, &b);
         let phase = rv(&mut h).state.open.as_ref().unwrap().step.phase.clone();
         assert!(matches!(phase, Phase::Applied(_)), "{phase:?}");
@@ -889,6 +924,63 @@ mod reviewing {
             h.frame(vec![]);
             fits(&mut h);
         }
+
+        // Sign out: the box ends it and clears the cookie; the panel asks
+        // for a PIN again and approving is off.
+        h.size = Vec2::new(1400.0, 4000.0);
+        h.frame(vec![]);
+        click(&mut h, "logout");
+        pump(&mut h, &b);
+        assert_eq!(rv(&mut h).state.signed_in(), None);
+        assert_eq!(b.jar.session(), None);
+        let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
+        assert!(keys.contains(&"pin".to_string()), "{keys:?}");
+    }
+
+    #[test]
+    fn on_a_box_with_accounts_the_panel_asks_for_a_user_and_a_session_end_brings_it_back() {
+        let b = Bench::new();
+        let mut accounts = helmsman_plc::policy::account::Accounts::default();
+        accounts
+            .add(
+                "alice",
+                helmsman_plc::policy::Role::Engineer,
+                "alice-pass-31337",
+                1,
+                [1; 16],
+            )
+            .unwrap();
+        accounts.save(b.state_dir()).unwrap();
+        let mut h = Harness::new(Project::default());
+        h.size = Vec2::new(1400.0, 2000.0);
+        h.app.mode = Mode::Review;
+        h.frame(vec![]);
+        pump(&mut h, &b);
+        let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
+        for k in ["user", "password", "login"] {
+            assert!(keys.contains(&k.to_string()), "no {k}: {keys:?}");
+        }
+        assert!(
+            !keys.iter().any(|k| k.starts_with("role ") || k == "pin"),
+            "{keys:?}"
+        );
+        type_into(&mut h, "user", "alice");
+        type_into(&mut h, "password", "alice-pass-31337");
+        click(&mut h, "login");
+        pump(&mut h, &b);
+        assert_eq!(rv(&mut h).state.signed_in().as_deref(), Some("alice (engineer)"));
+        assert_eq!(rv(&mut h).password_input, "", "cleared on submit");
+
+        // The box ends the session (here: her account is disabled): the
+        // next call is 401 and the sign-in panel is back.
+        accounts.set_disabled("alice", true).unwrap();
+        accounts.save(b.state_dir()).unwrap();
+        rv(&mut h).state.refresh();
+        pump(&mut h, &b);
+        assert_eq!(rv(&mut h).state.signed_in(), None);
+        let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
+        assert!(keys.contains(&"password".to_string()), "{keys:?}");
+        assert_eq!(b.jar.session(), None, "the box cleared the cookie");
     }
 
     #[test]
@@ -897,7 +989,11 @@ mod reviewing {
         h.app.mode = Mode::Review;
         h.frame(vec![]);
         let calls: Vec<_> = rv(&mut h).sent.iter().map(|q| q.call.clone()).collect();
-        assert_eq!(calls.len(), 3, "the list, the outputs and the policy: {calls:?}");
+        assert_eq!(
+            calls.len(),
+            4,
+            "the list, the outputs, the policy and who is signed in: {calls:?}"
+        );
         let ctx = h.ctx.clone();
         let answers = std::mem::take(&mut rv(&mut h).sent)
             .into_iter()

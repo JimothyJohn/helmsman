@@ -35,6 +35,12 @@
 //! SHA-256, ending after [`SESSION_TTL`], after [`SESSION_IDLE`] unused,
 //! on logout, or when the account changes. A session carries its
 //! account's role; nothing a request says can change it.
+//!
+//! **Role-PIN sessions** ([`Logins::issue_role`]): on a box without an
+//! accounts file, a role's PIN (checked by the caller through the PIN
+//! gate and its lockout) opens a session for that role, in the same
+//! table under the same limits, with no person ([`Proof::Pin`]); it ends
+//! at its next use once an accounts file appears.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt::{self, Write as _};
@@ -372,8 +378,50 @@ impl Accounts {
 /// Who a session is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Principal {
+    /// The account; for a role-PIN session, the role's name (no person
+    /// is known: see [`Principal::person`]).
     pub user: String,
     pub role: Role,
+    /// What the login proved.
+    pub proof: Proof,
+}
+
+/// What a session's login checked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Proof {
+    /// An account's password (a box with an accounts file).
+    Password,
+    /// A role's PIN (a box without one): the session is the role's, no
+    /// person's.
+    Pin,
+}
+
+impl Principal {
+    /// The person, when the session is an account's.
+    #[must_use]
+    pub fn person(&self) -> Option<&str> {
+        match self.proof {
+            Proof::Password => Some(&self.user),
+            Proof::Pin => None,
+        }
+    }
+
+    /// How the audit log and the history name the approver: `alice
+    /// (engineer)`, or `operator (PIN)` for a role-PIN session.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match self.proof {
+            Proof::Password => format!("{} ({})", self.user, self.role),
+            Proof::Pin => format!("{} (PIN)", self.role),
+        }
+    }
+}
+
+/// What a role-PIN session is checked against at each use: it lasts
+/// while the box has no accounts file (one appearing ends it at its next
+/// use). PINs change only with a restart, which ends every session.
+fn pin_stamp(role: Role) -> [u8; 32] {
+    Sha256::digest(format!("helmsman role-pin session {role}").as_bytes()).into()
 }
 
 /// A login that worked. `Debug` never shows the token.
@@ -600,7 +648,12 @@ impl Logins {
         if let (true, Some(a)) = (ok, account) {
             st.users.remove(user);
             drop(st);
-            return self.issue(a, now);
+            let who = Principal {
+                user: a.user.clone(),
+                role: a.role,
+                proof: Proof::Password,
+            };
+            return self.issue(who, a.stamp(), now);
         }
         if account.is_some() {
             let f = st.users.entry(user.to_string()).or_default();
@@ -632,12 +685,32 @@ impl Logins {
         Err(LoginRefused::Wrong)
     }
 
-    fn issue(&self, a: &Account, now: Instant) -> Result<Issued, LoginRefused> {
-        let token = random_token().map_err(|e| LoginRefused::Unavailable(format!("random token: {e}")))?;
+    /// Opens a session for `role` once its PIN was checked: by the
+    /// caller, through [`super::pin::Gate::check`] and its lockout; this
+    /// checks no PIN. It lasts as an account's session does, counts toward
+    /// the same caps (the per-person one per role), and ends at its next
+    /// use once the box has an accounts file.
+    ///
+    /// # Errors
+    /// [`LoginRefused::Unavailable`] if the box has an accounts file (role
+    /// PINs are off) or no randomness, [`LoginRefused::Full`] if the
+    /// table is.
+    pub fn issue_role(&self, role: Role) -> Result<Issued, LoginRefused> {
+        if !matches!(self.mode(), Mode::Pins) {
+            return Err(LoginRefused::Unavailable(
+                "this box has accounts: role PINs are off".into(),
+            ));
+        }
         let who = Principal {
-            user: a.user.clone(),
-            role: a.role,
+            user: role.as_str().to_string(),
+            role,
+            proof: Proof::Pin,
         };
+        self.issue(who, pin_stamp(role), (self.clock)())
+    }
+
+    fn issue(&self, who: Principal, stamp: [u8; 32], now: Instant) -> Result<Issued, LoginRefused> {
+        let token = random_token().map_err(|e| LoginRefused::Unavailable(format!("random token: {e}")))?;
         let mut ss = lock(&self.sessions);
         let limits = self.limits;
         ss.retain(|_, s| {
@@ -646,7 +719,7 @@ impl Logins {
         });
         let mut mine: Vec<([u8; 32], Instant)> = ss
             .iter()
-            .filter(|(_, s)| s.who.user == a.user)
+            .filter(|(_, s)| s.who.user == who.user && s.who.proof == who.proof)
             .map(|(k, s)| (*k, s.created))
             .collect();
         mine.sort_by_key(|(_, c)| *c);
@@ -661,7 +734,7 @@ impl Logins {
             key(&token),
             Session {
                 who: who.clone(),
-                stamp: a.stamp(),
+                stamp,
                 created: now,
                 last: now,
             },
@@ -693,9 +766,12 @@ impl Logins {
             ss.remove(&k);
             return Err(SessionRefused::Expired);
         }
-        let current = match self.mode() {
-            Mode::Accounts(a) => a.get(&s.who.user).filter(|a| !a.disabled).map(Account::stamp),
-            Mode::Pins | Mode::Broken(_) => None,
+        let current = match (self.mode(), s.who.proof) {
+            (Mode::Accounts(a), Proof::Password) => {
+                a.get(&s.who.user).filter(|a| !a.disabled).map(Account::stamp)
+            }
+            (Mode::Pins, Proof::Pin) => Some(pin_stamp(s.who.role)),
+            _ => None,
         };
         if !current.is_some_and(|c| ct_eq(&c, &s.stamp)) {
             ss.remove(&k);

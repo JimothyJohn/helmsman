@@ -19,11 +19,11 @@ serde_json = "1.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
-# fetch (Request, RequestInit, Headers, Response; RequestCache and
-# RequestCredentials for the review screen) and EventSource (Event,
-# EventTarget, MessageEvent) for the box API; Location for `?demo`.
-# ReadableStream(DefaultReader) and TextDecoder(Options): POST
-# /api/explain with the token in a header, read as it streams.
+# fetch (Request, RequestInit, Headers, Response; RequestCache,
+# RequestCredentials and ReferrerPolicy for the calls made with the
+# session cookie) and EventSource (Event, EventTarget, MessageEvent) for
+# the box API; Location for `?demo`. ReadableStream(DefaultReader) and
+# TextDecoder(Options): POST /api/explain, read as it streams.
 web-sys = { version = "0.3", features = [
     "console",
     "Document",
@@ -36,6 +36,7 @@ web-sys = { version = "0.3", features = [
     "MessageEvent",
     "ReadableStream",
     "ReadableStreamDefaultReader",
+    "ReferrerPolicy",
     "Request",
     "RequestCache",
     "RequestCredentials",
