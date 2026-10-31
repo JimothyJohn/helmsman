@@ -406,8 +406,16 @@ fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<(Module, String), Str
     if let Some(md) = dir
         && let Some(bytes) = &md.wasm
     {
-        let module = md.wasm_module(helmsman_plc::wasm::Limits::default())?;
-        return Ok((module, wasm_note(bytes)));
+        #[cfg(feature = "wasm")]
+        return Ok((
+            md.wasm_module(helmsman_plc::wasm::Limits::default())?,
+            wasm_note(bytes),
+        ));
+        #[cfg(not(feature = "wasm"))]
+        return Err(format!(
+            "{file}: a WASM module, and this build has no `wasm` feature ({} bytes)",
+            bytes.len()
+        ));
     }
     let src = match dir {
         Some(md) => md.source.clone(),
@@ -441,6 +449,7 @@ fn load((spec, dir): &(Spec, Option<ModuleDir>)) -> Result<(Module, String), Str
     Ok((module, src))
 }
 
+#[cfg(feature = "wasm")]
 /// What the API shows as a WASM module's source: an ST comment naming
 /// the binary, so nothing mistakes it for code.
 fn wasm_note(bytes: &[u8]) -> String {

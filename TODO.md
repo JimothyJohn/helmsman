@@ -442,6 +442,16 @@
   difficulty: low
   id: dropin-watch-only
 
+- [ ] **WASM runtime: wasmi now, per-module limits later?** The WASM module tier (feat/wasm-tier) runs on wasmi, a pure-Rust interpreter, not wasmtime as the card said. Why: fuel per scan is exact and built in, there is no JIT (no executable memory on the box, same behaviour on the Pi as in CI), 6 small crates instead of Cranelift's tree, and it is already faster than our ST interpreter (a small module's tick 0.16 µs vs 0.30 µs; a 1000-pass loop 16 µs vs 185 µs). Cost: the box binary grows about 2.1 MiB (7.9 to 10.1 MB, macOS release), and heavy number-crunching would run maybe 5-10x faster under wasmtime. Limits are fixed for every module today: 1 000 000 fuel per scan, 4 MiB of linear memory. Per-module limits would be two manifest keys (`fuel`, `memory_kib`) capped by the box policy, which makes them part of the approval tier.
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether wasm-tier stays on wasmi, and whether modules may ask for more fuel or memory
+  options: wasmi, fixed limits (recommended, built) | wasmi, per-module limits in the manifest capped by policy | switch to wasmtime
+  est: 5m
+  difficulty: low
+  id: wasm-limits
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -936,11 +946,19 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 
 ## Roadmap M3: tiers, sharing, fleet
 
-- [ ] **WASM module tier** — wasmtime host; capabilities from the manifest (read signals, emit outputs, nothing else); fuel/memory limits; for drivers and code ST is bad at. Built off-box by the relay.
+- [x] **WASM module tier** — wasmtime host; capabilities from the manifest (read signals, emit outputs, nothing else); fuel/memory limits; for drivers and code ST is bad at. Built off-box by the relay.
+  notes: built on feat/wasm-tier with wasmi, not wasmtime (interpreter with fuel; ARCHITECTURE "WASM modules" has the why and the measurements). `module.wasm` beside `module.st`, the `helmsman/v1` imports as ports, fuel and memory caps, faults like ST. Store/proposal/bundle support is `wasm-store`.
   est: 2w
   difficulty: high
   depends: module-format
   id: wasm-tier
+
+- [ ] **WASM modules in snapshots, proposals and bundles** — the store, the box API's proposals and bundles carry a module's files as UTF-8 text (`module.st`), so a `module.wasm` module runs from `--module-dir` but cannot be stored, proposed, approved, rolled back or bundled. Carry the binary as a blob (SHA-256 like the others), classify its tier from the manifest as for ST, show the API its imports instead of a source.
+  result: a WASM module goes through the same approval path as an ST one
+  est: 3d
+  difficulty: med
+  depends: wasm-tier
+  id: wasm-store
 
 - [x] **Bundle format and signing** — portable signed bundles (modules, params, signal map templates) importable on another box; signature + manifest checked by the host.
   notes: floor = signature + capability manifest + host-enforced sandbox; the AI review on install sits on top and can only refuse (market-floor). Built: `bundle` module (format, Ed25519 via ring, trust store), `helmsman-plc bundle keygen/pack/sign/verify/trust`, `GET /api/snapshots/{id}/bundle`, `POST /api/bundles` (proposal only); see ARCHITECTURE "Bundles".
