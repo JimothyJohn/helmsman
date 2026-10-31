@@ -442,6 +442,17 @@
   difficulty: low
   id: dropin-watch-only
 
+- [ ] **Site view: let browsers read /api/site cross-origin, or have the box fetch its peers?** The site view (feat/site-view) shows each peer's status by fetching that peer's `GET /api/site` straight from the browser. So with `--site` on, `/api/site` (and nothing else) answers `Access-Control-Allow-Origin: *`, with no credentials and no preflight (OPTIONS and POST still get 401), and the canvas page's CSP widens to `connect-src 'self' http:`. The body is the beacon's fields, the peer list, and module/device counts only: no names, no values, no source. The cost: any web page a browser on the floor opens can read that summary from every box. The alternative is the box fetching its peers on the browser's behalf: no CORS, no CSP change, but every box then opens HTTP connections to addresses it learned from untrusted UDP beacons (SSRF-shaped), and "reachable" would mean reachable from the box, not from the tablet doing the click-through. I built CORS (reversible: one header in `site_route`, one CSP swap in `Asset::allow_peers`).
+  asked: 2026-10-30
+  by: claude-agent
+  needs: your call
+  result: whether a page from another origin may read a box's site summary
+  options: CORS on /api/site only, with --site (recommended, built) | the box proxies peers' /api/site | CORS only for origins that are heard peers' addresses
+  est: 2h
+  difficulty: low
+  depends: site-view
+  id: site-view-cors
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
@@ -968,10 +979,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: approval-policy
   id: local-accounts
 
-- [ ] **Multi-box site view** — boxes discover each other on the LAN; one canvas shows the floor.
+- [x] **Multi-box site view** — boxes discover each other on the LAN; one canvas shows the floor.
   est: 1w
   difficulty: high
   depends: canvas-web
+  notes: built on feat/site-view: `--site NAME` (off by default) sends a strict text beacon to 239.255.72.77:41910 (TTL 1) every 5 s and lists what it hears at `GET /api/site` (site.rs, tests/site.rs); the canvas's Site tab / `?site` reads each peer's /api/site from the browser, cross-origin (site.rs, site_tests.rs); see site-view-cors
   id: site-view
 
 - [ ] **Fleet console + OTA** — the relay grows into the fleet backbone: box registry, snapshot sync, signed updates of the core.

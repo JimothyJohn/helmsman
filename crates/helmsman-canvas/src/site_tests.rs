@@ -136,15 +136,15 @@ fn a_peers_own_answer_is_its_status() {
 #[test]
 fn probes_repeat_every_refresh_and_a_silent_peer_times_out_to_unreachable() {
     let mut s = two_peers();
-    let (n, _) = probe(&s.poll(0.2), P1).unwrap();
+    let (n, _) = probe(&s.poll(1.0), P1).unwrap();
     // In flight: not asked again, however long the frames keep coming.
-    assert_eq!(probe(&s.poll(1.0), P1), None);
-    assert_eq!(probe(&s.poll(0.2 + PEER_TIMEOUT - 0.1), P1), None);
+    assert_eq!(probe(&s.poll(2.0), P1), None);
+    assert_eq!(probe(&s.poll(1.0 + PEER_TIMEOUT - 0.1), P1), None);
     // Unanswered past the timeout: failed, and asked again.
-    let cmds = s.poll(0.2 + PEER_TIMEOUT);
+    let cmds = s.poll(1.0 + PEER_TIMEOUT);
     let (n2, _) = probe(&cmds, P1).unwrap();
     assert!(n2 > n);
-    let line = &s.lines(0.2 + PEER_TIMEOUT)[1];
+    let line = &s.lines(1.0 + PEER_TIMEOUT)[1];
     assert_eq!(line.health, Health::Unreachable);
     assert!(line.status.starts_with("UNREACHABLE"), "{}", line.status);
     // The old probe's late answer is ignored; the new one counts.
@@ -153,19 +153,19 @@ fn probes_repeat_every_refresh_and_a_silent_peer_times_out_to_unreachable() {
             Fetch::Peer { id: P1.into(), n },
             Ok(answer(P1, &status(true, 2, 0, 0, 0))),
         ),
-        9.0,
+        9.5,
     );
-    assert_eq!(s.lines(9.0)[1].health, Health::Unreachable);
+    assert_eq!(s.lines(9.5)[1].health, Health::Unreachable);
     s.apply(
         Msg::Got(
             Fetch::Peer { id: P1.into(), n: n2 },
             Ok(answer(P1, &status(true, 2, 0, 0, 0))),
         ),
-        9.1,
+        9.6,
     );
-    assert_eq!(s.lines(9.1)[1].health, Health::Ok);
+    assert_eq!(s.lines(9.6)[1].health, Health::Ok);
     // Answered: asked again only after REFRESH from when it was sent.
-    let sent = 0.2 + PEER_TIMEOUT;
+    let sent = 1.0 + PEER_TIMEOUT;
     assert_eq!(probe(&s.poll(sent + REFRESH - 0.1), P1), None);
     assert!(probe(&s.poll(sent + REFRESH), P1).is_some());
     // A network error is unreachable with the browser's reason.
@@ -249,7 +249,7 @@ fn a_hostile_peer_answer_is_never_shown_as_a_status() {
         (Ok("\u{0}\u{1b}[31m".into()), "not a box's answer"),
     ];
     for (k, (body, why)) in cases.into_iter().enumerate() {
-        let line = ask(&mut s, body, 0.2 + REFRESH * k as f64);
+        let line = ask(&mut s, body, 1.0 + REFRESH * k as f64);
         assert_eq!(line.health, Health::Unreachable, "{why}: {line:?}");
         assert!(line.status.contains(why), "{why}: {line:?}");
     }
