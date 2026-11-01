@@ -121,6 +121,8 @@ pub struct Viewer {
     /// How far the operator moved each block from where the layout put it,
     /// per POU. The view's own; the program is untouched.
     moved: Vec<Vec<(NodeId, Vec2)>>,
+    /// Counts changes to `moved` (see [`Self::edits`]).
+    edits: u64,
 }
 
 /// One row of the program tree.
@@ -146,6 +148,89 @@ enum Grab {
 /// label and source text, which of the same, offset).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Arrangement(Vec<(String, String, String, usize, Vec2)>);
+
+/// Offsets closer to zero than this are no move (float residue).
+const STILL: f32 = 0.01;
+
+impl Arrangement {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// How many blocks it moves.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Read from a project's `diagram.layout` ([`helmsman_project::layout`]).
+    ///
+    /// # Errors
+    /// What [`helmsman_project::layout::parse`] refuses.
+    pub fn from_text(text: &str) -> Result<Self, Vec<String>> {
+        Ok(Self(
+            helmsman_project::layout::parse(text)?
+                .into_iter()
+                .map(|m| (m.pou, m.label, m.text, m.k, Vec2::new(m.dx, m.dy)))
+                .collect(),
+        ))
+    }
+
+    /// As a `diagram.layout` file, the moves in a stable order.
+    #[must_use]
+    pub fn to_text(&self) -> String {
+        let mut moves: Vec<helmsman_project::layout::Move> = self
+            .0
+            .iter()
+            .map(|(pou, label, text, k, v)| helmsman_project::layout::Move {
+                pou: pou.clone(),
+                label: label.clone(),
+                text: text.clone(),
+                k: *k,
+                dx: v.x,
+                dy: v.y,
+            })
+            .collect();
+        moves.sort_by(|a, b| (&a.pou, &a.label, &a.text, a.k).cmp(&(&b.pou, &b.label, &b.text, b.k)));
+        helmsman_project::layout::render(&moves)
+    }
+
+    /// The offset `self` gives each block, less what `base` gives it: the
+    /// moves to make on top of `base` to get `self`. A block `base` moves
+    /// and `self` does not is moved back.
+    #[must_use]
+    pub fn minus(&self, base: &Self) -> Self {
+        let key = |e: &(String, String, String, usize, Vec2)| (e.0.clone(), e.1.clone(), e.2.clone(), e.3);
+        let mut total: std::collections::BTreeMap<(String, String, String, usize), Vec2> =
+            std::collections::BTreeMap::new();
+        for e in &self.0 {
+            *total.entry(key(e)).or_default() += e.4;
+        }
+        for e in &base.0 {
+            *total.entry(key(e)).or_default() -= e.4;
+        }
+        Self(
+            total
+                .into_iter()
+                .filter(|(_, v)| v.x.abs() >= STILL || v.y.abs() >= STILL)
+                .map(|((p, l, t, k), v)| (p, l, t, k, v))
+                .collect(),
+        )
+    }
+
+    /// Only the moves of blocks `v` has.
+    #[must_use]
+    pub fn within(&self, v: &Viewer) -> Self {
+        Self(
+            self.0
+                .iter()
+                .filter(|(p, l, t, k, _)| v.block(p, l, t, *k).is_some())
+                .cloned()
+                .collect(),
+        )
+    }
+}
 
 /// The smallest thing a finger can hit, in points.
 pub const TAP: f32 = 44.0;
@@ -199,7 +284,34 @@ impl Viewer {
             grab: None,
             folded: Vec::new(),
             moved,
+            edits: 0,
         }
+    }
+
+    /// Counts every change to the arrangement (a drag step, an
+    /// [`Self::arrange`], a reset): a new count means something moved.
+    #[must_use]
+    pub const fn edits(&self) -> u64 {
+        self.edits
+    }
+
+    /// A block or region is being dragged.
+    #[must_use]
+    pub const fn dragging(&self) -> bool {
+        matches!(self.grab, Some(Grab::Node(_) | Grab::Region(_)))
+    }
+
+    /// Block `k` of those labelled `label` with text `text` in POU `pou`.
+    #[must_use]
+    pub fn block(&self, pou: &str, label: &str, text: &str, k: usize) -> Option<(usize, NodeId)> {
+        let p = self.module.pous.iter().position(|q| q.name == pou)?;
+        self.module.pous[p]
+            .diagram
+            .nodes
+            .iter()
+            .filter(|m| m.label == label && m.text == text)
+            .nth(k)
+            .map(|m| (p, m.id))
     }
 
     /// Moves block `n` of the shown POU by `by` (diagram units).
@@ -218,6 +330,7 @@ impl Viewer {
     }
 
     fn shift(&mut self, pou: usize, nodes: &[NodeId], by: Vec2) {
+        self.edits += 1;
         let d = &mut self.module.pous[pou].diagram;
         for &n in nodes {
             let Some(node) = d.nodes.get_mut(n.0 as usize) else {
@@ -240,6 +353,7 @@ impl Viewer {
 
     /// Every block back where the layout put it.
     pub fn reset_arrangement(&mut self) {
+        self.edits += 1;
         for pou in 0..self.moved.len() {
             for (n, v) in std::mem::take(&mut self.moved[pou]) {
                 if let Some(node) = self.module.pous[pou].diagram.nodes.get_mut(n.0 as usize) {
@@ -274,18 +388,9 @@ impl Viewer {
     /// Moves the blocks `a` names, wherever they still are; the rest stay
     /// where the layout puts them.
     pub fn arrange(&mut self, a: &Arrangement) {
+        self.edits += 1;
         for (name, label, text, k, v) in &a.0 {
-            let Some(pou) = self.module.pous.iter().position(|p| &p.name == name) else {
-                continue;
-            };
-            let n = self.module.pous[pou]
-                .diagram
-                .nodes
-                .iter()
-                .filter(|m| &m.label == label && &m.text == text)
-                .nth(*k)
-                .map(|m| m.id);
-            if let Some(n) = n {
+            if let Some((pou, n)) = self.block(name, label, text, *k) {
                 self.shift(pou, &[n], *v);
             }
         }

@@ -24,6 +24,9 @@
 )]
 
 mod app;
+mod arrange;
+#[cfg(test)]
+mod arrange_tests;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_projects_tests;

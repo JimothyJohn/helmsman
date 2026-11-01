@@ -729,7 +729,7 @@
   id: driver-udp
   answer: when a device on a real job needs it (recommended)
 
-- [ ] **Diagram arrangement on the box: where is it kept?** Since #93 anyone can drag blocks and IF/CASE boxes in the live diagram to make it easier to read; it changes only the drawing, never the program. In the playground the arrangement survives edits. On the box it lives in that browser tab's memory and is gone on reload, and every operator starts from the automatic layout. Options: per browser (localStorage, no box change), per box and shared (stored with the snapshot or beside it, so the engineer arranges once and every screen shows that), or both (shared default, personal tweaks on top).
+- [x] **Diagram arrangement on the box: where is it kept?** Since #93 anyone can drag blocks and IF/CASE boxes in the live diagram to make it easier to read; it changes only the drawing, never the program. In the playground the arrangement survives edits. On the box it lives in that browser tab's memory and is gone on reload, and every operator starts from the automatic layout. Options: per browser (localStorage, no box change), per box and shared (stored with the snapshot or beside it, so the engineer arranges once and every screen shows that), or both (shared default, personal tweaks on top).
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -740,6 +740,7 @@
   depends: ui-roles-view
   id: arrangement-persist
   answer: both: shared default + personal tweaks
+  notes: built (feat/arrangement-persist): the shared default is the project's `diagram.layout` (helmsman_project::layout; travels in the .zip, the build ignores it), saved by an engineer from the running project's diagram (Save as default) or the sim's open project; tweaks per browser in localStorage on top; Reset layout to the default, then to the automatic layout. Keyed per POU (a POU's diagram is the same in every module). docs/ARCHITECTURE.md "The diagram's arrangement".
 
 - [x] **Who may rearrange the diagram and use the program browser: everyone, or engineers?** The live diagram (#93) and the program browser (in progress) change only what a screen shows, so they're built for every role. Two reasons to restrict: a shared arrangement (`arrangement-persist`) is something an operator could make worse for everyone, and some plants want the floor screen locked to one view. Options: viewing tools for all, saving a shared layout for engineers (recommended); everything for all; a "kiosk" floor screen that can't navigate or rearrange.
   asked: 2026-10-31
