@@ -377,6 +377,18 @@ impl App {
                     w.undo(ctx, a == Action::Redo);
                 }
             }
+            Action::GoToDefinition => {
+                let mut chrome = std::mem::take(&mut self.chrome);
+                if let Some(w) = self.workspace() {
+                    w.go_to_definition(&mut chrome);
+                }
+                self.chrome = chrome;
+            }
+            Action::CrossReferences => {
+                if let Some(w) = self.workspace() {
+                    w.cross_references();
+                }
+            }
             Action::Files => self.chrome.left = !self.chrome.left,
             Action::St => self.chrome.st = !self.chrome.st,
             Action::Panel => self.chrome.right = !self.chrome.right,
@@ -565,6 +577,29 @@ impl App {
                     && let Some(w) = self.workspace()
                 {
                     w.undo(&ctx, true);
+                }
+                ui.separator();
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit definition",
+                    "Go to definition",
+                    false,
+                    &k(Action::GoToDefinition),
+                ) && let Some(w) = self.workspace()
+                {
+                    w.go_to_definition(&mut chrome);
+                }
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit xref",
+                    "Cross references",
+                    false,
+                    &k(Action::CrossReferences),
+                ) && let Some(w) = self.workspace()
+                {
+                    w.cross_references();
                 }
             });
             hits.push(("bar edit".to_string(), e.response.rect));
