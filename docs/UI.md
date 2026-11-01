@@ -32,7 +32,7 @@ this; change it here first when a decision changes.
 - **ST on demand:** an "ST" toggle slides the editor open beside the
   diagram; clicking a block jumps the editor to its line.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
-  not show), Trend (pinned signals), Claude. On a Pi the Trend opens with
+  not show), Trend (pinned signals), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box, or the
   browser's when signed out.
@@ -116,7 +116,7 @@ one column on a phone, and grow with the screen up to 4K.
 
 - **Proposals** (agent changes approved with a PIN) sit behind the ⋯ menu
   until they get a home.
-- **Claude** on a Pi goes through the relay and proposes; in the simulation
+- **Agent** (the tab) on a Pi goes through the relay and proposes; in the simulation
   it uses the visitor's key, as the playground does today.
 - **Site** (every box on the network) is gone for now; it returns with a
   fleet view.

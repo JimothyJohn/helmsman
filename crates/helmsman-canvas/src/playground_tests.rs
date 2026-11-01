@@ -1368,7 +1368,13 @@ fn typing_in_the_editor_checks_after_a_pause_and_marks_the_error_line() {
     assert!(s.view.session.running);
     // The highlighter marks line 1.
     let diags = [(1, 13)];
-    let job = highlight(&s.view.session.src, &diags, None, &egui::FontId::monospace(13.0));
+    let job = highlight(
+        &s.view.session.src,
+        &diags,
+        None,
+        &egui::FontId::monospace(13.0),
+        f32::INFINITY,
+    );
     assert!(job.sections.iter().any(|x| x.format.underline.width > 0.0));
     assert_eq!(job.text, s.view.session.src, "the layout keeps the text as is");
 }

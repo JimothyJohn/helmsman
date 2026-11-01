@@ -87,6 +87,8 @@ pub struct Var {
     pub array: bool,
     /// The (element) type as declared, upper-cased: `BOOL`, `TIME`, `TON`.
     pub ty: String,
+    /// Declared in a `VAR CONSTANT` section.
+    pub constant: bool,
 }
 
 /// One POU of the module.
@@ -263,6 +265,7 @@ fn vars(p: &ast::Pou, fbs: &HashSet<String>) -> HashMap<String, Var> {
                     fb,
                     array,
                     ty: named,
+                    constant: v.constant,
                 },
             )
         })
