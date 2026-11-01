@@ -253,7 +253,8 @@ scan; the scheduler bounds how often.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
-  screen TILE` a floor screen tile (below). Older maps read unchanged;
+  screen TILE` an output no device takes (the retired floor screen's
+  tiles, below). Older maps read unchanged;
   `box`, `module` and `screen` are reserved device ids.
 
 ## Signals in the scan (`io-runtime`, built)
@@ -519,45 +520,23 @@ load.
   calendar's signals are missing, so modules reading them are held, and
   driven outputs go to their safe values.
 
-## Floor screen (`andon-screen`, built)
+## Floor screen (`andon-screen`, retired)
 
-A box-driven full-screen andon view, an output kind next to GPIO lights
-(`screen.rs` in `helmsman-plc`; contract in `tests/screen.rs`). The
-box side is built; the canvas's Andon mode that drew it was removed with
-docs/UI.md's clean-up, and the Monitor (its step 3, below) replaced it.
-The Monitor builds its tiles from the program, not from this layout
-(card `andon-layout-after-monitor`).
+The box-driven andon view (a `--screen FILE` layout of tiles, state codes
+and colours, served at `GET /api/screen` and drawn by the canvas at
+`/?andon`) is retired: the Monitor replaced it and builds its tiles from
+the program, not from a layout file (card `andon-layout-after-monitor`).
+helmsman-plc refuses `--screen` with that reason, `/api/screen` is a 404,
+and the startup line for `/?andon` is gone; `?andon` opens the Monitor.
+The code is in git history (`crates/helmsman-plc/src/screen.rs`,
+`crates/helmsman-canvas/src/andon.rs`).
 
-- **Tiles are outputs.** `out line1_state int screen line1` in the I/O map
-  (`Binding::Screen`): an `out` signal no device takes, so no link polls or
-  writes it. A module drives it through a `VAR_OUTPUT` of that name, so the
-  one-writer rule, safe values (a held or faulted module's tile goes to its
-  `safe=` state), the approval tiers (a map change is output-affecting) and
-  the audit apply as to a stack light. Several signals may feed one tile.
-- **Messages are state codes, not strings.** A module drives an `INT` (or a
-  `BOOL`, read as 0/1); the layout maps each code to a fixed colour and a
-  fixed message. Signals stay scalar (no string type in the scan, recorder,
-  replay or sinks), and the words in front of the line are reviewed box
-  configuration, never text a module computes. A code the layout does not
-  name shows as "UNKNOWN STATE n".
-- **Layout file** (`--screen FILE`, `helmsman-screen 1`, hand-parsed, 64 KiB
-  cap): `title`, `grid COLS ROWS` (1..=8), `code SET N COLOUR TEXT`, `tile
-  ID COL,ROW[,W,H] SET SIGNAL TITLE`, `value ID SIGNAL LABEL` (a number
-  under the message). Colours are a fixed palette (IEC 60073 stack-light
-  colours plus the brand's safety yellow and graphite; no user theming).
-  Checked at startup against the map: each tile's signals are `screen`
-  outputs on that tile, of a type it can show, and every `screen` output is
-  on a tile; a map with tiles and no layout is refused while the API runs.
-  Changing it is a box config change (a restart), like the sinks file; it
-  is not in snapshots (`screen-layout-snapshot` asks).
-- **Served read-only** at `GET /api/screen`: the file byte for byte (the
-  canvas parses it with the same parser), the parsed layout and the palette.
-- **The view** was the served canvas at `/?andon` (now it opens the
-  Monitor): a header (title, and the shift from the calendar), big tiles,
-  fed by `/api/events`. Its rule carries to the Monitor: **stale data
-  never shows as a colour** (the stream fails, or no event for 3 s, and
-  every tile shows "NO DATA" on black under a red banner). The code is in
-  git history (`crates/helmsman-canvas/src/andon.rs` before the clean-up).
+What stays: `out NAME TYPE screen TILE` still parses in an I/O map
+(helmsman-io's `Binding::Screen`), so an old map loads and reloads
+unchanged. Such an output is one no device takes: no link polls or writes
+it, a module drives it through a `VAR_OUTPUT` of that name under the
+one-writer rule and safe values, and the Monitor shows it as one of the
+program's outputs. No layout has to fit it any more.
 
 ## Sim replay (`sim-replay`, built)
 
@@ -983,11 +962,8 @@ threads, the Modbus simulator over TCP).
   dropped; if the device does not answer that cannot happen (the box only
   reaches a device through its link), and the apply says so in
   `reload.notes`: the device's own comm watchdog is the backstop.
-- **The floor screen** (`--screen`) must fit the new map as it must at
-  startup (`screen::Layout::check`: every tile's signals are screen
-  outputs on it, every screen output is on a tile; no screen, no screen
-  outputs); if not, 409 and the old map keeps running. A screen output's
-  tile is part of its binding, so it carries like any other signal.
+- **`screen` outputs** (the retired floor screen's tiles) carry like any
+  other signal; with no layout file there is nothing they must fit.
 - **Around it.** Sinks rebind their emits by name; the API's catalog,
   device list and replay table follow. The recording restarts, so the
   next replay's window starts at the reload. A published live view from

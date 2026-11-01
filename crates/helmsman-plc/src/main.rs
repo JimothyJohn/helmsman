@@ -107,9 +107,6 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        the agent version POST /api/explain asks for (an
                        explain profile; default explain-v1). The box runs
                        only read-only tools for it either way.
-  --screen FILE        the floor screen's layout (see helmsman_plc::screen):
-                       tiles showing the I/O map's `screen` outputs, served
-                       at /api/screen and drawn by the canvas at /?andon
   --site NAME          announce this box on the LAN as part of site NAME
                        (a UDP multicast beacon to 239.255.72.77:41910, TTL
                        1, every 5 s) and list the boxes of that site it
@@ -174,7 +171,6 @@ struct Opts {
     relay_agent: String,
     relay_explain_agent: Option<String>,
     ui: Option<PathBuf>,
-    screen: Option<PathBuf>,
     site: Option<String>,
     box_name: Option<String>,
     policy: Option<PathBuf>,
@@ -231,7 +227,6 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_agent: "v3".into(),
         relay_explain_agent: None,
         ui: None,
-        screen: None,
         site: None,
         box_name: None,
         policy: None,
@@ -323,7 +318,11 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
             "--store" => once(&mut o.store, flag, v)?,
             "--ui" => once(&mut o.ui, flag, v)?,
-            "--screen" => once(&mut o.screen, flag, v)?,
+            "--screen" => {
+                return Err(
+                    "--screen is retired: the Monitor (/?monitor) builds its tiles from the program".into(),
+                );
+            }
             "--site" if site::valid_token(v) => o.site = Some(v.clone()),
             "--site" => return Err(format!("--site: 1 to 32 of A-Z a-z 0-9 . _ -, got {v:?}")),
             "--box-name" if site::valid_name(v) => o.box_name = Some(v.clone()),
@@ -344,9 +343,6 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.ui.is_some() && o.api.is_none() {
         return Err("--ui is served by the API; it does not go with --api off".into());
-    }
-    if o.screen.is_some() && o.api.is_none() {
-        return Err("--screen is served by the API; it does not go with --api off".into());
     }
     if o.site.is_some() && o.api.is_none_or(|a| a.port() == 0) {
         return Err("--site announces the API's port; it needs --api IP:PORT with a fixed port".into());
@@ -635,44 +631,6 @@ fn load_io(
     Ok((table, uses_box, parsed.map))
 }
 
-/// The floor screen's layout, checked against the I/O map; `None` without
-/// `--screen`. A map with `screen` outputs needs one when the API runs
-/// (without it, nothing would show them).
-fn load_screen(o: &Opts, map: Option<&helmsman_io::IoMap>) -> Result<Option<api::Screen>, String> {
-    let screens = map.is_some_and(|m| {
-        m.signals
-            .iter()
-            .any(|s| matches!(s.binding, helmsman_io::Binding::Screen { .. }))
-    });
-    let Some(path) = &o.screen else {
-        if screens && o.api.is_some() {
-            return Err("the I/O map declares screen tiles: give their layout with --screen FILE".into());
-        }
-        return Ok(None);
-    };
-    let file = path.display();
-    let mut buf = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|f| {
-            use std::io::Read as _;
-            f.take(helmsman_plc::screen::MAX_FILE as u64 + 1)
-                .read_to_end(&mut buf)
-        })
-        .map_err(|e| format!("{file}: {e}"))?;
-    let source = String::from_utf8(buf).map_err(|_| format!("{file}: not UTF-8"))?;
-    let layout = helmsman_plc::screen::parse(&source).map_err(|errs| {
-        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
-        format!("{file} is not a valid screen layout:{}", lines.concat())
-    })?;
-    layout
-        .check(map.unwrap_or(&helmsman_io::IoMap::default()))
-        .map_err(|errs| {
-            let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
-            format!("{file} does not fit the I/O map:{}", lines.concat())
-        })?;
-    Ok(Some(api::Screen { source, layout }))
-}
-
 /// The calendar file, bound to `table`.
 fn load_calendar((path, src): &Text, table: &mut SignalTable) -> Result<Source, String> {
     let file = path.display();
@@ -954,7 +912,6 @@ fn start_api(
     live: &Arc<Live>,
     devices: &Arc<Devices>,
     approval: Approval,
-    screen: Option<api::Screen>,
     forces: &Arc<Forces>,
 ) -> Result<(Api, Option<Site>), String> {
     let ui =
@@ -1001,10 +958,8 @@ fn start_api(
     };
     let trust = TrustStore::load(&dir)?;
     let has_ui = ui.is_some();
-    let has_screen = screen.is_some();
     let extras = api::Extras {
         ui,
-        screen,
         trust: Some(trust),
     };
     let site = o
@@ -1039,12 +994,6 @@ fn start_api(
     );
     if has_ui {
         eprintln!("helmsman-plc: canvas on {scheme}://{}/", server.addr());
-        if has_screen {
-            eprintln!(
-                "helmsman-plc: floor screen on {scheme}://{}/?andon",
-                server.addr()
-            );
-        }
     }
     if token.new {
         eprintln!(
@@ -1345,7 +1294,6 @@ fn run(o: &Opts) -> Result<(), String> {
         let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
         format!("modules do not fit together:{}", lines.concat())
     })?;
-    let screen = load_screen(o, map.as_ref())?;
     let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
@@ -1412,7 +1360,6 @@ fn run(o: &Opts) -> Result<(), String> {
                 &live,
                 &devices,
                 approval,
-                screen,
                 &forces,
             )
         })

@@ -24,7 +24,6 @@ pub mod project;
 pub mod record;
 pub mod replay;
 pub mod runtime;
-pub mod screen;
 pub mod signals;
 pub mod sink;
 #[cfg(feature = "box")]

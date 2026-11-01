@@ -911,7 +911,7 @@
   id: box-https
   answer: self-signed cert at first boot, fingerprint on screen (recommended)
 
-- [ ] **The box's andon layout (`--screen`, `/api/screen`) now has no screen: keep it for the Monitor or retire it?** UI.md step 1 removed the canvas's Andon mode (`?andon` now opens the Editor). The box side is untouched: `Binding::Screen` outputs, the `--screen` layout file, `GET /api/screen`, and helmsman-plc still prints "floor screen on http://…/?andon" at start. UI.md's Monitor (step 3) builds its tiles from the program's top-level instances, not from a layout file. Built default: nothing removed, the startup line is stale.
+- [x] **The box's andon layout (`--screen`, `/api/screen`) now has no screen: keep it for the Monitor or retire it?** UI.md step 1 removed the canvas's Andon mode (`?andon` now opens the Editor). The box side is untouched: `Binding::Screen` outputs, the `--screen` layout file, `GET /api/screen`, and helmsman-plc still prints "floor screen on http://…/?andon" at start. UI.md's Monitor (step 3) builds its tiles from the program's top-level instances, not from a layout file. Built default: nothing removed, the startup line is stale.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -921,6 +921,7 @@
   difficulty: low
   id: andon-layout-after-monitor
   answer: retire --screen and /api/screen once the Monitor ships (recommended)
+  notes: done (chore/retire-screen): helmsman-plc refuses `--screen` with the reason, `/api/screen` and `screen.rs` are gone, no "?andon" startup line. `out NAME TYPE screen TILE` still parses (helmsman-io) as an output no device takes, so old maps load; docs/ARCHITECTURE.md "Floor screen".
 
 - [ ] **The Trend tab on a box: where does its history come from?** On a box the Editor's right panel has only I/O for now; the simulation's Trend records every scan in the page. A box sends values over `/api/events` several times a second, and its recorder (sim-replay) already keeps the last minutes of inputs on the box. Built default: no Trend tab on a box (nor Claude, until step 2).
   asked: 2026-10-31
