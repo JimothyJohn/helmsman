@@ -421,6 +421,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     egui::Panel::left("ed-st")
         .resizable(true)
         .default_size(220.0)
+        .min_size(200.0)
         .show_collapsible(ui, &mut st, |ui| body.st(ui, chrome));
     chrome.st = st;
 
