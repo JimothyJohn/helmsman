@@ -625,7 +625,10 @@ fn fails_three_times_then_delivers_with_one_key() {
     let logs = Logs::default();
     let h = worker::spawn(cfg("mes", &srv.url("/hook")), &dir, 1, logs.log()).unwrap();
     assert!(h.offer(ev("parts", Value::Int(42))));
-    wait_until("delivery", || Stats::get(&h.stats().delivered) == 1);
+    // The worker counts the delivery, then says "up": wait for both.
+    wait_until("delivery", || {
+        Stats::get(&h.stats().delivered) == 1 && logs.all().contains("up;")
+    });
     let reqs = srv.reqs();
     assert_eq!(reqs.len(), 4);
     let keys: Vec<_> = reqs
