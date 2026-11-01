@@ -71,6 +71,20 @@ pub enum NodeKind {
     Jump,
 }
 
+impl NodeKind {
+    /// Whether the block has a header band over a body (a variable shows
+    /// its value under the header, a function block its instance's ports);
+    /// an operator, function, access, literal or jump is one box with its
+    /// label in the middle, as tall as its ports need.
+    #[must_use]
+    pub const fn headed(&self) -> bool {
+        matches!(
+            self,
+            Self::Read { .. } | Self::Write { .. } | Self::Fb { .. } | Self::For { .. }
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub id: NodeId,

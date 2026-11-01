@@ -14,7 +14,7 @@
 
 use std::collections::HashSet;
 
-use crate::model::{Diagram, NodeId, Rect, RegionId};
+use crate::model::{Diagram, Node, NodeId, Rect, RegionId};
 
 /// Width of one character of a label, in diagram units.
 pub const CHAR_W: f32 = 7.0;
@@ -28,18 +28,30 @@ const PAD: f32 = 12.0;
 pub const LABEL_H: f32 = 22.0;
 const MIN_BOX_W: f32 = 120.0;
 
-fn size(label: &str, ins: &[String], outs: &[String]) -> (f32, f32) {
+/// Vertical padding of a headerless block, above and below its port rows.
+const BARE_PAD: f32 = 4.0;
+
+/// A block's box: wide enough for its label and port names, one row per
+/// port; a headed block adds its header band, a bare one (an operator)
+/// is its port rows alone, so its height follows the larger side's count.
+fn size(n: &Node) -> (f32, f32) {
+    let (label, ins, outs) = (&n.label, &n.ins, &n.outs);
     let port_chars =
         ins.iter().map(String::len).max().unwrap_or(0) + outs.iter().map(String::len).max().unwrap_or(0);
     let chars = label.chars().count().max(port_chars + 2) as f32;
     let rows = ins.len().max(outs.len()).max(1) as f32;
-    ((chars * CHAR_W + 20.0).max(56.0), HEADER + rows * PORT_ROW + 4.0)
+    let h = if n.kind.headed() {
+        HEADER + rows * PORT_ROW + 4.0
+    } else {
+        rows * PORT_ROW + 2.0 * BARE_PAD
+    };
+    ((chars * CHAR_W + 20.0).max(56.0), h)
 }
 
 /// Lays out every node and region of `d` in place.
 pub fn layout(d: &mut Diagram) {
     for n in &mut d.nodes {
-        let (w, h) = size(&n.label, &n.ins, &n.outs);
+        let (w, h) = size(n);
         n.rect = Rect { x: 0.0, y: 0.0, w, h };
     }
     let mut l = Layout {
@@ -329,16 +341,30 @@ impl Layout<'_> {
 
 /// Where input `k` of a node with box `r` meets its left edge.
 #[must_use]
-pub fn in_port(r: &Rect, k: usize) -> (f32, f32) {
-    (r.x, port_y(r, k))
+pub fn in_port(n: &Node, k: usize) -> (f32, f32) {
+    in_port_at(&n.rect, n.kind.headed(), k)
+}
+
+/// [`in_port`] for a box `r` drawn for a node elsewhere (a ghost of a
+/// removed block): `headed` as its kind says.
+#[must_use]
+pub fn in_port_at(r: &Rect, headed: bool, k: usize) -> (f32, f32) {
+    (r.x, port_y(r, headed, k))
 }
 
 /// Where output `k` of a node with box `r` meets its right edge.
 #[must_use]
-pub fn out_port(r: &Rect, k: usize) -> (f32, f32) {
-    (r.right(), port_y(r, k))
+pub fn out_port(n: &Node, k: usize) -> (f32, f32) {
+    out_port_at(&n.rect, n.kind.headed(), k)
 }
 
-fn port_y(r: &Rect, k: usize) -> f32 {
-    r.y + HEADER + PORT_ROW * (k as f32 + 0.5) + 2.0
+/// [`out_port`] for a box `r` drawn for a node elsewhere.
+#[must_use]
+pub fn out_port_at(r: &Rect, headed: bool, k: usize) -> (f32, f32) {
+    (r.right(), port_y(r, headed, k))
+}
+
+fn port_y(r: &Rect, headed: bool, k: usize) -> f32 {
+    let top = if headed { HEADER + 2.0 } else { BARE_PAD };
+    r.y + top + PORT_ROW * (k as f32 + 0.5)
 }
