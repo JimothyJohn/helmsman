@@ -1,3 +1,7 @@
+<a href="https://helmsman.advin.io/"><img src="docs/brand/helmsman-banner.svg" alt="Helmsman Factory Automation" width="100%"></a>
+
+**[Try it in your browser →](https://helmsman.advin.io/playground/)** A simulated controller and its live diagram, no install.
+
 # Helmsman Factory Automation
 
 The soft PLC you program by describing the machine. The agent writes
