@@ -6,8 +6,9 @@
 //!
 //! - **Output-affecting**: the I/O map changed at all (bindings, devices,
 //!   safe values, units: whatever drives a point lives there); a WASM
-//!   driver was added, removed or changed (it is what reaches a device:
-//!   whatever it writes there, its outputs included, is its own); the
+//!   driver the map loads was added, dropped or its file changed
+//!   ([`classify_with`]: it is what reaches a device, and whatever it
+//!   writes there, its outputs included, is its own); the
 //!   calendar's `drive` lines changed; a module was added or removed that
 //!   drives a signal or has a `%Q` window; a module's `drives` or `%Q`
 //!   window changed; any file that should parse does not (a manifest, the
@@ -31,6 +32,7 @@
 use std::collections::BTreeSet;
 
 use crate::calendar;
+use crate::drivers::Drivers;
 use crate::manifest::Manifest;
 use crate::store::{ChangeSet, ModuleFiles};
 
@@ -103,19 +105,6 @@ pub fn classify(base: &ChangeSet, target: &ChangeSet) -> Class {
             "the I/O map changed (bindings, devices or safe values)".into(),
         );
     }
-    let guests: BTreeSet<&String> = base.drivers.keys().chain(target.drivers.keys()).collect();
-    for name in guests {
-        let verb = match (base.drivers.get(name), target.drivers.get(name)) {
-            (None, Some(_)) => "added",
-            (Some(_), None) => "removed",
-            (Some(a), Some(b)) if a != b => "changed",
-            _ => continue,
-        };
-        c.add(
-            Tier::OutputAffecting,
-            format!("WASM driver {name} {verb}; a driver reaches its devices"),
-        );
-    }
     if base.calendar != target.calendar {
         let drives = |s: Option<&str>| {
             s.map_or(Some(Vec::new()), |s| {
@@ -141,6 +130,32 @@ pub fn classify(base: &ChangeSet, target: &ChangeSet) -> Class {
     }
     if c.reasons.is_empty() {
         c.reasons.push((Tier::Param, "no change".into()));
+    }
+    c
+}
+
+/// [`classify`], plus the WASM driver files the step loads
+/// (`crate::driver_dir`): `running` is what the box's links run on now,
+/// `loading` what the target map would load. A driver one has and the
+/// other lacks, or whose bytes differ, is output-affecting (a driver
+/// reaches its devices, outputs included), so a changed driver file never
+/// rides in on a lesser change.
+#[must_use]
+pub fn classify_with(base: &ChangeSet, target: &ChangeSet, running: &Drivers, loading: &Drivers) -> Class {
+    let mut c = classify(base, target);
+    let names: BTreeSet<&String> = running.keys().chain(loading.keys()).collect();
+    for name in names {
+        let verb = match (running.get(name), loading.get(name)) {
+            (None, Some(_)) => "added",
+            (Some(_), None) => "dropped",
+            (Some(a), Some(b)) if a != b => "changed (its file)",
+            _ => continue,
+        };
+        c.reasons.retain(|(_, why)| why != "no change");
+        c.add(
+            Tier::OutputAffecting,
+            format!("WASM driver {name} {verb}; a driver reaches its devices"),
+        );
     }
     c
 }

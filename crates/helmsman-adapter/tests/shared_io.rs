@@ -33,8 +33,15 @@ fn device_cfg() -> DeviceConfig {
     cfg
 }
 
+/// Inactivity timeout RPI × 2^(7+2), about 5 s, not the 80 ms of
+/// multiplier 1: under a flood with six copies of the suite running, a
+/// thread can stall past 80 ms and the connection times out, which is not
+/// what these tests are about. Starvation shows as packets that stop
+/// arriving within `wait`'s deadline.
 fn io_cfg() -> IoConfig {
-    IoConfig::exclusive_owner(151, 150, 100, 32, 32, RPI)
+    let mut cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, RPI);
+    cfg.timeout_multiplier = 7;
+    cfg
 }
 
 fn wait(what: &str, mut ok: impl FnMut() -> bool) {

@@ -264,14 +264,6 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
             replaces.push(name.clone());
         }
     }
-    // Its WASM drivers join the box's (as a driver proposal would): a
-    // device of this box's map on one it replaces runs the new version.
-    let mut replaces_drivers = Vec::new();
-    for (name, b) in &v.bundle.content.drivers {
-        if target.drivers.insert(name.clone(), b.clone()).is_some() {
-            replaces_drivers.push(name.clone());
-        }
-    }
     if let Err(errs) = target.validate() {
         return refused(
             422,
@@ -308,16 +300,14 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
         "bindings": bindings,
         "modules": v.caps.modules,
         "replaces": replaces,
-        "drivers": v.bundle.content.drivers.keys().collect::<Vec<_>>(),
-        "replaces_drivers": replaces_drivers,
-        "touches_outputs": v.caps.drives_anything() || !v.bundle.content.drivers.is_empty(),
+        "touches_outputs": v.caps.drives_anything(),
         // What the store's history records as author and prompt on apply.
         "manifest": { "author": format!("{} (bundle {} {})", m.author, m.name, m.version), "prompt": [] },
         "note": note,
         "base": base.to_string(),
         "snapshot": snap.to_string(),
         "diff": render::diff(&diff(&running, &target)),
-        "approval": approve::tier_json(&running, &target, ctx.approval.as_ref().map(|a| &a.policy)),
+        "approval": approve::tier_json(ctx, &running, &target, None),
     });
     let detail = format!("proposal {id}: {what}: snapshot {base} -> {snap}");
     if audit_with(ctx, req, 201, &detail, Some(snap.to_string())).is_none() {

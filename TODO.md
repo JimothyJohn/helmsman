@@ -646,7 +646,7 @@
   id: wasm-api-size
   answer: keep 1 MiB bodies, ~750 KiB WASM (recommended, built)
 
-- [ ] **Where does an agent-written WASM driver live?** The sandbox and the first guest are built (`wasm-driver`), but nothing in a map can name one yet (`wasm-driver-map`). A driver reaches a device, so it should be reviewed like a map change. Recommended: a driver is a module-like blob in the store (as `wasm-store` now stores WASM modules), proposed and approved through the same policy at the engineer tier, carried by bundles, and named in the map as `wasm:NAME`; the box ships none built in (the Modbus guest stays a test fixture, since the native driver is the one that runs). Alternatives: a file path on the box (`module=/etc/helmsman/drivers/x.wasm`), simplest but outside snapshots, approval and audit; or bundles only, no local authoring. Nothing is built for this yet.
+- [x] **Where does an agent-written WASM driver live?** The sandbox and the first guest are built (`wasm-driver`), but nothing in a map can name one yet (`wasm-driver-map`). A driver reaches a device, so it should be reviewed like a map change. Recommended: a driver is a module-like blob in the store (as `wasm-store` now stores WASM modules), proposed and approved through the same policy at the engineer tier, carried by bundles, and named in the map as `wasm:NAME`; the box ships none built in (the Modbus guest stays a test fixture, since the native driver is the one that runs). Alternatives: a file path on the box (`module=/etc/helmsman/drivers/x.wasm`), simplest but outside snapshots, approval and audit; or bundles only, no local authoring. Nothing is built for this yet.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -656,7 +656,7 @@
   difficulty: low
   depends: wasm-driver
   id: wasm-driver-home
-  notes: built as the recommended option on feat/wasm-driver-map (reversible; card left open for your call): a driver is a `wasm-driver` blob in the change set, proposed as `{kind: driver, name, wasm}`, checked at proposal (`wasm::check` + `wasm::sandbox`, and the running map must still load), output-affecting so engineer PIN + replay, carried by bundles, rolled back like anything else. The Modbus guest stays a test fixture. To undo: drop `ChangeSet::drivers` and the `driver` proposal kind; the store's schema 3 only matters to stores that hold a driver.
+  notes: #89 built the store-blob option first; reworked to the answer on feat/drivers-as-files: a driver is `drivers/NAME.wasm`, in the project's folder (first, carried in its .zip) or `<state-dir>/drivers/` (an engineer's `GET/PUT/DELETE /api/drivers`, atomic writes, slug names, 256 KiB cap, links never followed). Checked at upload and at every load (`wasm::check` + `wasm::sandbox`, points parsed by the guest); read when a map loads (boot, apply, rollback, deploy), never mid-scan; a changed file replaces its links (SHA-256 in the link identity) and makes that step output-affecting. The `{kind: driver}` proposal, `ChangeSet::drivers` and bundle drivers are gone; a schema-3 store with drivers still opens (drivers ignored, logged) and rolls back. docs/ARCHITECTURE.md "WASM drivers"; contract in crates/helmsman-plc/tests/driver_map.rs.
   answer: file path on the box
 
 - [x] **BLINK_PATTERN with PERIOD 0 or negative: steady on, off, or a fault?** The stack-light block (#88, `BLINK_PATTERN(EN, MODE, PERIOD) -> Q` in helmsman-iec's library.st) has to do something when a blinking mode (slow, fast, double flash) gets a PERIOD of zero or below, which a bad param or an uninitialised TIME produces. Built: steady on, so a misconfigured alarm light still lights and nothing divides by zero. The alternatives are off (quiet, but a bad setting hides the alarm) or a runtime fault on the module (loud, but one bad param stops every output that module drives). Reversible: one branch in library.st and its property test.
@@ -703,8 +703,9 @@
   depends: wasm-driver-home
   id: driver-remove
   answer: rollback only (built)
+  notes: superseded by feat/drivers-as-files (`wasm-driver-home` answered "file path on the box"): a box driver is removed with `DELETE /api/drivers/NAME` (an engineer; refused while the running map loads it from the box), a project's by uploading its .zip without it.
 
-- [ ] **WASM drivers on a box with no store (`--module-dir`)?** A box started with `--module-dir` (modules as files, no snapshot store) has nowhere to keep an approved driver, so a map line naming `wasm:NAME` is refused there (#89). The bench Pi deploy (`scripts/pi-deploy-plc.sh`) runs that way today. Options: require the store for drivers (as now; the store is the box's normal mode), let a `--driver-dir` of `.wasm` files load unapproved (bench only, never with a store), or move the Pi deploy to the store so it doesn't matter.
+- [x] **WASM drivers on a box with no store (`--module-dir`)?** A box started with `--module-dir` (modules as files, no snapshot store) has nowhere to keep an approved driver, so a map line naming `wasm:NAME` is refused there (#89). The bench Pi deploy (`scripts/pi-deploy-plc.sh`) runs that way today. Options: require the store for drivers (as now; the store is the box's normal mode), let a `--driver-dir` of `.wasm` files load unapproved (bench only, never with a store), or move the Pi deploy to the store so it doesn't matter.
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -715,6 +716,7 @@
   depends: wasm-driver-home
   id: driver-module-dir
   answer: move the Pi deploy to the store (recommended)
+  notes: already done by #114 (verified: scripts/pi-deploy-plc.sh defaults to PLC_MODE=projects, running `helmsman-plc --projects` on its store; PLC_MODE=program keeps the old mode). Moot for drivers since feat/drivers-as-files: a driver is a file in `<state-dir>/drivers/`, so a box without a store loads one too.
 
 - [x] **UDP for WASM drivers: build a datagram import now, or when a device needs it?** A WASM driver gets one capability, a TCP stream to its own device's endpoint (`helmsman-driver/v1`). Protocols over UDP (BACnet/IP, some vendor discovery, SNMP for switch health) would need a datagram import bound to the same endpoint, with its own reply-source check. Nothing on the bench needs it: Modbus/TCP, EtherNet/IP (native driver) and Logix reads are all TCP or native.
   asked: 2026-10-31
@@ -1289,7 +1291,7 @@
   id: l5x-import
   asked: 2026-10-31
   by: claude-agent
-  notes: built on feat/l5x-ladder (2026-10-31): `helmsman_iec::ladder` converts the ladder subset (contacts, coils, branches, one-shots, TON/TOF/RTO/CTU/CTD/RES on TIMER/COUNTER structures, compares, math, CPT, MOV/CLR/COP, JSR inlined) to one F.st with a PROGRAM per task, and refuses anything else with its program, routine and rung; semantics from RM003 (docs/SOURCES.md), proven against a reference evaluator over random rungs (tests/ladder_equiv.rs). Left: the browser simulation still refuses L5X (sim_projects.rs; the converter is wasm-safe), and UDTs, indirect subscripts and JSR parameters are refused until a real export shows they matter.
+  notes: built on feat/l5x-ladder (2026-10-31): `helmsman_iec::ladder` converts the ladder subset (contacts, coils, branches, one-shots, TON/TOF/RTO/CTU/CTD/RES on TIMER/COUNTER structures, compares, math, CPT, MOV/CLR/COP, JSR inlined) to one F.st with a PROGRAM per task, and refuses anything else with its program, routine and rung; semantics from RM003 (docs/SOURCES.md), proven against a reference evaluator over random rungs (tests/ladder_equiv.rs). The browser simulation imports L5X through the same converter (feat/sim-l5x). Left: UDTs, indirect subscripts and JSR parameters are refused until a real export shows they matter.
 
 - [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc); a first install seeds project `line` from programs/line.st, deployed (`helmsman-plc project seed`, the unit's ExecStartPre); `PLC_MODE=program` keeps the old one-file mode. Built and tested here; yours to run against the Pi (native terminal or `!`: it needs Docker, trunk, and SSH with sudo on the Pi, and the firewall step is refused from an agent).
   needs: you to run the two commands (the Pi's IP); the Pi on Debian Trixie with key SSH and passwordless sudo (scripts/pi-prep.sh)
@@ -1498,7 +1500,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   depends: wasm-driver, wasm-store, wasm-driver-home
   id: wasm-driver-map
-  notes: built on feat/wasm-driver-map: `helmsman_plc::drivers` (approved set, `Points` for map validation, `open` for links), `Layout::build_with`, `LinkSet::plan_with` (a link's identity includes its driver's SHA-256, so a new version reopens it), `IoMap::validate_with`, `wasm::sandbox`; contract in crates/helmsman-plc/tests/driver_map.rs (the Modbus guest reading the simulator through the box runtime). docs/ARCHITECTURE.md "WASM drivers". The agent side (writing, checking and proposing a driver) is `driver-agent`.
+  notes: built on feat/wasm-driver-map: `helmsman_plc::drivers` (the drivers a map loads with, `Points` for map validation, `open` for links), `Layout::build_with`, `LinkSet::plan_with` (a link's identity includes its driver's SHA-256, so a new version reopens it), `IoMap::validate_with`, `wasm::sandbox`. Since feat/drivers-as-files `wasm:NAME` resolves to the file `drivers/NAME.wasm` (the project's, then the box's; `helmsman_plc::driver_dir`), not a store blob; contract in crates/helmsman-plc/tests/driver_map.rs (the Modbus guest reading the simulator from a driver file through the box runtime). docs/ARCHITECTURE.md "WASM drivers". The agent side (writing and checking a driver, then an engineer uploading it) is `driver-agent`.
 
 - [ ] **Agent writes a driver from the manual** — give the agent a device's documentation (PDF to text, as done for the Modbus spec); it writes the point map and, for a new protocol, a WASM driver, and iterates on harness output: simulator first, then the bench. Engineer approves the map before any output is bound.
   result: a new device or protocol without hand-written driver code

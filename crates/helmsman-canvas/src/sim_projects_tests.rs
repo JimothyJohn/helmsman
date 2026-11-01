@@ -250,12 +250,13 @@ fn download_then_upload_round_trips_in_the_simulation_and_with_the_box() {
         (
             "plant.L5X",
             b"<RSLogix5000Content/>".to_vec(),
-            "L5X import is not built yet",
+            "plant.L5X is not converted",
         ),
+        ("bad.L5X", vec![0xFF, 0xFE], "not UTF-8"),
         ("evil.zip", b"PK\x05\x06garbage".to_vec(), "Upload refused"),
         ("../x.st", b"x".to_vec(), "not a project file name"),
         ("bidi.st", "a\u{202E}b".as_bytes().to_vec(), "not allowed"),
-        ("notes.txt", b"hi".to_vec(), "upload takes .zip, .st or .xml"),
+        ("notes.txt", b"hi".to_vec(), "upload takes .zip, .st, .xml"),
     ] {
         let before = v.proj.files.clone();
         v.upload(file, bytes);
@@ -445,4 +446,53 @@ fn the_simulation_keeps_a_default_layout_and_tweaks_across_a_reload() {
     let w = v.viewer.as_mut().unwrap();
     v.layers.reset(w);
     assert_eq!((block_at(&v, lamp), block_at(&v, horn)), auto);
+}
+
+fn l5x_fixture(name: &str) -> Vec<u8> {
+    let path = format!(
+        "{}/../helmsman-iec/tests/fixtures/l5x/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+/// An L5X upload in the simulation becomes the same `.st` the box makes
+/// (the same converter, `helmsman_iec::ladder`), and it compiles and runs
+/// in the page; one outside the subset is refused whole, with its
+/// reasons, and changes nothing.
+#[test]
+fn an_l5x_upload_becomes_the_boxs_st_or_is_refused_whole() {
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.files_ui.confirm = None;
+    v.proj.create("plant", None);
+    v.open_project("plant");
+    let bytes = l5x_fixture("ladder.L5X");
+    v.upload("Ladder.L5X", bytes.clone());
+    let (msg, err) = v.proj.notice.clone().unwrap();
+    assert!(!err, "{msg}");
+    let box_st = helmsman_iec::ladder::convert(std::str::from_utf8(&bytes).unwrap())
+        .expect("the box converts it")
+        .st;
+    assert_eq!(v.proj.files.get("Ladder.st"), Some(&box_st), "the box's .st");
+    assert_eq!(v.proj.current, "Ladder.st");
+    // It builds and runs in the page (the starter's main.st aside), its
+    // inputs the ladder's.
+    v.proj.delete_file("main.st");
+    v.deploy();
+    assert!(v.diags().is_empty(), "{:?}", v.diags());
+    let inputs: Vec<String> = v.session.inputs().map(|p| p.name.clone()).collect();
+    assert_eq!(inputs, ["START", "STOP", "PART_EYE"], "{inputs:?}");
+
+    // An inventory export (instructions outside the subset): refused
+    // whole, with every reason the box gives.
+    let before = v.proj.files.clone();
+    let inventory = l5x_fixture("line3.L5X");
+    v.upload("line3.L5X", inventory.clone());
+    let (msg, err) = v.proj.notice.clone().unwrap();
+    assert!(err && msg.starts_with("line3.L5X is not converted: "), "{msg}");
+    let refused = helmsman_iec::ladder::convert(std::str::from_utf8(&inventory).unwrap()).unwrap_err();
+    for p in refused.problems.iter().take(20) {
+        assert!(msg.contains(&p.to_string()), "{p} missing from {msg}");
+    }
+    assert_eq!(v.proj.files, before, "nothing imported");
 }
