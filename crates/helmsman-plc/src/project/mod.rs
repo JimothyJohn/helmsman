@@ -170,7 +170,7 @@ fn is_dir(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
 }
 
-fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
     let tmp = dir.join(tmp_name("save"));
     let written = (|| {
         let mut f = fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
@@ -185,7 +185,7 @@ fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// Reads a regular file of at most `cap` bytes, refusing links.
-fn read_file(path: &Path, cap: usize) -> io::Result<Vec<u8>> {
+pub(crate) fn read_file(path: &Path, cap: usize) -> io::Result<Vec<u8>> {
     let meta = fs::symlink_metadata(path)?;
     if !meta.file_type().is_file() {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "not a regular file"));

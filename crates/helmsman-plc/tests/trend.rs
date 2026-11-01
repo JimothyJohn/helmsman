@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use helmsman_io::Value;
 use helmsman_plc::api::live::View;
-use helmsman_plc::api::trend::{LEASE, MAX_OWNERS, MAX_POINTS, MAX_TRACKED, Trends, WINDOW, Wanted};
+use helmsman_plc::api::trend::{
+    LEASE, MAX_NAME, MAX_OWNERS, MAX_PINS, MAX_PINS_FILE, MAX_POINTS, MAX_TRACKED, Trends, WINDOW, Wanted,
+};
 use proptest::prelude::*;
 
 fn names(n: usize) -> Vec<String> {
@@ -162,4 +164,140 @@ proptest! {
             prop_assert!(t.history_len(&n) <= MAX_POINTS);
         }
     }
+}
+
+/// A fresh folder for one test's pins file.
+fn folder(what: &str) -> std::path::PathBuf {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let d = std::env::temp_dir().join(format!(
+        "helmsman-trend-{what}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// Card trend-pins-persist: pins live in the state directory's
+/// `trend-pins` file and come back after a restart, tracked from the
+/// first scan; history is memory only and starts over.
+#[test]
+fn pins_survive_a_restart_in_the_file_and_history_does_not() {
+    let known = names(3);
+    let file = folder("pins").join("trend-pins");
+    {
+        let mut t = Trends::in_file(file.clone());
+        assert_eq!(t.file(), Some(file.as_path()));
+        assert_eq!(t.pins("user:alice"), Vec::<String>::new());
+        let w = t.set_pins("user:alice", &[s("s0"), s("s2")], &known);
+        assert_eq!(w.kept, [s("s0"), s("s2")]);
+        assert_eq!(t.save_error(), None);
+        t.set_pins("role:operator", &[s("s1")], &known);
+        for k in 0..100u64 {
+            let v = Some(Value::Int(i64::try_from(k).unwrap()));
+            t.sample(&view(k + 1, Duration::from_secs(k), &[v, v, v]), &known);
+        }
+        assert!(t.history_len("s0") > 50, "history while running");
+    }
+    assert!(file.is_file(), "the pins file exists");
+    // The box restarts: the pins are back, nothing is tracked until the
+    // first view says what the signals are, and history starts over.
+    let mut t = Trends::in_file(file.clone());
+    assert_eq!(t.pins("user:alice"), [s("s0"), s("s2")]);
+    assert_eq!(t.pins("role:operator"), [s("s1")]);
+    assert_eq!(t.tracked(), Vec::<String>::new(), "known only after a view");
+    assert_eq!(t.history_len("s0"), 0, "history is not kept");
+    t.sample(
+        &view(1, Duration::from_secs(0), &[Some(Value::Int(7)), None, None]),
+        &known,
+    );
+    assert_eq!(
+        t.tracked(),
+        [s("s0"), s("s1"), s("s2")],
+        "pins tracked from the first scan"
+    );
+    assert_eq!(t.history_len("s0"), 1);
+    // A pin for a signal this box no longer has stays in the file, untracked.
+    let fewer = names(1);
+    let mut t = Trends::in_file(file.clone());
+    t.sample(&view(1, Duration::from_secs(0), &[None]), &fewer);
+    assert_eq!(t.tracked(), [s("s0")]);
+    assert_eq!(t.pins("user:alice"), [s("s0"), s("s2")]);
+    // Unpinning reaches the file too.
+    t.set_pins("user:alice", &[], &fewer);
+    t.set_pins("role:operator", &[], &fewer);
+    let t = Trends::in_file(file.clone());
+    assert_eq!(t.pins("user:alice"), Vec::<String>::new());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{}");
+}
+
+#[test]
+fn a_hostile_pins_file_starts_with_no_pins_or_only_what_fits() {
+    let known = names(2);
+    let dir = folder("hostile");
+    let file = dir.join("trend-pins");
+    let empty = |why: &str| {
+        let mut t = Trends::in_file(file.clone());
+        t.sample(&view(1, Duration::from_secs(0), &[None, None]), &known);
+        assert_eq!(t.tracked(), Vec::<String>::new(), "{why}");
+        assert_eq!(t.pins("user:alice"), Vec::<String>::new(), "{why}");
+    };
+    empty("no file yet");
+    std::fs::write(&file, b"\xff\xfe not json").unwrap();
+    empty("not json");
+    std::fs::write(&file, b"[\"s0\"]").unwrap();
+    empty("not an object");
+    std::fs::write(
+        &file,
+        r#"{"user:alice": "s0", "": ["s0"], "user:bob": [1, null, ""]}"#,
+    )
+    .unwrap();
+    empty("owners and names of the wrong shape");
+    let huge = format!(
+        r#"{{"user:alice": ["s0"], "pad": ["{}"]}}"#,
+        "x".repeat(MAX_PINS_FILE)
+    );
+    std::fs::write(&file, huge).unwrap();
+    empty("over the file cap");
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    empty("a folder in its place");
+    std::fs::remove_dir(&file).unwrap();
+    // Too many of everything: trimmed to the bounds, nothing else kept.
+    let long = "n".repeat(MAX_NAME + 1);
+    let mut owners = serde_json::Map::new();
+    for k in 0..MAX_OWNERS + 50 {
+        let mut pins: Vec<serde_json::Value> = (0..MAX_PINS + 5).map(|j| format!("p{j}").into()).collect();
+        if k == 0 {
+            pins.insert(0, long.clone().into());
+        }
+        pins.insert(1, "p0".into());
+        owners.insert(format!("user:u{k:04}"), pins.into());
+    }
+    std::fs::write(&file, serde_json::Value::Object(owners).to_string()).unwrap();
+    let t = Trends::in_file(file.clone());
+    let kept: Vec<usize> = (0..MAX_OWNERS + 50)
+        .map(|k| t.pins(&format!("user:u{k:04}")).len())
+        .collect();
+    assert_eq!(
+        kept.iter().filter(|n| **n > 0).count(),
+        MAX_OWNERS,
+        "owners capped"
+    );
+    assert!(kept.iter().all(|n| *n <= MAX_PINS), "pins capped: {kept:?}");
+    let first = t.pins("user:u0000");
+    assert!(first.iter().all(|n| n.len() <= MAX_NAME), "{first:?}");
+    assert_eq!(first.iter().filter(|n| *n == "p0").count(), 1, "deduplicated");
+}
+
+#[test]
+fn pins_that_cannot_reach_the_file_stay_in_memory_and_say_why() {
+    let known = names(1);
+    let file = folder("nowrite").join("missing-folder").join("trend-pins");
+    let mut t = Trends::in_file(file);
+    let w = t.set_pins("user:alice", &[s("s0")], &known);
+    assert_eq!(w.kept, [s("s0")]);
+    assert_eq!(t.pins("user:alice"), [s("s0")], "held in memory");
+    let why = t.save_error().expect("the failed write is reported");
+    assert!(why.contains("trend-pins"), "{why}");
 }
