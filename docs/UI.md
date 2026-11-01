@@ -33,8 +33,11 @@ this; change it here first when a decision changes.
 - **Glyphs over the diagram's top-right corner:** run/stop, step and
   restart (the simulation), then save, upload, download and ? (help on
   the site). Strokes in the brand colours; each tells its key on hover.
-- **Trend along the bottom**, under the diagram, collapsible and
-  resizable (View › Trend, Alt 2): its time axis is the long side.
+- **Bottom panel**, under the diagram, collapsible and resizable (View ›
+  Trend, Alt 2), two tabs: Trend (its time axis is the long side) and
+  Messages (the last 200 things the page had to say: info, warnings,
+  errors, with the error count on the tab), so a fault or a refused
+  deploy is still there to read after the line under the header has gone.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
   not show), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then

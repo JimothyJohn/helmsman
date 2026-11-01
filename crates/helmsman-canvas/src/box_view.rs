@@ -34,8 +34,21 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Largest file the editor takes (the box's `project::MAX_FILE`).
 const MAX_FILE: usize = 256 * 1024;
 
+/// What [`BoxView::watch`] compares against.
+#[derive(Default)]
+struct BoxSeen {
+    link: Option<u8>,
+    deploy: Deploy,
+    fault: Option<String>,
+    notice: Option<String>,
+}
+
 pub struct BoxView {
     pub state: BoxState,
+    /// The Messages tab's log.
+    pub log: crate::messages::Log,
+    /// What the log last saw, to report changes once.
+    seen: BoxSeen,
     /// The box's projects, when it runs with them.
     pub projects: BoxProjects,
     pub files_ui: FilesUi,
@@ -114,6 +127,8 @@ impl BoxView {
     pub fn with_stores(tweaks: Box<dyn Storage>, pins: Box<dyn Storage>) -> Self {
         Self {
             trend: BoxTrend::new(pins),
+            log: crate::messages::Log::default(),
+            seen: BoxSeen::default(),
             state: BoxState::new(),
             projects: BoxProjects::new(),
             files_ui: FilesUi::default(),
@@ -271,6 +286,53 @@ impl BoxView {
         let now = ctx.input(|i| i.time);
         let (msgs, answers) = self.inbox();
         self.step_all(ctx, msgs, answers, now);
+        self.watch(now);
+    }
+
+    /// Reports to the log what changed: the link, a deploy's outcome, a
+    /// fault, a notice.
+    fn watch(&mut self, now: f64) {
+        let link = match self.state.link() {
+            Link::Connecting => 0,
+            Link::Connected => 1,
+            Link::Reconnecting { .. } => 2,
+            Link::Unreachable { .. } => 3,
+        };
+        if Some(link) != self.seen.link {
+            match link {
+                1 => self.log.info(now, "Connected to the box."),
+                2 => self.log.warning(now, "Lost the box: reconnecting."),
+                3 => self.log.error(now, "The box is unreachable."),
+                _ => {}
+            }
+            self.seen.link = Some(link);
+        }
+        if self.projects.deploy != self.seen.deploy {
+            match &self.projects.deploy {
+                Deploy::Done(what) => self.log.info(now, format!("Deployed: {what}")),
+                Deploy::Failed(why) => self.log.error(now, format!("Deploy failed: {why}")),
+                _ => {}
+            }
+            self.seen.deploy = self.projects.deploy.clone();
+        }
+        let fault = self.state.scan.as_ref().and_then(|s| s.fault.clone());
+        if fault != self.seen.fault {
+            if let Some(f) = &fault {
+                self.log.error(now, format!("Fault: {f}"));
+            }
+            self.seen.fault = fault;
+        }
+        let notice = self.projects.notice.as_ref().map(|(n, _)| n.clone());
+        if notice != self.seen.notice {
+            if let Some((n, error)) = &self.projects.notice {
+                if *error {
+                    self.log.error(now, n.clone());
+                } else {
+                    self.log.info(now, n.clone());
+                }
+            }
+            self.seen.notice = notice;
+        }
     }
 
     /// One frame of the Editor.
@@ -885,6 +947,10 @@ impl Body for BoxView {
 
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.trend.ui(ui, chrome, &self.state, self.session.as_ref());
+    }
+
+    fn messages(&mut self, _ui: &mut egui::Ui) -> &crate::messages::Log {
+        &self.log
     }
 
     fn tabs(&self) -> &'static [Tab] {

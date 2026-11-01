@@ -175,6 +175,26 @@ mod glyphs_and_help {
     }
 
     #[test]
+    fn the_bottom_panel_has_trend_and_messages_tabs() {
+        use crate::editor::Bottom;
+        let mut h = Harness::new(App::sim());
+        assert!(h.app.chrome.trend);
+        assert_eq!(h.app.chrome.bottom, Bottom::Trend);
+        for k in ["bottom trend", "bottom messages"] {
+            assert!(h.has(k), "no {k}");
+        }
+        h.press("bottom messages");
+        assert_eq!(h.app.chrome.bottom, Bottom::Messages);
+        h.frame(vec![]);
+        h.press("bottom trend");
+        assert_eq!(h.app.chrome.bottom, Bottom::Trend);
+        // Kept per browser.
+        h.app.chrome.bottom = Bottom::Messages;
+        let back = crate::editor::Chrome::restored(&h.app.chrome.saved());
+        assert_eq!(back.bottom, Bottom::Messages);
+    }
+
+    #[test]
     fn editor_and_monitor_are_one_toggle_and_help_has_an_about() {
         let mut h = Harness::new(App::sim());
         let (e, m) = (h.rect("editor"), h.rect("monitor"));

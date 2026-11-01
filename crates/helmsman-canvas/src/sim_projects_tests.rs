@@ -587,3 +587,52 @@ fn opening_or_deploying_another_program_stops_the_one_running() {
     assert!(v.session.running, "the last good build still runs");
     assert!(!v.session.diags.is_empty(), "and the error is listed");
 }
+
+/// Nick, 2026-11-01: the Messages tab keeps what the page had to say.
+#[test]
+fn the_log_keeps_refused_deploys_faults_and_state_changes() {
+    use crate::messages::Level;
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.open_project("blink");
+    v.proj.create("broken", None);
+    v.open_project("broken");
+    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\n  x := ;\nEND_PROGRAM\n".into();
+    v.deploy();
+    let errors: Vec<String> = v
+        .log
+        .iter()
+        .filter(|m| m.level == Level::Error)
+        .map(|m| m.text.clone())
+        .collect();
+    assert!(
+        errors.iter().any(|e| e.contains("Deploy of broken refused")),
+        "{errors:?}"
+    );
+    assert!(v.log.label().contains("error"), "{}", v.log.label());
+    let before = v.log.len();
+    let ctx = eframe::egui::Context::default();
+    let input = eframe::egui::RawInput {
+        time: Some(1.0),
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(input, |ui| v.tick(ui.ctx()));
+    out.textures_delta.clear();
+    assert!(v.log.len() >= before, "watching never loses entries");
+    // Stopping is reported once, not every frame.
+    v.session.set_running(false);
+    for k in 2..6 {
+        let input = eframe::egui::RawInput {
+            time: Some(f64::from(k)),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| v.tick(ui.ctx()));
+        out.textures_delta.clear();
+    }
+    let stops = v.log.iter().filter(|m| m.text == "Stopped.").count();
+    assert_eq!(
+        stops,
+        1,
+        "{:?}",
+        v.log.iter().map(|m| &m.text).collect::<Vec<_>>()
+    );
+}

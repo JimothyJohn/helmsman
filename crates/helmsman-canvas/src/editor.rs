@@ -49,6 +49,23 @@ impl Tab {
     }
 }
 
+/// The bottom panel's tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Bottom {
+    #[default]
+    Trend,
+    Messages,
+}
+
+impl Bottom {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Trend => "trend",
+            Self::Messages => "messages",
+        }
+    }
+}
+
 /// The Editor's layout and the Monitor's scan detail (kept per browser)
 /// and what was drawn where this frame (tests click by it).
 // Independent toggles a browser keeps, not states of one thing.
@@ -64,6 +81,8 @@ pub struct Chrome {
     /// The Trend runs along the bottom, under the diagram (Nick,
     /// 2026-11-01: a long time axis beats a tall one).
     pub trend: bool,
+    /// Which of the bottom panel's tabs shows: the Trend or the Messages.
+    pub bottom: Bottom,
     pub tab: Tab,
     /// The Monitor's status tiles show the scan period and counts: an
     /// engineer's choice, and only shown while one is signed in.
@@ -86,6 +105,7 @@ impl Default for Chrome {
             right: true,
             st: false,
             trend: true,
+            bottom: Bottom::Trend,
             tab: Tab::Io,
             scan: false,
             line: None,
@@ -101,13 +121,14 @@ impl Chrome {
     #[must_use]
     pub fn saved(&self) -> String {
         format!(
-            "left={} right={} st={} tab={} scan={} trend={}",
+            "left={} right={} st={} tab={} scan={} trend={} bottom={}",
             u8::from(self.left),
             u8::from(self.right),
             u8::from(self.st),
             self.tab.key(),
             u8::from(self.scan),
-            u8::from(self.trend)
+            u8::from(self.trend),
+            self.bottom.key()
         )
     }
 
@@ -122,6 +143,8 @@ impl Chrome {
                 Some(("st", v)) => c.st = v == "1",
                 Some(("scan", v)) => c.scan = v == "1",
                 Some(("trend", v)) => c.trend = v == "1",
+                Some(("bottom", "messages")) => c.bottom = Bottom::Messages,
+                Some(("bottom", "trend")) => c.bottom = Bottom::Trend,
                 Some(("tab", v)) => {
                     if let Some(t) = [Tab::Io, Tab::Claude].into_iter().find(|t| t.key() == v) {
                         c.tab = t;
@@ -269,6 +292,8 @@ pub trait Body {
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The Trend along the bottom: pins and the plot.
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// The Messages tab beside it: the view's log (`messages::Log`).
+    fn messages(&mut self, ui: &mut egui::Ui) -> &crate::messages::Log;
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab);
@@ -418,7 +443,32 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     egui::Panel::bottom("ed-trend")
         .resizable(true)
         .default_size(200.0)
-        .show_collapsible(ui, &mut trend, |ui| body.trend(ui, chrome));
+        .show_collapsible(ui, &mut trend, |ui| {
+            // Tabs: Trend | Messages (errors counted on the tab).
+            let label = body.messages(ui).label();
+            ui.horizontal(|ui| {
+                for (b, text, key) in [
+                    (Bottom::Trend, "Trend".to_string(), "bottom trend"),
+                    (Bottom::Messages, label, "bottom messages"),
+                ] {
+                    let r = ui.add(
+                        egui::Button::selectable(chrome.bottom == b, RichText::new(text).strong())
+                            .min_size(Vec2::new(64.0, TAP * 0.6)),
+                    );
+                    chrome.hit(key, r.rect);
+                    if r.clicked() {
+                        chrome.bottom = b;
+                    }
+                }
+            });
+            ui.separator();
+            match chrome.bottom {
+                Bottom::Trend => body.trend(ui, chrome),
+                Bottom::Messages => {
+                    body.messages(ui).ui(ui);
+                }
+            }
+        });
     chrome.trend = trend;
 
     let mut st = chrome.st;
