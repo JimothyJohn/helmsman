@@ -1,8 +1,9 @@
 //! The Editor's frame, the same on a box (`box_view`) and in the
-//! simulation (`playground_view`), as docs/UI.md lays it out: a toolbar
-//! under the header, the files and program tree on the left, the live
-//! diagram in the centre, the ST beside it on demand ("ST"), and the right
-//! panel's tabs (I/O, Trend, Agent). Both sidebars collapse to a strip;
+//! simulation (`playground_view`), as docs/UI.md lays it out: under the
+//! header (the app's one row: menus, the view's actions, the project),
+//! the files and program tree on the left, the live diagram in the
+//! centre, the ST beside it on demand (View menu), and the right panel's
+//! tabs (I/O, Trend, Agent). Both sidebars collapse to a strip;
 //! which are open is [`Chrome`], kept per browser by the app.
 //!
 //! What fills each part is the view's ([`Body`]); where it goes is here.
@@ -149,10 +150,111 @@ impl Chrome {
     }
 }
 
+/// A menu item: a full-width button that closes its menu when clicked.
+/// Whether it was.
+pub fn menu_item(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    text: impl Into<RichText>,
+    on: bool,
+) -> bool {
+    menu_item_keyed(ui, chrome, key, text, on, "")
+}
+
+/// [`menu_item`] with its keyboard shortcut printed at the right.
+pub fn menu_item_keyed(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    text: impl Into<RichText>,
+    on: bool,
+    shortcut: &str,
+) -> bool {
+    let b = egui::Button::selectable(on, text.into())
+        .min_size(Vec2::new(ui.available_width().max(220.0), TAP * 0.7));
+    let b = if shortcut.is_empty() {
+        b
+    } else {
+        b.shortcut_text(RichText::new(shortcut).weak())
+    };
+    let r = ui.add(b);
+    chrome.hit(key, r.rect);
+    if r.clicked() {
+        ui.close();
+        return true;
+    }
+    false
+}
+
+/// The View menu's part that is the Editor's frame: the ST pane, the two
+/// sidebars and the right panel's tab.
+pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
+    use crate::hotkeys::{Action, label};
+    let (st, left, right) = (chrome.st, chrome.left, chrome.right);
+    let ctx = ui.ctx().clone();
+    let k = |a| label(&ctx, a);
+    if menu_item_keyed(ui, chrome, "view st", "Structured Text", st, &k(Action::St)) {
+        chrome.st = !st;
+    }
+    if menu_item_keyed(ui, chrome, "view files", "Files", left, &k(Action::Files)) {
+        chrome.left = !left;
+    }
+    if menu_item_keyed(ui, chrome, "view panel", "Side panel", right, &k(Action::Panel)) {
+        chrome.right = !right;
+    }
+    for &t in tabs {
+        let on = chrome.right && chrome.tab == t;
+        if menu_item(
+            ui,
+            chrome,
+            &format!("view tab {}", t.key()),
+            format!("    {}", t.label()),
+            on,
+        ) {
+            chrome.tab = t;
+            chrome.right = true;
+        }
+    }
+}
+
+/// Undoes (or, `redo`, redoes) the last edit of the ST editor `id` on
+/// `text`, through the editor's own undo stack; whether anything changed.
+pub fn undo(ctx: &egui::Context, id: egui::Id, text: &mut String, redo: bool) -> bool {
+    let Some(mut state) = TextEditState::load(ctx, id) else {
+        return false;
+    };
+    let mut undoer = state.undoer();
+    let current = (state.cursor.char_range().unwrap_or_default(), text.clone());
+    let next = if redo {
+        undoer.redo(&current)
+    } else {
+        undoer.undo(&current)
+    }
+    .cloned();
+    let Some((cursor, t)) = next else {
+        return false;
+    };
+    let changed = t != *text;
+    *text = t;
+    state.cursor.set_char_range(Some(cursor));
+    state.set_undoer(undoer);
+    state.store(ctx, id);
+    changed
+}
+
 /// What a view puts in the Editor's frame.
 pub trait Body {
-    /// The toolbar's own part, after the ST toggle.
+    /// The view's actions in the header row, after the menus: run
+    /// controls and a short status in the simulation, the link's status
+    /// on a box. Short: the row is one line with the project on its right.
     fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// Whether [`Self::notices`] has anything to say.
+    fn has_notices(&self) -> bool;
+    /// What needs saying now (a fault, a deploy under way or refused, a
+    /// stale file with its Reload): a line under the header, only while
+    /// there is one.
+    fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// Under "Files": the open program and its tree.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The ST editor (read-only on a box).
@@ -207,20 +309,11 @@ fn chevron(ui: &egui::Ui, c: Pos2, left: bool, hot: bool) {
 
 /// One frame of the Editor.
 pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
-    egui::Panel::top("ed-tools").show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            let st = egui::Button::selectable(chrome.st, RichText::new("ST").strong().monospace())
-                .min_size(Vec2::new(TAP, 0.0));
-            let r = ui.add(st).on_hover_text("the Structured Text beside the diagram");
-            chrome.hit("st", r.rect);
-            if r.clicked() {
-                chrome.st = !chrome.st;
-            }
-            ui.separator();
-            body.toolbar(ui, chrome);
+    if body.has_notices() {
+        egui::Panel::top("ed-notices").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
         });
-    });
-
+    }
     let mut hits = Vec::new();
     let mut left = chrome.left;
     let flip = egui::Panel::show_switched(

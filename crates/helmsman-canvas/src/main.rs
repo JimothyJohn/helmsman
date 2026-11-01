@@ -37,6 +37,7 @@ mod box_view;
 mod claude;
 mod commit;
 mod editor;
+mod hotkeys;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod monitor_tests;
@@ -86,12 +87,12 @@ fn main() {
             .and_then(|d| d.get_element_by_id("canvas"))
             .and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok())
             .expect("index.html has a <canvas id=\"canvas\">");
+        // The browser keeps its keys, except the shortcuts of ours.
+        let mut options = eframe::WebOptions::default();
+        let base = std::mem::replace(&mut options.should_prevent_default, Box::new(|_| false));
+        options.should_prevent_default = Box::new(move |e| base(e) || hotkeys::wants(e));
         let started = eframe::WebRunner::new()
-            .start(
-                canvas,
-                eframe::WebOptions::default(),
-                Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
-            )
+            .start(canvas, options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
             .await;
         // The page's loading screen waits for one of these (loading/loading.js).
         match started {

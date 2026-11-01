@@ -8,13 +8,17 @@
 use eframe::egui::{self, Rect, RichText, Vec2};
 
 use crate::box_view::{BoxView, is_engineer};
-use crate::editor::{CHROME_KEY, Chrome};
+use crate::editor::{Body, CHROME_KEY, Chrome, menu_item, menu_item_keyed};
+use crate::hotkeys::{self, Action};
 use crate::monitor::{Monitor, NARROW, Wish};
 use crate::playground_view::PlaygroundView;
 use crate::projects::Workspace;
 use crate::review_view::ReviewView;
 use crate::st_view::TAP;
 use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
+
+/// The header's height, points: one row, as tall as the two it replaced.
+pub const HEADER_H: f32 = 64.0;
 
 /// Seconds between re-reads of the proposal list for the ⋯ badge.
 const PROPOSALS_EVERY: f64 = 30.0;
@@ -307,6 +311,76 @@ impl App {
             self.open_diagram(&program, &prefix);
         }
         self.chrome.hits.extend(header);
+        // Last, so a focused text editor has had its own Ctrl+Z first.
+        for a in hotkeys::pressed(&ctx) {
+            self.act(a, &ctx);
+        }
+    }
+
+    /// Does what a shortcut (or its menu item) asks; nothing where it
+    /// does not apply (Run in a box's page, Sign in in the simulation).
+    pub fn act(&mut self, a: Action, ctx: &egui::Context) {
+        match a {
+            Action::Save => {
+                if let Some(w) = self.workspace()
+                    && w.dirty()
+                    && w.writable().is_ok()
+                    && !w.busy()
+                {
+                    w.save();
+                }
+            }
+            Action::Deploy => {
+                if let Some(w) = self.workspace()
+                    && w.writable().is_ok()
+                    && !w.busy()
+                {
+                    w.deploy();
+                }
+            }
+            Action::RunStop | Action::Stop | Action::Step => {
+                if self.source != Source::Sim || self.screen != Screen::Editor {
+                    return;
+                }
+                let Some(s) = self.sim.as_mut() else { return };
+                if s.session.build.is_none() {
+                    return;
+                }
+                match a {
+                    Action::RunStop => {
+                        let on = !s.session.running;
+                        s.session.set_running(on);
+                    }
+                    Action::Stop => s.session.set_running(false),
+                    _ => {
+                        if !s.session.running {
+                            s.session.step();
+                        }
+                    }
+                }
+            }
+            Action::SignIn => {
+                if self.source == Source::Box {
+                    self.login = true;
+                }
+            }
+            Action::SignOut => {
+                if self.source == Source::Box
+                    && let Some(r) = &mut self.review
+                {
+                    r.state.logout();
+                    self.login = false;
+                }
+            }
+            Action::Undo | Action::Redo => {
+                if let Some(w) = self.workspace() {
+                    w.undo(ctx, a == Action::Redo);
+                }
+            }
+            Action::Files => self.chrome.left = !self.chrome.left,
+            Action::St => self.chrome.st = !self.chrome.st,
+            Action::Panel => self.chrome.right = !self.chrome.right,
+        }
     }
 
     /// The Editor's diagram of `program` (empty: the one open), at the
@@ -332,45 +406,25 @@ impl App {
         }
     }
 
-    /// The header: the mark, what is open, the screens, and the ⋯ menu.
-    /// Returns what it drew where.
+    /// The header, one row as tall as two: the mark and the File / Edit /
+    /// View menus on the left, the open view's actions after them, and on
+    /// the right what is open (its name, Save, Deploy), the screens, the
+    /// ⋯ menu and Sign in. Returns what it drew where.
     fn header(&mut self, ui: &mut egui::Ui) -> Vec<(String, Rect)> {
         let mut hits = Vec::new();
         let waiting = self.waiting();
         let title = self.title();
-        let menu_at = egui::Panel::top("header").show(ui, |ui| {
-            ui.horizontal(|ui| {
+        let engineer = is_engineer(self.session().as_ref()).is_ok();
+        let panel = egui::Panel::top("header").show(ui, |ui| {
+            let size = Vec2::new(ui.available_width(), HEADER_H);
+            ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 let mark = ui.label(RichText::new("HELMSMAN").strong().color(YELLOW));
                 hits.push(("mark".to_string(), mark.rect));
+                self.menus(ui, engineer, waiting, &mut hits);
                 ui.separator();
-                let t = ui.label(RichText::new(&title).strong().monospace().color(WHITE));
-                hits.push(("title".to_string(), t.rect));
-                if self.source == Source::Sim {
-                    ui.label(RichText::new("simulation").color(STEEL));
-                }
-                self.project_controls(ui, &mut hits);
-                ui.separator();
-                let e = ui.add(
-                    egui::Button::selectable(self.screen == Screen::Editor, RichText::new("Editor").strong())
-                        .min_size(Vec2::new(TAP * 1.5, 0.0)),
-                );
-                hits.push(("editor".to_string(), e.rect));
-                if e.clicked() {
-                    self.screen = Screen::Editor;
-                    self.menu = false;
-                }
-                let m = ui.add(
-                    egui::Button::selectable(
-                        self.screen == Screen::Monitor,
-                        RichText::new("Monitor").strong(),
-                    )
-                    .min_size(Vec2::new(TAP * 1.5, 0.0)),
-                );
-                hits.push(("monitor".to_string(), m.rect));
-                if m.clicked() {
-                    self.screen = Screen::Monitor;
-                    self.menu = false;
-                }
+                self.actions(ui, &mut hits);
+                // The right-hand group, laid out from the window's edge
+                // leftwards (the order below is right to left).
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let label = match waiting {
                         Some(n) if n > 0 => format!("⋯ {n}"),
@@ -389,15 +443,47 @@ impl App {
                     if m.clicked() {
                         self.menu = !self.menu;
                     }
+                    // ⋯ keeps the corner whether or not Sign in is shown.
                     self.login_button(ui, &mut hits);
+                    let mon = ui.add(
+                        egui::Button::selectable(
+                            self.screen == Screen::Monitor,
+                            RichText::new("Monitor").strong(),
+                        )
+                        .min_size(Vec2::new(TAP * 1.5, 0.0)),
+                    );
+                    hits.push(("monitor".to_string(), mon.rect));
+                    if mon.clicked() {
+                        self.screen = Screen::Monitor;
+                        self.menu = false;
+                    }
+                    let e = ui.add(
+                        egui::Button::selectable(
+                            self.screen == Screen::Editor,
+                            RichText::new("Editor").strong(),
+                        )
+                        .min_size(Vec2::new(TAP * 1.5, 0.0)),
+                    );
+                    hits.push(("editor".to_string(), e.rect));
+                    if e.clicked() {
+                        self.screen = Screen::Editor;
+                        self.menu = false;
+                    }
+                    ui.separator();
+                    self.project_controls(ui, &mut hits);
+                    if self.source == Source::Sim {
+                        ui.label(RichText::new("simulation").color(STEEL));
+                    }
+                    let t = ui.label(RichText::new(&title).strong().monospace().color(WHITE));
+                    hits.push(("title".to_string(), t.rect));
                     m.rect
                 })
                 .inner
             })
             .inner
         });
-        hits.push(("header".to_string(), menu_at.response.rect));
-        let menu_at = menu_at.inner;
+        hits.push(("header".to_string(), panel.response.rect));
+        let menu_at = panel.inner;
         if self.menu {
             self.menu_ui(ui.ctx(), menu_at, waiting, &mut hits);
         }
@@ -405,6 +491,153 @@ impl App {
             self.login_ui(ui.ctx(), menu_at, &mut hits);
         }
         hits
+    }
+
+    /// File, Edit and View: what exists today, nothing greyed for later.
+    fn menus(
+        &mut self,
+        ui: &mut egui::Ui,
+        engineer: bool,
+        waiting: Option<usize>,
+        hits: &mut Vec<(String, Rect)>,
+    ) {
+        let _ = waiting;
+        let ctx = ui.ctx().clone();
+        let mut chrome = std::mem::take(&mut self.chrome);
+        let before = chrome.hits.len();
+        // Plain menu buttons in the row: a MenuBar would take the whole width.
+        ui.scope(|ui| {
+            let f = ui.menu_button("File", |ui| {
+                let (dirty, write) = self
+                    .workspace()
+                    .map_or((false, Err(String::new())), |w| (w.dirty(), w.writable()));
+                let can = write.is_ok();
+                let k = |a| hotkeys::label(&ctx, a);
+                ui.add_enabled_ui(can && dirty, |ui| {
+                    if menu_item_keyed(ui, &mut chrome, "file save", "Save", false, &k(Action::Save))
+                        && let Some(w) = self.workspace()
+                    {
+                        w.save();
+                    }
+                });
+                ui.add_enabled_ui(can, |ui| {
+                    if menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "file deploy",
+                        "Deploy",
+                        false,
+                        &k(Action::Deploy),
+                    ) && let Some(w) = self.workspace()
+                    {
+                        w.deploy();
+                    }
+                });
+                if let Err(why) = &write
+                    && !why.is_empty()
+                {
+                    ui.label(RichText::new(why).small().color(STEEL));
+                }
+                ui.separator();
+                ui.add_enabled_ui(can, |ui| {
+                    if menu_item(ui, &mut chrome, "file upload", "Upload…", false) {
+                        #[cfg(target_arch = "wasm32")]
+                        crate::web::pick_file(UPLOAD_ACCEPT, &ctx);
+                    }
+                });
+                ui.add_enabled_ui(self.workspace().is_some(), |ui| {
+                    if menu_item(ui, &mut chrome, "file download", "Download .zip", false)
+                        && let Some(w) = self.workspace()
+                    {
+                        w.download();
+                    }
+                });
+            });
+            hits.push(("bar file".to_string(), f.response.rect));
+            let e = ui.menu_button("Edit", |ui| {
+                let k = |a| hotkeys::label(&ctx, a);
+                if menu_item_keyed(ui, &mut chrome, "edit undo", "Undo", false, &k(Action::Undo))
+                    && let Some(w) = self.workspace()
+                {
+                    w.undo(&ctx, false);
+                }
+                if menu_item_keyed(ui, &mut chrome, "edit redo", "Redo", false, &k(Action::Redo))
+                    && let Some(w) = self.workspace()
+                {
+                    w.undo(&ctx, true);
+                }
+            });
+            hits.push(("bar edit".to_string(), e.response.rect));
+            let v = ui.menu_button("View", |ui| {
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "view editor",
+                    "Editor",
+                    self.screen == Screen::Editor,
+                ) {
+                    self.screen = Screen::Editor;
+                }
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "view monitor",
+                    "Monitor",
+                    self.screen == Screen::Monitor,
+                ) {
+                    self.screen = Screen::Monitor;
+                }
+                ui.separator();
+                let tabs: &[crate::editor::Tab] = match self.source {
+                    Source::Box => self.boxv.as_ref().map_or(&[], |b| b.tabs()),
+                    Source::Sim => self.sim.as_ref().map_or(&[], |s| s.tabs()),
+                };
+                crate::editor::view_menu(ui, &mut chrome, tabs);
+                ui.separator();
+                if menu_item(ui, &mut chrome, "view fit", "Zoom to fit", false)
+                    && let Some(w) = self.workspace()
+                {
+                    w.zoom_to_fit();
+                }
+                if let Some(w) = self.workspace() {
+                    w.layout_menu(ui, &mut chrome);
+                }
+                if engineer {
+                    ui.separator();
+                    let on = chrome.scan;
+                    if menu_item(ui, &mut chrome, "view scan", "Scan detail", on) {
+                        chrome.scan = !on;
+                    }
+                }
+            });
+            hits.push(("bar view".to_string(), v.response.rect));
+        });
+        hits.extend(chrome.hits.drain(before..));
+        self.chrome = chrome;
+    }
+
+    /// The open view's actions in the header: the simulation's run
+    /// controls, scan period and status; a box's status and notices.
+    fn actions(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        if self.screen != Screen::Editor {
+            return;
+        }
+        let mut chrome = std::mem::take(&mut self.chrome);
+        let before = chrome.hits.len();
+        ui.horizontal(|ui| match self.source {
+            Source::Box => {
+                if let Some(b) = &mut self.boxv {
+                    Body::toolbar(b, ui, &mut chrome);
+                }
+            }
+            Source::Sim => {
+                if let Some(s) = &mut self.sim {
+                    Body::toolbar(s, ui, &mut chrome);
+                }
+            }
+        });
+        hits.extend(chrome.hits.drain(before..));
+        self.chrome = chrome;
     }
 
     /// The open project's name with its dirty marker, Save and Deploy;
@@ -419,13 +652,6 @@ impl App {
         let dirty = w.dirty();
         let write = w.writable();
         let busy = w.busy();
-        if dirty {
-            let d = ui
-                .label(RichText::new("●").strong().color(YELLOW))
-                .on_hover_text("edited, not saved");
-            hits.push(("dirty".to_string(), d.rect));
-        }
-        ui.separator();
         let button = |ui: &mut egui::Ui, text: &str, hint: &str, on: bool| {
             let b = egui::Button::new(RichText::new(text).strong()).min_size(Vec2::new(TAP * 1.5, 0.0));
             match &write {
@@ -433,13 +659,7 @@ impl App {
                 Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
             }
         };
-        let save = button(
-            ui,
-            "Save",
-            "write the edited files (a draft: what runs does not change)",
-            dirty,
-        );
-        hits.push(("save".to_string(), save.rect));
+        // Laid out right to left: Deploy, Save, then the dirty mark.
         let deploy = button(
             ui,
             "Deploy",
@@ -447,6 +667,20 @@ impl App {
             true,
         );
         hits.push(("deploy".to_string(), deploy.rect));
+        let save = button(
+            ui,
+            "Save",
+            "write the edited files (a draft: what runs does not change)",
+            dirty,
+        );
+        hits.push(("save".to_string(), save.rect));
+        ui.separator();
+        if dirty {
+            let d = ui
+                .label(RichText::new("●").strong().color(YELLOW))
+                .on_hover_text("edited, not saved");
+            hits.push(("dirty".to_string(), d.rect));
+        }
         let (save, deploy) = (save.clicked(), deploy.clicked());
         if let Some(w) = self.workspace() {
             if save {
@@ -529,21 +763,7 @@ impl App {
                         self.screen = Screen::Editor;
                         close = true;
                     }
-                    if self.workspace().is_some() {
-                        ui.separator();
-                        if item(ui, "menu upload", "Upload…".into(), false) {
-                            #[cfg(target_arch = "wasm32")]
-                            crate::web::pick_file(UPLOAD_ACCEPT, ctx);
-                            close = true;
-                        }
-                        if item(ui, "menu download", "Download .zip".into(), false) {
-                            if let Some(w) = self.workspace() {
-                                w.download();
-                            }
-                            close = true;
-                        }
-                        ui.separator();
-                    }
+                    ui.separator();
                     if let Some(n) = waiting {
                         let text = if n > 0 {
                             format!("Proposals ({n} waiting)")

@@ -418,13 +418,8 @@ impl PlaygroundView {
 }
 
 impl Body for PlaygroundView {
-    fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+    fn toolbar(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
         {
-            let can = self.proj.can_save_layout();
-            if crate::arrange::buttons(ui, chrome, &mut self.layers, self.viewer.as_mut(), can) {
-                self.save_layout();
-            }
-            ui.separator();
             let s = &mut self.session;
             let (label, fill) = if s.running {
                 ("■ Stop", GRAPHITE)
@@ -476,11 +471,22 @@ impl Body for PlaygroundView {
             #[allow(clippy::cast_precision_loss)]
             let secs = s.now_ms as f64 / 1000.0;
             ui.label(
-                RichText::new(format!("{state} · {} scans · t={secs:.1}s", s.scans))
+                RichText::new(format!("{state} · {secs:.1}s"))
                     .monospace()
                     .color(if s.fault.is_some() { RED } else { STEEL }),
-            );
+            )
+            .on_hover_text(format!("{} scans", s.scans));
         }
+    }
+
+    fn has_notices(&self) -> bool {
+        self.session.fault.is_some()
+            || self.notice.is_some()
+            || self.proj.notice.is_some()
+            || self.proj.storage_problem.is_some()
+    }
+
+    fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         if let Some(f) = &self.session.fault {
             ui.colored_label(RED, format!("Fault: {f}. Run or Step restarts the program."));
         }
@@ -1116,6 +1122,31 @@ const TYPE_HINT: &str = "type a value, then Enter (Esc puts it back)";
 impl Workspace for PlaygroundView {
     fn dirty(&self) -> bool {
         self.proj.dirty()
+    }
+
+    fn layout_menu(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let can = self.proj.can_save_layout();
+        if crate::arrange::menu_items(ui, chrome, &mut self.layers, self.viewer.as_mut(), can) {
+            self.save_layout();
+        }
+    }
+
+    fn zoom_to_fit(&mut self) {
+        if let Some(v) = &mut self.viewer {
+            v.refit();
+        }
+    }
+
+    fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
+        let Some(text) = self.proj.current_text_mut() else {
+            return false;
+        };
+        let done = editor::undo(ctx, egui::Id::unique("pg-source"), text, redo);
+        if done {
+            let t = ctx.input(|i| i.time);
+            self.edited(t);
+        }
+        done
     }
 
     fn writable(&self) -> Result<(), String> {
