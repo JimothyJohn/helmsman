@@ -164,5 +164,9 @@ name = "projects"
 required-features = ["box"]
 
 [[test]]
+name = "trend"
+required-features = ["box"]
+
+[[test]]
 name = "https"
 required-features = ["box", "https"]
