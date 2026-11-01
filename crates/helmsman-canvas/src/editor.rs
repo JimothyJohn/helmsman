@@ -29,7 +29,6 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
-    Trend,
     Claude,
 }
 
@@ -38,7 +37,6 @@ impl Tab {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Trend => "Trend",
             Self::Claude => "Agent",
         }
     }
@@ -46,7 +44,6 @@ impl Tab {
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
-            Self::Trend => "trend",
             Self::Claude => "claude",
         }
     }
@@ -64,6 +61,9 @@ pub struct Chrome {
     pub right: bool,
     /// The ST editor is open beside the diagram.
     pub st: bool,
+    /// The Trend runs along the bottom, under the diagram (Nick,
+    /// 2026-11-01: a long time axis beats a tall one).
+    pub trend: bool,
     pub tab: Tab,
     /// The Monitor's status tiles show the scan period and counts: an
     /// engineer's choice, and only shown while one is signed in.
@@ -82,6 +82,7 @@ impl Default for Chrome {
             left: true,
             right: true,
             st: false,
+            trend: true,
             tab: Tab::Io,
             scan: false,
             line: None,
@@ -96,12 +97,13 @@ impl Chrome {
     #[must_use]
     pub fn saved(&self) -> String {
         format!(
-            "left={} right={} st={} tab={} scan={}",
+            "left={} right={} st={} tab={} scan={} trend={}",
             u8::from(self.left),
             u8::from(self.right),
             u8::from(self.st),
             self.tab.key(),
-            u8::from(self.scan)
+            u8::from(self.scan),
+            u8::from(self.trend)
         )
     }
 
@@ -115,11 +117,9 @@ impl Chrome {
                 Some(("right", v)) => c.right = v == "1",
                 Some(("st", v)) => c.st = v == "1",
                 Some(("scan", v)) => c.scan = v == "1",
+                Some(("trend", v)) => c.trend = v == "1",
                 Some(("tab", v)) => {
-                    if let Some(t) = [Tab::Io, Tab::Trend, Tab::Claude]
-                        .into_iter()
-                        .find(|t| t.key() == v)
-                    {
+                    if let Some(t) = [Tab::Io, Tab::Claude].into_iter().find(|t| t.key() == v) {
                         c.tab = t;
                     }
                 }
@@ -203,6 +203,10 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
     if menu_item_keyed(ui, chrome, "view panel", "Side panel", right, &k(Action::Panel)) {
         chrome.right = !right;
     }
+    let trend = chrome.trend;
+    if menu_item_keyed(ui, chrome, "view trend", "Trend", trend, &k(Action::Trend)) {
+        chrome.trend = !trend;
+    }
     for &t in tabs {
         let on = chrome.right && chrome.tab == t;
         if menu_item(
@@ -259,6 +263,8 @@ pub trait Body {
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The ST editor (read-only on a box).
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// The Trend along the bottom: pins and the plot.
+    fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab);
@@ -403,6 +409,13 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     chrome.right = right;
     chrome.tab = tab;
     chrome.hits.extend(hits);
+
+    let mut trend = chrome.trend;
+    egui::Panel::bottom("ed-trend")
+        .resizable(true)
+        .default_size(200.0)
+        .show_collapsible(ui, &mut trend, |ui| body.trend(ui, chrome));
+    chrome.trend = trend;
 
     let mut st = chrome.st;
     egui::Panel::left("ed-st")

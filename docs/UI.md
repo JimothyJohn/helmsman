@@ -43,8 +43,10 @@ this; change it here first when a decision changes.
 - **ST on demand:** View › Structured Text slides the editor open beside
   the diagram (220 pt, resizable, lines wrapped); clicking a block jumps
   the editor to its line.
+- **Trend along the bottom**, under the diagram, collapsible and
+  resizable (View › Trend, Alt 2): its time axis is the long side.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
-  not show), Trend (pinned signals), Agent. On a Pi the Trend opens with
+  not show), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.
@@ -115,6 +117,7 @@ The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
 | Ctrl Z, Ctrl Y | Undo, Redo in the ST editor | Undo, Restore |
 | Alt 0 | Files sidebar | Devices view |
 | Alt 1 | Structured Text pane | POUs view |
+| Alt 2 | Trend along the bottom | Modules view |
 | Alt 3 | Side panel | Messages view |
 | Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
 | Ctrl Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References |

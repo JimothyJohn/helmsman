@@ -16,6 +16,7 @@
 //! | Undo / Redo | Ctrl/⌘ Z, Ctrl/⌘ Y | Undo / Restore |
 //! | Files sidebar | Alt 0 | Devices view |
 //! | Structured Text | Alt 1 | POUs view |
+//! | Trend along the bottom | Alt 2 | Modules view |
 //! | Side panel | Alt 3 | Messages view |
 //! | Go to definition (picked block's variable) | Ctrl/⌘ Shift D | Go to Definition |
 //! | Cross references (its reads and writes lit) | Ctrl/⌘ Shift X | Display Cross References |
@@ -43,6 +44,7 @@ pub enum Action {
     Files,
     St,
     Panel,
+    Trend,
     GoToDefinition,
     CrossReferences,
 }
@@ -97,6 +99,7 @@ pub const TABLE: &[Hotkey] = &[
     ),
     key(Action::Files, Modifiers::ALT, Key::Num0, "Devices"),
     key(Action::St, Modifiers::ALT, Key::Num1, "POUs"),
+    key(Action::Trend, Modifiers::ALT, Key::Num2, "Modules"),
     key(Action::Panel, Modifiers::ALT, Key::Num3, "Messages"),
 ];
 

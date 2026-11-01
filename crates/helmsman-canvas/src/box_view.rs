@@ -883,17 +883,16 @@ impl Body for BoxView {
         }
     }
 
-    fn tabs(&self) -> &'static [Tab] {
-        // Claude comes to the box later (docs/UI.md).
-        &[Tab::Io, Tab::Trend]
+    fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        self.trend.ui(ui, chrome, &self.state, self.session.as_ref());
     }
 
-    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab) {
-        if tab == Tab::Trend {
-            let mut chrome = Chrome::default();
-            self.trend.ui(ui, &mut chrome, &self.state, self.session.as_ref());
-            return;
-        }
+    fn tabs(&self) -> &'static [Tab] {
+        // Claude comes to the box later (docs/UI.md).
+        &[Tab::Io]
+    }
+
+    fn tab(&mut self, ui: &mut egui::Ui, _tab: Tab) {
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {
             if let Some(v) = &mut self.view {
