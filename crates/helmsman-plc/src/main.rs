@@ -1072,6 +1072,7 @@ fn start_api(
         forces: Some(Arc::clone(forces)),
         drivers: Some(helmsman_plc::driver_dir::DriverDir::in_state_dir(&dir)),
         running_drivers,
+        trend_pins: Some(dir.join("trend-pins")),
     };
     let server = Api::start_secure(cfg, shared, extras, site.as_ref().map(Site::handle), more, tls)
         .map_err(|e| format!("--api {bind}: {e}"))?;
