@@ -117,6 +117,11 @@ pub struct Viewer {
     lit: Option<Drivers>,
     /// What the drag in progress holds.
     grab: Option<Grab>,
+    /// When each node (scope, id) was last seen to run, page time: a
+    /// statement that ran for one scan stays lit for [`HOLD`].
+    ran_at: std::collections::HashMap<(usize, u32), f64>,
+    /// When each region (scope, id) was last seen taken, and how.
+    taken_at: std::collections::HashMap<(usize, u32), (f64, Gate)>,
     /// Instances folded in the tree (their prefixes).
     folded: Vec<String>,
     /// How far the operator moved each block from where the layout put it,
@@ -283,9 +288,38 @@ impl Viewer {
             highlight: Vec::new(),
             lit: None,
             grab: None,
+            ran_at: std::collections::HashMap::new(),
+            taken_at: std::collections::HashMap::new(),
             folded: Vec::new(),
             moved,
             edits: 0,
+        }
+    }
+
+    /// Keeps what ran lit for [`HOLD`] after the scan it ran in. The
+    /// diagram draws one scan per frame, so a statement that runs for a
+    /// single scan (the body of `IF pulse.Q`, a one-shot) would brighten
+    /// for one frame, only on the frames that happen to land on it: a
+    /// flicker. Held, it reads as a blink of fixed length instead.
+    pub fn hold(&mut self, live: &mut Live, now: f64) {
+        let scope = self.scope;
+        for (i, ran) in live.ran.iter_mut().enumerate() {
+            let key = (scope, u32::try_from(i).unwrap_or(u32::MAX));
+            if *ran {
+                self.ran_at.insert(key, now);
+            } else if self.ran_at.get(&key).is_some_and(|t| now - t < HOLD) {
+                *ran = true;
+            }
+        }
+        for (i, g) in live.gates.iter_mut().enumerate() {
+            let key = (scope, u32::try_from(i).unwrap_or(u32::MAX));
+            if matches!(g, Gate::Open(_)) {
+                self.taken_at.insert(key, (now, *g));
+            } else if let Some((t, held)) = self.taken_at.get(&key)
+                && now - t < HOLD
+            {
+                *g = *held;
+            }
         }
     }
 
@@ -782,7 +816,11 @@ impl Viewer {
                 _ => self.because = None,
             }
         }
-        let live = self.live(scan);
+        let mut live = self.live(scan);
+        if let Some(l) = &mut live {
+            let now = ui.input(|i| i.time);
+            self.hold(l, now);
+        }
         self.lit = self.path(scan);
         draw(
             &painter,
@@ -921,6 +959,9 @@ fn value_text(
 
 /// How strongly what is off the "because" path is drawn.
 const DIMMED: f32 = 0.22;
+
+/// How long a statement stays lit after the scan it ran in, seconds.
+pub const HOLD: f64 = 0.3;
 
 /// The FBD negation bubble's radius, in diagram units.
 const BUBBLE: f32 = 4.0;
@@ -1158,6 +1199,84 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                 );
             }
         }
+    }
+}
+
+/// A one-scan statement stays lit (the Blink lamp's flicker).
+#[cfg(test)]
+mod hold_tests {
+    use helmsman_diagram::{Gate, Live, NodeKind};
+
+    use super::{HOLD, Viewer};
+    use crate::playground::Session;
+
+    const SRC: &str = "PROGRAM blink
+VAR_INPUT
+  enable : BOOL := TRUE;
+  period : TIME := T#500ms;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+END_VAR
+VAR
+  pulse : TON;
+END_VAR
+pulse(IN := enable AND NOT pulse.Q, PT := period);
+IF pulse.Q THEN
+  lamp := NOT lamp;
+END_IF;
+END_PROGRAM
+";
+
+    #[test]
+    fn a_statement_that_ran_one_scan_stays_lit_for_hold_then_dims() {
+        let session = Session::new(SRC);
+        assert!(session.diags.is_empty(), "{:?}", session.diag_lines());
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        let mut v = Viewer::new(SRC, module);
+        let d = v.diagram().clone();
+        let lamp = d
+            .nodes
+            .iter()
+            .position(|n| n.kind == NodeKind::Write { path: "LAMP".into() })
+            .unwrap();
+        // The program's one region: the IF the lamp's assignment sits in.
+        assert_eq!(d.regions.len(), 1);
+        let region = 0;
+        let fresh = |ran: bool, gate: Gate| Live {
+            values: d.nodes.iter().map(|_| Vec::new()).collect(),
+            ran: d
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, _)| i != lamp || ran)
+                .collect(),
+            gates: d
+                .regions
+                .iter()
+                .enumerate()
+                .map(|(i, _)| if i == region { gate } else { Gate::Closed })
+                .collect(),
+        };
+        // The scan it ran in: lit, the IF taken.
+        let mut l = fresh(true, Gate::Open(1));
+        v.hold(&mut l, 10.0);
+        assert!(l.ran[lamp] && l.gates[region] == Gate::Open(1));
+        // The next frames show scans it did not run in: still lit, within HOLD.
+        let mut l = fresh(false, Gate::Closed);
+        v.hold(&mut l, 10.0 + HOLD / 2.0);
+        assert!(l.ran[lamp], "held");
+        assert_eq!(l.gates[region], Gate::Open(1), "the IF stays taken");
+        // After HOLD: as the scan says.
+        let mut l = fresh(false, Gate::Closed);
+        v.hold(&mut l, 10.0 + HOLD + 0.01);
+        assert!(!l.ran[lamp], "dimmed again");
+        assert_eq!(l.gates[region], Gate::Closed);
+        // Never reached: nothing to hold.
+        let mut l = fresh(false, Gate::NotReached);
+        v.hold(&mut l, 20.0);
+        assert!(!l.ran[lamp]);
+        assert_eq!(l.gates[region], Gate::NotReached);
     }
 }
 
