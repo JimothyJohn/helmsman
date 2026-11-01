@@ -4,9 +4,12 @@
 //! 1. The target change set is known (a stored proposal's, or a snapshot's)
 //!    and, for a proposal, it was drafted against what runs now (else 409:
 //!    stale, draft it again).
-//! 2. The step from what runs to the target is classified
-//!    ([`crate::policy::classify`]) and the policy's rule for that tier
-//!    looked up.
+//! 2. The WASM driver files the target map names are read once
+//!    ([`crate::driver_dir`]: the project being deployed or the running
+//!    one, then the box's folder), the step from what runs to the target
+//!    is classified with them ([`crate::policy::classify_with`]: a driver
+//!    whose bytes differ from what the links run is output-affecting) and
+//!    the policy's rule for that tier looked up.
 //! 3. The role named in the body is at least the rule's (else 403, and no
 //!    PIN is checked, so no attempt is spent).
 //! 4. If the rule wants one, the body names a sim replay
@@ -14,8 +17,9 @@
 //!    runs and the target, covering at least the policy's window (else 428).
 //! 5. The role's PIN (else 403, or 429 while entry is locked).
 //! 6. Every module of the target compiles (else 422). If the target
-//!    brings another I/O map or calendar, they load (else 422) and the
-//!    modules bind to them (else 409).
+//!    brings another I/O map, calendar or driver bytes, they load (else
+//!    422, a bad driver file named) and the modules bind to them (else
+//!    409).
 //! 7. The scan thread swaps the whole module set between ticks
 //!    ([`super::swap`]), and with another map or calendar reloads the
 //!    table, the calendar and the device links around it
@@ -40,10 +44,12 @@ use serde_json::{Value as Json, json};
 use super::store::Stored;
 use super::swap::{Plant, Reloaded, SwapHandle, compile_set};
 use super::{Ctx, Note, Request, Response, audit_full, record, wall};
+use crate::driver_dir::Found;
+use crate::drivers::Drivers;
 use crate::layout::Layout;
 use crate::policy::account::{Logins, Mode, Principal};
 use crate::policy::pin::{Gate, Refused};
-use crate::policy::{Policy, Role, Tier, classify};
+use crate::policy::{Class, Policy, Role, Tier, classify_with};
 use crate::replay;
 use crate::store::{ChangeSet, Meta, SnapshotId};
 
@@ -338,7 +344,11 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
             note,
         );
     };
-    let layout = match reload_layout(&running, &target) {
+    let found = ctx
+        .sources(deploying(target_ref))
+        .find_text(target.io_map.as_deref());
+    let running_drivers = ctx.running_drivers();
+    let layout = match reload_layout(&running, &target, &running_drivers, &found) {
         Ok(l) => l,
         Err(problems) => {
             return refuse(
@@ -427,7 +437,7 @@ pub(super) fn replay(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respon
         json!({
             "io_map_changed": running.io_map != target.io_map,
             "calendar_changed": running.calendar != target.calendar,
-            "drivers_changed": running.drivers != target.drivers,
+            "drivers_changed": running_drivers != found.drivers,
             "unrecorded": unrecorded,
             "retyped": retyped,
             "complete": cov.is_complete(),
@@ -625,7 +635,13 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             note,
         );
     }
-    let class = classify(&running, &target);
+    // The driver files the target map names, read once: what is
+    // classified is what loads.
+    let found = ctx
+        .sources(deploying(target_ref))
+        .find_text(target.io_map.as_deref());
+    let running_drivers = ctx.running_drivers();
+    let class = classify_with(&running, &target, &running_drivers, &found.drivers);
     let tier = class.tier;
     let needed = appr.policy.rule(tier);
     let reasons: Vec<Json> = class
@@ -717,7 +733,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             );
         }
     };
-    let layout = match reload_layout(&running, &target) {
+    let layout = match reload_layout(&running, &target, &running_drivers, &found) {
         Ok(l) => l,
         Err(problems) => {
             return refuse(
@@ -732,6 +748,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             );
         }
     };
+    let loaded_drivers = layout.as_ref().map(|l| l.drivers.clone());
     if let Some(l) = &layout {
         let fits = crate::Runtime::with_signals(appr.plant.i_len, appr.plant.q_len, new.clone(), &l.table);
         if let Err(errs) = fits {
@@ -792,11 +809,16 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         let mut store = store.lock().unwrap_or_else(PoisonError::into_inner);
         match target_ref {
             Target::Proposal(_) | Target::Project(_) => store.commit(&target, &m),
-            Target::Snapshot(_) => store.rollback(&content, &m),
+            // The id asked for: a schema 3 snapshot with drivers is read
+            // as `content` (without them), which the store commits.
+            Target::Snapshot(id) => match SnapshotId::parse(id) {
+                Some(to) => store.rollback(&to, &m),
+                None => Err(crate::store::Error::NotFound(content)),
+            },
         }
     };
     if let Err(e) = committed {
-        let back = swap_back(appr, ctx, old, &running, reloaded.is_some());
+        let back = swap_back(appr, ctx, old, &running, &running_drivers, reloaded.is_some());
         let undone = match &back {
             Ok(()) => "the running box was swapped back".to_string(),
             Err(e) => format!("SWAPPING BACK FAILED ({e}): the box runs the new change set uncommitted"),
@@ -812,6 +834,9 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         return Response::json(500, &json!({ "error": why, "changed": back.is_err() }));
     }
     ctx.set_running(target, catalog);
+    if let Some(d) = loaded_drivers {
+        ctx.set_running_drivers(d);
+    }
     let project = match target_ref {
         Target::Project(name) => {
             super::forces::release_all(ctx, "a project was deployed");
@@ -828,6 +853,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             "links_added": links.added,
             "safed": links.safed,
             "notes": links.notes,
+            "drivers": drivers_json(&found),
         })
     });
     if let Some(mut p) = proposal {
@@ -870,13 +896,14 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
 }
 
 /// The commit failed after the box took the change: puts `running` back
-/// (modules `old`, compiled from it), reloading its map and calendar too
-/// if the change had reloaded them.
+/// (modules `old`, compiled from it), reloading its map and calendar too,
+/// on the driver bytes it ran (`drivers`), if the change had reloaded them.
 fn swap_back(
     appr: &Approval,
     ctx: &Ctx,
     old: Vec<crate::Module>,
     running: &ChangeSet,
+    drivers: &Drivers,
     reloaded: bool,
 ) -> Result<(), String> {
     if !reloaded {
@@ -886,12 +913,8 @@ fn swap_back(
             .map(drop)
             .map_err(|e| e.to_string());
     }
-    let layout = Layout::build_with(
-        running.io_map.as_deref(),
-        running.calendar.as_deref(),
-        &running.drivers,
-    )
-    .map_err(|e| e.join("; "))?;
+    let layout = Layout::build_with(running.io_map.as_deref(), running.calendar.as_deref(), drivers)
+        .map_err(|e| e.join("; "))?;
     let r = appr
         .swap
         .reload(old, running.clone(), layout)
@@ -900,26 +923,55 @@ fn swap_back(
     Ok(())
 }
 
-/// The table and calendar a step from `running` to `target` loads, if it
-/// changes either or the WASM drivers the map may name (a new driver
-/// version reopens its devices' links): `Ok(None)` when all are the
-/// running ones.
+/// The project a step deploys, whose `drivers/` a map's `wasm:NAME` is
+/// looked for in first; `None` for an apply or rollback (the running
+/// project's, then).
+const fn deploying(target: Target<'_>) -> Option<&str> {
+    match target {
+        Target::Project(name) => Some(name),
+        Target::Proposal(_) | Target::Snapshot(_) => None,
+    }
+}
+
+/// The table and calendar a step from `running` (whose links run on
+/// `running_drivers`) to `target` loads, if it changes either or the
+/// driver bytes the target map loads (`found`; a changed file reopens its
+/// devices' links): `Ok(None)` when all are the running ones.
 ///
 /// # Errors
-/// What does not load, file by file.
-fn reload_layout(running: &ChangeSet, target: &ChangeSet) -> Result<Option<Layout>, Vec<String>> {
+/// What does not load, file by file: a driver file that will not, by
+/// name.
+fn reload_layout(
+    running: &ChangeSet,
+    target: &ChangeSet,
+    running_drivers: &Drivers,
+    found: &Found,
+) -> Result<Option<Layout>, Vec<String>> {
     if running.io_map == target.io_map
         && running.calendar == target.calendar
-        && running.drivers == target.drivers
+        && *running_drivers == found.drivers
+        && found.problems.is_empty()
     {
         return Ok(None);
     }
-    Layout::build_with(
-        target.io_map.as_deref(),
-        target.calendar.as_deref(),
-        &target.drivers,
-    )
-    .map(Some)
+    crate::driver_dir::layout(target.io_map.as_deref(), target.calendar.as_deref(), found).map(Some)
+}
+
+/// The drivers a load found, for a response: by name, where from and the
+/// SHA-256 of the bytes.
+fn drivers_json(found: &Found) -> Json {
+    found
+        .drivers
+        .iter()
+        .map(|(n, b)| {
+            let from = found.origin.get(n).map(ToString::to_string);
+            (
+                n.clone(),
+                json!({ "from": from, "sha256": crate::driver_dir::sha256(b) }),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
 }
 
 /// The table and recording the box runs now, which replays use: the
@@ -930,12 +982,13 @@ pub struct Shape {
     pub record: Option<crate::record::RecordTap>,
 }
 
-/// The tier a proposal's change set would be, against what it was drafted
-/// on, for the draft's JSON.
-#[must_use]
-pub fn tier_json(base: &ChangeSet, target: &ChangeSet, policy: Option<&Policy>) -> Json {
-    let c = classify(base, target);
-    let rule = policy.map(|p| p.rule(c.tier));
+/// The tier a step from `base` to `target` would be, against the driver
+/// files as they are now (`deploying`: the project whose `drivers/` comes
+/// first), for a draft's or a project check's JSON.
+pub(super) fn tier_json(ctx: &Ctx, base: &ChangeSet, target: &ChangeSet, deploying: Option<&str>) -> Json {
+    let found = ctx.sources(deploying).find_text(target.io_map.as_deref());
+    let c: Class = classify_with(base, target, &ctx.running_drivers(), &found.drivers);
+    let rule = ctx.approval.as_ref().map(|a| a.policy.rule(c.tier));
     json!({
         "tier": c.tier.as_str(),
         "reasons": c.reasons.iter().map(|(t, w)| json!({ "tier": t.as_str(), "why": w })).collect::<Vec<_>>(),

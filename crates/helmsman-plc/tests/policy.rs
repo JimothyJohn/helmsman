@@ -80,7 +80,6 @@ fn cs(modules: &[(&str, Spec)], map: &str, cal: Option<&str>) -> ChangeSet {
             .collect(),
         io_map: Some(map.into()),
         calendar: cal.map(str::to_string),
-        drivers: BTreeMap::new(),
     }
 }
 
@@ -291,7 +290,6 @@ fn set_strategy() -> impl Strategy<Value = ChangeSet> {
                     .collect(),
                 io_map: Some(map),
                 calendar: cal,
-                drivers: BTreeMap::new(),
             };
             if garble && let Some(f) = c.modules.values_mut().next() {
                 f.manifest.push_str("bogus line\n");

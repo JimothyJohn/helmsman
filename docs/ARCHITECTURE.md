@@ -437,38 +437,85 @@ it); the interface is in the module docs of `wasm.rs`.
   native driver passes, and agrees with the native driver, on the same
   simulator and on hostile peers, call for call (property tests in
   `tests/wasm_driver.rs`).
-- **Stored, approved and named by the map** (`wasm-driver-map`; where
-  it lives is `wasm-driver-home`, built as its recommended option and
-  still open): a driver is a blob in the change set under a name
-  (`ChangeSet::drivers`, a `wasm-driver NAME SHA256` tree line after the
-  modules; store schema 3, which a store reaches with its first driver as
-  it reached 2 with its first WASM module). `POST /api/proposals` takes
-  `{kind: driver, name, wasm}` (base64); the proposal is refused unless the
-  binary passes `wasm::check` and starts under the default limits without
-  a device (`wasm::sandbox`: memory within the cap, segments in bounds,
-  `configure` not called), and unless the running map still loads with it.
-  Adding, removing or changing a driver is `output-affecting`
-  (`policy::classify`): engineer PIN and a replay, like a map change. A
-  map device line names one as `device ID wasm:NAME ENDPOINT ...`; the
-  map is checked against the approved set (`Layout::build_with`,
-  `drivers::Points`: an unapproved name is refused, even on a device no
-  signal uses, and each point is parsed by the guest loaded with that
-  device's params), and the link opens on the guest (`drivers::open`,
-  `LinkSet::plan_with`). A link's identity includes the driver's SHA-256,
-  so approving a new version under an unchanged map line is a reload that
-  replaces those links (outputs the new link still has are written by it,
-  as for any changed device, and the old guest's connection is not
-  carried); rollback brings back the old bytes and the old links.
-  Bundles carry drivers as `wasm-driver` blobs, list each as `wasm:NAME`
-  under `drivers` in the capability manifest, and are refused as content
-  if one would not pass the proposal's check; an imported bundle's drivers
-  join the box's. The API shows a driver as `render::driver` (interface,
-  size, SHA-256, imports), never the binary. The box ships none built in:
-  the Modbus guest is a test fixture (`tests/driver_map.rs` reads the
-  simulator through it, end to end).
+- **Files, named by the map** (`wasm-driver-map`, `wasm-driver-home`:
+  "a file path on the box"; `helmsman_plc::driver_dir`, contract in
+  `helmsman-plc/tests/driver_map.rs`). A map device line `device ID
+  wasm:NAME ENDPOINT ...` runs on the file `drivers/NAME.wasm`, looked
+  for in the project first (`<state-dir>/projects/P/drivers/`: the
+  project being deployed, else the one `running-project` names), then in
+  the box's folder (`<state-dir>/drivers/`, in every mode, a store or
+  none). **The first file found is the one**: a project that carries a
+  driver runs the bytes it was written and tested with wherever it is
+  deployed, the box's folder supplies what a project leaves out, and a
+  bad project file is an error, never a fall back to the box's.
+  - **Names** are slugs (`helmsman_project::driver_name`: 1..=48 of `a-z
+    0-9 _ -`, starting with a letter or digit), so a name is one path
+    segment and two never differ by case alone; `wasm:../x`,
+    `wasm:Modbus` are refused as "not a driver name" before any file is
+    looked for.
+  - **Read safely**: regular files only, at most 256 KiB
+    (`helmsman_project::MAX_DRIVER`); a symbolic link (the file or a
+    `drivers/` folder) is refused, never followed, and on Unix the file
+    opened must be the one looked at (device and inode; a rename racing
+    the read is read again).
+  - **Checked on load** as a driver always was: `wasm::check` and an
+    instance started under the default limits without a device
+    (`wasm::sandbox`: memory within the cap, segments in bounds,
+    `configure` not called), then each point parsed by the guest loaded
+    with its device's params (`drivers::Points`, even on a device no
+    signal uses). A bad file is a map error naming the device and the
+    file (`device rio: wasm:modbus: drivers/modbus.wasm in the box:
+    ...`) and nothing loads; a name no file answers is "no such WASM
+    driver (no file drivers/NAME.wasm in the project or on the box)".
+  - **When a change runs**: files are read when a map loads (at boot,
+    and by every apply, rollback or deploy, which reads each file the
+    target map names once and loads exactly those bytes), never while
+    one runs. A link's identity includes its driver's SHA-256
+    (`LinkSet::plan_with`), so a changed file under an unchanged map line
+    replaces that device's link at the next load, between scans (outputs
+    the new link still has are written by it, as for any changed device;
+    the old guest's connection is not carried). A step whose loaded
+    driver bytes differ from what the links run on (added, dropped, or
+    the file changed) is `output-affecting` (`policy::classify_with`),
+    whatever else it changes, so a changed file never rides in on a
+    param or logic change; the apply's `reload.drivers` says which bytes
+    loaded from where (`{name: {from, sha256}}`). Rollback restores a
+    map, not driver bytes: it loads the files as they are then.
+  - **The box's folder** is managed by an engineer (the `/api/drivers`
+    routes below): uploads are held to the load's check first, then
+    written atomically (a temporary file renamed over the old), at most
+    64 files; a file the running map loads from the box (no project
+    driver in front of it) is not deleted (409).
+  - **A project's** `drivers/` travels in its `.zip` as
+    `drivers/NAME.wasm` (at most 16, files and drivers together within
+    the project's 900 KiB), is copied with it, and is checked as a box
+    upload is when an archive is installed (a bad one refuses the whole
+    archive). The browser's simulation runs no WASM driver: an archive
+    with one is refused there (`helmsman_project::from_zip`).
+  - **Not in snapshots or bundles.** A change set holds no driver; a
+    bundle carries none (its capability manifest still lists `wasm:NAME`
+    under `drivers`, as the map names it) and one an older build wrote
+    with a `wasm-driver` line is refused as malformed, saying so. A store
+    written when drivers were store blobs (#89, schema 3) still opens:
+    a snapshot with `wasm-driver` lines is read without them (their blobs
+    still checked; `store::Loaded::ignored_drivers`, logged at boot and
+    on every read through the API), and rolling back to one commits that
+    content as its own snapshot, recorded as a rollback to the old id
+    (`tests/fixtures/store-v3-drivers`).
+  - The API shows a driver as interface, size, SHA-256 and problems,
+    never the binary. The box ships none built in: the Modbus guest is a
+    test fixture (`tests/driver_map.rs` reads the simulator through it
+    from a driver file, end to end through the box runtime).
+
+| route | who | body / answer |
+| --- | --- | --- |
+| `GET /api/drivers` | engineer | `{drivers: [{name, map_name, bytes, sha256, ok, problems}]}` |
+| `PUT /api/drivers/{name}` | engineer | the `.wasm` bytes (`application/wasm` or `application/octet-stream`); 201 new, 200 replaced: `{name, ..., replaced, takes_effect}`; 400 name, 413 size, 415 type, 422 `{error, problems}`, 409 a link in its place, 507 full |
+| `DELETE /api/drivers/{name}` | engineer | `{deleted}`; 409 while the running map loads it from the box |
+
 - **Not yet**: stream sockets only: a protocol over UDP would need a
-  datagram import. Removing a driver is a rollback, not a proposal kind.
-  A driver from `--module-dir` files (no store) has nowhere to live.
+  datagram import. Adding a driver to a project is an archive upload (no
+  per-file route).
 
 ## The trace tap (`trace-tap`, built)
 
@@ -642,8 +689,7 @@ module, map or calendar source).
 - **Content-addressed**: blobs are keyed by SHA-256; a snapshot's id is the
   SHA-256 of a canonical text tree (`helmsman-snapshot 1`, then one
   `module NAME MANIFEST SOURCE` or `wasm-module NAME MANIFEST WASM` line
-  per module by name, `wasm-driver NAME H` per WASM driver by name,
-  `io-map H`, `calendar H`). Same content, same id, in
+  per module by name, `io-map H`, `calendar H`). Same content, same id, in
   any store; an ST snapshot's id is what it was before WASM modules. Blobs
   are bytes; the tree says which are text, and one read as text that is not
   UTF-8 is an error. Every read re-hashes
@@ -662,9 +708,10 @@ module, map or calendar source).
   tables plus `wasm-module` lines: a schema 1 store opens as it is and is
   marked 2 by the first commit holding a WASM module, so an older build
   keeps opening it until then and is told to upgrade after
-  (`tests/fixtures/store-v1` is a store from before). Schema 3 adds
-  `wasm-driver` lines the same way, marked by the first commit holding a
-  driver. Writers take SQLite's write
+  (`tests/fixtures/store-v1` is a store from before). Schema 3 added
+  `wasm-driver NAME H` lines (drivers as store blobs, #89); this build
+  writes none and reads them as "WASM drivers" says (the driver left out
+  and logged). Writers take SQLite's write
   lock up front (`BEGIN IMMEDIATE`, WAL), so concurrent commits never lose
   an entry. Author and approver are one line, prompt may span lines; none
   may carry controls or invisible formatting characters (as the manifest).
@@ -848,8 +895,8 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   every module drives the same signals and `%Q` bytes, the map is the same,
   and the calendar's `drive` lines are the same; `output-affecting` for
   anything else that can move an output: the I/O map changed at all
-  (bindings, devices, safe values), a WASM driver added, removed or
-  changed (it is what reaches a device), a module's `drives` or `%Q` window
+  (bindings, devices, safe values), the WASM driver bytes the map loads
+  added, dropped or changed (its file; it is what reaches a device), a module's `drives` or `%Q` window
   changed, a module that drives something was added or removed, the
   calendar's `drive` lines changed, or a manifest or calendar does not
   parse. When in doubt, up. What a proposal says about itself is never
@@ -956,7 +1003,7 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
 
 ## Map and calendar reload (`map-reload`, built)
 
-An apply or rollback whose I/O map, calendar or WASM drivers differ from
+An apply or rollback whose I/O map, calendar or WASM driver files differ from
 what runs reloads them on the running box, through the same approval path
 (always `output-affecting` for a map, `logic` for a calendar with the same
 `drive` lines). `POST /api/proposals` takes `{kind: io_map|calendar, text}`;
@@ -1019,8 +1066,10 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   optional `diagram.layout` (the diagram's shared arrangement, below;
   the build ignores it) and an optional `project.settings` (`author`; `program NAME scan_ms=
   i= q= m=`; `param PROGRAM NAME TYPE VALUE ...`, a manifest's param
-  line). Many are stored; one runs; editing or saving one never touches
-  what runs.
+  line), and optional WASM drivers its map names, `drivers/NAME.wasm`
+  ("WASM drivers"; they come in with its `.zip`). Many are stored; one
+  runs; editing or saving one never touches what runs (a driver file is
+  read at the next deploy or map reload, as the box's are).
 - **Names and contents.** A project is 1..=48 of `a-z 0-9 _ -` (lower
   case, so a case-folding file system never merges two); a file is
   `NAME.st` (1..=64 of `A-Z a-z 0-9 _ -`, no case-only twins), `io.map`
@@ -1046,7 +1095,9 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   settings (else `--scan-ms` and no windows; the only PROGRAM of a
   project gets the whole image, like a bare program). The same files
   always build the same snapshot. The project's `io.map` is the map; the
-  calendar and the WASM drivers are carried over from what runs.
+  calendar is carried over from what runs. The WASM drivers its map
+  names are its own `drivers/NAME.wasm` files, then the box's ("WASM
+  drivers"): files, not part of the snapshot.
 - **Deploy is an apply** (`approve::apply` with `Target::Project`): the
   build is the target change set, then the same steps as an apply:
   tier from the diff, the policy's role and replay rule
@@ -1069,7 +1120,8 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   encryption, symlinks or other non-files, names UTF-8, local and central
   headers agreeing. One common top-level folder (a plain name, never
   `..`) is stripped and `__MACOSX/` and `.DS_Store` skipped; anything
-  else must be a project file name at the top level, so zip-slip names
+  else must be a project file name at the top level or a WASM driver,
+  `drivers/NAME.wasm` (NAME a slug; "WASM drivers"), so zip-slip names
   are refused, not cleaned. A refused upload writes nothing, and a
   replacing one leaves the old project whole until the new one is in.
 - **Import** (`POST .../import?file=F`): `F.st` as it is; `F.xml`
@@ -1091,7 +1143,7 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | --- | --- | --- |
 | `GET /api/projects` | open | `{projects: [{name, running}], running}` |
 | `POST /api/projects` | engineer | `{name}` or `{name, from}` (copy); 201 |
-| `GET /api/projects/{p}` | open | `{name, running, files: [{name, bytes, version}]}` |
+| `GET /api/projects/{p}` | open | `{name, running, files: [{name, bytes, version}], drivers: [{name, bytes, sha256}]}` |
 | `DELETE /api/projects/{p}` | engineer | 409 for the running project |
 | `POST /api/projects/{p}/rename` | engineer | `{to}` |
 | `GET /api/projects/{p}/files/{f}` | open | `{name, text, version}` |
@@ -1623,6 +1675,8 @@ host-enforced checks; an AI review (`marketplace`) can only refuse on top.
   manifest not in canonical form; a blob the tree reads as text (all but
   a `wasm-module`'s binary) that is not UTF-8. A box from before
   `wasm-store` refuses a bundle with a WASM module as an unknown tree line.
+  A bundle carries no WASM driver: a `wasm-driver` line (#89's) is
+  refused, saying that drivers are files on the box now.
 - **Bundle manifest** (`helmsman-bundle-manifest 1`, canonical): name,
   version, author, description, and the **capability manifest**: modules,
   signals read, signals driven (modules and calendar `drive` lines), `%Q`
@@ -2094,7 +2148,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
 | module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault); a WASM module's fuel per scan (the same fault) and linear-memory cap | built |
 | module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink and the OPC UA server (read-only, SecurityPolicy None; `sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
-| driver ↔ box | strings and values | the `Driver` contract; a WASM driver (`helmsman-driver/v1`) imports only its socket to its own device's endpoint (it never names a host or port; no files, clocks or WASI, refused at load otherwise), and only in `read` and `write`, under fuel and memory limits and a per-call deadline; a trap fails that point (`Error::Driver`), not the link or the runtime | built (`wasm-driver`; `helmsman-io/tests/wasm_driver.rs`, `helmsman-plc/tests/wasm_driver.rs`); a map can't name one yet (`wasm-driver-map`) |
+| driver ↔ box | strings and values | the `Driver` contract; a WASM driver (`helmsman-driver/v1`) imports only its socket to its own device's endpoint (it never names a host or port; no files, clocks or WASI, refused at load otherwise), and only in `read` and `write`, under fuel and memory limits and a per-call deadline; a trap fails that point (`Error::Driver`), not the link or the runtime; the binary is a file (`drivers/NAME.wasm`, a slug, regular files only, links never followed, checked at upload and at every load) | built (`wasm-driver`, `wasm-driver-map`; `helmsman-io/tests/wasm_driver.rs`, `helmsman-plc/tests/wasm_driver.rs`, `helmsman-plc/tests/driver_map.rs`) |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` exist only with the feature; the Class 1 scanner (its own `scanner` feature, out of the box build for now, below) sends only `Forward_Open`/`Forward_Close` to an Assembly path. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
 | box ↔ mastered EtherNet/IP adapters | Class 1 I/O: the device's output assembly, its input assembly | `helmsman-proto`'s `scanner` feature, which only helmsman-plc's `enip-io` feature turns on (out of the box build until `e1213-bench` passes): it sends `Forward_Open` and `Forward_Close` to an Assembly-class path and nothing else (no other service, no `Session::request`); only devices in the I/O map, through `enip-io`, with the map's one-writer rule and approval tier. `tests/box_build.rs` checks the box build has neither `scanner` nor `unrestricted`, and that `enip-io` brings `scanner` alone. | built (`enip-io`, out of the box); real-device check `e1213-bench` |

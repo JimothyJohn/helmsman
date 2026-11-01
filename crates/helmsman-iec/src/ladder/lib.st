@@ -194,12 +194,18 @@ FUNCTION LOGIX_MODI : DINT
 END_FUNCTION
 
 (* @MODR *)
-(* REAL MOD (RM003 pp.411, 416): A - TRUNC(A / B) * B; by zero, 0. *)
+(* REAL MOD (RM003 pp.411, 416): A - TRUNC(A / B) * B; by zero, 0.
+   The truncate is a REAL one: a quotient between -1 and 0 truncates to
+   -0.0, not to the +0.0 a DINT round trip gives (so -0.0 MOD 5.0 is +0.0). *)
 FUNCTION LOGIX_MODR : REAL
   VAR_INPUT A, B : REAL; END_VAR
   VAR Q : REAL; END_VAR
   IF B = 0.0 THEN LOGIX_MODR := 0.0; RETURN; END_IF;
   Q := A / B;
-  IF ABS(Q) < 8388608.0 THEN Q := DINT_TO_REAL(TRUNC(Q)); END_IF;
+  IF ABS(Q) < 1.0 THEN
+    Q := Q * 0.0;
+  ELSIF ABS(Q) < 8388608.0 THEN
+    Q := DINT_TO_REAL(TRUNC(Q));
+  END_IF;
   LOGIX_MODR := A - Q * B;
 END_FUNCTION
