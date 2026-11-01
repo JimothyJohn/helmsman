@@ -150,7 +150,7 @@ fan_fault(condition := section.fault, ack := ack_pb, on_delay := T#0s);
 temp_sensor(condition := loop.sensor_bad, ack := ack_pb, on_delay := T#5s);
 filter_dirty(condition := filter_pa >= filter_dirty_pa, ack := ack_pb, on_delay := T#30s);
 tripped := freeze.showing OR fan_fault.showing OR temp_sensor.showing;
-run := (run OR start_pb OR plant.operator_start) AND NOT stop_pb AND NOT tripped;  (* PLANT: drop operator_start *)
+run := (run OR start_pb) AND NOT stop_pb AND NOT tripped;
 
 section(run := run, ack := ack_pb, damper_open_sw := damper_open_sw, damper_shut_sw := damper_shut_sw,
         fan_fb := fan_fb, fan_overload := fan_overload_in, airflow_sw := airflow_sw);
