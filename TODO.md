@@ -1049,7 +1049,7 @@
   id: box-https-lan-clients
   answer: as built: HTTPS by name from the LAN, plain HTTP from the box itself (recommended)
 
-- [ ] **Trend pins and history: survive a box restart?** `box-trend-source` (built) keeps each signed-in person's pins and the pinned signals' 10 minutes of history in memory, so a restart (a deploy of the binary, a power cut) forgets both: people pin again, and the history starts over. Built (reversible): memory only. Keeping pins means a small file in the state dir (`trend-pins`, written on each change). Keeping history means writing it out on shutdown, which a power cut skips anyway.
+- [x] **Trend pins and history: survive a box restart?** `box-trend-source` (built) keeps each signed-in person's pins and the pinned signals' 10 minutes of history in memory, so a restart (a deploy of the binary, a power cut) forgets both: people pin again, and the history starts over. Built (reversible): memory only. Keeping pins means a small file in the state dir (`trend-pins`, written on each change). Keeping history means writing it out on shutdown, which a power cut skips anyway.
   asked: 2026-10-31
   by: claude-agent
   needs: your call

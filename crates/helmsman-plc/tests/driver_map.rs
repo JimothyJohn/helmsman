@@ -383,6 +383,7 @@ impl Bench {
             forces: None,
             drivers: Some(DriverDir::in_state_dir(&state)),
             running_drivers: found.drivers,
+            trend_pins: None,
         };
         let api = Api::start_box(cfg, shared, Extras::default(), None, more).unwrap();
         let addr = api.addr();

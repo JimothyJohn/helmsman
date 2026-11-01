@@ -233,6 +233,10 @@ pub struct More {
     /// [`crate::layout::Layout::drivers`]), which a reload compares the
     /// files it finds with.
     pub running_drivers: crate::drivers::Drivers,
+    /// Where people's trend pins are kept across restarts
+    /// (`<state-dir>/trend-pins`, [`trend::Trends::in_file`]). `None`:
+    /// memory only.
+    pub trend_pins: Option<std::path::PathBuf>,
 }
 
 /// The box's HTTPS: what it serves with, and the certificate's
@@ -569,6 +573,7 @@ impl Api {
             forces,
             drivers: driver_dir,
             running_drivers,
+            trend_pins,
         } = more;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
@@ -605,7 +610,7 @@ impl Api {
             forces,
             driver_dir,
             running_drivers: Mutex::new(running_drivers),
-            trends: Mutex::new(trend::Trends::default()),
+            trends: Mutex::new(trend_pins.map_or_else(trend::Trends::default, trend::Trends::in_file)),
             tls,
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
