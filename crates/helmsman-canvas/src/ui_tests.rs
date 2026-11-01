@@ -821,6 +821,42 @@ mod boxed {
     }
 }
 
+mod fallback {
+    use super::Harness;
+    use crate::app::{App, Source};
+    use crate::remote::{Link, Msg, Stream};
+
+    /// Nick, 2026-11-01: a page that finds no box runs the simulation
+    /// by itself; a box that answered and went away keeps its view.
+    #[test]
+    fn a_page_no_box_ever_answered_falls_back_to_the_simulation_by_itself() {
+        let mut h = Harness::new(App::boxed());
+        assert_eq!(h.app.source, Source::Box);
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        assert!(!b.state.ever_connected());
+        for k in 0..3 {
+            b.state.apply(Msg::Failed(Stream::Values), t + f64::from(k));
+        }
+        assert!(matches!(b.state.link(), Link::Unreachable { .. }));
+        h.frame(vec![]);
+        assert_eq!(h.app.source, Source::Sim, "the simulation, unasked");
+        h.frame(vec![]);
+        let s = h.app.sim.as_ref().expect("running");
+        assert!(
+            s.notice.as_deref().is_some_and(|n| n.contains("No box answered")),
+            "{:?}",
+            s.notice
+        );
+        // Back to the box from ⋯ stays: the fallback happens once.
+        h.press("menu");
+        h.press("menu box");
+        assert_eq!(h.app.source, Source::Box);
+        h.wait(0.2);
+        assert_eq!(h.app.source, Source::Box, "not yanked back to the simulation");
+    }
+}
+
 // ---- proposals, behind the ⋯ menu ----
 
 mod reviewing {
