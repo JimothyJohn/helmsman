@@ -707,8 +707,8 @@ fn an_engineer_lists_opens_edits_saves_and_deploys_a_project_on_the_box() {
         "{:?}",
         p.notice
     );
-    // A single .st goes into the open project; L5X is refused, in the
-    // box's words.
+    // A single .st goes into the open project; an L5X the box cannot
+    // convert is refused, in the box's words.
     p.upload(
         "Extra.st",
         b"FUNCTION f : INT\n  f := 1;\nEND_FUNCTION\n".to_vec(),
@@ -723,7 +723,7 @@ fn an_engineer_lists_opens_edits_saves_and_deploys_a_project_on_the_box() {
     p.upload("plant.L5X", b"<RSLogix5000Content/>".to_vec(), false);
     settle(&b, &jar, p);
     let (msg, err) = p.notice.clone().unwrap();
-    assert!(err && msg.contains("L5X import is not built yet"), "{msg}");
+    assert!(err && msg.contains("plant.L5X is not converted"), "{msg}");
 }
 
 #[test]

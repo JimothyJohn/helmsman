@@ -61,7 +61,7 @@ this; change it here first when a decision changes.
   saying why. Sign in and out from the header.
 - **Download:** a `.zip` of the project folder (its `.st` files, the I/O map,
   settings). **Upload:** that `.zip` back, or single `.st`, PLCopen XML or
-  L5X files into the open project (XML and L5X converted to ST).
+  L5X files into the open project (XML and L5X ladder converted to ST).
 - In the browser simulation, projects persist in the browser's storage, with
   the same Upload and Download (the box's `.zip`). The built-in examples are
   read-only starter projects: Save keeps your own copy. Deploy compiles and
