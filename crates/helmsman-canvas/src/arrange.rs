@@ -235,7 +235,7 @@ pub fn menu_items(
     view: Option<&mut Viewer>,
     can: Result<(), String>,
 ) -> bool {
-    let wide = Vec2::new(ui.available_width().max(180.0), TAP * 0.7);
+    let wide = Vec2::new(ui.available_width().max(74.0), TAP * 0.7);
     let Some(v) = view else {
         ui.add_enabled(false, egui::Button::new("Reset layout").min_size(wide));
         return false;

@@ -832,7 +832,8 @@ impl Body for BoxView {
                 Some(Act::NewFile(f)) => self.projects.new_file(&f),
                 Some(Act::RenameFile { from, to }) => self.projects.rename_file(&from, &to),
                 Some(Act::DeleteFile(f)) => self.projects.delete_file(&f),
-                None => {}
+                // The Agent's answer lands in the simulation's projects.
+                Some(Act::UseAnswer { .. }) | None => {}
             }
             ui.separator();
             ui.label(RichText::new("Running").strong().color(brand::STEEL));
@@ -949,8 +950,8 @@ impl Body for BoxView {
         self.trend.ui(ui, chrome, &self.state, self.session.as_ref());
     }
 
-    fn messages(&mut self, _ui: &mut egui::Ui) -> &crate::messages::Log {
-        &self.log
+    fn messages(&mut self) -> &mut crate::messages::Log {
+        &mut self.log
     }
 
     fn tabs(&self) -> &'static [Tab] {
@@ -966,21 +967,27 @@ impl Body for BoxView {
                 ui.separator();
             }
             ui.label(RichText::new("Signals").strong());
-            for s in &self.state.signals {
-                let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
-                let forced = if s.forced { "  FORCED" } else { "" };
-                let text = format!("{} {} = {}{unit}{forced}", s.dir, s.name, show(s.value));
-                let color = match s.quality.as_str() {
-                    _ if s.forced => WARN,
-                    "missing" => RED,
-                    _ if s.value == Some(helmsman_iec::Value::Bool(true)) => brand::YELLOW,
-                    _ => brand::WHITE,
-                };
-                let l = ui.label(RichText::new(text).monospace().color(color));
-                if let Some(e) = &s.point_error {
-                    l.on_hover_text(e);
+            // Two columns (Nick, 2026-11-01: denser).
+            egui::Grid::new("box-io-signals").num_columns(2).show(ui, |ui| {
+                for pair in self.state.signals.chunks(2) {
+                    for s in pair {
+                        let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
+                        let forced = if s.forced { "  FORCED" } else { "" };
+                        let text = format!("{} {} = {}{unit}{forced}", s.dir, s.name, show(s.value));
+                        let color = match s.quality.as_str() {
+                            _ if s.forced => WARN,
+                            "missing" => RED,
+                            _ if s.value == Some(helmsman_iec::Value::Bool(true)) => brand::YELLOW,
+                            _ => brand::WHITE,
+                        };
+                        let l = ui.label(RichText::new(text).monospace().color(color));
+                        if let Some(e) = &s.point_error {
+                            l.on_hover_text(e);
+                        }
+                    }
+                    ui.end_row();
                 }
-            }
+            });
         });
     }
 

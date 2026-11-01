@@ -25,17 +25,21 @@ this; change it here first when a decision changes.
   Monitor, Structured Text, Files, the side panel and its tabs, Trend,
   Zoom to fit, the layout items, Scan detail for an engineer) and Help
   (Help and Keyboard shortcuts on the site, About Helmsman: version,
-  build, licence). After them the program's state, green running, red
-  stopped or faulted (a box: its link). On the right the project's name,
-  its edited mark, the Editor | Monitor toggle, ⋯ (proposals, where the
-  program runs) and Sign in. A fault, a deploy under way or a stale file
-  shows on a line under the header only while it lasts.
+  build, licence, and on a box its certificate fingerprint). After them
+  the program's state, green running, red stopped or faulted (a box: its
+  link). On the right the project's name, its edited mark, a "n waiting"
+  badge when proposals wait, the Editor | Monitor toggle (a click on
+  either side flips it), Sign in on a box, and ? in the very corner (help
+  on the site). Proposals and "Simulate in this browser / Back to this
+  box" are View items. A fault, a deploy under way or a stale file shows
+  on a line under the header only while it lasts.
 - **Glyphs over the diagram's top-right corner:** run/stop, step and
-  restart (the simulation), then save, upload, download and ? (help on
-  the site). Strokes in the brand colours; each tells its key on hover.
+  restart (the simulation), then save, upload, download. Strokes in the
+  brand colours; each tells its key on hover.
 - **Bottom panel**, under the diagram, collapsible and resizable (View ›
   Trend, Alt 2), two tabs: Trend (its time axis is the long side) and
-  Messages (the last 200 things the page had to say: info, warnings,
+  Messages (the last 200 things the page had to say, filtered by level
+  with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
   deploy is still there to read after the line under the header has gone.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
