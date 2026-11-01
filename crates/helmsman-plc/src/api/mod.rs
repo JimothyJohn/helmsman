@@ -1270,9 +1270,8 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "forces"] => return Some("GET, POST, DELETE"),
         ["api", "forces", _] => return Some("DELETE"),
-        ["api", "drivers"] => return Some("GET"),
+        ["api", "drivers" | "trends"] => return Some("GET"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
-        ["api", "trends"] => return Some("GET"),
         ["api", "trends", "pins"] => return Some("GET, PUT"),
         _ => {}
     }
