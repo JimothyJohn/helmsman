@@ -103,7 +103,7 @@ fn every_starter_compiles_lowers_with_nesting_and_has_io() {
 
 /// Card starter-autostart-on-box: the plant model never presses Start, so
 /// a deployed starter sits still (no output on) until someone presses or
-/// forces start_pb, and then it moves.
+/// forces `start_pb`, and then it moves.
 #[test]
 fn every_starter_sits_still_until_start_is_pressed() {
     for st in STARTERS {
