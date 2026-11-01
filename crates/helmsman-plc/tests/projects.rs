@@ -111,7 +111,6 @@ fn running() -> ChangeSet {
         modules: BTreeMap::from([("conveyor".to_string(), ModuleFiles::st(MANIFEST, SOURCE))]),
         io_map: Some(MAP.into()),
         calendar: None,
-        drivers: BTreeMap::new(),
     }
 }
 
@@ -240,6 +239,7 @@ impl Bench {
         let more = More {
             projects: Some(Projects::in_state_dir(&state).unwrap()),
             forces: Some(Arc::clone(&forces)),
+            ..More::default()
         };
         let image = Arc::new(Mutex::new(vec![0u8; 32]));
         let api = Api::start_box(cfg, shared, Extras::default(), None, more).unwrap();

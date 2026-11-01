@@ -86,14 +86,17 @@ pub(super) fn get(ctx: &Ctx, rest: &[&str]) -> Response {
             ),
             Err(r) => refusal(&r),
         },
-        ["projects", name] => match p.files(name) {
-            Ok(files) => Response::json(
+        ["projects", name] => match p.files(name).and_then(|f| Ok((f, p.drivers(name)?))) {
+            Ok((files, drivers)) => Response::json(
                 200,
                 &json!({
                     "name": name,
                     "running": current.as_deref() == Some(*name),
                     "files": files.iter().map(|f| json!({
                         "name": f.name, "bytes": f.bytes, "version": f.version,
+                    })).collect::<Vec<_>>(),
+                    "drivers": drivers.iter().map(|(n, b)| json!({
+                        "name": n, "bytes": b.len(), "sha256": project::version(b),
                     })).collect::<Vec<_>>(),
                 }),
             ),
@@ -368,7 +371,7 @@ fn upload(
         Ok(r) => r,
         Err(e) => return done(400, json!({ "error": e }), format!("{what}: malformed upload")),
     };
-    let files = match project::zip::read(&req.body).and_then(project::from_zip) {
+    let (files, drivers) = match project::zip::read(&req.body).and_then(project::from_zip_with_drivers) {
         Ok(f) => f,
         Err(e) => {
             return done(
@@ -378,11 +381,19 @@ fn upload(
             );
         }
     };
-    match p.install(name, &files, replace) {
+    match p.install_with(name, &files, &drivers, replace) {
         Ok(()) => done(
             if replace { 200 } else { 201 },
-            json!({ "name": name, "files": files.0.keys().collect::<Vec<_>>() }),
-            format!("{what}: uploaded ({} files)", files.0.len()),
+            json!({
+                "name": name,
+                "files": files.0.keys().collect::<Vec<_>>(),
+                "drivers": drivers.keys().collect::<Vec<_>>(),
+            }),
+            format!(
+                "{what}: uploaded ({} files, {} drivers)",
+                files.0.len(),
+                drivers.len()
+            ),
         ),
         Err(r) => done(
             r.status,
@@ -473,7 +484,7 @@ fn check(req: &Request, ctx: &Ctx, name: &str) -> Response {
         Ok(b) => {
             let tier = ctx
                 .running()
-                .map(|r| approve::tier_json(&r, &b.change, ctx.approval.as_ref().map(|a| &a.policy)));
+                .map(|r| approve::tier_json(ctx, &r, &b.change, Some(name)));
             let body = json!({
                 "ok": true,
                 "snapshot": b.change.id().to_string(),

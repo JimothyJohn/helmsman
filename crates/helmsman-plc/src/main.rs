@@ -408,9 +408,10 @@ struct Content {
     dirs: Vec<ModuleDir>,
     io_map: Option<Text>,
     calendar: Option<Text>,
-    /// The approved WASM drivers the map may name (`wasm:NAME`): the
-    /// snapshot's; none from files.
-    drivers: helmsman_plc::drivers::Drivers,
+    /// The WASM drivers the map names (`wasm:NAME`), read from their files
+    /// ([`resolve_drivers`]: the running project's `drivers/`, then
+    /// `<state-dir>/drivers/`).
+    drivers: helmsman_plc::driver_dir::Found,
     /// Which snapshot, when it came from a store.
     origin: Option<String>,
     /// All of it as a change set, for the API's proposals: the head
@@ -437,7 +438,7 @@ fn from_store(dir: &Path, d: &Defaults, projects: bool) -> Result<Content, Strin
                 dirs: Vec::new(),
                 io_map: None,
                 calendar: None,
-                drivers: helmsman_plc::drivers::Drivers::new(),
+                drivers: helmsman_plc::driver_dir::Found::default(),
                 origin: Some(format!(
                     "store {}: no project deployed yet; nothing runs until one is",
                     dir.display()
@@ -447,7 +448,16 @@ fn from_store(dir: &Path, d: &Defaults, projects: bool) -> Result<Content, Strin
         }
         None => return Err(format!("store {} has no snapshot yet", dir.display())),
     };
-    let cs = store.get(&head.id).map_err(|e| e.to_string())?;
+    let loaded = store.load(&head.id).map_err(|e| e.to_string())?;
+    if !loaded.ignored_drivers.is_empty() {
+        eprintln!(
+            "helmsman-plc: snapshot {} holds WASM drivers from an older build ({}); they are ignored: \
+             drivers are files now, drivers/NAME.wasm in the project or in the state directory",
+            head.id,
+            loaded.ignored_drivers.join(", ")
+        );
+    }
+    let cs = loaded.content;
     let running = Some(cs.clone());
     let at = dir.join(head.id.to_string());
     let kind = match head.kind {
@@ -466,7 +476,7 @@ fn from_store(dir: &Path, d: &Defaults, projects: bool) -> Result<Content, Strin
         dirs,
         io_map: cs.io_map.map(|s| (at.join("io.map"), s)),
         calendar: cs.calendar.map(|s| (at.join("calendar"), s)),
-        drivers: cs.drivers,
+        drivers: helmsman_plc::driver_dir::Found::default(),
         origin: Some(format!(
             "store {}: snapshot {} (entry {}, {kind} by {})",
             dir.display(),
@@ -478,7 +488,69 @@ fn from_store(dir: &Path, d: &Defaults, projects: bool) -> Result<Content, Strin
     })
 }
 
+/// Where the map's `wasm:NAME` is found at boot: the running project's
+/// `drivers/` (with `--projects`), then `<state-dir>/drivers/`.
+fn driver_sources(o: &Opts) -> Result<helmsman_plc::driver_dir::Sources, String> {
+    let state = state_dir(o);
+    let project = if o.projects {
+        let p = helmsman_plc::project::Projects::in_state_dir(&state)
+            .map_err(|e| format!("--projects in {}: {e}", state.display()))?;
+        p.running()
+            .and_then(|r| p.folder(&r.name).map(|dir| (r.name, dir)))
+    } else {
+        None
+    };
+    Ok(helmsman_plc::driver_dir::Sources {
+        project,
+        boxed: Some(
+            helmsman_plc::driver_dir::DriverDir::in_state_dir(&state)
+                .root()
+                .to_path_buf(),
+        ),
+    })
+}
+
+/// The driver files `content`'s map names, read and checked once, before
+/// the map loads; a bad one fails the boot naming the file.
+fn resolve_drivers(o: &Opts, content: &mut Content) -> Result<(), String> {
+    let Some((path, text)) = &content.io_map else {
+        return Ok(());
+    };
+    let found = driver_sources(o)?.find_text(Some(text));
+    if !found.problems.is_empty() {
+        let lines: Vec<String> = found
+            .problems
+            .iter()
+            .map(|p| format!("\n  {}: {p}", path.display()))
+            .collect();
+        return Err(format!(
+            "{} is not a valid map:{}",
+            path.display(),
+            lines.concat()
+        ));
+    }
+    for (name, bytes) in &found.drivers {
+        let from = found
+            .origin
+            .get(name)
+            .map_or_else(String::new, |o| format!(" from {o}"));
+        eprintln!(
+            "helmsman-plc: WASM driver {name}{from} ({} bytes, sha256 {})",
+            bytes.len(),
+            helmsman_plc::driver_dir::sha256(bytes)
+        );
+    }
+    content.drivers = found;
+    Ok(())
+}
+
 fn content(o: &Opts, d: &Defaults) -> Result<Content, String> {
+    let mut c = read_content(o, d)?;
+    resolve_drivers(o, &mut c)?;
+    Ok(c)
+}
+
+fn read_content(o: &Opts, d: &Defaults) -> Result<Content, String> {
     if let Some(dir) = &o.store {
         return from_store(dir, d, o.projects);
     }
@@ -490,7 +562,7 @@ fn content(o: &Opts, d: &Defaults) -> Result<Content, String> {
             .collect::<Result<_, _>>()?,
         io_map: o.io_map.as_deref().map(read_text).transpose()?,
         calendar: o.calendar.as_deref().map(read_text).transpose()?,
-        drivers: helmsman_plc::drivers::Drivers::new(),
+        drivers: helmsman_plc::driver_dir::Found::default(),
         origin: None,
         running: (o.programs.is_empty() && o.modules.is_empty())
             .then(|| ChangeSet::read(&o.module_dirs, o.io_map.as_deref(), o.calendar.as_deref()).ok())
@@ -714,7 +786,7 @@ fn box_channels(chip: Option<&Path>) -> Result<helmsman_plc::link::Channels, Str
 fn load_signals(c: &Content) -> Result<Signals, String> {
     let (mut table, uses_box, map) = match &c.io_map {
         Some(text) => {
-            let (table, uses_box, map) = load_io(text, &c.drivers)?;
+            let (table, uses_box, map) = load_io(text, &c.drivers.drivers)?;
             (table, uses_box, Some(map))
         }
         None => (SignalTable::default(), false, None),
@@ -937,6 +1009,7 @@ fn start_api(
     approval: Approval,
     screen: Option<api::Screen>,
     forces: &Arc<Forces>,
+    running_drivers: helmsman_plc::drivers::Drivers,
 ) -> Result<(Api, Option<Site>), String> {
     let ui =
         o.ui.as_deref()
@@ -1009,6 +1082,8 @@ fn start_api(
     let more = api::More {
         projects,
         forces: Some(Arc::clone(forces)),
+        drivers: Some(helmsman_plc::driver_dir::DriverDir::in_state_dir(&dir)),
+        running_drivers,
     };
     let server = Api::start_box(cfg, shared, extras, site.as_ref().map(Site::handle), more)
         .map_err(|e| format!("--api {bind}: {e}"))?;
@@ -1304,7 +1379,7 @@ fn run(o: &Opts) -> Result<(), String> {
         &devices,
         box_channels(o.gpio_chip.as_deref())?,
         &io,
-        &content.drivers,
+        &content.drivers.drivers,
     )?;
     for name in io_plan.starts() {
         devices.add(name);
@@ -1358,6 +1433,7 @@ fn run(o: &Opts) -> Result<(), String> {
                 approval,
                 screen,
                 &forces,
+                content.drivers.drivers.clone(),
             )
         })
         .transpose()?;

@@ -941,7 +941,6 @@ fn offset_set(base: u8) -> ChangeSet {
         modules: [("offset".to_string(), module)].into_iter().collect(),
         io_map: Some("out lamp bool box do:0\n".into()),
         calendar: Some("zone UTC\nshift 7 daily 00:00-24:00\n".into()),
-        drivers: std::collections::BTreeMap::new(),
     }
 }
 

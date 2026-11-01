@@ -109,6 +109,37 @@ pub fn clean(s: &str) -> String {
     out
 }
 
+/// The folder of a project's WASM drivers, in its folder on a box and in
+/// its archive: `drivers/NAME.wasm`.
+pub const DRIVERS: &str = "drivers";
+/// A driver file's extension.
+pub const DRIVER_EXT: &str = ".wasm";
+/// Largest driver file, bytes.
+pub const MAX_DRIVER: usize = 256 * 1024;
+/// Most drivers one project carries.
+pub const MAX_DRIVERS: usize = 16;
+
+/// A project's (or a box's) WASM driver binaries, by name.
+pub type Drivers = BTreeMap<String, Vec<u8>>;
+
+/// Whether `s` is a WASM driver's name (`wasm:NAME` in a map, the file
+/// `drivers/NAME.wasm`): a slug, the rule a project name follows (1..=48
+/// of `a-z 0-9 _ -`, starting with a letter or digit), so it is one path
+/// segment and two drivers never differ by case alone.
+#[must_use]
+pub fn driver_name(s: &str) -> bool {
+    project_name(s)
+}
+
+/// The NAME of an archive path `drivers/NAME.wasm`.
+#[must_use]
+pub fn driver_path(s: &str) -> Option<&str> {
+    s.strip_prefix(DRIVERS)?
+        .strip_prefix('/')?
+        .strip_suffix(DRIVER_EXT)
+        .filter(|n| driver_name(n))
+}
+
 /// A project's files in memory, by name (sorted).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Files(pub BTreeMap<String, String>);
@@ -183,11 +214,31 @@ impl Files {
 
 /// Files from an archive's entries: one common top-level folder stripped,
 /// Mac metadata skipped, every name a project file name, no duplicates.
+/// An archive that carries WASM drivers (`drivers/NAME.wasm`) is refused
+/// here, since only a box runs them ([`from_zip_with_drivers`]).
 ///
 /// # Errors
 /// A name that is not a project file (traversal, an absolute path, a
-/// nested folder, anything else), a duplicate, bad contents.
+/// nested folder, anything else), a duplicate, bad contents, a driver.
 pub fn from_zip(entries: Vec<zip::Entry>) -> Result<Files, String> {
+    let (files, drivers) = from_zip_with_drivers(entries)?;
+    if let Some(name) = drivers.keys().next() {
+        return Err(format!(
+            "{DRIVERS}/{name}{DRIVER_EXT}: a WASM driver; only a box runs those"
+        ));
+    }
+    Ok(files)
+}
+
+/// [`from_zip`], keeping the WASM drivers the archive carries: each
+/// `drivers/NAME.wasm` (NAME a [`driver_name`]) at most [`MAX_DRIVER`]
+/// bytes, at most [`MAX_DRIVERS`] of them, and files and drivers together
+/// at most [`MAX_TOTAL`] bytes. What a driver's bytes are is the box's to
+/// check (it loads them).
+///
+/// # Errors
+/// As [`from_zip`], and a driver past the size or count rules.
+pub fn from_zip_with_drivers(entries: Vec<zip::Entry>) -> Result<(Files, Drivers), String> {
     let keep: Vec<zip::Entry> = entries
         .into_iter()
         .filter(|e| {
@@ -198,10 +249,12 @@ pub fn from_zip(entries: Vec<zip::Entry>) -> Result<Files, String> {
         .first()
         .and_then(|e| e.name.split_once('/'))
         .map(|(p, _)| p)
-        // A folder a zipper made: a plain name, never `..`, `.`, a drive.
+        // A folder a zipper made: a plain name, never `..`, `.`, a drive,
+        // nor the drivers folder of an archive that holds nothing else.
         .filter(|p| {
             let b = p.as_bytes();
-            (1..=128).contains(&b.len())
+            *p != DRIVERS
+                && (1..=128).contains(&b.len())
                 && b[0].is_ascii_alphanumeric()
                 && b.iter()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.' | b' '))
@@ -209,15 +262,30 @@ pub fn from_zip(entries: Vec<zip::Entry>) -> Result<Files, String> {
         .map(|p| format!("{p}/"))
         .filter(|p| keep.iter().all(|e| e.name.starts_with(p.as_str())));
     let mut files = BTreeMap::new();
+    let mut drivers = Drivers::new();
     for e in keep {
         let name = prefix
             .as_deref()
             .and_then(|p| e.name.strip_prefix(p))
             .unwrap_or(&e.name)
             .to_string();
+        if let Some(driver) = driver_path(&name) {
+            if e.data.len() > MAX_DRIVER {
+                return Err(format!("{name}: larger than {MAX_DRIVER} bytes"));
+            }
+            if drivers.insert(driver.to_string(), e.data).is_some() {
+                return Err(format!("{name}: twice in the archive"));
+            }
+            if drivers.len() > MAX_DRIVERS {
+                return Err(format!(
+                    "more than {MAX_DRIVERS} drivers; a project carries at most that"
+                ));
+            }
+            continue;
+        }
         if file_name(&name).is_none() {
             return Err(format!(
-                "{}: not a project file (NAME.st, {IO_MAP} or {SETTINGS} at the archive's top level)",
+                "{}: not a project file (NAME.st, {IO_MAP} or {SETTINGS} at the archive's top level, or {DRIVERS}/NAME{DRIVER_EXT})",
                 clean(&e.name)
             ));
         }
@@ -228,7 +296,11 @@ pub fn from_zip(entries: Vec<zip::Entry>) -> Result<Files, String> {
     }
     let files = Files(files);
     files.check().map_err(|e| e.join("; "))?;
-    Ok(files)
+    let total = files.total() + drivers.values().map(Vec::len).sum::<usize>();
+    if total > MAX_TOTAL {
+        return Err(format!("{total} bytes; a project is at most {MAX_TOTAL}"));
+    }
+    Ok((files, drivers))
 }
 
 /// A `.zip`'s bytes read as a project's files, held to every rule.
@@ -264,6 +336,79 @@ mod tests {
         let z = f.to_zip().unwrap();
         assert_eq!(read_zip(&z).unwrap(), f);
         assert_eq!(f.to_zip().unwrap(), z, "the same files, the same bytes");
+    }
+
+    fn entry(name: &str, data: &[u8]) -> zip::Entry {
+        zip::Entry {
+            name: name.into(),
+            data: data.to_vec(),
+        }
+    }
+
+    #[test]
+    fn driver_names_are_slugs_and_paths_name_nothing_else() {
+        assert!(driver_name("modbus") && driver_name("rio-x_2"));
+        assert_eq!(driver_path("drivers/modbus.wasm"), Some("modbus"));
+        for bad in [
+            "drivers/../x.wasm",
+            "drivers/Modbus.wasm",
+            "drivers/a/b.wasm",
+            "drivers/.wasm",
+            "drivers/x.WASM",
+            "drivers/x.wasm/",
+            "drivers\\x.wasm",
+            "x.wasm",
+            "../drivers/x.wasm",
+            "drivers/%2e%2e.wasm",
+            "drivers/x\0.wasm",
+            "/drivers/x.wasm",
+        ] {
+            assert_eq!(driver_path(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_archive_carries_drivers_to_a_box_and_never_to_the_simulation() {
+        let st = entry("line/main.st", b"PROGRAM main\nEND_PROGRAM\n");
+        let wasm = entry("line/drivers/modbus.wasm", b"\0asm\x01\0\0\0");
+        let (files, drivers) = from_zip_with_drivers(vec![st.clone(), wasm.clone()]).unwrap();
+        assert_eq!(files.0.keys().collect::<Vec<_>>(), ["main.st"]);
+        assert_eq!(drivers["modbus"], b"\0asm\x01\0\0\0");
+        let e = from_zip(vec![st.clone(), wasm]).unwrap_err();
+        assert!(
+            e.contains("drivers/modbus.wasm") && e.contains("only a box"),
+            "{e}"
+        );
+        // Only drivers, at the top: the folder is not stripped as a prefix.
+        let (_, d) = from_zip_with_drivers(vec![entry("drivers/a.wasm", b"x")]).unwrap();
+        assert!(d.contains_key("a"));
+        for (why, entries) in [
+            ("traversal", vec![entry("drivers/../a.wasm", b"x")]),
+            ("upper case", vec![entry("drivers/A.wasm", b"x")]),
+            ("nested", vec![entry("drivers/a/b.wasm", b"x")]),
+            (
+                "twice",
+                vec![entry("drivers/a.wasm", b"x"), entry("drivers/a.wasm", b"y")],
+            ),
+            (
+                "too large",
+                vec![entry("drivers/a.wasm", &vec![0; MAX_DRIVER + 1])],
+            ),
+            (
+                "too many",
+                (0..=MAX_DRIVERS)
+                    .map(|n| entry(&format!("drivers/d{n}.wasm"), b"x"))
+                    .collect(),
+            ),
+            (
+                "files and drivers past the project's total",
+                (0..4)
+                    .map(|n| entry(&format!("drivers/d{n}.wasm"), &vec![0; MAX_DRIVER]))
+                    .collect(),
+            ),
+        ] {
+            assert!(from_zip_with_drivers(entries).is_err(), "{why}");
+        }
     }
 
     #[test]

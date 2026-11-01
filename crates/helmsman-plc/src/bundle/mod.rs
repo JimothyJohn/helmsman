@@ -9,8 +9,7 @@
 //! T len tree                            the snapshot tree (store::ChangeSet::tree)
 //! M len manifest                        the bundle manifest ([`manifest`])
 //! B len blob   (zero or more)           each file the tree names, ascending by SHA-256
-//!                                       (bytes; text but a `wasm-module`'s program
-//!                                       and a `wasm-driver`)
+//!                                       (bytes; text but a `wasm-module`'s program)
 //! S len key+sig (zero or more)          Ed25519 signatures ([`sign`]), ascending by key
 //! ```
 //!
@@ -30,9 +29,10 @@
 //! ST program, the map, the calendar) that is not UTF-8.
 //! [`verify`] then checks every signature, the signer against the box's
 //! [`sign::TrustStore`], and the content: every module compiled and held to
-//! its own manifest, every WASM driver one a box would take as a driver
-//! proposal, and the capability manifest exactly what the content can
-//! touch ([`manifest::capabilities`]).
+//! its own manifest, and the capability manifest exactly what the content
+//! can touch ([`manifest::capabilities`]). A bundle carries no WASM
+//! driver (a `wasm-driver` tree line, an older build's, is refused): a
+//! map's `wasm:NAME` loads the importing box's own file.
 //!
 //! Nothing here applies anything: on a box a verified bundle becomes a
 //! proposal (`api::bundle`), which the approval policy then treats like any
@@ -47,7 +47,6 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
-use crate::drivers::MAX_DRIVERS;
 use crate::manifest::MAX_FILE;
 use crate::spec::{Defaults, name_ok};
 use crate::store::{ChangeSet, Code, MAX_MODULES, ModuleFiles, SnapshotId};
@@ -209,8 +208,6 @@ fn utf8<'a>(b: &'a [u8], what: &str) -> Result<&'a str, Error> {
 enum Line {
     /// Name, manifest, program, and whether the program is WASM.
     Module(String, [u8; 32], [u8; 32], bool),
-    /// A WASM driver: name and binary.
-    Driver(String, [u8; 32]),
     Map([u8; 32]),
     Calendar([u8; 32]),
 }
@@ -223,7 +220,6 @@ fn tree_lines(tree: &str) -> Result<Vec<Line>, Error> {
     }
     let mut out = Vec::new();
     let mut modules = BTreeSet::new();
-    let mut drivers = BTreeSet::new();
     let hash = |h: &str| hex32(h).ok_or_else(|| bad(format!("{h:?} is not a SHA-256 in lowercase hex")));
     for line in lines {
         if line.is_empty() {
@@ -250,19 +246,13 @@ fn tree_lines(tree: &str) -> Result<Vec<Line>, Error> {
                     *kind == "wasm-module",
                 ));
             }
-            ["wasm-driver", name, h] => {
-                if !name_ok(name) {
-                    return Err(bad(format!(
-                        "{name:?} is not a driver name (1..=64 of A-Z a-z 0-9 _ -)"
-                    )));
-                }
-                if !drivers.insert(*name) {
-                    return Err(bad(format!("driver {name} is named twice")));
-                }
-                if drivers.len() > MAX_DRIVERS {
-                    return Err(bad(format!("more than {MAX_DRIVERS} drivers")));
-                }
-                out.push(Line::Driver((*name).to_string(), hash(h)?));
+            ["wasm-driver", name, _] => {
+                let shown: String = name.chars().take(64).flat_map(char::escape_debug).collect();
+                return Err(bad(format!(
+                    "it carries WASM driver {shown} (an older build's bundle): drivers are files on \
+                     the box now (drivers/NAME.wasm); export the snapshot again and copy the driver \
+                     file across"
+                )));
             }
             ["io-map", h] => out.push(Line::Map(hash(h)?)),
             ["calendar", h] => out.push(Line::Calendar(hash(h)?)),
@@ -322,7 +312,6 @@ impl Bundle {
             .modules
             .values()
             .flat_map(|f| [f.manifest.as_bytes(), f.code.bytes()])
-            .chain(self.content.drivers.values().map(Vec::as_slice))
             .chain(self.content.io_map.as_deref().map(str::as_bytes))
             .chain(self.content.calendar.as_deref().map(str::as_bytes))
             .map(|b| (sha256(b), b))
@@ -484,10 +473,6 @@ fn content(tree: &str, blobs: &BTreeMap<[u8; 32], &[u8]>) -> Result<ChangeSet, E
                 };
                 cs.modules.insert(name, ModuleFiles { manifest, code });
             }
-            Line::Driver(name, h) => {
-                let b = bytes(h, &format!("driver {name}"))?;
-                cs.drivers.insert(name, b);
-            }
             Line::Map(h) => cs.io_map = Some(text(bytes(h, "io-map")?, "io-map")?),
             Line::Calendar(h) => cs.calendar = Some(text(bytes(h, "calendar")?, "calendar")?),
         }
@@ -500,7 +485,7 @@ fn content(tree: &str, blobs: &BTreeMap<[u8; 32], &[u8]>) -> Result<ChangeSet, E
     }
     if cs.tree() != tree {
         return Err(Error::Malformed(
-            "tree: not in canonical form (header, modules by name, drivers by name, io-map, calendar, one space, a newline after each line)"
+            "tree: not in canonical form (header, modules by name, io-map, calendar, one space, a newline after each line)"
                 .into(),
         ));
     }

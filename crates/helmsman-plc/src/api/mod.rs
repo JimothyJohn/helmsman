@@ -48,6 +48,7 @@
 //! GET  /api/projects ...                  the editor's projects; PUT, DELETE, deploy and uploads need an engineer session (see [`projects`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
 //! GET  /api/forces                        forced inputs; POST and DELETE need an engineer session (see [`forces`])
+//! GET  /api/drivers ...                   the box's WASM driver files; list, PUT and DELETE need an engineer session (see [`drivers`])
 //! POST /mcp                               token: MCP Streamable HTTP, the agent's tools for an engineer's own client (see [`mcp`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
 //! ```
@@ -94,6 +95,7 @@ pub mod approve;
 pub mod bundle;
 pub mod catalog;
 pub mod chat;
+pub mod drivers;
 pub mod dropin;
 pub mod explain;
 pub mod forces;
@@ -218,6 +220,14 @@ pub struct More {
     /// Forced inputs ([`crate::force`]): the scan thread applies them
     /// through a [`crate::force::Reader`] on the same set.
     pub forces: Option<Arc<crate::force::Forces>>,
+    /// The box's WASM driver folder (`<state-dir>/drivers/`,
+    /// [`crate::driver_dir`]): where a map's `wasm:NAME` is found after
+    /// the project's, and the driver routes ([`drivers`]). `None`: neither.
+    pub drivers: Option<crate::driver_dir::DriverDir>,
+    /// The WASM drivers the running map was loaded with (its
+    /// [`crate::layout::Layout::drivers`]), which a reload compares the
+    /// files it finds with.
+    pub running_drivers: crate::drivers::Drivers,
 }
 
 /// A floor screen layout as loaded: the file, byte for byte, and what it
@@ -296,6 +306,12 @@ struct Ctx {
     projects: Option<crate::project::Projects>,
     /// Forced inputs (see [`forces`]); `None`: those routes answer 404.
     forces: Option<Arc<crate::force::Forces>>,
+    /// The box's driver folder (see [`drivers`]); `None`: those routes
+    /// answer 404, and only a project's drivers load.
+    driver_dir: Option<crate::driver_dir::DriverDir>,
+    /// The WASM drivers the running map was loaded with; replaced by a
+    /// reload.
+    running_drivers: Mutex<crate::drivers::Drivers>,
 }
 
 impl Ctx {
@@ -360,6 +376,36 @@ impl Ctx {
 
     fn set_shape(&self, shape: approve::Shape) {
         *self.shape.lock().unwrap_or_else(PoisonError::into_inner) = Some(shape);
+    }
+
+    /// Where a map's `wasm:NAME` is found (`crate::driver_dir`): the
+    /// folder of the project being deployed, else of the one recorded as
+    /// running, then the box's driver folder.
+    fn sources(&self, deploying: Option<&str>) -> crate::driver_dir::Sources {
+        let project = self.projects.as_ref().and_then(|p| {
+            let name = deploying
+                .map(str::to_string)
+                .or_else(|| p.running().map(|r| r.name))?;
+            p.folder(&name).map(|dir| (name, dir))
+        });
+        crate::driver_dir::Sources {
+            project,
+            boxed: self.driver_dir.as_ref().map(|d| d.root().to_path_buf()),
+        }
+    }
+
+    fn running_drivers(&self) -> crate::drivers::Drivers {
+        self.running_drivers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_running_drivers(&self, drivers: crate::drivers::Drivers) {
+        *self
+            .running_drivers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = drivers;
     }
 
     /// A reload started and ended device links: the device list follows.
@@ -513,7 +559,12 @@ impl Api {
         more: More,
     ) -> io::Result<Self> {
         let Extras { ui, screen, trust } = extras;
-        let More { projects, forces } = more;
+        let More {
+            projects,
+            forces,
+            drivers: driver_dir,
+            running_drivers,
+        } = more;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
         listener.set_nonblocking(true)?;
@@ -549,6 +600,8 @@ impl Api {
             mcp: Mutex::new(mcp::Workspace::default()),
             projects,
             forces,
+            driver_dir,
+            running_drivers: Mutex::new(running_drivers),
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
@@ -1043,6 +1096,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         (_, ["api", "projects", ..]) => return projects::mutate(req, ctx, &segs[1..]),
         (_, ["api", "forces", ..]) => return forces::mutate(req, ctx, &segs[1..]),
+        (_, ["api", "drivers", ..]) => return drivers::mutate(req, ctx, &segs[1..]),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
@@ -1087,6 +1141,8 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "forces"] => return Some("GET, POST, DELETE"),
         ["api", "forces", _] => return Some("DELETE"),
+        ["api", "drivers"] => return Some("GET"),
+        ["api", "drivers", _] => return Some("PUT, DELETE"),
         _ => {}
     }
     match path {
@@ -1206,7 +1262,7 @@ fn checked(
             }),
         ));
     }
-    proposal::check(new, &ctx.catalog(), ctx.cfg.memory, running)
+    proposal::check(new, &ctx.catalog(), ctx.cfg.memory, running, &ctx.sources(None))
 }
 
 /// Minutes of recording a draft replay covers when the request does not say.
@@ -1331,7 +1387,7 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
     p["status"] = json!("draft");
     p["at"] = json!(wall());
     p["approval"] = match (&running, &change) {
-        (Some(base), Some(cs)) => approve::tier_json(base, cs, ctx.approval.as_ref().map(|a| &a.policy)),
+        (Some(base), Some(cs)) => approve::tier_json(ctx, base, cs, None),
         _ => Json::Null,
     };
     let snap = change.as_ref().map(|cs| cs.id().to_string());
@@ -1451,6 +1507,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "traces", "events"] => return Reply::AllTraces,
         ["api", "projects", ..] | ["api", "running"] => projects::get(ctx, &segs[1..]),
         ["api", "forces"] => forces::get(ctx),
+        ["api", "drivers"] => drivers::list(req, ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "screen"] => match &ctx.screen {
@@ -1518,7 +1575,15 @@ fn snapshot(ctx: &Ctx, id: &str) -> Result<ChangeSet, Response> {
         return Err(Response::error(404, "no such snapshot"));
     };
     let store = store.lock().unwrap_or_else(PoisonError::into_inner);
-    store.get(&id).map_err(|e| store_error(&e))
+    let loaded = store.load(&id).map_err(|e| store_error(&e))?;
+    if !loaded.ignored_drivers.is_empty() {
+        (ctx.cfg.log)(&format!(
+            "store: snapshot {id} holds WASM drivers from an older build ({}); they are ignored: \
+             drivers are files now (drivers/NAME.wasm on the box or in the project)",
+            loaded.ignored_drivers.join(", ")
+        ));
+    }
+    Ok(loaded.content)
 }
 
 fn index(agent: bool) -> Json {
@@ -1543,7 +1608,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/io_map", false, "the running I/O map file and its snapshot id"),
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
-            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, {kind: io_map|calendar, text}, or {kind: driver, name, wasm (base64)}: a WASM driver the map names as wasm:NAME; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),
+            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
@@ -1591,6 +1656,9 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/forces", true, "engineer session: force an input {signal, value} or {address: %IX0.0 | %IBn | %IWn | %IDn, value}; ends at that session's logout or expiry and on deploy"),
             e("DELETE", "/api/forces/{id}", true, "engineer session: release one force"),
             e("DELETE", "/api/forces", true, "engineer session: release every force"),
+            e("GET", "/api/drivers", true, "engineer session: the box's WASM driver files (drivers/NAME.wasm): name, bytes, sha256, problems"),
+            e("PUT", "/api/drivers/{name}", true, "engineer session: the driver's .wasm bytes, checked as a load checks them, written atomically; runs from the next deploy or map reload"),
+            e("DELETE", "/api/drivers/{name}", true, "engineer session: delete a driver file (not one the running map loads from the box)"),
             e("GET", "/api/running", false,"the project deployed last, its snapshot, and whether it is what runs"),
             e("POST", "/mcp", true,"MCP (Streamable HTTP, 2026-07-28 or 2025-11-25): the agent's read, draft, check, simulate and propose tools for an engineer's own client; no apply"),
         ],
