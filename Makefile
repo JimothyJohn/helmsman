@@ -58,6 +58,9 @@ help-site:  ## Build docs/help/*.html from docs/help/*.md plus the generated key
 help-site-check:  ## Fail if docs/help/ is out of date with the code and the Markdown.
 	./scripts/build-help.sh --check
 
+datasheet:  ## Render docs/datasheet.html to the one-page docs/helmsman-datasheet.pdf (needs Chrome or Chromium).
+	./scripts/build-datasheet.sh
+
 canvas:  ## Run the canvas (the simulation) as a native window.
 	cargo run --release -p helmsman-canvas
 

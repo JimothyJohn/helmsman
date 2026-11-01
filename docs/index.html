@@ -103,10 +103,11 @@ header.top .gh:hover{color:var(--yellow)}
     <a class="brand" href="#"><svg class="mk" viewBox="0 0 96 96" width="28" height="28" aria-hidden="true" style="color:#FFC20E"><use href="#se20"/></svg>HELMSMAN</a>
     <nav aria-label="Sections">
       <a href="#agentic">How it works</a>
-      <a href="#why">Why Helmsman</a>
       <a href="#connect">Connects to</a>
       <a href="#status">Status</a>
+      <a href="#why">Why?</a>
       <a href="help/">Help</a>
+      <a href="helmsman-datasheet.pdf" download="helmsman-datasheet.pdf">Datasheet</a>
       <a href="playground/">Try it</a>
     </nav>
     <a class="gh" href="https://github.com/JimothyJohn/helmsman" aria-label="Source on GitHub" title="Source on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
@@ -129,7 +130,7 @@ header.top .gh:hover{color:var(--yellow)}
   </div>
 </div>
 
-<div class="facts" id="why">
+<div class="facts" id="pillars">
   <div class="wrap">
     <div><b>Robust</b><span>Built on a minimal set of dependencies. Every change passes more than 1,300 automated tests and interoperability tests before it ships.</span></div>
     <div><b>Simple</b><span>One controller, one service, its own web screen. No cloud needed to run the machine, no database server, no stack of microservices.</span></div>
@@ -196,6 +197,25 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
         <tr><td>Rockwell CompactLogix</td><td>Existing PLC, read without writing</td><td><span class="chip pending">bench pending</span></td></tr>
       </tbody>
     </table>
+    </div>
+  </div>
+</section>
+
+<section id="why" class="on-black">
+  <div class="wrap">
+    <h2>Why?</h2>
+    <h3>The tools are older than the plants</h3>
+    <div class="two">
+      <div>
+        <p>Most industrial programming suites are stacked on the suites before them and keep their habits. You draw on a canvas and the tool saves a file only it can read, so a program is hard to review, hard to compare with last week's and hard to hand to the next person.</p>
+        <p>Language models read and write text well. People on the floor want to see what the machine is doing. Helmsman gives each side what it works best with: underneath, the program is plain Structured Text; on screen, it is a live diagram with values on the wires.</p>
+        <p>The same models are good at the part of controls work nobody enjoys: finding how a device talks, bringing the link up, mapping the I/O and keeping it mapped. That used to take most of a project's hours before the first line of the sequence was written. With the agent doing it, the engineer's hours go to the spec and to checking the result.</p>
+      </div>
+      <div>
+        <p>Earlier suites were proprietary, tied to one operating system and heavy on the workstation. Helmsman runs as one service on the controller and serves its own editor to a browser, so there is nothing to install and nothing to license per seat.</p>
+        <p>The idea in one line: focus on what matters and leave the boilerplate to the agent. You are the robot overlord, not the meat puppet.</p>
+        <p class="muted"><b>Where it goes.</b> Next, in rough order: the agent finds a device's documentation on its own; it maps the network from the electrical drawings and the bill of materials; it sorts out and explains the behaviours already present in a system; and it hands you a running template of the machine you have already built in the real world instead of a blank page to describe it on.</p>
+      </div>
     </div>
   </div>
 </section>
