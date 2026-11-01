@@ -19,6 +19,7 @@ use crate::playground::{
     Dir, EXAMPLES, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget,
 };
 use crate::playground_view::PlaygroundView;
+use crate::projects::Workspace;
 
 const KEY: &str = "sk-ant-api03-TESTKEY-not-a-real-key-0123456789";
 
@@ -269,6 +270,49 @@ fn a_broken_edit_keeps_the_last_good_program_running_and_says_where() {
 }
 
 #[test]
+fn a_check_marks_errors_and_never_touches_the_program_running() {
+    let mut s = Session::new(example("latch"));
+    s.set_input("start", b(true));
+    s.step();
+    assert_eq!(s.value("motor"), Some(b(true)));
+    // A broken edit: its error marked, the program untouched.
+    let broken = example("latch").replace("motor := (start OR motor)", "motor := (start OR motr)");
+    assert!(!s.check(&broken));
+    assert_eq!(s.src, broken);
+    assert!(s.stale());
+    assert_eq!(s.diags[0].pos.line, 8, "{:?}", s.diag_lines());
+    assert_eq!(
+        s.build.as_ref().unwrap().src,
+        example("latch"),
+        "still the source deployed"
+    );
+    // A working edit that would change what the lamp does: checked clean,
+    // not run.
+    let changed = example("latch").replace("motor := (start OR motor) AND NOT stop;", "motor := FALSE;");
+    assert!(s.check(&changed));
+    assert!(s.diags.is_empty(), "{:?}", s.diag_lines());
+    assert!(s.stale());
+    assert_eq!(s.build.as_ref().unwrap().src, example("latch"));
+    assert_eq!(s.scans, 1, "no cold start");
+    s.step();
+    assert_eq!(s.value("motor"), Some(b(true)), "the old latch still runs");
+    // Deployed: it runs, from a cold start.
+    assert!(s.set_source(&changed));
+    assert!(!s.stale());
+    assert_eq!(s.scans, 0);
+    s.step();
+    assert_eq!(s.value("motor"), Some(b(false)));
+    // Nothing deployed yet: a check marks errors just the same.
+    let mut fresh = Session::new("");
+    assert!(fresh.build.is_none());
+    assert!(!fresh.check("PROGRAM p\nx := 1;\nEND_PROGRAM\n"));
+    assert_eq!(fresh.diags[0].pos.line, 2, "{:?}", fresh.diag_lines());
+    assert!(fresh.build.is_none());
+    assert!(fresh.check(example("latch")));
+    assert!(fresh.build.is_none(), "a check never builds");
+}
+
+#[test]
 fn the_editor_is_bounded_and_cut_on_a_char_boundary() {
     let mut s = Session::new("");
     assert!(!s.diags.is_empty(), "empty source does not compile");
@@ -276,6 +320,10 @@ fn the_editor_is_bounded_and_cut_on_a_char_boundary() {
     let long = "é".repeat(MAX_SOURCE);
     s.set_source(&long);
     assert!(s.src.len() <= MAX_SOURCE);
+    assert!(s.src.chars().all(|c| c == 'é'));
+    s.src.clear();
+    s.check(&long);
+    assert!(s.src.len() <= MAX_SOURCE, "a check cuts the same");
     assert!(s.src.chars().all(|c| c == 'é'));
 }
 
@@ -1259,33 +1307,186 @@ fn a_pick_survives_an_edit_while_its_variable_does() {
     assert_eq!(s.view.viewer.as_ref().unwrap().because, None);
 }
 
+impl Screen {
+    /// Whether `pred` holds on some frame of the next `secs`.
+    fn some_frame(&mut self, secs: f64, pred: impl Fn(&Self) -> bool) -> bool {
+        let end = self.time + secs;
+        while self.time < end {
+            self.frame(vec![]);
+            if pred(self) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Whether `pred` holds on every frame of the next `secs`.
+    fn every_frame(&mut self, secs: f64, pred: impl Fn(&Self) -> bool) -> bool {
+        let end = self.time + secs;
+        while self.time < end {
+            self.frame(vec![]);
+            if !pred(self) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Clicks into the ST editor's first line, then types a stray
+    /// character there: an edit that does not compile.
+    fn type_a_stray_character(&mut self) {
+        let editor = self.rect("pg-source");
+        self.click(Pos2::new(editor.left() + 60.0, editor.top() + 6.0));
+        self.frame(vec![Event::Text("!".into())]);
+        assert!(
+            self.view.session.src.lines().next().unwrap().contains('!'),
+            "{:?}",
+            self.view.session.src
+        );
+    }
+
+    /// The source the program running was built from.
+    fn deployed(&self) -> String {
+        self.view.session.build.as_ref().expect("a program").src.clone()
+    }
+}
+
 #[test]
-fn typing_in_the_editor_compiles_after_a_pause_and_marks_the_error_line() {
+fn typing_in_the_editor_checks_after_a_pause_and_marks_the_error_line() {
     let mut s = Screen::new();
-    let editor = s.rect("pg-source");
-    // Click into the first line, type a stray character.
-    s.click(Pos2::new(editor.left() + 60.0, editor.top() + 6.0));
-    s.frame(vec![Event::Text("!".into())]);
-    assert!(
-        s.view.session.src.lines().next().unwrap().contains('!'),
-        "{:?}",
-        s.view.session.src
-    );
+    let deployed = s.deployed();
+    s.type_a_stray_character();
     assert_eq!(
         s.view.session.diag_lines(),
         Vec::<String>::new(),
-        "not compiled while typing"
+        "not checked while typing"
     );
     s.wait(0.5);
-    assert!(!s.view.session.diags.is_empty(), "compiled after the pause");
+    assert!(!s.view.session.diags.is_empty(), "checked after the pause");
     assert_eq!(s.view.session.diags[0].pos.line, 1);
-    assert!(s.view.session.build.is_some(), "the old program keeps running");
+    assert_eq!(s.deployed(), deployed, "the program running is untouched");
     assert!(s.view.session.running);
     // The highlighter marks line 1.
     let diags = [(1, 13)];
-    let job = highlight(&s.view.session.src, &diags, None, &egui::FontId::monospace(13.0));
+    let job = highlight(
+        &s.view.session.src,
+        &diags,
+        None,
+        &egui::FontId::monospace(13.0),
+        f32::INFINITY,
+    );
     assert!(job.sections.iter().any(|x| x.format.underline.width > 0.0));
     assert_eq!(job.text, s.view.session.src, "the layout keeps the text as is");
+}
+
+#[test]
+fn typing_a_working_change_runs_nothing_until_deploy() {
+    let mut s = Screen::new();
+    let deployed = s.deployed();
+    let diagram = s.view.viewer.as_ref().unwrap().src.clone();
+    // Focus the editor, then the caret to the start of END_PROGRAM's line
+    // (the last one), and type a statement in front of it.
+    let editor = s.rect("pg-source");
+    s.click(Pos2::new(editor.left() + 60.0, editor.top() + 6.0));
+    let last = u32::try_from(deployed.lines().count()).unwrap();
+    assert!(deployed.lines().last().unwrap().starts_with("END_PROGRAM"));
+    s.chrome.goto(last);
+    s.frame(vec![]);
+    s.frame(vec![Event::Text("lamp := TRUE; ".into())]);
+    assert!(
+        s.view.session.src.contains("lamp := TRUE; END_PROGRAM"),
+        "{}",
+        s.view.session.src
+    );
+    s.wait(0.5);
+    assert!(
+        s.view.session.diags.is_empty(),
+        "{:?}",
+        s.view.session.diag_lines()
+    );
+    assert!(s.view.session.stale(), "checked, not deployed");
+    assert_eq!(s.deployed(), deployed, "the program running is untouched");
+    assert_eq!(
+        s.view.viewer.as_ref().unwrap().src,
+        diagram,
+        "and so is its diagram"
+    );
+    assert!(s.view.session.running);
+    assert!(
+        s.some_frame(1.2, |s| s.output("lamp") == b(false)),
+        "the lamp still blinks: the edit does not run"
+    );
+    // Deploy: the edit runs from a cold start, and the lamp is stuck on.
+    s.view.deploy();
+    assert!(!s.view.session.stale());
+    assert!(s.view.session.running);
+    assert_eq!(s.view.proj.running.as_deref(), Some("blink"));
+    assert_eq!(
+        s.view.viewer.as_ref().unwrap().src,
+        s.view.session.src,
+        "the diagram follows"
+    );
+    s.wait(0.1);
+    assert!(
+        s.every_frame(1.2, |s| s.output("lamp") == b(true)),
+        "the edit runs"
+    );
+}
+
+#[test]
+fn deploying_a_broken_edit_is_refused_and_the_old_program_keeps_running() {
+    let mut s = Screen::new();
+    let deployed = s.deployed();
+    s.type_a_stray_character();
+    s.wait(0.5);
+    assert!(
+        !s.view.session.diags.is_empty(),
+        "the stray character is an error"
+    );
+    let scans = s.view.session.scans;
+    s.view.deploy();
+    assert!(
+        s.view.notice.as_ref().unwrap().contains("does not compile"),
+        "{:?}",
+        s.view.notice
+    );
+    assert_eq!(
+        s.deployed(),
+        deployed,
+        "refused: the program running is untouched"
+    );
+    assert!(s.view.session.running);
+    assert!(s.view.session.stale());
+    assert_eq!(s.view.session.diags[0].pos.line, 1, "the error stays marked");
+    s.wait(0.2);
+    assert!(s.view.session.scans > scans, "and it keeps scanning");
+    // The stray character taken back: checked clean, the same source as
+    // deployed, so nothing is stale; Deploy restarts it cold.
+    s.frame(vec![Event::Key {
+        key: egui::Key::Backspace,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    }]);
+    assert_eq!(s.view.session.src, deployed, "{}", s.view.session.src);
+    s.wait(0.5);
+    assert!(
+        s.view.session.diags.is_empty(),
+        "{:?}",
+        s.view.session.diag_lines()
+    );
+    assert!(!s.view.session.stale());
+    s.view.deploy();
+    assert!(s.view.session.running);
+    assert_eq!(s.view.session.scans, 0, "a cold start");
+    assert!(
+        s.view
+            .notice
+            .as_ref()
+            .unwrap()
+            .contains("is running in this page")
+    );
 }
 
 #[test]

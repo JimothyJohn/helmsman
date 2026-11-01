@@ -10,20 +10,16 @@ VAR_OUTPUT
   motor_fb : BOOL;
   cylinder_out : BOOL;
   cylinder_home : BOOL;
-  operator_start : BOOL;
 END_VAR
 VAR CONSTANT
   stroke : TIME := T#500ms;
   motor_delay : TIME := T#200ms;
 END_VAR
 VAR
-  operator : TP;
   pull_in : TON;
   extended : TON;
   retracted : TON;
 END_VAR
-operator(IN := TRUE, PT := T#1s);  (* as if someone pressed start *)
-operator_start := operator.Q;
 pull_in(IN := motor, PT := motor_delay);
 extended(IN := cylinder, PT := stroke);
 retracted(IN := NOT cylinder, PT := stroke);

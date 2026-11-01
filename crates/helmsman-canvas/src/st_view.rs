@@ -11,6 +11,7 @@ use eframe::egui::{
     epaint::CubicBezierShape,
 };
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
+use helmsman_diagram::lower::Var;
 use helmsman_diagram::{
     Diagram, Drivers, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, drivers,
 };
@@ -831,6 +832,7 @@ impl Viewer {
                 pick: self.pick,
                 lines: &self.highlight,
                 lit: self.lit.as_ref(),
+                vars: self.module.program().map(|p| &p.vars),
             },
         );
     }
@@ -917,6 +919,42 @@ struct Marks<'a> {
     lines: &'a [u32],
     /// The "because" path: drawn at full strength, the rest dimmed.
     lit: Option<&'a Drivers>,
+    /// The POU's variables, by upper-cased name: how a value prints
+    /// (`T#500ms` for a TIME) and which are constants (no value shown).
+    vars: Option<&'a std::collections::HashMap<String, Var>>,
+}
+
+/// The program variable a node's path starts at (`M.ON` is `M`'s).
+fn var_of<'a>(vars: Option<&'a std::collections::HashMap<String, Var>>, path: &str) -> Option<&'a Var> {
+    let head = path.split(['.', '[']).next().unwrap_or(path).to_ascii_uppercase();
+    vars?.get(&head)
+}
+
+/// What a node's value is, as it should read: a whole TIME variable's
+/// in a time literal's unit, anything else as the value prints. `None`:
+/// the node is a literal or a constant, whose label says it all.
+fn value_text(
+    d: &Diagram,
+    n: NodeId,
+    v: Value,
+    vars: Option<&std::collections::HashMap<String, Var>>,
+) -> Option<String> {
+    let node = d.node(n);
+    let path = match &node.kind {
+        NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => path,
+        NodeKind::Const { .. } => return None,
+        _ => return Some(v.to_string()),
+    };
+    let var = var_of(vars, path);
+    if var.is_some_and(|x| x.constant) {
+        return None;
+    }
+    match v {
+        Value::Int(ns) if !path.contains(['.', '[']) && var.is_some_and(|x| x.ty == "TIME") => {
+            Some(helmsman_diagram::text::time(ns))
+        }
+        v => Some(v.to_string()),
+    }
 }
 
 /// How strongly what is off the "because" path is drawn.
@@ -941,7 +979,12 @@ fn bubble(painter: &egui::Painter, p: Pos2, z: f32, seen: Option<Value>, fade: f
 }
 
 fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option<&Live>, marks: Marks<'_>) {
-    let Marks { pick, lines, lit } = marks;
+    let Marks {
+        pick,
+        lines,
+        lit,
+        vars,
+    } = marks;
     let z = cam.zoom;
     let strength = |on: bool| if lit.is_none() || on { 1.0 } else { DIMMED };
     // Pins entered through a bubble: no pin dot over it.
@@ -1034,11 +1077,12 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         if text
             && let Some(v) = v
             && !matches!(v, Value::Bool(_))
+            && let Some(label) = value_text(d, w.from, v, vars)
         {
             painter.text(
                 pa + Vec2::new(4.0, -7.0) * z,
                 Align2::LEFT_CENTER,
-                v.to_string(),
+                label,
                 font(10.0 * z),
                 WHITE.gamma_multiply(f),
             );
@@ -1063,18 +1107,29 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         };
         let fade: f32 = if ran { 1.0 } else { 0.4 } * on_path;
         let radius = CornerRadius::same(4);
-        painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7) * on_path));
         let h = Rect::from_min_size(r.min, Vec2::new(r.width(), HEADER * z));
-        painter.rect_filled(
-            h,
-            CornerRadius {
-                nw: 4,
-                ne: 4,
-                sw: 0,
-                se: 0,
-            },
-            head.gamma_multiply(fade),
+        // A block that shows a value under its header (a variable) or
+        // keeps its instance's ports apart (a function block) has a body
+        // of its own; an operator, function or literal is one shade.
+        let two_tone = matches!(
+            n.kind,
+            NodeKind::Read { .. } | NodeKind::Write { .. } | NodeKind::Fb { .. } | NodeKind::For { .. }
         );
+        if two_tone {
+            painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7) * on_path));
+            painter.rect_filled(
+                h,
+                CornerRadius {
+                    nw: 4,
+                    ne: 4,
+                    sw: 0,
+                    se: 0,
+                },
+                head.gamma_multiply(fade),
+            );
+        } else {
+            painter.rect_filled(r, radius, head.gamma_multiply(fade));
+        }
         if lines.contains(&n.pos.line) {
             // The source line the explanation is about.
             painter.rect_stroke(
@@ -1129,15 +1184,16 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                     );
                 }
             }
-            // A variable's value in its body.
+            // A variable's value in its body (a constant's is its label).
             if matches!(n.kind, NodeKind::Read { .. } | NodeKind::Write { .. })
                 && let Some(v) = live.and_then(|l| l.values[n.id.0 as usize].first().copied().flatten())
+                && let Some(label) = value_text(d, n.id, v, vars)
             {
                 let on = v == Value::Bool(true);
                 painter.text(
                     Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0),
                     Align2::CENTER_CENTER,
-                    v.to_string(),
+                    label,
                     font(11.0 * z),
                     (if on { YELLOW } else { WHITE }).gamma_multiply(on_path),
                 );
@@ -1221,6 +1277,84 @@ END_PROGRAM
         v.hold(&mut l, 20.0);
         assert!(!l.ran[lamp]);
         assert_eq!(l.gates[region], Gate::NotReached);
+    }
+}
+
+/// What a block's value reads as (cards `period` value, node fills).
+#[cfg(test)]
+mod value_tests {
+    use helmsman_diagram::NodeKind;
+    use helmsman_iec::Value;
+
+    use super::{Viewer, value_text};
+    use crate::playground::Session;
+
+    const SRC: &str = "PROGRAM clutter
+VAR_INPUT
+  period : TIME := T#500ms;
+  n : INT := 7;
+END_VAR
+VAR CONSTANT
+  k : INT := 3;
+END_VAR
+VAR
+  pulse : TON;
+  m : INT;
+END_VAR
+pulse(IN := TRUE, PT := period);
+m := n + k + 2;
+END_PROGRAM
+";
+
+    fn viewer() -> Viewer {
+        let session = Session::new(SRC);
+        assert!(session.diags.is_empty(), "{:?}", session.diag_lines());
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        Viewer::new(SRC, module)
+    }
+
+    fn node(v: &Viewer, k: &NodeKind) -> helmsman_diagram::NodeId {
+        v.diagram().nodes.iter().find(|n| n.kind == *k).unwrap().id
+    }
+
+    #[test]
+    fn a_time_reads_as_a_literal_a_constant_shows_nothing_and_an_int_is_itself() {
+        let v = viewer();
+        let d = v.diagram();
+        let vars = v.module.program().map(|p| &p.vars);
+        let read = |p: &str| node(&v, &NodeKind::Read { path: p.into() });
+        assert_eq!(
+            value_text(d, read("PERIOD"), Value::Int(500_000_000), vars).as_deref(),
+            Some("T#500ms"),
+            "a TIME in its unit, not nanoseconds"
+        );
+        assert_eq!(
+            value_text(d, read("N"), Value::Int(7), vars).as_deref(),
+            Some("7")
+        );
+        assert_eq!(
+            value_text(d, read("K"), Value::Int(3), vars),
+            None,
+            "a VAR CONSTANT shows no value"
+        );
+        let lit = node(
+            &v,
+            &NodeKind::Const {
+                value: Some(Value::Int(2)),
+            },
+        );
+        assert_eq!(
+            value_text(d, lit, Value::Int(2), vars),
+            None,
+            "a literal is its label"
+        );
+        let plus = node(&v, &NodeKind::Op { op: "+".into() });
+        assert_eq!(value_text(d, plus, Value::Int(12), vars).as_deref(), Some("12"));
+        assert_eq!(
+            value_text(d, read("N"), Value::Int(7), None).as_deref(),
+            Some("7"),
+            "no declarations known: as the value prints"
+        );
     }
 }
 

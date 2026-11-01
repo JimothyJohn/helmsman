@@ -1219,8 +1219,11 @@ keeps them in memory and says so). The built-in examples are read-only
 projects (named after their PROGRAM): they open and edit like any other,
 and Save keeps a copy under a free name. The build is the box's (one
 `.st` as it is; several in name order under `(* file NAME *)` lines), so
-errors and block clicks map to a file and line. Deploy compiles and runs
-it in the page. Upload and Download use `helmsman-project`'s `.zip`;
+errors and block clicks map to a file and line. Typing only checks
+(`Session::check`: errors marked, the program running and its diagram
+untouched); Deploy compiles and runs it in the page (`Session::set_source`),
+and a project that does not compile is refused with the old program still
+running, as on a box. Upload and Download use `helmsman-project`'s `.zip`;
 `.st`, `PLCopen` `.xml` and `.L5X` import into the open project. An
 L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
 so it becomes the same `.st` the box makes, or is refused whole with the
@@ -1251,10 +1254,11 @@ the tweaks; a second step stores the automatic layout as the tweak.
 binary and the canvas and runs `helmsman-plc --projects`
 (`PLC_MODE=program` keeps one program file). Its unit runs `helmsman-plc
 project seed NAME FILE.st` before every start (`project::seed`): only on
-a first install (no project, nothing deployed) it makes the project and
-commits its build as the store's first snapshot (approver `first
-install`), so the box boots running `line`; afterwards it touches
-nothing. `scripts/pi-account.sh` makes the engineer login.
+a first install (no project, nothing deployed) it makes the project, for
+an engineer to open and deploy; the store stays empty and the box boots
+running nothing until that first deploy (card `seed-deploys`: no store
+commit skips the approval path). Afterwards it touches nothing.
+`scripts/pi-account.sh` makes the engineer login.
 
 ### L5X ladder import (`l5x-import`, built)
 
@@ -2126,12 +2130,14 @@ both). No box, no server: everything runs in the page (`playground.rs`,
 `playground_tests.rs` and `ui_tests.rs`).
 
 - **Editor → program.** A multiline ST editor with line numbers; it
-  compiles 0.35 s after the last keystroke with `helmsman_iec::compile`
-  (image: 8 bytes of `%I` and `%Q`). Diagnostics are drawn on their line
-  (dark red ground, the column's word underlined, the line number red) and
-  listed under the editor. A source that does not compile leaves the last
-  good program running. Four starter examples: blink (TON), start/stop
-  latch (located), counter (CTU), traffic light (CASE + TON).
+  checks the text 0.35 s after the last keystroke with
+  `helmsman_iec::compile` (image: 8 bytes of `%I` and `%Q`). Diagnostics
+  are drawn on their line (dark red ground, the column's word underlined,
+  the line number red) and listed under the editor. A check never changes
+  what runs: the program running is the last one deployed, and Deploy
+  refuses a source that does not compile, leaving it running. Four
+  starter examples: blink (TON), start/stop latch (located), counter
+  (CTU), traffic light (CASE + TON).
 - **Run / Stop / Step**, scan period 1-1000 ms, Restart (cold). The
   program is a `helmsman_iec::Program` scanned directly on the page's
   clock (at most 500 scans a frame); the last scan of each frame is

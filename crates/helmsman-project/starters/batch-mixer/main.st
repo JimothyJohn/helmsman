@@ -160,7 +160,7 @@ inlet_closed := inlet_closed_in OR plant.inlet_closed;  (* PLANT: keep the _in i
 outlet_open := outlet_open_in OR plant.outlet_open;  (* PLANT: keep the _in input *)
 outlet_closed := outlet_closed_in OR plant.outlet_closed;  (* PLANT: keep the _in input *)
 agitator_fb := agitator_fb_in OR plant.agitator_fb;  (* PLANT: keep the _in input *)
-run := (run OR start_pb OR plant.operator_start) AND NOT stop_pb AND NOT tank.tripped;  (* PLANT: drop operator_start *)
+run := (run OR start_pb) AND NOT stop_pb AND NOT tank.tripped;
 
 level_tx(raw := level_raw, eng_min := 0.0, eng_max := 3.0);
 temp_tx(raw := temp_raw, eng_min := 0.0, eng_max := 120.0);
