@@ -18,7 +18,7 @@ use crate::st_view::TAP;
 use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
 
 /// The header's height, points: one row, as tall as the two it replaced.
-pub const HEADER_H: f32 = 64.0;
+pub const HEADER_H: f32 = 48.0;
 
 /// Seconds between re-reads of the proposal list for the ⋯ badge.
 const PROPOSALS_EVERY: f64 = 30.0;
