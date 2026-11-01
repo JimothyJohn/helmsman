@@ -619,6 +619,7 @@ mod chrome {
         );
         // Shut, the line is still where it opens.
         h.view_menu("view st");
+        h.wait(0.6);
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
         h.click(at + Vec2::new(0.0, 0.0));
         assert_eq!(h.app.chrome.line, Some(line));

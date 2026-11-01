@@ -41,6 +41,9 @@ use brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
 
 /// How much of the diagram a pan must leave in view, points.
 pub const KEEP: f32 = 120.0;
+/// The band along the diagram's top the glyph buttons sit in, points: a
+/// fit keeps the diagram below it.
+pub const GLYPH_BAND: f32 = 52.0;
 
 /// Pan and zoom: `screen = origin + offset + world * zoom`.
 #[derive(Clone, Copy, Debug)]
@@ -49,6 +52,11 @@ pub struct Cam {
     pub zoom: f32,
     origin: Pos2,
     fitted: bool,
+    /// The operator panned or zoomed since the last fit: a change of the
+    /// view's size then keeps their framing (clamped) instead of refitting.
+    moved: bool,
+    /// The size of the area last drawn in.
+    area: Vec2,
 }
 
 impl Default for Cam {
@@ -58,6 +66,8 @@ impl Default for Cam {
             zoom: 1.0,
             origin: Pos2::ZERO,
             fitted: false,
+            moved: false,
+            area: Vec2::ZERO,
         }
     }
 }
@@ -77,6 +87,7 @@ impl Cam {
     }
 
     fn zoom_at(&mut self, screen: Pos2, factor: f32) {
+        self.moved = true;
         let (wx, wy) = self.to_world(screen);
         self.zoom = (self.zoom * factor).clamp(0.15, 3.0);
         self.offset = screen - self.origin - Vec2::new(wx, wy) * self.zoom;
@@ -101,6 +112,7 @@ impl Cam {
         self.origin = area.min;
         self.offset = Vec2::splat(30.0 * self.zoom);
         self.fitted = true;
+        self.moved = false;
     }
 }
 
@@ -842,8 +854,19 @@ impl Viewer {
         let painter = ui.painter_at(area);
         let size = self.diagram().size;
         let cam = &mut self.cams[self.scope];
+        // The view changed size (a pane opened, the window resized) and
+        // the operator had not panned or zoomed: fit again, or the
+        // diagram's right part slides under a panel.
+        if cam.fitted && !cam.moved && cam.area != area.size() {
+            cam.fitted = false;
+        }
+        cam.area = area.size();
         if !cam.fitted {
-            cam.fit(area, size);
+            // Fit under the glyph strip along the top, so no block opens
+            // under it.
+            let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
+            cam.fit(below, size);
+            cam.offset.y += GLYPH_BAND;
         }
         cam.origin = area.min;
         let (hover, scroll, zoom) = ui
@@ -856,6 +879,7 @@ impl Viewer {
                 }
             } else if scroll != Vec2::ZERO {
                 cam.offset += scroll;
+                cam.moved = true;
             }
         }
         let double = response.double_clicked();
@@ -882,7 +906,11 @@ impl Viewer {
             match self.grab {
                 Some(Grab::Node(n)) => self.move_node(n, by / cam.zoom),
                 Some(Grab::Region(r)) => self.move_region(r, by / cam.zoom),
-                _ => self.cams[self.scope].offset += by,
+                _ => {
+                    let cam = &mut self.cams[self.scope];
+                    cam.offset += by;
+                    cam.moved = true;
+                }
             }
         }
         if response.drag_stopped() {
@@ -1064,6 +1092,32 @@ fn value_text(
 /// How strongly what is off the "because" path is drawn.
 const DIMMED: f32 = 0.22;
 
+/// A wire between statements longer than this (diagram units) is drawn
+/// as a tunnel: a tagged stub at each end, no lead across the diagram.
+pub const TUNNEL_AT: f32 = 260.0;
+
+/// Whether the wire from `a` to `b`, `len` units long, is a tunnel.
+#[must_use]
+pub fn tunnel(a: &helmsman_diagram::Node, b: &helmsman_diagram::Node, len: f32) -> bool {
+    a.stmt != b.stmt && len > TUNNEL_AT
+}
+
+/// What a tunnel's tags say: the variable the source writes or reads, or
+/// a block's `instance.output`.
+#[must_use]
+pub fn source_name(a: &helmsman_diagram::Node, out: usize) -> String {
+    match &a.kind {
+        NodeKind::Write { path } | NodeKind::Read { path } | NodeKind::Access { path } => {
+            path.to_ascii_lowercase()
+        }
+        NodeKind::Fb { instance, .. } => {
+            let port = a.outs.get(out).map_or("", String::as_str);
+            format!("{}.{}", instance.to_ascii_lowercase(), port.to_ascii_lowercase())
+        }
+        _ => a.label.to_ascii_lowercase(),
+    }
+}
+
 /// How long a statement stays lit after the scan it ran in, seconds.
 pub const HOLD: f64 = 0.3;
 
@@ -1165,18 +1219,37 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         let v = live.and_then(|l| l.wire(d, k));
         let (c, width) = wire_color(v);
         let (pa, pb) = (cam.to_screen(ax, ay), cam.to_screen(bx, by));
-        if w.negated {
-            bezier(
-                painter,
-                pa,
-                pb - Vec2::new(2.0 * BUBBLE * z, 0.0),
-                z,
-                c.gamma_multiply(f),
-                width,
-            );
-            bubble(painter, pb, z, live.and_then(|l| l.input(d, k)), f);
+        let end = if w.negated {
+            pb - Vec2::new(2.0 * BUBBLE * z, 0.0)
         } else {
-            bezier(painter, pa, pb, z, c.gamma_multiply(f), width);
+            pb
+        };
+        if tunnel(a, b, (end - pa).length() / z) {
+            // Too far to trace: a tagged stub at each end naming the signal.
+            let name = source_name(a, w.out);
+            let stub = 14.0 * z;
+            let stroke = Stroke::new(width * z.max(0.5), c.gamma_multiply(f));
+            painter.line_segment([pa, pa + Vec2::new(stub, 0.0)], stroke);
+            painter.text(
+                pa + Vec2::new(stub + 3.0 * z, 0.0),
+                Align2::LEFT_CENTER,
+                format!("{name} ▸"),
+                font(9.5 * z),
+                c.gamma_multiply(f),
+            );
+            painter.line_segment([end - Vec2::new(stub, 0.0), end], stroke);
+            painter.text(
+                end - Vec2::new(stub + 3.0 * z, 0.0),
+                Align2::RIGHT_CENTER,
+                format!("▸ {name}"),
+                font(9.5 * z),
+                c.gamma_multiply(f),
+            );
+        } else {
+            bezier(painter, pa, end, z, c.gamma_multiply(f), width);
+        }
+        if w.negated {
+            bubble(painter, pb, z, live.and_then(|l| l.input(d, k)), f);
         }
         if text
             && let Some(v) = v
@@ -1649,10 +1722,17 @@ END_PROGRAM
         assert_eq!(h.sv.view.because.as_deref(), Some("OTHER"));
         assert_eq!(h.lit(), ["OTHER", "OTHER"]);
 
-        // Empty space, far from every block: cleared, nothing dimmed.
-        let v = &h.sv.view;
-        let (w, hgt) = v.diagram().size;
-        let empty = v.cams[v.scope].to_screen(w + 60.0, hgt + 60.0);
+        // Empty space, far from every block (the view's bottom-right
+        // corner: a fit leaves margins there): cleared, nothing dimmed.
+        let empty = Pos2::new(1190.0, 790.0);
+        assert_eq!(
+            h.sv.view.diagram().node_at(
+                h.sv.view.cams[h.sv.view.scope].to_world(empty).0,
+                h.sv.view.cams[h.sv.view.scope].to_world(empty).1
+            ),
+            None,
+            "the corner is empty"
+        );
         h.click(empty);
         assert_eq!(h.sv.view.because, None);
         assert!(h.sv.view.highlighted().is_none());
