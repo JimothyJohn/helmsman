@@ -567,7 +567,11 @@ into the code.
     LES->LT, NEQ->NE, LIM->LIMIT, MOV->MOVE (pp.320, 331, 338, 348, 364,
     379, 482; p.356 says "from LES to LE", a typo for LEQ); EQ is false
     and NE true on a NaN (pp.324, 383); LIMIT's circular range when
-    Low > High and false on a NaN (pp.364, 368).
+    Low > High and false on a NaN (pp.364, 368). LIMIT's three operands
+    are converted to one type before it compares (pp.852-853: integer
+    inputs mixed with a REAL in one instruction become REAL "before the
+    instruction executes"), so DINT limits one apart can round to the same
+    REAL and Low <= High holds.
   - Math: ADD (pp.395-400), SUB (pp.433-438), MUL (pp.417-421), DIV
     (pp.405-410: integer results truncated; by zero, Source A for
     integers and infinity ("1.$") for floats, a minor fault), MOD
@@ -597,7 +601,12 @@ into the code.
     runs every called routine once, ignoring RET (p.627).
 - **Not in RM003 / not verified:** what `/` and `MOD` by zero do inside a
   CPT expression (the converter applies DIV's and MOD's rules); the sign
-  of a float division by zero and 0/0 (IEEE is used: ±inf, NaN); a REAL
+  of a float division by zero and 0/0 (IEEE is used: ±inf, NaN); signed
+  zero: RM003 never mentions -0.0, so whether a REAL MOD's "truncate"
+  (p.411) keeps the sign of a zero quotient is not stated (both sides
+  take the IEEE REAL truncate, so -0.0 MOD 5.0 is +0.0 and 0.0 /
+  -2147483648.0 is -0.0, which a later division by zero can show as
+  -inf); a REAL
   too large for any integer (the converter stores 0, the low bits of its
   integer value); whether ADD/SUB/MUL with integer sources and a REAL
   destination compute in REAL (the converter does, by CPT's rule on
