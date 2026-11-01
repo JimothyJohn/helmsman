@@ -271,7 +271,7 @@
   answer: merge queue on dev (recommended)
   notes: acted on 2026-10-31: GitHub refuses a merge queue on a personal-account repo (422); the follow-up is `dev-merge-safety-2`.
 
-- [ ] **Merge queue isn't available here: what instead?** You answered `dev-merge-safety` with "merge queue", but GitHub refuses it on this repo: a `merge_queue` ruleset rule comes back `422 Invalid rule 'merge_queue'` (probed 2026-10-31 with a disabled ruleset; nothing left behind). Merge queues aren't offered on personal-account repos. What does work: (a) require branches to be up to date on `dev` (`strict: true`) plus a small workflow that, when `dev` moves, runs `gh pr update-branch` on every open auto-merge PR into `dev`, so each PR re-runs CI on the new tip and auto-merge lands them one at a time; (b) move the repo to an organization, which gets merge queues; (c) keep fixing forward with the local test-merge rule (CLAUDE.md "Green alone != green together") and the wider CI gate in draft PR #73.
+- [x] **Merge queue isn't available here: what instead?** You answered `dev-merge-safety` with "merge queue", but GitHub refuses it on this repo: a `merge_queue` ruleset rule comes back `422 Invalid rule 'merge_queue'` (probed 2026-10-31 with a disabled ruleset; nothing left behind). Merge queues aren't offered on personal-account repos. What does work: (a) require branches to be up to date on `dev` (`strict: true`) plus a small workflow that, when `dev` moves, runs `gh pr update-branch` on every open auto-merge PR into `dev`, so each PR re-runs CI on the new tip and auto-merge lands them one at a time; (b) move the repo to an organization, which gets merge queues; (c) keep fixing forward with the local test-merge rule (CLAUDE.md "Green alone != green together") and the wider CI gate in draft PR #73.
   asked: 2026-10-31
   by: claude-session
   needs: your call (repo setting; (b) is a GitHub org)
@@ -1273,6 +1273,23 @@
   difficulty: low
   id: site-domain
   asked: 2026-10-31
+  by: claude-session
+  notes: DNS is live and docs/CNAME is in dev (#125); left: Nick's dev -> master merge, then Pages settings -> Enforce HTTPS. Tick it then.
+
+- [ ] **Apply an L5X task's scan rate** — a converted periodic task's rate is only a note at the top of the generated `.st`; project.settings isn't touched, so the program runs at the default scan.
+  result: an imported periodic task runs at its Logix period
+  est: 2h
+  difficulty: low
+  id: l5x-task-rate
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Test-started boxes die with their test** — a test process killed abruptly leaves its helmsman-plc running (two were found on the Studio, one holding port 8080). Give test children a parent-death signal, such as exiting when a stdin pipe closes.
+  result: no box outlives the test run that started it
+  est: 2h
+  difficulty: low
+  id: test-box-orphans
+  asked: 2026-11-01
   by: claude-session
 
 - [x] **Force inputs from the editor** — docs/UI.md step 2's last part: an engineer forces an input (a signal and/or a %I address) to a value, applied every scan after the I/O read and before the programs run.

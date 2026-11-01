@@ -270,7 +270,7 @@ fi
 echo "  from here:  scripts/adapter-smoke.sh $host"
 case "$api" in
     127.*) echo "  canvas:     ssh -L $api_port:127.0.0.1:$api_port $target, then https://localhost:$api_port/" ;;
-    *) echo "  canvas:     https://$host:$api_port/ from $allow" ;;
+    *) echo "  canvas:     https://$host:$api_port/ from $ui_allow (use the Pi's address on that network)" ;;
 esac
 echo "  HTTPS certificate SHA-256 (self-signed: check the browser shows this, then trust it):"
 echo "              ${fingerprint:-unknown; ssh $target journalctl -u helmsman-plc | grep fingerprint}"

@@ -29,8 +29,9 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
 - **Timing in tests.** No fixed sleeps before an assertion: wait with a
   deadline (`wait(...)` in tests/reload.rs). Watchers start once the state
   they watch holds. The suite must pass with 6 copies running at once.
-- **PRs land one at a time.** dev's protection isn't strict: test-merge
-  overlapping PRs on a throwaway branch and run the gate before both land.
+- **PRs land one at a time.** dev requires branches to be up to date, and
+  .github/workflows/update-branches.yml updates auto-merge PRs when dev
+  moves (drafts stay behind until they leave draft).
 - **Protocol claims** get a docs/SOURCES.md entry and a § / page citation.
 
 ## Voice (anything a user reads: the site, README intro, UI text, release notes)
