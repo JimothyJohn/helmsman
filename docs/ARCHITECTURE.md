@@ -617,6 +617,37 @@ one did. `record.rs` and `replay.rs` in `helmsman-plc`; contract in
   running module sees data at the running tick rate
   (`replay-granularity` asks).
 
+## Trends on the box (`box-trend-source`, built)
+
+The Editor's Trend tab on a box opens with the last minutes of each pinned
+signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
+`api.rs` and canvas `box_projects_tests.rs` tests; the canvas side is
+`box_trend.rs`).
+
+- **Not the recorder.** It keeps only what modules read, never their
+  outputs, and a pinned lamp is an output. Instead a ring per tracked
+  signal, fed from the views the scan thread publishes (the values
+  stream's source; the API's accept loop samples the newest one every
+  stream period, so the scan never waits): a point when the value
+  changes, on the scheduler's clock.
+- **Bounds.** 10 min a signal (the value the window opens on kept), 2400
+  changes a signal, 64 signals at once (one more is refused, never
+  swapped for another's): about 7 MiB worst case. At most 16 signals a
+  request (400 past that); names the box has no signal for come back
+  `unknown` and are never tracked.
+- **Who pins.** Signed in, the person's pins (an account; a role-PIN
+  session pins for its role) are kept by the box: `GET /api/trends/pins`
+  and `PUT /api/trends/pins {signals}` (a login session; the box token is
+  no one, 400), at most 16, 256 people, in memory (card
+  `trend-pins-persist`). Signed out, the browser keeps them
+  (`localStorage`, wrapped). `GET /api/trends?signals=a,b` (open, like
+  every read) answers `{now_ms, window_ms, signals: [{name, points: [[t_ms,
+  value]]}], unknown, refused}` and keeps those signals tracked for a day
+  after the last ask; the page asks on open, on every pin change and every
+  10 min. A person's pins stay tracked while pinned.
+- **The tab** draws up to six pins as steps over the box's window,
+  extended by each values event (`at_ms`), the last value held to now.
+
 ## Snapshots (`snapshots`, built)
 
 `helmsman_plc::store` (`store.rs`; contract in `tests/store.rs`) keeps

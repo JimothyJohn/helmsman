@@ -921,7 +921,7 @@
   id: andon-layout-after-monitor
   answer: retire --screen and /api/screen once the Monitor ships (recommended)
 
-- [ ] **The Trend tab on a box: where does its history come from?** On a box the Editor's right panel has only I/O for now; the simulation's Trend records every scan in the page. A box sends values over `/api/events` several times a second, and its recorder (sim-replay) already keeps the last minutes of inputs on the box. Built default: no Trend tab on a box (nor Claude, until step 2).
+- [x] **The Trend tab on a box: where does its history come from?** On a box the Editor's right panel has only I/O for now; the simulation's Trend records every scan in the page. A box sends values over `/api/events` several times a second, and its recorder (sim-replay) already keeps the last minutes of inputs on the box. Built default: no Trend tab on a box (nor Claude, until step 2).
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -931,6 +931,7 @@
   difficulty: med
   id: box-trend-source
   answer: box-side, from the recorder, so history is there on open
+  notes: built (feat/box-trend), not from the recorder itself: it keeps only what modules read, never their outputs, and a pinned lamp is an output. A ring per pinned signal instead, fed from the published views (the values stream's source): changes only, 10 min, 2400 points a signal, 64 signals at once (about 7 MiB worst case). `GET /api/trends?signals=` (open) answers the history and keeps the signals tracked a day; pins are the signed-in person's on the box (`GET/PUT /api/trends/pins`), the browser's when signed out. docs/ARCHITECTURE.md "Trends on the box".
 
 - [x] **Does Deploy skip the sim replay for an engineer?** docs/UI.md says Deploy compiles, snapshots and hot-swaps. The approval floor in code says a `logic` or `output-affecting` change needs an engineer *and* a sim replay. Built (reversible): Deploy goes through the same approval path, so the UI calls `POST /api/projects/{p}/replay` then `POST .../deploy {replay: N}` (one click can do both; the replay is real evidence of exactly that build against the box's recording). Options: keep it (the floor holds everywhere); let an engineer's Deploy skip the replay (the policy floor gets an exception for the editor); or have Deploy run the replay itself and refuse only if it faults.
   asked: 2026-10-31
@@ -1035,6 +1036,17 @@
   difficulty: low
   depends: box-https
   id: box-https-lan-clients
+
+- [ ] **Trend pins and history: survive a box restart?** `box-trend-source` (built) keeps each signed-in person's pins and the pinned signals' 10 minutes of history in memory, so a restart (a deploy of the binary, a power cut) forgets both: people pin again, and the history starts over. Built (reversible): memory only. Keeping pins means a small file in the state dir (`trend-pins`, written on each change). Keeping history means writing it out on shutdown, which a power cut skips anyway.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether pins (and history) come back after a restart
+  options: pins in a state-dir file, history in memory (recommended) | both in memory (built) | both on disk
+  est: 1h
+  difficulty: low
+  depends: box-trend-source
+  id: trend-pins-persist
 
 ## Tasks
 

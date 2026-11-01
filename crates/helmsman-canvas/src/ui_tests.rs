@@ -490,8 +490,8 @@ mod boxed {
         assert_eq!(v.because, None, "opens with no path lit");
         assert_eq!(b.status(h.time).0, "● connected");
         assert!(
-            !h.has("tab trend") && !h.has("tab claude"),
-            "I/O only on a box, for now"
+            h.has("tab trend") && !h.has("tab claude"),
+            "I/O and Trend on a box; Claude comes later"
         );
         assert_eq!(h.app.chrome.tab, Tab::Io);
 

@@ -16,10 +16,12 @@ use helmsman_iec::Value;
 use serde_json::json;
 
 use crate::box_projects::{Answer, BoxProjects, Deploy, PCall, PReq};
+use crate::box_trend::BoxTrend;
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::projects::{self, Act, FilesUi, Listing, Workspace};
 use crate::remote::{BoxState, Cmd, Link, Msg, SignalRow};
 use crate::review::Session;
+use crate::sim_projects::Storage;
 use crate::st_view::brand::{BLACK, GRAPHITE, WARN};
 use crate::st_view::{Pick, Viewer, brand, show};
 
@@ -36,6 +38,8 @@ pub struct BoxView {
     /// before every frame.
     pub session: Option<Session>,
     pub view: Option<Viewer>,
+    /// The Trend tab: pinned signals from the box's history.
+    pub trend: BoxTrend,
     /// The lowering the view was built from.
     generation: u64,
     /// Set when the operator, with the box out of reach, asks for the
@@ -79,7 +83,18 @@ pub fn is_engineer(s: Option<&Session>) -> Result<(), String> {
 impl BoxView {
     #[must_use]
     pub fn new() -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let pins: Box<dyn Storage> = Box::new(crate::web::LocalSlot("helmsman-canvas/trend-pins"));
+        #[cfg(not(target_arch = "wasm32"))]
+        let pins: Box<dyn Storage> = Box::new(crate::sim_projects::MemStorage::default());
+        Self::with_pins(pins)
+    }
+
+    /// The Editor, the Trend's pins kept in `pins` while signed out.
+    #[must_use]
+    pub fn with_pins(pins: Box<dyn Storage>) -> Self {
         Self {
+            trend: BoxTrend::new(pins),
             state: BoxState::new(),
             projects: BoxProjects::new(),
             files_ui: FilesUi::default(),
@@ -112,7 +127,10 @@ impl BoxView {
             self.state.apply(m, now);
         }
         for (call, a) in answers {
-            self.projects.answer(call, &a);
+            match call {
+                PCall::TrendPins | PCall::SavePins | PCall::Trend => self.trend.answer(&call, &a, now),
+                call => self.projects.answer(call, &a),
+            }
         }
         if std::mem::take(&mut self.projects.deployed) {
             self.state.relist();
@@ -125,7 +143,9 @@ impl BoxView {
         }
         let cmds = self.state.poll(now);
         self.run(ctx, cmds);
-        let reqs = self.projects.poll();
+        self.trend.step(self.session.as_ref(), &self.state, now);
+        let mut reqs = self.projects.poll();
+        reqs.extend(self.trend.poll());
         self.send(ctx, reqs);
         self.downloads();
         match &self.state.lowered {
@@ -743,11 +763,16 @@ impl Body for BoxView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        // Trend and Claude come to the box later (docs/UI.md).
-        &[Tab::Io]
+        // Claude comes to the box later (docs/UI.md).
+        &[Tab::Io, Tab::Trend]
     }
 
-    fn tab(&mut self, ui: &mut egui::Ui, _tab: Tab) {
+    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab) {
+        if tab == Tab::Trend {
+            let mut chrome = Chrome::default();
+            self.trend.ui(ui, &mut chrome, &self.state, self.session.as_ref());
+            return;
+        }
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {
             if let Some(v) = &mut self.view {
