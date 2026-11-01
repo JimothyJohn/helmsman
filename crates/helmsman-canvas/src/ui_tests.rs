@@ -127,6 +127,29 @@ fn write_to(path: &str) -> impl Fn(&NodeKind) -> bool + '_ {
 
 // ---- the header and the Editor's frame ----
 
+mod polish {
+    use crate::editor::{Tab, numbering};
+
+    /// The hit stays "tab claude" (the stored key); only the label changed.
+    #[test]
+    fn the_third_tab_reads_agent() {
+        assert_eq!(Tab::Claude.label(), "Agent");
+    }
+
+    #[test]
+    fn a_wrapped_line_is_numbered_once_on_its_first_row() {
+        // Line 1 wraps over three rows, line 2 fits, line 3 is empty.
+        let rows = [false, false, true, true, true];
+        assert_eq!(
+            numbering(rows.into_iter()),
+            [(1, true), (1, false), (1, false), (2, true), (3, true)]
+        );
+        assert_eq!(numbering(std::iter::empty()), []);
+        // A last line without a newline is still numbered.
+        assert_eq!(numbering([true, false].into_iter()), [(1, true), (2, true)]);
+    }
+}
+
 mod chrome {
     use eframe::egui::{self, Pos2, Vec2};
 
@@ -326,7 +349,9 @@ mod chrome {
         assert!(h.app.chrome.st);
         h.wait(0.5);
         let r = h.ctx.read_response(editor()).expect("open again");
-        assert!(r.rect.width() > 200.0, "{:?}", r.rect);
+        // The pane opens at 220 pt; the editor is what is left of it
+        // beside the gutter.
+        assert!((120.0..220.0).contains(&r.rect.width()), "{:?}", r.rect);
 
         // Click the lamp's assignment: the ST goes to its line.
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
