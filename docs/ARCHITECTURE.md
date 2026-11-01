@@ -1214,8 +1214,11 @@ keeps them in memory and says so). The built-in examples are read-only
 projects (named after their PROGRAM): they open and edit like any other,
 and Save keeps a copy under a free name. The build is the box's (one
 `.st` as it is; several in name order under `(* file NAME *)` lines), so
-errors and block clicks map to a file and line. Deploy compiles and runs
-it in the page. Upload and Download use `helmsman-project`'s `.zip`;
+errors and block clicks map to a file and line. Typing only checks
+(`Session::check`: errors marked, the program running and its diagram
+untouched); Deploy compiles and runs it in the page (`Session::set_source`),
+and a project that does not compile is refused with the old program still
+running, as on a box. Upload and Download use `helmsman-project`'s `.zip`;
 `.st`, `PLCopen` `.xml` and `.L5X` import into the open project. An
 L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
 so it becomes the same `.st` the box makes, or is refused whole with the
@@ -2122,12 +2125,14 @@ both). No box, no server: everything runs in the page (`playground.rs`,
 `playground_tests.rs` and `ui_tests.rs`).
 
 - **Editor → program.** A multiline ST editor with line numbers; it
-  compiles 0.35 s after the last keystroke with `helmsman_iec::compile`
-  (image: 8 bytes of `%I` and `%Q`). Diagnostics are drawn on their line
-  (dark red ground, the column's word underlined, the line number red) and
-  listed under the editor. A source that does not compile leaves the last
-  good program running. Four starter examples: blink (TON), start/stop
-  latch (located), counter (CTU), traffic light (CASE + TON).
+  checks the text 0.35 s after the last keystroke with
+  `helmsman_iec::compile` (image: 8 bytes of `%I` and `%Q`). Diagnostics
+  are drawn on their line (dark red ground, the column's word underlined,
+  the line number red) and listed under the editor. A check never changes
+  what runs: the program running is the last one deployed, and Deploy
+  refuses a source that does not compile, leaving it running. Four
+  starter examples: blink (TON), start/stop latch (located), counter
+  (CTU), traffic light (CASE + TON).
 - **Run / Stop / Step**, scan period 1-1000 ms, Restart (cold). The
   program is a `helmsman_iec::Program` scanned directly on the page's
   clock (at most 500 scans a frame); the last scan of each frame is
