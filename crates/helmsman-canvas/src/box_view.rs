@@ -508,6 +508,7 @@ impl BoxView {
 /// An input's force control over its block: a BOOL flips, a number drags.
 /// The value to force it to, if one was asked for.
 fn force_ui(ui: &mut egui::Ui, rect: Rect, s: &SignalRow, forced: bool) -> Option<Value> {
+    let id = egui::Id::unique(("box-force-number", &s.name));
     let label = s.name.to_ascii_lowercase();
     let size = (rect.height() * 0.35).clamp(7.0, 16.0);
     let tip = "force this input on the box (an engineer only; ends on logout or deploy)";
@@ -529,25 +530,17 @@ fn force_ui(ui: &mut egui::Ui, rect: Rect, s: &SignalRow, forced: bool) -> Optio
                 .then_some(Value::Bool(!on))
         }
         Some(Value::Int(n)) => {
-            let mut v = i64::try_from(n).unwrap_or(0);
-            let before = v;
-            ui.add_sized(
-                rect.size(),
-                egui::DragValue::new(&mut v).prefix(format!("{label} = ")),
-            )
-            .on_hover_text(tip);
-            (v != before).then_some(Value::Int(i128::from(v)))
+            let v = i64::try_from(n).unwrap_or(0);
+            let c = crate::commit::number(ui, id, &v.to_string(), "", rect.size(), tip);
+            crate::commit::int(&c, i64::MIN, i64::MAX)
+                .filter(|x| *x != v)
+                .map(|x| Value::Int(i128::from(x)))
         }
         Some(Value::Real(r)) => {
-            let mut v = r;
-            ui.add_sized(
-                rect.size(),
-                egui::DragValue::new(&mut v)
-                    .speed(0.1)
-                    .prefix(format!("{label} = ")),
-            )
-            .on_hover_text(tip);
-            (v.to_bits() != r.to_bits() && v.is_finite()).then_some(Value::Real(v))
+            let c = crate::commit::number(ui, id, &r.to_string(), "", rect.size(), tip);
+            crate::commit::real(&c)
+                .filter(|x| x.to_bits() != r.to_bits())
+                .map(Value::Real)
         }
         _ => None,
     }

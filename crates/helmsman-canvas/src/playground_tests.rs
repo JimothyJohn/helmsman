@@ -1234,24 +1234,83 @@ fn a_rearranged_diagram_survives_an_edit_and_resets() {
     assert!(!s.view.viewer.as_ref().unwrap().rearranged());
 }
 
-#[test]
-fn a_number_on_the_diagram_drags_sideways() {
-    let mut s = Screen::new();
-    let Value::Int(before) = s.input("period") else {
-        panic!("TIME is an Int")
-    };
-    let at = s.block("period").center();
-    s.frame(vec![Event::PointerMoved(at)]);
-    s.button(at, true);
-    for dx in 1..=8 {
-        #[allow(clippy::cast_precision_loss)]
-        s.frame(vec![Event::PointerMoved(at + Vec2::new(dx as f32 * 10.0, 0.0))]);
+impl Screen {
+    fn key(&mut self, key: egui::Key) {
+        self.frame(vec![Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
     }
-    s.button(at + Vec2::new(80.0, 0.0), false);
-    let Value::Int(after) = s.input("period") else {
-        panic!("TIME is an Int")
-    };
-    assert!(after > before, "{before} -> {after}");
+}
+
+/// Nick, 2026-11-01: a value is never written while it is typed. Enter
+/// (or leaving the field) commits it, Escape puts the old one back.
+#[test]
+fn a_number_on_the_diagram_is_written_on_enter_not_while_typing() {
+    let mut s = Screen::new();
+    assert_eq!(s.input("period"), Value::Int(500_000_000));
+    let at = s.block("period").center();
+    // Click in: the whole value is selected, so typing replaces it.
+    s.click(at);
+    s.frame(vec![Event::Text("250".into())]);
+    s.wait(0.2);
+    assert_eq!(
+        s.input("period"),
+        Value::Int(500_000_000),
+        "typing writes nothing"
+    );
+    s.key(egui::Key::Enter);
+    s.wait(0.1);
+    assert_eq!(s.input("period"), Value::Int(250_000_000), "Enter writes it");
+    // Escape: what was typed is dropped.
+    s.click(at);
+    s.frame(vec![Event::Text("9".into())]);
+    s.key(egui::Key::Escape);
+    s.wait(0.1);
+    assert_eq!(
+        s.input("period"),
+        Value::Int(250_000_000),
+        "Escape keeps the value"
+    );
+    // Nonsense committed: the value stays.
+    s.click(at);
+    s.frame(vec![Event::Text("x".into())]);
+    s.key(egui::Key::Enter);
+    s.wait(0.1);
+    assert_eq!(
+        s.input("period"),
+        Value::Int(250_000_000),
+        "not a number: unchanged"
+    );
+}
+
+#[test]
+fn the_scan_period_field_commits_on_enter_or_focus_out_and_reverts_on_escape() {
+    let mut s = Screen::new();
+    let before = s.view.session.period_ms;
+    let field = s.rect("pg-period").center();
+    s.click(field);
+    s.frame(vec![Event::Text("25".into())]);
+    s.wait(0.2);
+    assert_eq!(s.view.session.period_ms, before, "typing changes nothing");
+    s.key(egui::Key::Enter);
+    s.wait(0.1);
+    assert_eq!(s.view.session.period_ms, 25);
+    // Leaving the field commits too: click the diagram's empty space.
+    s.click(field);
+    s.frame(vec![Event::Text("40".into())]);
+    let away = s.block("period").center() + Vec2::new(0.0, 160.0);
+    s.click(away);
+    s.wait(0.1);
+    assert_eq!(s.view.session.period_ms, 40, "focus out commits");
+    s.click(field);
+    s.frame(vec![Event::Text("7".into())]);
+    s.key(egui::Key::Escape);
+    s.wait(0.1);
+    assert_eq!(s.view.session.period_ms, 40, "Escape reverts");
 }
 
 #[test]

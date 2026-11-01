@@ -13,9 +13,7 @@ use helmsman_iec::{Ty, Value};
 use crate::arrange::Layers;
 use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
 use crate::editor::{self, Body, Chrome, Tab};
-use crate::playground::{
-    MAX_PERIOD, MAX_SOURCE, MIN_PERIOD, Point, Session, TREND_MS, TREND_SIGNALS, Widget,
-};
+use crate::playground::{MAX_PERIOD, MAX_SOURCE, Point, Session, TREND_MS, TREND_SIGNALS, Widget};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, Storage};
 use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
@@ -456,16 +454,16 @@ impl Body for PlaygroundView {
                 s.restart();
             }
             ui.label(RichText::new("scan").color(STEEL));
-            let mut p = s.period_ms;
-            if ui
-                .add(
-                    egui::DragValue::new(&mut p)
-                        .range(MIN_PERIOD..=MAX_PERIOD)
-                        .suffix(" ms"),
-                )
-                .changed()
-            {
-                s.set_period(p);
+            let c = crate::commit::number(
+                ui,
+                egui::Id::unique("pg-period"),
+                &s.period_ms.to_string(),
+                "ms",
+                Vec2::new(64.0, 20.0),
+                "scan period: type, then Enter",
+            );
+            if let Some(p) = crate::commit::int(&c, 0, i64::MAX) {
+                s.set_period(u64::try_from(p).unwrap_or(MAX_PERIOD));
             }
             ui.separator();
             let state = if s.fault.is_some() {
@@ -1038,6 +1036,7 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
     let label = p.name.to_ascii_lowercase();
     let size = (rect.height() * 0.4).clamp(7.0, 18.0);
     let builder = egui::UiBuilder::new().max_rect(rect).id_salt(("pg-map", k));
+    let id = egui::Id::unique(("pg-map-number", k));
     ui.scope_builder(builder, |ui| match p.widget {
         Some(Widget::Push) => {
             let on = p.value == Value::Bool(true);
@@ -1075,52 +1074,36 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
         Some(Widget::Int { min, max }) => {
             let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
             let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
-            let mut v = match p.value {
+            let v = match p.value {
                 Value::Int(n) => i64::try_from(n).unwrap_or(0),
                 _ => 0,
             };
-            let before = v;
-            let d = egui::DragValue::new(&mut v)
-                .range(lo..=hi)
-                .prefix(format!("{label} = "));
-            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
-            if v == before {
-                MapInput::Nothing
-            } else {
-                MapInput::Set(Value::Int(i128::from(v)))
+            let c = crate::commit::number(ui, id, &v.to_string(), "", rect.size(), TYPE_HINT);
+            match crate::commit::int(&c, lo, hi) {
+                Some(n) if n != v => MapInput::Set(Value::Int(i128::from(n))),
+                _ => MapInput::Nothing,
             }
         }
         Some(Widget::Real) => {
-            let mut v = match p.value {
+            let v = match p.value {
                 Value::Real(r) => r,
                 _ => 0.0,
             };
-            let before = v;
-            let d = egui::DragValue::new(&mut v)
-                .speed(0.1)
-                .prefix(format!("{label} = "));
-            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
-            if v.to_bits() != before.to_bits() && v.is_finite() {
-                MapInput::Set(Value::Real(v))
-            } else {
-                MapInput::Nothing
+            let c = crate::commit::number(ui, id, &v.to_string(), "", rect.size(), TYPE_HINT);
+            match crate::commit::real(&c) {
+                Some(x) if x.to_bits() != v.to_bits() => MapInput::Set(Value::Real(x)),
+                _ => MapInput::Nothing,
             }
         }
         Some(Widget::Time) => {
-            let mut ms = match p.value {
+            let ms = match p.value {
                 Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
                 _ => 0,
             };
-            let before = ms;
-            let d = egui::DragValue::new(&mut ms)
-                .range(0..=86_400_000)
-                .prefix(format!("{label} = "))
-                .suffix(" ms");
-            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
-            if ms == before {
-                MapInput::Nothing
-            } else {
-                MapInput::Set(Value::Int(i128::from(ms) * 1_000_000))
+            let c = crate::commit::number(ui, id, &ms.to_string(), "ms", rect.size(), TYPE_HINT);
+            match crate::commit::int(&c, 0, 86_400_000) {
+                Some(n) if n != ms => MapInput::Set(Value::Int(i128::from(n) * 1_000_000)),
+                _ => MapInput::Nothing,
             }
         }
         None => MapInput::Nothing,
@@ -1128,7 +1111,7 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
     .inner
 }
 
-const DRAG_HINT: &str = "drag sideways to change, or click to type";
+const TYPE_HINT: &str = "type a value, then Enter (Esc puts it back)";
 
 impl Workspace for PlaygroundView {
     fn dirty(&self) -> bool {
@@ -1249,9 +1232,22 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             };
             let before = v;
             ui.add(egui::Slider::new(&mut v, slo..=shi).show_value(false));
-            ui.add(egui::DragValue::new(&mut v).range(lo..=hi));
             if v != before {
                 out = Some(Value::Int(i128::from(v)));
+            }
+            let id = egui::Id::unique(("io-int", &p.name));
+            let c = crate::commit::number(
+                ui,
+                id,
+                &before.to_string(),
+                "",
+                Vec2::new(84.0, TAP * 0.6),
+                TYPE_HINT,
+            );
+            if let Some(n) = crate::commit::int(&c, lo, hi)
+                && n != before
+            {
+                out = Some(Value::Int(i128::from(n)));
             }
         }
         Some(Widget::Real) => {
@@ -1262,9 +1258,22 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             };
             let before = v;
             ui.add(egui::Slider::new(&mut v, -100.0..=100.0).show_value(false));
-            ui.add(egui::DragValue::new(&mut v).speed(0.1));
             if v.to_bits() != before.to_bits() && v.is_finite() {
                 out = Some(Value::Real(v));
+            }
+            let id = egui::Id::unique(("io-real", &p.name));
+            let c = crate::commit::number(
+                ui,
+                id,
+                &before.to_string(),
+                "",
+                Vec2::new(84.0, TAP * 0.6),
+                TYPE_HINT,
+            );
+            if let Some(x) = crate::commit::real(&c)
+                && x.to_bits() != before.to_bits()
+            {
+                out = Some(Value::Real(x));
             }
         }
         Some(Widget::Time) => {
