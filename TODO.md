@@ -1061,7 +1061,7 @@
   id: trend-pins-persist
   answer: pins in a state-dir file, history in memory (recommended)
 
-- [ ] **Should a machine example start itself on a box?** Each machine's plant model presses Start after power-up so the diagram moves with nothing wired, and its io.map uses the box's own channels. Fine on a box with nothing connected; on a box run with `--gpio-chip` those channels are real pins, and the example drives them on Deploy. Built default: it starts itself, and each io.map says in a comment to check the channels first.
+- [x] **Should a machine example start itself on a box?** Each machine's plant model presses Start after power-up so the diagram moves with nothing wired, and its io.map uses the box's own channels. Fine on a box with nothing connected; on a box run with `--gpio-chip` those channels are real pins, and the example drives them on Deploy. Built default: it starts itself, and each io.map says in a comment to check the channels first.
   needs: your call
   result: keep the default, or the plant model waits for Start on a box
   options: keep; plant waits for Start (the diagram sits still until someone forces start_pb); refuse a starter's io.map on a box with GPIO

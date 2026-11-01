@@ -11,7 +11,6 @@ VAR_OUTPUT
   belt_fb : BOOL;
   gate_out : BOOL;
   gate_home : BOOL;
-  operator_start : BOOL;
 END_VAR
 VAR CONSTANT
   part_every : TIME := T#3s;
@@ -22,7 +21,6 @@ VAR CONSTANT
   stroke : TIME := T#300ms;       (* gate travel *)
 END_VAR
 VAR
-  operator : TP;
   motor : TON;
   gate_extended : TON;
   gate_retracted : TON;
@@ -31,8 +29,6 @@ VAR
   parts : INT;
   part_len : TIME;
 END_VAR
-operator(IN := TRUE, PT := T#1s);  (* as if someone pressed start *)
-operator_start := operator.Q;
 motor(IN := belt, PT := motor_delay);
 belt_fb := motor.Q;
 gate_extended(IN := gate, PT := stroke);

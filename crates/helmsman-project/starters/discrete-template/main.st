@@ -95,7 +95,7 @@ plant(motor := motor, cylinder := cylinder);  (* PLANT *)
 motor_fb := motor_fb_in OR plant.motor_fb;  (* PLANT: keep the _in input *)
 out_sw := out_in OR plant.cylinder_out;  (* PLANT: keep the _in input *)
 home_sw := home_in OR plant.cylinder_home;  (* PLANT: keep the _in input *)
-run := (run OR start_pb OR plant.operator_start) AND NOT stop_pb AND NOT work.tripped;  (* PLANT: drop operator_start *)
+run := (run OR start_pb) AND NOT stop_pb AND NOT work.tripped;
 
 work(run := run, ack := ack_pb, motor_fb := motor_fb, motor_overload := motor_overload_in,
      out_sw := out_sw, home_sw := home_sw);

@@ -10,7 +10,6 @@ VAR_OUTPUT
   raw : REAL;
   fb_a : BOOL;
   fb_b : BOOL;
-  operator_start : BOOL;
 END_VAR
 VAR CONSTANT
   full_speed_value : REAL := 10.0;  (* what the header reaches at 100 % *)
@@ -19,15 +18,12 @@ VAR CONSTANT
   dt_s : REAL := 0.1;
 END_VAR
 VAR
-  operator : TP;
   motor_a : TON;
   motor_b : TON;
   clock : TON;
   value : REAL;
   aim : REAL;
 END_VAR
-operator(IN := TRUE, PT := T#1s);  (* as if someone pressed start *)
-operator_start := operator.Q;
 motor_a(IN := pump_a, PT := motor_delay);
 motor_b(IN := pump_b, PT := motor_delay);
 fb_a := motor_a.Q;
