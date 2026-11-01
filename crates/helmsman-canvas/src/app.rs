@@ -97,6 +97,9 @@ pub struct App {
     pub monitor: Monitor,
     /// The first frame chose the screen (a phone opens the Monitor).
     routed: bool,
+    /// The page fell back to the simulation by itself (no box answered);
+    /// once, so ⋯ › Back to this box is not undone.
+    fell_back: bool,
     /// When the proposal list was last asked for (page time, s).
     listed: Option<f64>,
 }
@@ -143,6 +146,7 @@ impl App {
             review: None,
             monitor: Monitor::default(),
             routed: false,
+            fell_back: false,
             listed: None,
         }
     }
@@ -267,6 +271,25 @@ impl App {
         if let Some(b) = &mut self.boxv {
             b.session = session;
         }
+        // No box ever answered this page: it is the simulation then, by
+        // itself (Nick, 2026-11-01). A box that answered and went away
+        // stays the box: its last diagram is worth more than a demo.
+        if self.source == Source::Box
+            && !self.fell_back
+            && let Some(b) = &self.boxv
+            && matches!(b.state.link(), crate::remote::Link::Unreachable { .. })
+            && !b.state.ever_connected()
+        {
+            self.fell_back = true;
+            self.source = Source::Sim;
+            if self.screen == Screen::Proposals {
+                self.screen = Screen::Editor;
+            }
+            let s = self.sim.get_or_insert_with(PlaygroundView::new);
+            s.notice = Some(
+                "No box answered at this address: simulating in this browser (⋯ › Back to this box).".into(),
+            );
+        }
         let header = self.header(ui);
         self.chrome.hits.clear();
         match (self.screen, self.source) {
@@ -375,6 +398,18 @@ impl App {
             Action::Undo | Action::Redo => {
                 if let Some(w) = self.workspace() {
                     w.undo(ctx, a == Action::Redo);
+                }
+            }
+            Action::GoToDefinition => {
+                let mut chrome = std::mem::take(&mut self.chrome);
+                if let Some(w) = self.workspace() {
+                    w.go_to_definition(&mut chrome);
+                }
+                self.chrome = chrome;
+            }
+            Action::CrossReferences => {
+                if let Some(w) = self.workspace() {
+                    w.cross_references();
                 }
             }
             Action::Files => self.chrome.left = !self.chrome.left,
@@ -565,6 +600,29 @@ impl App {
                     && let Some(w) = self.workspace()
                 {
                     w.undo(&ctx, true);
+                }
+                ui.separator();
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit definition",
+                    "Go to definition",
+                    false,
+                    &k(Action::GoToDefinition),
+                ) && let Some(w) = self.workspace()
+                {
+                    w.go_to_definition(&mut chrome);
+                }
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit xref",
+                    "Cross references",
+                    false,
+                    &k(Action::CrossReferences),
+                ) && let Some(w) = self.workspace()
+                {
+                    w.cross_references();
                 }
             });
             hits.push(("bar edit".to_string(), e.response.rect));

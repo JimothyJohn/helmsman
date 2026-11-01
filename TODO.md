@@ -1072,7 +1072,7 @@
   id: starter-autostart-on-box
   answer: plant waits for Start (the diagram sits still until someone forces start_pb)
 
-- [ ] **Offer the five short examples on a box too?** Blink, Latch, Counter, Traffic and Line stay simulation-only: they read `VAR_INPUT`s with no io.map, so a box refuses them at Deploy. Built default: a box offers the seven machines and two templates only. Giving the short ones an io.map would show that file in the first program a visitor opens.
+- [x] **Offer the five short examples on a box too?** Blink, Latch, Counter, Traffic and Line stay simulation-only: they read `VAR_INPUT`s with no io.map, so a box refuses them at Deploy. Built default: a box offers the seven machines and two templates only. Giving the short ones an io.map would show that file in the first program a visitor opens.
   needs: your call
   result: leave them out, or add io.maps and list them
   options: leave out; add io.maps and list them
@@ -1083,7 +1083,7 @@
   id: starter-short-examples-on-box
   answer: leave out
 
-- [ ] **Add a LICENSE file?** `Cargo.toml` declares `license = "MIT"` and CONTRIBUTING.md (docs/contributing PR) tells contributors the crates are MIT with a DCO sign-off, but there is no LICENSE file at the root, so GitHub shows no license and the claim has nothing behind it. A LICENSE is a legal choice (MIT as declared, or something else now that the agent and relay are in scope), so it is yours; the card `open-core-split` may change the answer.
+- [x] **Add a LICENSE file?** `Cargo.toml` declares `license = "MIT"` and CONTRIBUTING.md (docs/contributing PR) tells contributors the crates are MIT with a DCO sign-off, but there is no LICENSE file at the root, so GitHub shows no license and the claim has nothing behind it. A LICENSE is a legal choice (MIT as declared, or something else now that the agent and relay are in scope), so it is yours; the card `open-core-split` may change the answer.
   needs: your call on the license (and copyright holder line)
   result: LICENSE at the root, GitHub's license badge, CONTRIBUTING's claim true
   options: MIT as Cargo.toml says | Apache-2.0 | wait for open-core-split
@@ -1092,8 +1092,9 @@
   id: license-file
   asked: 2026-11-01
   by: claude-session
+  answer: Apache-2.0
 
-- [ ] **Reserve F9 for a breakpoint on a block?** CODESYS F9 toggles a breakpoint. Here: pick a block or a statement line in the simulation and press F9; the scan pauses before that statement runs, the diagram lit as of that moment, F10 (already Step) runs the rest of the scan. Powerful for "why did this fire": the trace tap already knows which statement is running (`trace-tap` records the innermost statement at a fault). Box side later, read-only (pause a copy, never the real scan).
+- [x] **Reserve F9 for a breakpoint on a block?** CODESYS F9 toggles a breakpoint. Here: pick a block or a statement line in the simulation and press F9; the scan pauses before that statement runs, the diagram lit as of that moment, F10 (already Step) runs the rest of the scan. Powerful for "why did this fire": the trace tap already knows which statement is running (`trace-tap` records the innermost statement at a fault). Box side later, read-only (pause a copy, never the real scan).
   needs: your call; the key is free today (docs/UI.md, Keyboard)
   result: pause-at-statement in the simulation's interpreter, F9 on the picked block, a marker on the block and the ST line
   options: build | reserve the key only | drop
@@ -1102,8 +1103,9 @@
   id: hotkey-breakpoint
   asked: 2026-11-01
   by: claude-session
+  answer: drop
 
-- [ ] **Reserve F8 / Shift+F10 for step into and out of an instance?** CODESYS F8 steps into, Shift+F10 steps out. Here: with the simulation stopped, F8 on a picked function-block block opens that instance's diagram (what a double click does) and steps one scan; Shift+F10 goes up a level (Alt+↑ today) and keeps stepping. Pairs with hotkey-breakpoint.
+- [x] **Reserve F8 / Shift+F10 for step into and out of an instance?** CODESYS F8 steps into, Shift+F10 steps out. Here: with the simulation stopped, F8 on a picked function-block block opens that instance's diagram (what a double click does) and steps one scan; Shift+F10 goes up a level (Alt+↑ today) and keeps stepping. Pairs with hotkey-breakpoint.
   needs: your call; the key is free today (docs/UI.md, Keyboard)
   result: F8 opens the picked instance and steps, Shift+F10 steps out
   options: build | reserve the key only | drop
@@ -1112,8 +1114,9 @@
   id: hotkey-step-into
   asked: 2026-11-01
   by: claude-session
+  answer: Use a different non F hotkey
 
-- [ ] **Reserve F7 / Alt+F7 for forcing the picked input from the keyboard?** CODESYS F7 forces the prepared values, Alt+F7 unforces all. Here a force is a click on an input's block. With a block picked, F7 would force it (flip a BOOL, open the number field), Alt+F7 release every force (the banner's button). On a box this is the engineer's force path, so the same session rules; in the simulation it is the switch.
+- [x] **Reserve F7 / Alt+F7 for forcing the picked input from the keyboard?** CODESYS F7 forces the prepared values, Alt+F7 unforces all. Here a force is a click on an input's block. With a block picked, F7 would force it (flip a BOOL, open the number field), Alt+F7 release every force (the banner's button). On a box this is the engineer's force path, so the same session rules; in the simulation it is the switch.
   needs: your call; the key is free today (docs/UI.md, Keyboard)
   result: F7 forces the picked input, Alt+F7 releases all, both on the box's audited path
   options: build | reserve the key only | drop
@@ -1122,8 +1125,9 @@
   id: hotkey-force
   asked: 2026-11-01
   by: claude-session
+  answer: Use a different key, and don't drop the other F key I accidentally told you to drop, I think it was breakpoint. Override that decision
 
-- [ ] **Reserve Ctrl+F / F3 for find in the Structured Text?** CODESYS Ctrl+F finds, F3 next, Shift+F3 previous, Ctrl+H replaces. The ST pane has no find. A find box over the editor (match marked, Enter/F3 next) is the obvious missing editor feature; replace can wait. Ctrl+F is the browser's find today and would have to be taken from it (the page can: `hotkeys::wants`).
+- [x] **Reserve Ctrl+F / F3 for find in the Structured Text?** CODESYS Ctrl+F finds, F3 next, Shift+F3 previous, Ctrl+H replaces. The ST pane has no find. A find box over the editor (match marked, Enter/F3 next) is the obvious missing editor feature; replace can wait. Ctrl+F is the browser's find today and would have to be taken from it (the page can: `hotkeys::wants`).
   needs: your call; the key is free today (docs/UI.md, Keyboard)
   result: a find box in the ST pane on Ctrl+F, F3/Shift+F3 to move, the match marked like a diagnostic
   options: build | reserve the key only | drop
@@ -1132,8 +1136,9 @@
   id: hotkey-find
   asked: 2026-11-01
   by: claude-session
+  answer: Again, choose different keys that will hopefully feel cimilar
 
-- [ ] **Reserve Ctrl+Shift+D for go to definition, Ctrl+Shift+X for cross references?** CODESYS Ctrl+Shift+D jumps to a variable's declaration, Ctrl+Shift+X lists where it is used. Here: with a block picked (a read, a write, an instance), Ctrl+Shift+D sends the ST pane to its VAR line (we know the line: `Var` in the lowered POU); Ctrl+Shift+X lights every block that reads or writes it, the diagram's own cross reference, which is the `because` path but for a variable rather than an output. Ctrl+Shift+D is Chrome's bookmark-all-tabs; the page would take it.
+- [x] **Reserve Ctrl+Shift+D for go to definition, Ctrl+Shift+X for cross references?** CODESYS Ctrl+Shift+D jumps to a variable's declaration, Ctrl+Shift+X lists where it is used. Here: with a block picked (a read, a write, an instance), Ctrl+Shift+D sends the ST pane to its VAR line (we know the line: `Var` in the lowered POU); Ctrl+Shift+X lights every block that reads or writes it, the diagram's own cross reference, which is the `because` path but for a variable rather than an output. Ctrl+Shift+D is Chrome's bookmark-all-tabs; the page would take it.
   needs: your call; the key is free today (docs/UI.md, Keyboard)
   result: Ctrl+Shift+D: the declaration line in the ST pane; Ctrl+Shift+X: every read and write of the picked variable lit
   options: build | reserve the keys only | drop
@@ -1142,8 +1147,9 @@
   id: hotkey-go-to-definition
   asked: 2026-11-01
   by: claude-session
+  answer: build
 
-- [ ] **Reserve F2 / Shift+F2 for the Agent?** CODESYS F2 is the input assistant (pick a variable, a block, a function from a list), Shift+F2 auto-declares the variable under the caret. Here the assistant is the Agent: F2 would focus the Agent tab's prompt with the picked block or the ST selection as context ("what does this do", "add a timeout here"); Shift+F2 would ask it for the one thing CODESYS does mechanically: declare the undeclared identifier under the caret with a type it infers, as a proposal. The second is small and exact; the first is where the agentic story meets the keyboard.
+- [x] **Reserve F2 / Shift+F2 for the Agent?** CODESYS F2 is the input assistant (pick a variable, a block, a function from a list), Shift+F2 auto-declares the variable under the caret. Here the assistant is the Agent: F2 would focus the Agent tab's prompt with the picked block or the ST selection as context ("what does this do", "add a timeout here"); Shift+F2 would ask it for the one thing CODESYS does mechanically: declare the undeclared identifier under the caret with a type it infers, as a proposal. The second is small and exact; the first is where the agentic story meets the keyboard.
   needs: your call; the key is free today (docs/UI.md, Keyboard)
   result: F2 focuses the Agent prompt with context; Shift+F2 declares the identifier under the caret
   options: build both | build Shift+F2 only | reserve the keys only | drop
@@ -1152,8 +1158,55 @@
   id: hotkey-agent
   asked: 2026-11-01
   by: claude-session
+  answer: reserve the keys only
 
 ## Tasks
+
+- [ ] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.
+  needs: pause-at-statement in helmsman-iec's interpreter
+  result: Ctrl B toggles a breakpoint on the picked block; a marker on the block and the ST line; the scan pauses there
+  est: 2d
+  difficulty: med
+  id: hotkey-breakpoint-build
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Step into / out of an instance (Ctrl ] / Ctrl [)** — Nick 2026-11-01: a non-F key. Stopped, Ctrl ] on a picked function-block block opens that instance's diagram and steps one scan; Ctrl [ goes up a level (Alt ↑ today) and keeps stepping.
+  needs: nothing
+  result: the two keys in hotkeys::TABLE, the open-and-step behaviour, docs/UI.md rows
+  est: 1d
+  difficulty: low
+  id: hotkey-step-into-build
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Force the picked input from the keyboard (Ctrl Shift F / Ctrl Shift U)** — Nick 2026-11-01: a non-F key. With a block picked, Ctrl Shift F forces it (flip a BOOL, open the number field), Ctrl Shift U releases every force (the banner's button). On a box the engineer's audited force path; in the simulation the switch.
+  needs: nothing
+  result: the two keys, acting through the existing force path
+  est: 4h
+  difficulty: low
+  id: hotkey-force-build
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Find in the Structured Text (Ctrl F, Ctrl G next, Ctrl Shift G previous)** — Nick 2026-11-01: keys that feel familiar rather than F3. A find box over the ST pane, the match marked like a diagnostic, Enter or Ctrl G next, Ctrl Shift G previous; the page takes Ctrl F from the browser (hotkeys::wants). Replace can wait.
+  needs: nothing
+  result: a find box in the ST pane on the three keys
+  est: 1d
+  difficulty: low
+  id: hotkey-find-build
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **F2 / Shift F2 reserved for the Agent** — Nick 2026-11-01: reserve the keys only. F2 would focus the Agent prompt with the picked block or the ST selection as context; Shift F2 would ask it to declare the identifier under the caret, as a proposal. Nothing bound until decided.
+  needs: a decision to build
+  result: the keys stay free (docs/UI.md lists them as reserved)
+  est: 2d
+  difficulty: med
+  id: hotkey-agent-reserved
+  asked: 2026-11-01
+  by: claude-session
+
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
   needs: nothing

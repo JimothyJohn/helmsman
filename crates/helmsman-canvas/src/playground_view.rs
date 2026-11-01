@@ -1148,6 +1148,22 @@ impl Workspace for PlaygroundView {
         }
     }
 
+    fn go_to_definition(&mut self, chrome: &mut Chrome) -> bool {
+        let Some(line) = self.viewer.as_ref().and_then(Viewer::definition_line) else {
+            return false;
+        };
+        match self.proj.locate(line) {
+            Some((file, l)) => self.goto(&file, l, chrome),
+            None => chrome.goto(line),
+        }
+        chrome.st = true;
+        true
+    }
+
+    fn cross_references(&mut self) -> bool {
+        self.viewer.as_mut().is_some_and(Viewer::cross_references)
+    }
+
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
         let Some(text) = self.proj.current_text_mut() else {
             return false;
