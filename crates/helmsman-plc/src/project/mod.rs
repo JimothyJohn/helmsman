@@ -605,21 +605,21 @@ impl Projects {
 /// What [`seed`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Seeded {
-    /// The project was made and deployed as this snapshot.
-    Deployed { snapshot: String },
+    /// The project was made; nothing runs until an engineer deploys it.
+    Made,
     /// Not a first install (a project exists, or something was deployed):
     /// nothing was touched.
     Left(String),
 }
 
 /// A first install's project: when the box has no project and nothing
-/// deployed, makes project `name` from `files` and commits its build as
-/// the store's first snapshot (author `project NAME`, approver `first
-/// install`), recorded as the running project, so the box boots it. On
-/// any later install it touches nothing, so it never clobbers a project
-/// or brings back one an engineer deleted. There is no approval to ask
-/// for: nothing runs yet, and only someone with root on the box runs it
-/// (`helmsman-plc project seed`, the service's `ExecStartPre`).
+/// deployed, makes project `name` from `files`, for an engineer to open
+/// and deploy. Nothing is committed to the store and nothing runs: a box
+/// runs only what an engineer deployed through the approval path (card
+/// `seed-deploys`). On any later install it touches nothing, so it never
+/// clobbers a project or brings back one an engineer deleted. Only
+/// someone with root on the box runs it (`helmsman-plc project seed`,
+/// the service's `ExecStartPre`).
 ///
 /// # Errors
 /// The folders or store cannot be used, a file breaks the rules, or the
@@ -630,12 +630,11 @@ pub fn seed(
     name: &str,
     files: &[(String, String)],
     shape: &build::Shape,
-    time_ms: i64,
 ) -> Result<Seeded, String> {
     let projects =
         Projects::in_state_dir(state).map_err(|e| format!("projects in {}: {e}", state.display()))?;
     let store_dir = state.join("store");
-    let mut store =
+    let store =
         crate::store::Store::open(&store_dir).map_err(|e| format!("store {}: {e}", store_dir.display()))?;
     let existing = projects.list().map_err(|r| r.why)?;
     if !existing.is_empty() {
@@ -657,24 +656,9 @@ pub fn seed(
             .map_err(|r| format!("{file}: {}", r.why))?;
     }
     let read = projects.read(name).map_err(|r| r.why)?;
-    let built = build::build(name, &read, None, shape).map_err(|diags| {
+    build::build(name, &read, None, shape).map_err(|diags| {
         let lines: Vec<String> = diags.iter().map(ToString::to_string).collect();
         format!("project {name} does not build:\n  {}", lines.join("\n  "))
     })?;
-    let meta = crate::store::Meta {
-        author: format!("project {name}"),
-        prompt: "seeded on first install".into(),
-        approver: Some("first install".into()),
-        time_ms,
-    };
-    let id = store.commit(&built.change, &meta).map_err(|e| e.to_string())?;
-    projects
-        .record(&Running {
-            name: name.to_string(),
-            snapshot: id.to_string(),
-        })
-        .map_err(|e| format!("the running-project record: {e}"))?;
-    Ok(Seeded::Deployed {
-        snapshot: id.to_string(),
-    })
+    Ok(Seeded::Made)
 }
