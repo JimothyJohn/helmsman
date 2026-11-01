@@ -35,8 +35,25 @@ impl Drop for Running {
     }
 }
 
+/// A fresh, empty directory of its own for each call: the process id and
+/// a counter keep parallel copies of this suite, and parallel tests in one
+/// copy, out of each other's files.
+fn tmp(name: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "bin-{name}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// `NAME.st` in a directory of its own (error messages name the file).
 fn program_file(name: &str, src: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.st"));
+    let path = tmp(name).join(format!("{name}.st"));
     std::fs::write(&path, src).unwrap();
     path
 }
@@ -47,22 +64,19 @@ fn ladder() -> PathBuf {
 
 fn plc() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"));
-    // The OPC UA server's default port is shared; tests/opcua.rs covers it.
-    c.args(["--opcua", "off"]);
+    // The OPC UA server's and the API's default ports are shared by every
+    // copy of this suite (tests/opcua.rs covers OPC UA); a test's own
+    // --api comes later and wins.
+    c.args(["--opcua", "off", "--api", "127.0.0.1:0"]);
+    // A run without --state-dir writes ./helmsman-state into a working
+    // directory of its own, never the crate's or another copy's.
+    c.current_dir(tmp("cwd")).env_remove("STATE_DIRECTORY");
     c
 }
 
-/// A fresh, empty state directory for one PLC process.
+/// A fresh, empty state directory for one PLC process (not made yet).
 fn state_dir() -> PathBuf {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static N: AtomicUsize = AtomicUsize::new(0);
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "bin-state-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
+    tmp("state").join("state")
 }
 
 /// Starts the PLC on free loopback ports; returns it and its CIP and I/O addresses.
@@ -100,6 +114,17 @@ fn spawn_with(args: &[&std::ffi::OsStr], peer_io_port: u16) -> (Running, SocketA
         .collect();
     assert_eq!(addrs.len(), 2, "unexpected banner: {line:?}");
     (Running { child, stderr }, addrs[0], addrs[1])
+}
+
+/// Exclusive owner, 32 bytes each way at a 10 ms RPI. The inactivity
+/// timeout is RPI × 2^(7+2), about 5 s, not the 80 ms of multiplier 1: with
+/// six copies of the suite running, a scanner thread can stall longer than
+/// 80 ms, the box then drops the connection as timed out, and the closing
+/// `Forward_Close` is refused (0x0107). No test here is about the timeout.
+fn io_config() -> IoConfig {
+    let mut cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    cfg.timeout_multiplier = 7;
+    cfg
 }
 
 fn wait_for(conn: &IoConnection, what: &str, mut ok: impl FnMut(&Input) -> bool) -> Input {
@@ -140,7 +165,7 @@ fn program_drives_class1_io() {
         s.get_attribute_single(class::IDENTITY, 1, 7).unwrap()[1..],
         *b"Helmsman PLC"
     );
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
 
     let mut out = [0u8; 32];
@@ -176,7 +201,7 @@ fn a_fault_zeroes_outputs_and_keeps_the_adapter_up() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (plc, encap, io) = spawn(&prog, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     conn.set_output(&[0; 32]).unwrap();
     wait_for(&conn, "the program to run", |i| i.data[0] == 0xFF);
@@ -230,7 +255,7 @@ fn modules_share_the_image_and_a_fault_stops_only_its_module() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     conn.set_output(&[0; 32]).unwrap();
     let first = wait_for(&conn, "both modules to run", |i| {
@@ -322,7 +347,7 @@ fn modules_fighting_for_an_output_are_refused_before_the_adapter_starts() {
 }
 
 fn text_file(name: &str, text: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let path = tmp(name).join(name);
     std::fs::write(&path, text).unwrap();
     path
 }
@@ -395,7 +420,9 @@ out lamp  bool box do:0 safe=true
 /// apart. The scanner's bit goes through the module to the E1213's DO-00,
 /// back on its wired DI-00, through the module again and out to the
 /// scanner. (`--io-port 0` only so parallel test runs don't fight over
-/// 2222; adapter and link share whatever port it is.)
+/// 2222; adapter and link share whatever port it is.) Only with the
+/// `enip-io` feature (`scripts/lint.sh` builds it; out of the box build).
+#[cfg(feature = "enip-io")]
 #[test]
 fn the_adapter_and_an_enip_io_link_share_one_io_port() {
     use helmsman_io::enip_sim::E1213Sim;
@@ -428,7 +455,7 @@ in  clamp_fb bool rio di:0
     let args = [prog.as_os_str(), "--io-map".as_ref(), map.as_os_str()];
     let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
 
     wait_until("the link to the E1213", || !sim.o_to_t_sources().is_empty());
@@ -449,6 +476,48 @@ in  clamp_fb bool rio di:0
     let log = plc.finish();
     assert!(log.contains("device rio up"), "{log}");
     assert!(!log.contains("address in use"), "{log}");
+}
+
+/// The box build leaves `enip-io` out (TODO.md `enip-in-box`): a map that
+/// names it is refused before the box goes on the network, saying so,
+/// even when no signal uses the device. The E1213 runs over Modbus/TCP.
+#[cfg(not(feature = "enip-io"))]
+#[test]
+fn a_map_naming_enip_io_is_refused_as_not_in_this_build() {
+    let prog = program_file(
+        "enip_out",
+        "PROGRAM p VAR_INPUT start : BOOL; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR lamp := start; END_PROGRAM",
+    );
+    for (name, text) in [
+        (
+            "enip_used.iomap",
+            "device rio enip-io 127.0.0.1:44818\nin start bool rio di:0\nout lamp bool box do:0\n",
+        ),
+        (
+            "enip_unused.iomap",
+            "device rio enip-io 127.0.0.1:44818\nin start bool box di:0\nout lamp bool box do:0\n",
+        ),
+    ] {
+        let map = text_file(name, text);
+        let out = plc()
+            .arg(&prog)
+            .arg("--io-map")
+            .arg(&map)
+            .args(["--encap-port", "0", "--io-port", "0"])
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}: {err}");
+        assert!(
+            err.contains("device rio: unknown driver \"enip-io: not in this build"),
+            "{name}: {err}"
+        );
+        assert!(
+            err.contains("modbus-tcp"),
+            "{name}: names the way that works: {err}"
+        );
+        assert!(!err.contains("CIP on"), "{name}: {err}");
+    }
 }
 
 #[test]
@@ -589,7 +658,7 @@ fn shipped_echo_program_echoes() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (_plc, encap, io) = spawn(&prog, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     let pattern: Vec<u8> = (1..=32).collect();
     conn.set_output(&pattern).unwrap();
@@ -605,7 +674,7 @@ fn ladder_project_drives_class1_io() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (_plc, encap, io) = spawn(&ladder(), scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     let mut out = [0u8; 32];
     conn.set_output(&out).unwrap();
@@ -639,7 +708,7 @@ fn emit_st_prints_the_lowered_project() {
 
 #[test]
 fn project_errors_exit_1_with_xml_positions() {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bad.xml");
+    let path = tmp("bad_xml").join("bad.xml");
     let xml = std::fs::read_to_string(ladder())
         .unwrap()
         .replace("<variable>Stop</variable>", "<variable>Stopp</variable>");
@@ -678,7 +747,7 @@ fn a_module_sees_the_shift_calendar_through_the_scan() {
     let args = [prog.as_os_str(), "--calendar".as_ref(), cal.as_os_str()];
     let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     wait_for(&conn, "in shift 7 all day", |i| {
         i.data[0] & 1 == 1 && i.data[2..4] == 7u16.to_le_bytes()
@@ -750,9 +819,7 @@ fn a_bad_calendar_is_refused_before_the_adapter_starts() {
 }
 
 fn module_dir(name: &str, manifest: &str, source: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("bin-modules")
-        .join(name);
+    let dir = tmp(name).join(name);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("module.manifest"), manifest).unwrap();
     std::fs::write(dir.join("module.st"), source).unwrap();
@@ -787,7 +854,7 @@ fn a_module_directory_runs_with_its_param_beside_a_module_flag() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (_plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     conn.set_output(&[0; 32]).unwrap();
     wait_for(&conn, "the param through the directory's module", |i| {
@@ -832,10 +899,7 @@ fn a_module_directory_whose_manifest_lies_is_refused_before_the_adapter_starts()
 
 #[test]
 fn a_wasm_module_directory_runs_and_one_whose_manifest_lies_is_refused() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("bin-modules")
-        .join("blink-wasm");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tmp("blink-wasm");
     let wasm = wat::parse_str(
         r#"(module (import "helmsman/v1" "now_ms" (func $now (result i64)))
                    (global $t (export "t") (mut i64) (i64.const 0))
@@ -871,11 +935,7 @@ fn a_wasm_module_directory_runs_and_one_whose_manifest_lies_is_refused() {
 // ---- --store -----------------------------------------------------------------
 
 fn store_dir(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("bin-stores")
-        .join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
+    tmp(name).join("store")
 }
 
 /// One module that writes `base + 2` to output byte 0 while the stored
@@ -897,7 +957,6 @@ fn offset_set(base: u8) -> ChangeSet {
         modules: [("offset".to_string(), module)].into_iter().collect(),
         io_map: Some("out lamp bool box do:0\n".into()),
         calendar: Some("zone UTC\nshift 7 daily 00:00-24:00\n".into()),
-        drivers: std::collections::BTreeMap::new(),
     }
 }
 
@@ -922,7 +981,7 @@ fn the_store_runs_its_head_snapshot_after_a_rollback() {
     let args = [std::ffi::OsStr::new("--store"), dir.as_os_str()];
     let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     conn.set_output(&[0; 32]).unwrap();
     wait_for(
@@ -998,7 +1057,10 @@ fn spawn_api(state: &Path) -> (Running, std::net::SocketAddr, String) {
     while api.is_none() || token.is_none() {
         let mut line = String::new();
         assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
-        if let Some(rest) = line.strip_prefix("helmsman-plc: API on http://") {
+        if let Some(rest) = line
+            .strip_prefix("helmsman-plc: API on https://")
+            .or_else(|| line.strip_prefix("helmsman-plc: API on http://"))
+        {
             api = rest.split('/').next().and_then(|a| a.parse().ok());
         } else if line.starts_with("helmsman-plc: API token") {
             token = Some(line.trim_end().to_string());
@@ -1293,60 +1355,32 @@ fn a_policy_that_loosens_the_floor_stops_the_box_before_it_is_on_the_network() {
     }
 }
 
+/// `--screen` is retired: a unit file still passing it is told why, before
+/// anything starts, and the help no longer offers it.
 #[test]
-fn a_bad_screen_layout_is_refused_before_the_adapter_starts() {
+fn the_retired_screen_flag_is_refused_with_the_reason() {
     let prog = program_file(
         "screen_line",
         "PROGRAM p VAR_OUTPUT line1_state : INT; END_VAR line1_state := 1; END_PROGRAM",
     );
-    let map = text_file("screen_line.iomap", "out line1_state int screen line1 safe=0\n");
-    let good = "helmsman-screen 1\ngrid 1 1\ncode s 1 green Running\ntile line1 0,0 s line1_state Line 1\n";
-    for (name, text, want) in [
-        (
-            "syntax.screen",
-            "helmsman-screen 1\ngrid 1 1\ntile\n",
-            "syntax.screen: line 3: tile",
-        ),
-        (
-            "unfit.screen",
-            "helmsman-screen 1\ngrid 1 1\ncode s 1 green Running\ntile line1 0,0 s nosuch Line 1\n",
-            "unfit.screen: tile line1: no signal nosuch in the I/O map",
-        ),
-    ] {
-        let screen = text_file(name, text);
-        let out = plc()
-            .arg(&prog)
-            .arg("--io-map")
-            .arg(&map)
-            .arg("--screen")
-            .arg(&screen)
-            .args(["--encap-port", "0", "--io-port", "0"])
-            .output()
-            .unwrap();
-        assert_eq!(out.status.code(), Some(1), "{name}");
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(err.contains(want), "{name}: {err}");
-        assert!(!err.contains("CIP on"), "{name}: {err}");
-    }
-    // Screen tiles in the map need their layout while the API runs.
-    let out = plc()
-        .arg(&prog)
-        .arg("--io-map")
-        .arg(&map)
-        .args(["--encap-port", "0", "--io-port", "0"])
-        .output()
-        .unwrap();
-    assert_eq!(out.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("--screen FILE"));
-    let screen = text_file("good.screen", good);
+    let screen = text_file("old.screen", "helmsman-screen 1\ngrid 1 1\n");
     let out = plc()
         .arg(&prog)
         .arg("--screen")
         .arg(&screen)
-        .args(["--api", "off"])
+        .args(["--encap-port", "0", "--io-port", "0"])
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(2), "--screen needs the API");
+    assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("--screen is retired") && err.contains("Monitor"),
+        "{err}"
+    );
+    assert!(!err.contains("CIP on"), "{err}");
+    let help = plc().arg("--help").output().unwrap();
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(!help.contains("--screen") && !help.contains("andon"), "{help}");
 }
 
 /// The relay serves agent v3 (the drop-in tools) and explain-v1 (read-only
@@ -1357,4 +1391,98 @@ fn the_default_agent_versions_are_the_ones_the_relay_serves() {
     let usage = String::from_utf8_lossy(&out.stdout);
     assert!(usage.contains("(default v3)"), "{usage}");
     assert!(usage.contains("default explain-v1"), "{usage}");
+}
+
+/// A map naming `wasm:NAME` boots on `<state-dir>/drivers/NAME.wasm`, with
+/// no store: a missing or bad file stops the boot before the box goes on
+/// the network, naming the file.
+#[test]
+fn the_binary_boots_a_wasm_driver_from_its_state_directory() {
+    let prog = program_file(
+        "wasm_driver",
+        "PROGRAM p VAR_INPUT level : DINT; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR lamp := level > 10; END_PROGRAM",
+    );
+    let map = text_file(
+        "wasm_driver.iomap",
+        "device rio wasm:modbus 127.0.0.1:1 unit=1\nin level int rio hr:0\nout lamp bool box do:0\n",
+    );
+    let boot = |state: &Path| {
+        plc()
+            .arg(&prog)
+            .arg("--io-map")
+            .arg(&map)
+            .args(["--encap-port", "0", "--io-port", "0", "--state-dir"])
+            .arg(state)
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let state = state_dir();
+    for (bytes, says) in [
+        (None, "drivers/modbus.wasm"),
+        (Some(b"\0asm junk".as_slice()), "drivers/modbus.wasm in the box"),
+    ] {
+        if let Some(b) = bytes {
+            std::fs::create_dir_all(state.join("drivers")).unwrap();
+            std::fs::write(state.join("drivers/modbus.wasm"), b).unwrap();
+        }
+        let out = boot(&state).wait_with_output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{err}");
+        assert!(err.contains(says), "{err}");
+        assert!(
+            !err.contains("CIP on"),
+            "refused before going on the network: {err}"
+        );
+    }
+    let guest = include_bytes!("../../helmsman-io/guests/modbus-tcp.wasm");
+    std::fs::write(state.join("drivers/modbus.wasm"), guest).unwrap();
+    let mut child = boot(&state);
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut running = Running { child, stderr };
+    let mut said = String::new();
+    while !said.contains("CIP on") {
+        let mut line = String::new();
+        assert!(running.stderr.read_line(&mut line).unwrap() > 0, "exited: {said}");
+        said.push_str(&line);
+    }
+    drop(running);
+    assert!(said.contains("WASM driver modbus from the box"), "{said}");
+}
+
+/// Without `--state-dir` (and without systemd's `$STATE_DIRECTORY`) the box
+/// keeps its token, certificate and PINs in `./helmsman-state` of its
+/// working directory. No test leaves one in the crate: every helper here
+/// runs the binary from a working directory of its own.
+#[test]
+fn the_default_state_directory_is_in_the_working_directory_never_the_crate() {
+    let in_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("helmsman-state");
+    let leaked = || {
+        format!(
+            "{} exists: a test ran helmsman-plc from the crate without --state-dir",
+            in_crate.display()
+        )
+    };
+    assert!(!in_crate.exists(), "{}", leaked());
+    let cwd = tmp("default_state");
+    let echo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
+    let mut child = plc()
+        .current_dir(&cwd)
+        .arg(&echo)
+        .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut running = Running { child, stderr };
+    let mut said = String::new();
+    while !said.contains("API token") {
+        let mut line = String::new();
+        assert!(running.stderr.read_line(&mut line).unwrap() > 0, "exited: {said}");
+        said.push_str(&line);
+    }
+    drop(running);
+    assert!(said.contains("helmsman-state/api-token"), "{said}");
+    assert!(cwd.join("helmsman-state/api-token").is_file(), "{said}");
+    assert!(!in_crate.exists(), "{}", leaked());
 }

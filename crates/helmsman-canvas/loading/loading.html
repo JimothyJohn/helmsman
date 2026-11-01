@@ -1,0 +1,29 @@
+<style>
+    #loading { position: fixed; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center;
+               padding: 16px; box-sizing: border-box; background: #141414; color: #E6E6E6;
+               font: 15px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+    #loading [hidden] { display: none; }
+    #loading > div { width: 100%; max-width: 32em; }
+    #loading p { margin: 0 0 12px; }
+    #loading-bar { height: 8px; background: #2E2E2E; overflow: hidden; }
+    #loading-fill { height: 100%; width: 0; background: #FFC20E; }
+    #loading-bar.indeterminate #loading-fill { width: 30%; animation: loading-slide 1.2s ease-in-out infinite alternate; }
+    @keyframes loading-slide { from { margin-left: 0; } to { margin-left: 70%; } }
+    @media (prefers-reduced-motion: reduce) { #loading-bar.indeterminate #loading-fill { animation: none; width: 100%; opacity: .4; } }
+    #loading-title { color: #FFC20E; font-weight: bold; }
+    #loading-detail { margin: 0 0 16px; color: #8C8C8C; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+                      white-space: pre-wrap; overflow-wrap: anywhere; }
+    #loading-reload { background: #FFC20E; color: #141414; border: 0; padding: 8px 16px; font: inherit; font-weight: bold; cursor: pointer; }
+</style>
+<div id="loading">
+    <div id="loading-progress">
+        <p id="loading-text" aria-live="polite">Loading Helmsman…</p>
+        <div id="loading-bar" class="indeterminate" role="progressbar" aria-label="Loading" aria-valuemin="0" aria-valuemax="100"><div id="loading-fill"></div></div>
+    </div>
+    <div id="loading-failed" role="alert" hidden>
+        <p id="loading-title">Helmsman could not start.</p>
+        <p id="loading-why"></p>
+        <pre id="loading-detail" hidden></pre>
+        <button id="loading-reload" type="button">Reload</button>
+    </div>
+</div>

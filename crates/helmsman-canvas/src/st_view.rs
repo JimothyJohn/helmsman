@@ -1,30 +1,20 @@
 //! The live ST view: a module's Structured Text drawn as its diagram
 //! (`helmsman-diagram`), read-only, with a traced scan on it every frame.
 //!
-//! [`Viewer`] draws a module from whatever scans it is given: the demo
-//! here ([`StView`]), or a box over its API (`box_view`).
-//!
-//! The demo runs the module in-process the way the box does: a
-//! `helmsman_plc::Runtime` scanning every 10 ms on the page's clock, a
-//! `TraceTap` asked for one scan per frame. Its inputs are simulated (a
-//! scripted shift, or switched by hand); the ST itself is never edited
-//! here (`canvas-edit-scope`: changes go through the agent as ST).
-
-use std::time::Duration;
+//! [`Viewer`] draws a module from whatever scans it is given: the
+//! simulation in the page (`playground_view`), or a box over its API
+//! (`box_view`). The ST itself is never edited from the diagram
+//! (`canvas-edit-scope`).
 
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
     epaint::CubicBezierShape,
 };
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
-use helmsman_diagram::phrase::{Phrased, paths};
 use helmsman_diagram::{
-    Diagram, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, Words, annotate, explain, phrase,
+    Diagram, Drivers, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, drivers,
 };
-use helmsman_iec::{ImageSizes, Value, compile};
-use helmsman_plc::{Module as Slot, Runtime, Sample, Status, TraceTap, Window};
-
-use crate::explain::{Ask, Phase, Steady};
+use helmsman_iec::Value;
 
 /// Brand colours (docs/brand/index.html).
 pub mod brand {
@@ -36,74 +26,11 @@ pub mod brand {
     pub const WHITE: Color32 = Color32::from_rgb(0xFF, 0xFF, 0xFF);
     /// Between black and graphite: node bodies.
     pub const PANEL: Color32 = Color32::from_rgb(0x24, 0x24, 0x24);
+    /// The warning colour: a forced input, the force banner.
+    pub const WARN: Color32 = Color32::from_rgb(0xFF, 0x8A, 0x1E);
 }
 
 use brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
-
-/// The demo module: a conveyor cell with a start/stop latch, a motor
-/// block with a nested IF, a blinker, a part counter, a CASE and a stack
-/// light.
-pub const DEMO: &str = "FUNCTION_BLOCK motor
-VAR_INPUT run, fault : BOOL; END_VAR
-VAR_OUTPUT on : BOOL; END_VAR
-IF run THEN
-  IF NOT fault THEN
-    on := TRUE;
-  ELSE
-    on := FALSE;
-  END_IF;
-ELSE
-  on := FALSE;
-END_IF;
-END_FUNCTION_BLOCK
-
-PROGRAM cell
-VAR
-  start AT %IX0.0 : BOOL;
-  stop AT %IX0.1 : BOOL;
-  jam AT %IX0.2 : BOOL;
-  conveyor AT %QX0.0 : BOOL;
-  green AT %QX0.1 : BOOL;
-  red AT %QX0.2 : BOOL;
-  running : BOOL;
-  m : motor;
-  blink : TON;
-  flash : BOOL;
-  parts : CTU;
-  count : INT;
-  lane : INT;
-END_VAR
-running := (start OR running) AND NOT stop;
-m(run := running, fault := jam);
-conveyor := m.on;
-blink(IN := NOT blink.Q, PT := T#400ms);
-IF blink.Q THEN flash := NOT flash; END_IF;
-parts(CU := m.on AND flash, R := stop, PV := 1000);
-count := parts.CV;
-CASE count MOD 3 OF
-  0: lane := 1;
-  1: lane := 2;
-ELSE
-  lane := 3;
-END_CASE;
-IF jam THEN
-  red := flash;
-  green := FALSE;
-ELSIF m.on THEN
-  green := TRUE;
-  red := FALSE;
-ELSE
-  green := FALSE;
-  red := FALSE;
-END_IF;
-END_PROGRAM
-";
-
-const MODULE: &str = "cell";
-const SCAN_MS: u64 = 10;
-/// The scripted shift repeats every this many ms.
-const SHIFT_MS: u64 = 12_000;
-const INPUTS: [&str; 3] = ["start", "stop", "jam"];
 
 /// Pan and zoom: `screen = origin + offset + world * zoom`.
 #[derive(Clone, Copy, Debug)]
@@ -180,46 +107,133 @@ pub struct Viewer {
     pub scope: usize,
     pub cams: Vec<Cam>,
     pub pick: Option<Pick>,
-    /// The variable "on because" is shown for (program path).
+    /// The variable last tapped (an output, or a block's first output),
+    /// as a program path.
     pub because: Option<String>,
-    /// What the templates know beside the trace: the module's kinds, and
-    /// the signal model's units when a box gave them.
-    pub words: Words,
-    /// How long each explained variable has shown its value.
-    pub steady: Steady,
-    /// The source lines the explanation is about (drawn highlighted).
+    /// Source lines drawn highlighted.
     pub highlight: Vec<u32>,
+    /// The "because" path the last frame drew (see [`Self::highlighted`]).
+    lit: Option<Drivers>,
+    /// What the drag in progress holds.
+    grab: Option<Grab>,
+    /// Instances folded in the tree (their prefixes).
+    folded: Vec<String>,
+    /// How far the operator moved each block from where the layout put it,
+    /// per POU. The view's own; the program is untouched.
+    moved: Vec<Vec<(NodeId, Vec2)>>,
+    /// Counts changes to `moved` (see [`Self::edits`]).
+    edits: u64,
+}
+
+/// One row of the program tree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TreeRow {
+    pub scope: usize,
+    /// 0 for the program, 1 for what it calls, and so on.
+    pub depth: usize,
+    pub has_kids: bool,
+    pub folded: bool,
+}
+
+/// What a drag on the diagram holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Grab {
+    Node(NodeId),
+    Region(RegionId),
+    Pan,
+}
+
+/// Where the operator moved blocks, by what they are rather than their
+/// ids, so it survives an edit that renumbers them: (POU, the block's
+/// label and source text, which of the same, offset).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Arrangement(Vec<(String, String, String, usize, Vec2)>);
+
+/// Offsets closer to zero than this are no move (float residue).
+const STILL: f32 = 0.01;
+
+impl Arrangement {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// How many blocks it moves.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Read from a project's `diagram.layout` ([`helmsman_project::layout`]).
+    ///
+    /// # Errors
+    /// What [`helmsman_project::layout::parse`] refuses.
+    pub fn from_text(text: &str) -> Result<Self, Vec<String>> {
+        Ok(Self(
+            helmsman_project::layout::parse(text)?
+                .into_iter()
+                .map(|m| (m.pou, m.label, m.text, m.k, Vec2::new(m.dx, m.dy)))
+                .collect(),
+        ))
+    }
+
+    /// As a `diagram.layout` file, the moves in a stable order.
+    #[must_use]
+    pub fn to_text(&self) -> String {
+        let mut moves: Vec<helmsman_project::layout::Move> = self
+            .0
+            .iter()
+            .map(|(pou, label, text, k, v)| helmsman_project::layout::Move {
+                pou: pou.clone(),
+                label: label.clone(),
+                text: text.clone(),
+                k: *k,
+                dx: v.x,
+                dy: v.y,
+            })
+            .collect();
+        moves.sort_by(|a, b| (&a.pou, &a.label, &a.text, a.k).cmp(&(&b.pou, &b.label, &b.text, b.k)));
+        helmsman_project::layout::render(&moves)
+    }
+
+    /// The offset `self` gives each block, less what `base` gives it: the
+    /// moves to make on top of `base` to get `self`. A block `base` moves
+    /// and `self` does not is moved back.
+    #[must_use]
+    pub fn minus(&self, base: &Self) -> Self {
+        let key = |e: &(String, String, String, usize, Vec2)| (e.0.clone(), e.1.clone(), e.2.clone(), e.3);
+        let mut total: std::collections::BTreeMap<(String, String, String, usize), Vec2> =
+            std::collections::BTreeMap::new();
+        for e in &self.0 {
+            *total.entry(key(e)).or_default() += e.4;
+        }
+        for e in &base.0 {
+            *total.entry(key(e)).or_default() -= e.4;
+        }
+        Self(
+            total
+                .into_iter()
+                .filter(|(_, v)| v.x.abs() >= STILL || v.y.abs() >= STILL)
+                .map(|((p, l, t, k), v)| (p, l, t, k, v))
+                .collect(),
+        )
+    }
+
+    /// Only the moves of blocks `v` has.
+    #[must_use]
+    pub fn within(&self, v: &Viewer) -> Self {
+        Self(
+            self.0
+                .iter()
+                .filter(|(p, l, t, k, _)| v.block(p, l, t, *k).is_some())
+                .cloned()
+                .collect(),
+        )
+    }
 }
 
 /// The smallest thing a finger can hit, in points.
 pub const TAP: f32 = 44.0;
-
-/// What the explain panel offers beside the box's own explanation.
-#[derive(Clone, Copy)]
-pub struct AskUi<'a> {
-    /// Why "Ask why" cannot be used now; `None`: it can.
-    pub blocked: Option<&'a str>,
-    /// The ask in flight or answered.
-    pub ask: Option<&'a Ask>,
-}
-
-impl AskUi<'_> {
-    /// For the in-page demo: no box, no agent.
-    #[must_use]
-    pub const fn demo() -> Self {
-        Self {
-            blocked: Some("The demo runs in this page: asking the agent needs a box with a relay."),
-            ask: None,
-        }
-    }
-}
-
-/// What the operator asked for in the panel.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Action {
-    /// "Ask why" for this program path.
-    AskWhy(String),
-}
 
 impl Viewer {
     /// `module`, lowered from `src`: the program first, then each user
@@ -256,6 +270,7 @@ impl Viewer {
             });
         }
         let cams = vec![Cam::default(); scopes.len()];
+        let moved = vec![Vec::new(); module.pous.len()];
         Self {
             src: src.to_string(),
             module,
@@ -264,39 +279,124 @@ impl Viewer {
             cams,
             pick: None,
             because: None,
-            words: Words::default(),
-            steady: Steady::default(),
             highlight: Vec::new(),
+            lit: None,
+            grab: None,
+            folded: Vec::new(),
+            moved,
+            edits: 0,
         }
-        .with_words()
     }
 
-    fn with_words(mut self) -> Self {
-        self.words = Words::of(&self.module);
-        self
+    /// Counts every change to the arrangement (a drag step, an
+    /// [`Self::arrange`], a reset): a new count means something moved.
+    #[must_use]
+    pub const fn edits(&self) -> u64 {
+        self.edits
     }
 
-    /// The box's own explanation of the variable "on because" is shown
-    /// for, from `scan` (at `now_ms` on the module's clock): the facts, as
-    /// sentences. Notes the values it saw, for "unchanged over the last".
-    pub fn explanation(&mut self, scan: Option<&dyn Scan>, now_ms: Option<u64>) -> Option<Phrased> {
-        let path = self.because.clone()?;
-        let b = explain(&self.module, scan?, &path, 4);
-        if let Some(now) = now_ms {
-            let s = scan?;
-            for p in paths(&b) {
-                self.steady.observe(&p, s.get(&p), now);
+    /// A block or region is being dragged.
+    #[must_use]
+    pub const fn dragging(&self) -> bool {
+        matches!(self.grab, Some(Grab::Node(_) | Grab::Region(_)))
+    }
+
+    /// Block `k` of those labelled `label` with text `text` in POU `pou`.
+    #[must_use]
+    pub fn block(&self, pou: &str, label: &str, text: &str, k: usize) -> Option<(usize, NodeId)> {
+        let p = self.module.pous.iter().position(|q| q.name == pou)?;
+        self.module.pous[p]
+            .diagram
+            .nodes
+            .iter()
+            .filter(|m| m.label == label && m.text == text)
+            .nth(k)
+            .map(|m| (p, m.id))
+    }
+
+    /// Moves block `n` of the shown POU by `by` (diagram units).
+    pub fn move_node(&mut self, n: NodeId, by: Vec2) {
+        let pou = self.scopes[self.scope].pou;
+        self.shift(pou, &[n], by);
+        helmsman_diagram::layout::refit(&mut self.module.pous[pou].diagram);
+    }
+
+    /// Moves everything in region `r` of the shown POU by `by`.
+    pub fn move_region(&mut self, r: RegionId, by: Vec2) {
+        let pou = self.scopes[self.scope].pou;
+        let members = helmsman_diagram::layout::inside(&self.module.pous[pou].diagram, r);
+        self.shift(pou, &members, by);
+        helmsman_diagram::layout::refit(&mut self.module.pous[pou].diagram);
+    }
+
+    fn shift(&mut self, pou: usize, nodes: &[NodeId], by: Vec2) {
+        self.edits += 1;
+        let d = &mut self.module.pous[pou].diagram;
+        for &n in nodes {
+            let Some(node) = d.nodes.get_mut(n.0 as usize) else {
+                continue;
+            };
+            node.rect.x += by.x;
+            node.rect.y += by.y;
+            match self.moved[pou].iter_mut().find(|(m, _)| *m == n) {
+                Some((_, total)) => *total += by,
+                None => self.moved[pou].push((n, by)),
             }
         }
-        let mut w = self.words.clone();
-        for p in paths(&b) {
-            if let Some(ms) = self.steady.ms(&p) {
-                w.steady_ms.insert(p, ms);
+    }
+
+    /// Whether the operator moved anything.
+    #[must_use]
+    pub fn rearranged(&self) -> bool {
+        self.moved.iter().any(|m| m.iter().any(|(_, v)| *v != Vec2::ZERO))
+    }
+
+    /// Every block back where the layout put it.
+    pub fn reset_arrangement(&mut self) {
+        self.edits += 1;
+        for pou in 0..self.moved.len() {
+            for (n, v) in std::mem::take(&mut self.moved[pou]) {
+                if let Some(node) = self.module.pous[pou].diagram.nodes.get_mut(n.0 as usize) {
+                    node.rect.x -= v.x;
+                    node.rect.y -= v.y;
+                }
+            }
+            helmsman_diagram::layout::refit(&mut self.module.pous[pou].diagram);
+        }
+    }
+
+    /// Where the operator moved blocks, to carry onto the next version of
+    /// the program.
+    #[must_use]
+    pub fn arrangement(&self) -> Arrangement {
+        let mut out = Vec::new();
+        for (pou, moved) in self.module.pous.iter().zip(&self.moved) {
+            for &(n, v) in moved {
+                let Some(node) = pou.diagram.nodes.get(n.0 as usize) else {
+                    continue;
+                };
+                let k = pou.diagram.nodes[..n.0 as usize]
+                    .iter()
+                    .filter(|m| m.label == node.label && m.text == node.text)
+                    .count();
+                out.push((pou.name.clone(), node.label.clone(), node.text.clone(), k, v));
             }
         }
-        let said = phrase(&b, &w);
-        self.highlight = said.lines();
-        Some(said)
+        Arrangement(out)
+    }
+
+    /// Moves the blocks `a` names, wherever they still are; the rest stay
+    /// where the layout puts them.
+    pub fn arrange(&mut self, a: &Arrangement) {
+        self.edits += 1;
+        for (name, label, text, k, v) in &a.0 {
+            if let Some((pou, n)) = self.block(name, label, text, *k) {
+                self.shift(pou, &[n], *v);
+            }
+        }
+        for p in &mut self.module.pous {
+            helmsman_diagram::layout::refit(&mut p.diagram);
+        }
     }
 
     /// Whether there is anything to draw.
@@ -315,20 +415,8 @@ impl Viewer {
         Some(annotate(self.diagram(), scan?, &self.scopes[self.scope].prefix))
     }
 
-    /// The source line a statement starts on, numbered.
-    #[must_use]
-    pub fn source_line(&self, line: u32) -> String {
-        let text = self
-            .src
-            .lines()
-            .nth(line.saturating_sub(1) as usize)
-            .unwrap_or("")
-            .trim();
-        format!("{line:>3} | {text}")
-    }
-
-    /// What the selection panel shows: the picked element's source line
-    /// and its text.
+    /// The picked element's source line and its text (a block click
+    /// sends the ST editor to the line).
     #[must_use]
     pub fn picked(&self) -> Option<(u32, String)> {
         let d = self.diagram();
@@ -342,6 +430,14 @@ impl Viewer {
                 (r.pos.line, r.label.clone())
             }
         })
+    }
+
+    /// Whether `path` (a program path; `M.ON` for an instance's) names a
+    /// variable of the program: a pick that survives a new version.
+    #[must_use]
+    pub fn knows(&self, path: &str) -> bool {
+        let head = path.split('.').next().unwrap_or(path).to_ascii_uppercase();
+        self.module.program().is_some_and(|p| p.vars.contains_key(&head))
     }
 
     /// Program paths the outputs list offers: located outputs and
@@ -366,26 +462,164 @@ impl Viewer {
     }
 
     /// The scope picker (program, or a block through one instance).
-    pub fn scopes_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("View").strong());
-        let mut chosen = None;
-        for (k, s) in self.scopes.iter().enumerate() {
-            if ui.selectable_label(k == self.scope, &s.label).clicked() {
-                chosen = Some(k);
-            }
-        }
-        if let Some(k) = chosen
-            && k != self.scope
-        {
+    /// Shows scope `k`: the program or a block instance.
+    pub fn open(&mut self, k: usize) {
+        if k < self.scopes.len() && k != self.scope {
             self.scope = k;
             self.pick = None;
         }
     }
 
-    /// The outputs with their values; a click asks why.
+    /// The scope holding the shown one (an instance's caller), if any.
+    #[must_use]
+    pub fn parent(&self) -> Option<usize> {
+        parent_of(&self.scopes, self.scope)
+    }
+
+    /// The chain from the program down to the shown scope.
+    #[must_use]
+    pub fn trail(&self) -> Vec<usize> {
+        let mut out = vec![self.scope];
+        // Each step drops a path segment, so this ends.
+        while let Some(p) = parent_of(&self.scopes, out[out.len() - 1]) {
+            out.push(p);
+        }
+        out.reverse();
+        out
+    }
+
+    /// The program and its block instances as a tree, nested by call; a
+    /// click shows one. `▸`/`▾` folds an instance's own instances.
+    pub fn tree_ui(&mut self, ui: &mut egui::Ui) {
+        let mut chosen = None;
+        let mut fold = None;
+        for row in self.tree_rows() {
+            let s = &self.scopes[row.scope];
+            ui.horizontal(|ui| {
+                #[allow(clippy::cast_precision_loss)]
+                ui.add_space(row.depth as f32 * 14.0);
+                if row.has_kids {
+                    if ui.small_button(if row.folded { "▸" } else { "▾" }).clicked() {
+                        fold = Some(row.scope);
+                    }
+                } else {
+                    ui.add_space(18.0);
+                }
+                let text = RichText::new(&s.label).monospace();
+                if ui
+                    .selectable_label(row.scope == self.scope, text)
+                    .on_hover_text("show this one's diagram")
+                    .clicked()
+                {
+                    chosen = Some(row.scope);
+                }
+            });
+        }
+        if let Some(k) = fold {
+            self.toggle_fold(k);
+        }
+        if let Some(k) = chosen {
+            self.open(k);
+        }
+    }
+
+    /// The tree's rows, in order, skipping what folded instances hold.
+    #[must_use]
+    pub fn tree_rows(&self) -> Vec<TreeRow> {
+        let mut out = Vec::new();
+        let mut hidden: Option<&str> = None;
+        for (k, s) in self.scopes.iter().enumerate() {
+            if let Some(h) = hidden {
+                if s.prefix.starts_with(h) {
+                    continue;
+                }
+                hidden = None;
+            }
+            // The program's prefix is empty, so every instance is under it;
+            // it is the root and never folds.
+            let has_kids = k > 0
+                && self
+                    .scopes
+                    .iter()
+                    .any(|q| q.prefix.len() > s.prefix.len() && q.prefix.starts_with(s.prefix.as_str()));
+            let folded = has_kids && self.folded.contains(&s.prefix);
+            if folded {
+                hidden = Some(&s.prefix);
+            }
+            out.push(TreeRow {
+                scope: k,
+                depth: s.prefix.matches('.').count(),
+                has_kids,
+                folded,
+            });
+        }
+        out
+    }
+
+    /// Folds scope `k`'s own instances away in the tree, or shows them.
+    pub fn toggle_fold(&mut self, k: usize) {
+        let Some(p) = self.scopes.get(k).map(|s| s.prefix.clone()) else {
+            return;
+        };
+        match self.folded.iter().position(|f| *f == p) {
+            Some(i) => {
+                self.folded.remove(i);
+            }
+            None => self.folded.push(p),
+        }
+    }
+
+    /// "site › box › module" (from the host, `outer`), then the program
+    /// and each instance down to the one shown, every part a link, and ↑
+    /// for one level up. Returns the outer part clicked.
+    pub fn crumbs_ui(&mut self, ui: &mut egui::Ui, outer: &[String]) -> Option<usize> {
+        let mut hit = None;
+        let mut go = None;
+        ui.horizontal_wrapped(|ui| {
+            let up = self.parent();
+            if ui
+                .add_enabled(up.is_some(), egui::Button::new("↑"))
+                .on_hover_text("up one level (Alt+↑)")
+                .clicked()
+            {
+                go = up;
+            }
+            for (i, o) in outer.iter().enumerate() {
+                if ui.link(RichText::new(o).color(brand::STEEL)).clicked() {
+                    hit = Some(i);
+                }
+                ui.label(RichText::new("›").color(brand::STEEL));
+            }
+            let trail = self.trail();
+            for (j, &k) in trail.iter().enumerate() {
+                if j > 0 {
+                    ui.label(RichText::new("›").color(brand::STEEL));
+                }
+                let last = j + 1 == trail.len();
+                let text = RichText::new(&self.scopes[k].label).monospace();
+                let text = if last {
+                    text.strong().color(brand::YELLOW)
+                } else {
+                    text
+                };
+                if ui.link(text).clicked() {
+                    go = Some(k);
+                }
+            }
+        });
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::ALT, egui::Key::ArrowUp)) {
+            go = go.or_else(|| self.parent());
+        }
+        if let Some(k) = go {
+            self.open(k);
+        }
+        hit
+    }
+
+    /// The outputs with their values; a click picks one.
     pub fn outputs_ui(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         ui.label(RichText::new("Outputs").strong())
-            .on_hover_text("click: why is it in this state?");
+            .on_hover_text("click: pick it");
         for path in self.outputs() {
             let value = scan.and_then(|s| s.get(&path));
             let on = value == Some(Value::Bool(true));
@@ -398,93 +632,6 @@ impl Viewer {
                 self.because = Some(path);
             }
         }
-    }
-
-    /// The explain panel: why the chosen variable is in its state (the
-    /// box's own words, instantly), "Ask why" for the agent's, the facts
-    /// for an engineer, and the selection's source line.
-    pub fn right(
-        &mut self,
-        ui: &mut egui::Ui,
-        scan: Option<&dyn Scan>,
-        now_ms: Option<u64>,
-        ask: AskUi<'_>,
-    ) -> Option<Action> {
-        let said = self.explanation(scan, now_ms);
-        let mut action = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            ui.label(RichText::new("Why").strong().size(16.0));
-            match (&self.because, &said) {
-                (Some(_), Some(said)) => {
-                    for s in &said.sentences {
-                        ui.horizontal_wrapped(|ui| {
-                            #[allow(clippy::cast_precision_loss)]
-                            ui.add_space(12.0 * s.depth as f32);
-                            let color = if s.depth == 0 {
-                                WHITE
-                            } else {
-                                STEEL.gamma_multiply(1.4)
-                            };
-                            ui.label(RichText::new(&s.text).color(color));
-                        });
-                    }
-                    for l in said.lines() {
-                        ui.label(RichText::new(self.source_line(l)).monospace().color(YELLOW));
-                    }
-                }
-                (Some(_), None) => {
-                    ui.label(RichText::new("Waiting for a traced scan…").color(STEEL));
-                }
-                (None, _) => {
-                    ui.label(
-                        RichText::new("Tap an output or a block to see why it is in its state.").color(STEEL),
-                    );
-                }
-            }
-            if let Some(path) = self.because.clone() {
-                ui.add_space(6.0);
-                if let Some(a) = action_ui(ui, &path, ask) {
-                    action = Some(a);
-                }
-            }
-            if let (Some(path), Some(s)) = (&self.because, scan) {
-                egui::CollapsingHeader::new(RichText::new("Facts").strong())
-                    .id_salt("facts")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        for line in explain(&self.module, s, path, 4).outline() {
-                            ui.label(RichText::new(line).monospace().size(11.5));
-                        }
-                    });
-            }
-            ui.separator();
-            ui.label(RichText::new("Selection").strong());
-            match self.picked() {
-                Some((line, text)) => {
-                    ui.label(RichText::new(self.source_line(line)).monospace().color(YELLOW));
-                    ui.label(RichText::new(text).monospace());
-                    if let Some(Pick::Node(n)) = self.pick {
-                        let live = self.live(scan);
-                        let node = &self.diagram().nodes[n.0 as usize];
-                        if let Some(live) = &live {
-                            for (k, o) in node.outs.iter().enumerate() {
-                                let v = live.values[n.0 as usize].get(k).copied().flatten();
-                                let name = if o.is_empty() { "out" } else { o.as_str() };
-                                ui.label(
-                                    RichText::new(format!("{name} = {}", show(v)))
-                                        .monospace()
-                                        .color(STEEL),
-                                );
-                            }
-                        }
-                    }
-                }
-                None => {
-                    ui.label(RichText::new("Tap a block or region to see its source line.").color(STEEL));
-                }
-            }
-        });
-        action
     }
 
     /// The variable a tap on node `n` asks about: a variable read or
@@ -503,6 +650,59 @@ impl Viewer {
             }
             _ => None,
         }
+    }
+
+    /// Each variable the program reads, with where its block sits on
+    /// screen after the last [`Self::canvas`], under its header (the
+    /// playground puts the inputs' controls there; the header stays free
+    /// to drag the block by). Empty while a block instance is shown.
+    #[must_use]
+    pub fn reads_on_screen(&self) -> Vec<(String, Rect)> {
+        if !self.scopes[self.scope].prefix.is_empty() {
+            return Vec::new();
+        }
+        let cam = self.cams[self.scope];
+        self.diagram()
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NodeKind::Read { path } => {
+                    let mut r = cam.rect(&n.rect);
+                    r.min.y += HEADER * cam.zoom;
+                    Some((path.clone(), r))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The scope of the block instance drawn at screen point `p`, if it
+    /// has a diagram of its own.
+    fn instance_at(&self, cam: Cam, p: Pos2) -> Option<usize> {
+        let (x, y) = cam.to_world(p);
+        let n = self.diagram().node_at(x, y)?;
+        let NodeKind::Fb { instance, .. } = &self.diagram().node(n).kind else {
+            return None;
+        };
+        let want = format!("{}{instance}.", self.scopes[self.scope].prefix);
+        self.scopes
+            .iter()
+            .position(|s| s.prefix.eq_ignore_ascii_case(&want))
+    }
+
+    /// What a drag starting at screen point `p` takes hold of.
+    fn grab_at(&self, cam: Cam, p: Pos2) -> Grab {
+        let (x, y) = cam.to_world(p);
+        let d = self.diagram();
+        if let Some(n) = d.node_at(x, y) {
+            return Grab::Node(n);
+        }
+        // The innermost region whose label strip is under the pointer.
+        d.regions
+            .iter()
+            .filter(|r| r.rect.contains(x, y) && y <= r.rect.y + LABEL_H)
+            .min_by(|a, b| (a.rect.w * a.rect.h).total_cmp(&(b.rect.w * b.rect.h)))
+            .map_or(Grab::Pan, |r| Grab::Region(r.id))
     }
 
     /// The diagram, panned, zoomed and clickable, with `scan` on it.
@@ -528,13 +728,37 @@ impl Viewer {
                 cam.offset += scroll;
             }
         }
-        if response.dragged() {
-            cam.offset += response.drag_delta();
-        }
-        if response.double_clicked() {
-            cam.fitted = false;
-        }
+        let double = response.double_clicked();
         let cam = *cam;
+        // A double click on a block instance opens it; anywhere else it
+        // fits the diagram to the view.
+        if double {
+            let into = response
+                .interact_pointer_pos()
+                .and_then(|p| self.instance_at(cam, p));
+            match into {
+                Some(k) => self.open(k),
+                None => self.cams[self.scope].fitted = false,
+            }
+        }
+        // A drag that starts on a block moves it, on a region's label moves
+        // the region with all it holds, anywhere else pans.
+        if response.drag_started() {
+            let at = ui.ctx().input(|i| i.pointer.press_origin());
+            self.grab = Some(at.map_or(Grab::Pan, |p| self.grab_at(cam, p)));
+        }
+        if response.dragged() {
+            let by = response.drag_delta();
+            match self.grab {
+                Some(Grab::Node(n)) => self.move_node(n, by / cam.zoom),
+                Some(Grab::Region(r)) => self.move_region(r, by / cam.zoom),
+                _ => self.cams[self.scope].offset += by,
+            }
+        }
+        if response.drag_stopped() {
+            self.grab = None;
+        }
+        let cam = self.cams[self.scope];
         if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
         {
@@ -546,213 +770,50 @@ impl Viewer {
             self.pick = node_near(d, x, y, slop)
                 .map(Pick::Node)
                 .or_else(|| d.region_at(x, y).map(Pick::Region));
-            if let Some(Pick::Node(n)) = self.pick
-                && let Some(path) = self.tapped(n)
-            {
-                self.because = Some(path);
+            match self.pick {
+                // An output, an assignment or a variable's block: its path.
+                Some(Pick::Node(n)) => {
+                    if let Some(path) = self.tapped(n) {
+                        self.because = Some(path);
+                    }
+                }
+                // Empty space (a region's inside counts): no path.
+                _ => self.because = None,
             }
         }
         let live = self.live(scan);
+        self.lit = self.path(scan);
         draw(
             &painter,
             area,
             cam,
             self.diagram(),
             live.as_ref(),
-            self.pick,
-            &self.highlight,
+            Marks {
+                pick: self.pick,
+                lines: &self.highlight,
+                lit: self.lit.as_ref(),
+            },
         );
     }
-}
 
-/// The demo: the module running in-page on a `helmsman_plc::Runtime`.
-pub struct StView {
-    pub view: Viewer,
-    rt: Runtime,
-    tap: TraceTap,
-    pub sample: Option<Sample>,
-    /// Runtime clock, ms.
-    pub now_ms: u64,
-    /// Page time the clock last caught up to.
-    last: Option<f64>,
-    pub running: bool,
-    /// Inputs follow the scripted shift; off: switched by hand.
-    pub auto: bool,
-    pub inputs: [bool; 3],
-    pub error: Option<String>,
-}
-
-impl StView {
-    /// The demo module, compiled and running.
-    pub fn demo() -> Self {
-        Self::new(DEMO).unwrap_or_else(|e| {
-            // DEMO is a constant that compiles (tested); keep the view up anyway.
-            let mut v = Self::new("PROGRAM cell\nVAR x : BOOL; END_VAR\nx := NOT x;\nEND_PROGRAM")
-                .unwrap_or_else(|_| unreachable!());
-            v.error = Some(e);
-            v
-        })
-    }
-
-    /// `src` as module `cell` with one byte of `%I` and `%Q`.
-    ///
-    /// # Errors
-    /// Compile, lowering or runtime configuration errors, as text.
-    pub fn new(src: &str) -> Result<Self, String> {
-        let sizes = ImageSizes { i: 1, q: 1, m: 0 };
-        let program = compile(src, sizes).map_err(|d| {
-            d.iter()
-                .map(|d| format!("{}: {}", d.pos, d.msg))
-                .collect::<Vec<_>>()
-                .join("\n")
-        })?;
-        let module = helmsman_diagram::lower(src, &program.trace_map()).map_err(|e| e.to_string())?;
-        let rt = Runtime::new(
-            1,
-            1,
-            vec![Slot {
-                name: MODULE.into(),
-                program: program.into(),
-                period: Duration::from_millis(SCAN_MS),
-                i: Window::new(0, 1),
-                q: Window::new(0, 1),
-                params: Vec::new(),
-            }],
-        )
-        .map_err(|e| format!("{e:?}"))?;
-        let tap = rt.tap(MODULE).ok_or("no tap")?;
-        let mut view = Viewer::new(src, module);
-        view.because = Some("CONVEYOR".into());
-        Ok(Self {
-            view,
-            rt,
-            tap,
-            sample: None,
-            now_ms: 0,
-            last: None,
-            running: true,
-            auto: true,
-            inputs: [false; 3],
-            error: None,
-        })
-    }
-
-    /// The scripted shift: start at 0.2 s, a jam from 6 to 7.5 s, stop at 10 s.
+    /// What drives the "because" variable's value in `scan`, on the
+    /// diagram shown: `None` with no variable or scan, or when nothing on
+    /// this diagram drives it (it lives in another scope).
     #[must_use]
-    pub const fn scripted(ms: u64) -> [bool; 3] {
-        let t = ms % SHIFT_MS;
-        [
-            t >= 200 && t < 500,
-            t >= 10_000 && t < 10_300,
-            t >= 6_000 && t < 7_500,
-        ]
+    pub fn path(&self, scan: Option<&dyn Scan>) -> Option<Drivers> {
+        let path = self.because.as_deref()?;
+        let s = &self.scopes[self.scope];
+        let on = drivers(&self.module, scan?, s.pou, &s.prefix, path);
+        (!on.is_empty()).then_some(on)
     }
 
-    /// Runs the module up to page time `t` (seconds), tracing the last scan.
-    pub fn advance(&mut self, t: f64) {
-        let last = *self.last.get_or_insert(t);
-        self.last = Some(t);
-        if !self.running {
-            return;
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let due = (((t - last).max(0.0) * 1000.0) as u64 / SCAN_MS).min(200);
-        // At least one scan per frame keeps a live trace on the page.
-        self.scans(due.max(1));
-    }
-
-    /// Runs `n` scans; the last one is traced.
-    pub fn scans(&mut self, n: u64) {
-        for k in 0..n {
-            if self.auto {
-                self.inputs = Self::scripted(self.now_ms);
-            }
-            let byte = self
-                .inputs
-                .iter()
-                .enumerate()
-                .fold(0u8, |b, (i, &on)| b | (u8::from(on) << i));
-            if k + 1 == n {
-                self.tap.request();
-            }
-            self.rt.tick(Duration::from_millis(self.now_ms), &[byte]);
-            self.now_ms += SCAN_MS;
-        }
-        if let Some(s) = self.tap.take() {
-            self.sample = Some(s);
-        }
-    }
-
+    /// The path the last [`Self::canvas`] drew at full strength (the rest
+    /// dimmed); `None`: nothing dimmed.
     #[cfg(test)]
     #[must_use]
-    pub fn live(&self) -> Option<Live> {
-        self.view
-            .live(self.sample.as_ref().map(|s| &s.trace as &dyn Scan))
-    }
-
-    pub fn show(&mut self, ui: &mut egui::Ui) {
-        let t = ui.ctx().input(|i| i.time);
-        self.advance(t);
-        egui::Panel::left("st-left")
-            .resizable(true)
-            .default_size(220.0)
-            .show(ui, |ui| self.left(ui));
-        let scan = self.sample.as_ref().map(|s| &s.trace as &dyn Scan);
-        egui::Panel::right("st-right")
-            .resizable(true)
-            .default_size(340.0)
-            .show(ui, |ui| {
-                let _ = self.view.right(ui, scan, Some(self.now_ms), AskUi::demo());
-            });
-        egui::CentralPanel::no_frame().show(ui, |ui| self.view.canvas(ui, scan));
-        if self.running {
-            ui.ctx().request_repaint();
-        }
-    }
-
-    fn left(&mut self, ui: &mut egui::Ui) {
-        ui.heading(RichText::new("Module cell").color(YELLOW));
-        ui.label(RichText::new("demo, running in this page").color(STEEL));
-        let status = match self.rt.status(MODULE) {
-            Some(Status::Running) => "running".to_string(),
-            Some(Status::Held) => "held".to_string(),
-            Some(Status::Faulted(f)) => format!("faulted: {f:?}"),
-            None => "?".into(),
-        };
-        let scans = self.rt.stats(MODULE).map_or(0, |s| s.scans);
-        ui.label(
-            RichText::new(format!(
-                "{status} · {scans} scans · t={:.1}s",
-                self.now_ms as f64 / 1000.0
-            ))
-            .monospace()
-            .color(STEEL),
-        );
-        ui.horizontal(|ui| {
-            let label = if self.running { "Pause" } else { "Run" };
-            if ui.button(label).clicked() {
-                self.running = !self.running;
-            }
-            if ui.add_enabled(!self.running, egui::Button::new("Step")).clicked() {
-                self.scans(1);
-            }
-        });
-        if let Some(e) = &self.error {
-            ui.colored_label(Color32::from_rgb(255, 110, 100), e);
-        }
-        ui.separator();
-        self.view.scopes_ui(ui);
-        ui.separator();
-        ui.label(RichText::new("Demo inputs").strong());
-        ui.checkbox(&mut self.auto, "scripted shift");
-        ui.add_enabled_ui(!self.auto, |ui| {
-            for (k, name) in INPUTS.iter().enumerate() {
-                ui.checkbox(&mut self.inputs[k], format!("{name}  %IX0.{k}"));
-            }
-        });
-        ui.separator();
-        let scan = self.sample.as_ref().map(|s| &s.trace as &dyn Scan);
-        self.view.outputs_ui(ui, scan);
+    pub const fn highlighted(&self) -> Option<&Drivers> {
+        self.lit.as_ref()
     }
 }
 
@@ -783,6 +844,15 @@ fn bezier(painter: &egui::Painter, a: Pos2, b: Pos2, z: f32, color: Color32, wid
     ));
 }
 
+/// The scope that calls scope `k` (`m.t.` → `m.`, `m.` → the program).
+fn parent_of(scopes: &[Scope], k: usize) -> Option<usize> {
+    let prefix = scopes.get(k)?.prefix.strip_suffix('.')?;
+    let up = prefix
+        .rsplit_once('.')
+        .map_or(String::new(), |(p, _)| format!("{p}."));
+    scopes.iter().position(|s| s.prefix == up)
+}
+
 /// The node at `(x, y)`, or the nearest one within `slop` of it.
 #[must_use]
 pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
@@ -801,65 +871,51 @@ pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
     })
 }
 
-/// "Ask why" and its answer, under the box's own explanation.
-fn action_ui(ui: &mut egui::Ui, path: &str, ask: AskUi<'_>) -> Option<Action> {
-    let mut action = None;
-    let answered = ask.ask.filter(|a| a.path.eq_ignore_ascii_case(path));
-    let running = answered.is_some_and(Ask::running);
-    let enabled = ask.blocked.is_none() && !running;
-    let button = egui::Button::new(RichText::new("Ask why").strong().color(BLACK))
-        .fill(if enabled { YELLOW } else { GRAPHITE })
-        .min_size(Vec2::new(TAP * 3.0, TAP));
-    let r = ui.add_enabled(enabled, button);
-    if r.clicked() {
-        action = Some(Action::AskWhy(path.to_string()));
-    }
-    if let Some(why) = ask.blocked {
-        ui.label(RichText::new(why).color(STEEL));
-    }
-    if let Some(a) = answered {
-        ui.add_space(4.0);
-        if let Some(scan) = a.scan {
-            ui.label(RichText::new(format!("The agent's answer (scan {scan}):")).color(STEEL));
-        }
-        if !a.text.is_empty() {
-            ui.label(RichText::new(&a.text).color(WHITE));
-        }
-        for n in &a.notes {
-            ui.label(RichText::new(n).small().color(STEEL));
-        }
-        match &a.phase {
-            Phase::Waiting | Phase::Streaming => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(RichText::new("asking…").color(STEEL));
-                });
-            }
-            Phase::Done => {}
-            Phase::Failed(why) => {
-                ui.colored_label(Color32::from_rgb(255, 110, 100), why);
-            }
-        }
-    }
-    action
+/// What [`draw`] marks on the diagram beside the scan.
+#[derive(Clone, Copy)]
+struct Marks<'a> {
+    pick: Option<Pick>,
+    /// Source lines the explanation cites.
+    lines: &'a [u32],
+    /// The "because" path: drawn at full strength, the rest dimmed.
+    lit: Option<&'a Drivers>,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw(
-    painter: &egui::Painter,
-    area: Rect,
-    cam: Cam,
-    d: &Diagram,
-    live: Option<&Live>,
-    pick: Option<Pick>,
-    lines: &[u32],
-) {
+/// How strongly what is off the "because" path is drawn.
+const DIMMED: f32 = 0.22;
+
+/// The FBD negation bubble's radius, in diagram units.
+const BUBBLE: f32 = 4.0;
+
+/// The negation bubble on a pin at `p` (screen), entered from the left:
+/// outlined in the colour of the value its consumer sees.
+fn bubble(painter: &egui::Painter, p: Pos2, z: f32, seen: Option<Value>, fade: f32) {
+    let (c, _) = wire_color(seen);
+    painter.circle(
+        p - Vec2::new(BUBBLE * z, 0.0),
+        BUBBLE * z,
+        BLACK,
+        Stroke::new(1.5 * z.max(0.5), c.gamma_multiply(fade)),
+    );
+}
+
+fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option<&Live>, marks: Marks<'_>) {
+    let Marks { pick, lines, lit } = marks;
     let z = cam.zoom;
+    let strength = |on: bool| if lit.is_none() || on { 1.0 } else { DIMMED };
+    // Pins entered through a bubble: no pin dot over it.
+    let bubbled: std::collections::HashSet<(NodeId, usize)> = d
+        .wires
+        .iter()
+        .filter(|w| w.negated)
+        .map(|w| (w.to, w.inp))
+        .collect();
     painter.rect_filled(area, CornerRadius::ZERO, BLACK);
     let text = z > 0.35;
     // Regions, outermost first.
     for r in &d.regions {
         let gate = live.map(|l| l.gates[r.id.0 as usize]);
+        let f = strength(lit.is_some_and(|l| l.region(r.id)));
         let rect = cam.rect(&r.rect);
         let (stroke, fill, state) = match gate {
             Some(Gate::Open(n)) => (YELLOW, YELLOW.gamma_multiply(0.06), format!("taken ×{n}")),
@@ -867,6 +923,7 @@ fn draw(
             Some(Gate::NotReached) => (GRAPHITE, Color32::TRANSPARENT, "not reached".into()),
             None => (STEEL, Color32::TRANSPARENT, String::new()),
         };
+        let (stroke, fill) = (stroke.gamma_multiply(f), fill.gamma_multiply(f));
         painter.rect_filled(rect, CornerRadius::same(6), fill);
         let width = if pick == Some(Pick::Region(r.id)) {
             2.5
@@ -890,31 +947,49 @@ fn draw(
                 stroke,
             );
         }
-        // The gate's wire into the region's label.
+        // The gate's wire into the region's label, through its bubble.
         if let Some((g, port)) = r.gate {
             let n = d.node(g);
             let (x, y) = out_port(&n.rect, port);
             let v = live.and_then(|l| l.values[g.0 as usize].get(port).copied().flatten());
             let (c, w) = wire_color(v);
-            bezier(
-                painter,
-                cam.to_screen(x, y),
-                cam.to_screen(r.rect.x, r.rect.y + LABEL_H / 2.0),
-                z,
-                c,
-                w,
-            );
+            let end = cam.to_screen(r.rect.x, r.rect.y + LABEL_H / 2.0);
+            let wire_end = if r.negated {
+                end - Vec2::new(2.0 * BUBBLE * z, 0.0)
+            } else {
+                end
+            };
+            bezier(painter, cam.to_screen(x, y), wire_end, z, c.gamma_multiply(f), w);
+            if r.negated {
+                bubble(painter, end, z, live.and_then(|l| l.gate_value(d, r.id)), f);
+            }
         }
     }
-    // Wires.
-    for (k, w) in d.wires.iter().enumerate() {
+    // Wires, the path's last so they sit on top.
+    let mut order: Vec<usize> = (0..d.wires.len()).collect();
+    order.sort_by_key(|&k| lit.is_some_and(|l| l.wire(k)));
+    for k in order {
+        let w = &d.wires[k];
+        let f = strength(lit.is_some_and(|l| l.wire(k)));
         let (a, b) = (d.node(w.from), d.node(w.to));
         let (ax, ay) = out_port(&a.rect, w.out);
         let (bx, by) = in_port(&b.rect, w.inp);
         let v = live.and_then(|l| l.wire(d, k));
         let (c, width) = wire_color(v);
         let (pa, pb) = (cam.to_screen(ax, ay), cam.to_screen(bx, by));
-        bezier(painter, pa, pb, z, c, width);
+        if w.negated {
+            bezier(
+                painter,
+                pa,
+                pb - Vec2::new(2.0 * BUBBLE * z, 0.0),
+                z,
+                c.gamma_multiply(f),
+                width,
+            );
+            bubble(painter, pb, z, live.and_then(|l| l.input(d, k)), f);
+        } else {
+            bezier(painter, pa, pb, z, c.gamma_multiply(f), width);
+        }
         if text
             && let Some(v) = v
             && !matches!(v, Value::Bool(_))
@@ -924,7 +999,7 @@ fn draw(
                 Align2::LEFT_CENTER,
                 v.to_string(),
                 font(10.0 * z),
-                WHITE,
+                WHITE.gamma_multiply(f),
             );
         }
     }
@@ -935,6 +1010,7 @@ fn draw(
             continue;
         }
         let ran = live.is_none_or(|l| l.ran[n.id.0 as usize]);
+        let on_path = strength(lit.is_some_and(|l| l.node(n.id)));
         let (head, ink) = match &n.kind {
             NodeKind::Fb { .. } | NodeKind::For { .. } => (YELLOW, BLACK),
             NodeKind::Write { .. } => (WHITE, BLACK),
@@ -944,9 +1020,9 @@ fn draw(
             }
             NodeKind::Jump => (STEEL, BLACK),
         };
-        let fade: f32 = if ran { 1.0 } else { 0.4 };
+        let fade: f32 = if ran { 1.0 } else { 0.4 } * on_path;
         let radius = CornerRadius::same(4);
-        painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7)));
+        painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7) * on_path));
         let h = Rect::from_min_size(r.min, Vec2::new(r.width(), HEADER * z));
         painter.rect_filled(
             h,
@@ -963,7 +1039,7 @@ fn draw(
             painter.rect_stroke(
                 r.expand(4.0 * z),
                 CornerRadius::same(6),
-                Stroke::new(2.0 * z, YELLOW.gamma_multiply(0.6)),
+                Stroke::new(2.0 * z, YELLOW.gamma_multiply(0.6 * on_path)),
                 StrokeKind::Outside,
             );
         }
@@ -984,14 +1060,16 @@ fn draw(
             for (k, name) in n.ins.iter().enumerate() {
                 let (x, y) = in_port(&n.rect, k);
                 let p = cam.to_screen(x, y);
-                painter.circle_filled(p, 3.0 * z, STEEL);
+                if !bubbled.contains(&(n.id, k)) {
+                    painter.circle_filled(p, 3.0 * z, STEEL.gamma_multiply(on_path));
+                }
                 if !name.is_empty() {
                     painter.text(
                         p + Vec2::new(6.0 * z, 0.0),
                         Align2::LEFT_CENTER,
                         name,
                         font(10.0 * z),
-                        STEEL,
+                        STEEL.gamma_multiply(on_path),
                     );
                 }
             }
@@ -999,14 +1077,14 @@ fn draw(
                 let (x, y) = out_port(&n.rect, k);
                 let p = cam.to_screen(x, y);
                 let v = live.and_then(|l| l.values[n.id.0 as usize].get(k).copied().flatten());
-                painter.circle_filled(p, 3.5 * z, wire_color(v).0);
+                painter.circle_filled(p, 3.5 * z, wire_color(v).0.gamma_multiply(on_path));
                 if !name.is_empty() {
                     painter.text(
                         p - Vec2::new(6.0 * z, 0.0),
                         Align2::RIGHT_CENTER,
                         name,
                         font(10.0 * z),
-                        STEEL,
+                        STEEL.gamma_multiply(on_path),
                     );
                 }
             }
@@ -1020,9 +1098,173 @@ fn draw(
                     Align2::CENTER_CENTER,
                     v.to_string(),
                     font(11.0 * z),
-                    if on { YELLOW } else { WHITE },
+                    (if on { YELLOW } else { WHITE }).gamma_multiply(on_path),
                 );
             }
         }
+    }
+}
+
+/// The "because" path, driven headlessly through egui: taps on the
+/// diagram, asserting on what the canvas drew at full strength.
+#[cfg(test)]
+mod path_tests {
+    use eframe::egui::{self, Event, PointerButton, Pos2, RawInput, Rect, Vec2};
+    use helmsman_diagram::NodeKind;
+    use helmsman_iec::Value;
+
+    use super::{Scan, Viewer};
+    use crate::playground::Session;
+
+    /// The playground's latch, with two unrelated statements.
+    const LATCH: &str = "PROGRAM latch
+VAR
+  start AT %IX0.0 : BOOL;
+  stop AT %IX0.1 : BOOL;
+  motor AT %QX0.0 : BOOL;
+  other AT %IX0.2 : BOOL;
+  lamp AT %QX0.1 : BOOL;
+  count : INT;
+END_VAR
+motor := (start OR motor) AND NOT stop;
+lamp := other;
+IF other THEN count := count + 1; END_IF;
+END_PROGRAM
+";
+
+    /// The simulation's session (stopped, stepped by hand) and its view.
+    struct Sim {
+        session: Session,
+        view: Viewer,
+    }
+
+    struct Harness {
+        ctx: egui::Context,
+        sv: Sim,
+        time: f64,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            let mut session = Session::new(LATCH);
+            assert!(session.set_input("start", Value::Bool(true)));
+            for _ in 0..3 {
+                session.step();
+            }
+            let module = session.build.as_ref().unwrap().module.clone().unwrap();
+            let mut view = Viewer::new(LATCH, module);
+            // Something not on this diagram, as a box's first output can be.
+            view.because = Some("CONVEYOR".into());
+            let mut h = Self {
+                ctx: egui::Context::default(),
+                sv: Sim { session, view },
+                time: 0.0,
+            };
+            h.frame(vec![]);
+            h.frame(vec![]);
+            h
+        }
+
+        fn frame(&mut self, events: Vec<Event>) {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1200.0, 800.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            self.time += 1.0 / 60.0;
+            let Sim { view, session } = &mut self.sv;
+            let scan = session.trace.as_ref().map(|t| t as &dyn Scan);
+            let mut out = self.ctx.run_ui(input, |ui| {
+                egui::CentralPanel::no_frame().show(ui, |ui| view.canvas(ui, scan));
+            });
+            out.textures_delta.clear();
+        }
+
+        fn click(&mut self, at: Pos2) {
+            let button = |pressed| Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.frame(vec![Event::PointerMoved(at)]);
+            self.frame(vec![button(true)]);
+            self.frame(vec![button(false)]);
+            // Far enough apart not to make a double click.
+            self.time += 1.0;
+            self.frame(vec![]);
+        }
+
+        /// The screen centre of the first node of kind `k`.
+        fn at(&self, k: &NodeKind) -> Pos2 {
+            let v = &self.sv.view;
+            let n = v.diagram().nodes.iter().find(|n| n.kind == *k).unwrap();
+            v.cams[v.scope].to_screen(n.rect.x + n.rect.w / 2.0, n.rect.y + n.rect.h / 2.0)
+        }
+
+        /// The nodes drawn at full strength, by label.
+        fn lit(&self) -> Vec<String> {
+            let v = &self.sv.view;
+            let Some(on) = v.highlighted() else {
+                return Vec::new();
+            };
+            v.diagram()
+                .nodes
+                .iter()
+                .filter(|n| on.node(n.id))
+                .map(|n| n.label.clone())
+                .collect()
+        }
+    }
+
+    fn write(path: &str) -> NodeKind {
+        NodeKind::Write { path: path.into() }
+    }
+
+    #[test]
+    fn tapping_an_output_dims_all_but_its_path_and_empty_space_clears_it() {
+        let mut h = Harness::new();
+        assert_eq!(
+            h.sv.view.because.as_deref(),
+            Some("CONVEYOR"),
+            "a variable elsewhere"
+        );
+        assert!(
+            h.sv.view.highlighted().is_none(),
+            "not on this diagram: nothing dimmed"
+        );
+
+        h.click(h.at(&write("MOTOR")));
+        assert_eq!(h.sv.view.because.as_deref(), Some("MOTOR"));
+        assert_eq!(
+            h.lit(),
+            ["START", "MOTOR", "OR", "STOP", "AND", "MOTOR :="],
+            "start, stop and the seal-in"
+        );
+        let v = &h.sv.view;
+        let on = v.highlighted().unwrap();
+        let d = v.diagram();
+        for n in &d.nodes {
+            let unrelated = n.pos.line > 10;
+            assert_eq!(on.node(n.id), !unrelated, "{} on line {}", n.label, n.pos.line);
+        }
+        assert!(!on.region(d.regions[0].id), "the IF is dimmed");
+        let negated = d.wires.iter().position(|w| w.negated).unwrap();
+        assert!(on.wire(negated), "the bubbled STOP wire is on the path");
+
+        // A read's block: that variable's path.
+        h.click(h.at(&NodeKind::Read { path: "OTHER".into() }));
+        assert_eq!(h.sv.view.because.as_deref(), Some("OTHER"));
+        assert_eq!(h.lit(), ["OTHER", "OTHER"]);
+
+        // Empty space, far from every block: cleared, nothing dimmed.
+        let v = &h.sv.view;
+        let (w, hgt) = v.diagram().size;
+        let empty = v.cams[v.scope].to_screen(w + 60.0, hgt + 60.0);
+        h.click(empty);
+        assert_eq!(h.sv.view.because, None);
+        assert!(h.sv.view.highlighted().is_none());
+        assert_eq!(h.lit(), Vec::<String>::new());
     }
 }

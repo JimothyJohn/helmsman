@@ -1,5 +1,6 @@
 //! The box build (`cargo build -p helmsman-plc`, what `pi-deploy-plc.sh`
-//! ships) must not enable `helmsman-proto`'s `unrestricted` feature: without
+//! ships) must not enable `helmsman-proto`'s `unrestricted` feature, nor
+//! for now its Class 1 `scanner`: without
 //! it the only requests the box can send to a controller it observes are
 //! reads (`docs/ARCHITECTURE.md`, trust boundary "box ↔ observed PLCs").
 //! Feature unification is a property of the whole dependency graph, so this
@@ -38,13 +39,43 @@ fn box_build_cannot_send_arbitrary_services() {
         !tree.contains("\"unrestricted\""),
         "the box build enables helmsman-proto/unrestricted:\n{tree}"
     );
-    // The Class 1 scanner is in, for the adapters the box masters
-    // (helmsman-io's enip-io): it sends Forward_Open / Forward_Close to an
-    // Assembly path and nothing else, so it widens nothing above.
+    // The Class 1 scanner (helmsman-io's enip-io) stays out of the box
+    // until the E1213 bench passes (TODO.md `enip-in-box`).
     assert!(
-        tree.contains("\"scanner\""),
-        "the box build lost helmsman-proto/scanner (enip-io):\n{tree}"
+        !tree.contains("\"scanner\""),
+        "the box build enables helmsman-proto/scanner (enip-io):\n{tree}"
     );
+}
+
+/// What the assertion above looks for is there when the scanner is: the
+/// `enip-io` feature brings in `scanner`, and still not `unrestricted`.
+#[test]
+fn the_enip_io_feature_brings_the_scanner_and_nothing_wider() {
+    let out = Command::new(env!("CARGO"))
+        .args([
+            "tree",
+            "--locked",
+            "--offline",
+            "-p",
+            "helmsman-plc",
+            "--features",
+            "enip-io",
+            "-e",
+            "normal,features",
+            "-i",
+            "helmsman-proto",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run cargo tree");
+    let tree = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "cargo tree failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(tree.contains("\"scanner\""), "{tree}");
+    assert!(!tree.contains("\"unrestricted\""), "{tree}");
 }
 
 /// The OPC UA tests drive the server with `async-opcua`'s client, a

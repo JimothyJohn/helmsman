@@ -203,9 +203,17 @@ pub struct Drafts {
     next: u32,
     /// Drop-ins this conversation read; every proposal names them.
     dropins: BTreeSet<u64>,
+    /// Of `dropins`, the ones the relay refused (#87): still cited, so a
+    /// reviewer sees everything the conversation touched, but marked, as
+    /// the model never saw them (`refused-dropin-binding`).
+    refused: BTreeSet<u64>,
     /// It read an existing PLC program: watch modules only from now on.
     watch_only: bool,
 }
+
+/// What every draft body carries for the box: watch, the drop-ins it
+/// cites, and which of those the relay refused.
+type Binding = (bool, Vec<u64>, Vec<u64>);
 
 impl Drafts {
     /// Whether the conversation read an existing PLC program, so its
@@ -221,22 +229,43 @@ impl Drafts {
         &self.dropins
     }
 
+    /// Of [`Drafts::dropins`], the ones the relay refused, which the
+    /// model has not seen.
+    #[must_use]
+    pub const fn refused(&self) -> &BTreeSet<u64> {
+        &self.refused
+    }
+
     fn read(&mut self, id: u64, plc: bool) {
         self.dropins.insert(id);
+        self.refused.remove(&id);
         self.watch_only |= plc;
     }
 
     /// Drop-in `id` was shown to the model in the user's message (a
     /// photo's image block or a PDF's document block): it binds every
     /// proposal like one a tool read. Neither is a PLC program, so this
-    /// never makes the conversation watch-only.
+    /// never makes the conversation watch-only. Attached again after a
+    /// refusal, it is no longer marked refused once the model has it.
     pub fn attached(&mut self, id: u64) {
         self.dropins.insert(id);
+        self.refused.remove(&id);
+    }
+
+    /// The relay refused drop-in `id` and it left the history: it stays
+    /// in the binding, marked refused.
+    pub fn refuse(&mut self, id: u64) {
+        self.dropins.insert(id);
+        self.refused.insert(id);
     }
 
     /// What every draft body carries for the box: watch, provenance.
-    fn binding(&self) -> (bool, Vec<u64>) {
-        (self.watch_only, self.dropins.iter().copied().collect())
+    fn binding(&self) -> Binding {
+        (
+            self.watch_only,
+            self.dropins.iter().copied().collect(),
+            self.refused.iter().copied().collect(),
+        )
     }
 
     #[must_use]
@@ -726,10 +755,10 @@ fn draft_module(drafts: &mut Drafts, i: DraftModule) -> Outcome {
     )
 }
 
-fn module_body(d: &Draft, binding: &(bool, Vec<u64>)) -> Json {
+fn module_body(d: &Draft, binding: &Binding) -> Json {
     json!({
         "kind": "module", "manifest": d.manifest, "source": d.source,
-        "watch": binding.0, "dropins": binding.1,
+        "watch": binding.0, "dropins": binding.1, "refused_dropins": binding.2,
     })
 }
 
@@ -863,6 +892,7 @@ fn propose_change(api: &dyn Caller, drafts: &mut Drafts, i: &Propose) -> Outcome
         let body = json!({
             "kind": "param", "module": c.module, "param": c.param,
             "value": param_value(&c.value), "note": summary, "dropins": binding.1,
+            "refused_dropins": binding.2,
         });
         match api.post("/api/proposals", &body) {
             Ok((201, p)) => stored.push(p),
@@ -1072,7 +1102,8 @@ fn propose_io_map(api: &dyn Caller, drafts: &mut Drafts, i: &ProposeIoMap) -> Ou
     if i.text.len() > MAX_SOURCE {
         return fail("the map is larger than a change set file may be (1 MiB)");
     }
-    let body = json!({ "kind": "io_map", "text": i.text, "note": summary, "dropins": drafts.binding().1 });
+    let (_, dropins, refused) = drafts.binding();
+    let body = json!({ "kind": "io_map", "text": i.text, "note": summary, "dropins": dropins, "refused_dropins": refused });
     match api.post("/api/proposals", &body) {
         Ok((201, p)) => {
             let id = p["id"].as_u64();

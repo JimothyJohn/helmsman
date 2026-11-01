@@ -9,12 +9,38 @@
 //! question, answered by the trace). An IF or CASE becomes one region per
 //! arm, gated by its condition (or the selector); a loop becomes one region
 //! gated by its head or condition.
+//!
+//! ## NOT is a bubble
+//!
+//! A boolean `NOT` is not a block: it is the FBD negation bubble, a
+//! property of the connection ([`Wire::negated`], or
+//! [`Region::negated`] for a gate). `c := a AND NOT b` is one AND block
+//! with a bubble on its second pin; `y := NOT x` is a bubble on the
+//! write's pin; `IF NOT jam` a bubble on the gate. The decisions:
+//!
+//! - **Double negation** cancels: `NOT NOT x` is a plain wire.
+//! - **Literals fold**: `NOT TRUE` is the constant `FALSE` (its text stays
+//!   `NOT TRUE`). A named constant (`VAR CONSTANT`) is a read like any
+//!   other and gets a bubble.
+//! - **FB outputs** (`NOT t.Q`, read before or after the call) and **array
+//!   elements** (`NOT flags[i]`) are BOOL like any other and get a bubble
+//!   on the pin they feed.
+//! - **Only BOOL.** `NOT` on a BYTE, WORD, DWORD, LWORD or integer is a
+//!   bitwise complement and stays a NOT block: a bubble reads as "the
+//!   signal, inverted", which on a WORD would hide that every bit flips,
+//!   and its live value is not re-evaluated anyway. Whether an operand is
+//!   BOOL comes from the declarations (the POU's, a user or library block's
+//!   ports, struct fields, function results); an operand whose type the
+//!   declarations do not give (a generic function's result, an enumeration
+//!   value) keeps the block, which is never wrong, only less compact.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use helmsman_iec::Value;
-use helmsman_iec::ast::{self, Expr, ExprKind, Pos, PouKind, Section, StmtKind, TypeRef, UnOp};
+use helmsman_iec::ast::{
+    self, BinOp, Expr, ExprKind, Pos, PouKind, Section, StmtKind, TypeDef, TypeRef, UnOp,
+};
 use helmsman_iec::trace::{StmtId, TraceMap};
 
 use crate::model::{Diagram, Node, NodeId, NodeKind, Rect, Region, RegionId, RegionKind, Stmt, Wire};
@@ -179,11 +205,13 @@ fn lower_by(src: &str, ids_of: impl Fn(&str) -> HashMap<(u32, u32), StmtId>) -> 
             .filter(|p| p.kind == PouKind::FunctionBlock)
             .map(|p| p.name.clone()),
     );
+    let types = Types::of(&[ast::library(), &unit]);
     let mut pous = Vec::new();
     for p in &unit.pous {
         let vars = vars(p, &fbs);
         let ids = ids_of(&p.name);
         let mut l = Lower {
+            types: &types,
             d: Diagram {
                 pou: p.name.clone(),
                 ..Diagram::default()
@@ -252,7 +280,86 @@ enum Src {
 type Port = (NodeId, usize);
 type R<T> = Result<T, LowerError>;
 
+/// A value on its way into a pin: a node's output, maybe through a
+/// negation bubble.
+#[derive(Debug, Clone, Copy)]
+struct Feed {
+    port: Port,
+    neg: bool,
+}
+
+impl From<Port> for Feed {
+    fn from(port: Port) -> Self {
+        Self { port, neg: false }
+    }
+}
+
+/// The declared types lowering can see, for telling a boolean NOT from a
+/// bitwise one: every POU's variables (user and library, so a block's
+/// ports), functions' results, and named types.
+#[derive(Default)]
+struct Types {
+    vars: HashMap<String, HashMap<String, TypeRef>>,
+    funcs: HashMap<String, TypeRef>,
+    defs: HashMap<String, TypeDef>,
+}
+
+impl Types {
+    fn of(units: &[&ast::Unit]) -> Self {
+        let mut t = Self::default();
+        for u in units {
+            for p in &u.pous {
+                t.vars.insert(
+                    p.name.clone(),
+                    p.vars.iter().map(|v| (v.name.clone(), v.ty.clone())).collect(),
+                );
+                if let PouKind::Function(r) = &p.kind {
+                    t.funcs.insert(p.name.clone(), r.clone());
+                }
+            }
+            for d in &u.types {
+                t.defs.insert(d.name.clone(), d.def.clone());
+            }
+        }
+        t
+    }
+
+    /// `t` with aliases followed.
+    fn resolve<'t>(&'t self, mut t: &'t TypeRef) -> &'t TypeRef {
+        for _ in 0..16 {
+            match t {
+                TypeRef::Named(n, _) => match self.defs.get(n) {
+                    Some(TypeDef::Alias(a, _)) => t = a,
+                    _ => return t,
+                },
+                TypeRef::Array { .. } => return t,
+            }
+        }
+        t
+    }
+
+    /// The type of member `m` of a value of type `t`: a block's port or
+    /// a struct's field.
+    fn member(&self, t: &TypeRef, m: &str) -> Option<TypeRef> {
+        let TypeRef::Named(n, _) = self.resolve(t) else {
+            return None;
+        };
+        if let Some(vs) = self.vars.get(n) {
+            return vs.get(m).cloned();
+        }
+        match self.defs.get(n) {
+            Some(TypeDef::Struct(fs)) => fs.iter().find(|f| f.name == m).map(|f| f.ty.clone()),
+            _ => None,
+        }
+    }
+
+    fn is_bool(&self, t: &TypeRef) -> bool {
+        matches!(self.resolve(t), TypeRef::Named(n, _) if n == "BOOL")
+    }
+}
+
 struct Lower<'a> {
+    types: &'a Types,
     d: Diagram,
     pou: &'a str,
     ids: HashMap<(u32, u32), StmtId>,
@@ -371,12 +478,14 @@ impl Lower<'_> {
         id
     }
 
-    fn wire(&mut self, from: Port, to: NodeId, inp: usize) {
+    fn wire(&mut self, from: impl Into<Feed>, to: NodeId, inp: usize) {
+        let f = from.into();
         self.d.wires.push(Wire {
-            from: from.0,
-            out: from.1,
+            from: f.port.0,
+            out: f.port.1,
             to,
             inp,
+            negated: f.neg,
         });
     }
 
@@ -406,7 +515,7 @@ impl Lower<'_> {
         stmt: StmtId,
         arm: usize,
         label: String,
-        gate: Option<Port>,
+        gate: Option<Feed>,
         pos: Pos,
     ) -> RegionId {
         #[allow(clippy::cast_possible_truncation)]
@@ -418,7 +527,8 @@ impl Lower<'_> {
             arm,
             parent: self.region,
             label,
-            gate,
+            gate: gate.map(|g| g.port),
+            negated: gate.is_some_and(|g| g.neg),
             pos,
             body: Vec::new(),
             rect: Rect::default(),
@@ -475,7 +585,7 @@ impl Lower<'_> {
                     self.reads.clear();
                     self.env.clone_from(&saved);
                     let g = self.expr(c)?;
-                    roots.push(g.0);
+                    roots.push(g.port.0);
                     let (kind, kw) = if k == 0 {
                         (RegionKind::If, "IF")
                     } else {
@@ -494,7 +604,7 @@ impl Lower<'_> {
             }
             StmtKind::Case(sel, cases, other) => {
                 let g = self.expr(sel)?;
-                roots.push(g.0);
+                roots.push(g.port.0);
                 let saved = self.env.clone();
                 let mark = self.written.len();
                 for (k, (ls, body)) in cases.iter().enumerate() {
@@ -557,7 +667,7 @@ impl Lower<'_> {
                 roots.push(head);
                 let saved = self.env.clone();
                 let mark = self.written.len();
-                let r = self.region(RegionKind::For, id, 0, label, Some((head, 0)), s.pos);
+                let r = self.region(RegionKind::For, id, 0, label, Some((head, 0).into()), s.pos);
                 arms.push(r);
                 let mut inner = saved.clone();
                 inner.retain(|k, _| !within(k, var));
@@ -568,7 +678,7 @@ impl Lower<'_> {
             }
             StmtKind::While(c, body) => {
                 let g = self.expr(c)?;
-                roots.push(g.0);
+                roots.push(g.port.0);
                 let saved = self.env.clone();
                 let mark = self.written.len();
                 let r = self.region(
@@ -585,7 +695,7 @@ impl Lower<'_> {
             }
             StmtKind::Repeat(body, c) => {
                 let g = self.expr(c)?;
-                roots.push(g.0);
+                roots.push(g.port.0);
                 let saved = self.env.clone();
                 let mark = self.written.len();
                 let r = self.region(
@@ -622,7 +732,7 @@ impl Lower<'_> {
         Ok(Some(ix))
     }
 
-    fn write(&mut self, target: &Expr, v: Port, label: String, pos: Pos) -> R<NodeId> {
+    fn write(&mut self, target: &Expr, v: Feed, label: String, pos: Pos) -> R<NodeId> {
         let Some(p) = place(target) else {
             // The checker only accepts places; keep going with the text.
             let n = self.node(
@@ -675,9 +785,9 @@ impl Lower<'_> {
         self.written.push(key);
     }
 
-    fn konst(&mut self, e: &Expr, value: Option<Value>) -> Port {
+    fn konst(&mut self, e: &Expr, value: Option<Value>) -> Feed {
         let t = text::expr(e);
-        (
+        Feed::from((
             self.node(
                 NodeKind::Const { value },
                 t.clone(),
@@ -687,10 +797,68 @@ impl Lower<'_> {
                 e.pos,
             ),
             0,
-        )
+        ))
     }
 
-    fn expr(&mut self, e: &Expr) -> R<Port> {
+    /// The declared type of `e`, when the declarations give it.
+    fn ty(&self, e: &Expr) -> Option<TypeRef> {
+        let named = |n: &str| Some(TypeRef::Named(n.to_string(), e.pos));
+        match &e.kind {
+            ExprKind::Bool(_) | ExprKind::Bit(..) => named("BOOL"),
+            ExprKind::Var(n) => self.types.vars.get(self.pou)?.get(n).cloned(),
+            ExprKind::Member(b, m) => self.types.member(&self.ty(b)?, m),
+            ExprKind::Index(b, ix) => match self.types.resolve(&self.ty(b)?) {
+                TypeRef::Array { dims, elem, .. } if dims.len() == ix.len() => Some((**elem).clone()),
+                _ => None,
+            },
+            // `%IX0.0`, `%Q0.1`: a bit; any other size is not BOOL.
+            ExprKind::Direct(d) => match d.as_bytes().get(1) {
+                Some(b'X') => named("BOOL"),
+                Some(c) if c.is_ascii_digit() => named("BOOL"),
+                _ => None,
+            },
+            ExprKind::Unary(_, a) => self.ty(a),
+            ExprKind::Binary(op, a, b) => match op {
+                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => named("BOOL"),
+                _ => self.ty(a).or_else(|| self.ty(b)),
+            },
+            ExprKind::Call(f, _) => match &f.kind {
+                ExprKind::Var(n) if n.ends_with("_TO_BOOL") => named("BOOL"),
+                ExprKind::Var(n) => self.types.funcs.get(n).cloned(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn is_bool(&self, e: &Expr) -> bool {
+        self.ty(e).is_some_and(|t| self.types.is_bool(&t))
+    }
+
+    /// `NOT a` for a BOOL `a`: a bubble on whatever `a` feeds, folded into
+    /// a literal, or (`NOT NOT a`) no bubble at all.
+    fn negate(&mut self, e: &Expr, a: &Expr) -> R<Feed> {
+        let f = self.expr(a)?;
+        let node = &mut self.d.nodes[f.port.0.0 as usize];
+        if let NodeKind::Const {
+            value: Some(Value::Bool(b)),
+        } = node.kind
+        {
+            // A literal is its own node, never shared: fold.
+            node.kind = NodeKind::Const {
+                value: Some(Value::Bool(!b)),
+            };
+            node.label = (if b { "FALSE" } else { "TRUE" }).into();
+            node.text = text::expr(e);
+            return Ok(f);
+        }
+        Ok(Feed {
+            port: f.port,
+            neg: !f.neg,
+        })
+    }
+
+    fn expr(&mut self, e: &Expr) -> R<Feed> {
         Ok(match &e.kind {
             ExprKind::Int { value, .. } => self.konst(e, Some(Value::Int(*value))),
             ExprKind::Real { value, .. } => self.konst(e, Some(Value::Real(*value))),
@@ -707,7 +875,7 @@ impl Lower<'_> {
             | ExprKind::Bit(..)
             | ExprKind::Index(..) => {
                 match place(e) {
-                    Some(p) if p.dynamic.is_empty() => self.read(&p.path, e.pos),
+                    Some(p) if p.dynamic.is_empty() => self.read(&p.path, e.pos).into(),
                     Some(p) => {
                         let mut srcs = Vec::new();
                         for i in &p.dynamic {
@@ -724,7 +892,7 @@ impl Lower<'_> {
                         for (k, s) in srcs.into_iter().enumerate() {
                             self.wire(s, n, k);
                         }
-                        (n, 0)
+                        (n, 0).into()
                     }
                     None => {
                         // A member of a call result, say: show it as a block over its base.
@@ -741,10 +909,11 @@ impl Lower<'_> {
                             e.pos,
                         );
                         self.wire(s, n, 0);
-                        (n, 0)
+                        (n, 0).into()
                     }
                 }
             }
+            ExprKind::Unary(UnOp::Not, a) if self.is_bool(a) => self.negate(e, a)?,
             ExprKind::Unary(op, a) => {
                 let s = self.expr(a)?;
                 let sym = match op {
@@ -760,7 +929,7 @@ impl Lower<'_> {
                     e.pos,
                 );
                 self.wire(s, n, 0);
-                (n, 0)
+                (n, 0).into()
             }
             ExprKind::Binary(op, a, b) => {
                 let sa = self.expr(a)?;
@@ -776,11 +945,11 @@ impl Lower<'_> {
                 );
                 self.wire(sa, n, 0);
                 self.wire(sb, n, 1);
-                (n, 0)
+                (n, 0).into()
             }
             ExprKind::Call(..) => {
                 let (n, _) = self.call(e)?;
-                (n, 0)
+                (n, 0).into()
             }
         })
     }
@@ -826,7 +995,7 @@ impl Lower<'_> {
     /// function. Returns the node and the writes its `=>` outputs made.
     fn call(&mut self, e: &Expr) -> R<(NodeId, Vec<NodeId>)> {
         let ExprKind::Call(f, args) = &e.kind else {
-            return Ok((self.expr(e)?.0, Vec::new()));
+            return Ok((self.expr(e)?.port.0, Vec::new()));
         };
         let callee = text::expr(f);
         let instance = place(f).filter(|p| self.vars.contains_key(root_of(&p.path)));
@@ -883,7 +1052,7 @@ impl Lower<'_> {
             node.outs.push(port.clone());
             let k = node.outs.len() - 1;
             let label = format!("{port} => {}", text::expr(&a.value));
-            writes.push(self.write(&a.value, (n, k), label, a.pos)?);
+            writes.push(self.write(&a.value, (n, k).into(), label, a.pos)?);
         }
         Ok((n, writes))
     }

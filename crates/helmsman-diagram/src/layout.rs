@@ -51,6 +51,77 @@ pub fn layout(d: &mut Diagram) {
     d.size = (w, h);
 }
 
+/// The nodes inside region `r`, nested regions' too: what moves with it.
+#[must_use]
+pub fn inside(d: &Diagram, r: RegionId) -> Vec<NodeId> {
+    let within = |mut at: Option<RegionId>| {
+        while let Some(q) = at {
+            if q == r {
+                return true;
+            }
+            at = d.region(q).parent;
+        }
+        false
+    };
+    d.nodes
+        .iter()
+        .filter(|n| within(n.region))
+        .map(|n| n.id)
+        .collect()
+}
+
+/// Each region's box around what is in it, after nodes moved (the inner
+/// regions first), and the diagram's size around everything. On a fresh
+/// layout it changes nothing.
+pub fn refit(d: &mut Diagram) {
+    let depth = |d: &Diagram, r: &crate::model::Region| {
+        let (mut k, mut at) = (0, r.parent);
+        while let Some(q) = at {
+            k += 1;
+            at = d.region(q).parent;
+        }
+        k
+    };
+    let mut order: Vec<(usize, usize)> = d.regions.iter().map(|r| (depth(d, r), r.id.0 as usize)).collect();
+    order.sort_unstable_by(|a, b| b.cmp(a));
+    for (_, i) in order {
+        let id = d.regions[i].id;
+        let inner = d
+            .nodes
+            .iter()
+            .filter(|n| n.region == Some(id))
+            .map(|n| n.rect)
+            .chain(d.regions.iter().filter(|q| q.parent == Some(id)).map(|q| q.rect));
+        let Some((x0, y0, x1, y1)) = bounds(inner) else {
+            continue;
+        };
+        let label_w = d.regions[i].label.chars().count() as f32 * CHAR_W + 2.0 * PAD;
+        d.regions[i].rect = Rect {
+            x: x0 - PAD,
+            y: y0 - LABEL_H,
+            w: (x1 - x0 + 2.0 * PAD).max(MIN_BOX_W).max(label_w),
+            h: y1 - y0 + LABEL_H + PAD,
+        };
+    }
+    let all = d
+        .nodes
+        .iter()
+        .map(|n| n.rect)
+        .chain(d.regions.iter().map(|r| r.rect));
+    if let Some((_, _, x1, y1)) = bounds(all) {
+        d.size = (x1.max(0.0), y1.max(0.0));
+    }
+}
+
+fn bounds(rects: impl Iterator<Item = Rect>) -> Option<(f32, f32, f32, f32)> {
+    rects.fold(None, |acc, r| {
+        Some(match acc {
+            None => (r.x, r.y, r.right(), r.bottom()),
+            Some((a, b, c, e)) => (a.min(r.x), b.min(r.y), c.max(r.right()), e.max(r.bottom())),
+        })
+    })
+}
+
 struct Layout<'a> {
     d: &'a mut Diagram,
     placed: HashSet<NodeId>,

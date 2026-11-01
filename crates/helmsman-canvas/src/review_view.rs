@@ -142,6 +142,13 @@ impl ReviewView {
         }
     }
 
+    /// Takes in what arrived and sends what is queued, without drawing:
+    /// the header's badge, while another screen is up.
+    pub fn tick(&mut self, ctx: &egui::Context, now: f64) {
+        let answers = self.inbox();
+        self.step(ctx, answers, now);
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn run(&mut self, ctx: &egui::Context, reqs: Vec<Request>) {
         for r in reqs {
@@ -199,7 +206,7 @@ impl ReviewView {
 
     /// Who is approving: signed in, or the way in this box takes (a user
     /// and password with accounts, else a role and its PIN).
-    fn login_ui(&mut self, ui: &mut egui::Ui) {
+    pub fn login_ui(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Signed in").strong());
         if let Some(who) = self.state.signed_in() {
             ui.horizontal_wrapped(|ui| {

@@ -1,22 +1,24 @@
-//! The ST playground on screen (`?playground`, and the page at
-//! `docs/playground/`): an editor that compiles as you type, the program
+//! The Editor on the simulation in the page (docs/playground/, or any page
+//! no box serves): an ST editor that compiles as you type, the program
 //! running in the page with Run / Stop / Step, a virtual I/O panel built
-//! from the program's ports, a trend, the live diagram with "on
-//! because", and an "Ask Claude" panel. No box and no server: the state
-//! is [`crate::playground::Session`] and [`crate::claude::Chat`].
+//! from the program's ports, a trend, the live diagram, and Claude with
+//! the visitor's own key. No box and no server: the state is
+//! [`crate::playground::Session`] and [`crate::claude::Chat`].
 
-use eframe::egui::{
-    self, Color32, CornerRadius, FontId, Pos2, RichText, Sense, Stroke, TextFormat, Vec2, text::LayoutJob,
-};
+use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, RichText, Sense, Stroke, Vec2};
 use helmsman_diagram::Scan;
 use helmsman_iec::{Ty, Value};
 
+use crate::arrange::Layers;
 use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
+use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{
-    EXAMPLES, MAX_PERIOD, MAX_SOURCE, MIN_PERIOD, Point, Session, TREND_MS, TREND_SIGNALS, Widget,
+    MAX_PERIOD, MAX_SOURCE, MIN_PERIOD, Point, Session, TREND_MS, TREND_SIGNALS, Widget,
 };
+use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
+use crate::sim_projects::{SimProjects, Storage};
 use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
-use crate::st_view::{AskUi, TAP, Viewer};
+use crate::st_view::{Pick, TAP, Viewer};
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Quiet time after the last keystroke before the editor compiles, s.
@@ -30,15 +32,6 @@ const TREND: [Color32; TREND_SIGNALS] = [
     Color32::from_rgb(0xD5, 0x9C, 0xFF),
     WHITE,
 ];
-
-/// The right panel's tabs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Tab {
-    #[default]
-    Io,
-    Why,
-    Claude,
-}
 
 /// Where Claude requests go: the browser, or (natively) a list tests read.
 #[derive(Default)]
@@ -97,10 +90,16 @@ pub struct PlaygroundView {
     pub session: Session,
     /// The diagram of the program running, rebuilt when it changes.
     pub viewer: Option<Viewer>,
+    /// Its shared default layout (the project's) and this browser's
+    /// tweaks (`arrange.rs`).
+    pub layers: Layers,
+    /// The viewer was just built: lay it out from the layers.
+    fresh: bool,
     viewer_of: String,
     /// When the editor last changed and is not compiled yet.
     pending: Option<f64>,
-    pub tab: Tab,
+    /// The diagram's pick last frame (a new one sends the ST there).
+    last_pick: Option<Pick>,
     pub chat: Chat,
     pub link: Link,
     proxy_asked: bool,
@@ -108,30 +107,150 @@ pub struct PlaygroundView {
     pub notice: Option<String>,
     /// Why the last "Ask" could not be sent.
     pub ask_error: Option<String>,
+    /// The projects, kept in the browser's storage.
+    pub proj: SimProjects,
+    pub files_ui: FilesUi,
+    /// Downloads made (natively nothing saves them: tests read them).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub downloads: Vec<(String, Vec<u8>)>,
 }
 
 impl PlaygroundView {
     #[must_use]
     pub fn new() -> Self {
         #[cfg(target_arch = "wasm32")]
+        let projects: Box<dyn Storage> = Box::new(crate::web::LocalProjects);
+        #[cfg(not(target_arch = "wasm32"))]
+        let projects: Box<dyn Storage> = Box::new(crate::sim_projects::MemStorage::default());
+        Self::with_storage(projects)
+    }
+
+    /// The simulation with its projects kept in `projects`; it opens the
+    /// project open last (else the first example), running.
+    #[must_use]
+    pub fn with_storage(projects: Box<dyn Storage>) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let tweaks: Box<dyn Storage> = Box::new(crate::web::LocalArrangements);
+        #[cfg(not(target_arch = "wasm32"))]
+        let tweaks: Box<dyn Storage> = Box::new(crate::sim_projects::MemStorage::default());
+        Self::with_stores(projects, tweaks)
+    }
+
+    /// [`Self::with_storage`], with the diagram's personal layouts kept in
+    /// `tweaks`.
+    #[must_use]
+    pub fn with_stores(projects: Box<dyn Storage>, tweaks: Box<dyn Storage>) -> Self {
+        #[cfg(target_arch = "wasm32")]
         let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::web::LocalKeyStore);
         #[cfg(not(target_arch = "wasm32"))]
         let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::claude::NoStore);
+        let proj = SimProjects::load(projects);
         let mut v = Self {
-            session: Session::new(EXAMPLES[0].src),
+            session: Session::new(&proj.build_src()),
             viewer: None,
+            layers: Layers::load(tweaks),
+            fresh: false,
             viewer_of: String::new(),
             pending: None,
-            tab: Tab::Io,
+            last_pick: None,
             chat: Chat::new(store),
             link: Link::default(),
             proxy_asked: false,
             notice: None,
             ask_error: None,
+            proj,
+            files_ui: FilesUi::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            downloads: Vec::new(),
         };
         v.session.set_running(true);
+        v.proj.running = Some(v.proj.open.clone());
         v.sync_viewer();
         v
+    }
+
+    /// Loads the open project's build into the session, compiled and
+    /// stopped.
+    fn reload(&mut self) {
+        let src = self.proj.build_src();
+        self.session.load(&src);
+        self.pending = None;
+        self.sync_viewer();
+    }
+
+    /// Opens project `name`, compiled and stopped (Deploy runs it).
+    pub fn open_project(&mut self, name: &str) {
+        self.proj.open_project(name);
+        self.reload();
+        self.notice = None;
+    }
+
+    /// The editor's text changed: the session's source follows at once
+    /// and compiles after the pause.
+    fn edited(&mut self, t: f64) {
+        self.session.src = self.proj.build_src();
+        self.pending = Some(t);
+        self.notice = None;
+    }
+
+    /// The compile errors, each with its file and line.
+    #[must_use]
+    pub fn diags(&self) -> Vec<Diag> {
+        self.session
+            .diags
+            .iter()
+            .map(|d| {
+                let (file, line) = self
+                    .proj
+                    .locate(d.pos.line)
+                    .unwrap_or_else(|| (self.proj.current.clone(), d.pos.line));
+                Diag {
+                    file,
+                    line,
+                    col: d.pos.col,
+                    message: d.msg.clone(),
+                }
+            })
+            .collect()
+    }
+
+    /// Opens `file` at `line` in the ST editor.
+    fn goto(&mut self, file: &str, line: u32, chrome: &mut Chrome) {
+        self.proj.open_file(file);
+        chrome.goto(line);
+    }
+
+    /// Carries out what the Files sidebar asked.
+    fn act(&mut self, a: Act) {
+        match a {
+            Act::OpenProject(p) => self.open_project(&p),
+            Act::OpenFile(f) => self.proj.open_file(&f),
+            Act::NewProject(p) => {
+                self.proj.create(&p, None);
+                self.reload();
+            }
+            Act::CopyProject { from, to } => {
+                self.proj.create(&to, Some(&from));
+                self.reload();
+            }
+            Act::RenameProject { from, to } => self.proj.rename(&from, &to),
+            Act::DeleteProject(p) => {
+                let open = self.proj.open == p;
+                self.proj.delete(&p);
+                if open {
+                    self.reload();
+                }
+            }
+            Act::NewFile(f) => self.proj.new_file(&f),
+            Act::RenameFile { from, to } => {
+                self.proj.rename_file(&from, &to);
+                self.edited(f64::NEG_INFINITY);
+            }
+            Act::DeleteFile(f) => {
+                self.proj.delete_file(&f);
+                self.edited(f64::NEG_INFINITY);
+            }
+        }
     }
 
     /// Rebuilds the diagram when the program running changed.
@@ -145,17 +264,43 @@ impl PlaygroundView {
         }
         self.viewer_of.clone_from(&b.src);
         let old = self.viewer.as_ref().and_then(|v| v.because.clone());
+        // Blocks the user moved stay moved across edits: kept as tweaks,
+        // and the new diagram is laid out from the layers.
+        if let Some(v) = &self.viewer {
+            self.layers.track(v);
+        }
+        self.fresh = true;
         self.viewer = b.module.clone().map(|m| {
             let mut v = Viewer::new(&b.src, m);
-            let outs = v.outputs();
-            v.because = old.filter(|o| outs.contains(o)).or_else(|| outs.first().cloned());
+            // Opens with no path lit; the user's pick survives an edit
+            // while its variable does.
+            v.because = old.filter(|o| v.knows(o));
             v
         });
     }
 
-    /// Loads `src` into the editor, compiled and stopped.
+    /// Loads `src` into the editor (the open file, or the project's first
+    /// program file when a map or settings file is open), compiled and
+    /// stopped.
     pub fn load(&mut self, src: &str, what: &str) {
-        let ok = self.session.load(src);
+        if crate::sim_projects::is_st(&self.proj.current) {
+            if let Some(t) = self.proj.current_text_mut() {
+                src.clone_into(t);
+            }
+        } else if let Some(f) = self
+            .proj
+            .files
+            .keys()
+            .find(|f| crate::sim_projects::is_st(f))
+            .cloned()
+        {
+            self.proj.files.insert(f.clone(), src.to_string());
+            self.proj.current = f;
+        } else {
+            self.proj.files.insert("main.st".into(), src.to_string());
+            self.proj.current = "main.st".into();
+        }
+        let ok = self.session.load(&self.proj.build_src());
         self.pending = None;
         self.sync_viewer();
         self.notice = Some(if ok {
@@ -177,12 +322,27 @@ impl PlaygroundView {
         }
     }
 
-    /// Picks the variable "on because" explains and shows it.
-    pub fn explain(&mut self, name: &str) {
+    /// Picks output `name`, as a tap on it does.
+    pub fn pick(&mut self, name: &str) {
         if let Some(v) = &mut self.viewer {
             v.because = Some(name.to_string());
         }
-        self.tab = Tab::Why;
+    }
+
+    /// What the header names: the open project.
+    #[must_use]
+    pub fn title(&self) -> String {
+        self.proj.open.clone()
+    }
+
+    /// The PROGRAM running, in lower case (the Monitor's name for it);
+    /// the project's name while nothing compiled.
+    #[must_use]
+    pub fn program_name(&self) -> String {
+        self.viewer
+            .as_ref()
+            .and_then(|v| v.module.program())
+            .map_or_else(|| self.title(), |p| p.name.to_ascii_lowercase())
     }
 
     /// Sends the typed question about the editor's program.
@@ -211,54 +371,58 @@ impl PlaygroundView {
         true
     }
 
-    pub fn show(&mut self, ui: &mut egui::Ui) {
-        let ctx = ui.ctx().clone();
+    /// One frame of the Editor.
+    pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        self.tick(&ui.ctx().clone());
+        editor::show(ui, chrome, self);
+    }
+
+    /// Runs the program (and Claude's answer) on with nothing drawn: the
+    /// Monitor watches the same session.
+    pub fn tick(&mut self, ctx: &egui::Context) {
         if !self.proxy_asked {
             self.proxy_asked = true;
-            self.link.check_proxy(&ctx);
+            self.link.check_proxy(ctx);
         }
         for m in self.link.drain() {
             self.chat.receive(m);
         }
         let t = ctx.input(|i| i.time);
         self.compile_due(t, false);
+        self.arrange();
         self.session.advance(t);
         if self.session.running || self.pending.is_some() || self.chat.busy() {
             ctx.request_repaint();
         }
-        egui::Panel::top("pg-top").show(ui, |ui| self.top(ui));
-        egui::Panel::left("pg-editor")
-            .resizable(true)
-            .default_size(460.0)
-            .show(ui, |ui| self.editor(ui, t));
-        egui::Panel::right("pg-side")
-            .resizable(true)
-            .default_size(360.0)
-            .show(ui, |ui| self.side(ui));
-        egui::Panel::bottom("pg-trend")
-            .resizable(true)
-            .default_size(150.0)
-            .show(ui, |ui| self.trend(ui));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.diagram(ui));
+    }
+}
+
+impl PlaygroundView {
+    /// Lays the diagram out from its layers, or keeps a finished move.
+    pub fn arrange(&mut self) {
+        let fresh = std::mem::take(&mut self.fresh);
+        if let Some(v) = &mut self.viewer {
+            let key = format!("sim:{}", self.proj.open);
+            self.layers.show(v, &key, self.proj.layout(), fresh);
+        }
     }
 
-    fn top(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("HELMSMAN").strong().color(YELLOW));
-            ui.label(RichText::new("ST playground").color(WHITE));
-            ui.separator();
-            let mut pick = None;
-            egui::ComboBox::from_id_salt("pg-examples")
-                .selected_text("Examples")
-                .show_ui(ui, |ui| {
-                    for (k, e) in EXAMPLES.iter().enumerate() {
-                        if ui.selectable_label(false, e.name).clicked() {
-                            pick = Some(k);
-                        }
-                    }
-                });
-            if let Some(k) = pick {
-                self.load(EXAMPLES[k].src, &format!("the {} example", EXAMPLES[k].name));
+    /// Saves the diagram as it stands as the open project's default.
+    pub fn save_layout(&mut self) {
+        let Some(v) = &self.viewer else { return };
+        let text = v.arrangement().to_text();
+        if self.proj.save_layout(&text) {
+            self.layers.adopt(v, &text);
+        }
+    }
+}
+
+impl Body for PlaygroundView {
+    fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        {
+            let can = self.proj.can_save_layout();
+            if crate::arrange::buttons(ui, chrome, &mut self.layers, self.viewer.as_mut(), can) {
+                self.save_layout();
             }
             ui.separator();
             let s = &mut self.session;
@@ -316,16 +480,33 @@ impl PlaygroundView {
                     .monospace()
                     .color(if s.fault.is_some() { RED } else { STEEL }),
             );
-        });
+        }
         if let Some(f) = &self.session.fault {
             ui.colored_label(RED, format!("Fault: {f}. Run or Step restarts the program."));
         }
         if let Some(n) = &self.notice {
             ui.label(RichText::new(n).color(STEEL));
         }
+        if let Some((n, error)) = self.proj.notice.clone() {
+            let r = ui.label(RichText::new(n).color(if error { RED } else { STEEL }));
+            chrome.hit("notice", r.rect);
+            if error && self.proj.pending.is_some() {
+                let r = ui.button("Replace");
+                chrome.hit("replace", r.rect);
+                if r.clicked() {
+                    self.proj.replace();
+                    self.reload();
+                }
+            }
+        }
+        if let Some(why) = &self.proj.storage_problem {
+            let r = ui.label(RichText::new(format!("⚠ {why}")).color(STEEL));
+            chrome.hit("storage", r.rect);
+        }
     }
 
-    fn editor(&mut self, ui: &mut egui::Ui, t: f64) {
+    fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = ui.ctx().input(|i| i.time);
         let stale = self.session.stale();
         ui.horizontal(|ui| {
             ui.label(RichText::new("Structured Text").strong());
@@ -344,87 +525,138 @@ impl PlaygroundView {
                     .color(STEEL),
             );
         }
-        let diags: Vec<(u32, u32)> = self
-            .session
-            .diags
+        let all = self.diags();
+        let current = self.proj.current.clone();
+        let diags: Vec<(u32, u32)> = all
             .iter()
-            .map(|d| (d.pos.line, d.pos.col))
+            .filter(|d| d.file == current)
+            .map(|d| (d.line, d.col))
             .collect();
-        let font = FontId::monospace(13.0);
-        let lines = self.session.src.lines().count().max(1) + usize::from(self.session.src.ends_with('\n'));
         let avail = ui.available_height();
         let list_h = if self.session.diags.is_empty() { 0.0 } else { 110.0 };
-        egui::ScrollArea::both()
-            .id_salt("pg-editor-scroll")
-            .max_height((avail - list_h).max(120.0))
-            .show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    // The gutter: line numbers, an error's in red.
-                    let mut gutter = LayoutJob::default();
-                    for n in 1..=lines {
-                        let bad = diags.iter().any(|(l, _)| *l as usize == n);
-                        gutter.append(
-                            &format!("{n:>3}\n"),
-                            0.0,
-                            TextFormat::simple(font.clone(), if bad { RED } else { STEEL }),
-                        );
-                    }
-                    ui.label(gutter);
-                    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
-                        let job = highlight(buf.as_str(), &diags, &font);
-                        ui.fonts_mut(|f| f.layout_job(job))
-                    };
-                    let r = ui.add(
-                        egui::TextEdit::multiline(&mut self.session.src)
-                            .id(egui::Id::unique("pg-source"))
-                            .code_editor()
-                            .char_limit(MAX_SOURCE)
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(24)
-                            .lock_focus(true)
-                            .layouter(&mut layouter),
-                    );
-                    if r.changed() {
-                        self.pending = Some(t);
-                        self.notice = None;
-                    }
-                });
-            });
+        let size = Vec2::new(ui.available_width(), (avail - list_h).max(120.0));
+        let Some(text) = self.proj.current_text_mut() else {
+            ui.label(RichText::new("No file open: make one in Files.").color(STEEL));
+            return;
+        };
+        let r = ui
+            .allocate_ui(size, |ui| {
+                editor::st_editor(
+                    ui,
+                    egui::Id::unique("pg-source"),
+                    text,
+                    &diags,
+                    MAX_SOURCE,
+                    chrome,
+                )
+            })
+            .inner;
+        if r.changed() {
+            self.edited(t);
+        }
         if !self.session.diags.is_empty() {
             ui.separator();
             egui::ScrollArea::vertical()
                 .id_salt("pg-diags")
                 .max_height(list_h)
                 .show(ui, |ui| {
-                    for d in &self.session.diags {
-                        ui.label(
-                            RichText::new(format!("{}:{}  {}", d.pos.line, d.pos.col, d.msg))
-                                .monospace()
-                                .color(RED),
-                        );
+                    if let Some(d) = projects::diags_ui(ui, &all, chrome) {
+                        self.goto(&d.file, d.line, chrome);
                     }
                 });
         }
     }
 
-    fn side(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            for (tab, label) in [(Tab::Io, "I/O"), (Tab::Why, "Why"), (Tab::Claude, "Ask Claude")] {
-                let b = egui::Button::selectable(self.tab == tab, RichText::new(label).strong())
-                    .min_size(Vec2::new(80.0, TAP * 0.75));
-                if ui.add(b).clicked() {
-                    self.tab = tab;
-                }
-            }
-        });
+    /// The projects (the visitor's, then the examples), the open one's
+    /// files, and under them the program's outline: every block instance
+    /// it calls, nested; a click shows that one's diagram.
+    fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let rows = self.proj.rows();
+        let files: Vec<(String, bool)> = self
+            .proj
+            .files
+            .keys()
+            .map(|f| (f.clone(), self.proj.file_dirty(f)))
+            .collect();
+        let open = self.proj.open.clone();
+        let current = self.proj.current.clone();
+        let listing = Listing {
+            projects: &rows,
+            open: Some(&open),
+            files,
+            current: Some(&current),
+            write: Ok(()),
+            dirty: self.proj.dirty(),
+        };
+        if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
+            self.act(a);
+        }
         ui.separator();
-        match self.tab {
+        ui.label(RichText::new("Program").strong().color(STEEL));
+        match &mut self.viewer {
+            Some(v) => {
+                ui.indent("pg-tree", |ui| v.tree_ui(ui));
+            }
+            None => {
+                ui.label(RichText::new("Nothing compiled yet.").color(STEEL));
+            }
+        }
+    }
+
+    fn tabs(&self) -> &'static [Tab] {
+        &[Tab::Io, Tab::Trend, Tab::Claude]
+    }
+
+    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab) {
+        match tab {
             Tab::Io => self.io(ui),
-            Tab::Why => self.why(ui),
+            Tab::Trend => self.trend_tab(ui),
             Tab::Claude => self.claude(ui),
         }
     }
 
+    fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
+        if let Some(v) = &mut self.viewer {
+            v.crumbs_ui(ui, &[]);
+            let area = ui.available_rect_before_wrap();
+            v.canvas(ui, scan);
+            let mut jump = None;
+            if v.pick != self.last_pick {
+                self.last_pick = v.pick;
+                if let Some((line, _)) = v.picked() {
+                    jump = Some(line);
+                }
+            }
+            let reads = v.reads_on_screen();
+            self.map_inputs(ui, area, &reads);
+            if let Some(line) = jump {
+                match self.proj.locate(line) {
+                    Some((file, l)) => self.goto(&file, l, chrome),
+                    None => chrome.goto(line),
+                }
+            }
+            return;
+        }
+        let rect = ui.available_rect_before_wrap();
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, BLACK);
+        let why = self
+            .session
+            .build
+            .as_ref()
+            .and_then(|b| b.module_error.clone())
+            .unwrap_or_else(|| "Write a PROGRAM that compiles to see its diagram.".into());
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            why,
+            FontId::proportional(14.0),
+            STEEL,
+        );
+    }
+}
+
+impl PlaygroundView {
     fn io(&mut self, ui: &mut egui::Ui) {
         if self.session.build.is_none() {
             ui.label(RichText::new("Nothing compiled yet.").color(STEEL));
@@ -432,6 +664,11 @@ impl PlaygroundView {
         }
         let inputs: Vec<Point> = self.session.inputs().cloned().collect();
         let outputs: Vec<Point> = self.session.outputs().cloned().collect();
+        let on_map = self.on_map();
+        let off_map: Vec<&Point> = inputs
+            .iter()
+            .filter(|p| !on_map.iter().any(|r| r.eq_ignore_ascii_case(&p.name)))
+            .collect();
         egui::ScrollArea::vertical().id_salt("pg-io").show(ui, |ui| {
             ui.label(RichText::new("Inputs").strong());
             if inputs.is_empty() {
@@ -440,15 +677,21 @@ impl PlaygroundView {
                         .small()
                         .color(STEEL),
                 );
+            } else if off_map.len() < inputs.len() {
+                ui.label(
+                    RichText::new("Switch, press or drag the inputs on their blocks in the diagram.")
+                        .small()
+                        .color(STEEL),
+                );
             }
-            for p in &inputs {
+            for p in off_map {
                 if let Some(v) = input_ui(ui, p) {
                     self.session.set_input(&p.name, v);
                 }
             }
             ui.add_space(8.0);
             ui.label(RichText::new("Outputs").strong())
-                .on_hover_text("click: why is it in this state?");
+                .on_hover_text("click: pick it");
             if outputs.is_empty() {
                 ui.label(
                     RichText::new("No VAR_OUTPUT or %QX bit: add one to get a lamp.")
@@ -458,36 +701,35 @@ impl PlaygroundView {
             }
             for p in &outputs {
                 if output_ui(ui, p) {
-                    self.explain(&p.name);
+                    self.pick(&p.name);
                 }
             }
-            ui.add_space(8.0);
-            ui.label(RichText::new("Trend").strong())
-                .on_hover_text(format!("up to {TREND_SIGNALS} signals"));
-            ui.horizontal_wrapped(|ui| {
-                for p in outputs.iter().chain(&inputs) {
-                    let on = self.session.trend.signals.contains(&p.name);
-                    if ui.selectable_label(on, p.name.to_ascii_lowercase()).clicked() {
-                        self.session.trend.toggle(&p.name);
-                    }
-                }
-            });
         });
     }
 
-    fn why(&mut self, ui: &mut egui::Ui) {
-        let Some(v) = &mut self.viewer else {
-            ui.label(RichText::new("No diagram for this program.").color(STEEL));
+    /// The signals to trend (outputs, then inputs) and the chart.
+    fn trend_tab(&mut self, ui: &mut egui::Ui) {
+        if self.session.build.is_none() {
+            ui.label(RichText::new("Nothing compiled yet.").color(STEEL));
             return;
-        };
-        v.outputs_ui(ui, self.session.trace.as_ref().map(|t| t as &dyn Scan));
-        ui.separator();
-        let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
-        let ask = AskUi {
-            blocked: Some("In the playground, ask Claude in the Ask Claude tab."),
-            ask: None,
-        };
-        let _ = v.right(ui, scan, Some(self.session.now_ms), ask);
+        }
+        ui.label(RichText::new(format!("Pin up to {TREND_SIGNALS} signals")).color(STEEL));
+        let points: Vec<String> = self
+            .session
+            .outputs()
+            .chain(self.session.inputs())
+            .map(|p| p.name.clone())
+            .collect();
+        ui.horizontal_wrapped(|ui| {
+            for name in &points {
+                let on = self.session.trend.signals.contains(name);
+                if ui.selectable_label(on, name.to_ascii_lowercase()).clicked() {
+                    self.session.trend.toggle(name);
+                }
+            }
+        });
+        ui.add_space(6.0);
+        self.trend(ui);
     }
 
     fn claude(&mut self, ui: &mut egui::Ui) {
@@ -669,7 +911,7 @@ impl PlaygroundView {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Pick signals to trend in the I/O tab",
+                "Pick signals to trend above",
                 FontId::proportional(13.0),
                 STEEL,
             );
@@ -734,28 +976,216 @@ impl PlaygroundView {
             }
         }
     }
+}
 
-    fn diagram(&mut self, ui: &mut egui::Ui) {
-        let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
-        if let Some(v) = &mut self.viewer {
-            v.canvas(ui, scan);
-            return;
+impl PlaygroundView {
+    /// Each input's control, drawn on its blocks in the diagram: a click
+    /// flips a switch, a push button is on while held, a number drags
+    /// sideways (or takes a typed value on a click).
+    fn map_inputs(&mut self, ui: &mut egui::Ui, area: egui::Rect, reads: &[(String, egui::Rect)]) {
+        let inputs: Vec<Point> = self.session.inputs().cloned().collect();
+        ui.set_clip_rect(area);
+        // A push button read in two places is held if either is.
+        let mut held: Vec<(String, bool)> = Vec::new();
+        let mut set = Vec::new();
+        for (k, (path, rect)) in reads.iter().enumerate() {
+            let Some(p) = inputs.iter().find(|p| p.name.eq_ignore_ascii_case(path)) else {
+                continue;
+            };
+            if !area.intersects(*rect) {
+                continue;
+            }
+            match map_input_ui(ui, *rect, p, k) {
+                MapInput::Held(on) => match held.iter_mut().find(|(n, _)| *n == p.name) {
+                    Some((_, h)) => *h |= on,
+                    None => held.push((p.name.clone(), on)),
+                },
+                MapInput::Set(v) => set.push((p.name.clone(), v)),
+                MapInput::Nothing => {}
+            }
         }
-        let rect = ui.available_rect_before_wrap();
-        ui.painter().rect_filled(rect, CornerRadius::ZERO, BLACK);
-        let why = self
-            .session
-            .build
-            .as_ref()
-            .and_then(|b| b.module_error.clone())
-            .unwrap_or_else(|| "Write a PROGRAM that compiles to see its diagram.".into());
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            why,
-            FontId::proportional(14.0),
-            STEEL,
-        );
+        for (name, on) in held {
+            self.session.set_input(&name, Value::Bool(on));
+        }
+        for (name, v) in set {
+            self.session.set_input(&name, v);
+        }
+    }
+
+    /// The inputs the diagram shows a control for.
+    pub(crate) fn on_map(&self) -> Vec<String> {
+        let Some(v) = &self.viewer else { return Vec::new() };
+        v.reads_on_screen().into_iter().map(|(path, _)| path).collect()
+    }
+}
+
+/// What an input's control on the diagram did this frame.
+enum MapInput {
+    Nothing,
+    /// A push button: whether it is held.
+    Held(bool),
+    Set(Value),
+}
+
+/// One input's control filling its block at `rect`.
+fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> MapInput {
+    let label = p.name.to_ascii_lowercase();
+    let size = (rect.height() * 0.4).clamp(7.0, 18.0);
+    let builder = egui::UiBuilder::new().max_rect(rect).id_salt(("pg-map", k));
+    ui.scope_builder(builder, |ui| match p.widget {
+        Some(Widget::Push) => {
+            let on = p.value == Value::Bool(true);
+            let b = egui::Button::new(RichText::new(&label).strong().size(size).color(if on {
+                BLACK
+            } else {
+                WHITE
+            }))
+            .fill(if on { YELLOW } else { GRAPHITE })
+            .sense(Sense::click_and_drag());
+            let r = ui
+                .add_sized(rect.size(), b)
+                .on_hover_text("push button: on while held");
+            MapInput::Held(r.is_pointer_button_down_on())
+        }
+        Some(Widget::Toggle) => {
+            let on = p.value == Value::Bool(true);
+            let b = egui::Button::new(
+                RichText::new(format!("{label} {}", if on { "ON" } else { "OFF" }))
+                    .strong()
+                    .size(size)
+                    .color(if on { BLACK } else { WHITE }),
+            )
+            .fill(if on { YELLOW } else { GRAPHITE });
+            if ui
+                .add_sized(rect.size(), b)
+                .on_hover_text("switch: click to flip")
+                .clicked()
+            {
+                MapInput::Set(Value::Bool(!on))
+            } else {
+                MapInput::Nothing
+            }
+        }
+        Some(Widget::Int { min, max }) => {
+            let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
+            let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
+            let mut v = match p.value {
+                Value::Int(n) => i64::try_from(n).unwrap_or(0),
+                _ => 0,
+            };
+            let before = v;
+            let d = egui::DragValue::new(&mut v)
+                .range(lo..=hi)
+                .prefix(format!("{label} = "));
+            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
+            if v == before {
+                MapInput::Nothing
+            } else {
+                MapInput::Set(Value::Int(i128::from(v)))
+            }
+        }
+        Some(Widget::Real) => {
+            let mut v = match p.value {
+                Value::Real(r) => r,
+                _ => 0.0,
+            };
+            let before = v;
+            let d = egui::DragValue::new(&mut v)
+                .speed(0.1)
+                .prefix(format!("{label} = "));
+            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
+            if v.to_bits() != before.to_bits() && v.is_finite() {
+                MapInput::Set(Value::Real(v))
+            } else {
+                MapInput::Nothing
+            }
+        }
+        Some(Widget::Time) => {
+            let mut ms = match p.value {
+                Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
+                _ => 0,
+            };
+            let before = ms;
+            let d = egui::DragValue::new(&mut ms)
+                .range(0..=86_400_000)
+                .prefix(format!("{label} = "))
+                .suffix(" ms");
+            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
+            if ms == before {
+                MapInput::Nothing
+            } else {
+                MapInput::Set(Value::Int(i128::from(ms) * 1_000_000))
+            }
+        }
+        None => MapInput::Nothing,
+    })
+    .inner
+}
+
+const DRAG_HINT: &str = "drag sideways to change, or click to type";
+
+impl Workspace for PlaygroundView {
+    fn dirty(&self) -> bool {
+        self.proj.dirty()
+    }
+
+    fn writable(&self) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn save(&mut self) {
+        self.proj.save();
+    }
+
+    /// Compiles the open project and runs it in the page.
+    fn deploy(&mut self) {
+        let src = self.proj.build_src();
+        let ok = self.session.set_source(&src);
+        self.pending = None;
+        self.sync_viewer();
+        if ok {
+            self.session.set_running(true);
+            self.proj.running = Some(self.proj.open.clone());
+            let program = self
+                .viewer
+                .as_ref()
+                .and_then(|v| v.module.program())
+                .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
+            self.notice = Some(format!("{} is running in this page{program}.", self.proj.open));
+        } else {
+            self.notice = Some(format!(
+                "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
+                self.proj.open,
+                self.session.diags.len()
+            ));
+        }
+    }
+
+    fn busy(&self) -> bool {
+        false
+    }
+
+    fn upload(&mut self, file: &str, bytes: Vec<u8>) {
+        let before = (self.proj.open.clone(), self.proj.build_src());
+        self.proj.upload(file, &bytes);
+        if before.0 != self.proj.open {
+            self.reload();
+        } else if before.1 != self.proj.build_src() {
+            self.session.src = self.proj.build_src();
+            self.pending = Some(f64::NEG_INFINITY);
+        }
+    }
+
+    fn download(&mut self) {
+        match self.proj.zip() {
+            Ok((name, bytes)) => {
+                #[cfg(target_arch = "wasm32")]
+                crate::web::download_bytes(&name, &bytes, "application/zip");
+                #[cfg(not(target_arch = "wasm32"))]
+                self.downloads.push((name, bytes));
+            }
+            Err(e) => self.proj.notice = Some((format!("Cannot download: {e}"), true)),
+        }
     }
 }
 
@@ -763,55 +1193,6 @@ impl Default for PlaygroundView {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// The editor's text as a layout: a line with a diagnostic on a dark red
-/// ground, its column to the end of the word underlined.
-#[must_use]
-pub fn highlight(text: &str, diags: &[(u32, u32)], font: &FontId) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    let plain = TextFormat::simple(font.clone(), Color32::from_gray(230));
-    let bad_ground = Color32::from_rgb(0x4A, 0x16, 0x14);
-    for (k, line) in text.split_inclusive('\n').enumerate() {
-        let n = u32::try_from(k + 1).unwrap_or(u32::MAX);
-        let Some(&(_, col)) = diags.iter().find(|(l, _)| *l == n) else {
-            job.append(line, 0.0, plain.clone());
-            continue;
-        };
-        let ground = TextFormat {
-            background: bad_ground,
-            ..plain.clone()
-        };
-        // Columns count characters from 1.
-        let start = line
-            .char_indices()
-            .nth(col.saturating_sub(1) as usize)
-            .map_or(line.trim_end_matches('\n').len(), |(i, _)| i);
-        let rest = &line[start..];
-        let word = rest
-            .char_indices()
-            .find(|(i, c)| *i > 0 && !(c.is_alphanumeric() || *c == '_'))
-            .map_or(rest.trim_end_matches('\n').len(), |(i, _)| i)
-            .max(
-                rest.chars()
-                    .next()
-                    .filter(|c| *c != '\n')
-                    .map_or(0, char::len_utf8),
-            );
-        job.append(&line[..start], 0.0, ground.clone());
-        job.append(
-            &rest[..word],
-            0.0,
-            TextFormat {
-                underline: Stroke::new(1.5, RED),
-                color: WHITE,
-                ..ground.clone()
-            },
-        );
-        job.append(&rest[word..], 0.0, ground);
-    }
-    job.wrap.max_width = f32::INFINITY;
-    job
 }
 
 /// One input's control; the value it sets, if it changed (a push button
@@ -916,7 +1297,7 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
                 .color(if on { YELLOW } else { WHITE }),
         )
         .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
-    ui.add(b).on_hover_text("why is it in this state?").clicked()
+    ui.add(b).on_hover_text("click: pick it").clicked()
 }
 
 /// A value for a readout (TIME in ms).

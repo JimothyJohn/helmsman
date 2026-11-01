@@ -678,9 +678,20 @@ impl Review {
         r
     }
 
+    /// Asks for the list again, alone (the header's badge).
+    pub fn relist(&mut self) {
+        self.queue.push(Request::get(Call::List, "/api/proposals".into()));
+    }
+
+    /// Proposals waiting for a decision: the drafts.
+    #[must_use]
+    pub fn waiting(&self) -> usize {
+        self.list.iter().filter(|r| r.status == "draft").count()
+    }
+
     /// Asks for the list (and signals and policy) again.
     pub fn refresh(&mut self) {
-        self.queue.push(Request::get(Call::List, "/api/proposals".into()));
+        self.relist();
         self.queue
             .push(Request::get(Call::Signals, "/api/signals".into()));
         self.queue.push(Request::get(Call::Policy, "/api/policy".into()));
@@ -755,7 +766,7 @@ impl Review {
     }
 
     /// The box no longer knows the session (401): back to signing in.
-    fn session_ended(&mut self) {
+    pub fn session_ended(&mut self) {
         if self.session.take().is_some() {
             self.login_problem =
                 Some("The session ended (signed out, expired, or the box restarted). Sign in again.".into());

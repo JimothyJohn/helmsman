@@ -1,5 +1,5 @@
 //! The browser transport for [`crate::remote`]: `fetch` for one-off
-//! reads, `EventSource` for the two streams. Callbacks only push
+//! reads, `EventSource` for the streams. Callbacks only push
 //! [`Msg`]s into an inbox and wake egui; all decisions are
 //! [`crate::remote::BoxState`]'s.
 //!
@@ -16,9 +16,9 @@ use eframe::wasm_bindgen::closure::Closure;
 use eframe::wasm_bindgen::{JsCast as _, JsValue};
 use wasm_bindgen_futures::JsFuture;
 
+use crate::box_projects::{PCall, PReq};
 use crate::claude::{Incoming, KeyStore, PROXY_HEALTH, PROXY_HELLO, Request as ClaudeRequest};
-use crate::explain::{Reply, Side, SideCmd};
-use crate::remote::{Cmd, Fetch, Msg, Stream};
+use crate::remote::{Cmd, Msg, Stream};
 use crate::review::{Answer, Call, Request as ReviewRequest};
 
 type Inbox = Rc<RefCell<Vec<Msg>>>;
@@ -50,35 +50,10 @@ pub struct Driver {
     inbox: Inbox,
     values: Option<Source>,
     trace: Option<Source>,
-    /// What the explain panel's requests brought back.
-    side: Rc<RefCell<Vec<Side>>>,
+    traces: Option<Source>,
 }
 
 impl Driver {
-    /// What the explain panel's requests brought back since the last call.
-    pub fn drain_side(&mut self) -> Vec<Side> {
-        std::mem::take(&mut *self.side.borrow_mut())
-    }
-
-    /// Carries out an explain-panel request.
-    pub fn side(&mut self, cmd: SideCmd, ctx: &egui::Context) {
-        let (side, ctx) = (Rc::clone(&self.side), ctx.clone());
-        wasm_bindgen_futures::spawn_local(async move {
-            let push = |m: Side| {
-                side.borrow_mut().push(m);
-                ctx.request_repaint();
-            };
-            match cmd {
-                SideCmd::Index => push(Side::Index(get("/api").await)),
-                SideCmd::Ask { body } => {
-                    if let Err(e) = ask(&body, &push).await {
-                        push(Side::Ask(Reply::Failed(e)));
-                    }
-                }
-            }
-        });
-    }
-
     /// What arrived since the last call.
     pub fn drain(&mut self) -> Vec<Msg> {
         std::mem::take(&mut *self.inbox.borrow_mut())
@@ -89,10 +64,7 @@ impl Driver {
             Cmd::Get(what, url) => {
                 let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
                 wasm_bindgen_futures::spawn_local(async move {
-                    let r = match what {
-                        Fetch::Peer { .. } => get_peer(&url).await,
-                        _ => get(&url).await,
-                    };
+                    let r = get(&url).await;
                     inbox.borrow_mut().push(Msg::Got(what, r));
                     ctx.request_repaint();
                 });
@@ -112,6 +84,7 @@ impl Driver {
         match stream {
             Stream::Values => &mut self.values,
             Stream::Trace => &mut self.trace,
+            Stream::Traces => &mut self.traces,
         }
     }
 
@@ -178,55 +151,31 @@ async fn get(url: &str) -> Result<String, String> {
     body.as_string().ok_or_else(|| "not text".into())
 }
 
-/// `GET url` on another box (the site view's peers): cross-origin, no
-/// credentials, nothing cached; an answer over [`crate::site::MAX_BODY`]
-/// (by its length, or once read) is refused.
-async fn get_peer(url: &str) -> Result<String, String> {
-    let window = web_sys::window().ok_or("no window")?;
-    let init = web_sys::RequestInit::new();
-    init.set_method("GET");
-    init.set_mode(web_sys::RequestMode::Cors);
-    init.set_credentials(web_sys::RequestCredentials::Omit);
-    init.set_cache(web_sys::RequestCache::NoStore);
-    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(|e| text(&e))?;
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
-        .await
-        .map_err(|e| text(&e))?
-        .dyn_into()
-        .map_err(|e| text(&e))?;
-    if !resp.ok() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let declared = resp
-        .headers()
-        .get("Content-Length")
-        .ok()
-        .flatten()
-        .and_then(|v| v.trim().parse::<usize>().ok());
-    if declared.is_some_and(|n| n > crate::site::MAX_BODY) {
-        return Err("answer too large".into());
-    }
-    let body = JsFuture::from(resp.text().map_err(|e| text(&e))?)
-        .await
-        .map_err(|e| text(&e))?
-        .as_string()
-        .ok_or("not text")?;
-    if body.len() > crate::site::MAX_BODY {
-        return Err("answer too large".into());
-    }
-    Ok(body)
+/// Whether this page runs the simulation rather than watching the box
+/// that served it ([`crate::app::wants_sim`] on the page's query string
+/// and its canvas element's `data-mode`).
+#[must_use]
+pub fn wants_sim() -> bool {
+    let window = web_sys::window();
+    let query = window
+        .as_ref()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default();
+    let mode = window
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("canvas"))
+        .and_then(|e| e.get_attribute("data-mode"));
+    crate::app::wants_sim(&query, mode.as_deref())
 }
 
-/// Whether this page is the playground: `?playground`, or the canvas
-/// element says so (`docs/playground/`'s page: `data-mode="playground"`).
+/// Whether this page opens on the Monitor ([`crate::app::wants_monitor`]
+/// on its query string: `?monitor`, or the old `?andon`).
 #[must_use]
-pub fn wants_playground() -> bool {
-    wants("playground")
-        || web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.get_element_by_id("canvas"))
-            .and_then(|e| e.get_attribute("data-mode"))
-            .is_some_and(|m| m == "playground")
+pub fn wants_monitor() -> bool {
+    let query = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default();
+    crate::app::wants_monitor(&query)
 }
 
 /// The playground's link to Claude: one answer at a time, abortable.
@@ -379,78 +328,6 @@ impl KeyStore for LocalKeyStore {
     }
 }
 
-/// Whether the page asked for the demo (`?demo`).
-#[must_use]
-pub fn wants_demo() -> bool {
-    wants("demo")
-}
-
-/// Whether the page's query string has `key` (`?andon`, `?demo`).
-#[must_use]
-pub fn wants(key: &str) -> bool {
-    web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .is_some_and(|q| {
-            q.trim_start_matches('?')
-                .split('&')
-                .any(|kv| kv.split('=').next() == Some(key))
-        })
-}
-
-/// `POST /api/explain` (same origin, the session cookie, see [`init`]),
-/// its body handed over chunk by chunk as it streams.
-async fn ask(body: &str, push: &dyn Fn(Side)) -> Result<(), String> {
-    use web_sys::js_sys::{Reflect, Uint8Array};
-
-    let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init("POST")?;
-    headers
-        .set("Content-Type", "application/json")
-        .map_err(|e| text(&e))?;
-    init.set_headers(&headers);
-    init.set_body(&JsValue::from_str(body));
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init("/api/explain", &init))
-        .await
-        .map_err(|e| text(&e))?
-        .dyn_into()
-        .map_err(|e| text(&e))?;
-    if resp.status() != 200 {
-        let b = JsFuture::from(resp.text().map_err(|e| text(&e))?)
-            .await
-            .map_err(|e| text(&e))?;
-        push(Side::Ask(Reply::Status(
-            resp.status(),
-            b.as_string().unwrap_or_default(),
-        )));
-        return Ok(());
-    }
-    let stream = resp.body().ok_or("no body")?;
-    let reader: web_sys::ReadableStreamDefaultReader =
-        stream.get_reader().dyn_into().map_err(|e| text(&e))?;
-    let decoder = web_sys::TextDecoder::new().map_err(|e| text(&e))?;
-    let opts = web_sys::TextDecodeOptions::new();
-    opts.set_stream(true);
-    loop {
-        let r = JsFuture::from(reader.read()).await.map_err(|e| text(&e))?;
-        let done = Reflect::get(&r, &JsValue::from_str("done"))
-            .map_err(|e| text(&e))?
-            .as_bool()
-            .unwrap_or(true);
-        if done {
-            push(Side::Ask(Reply::End));
-            return Ok(());
-        }
-        let value: Uint8Array = Reflect::get(&r, &JsValue::from_str("value"))
-            .map_err(|e| text(&e))?
-            .dyn_into()
-            .map_err(|e| text(&e))?;
-        let chunk = decoder
-            .decode_with_js_u8_array_and_options(&value, &opts)
-            .map_err(|e| text(&e))?;
-        push(Side::Ask(Reply::Chunk(chunk)));
-    }
-}
-
 /// The review screen's transport: one `fetch` per [`ReviewRequest`],
 /// answered with its status, `Retry-After` and body whatever the status,
 /// so the screen can show the box's refusal verbatim.
@@ -504,17 +381,31 @@ fn init(method: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String
 /// Carries out `req` on the page's origin with the session cookie (see
 /// [`init`]); nothing is cached or stored.
 async fn send(req: ReviewRequest) -> Result<Answer, String> {
+    let body = req.body.as_ref().map(|b| JsValue::from_str(b));
+    let ctype = body.as_ref().map(|_| "application/json");
+    let (method, url) = (req.method.as_str(), req.url.clone());
+    drop(req);
+    fetch(method, &url, body, ctype).await
+}
+
+/// One same-origin call (see [`init`]) with an optional body of type
+/// `ctype`: its status, `Retry-After` and body whatever the status.
+async fn fetch(
+    method: &str,
+    url: &str,
+    body: Option<JsValue>,
+    ctype: Option<&str>,
+) -> Result<Answer, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let (init, headers) = init(req.method.as_str())?;
-    if let Some(b) = &req.body {
-        headers
-            .set("Content-Type", "application/json")
-            .map_err(|e| text(&e))?;
-        init.set_body(&JsValue::from_str(b));
+    let (init, headers) = init(method)?;
+    if let Some(b) = &body {
+        if let Some(t) = ctype {
+            headers.set("Content-Type", t).map_err(|e| text(&e))?;
+        }
+        init.set_body(b);
     }
     init.set_headers(&headers);
-    let request = web_sys::Request::new_with_str_and_init(&req.url, &init).map_err(|e| text(&e))?;
-    drop(req);
+    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(|e| text(&e))?;
     let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|e| text(&e))?
@@ -536,4 +427,181 @@ async fn send(req: ReviewRequest) -> Result<Answer, String> {
         retry_after,
         body,
     })
+}
+
+/// The project and force routes' transport: one `fetch` per [`PReq`],
+/// its body bytes as they are (a `.zip`, a file, JSON).
+#[derive(Default)]
+pub struct ProjHttp {
+    inbox: Rc<RefCell<Vec<(PCall, Answer)>>>,
+}
+
+impl ProjHttp {
+    /// What arrived since the last call.
+    pub fn drain(&mut self) -> Vec<(PCall, Answer)> {
+        std::mem::take(&mut *self.inbox.borrow_mut())
+    }
+
+    pub fn send(&mut self, req: PReq, ctx: &egui::Context) {
+        let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let body = req
+                .body
+                .as_ref()
+                .map(|b| JsValue::from(web_sys::js_sys::Uint8Array::from(b.as_slice())));
+            let ctype = body.as_ref().map(|_| req.ctype);
+            let answer = fetch(req.method, &req.url, body, ctype)
+                .await
+                .unwrap_or_else(|why| Answer {
+                    status: 0,
+                    retry_after: None,
+                    body: why,
+                });
+            inbox.borrow_mut().push((req.call, answer));
+            ctx.request_repaint();
+        });
+    }
+}
+
+thread_local! {
+    /// Files the user picked, read, and not taken yet.
+    static PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Opens the browser's file picker (`accept`: `.zip,.st,.xml,.l5x`); the
+/// file chosen arrives through [`take_picked`].
+pub fn pick_file(accept: &str, ctx: &egui::Context) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Some(input) = doc
+        .create_element("input")
+        .ok()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok())
+    else {
+        return;
+    };
+    input.set_type("file");
+    input.set_accept(accept);
+    let ctx = ctx.clone();
+    let picker = input.clone();
+    let on_change = Closure::once_into_js(move || {
+        let Some(file) = picker.files().and_then(|l| l.get(0)) else {
+            return;
+        };
+        let name = file.name();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(buf) = JsFuture::from(file.array_buffer()).await {
+                let bytes = web_sys::js_sys::Uint8Array::new(&buf).to_vec();
+                PICKED.with(|p| p.borrow_mut().push((name, bytes)));
+                ctx.request_repaint();
+            }
+        });
+    });
+    input.set_onchange(Some(on_change.unchecked_ref()));
+    input.click();
+}
+
+/// The files picked since the last call: name and bytes.
+#[must_use]
+pub fn take_picked() -> Vec<(String, Vec<u8>)> {
+    PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Clicks a hidden link to `href` that downloads as `name`.
+fn click_download(href: &str, name: &str) {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Some(a) = doc
+        .create_element("a")
+        .ok()
+        .and_then(|e| e.dyn_into::<web_sys::HtmlAnchorElement>().ok())
+    else {
+        return;
+    };
+    a.set_href(href);
+    a.set_download(name);
+    a.click();
+}
+
+/// Downloads a same-origin `url` (the box's `GET .../zip`) as `name`.
+pub fn download_url(url: &str, name: &str) {
+    click_download(url, name);
+}
+
+/// Downloads `bytes` made in the page as `name`, of type `mime`.
+pub fn download_bytes(name: &str, bytes: &[u8], mime: &str) {
+    let array = web_sys::js_sys::Array::new();
+    array.push(&web_sys::js_sys::Uint8Array::from(bytes));
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type(mime);
+    let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&array, &opts) else {
+        return;
+    };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        return;
+    };
+    click_download(&url, name);
+    let _ = web_sys::Url::revoke_object_url(&url);
+}
+
+/// The simulation's projects in `localStorage`. Every access is wrapped:
+/// a private window, blocked site data or a full quota throws, and the
+/// page then keeps its projects in memory (`sim_projects`).
+#[derive(Debug, Default)]
+pub struct LocalProjects;
+
+const PROJECTS_SLOT: &str = "helmsman-canvas/projects";
+
+fn storage() -> Result<web_sys::Storage, String> {
+    web_sys::window()
+        .ok_or("no window")?
+        .local_storage()
+        .map_err(|e| text(&e))?
+        .ok_or_else(|| "no localStorage".into())
+}
+
+/// One `localStorage` slot (the Trend's pins: `box_trend.rs`), every
+/// access wrapped as for [`LocalProjects`].
+#[derive(Debug)]
+pub struct LocalSlot(pub &'static str);
+
+impl crate::sim_projects::Storage for LocalSlot {
+    fn load(&self) -> Result<Option<String>, String> {
+        storage()?.get_item(self.0).map_err(|e| text(&e))
+    }
+
+    fn save(&mut self, value: &str) -> Result<(), String> {
+        storage()?.set_item(self.0, value).map_err(|e| text(&e))
+    }
+}
+
+/// The diagram's personal layouts in `localStorage` (`arrange.rs`), every
+/// access wrapped as for [`LocalProjects`].
+#[derive(Debug, Default)]
+pub struct LocalArrangements;
+
+const ARRANGEMENTS_SLOT: &str = "helmsman-canvas/arrangements";
+
+impl crate::sim_projects::Storage for LocalArrangements {
+    fn load(&self) -> Result<Option<String>, String> {
+        storage()?.get_item(ARRANGEMENTS_SLOT).map_err(|e| text(&e))
+    }
+
+    fn save(&mut self, value: &str) -> Result<(), String> {
+        storage()?
+            .set_item(ARRANGEMENTS_SLOT, value)
+            .map_err(|e| text(&e))
+    }
+}
+
+impl crate::sim_projects::Storage for LocalProjects {
+    fn load(&self) -> Result<Option<String>, String> {
+        storage()?.get_item(PROJECTS_SLOT).map_err(|e| text(&e))
+    }
+
+    fn save(&mut self, value: &str) -> Result<(), String> {
+        storage()?.set_item(PROJECTS_SLOT, value).map_err(|e| text(&e))
+    }
 }

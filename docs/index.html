@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Helmsman Factory Automation</title>
-<meta name="description" content="Helmsman Factory Automation: a small soft PLC for factory edge boxes, with an open-source CIP-over-Ethernet originator and adapter, written in Rust.">
+<meta name="description" content="Helmsman Factory Automation: the soft PLC you program by describing the machine. Write the spec, validate the result; standard IEC 61131-3 Structured Text, EtherNet/IP and Modbus TCP.">
 <link rel="icon" type="image/svg+xml" href="brand/helmsman-mark-16-yellow.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -72,11 +72,6 @@ p code,li code,td code{background:#EDEDED;padding:1px 5px}
 .diagram .wire.io{stroke:var(--yellow);stroke-dasharray:5 4}
 .diagram .arrow{fill:var(--steel)}
 .diagram .arrow.io{fill:var(--yellow)}
-.crates{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px;margin-top:28px}
-.crate{background:var(--graphite);color:#fff;padding:18px 18px 16px;border-top:4px solid var(--yellow)}
-.crate h4{font:600 15px var(--mono);margin:0 0 6px;color:var(--yellow)}
-.crate p{margin:0;font-size:14.5px}
-.crate .st{display:inline-block;margin-top:10px;font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:#C8C8C8}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:32px;align-items:start}
 .two>*{min-width:0}
 @media (max-width:760px){.two{grid-template-columns:1fr}}
@@ -93,6 +88,12 @@ th{font:600 12px var(--mono);text-transform:uppercase;letter-spacing:.06em}
 footer{background:var(--black);color:var(--dim);padding:28px 0 48px;font:13px var(--mono)}
 footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px}
 footer a{color:var(--yellow)}
+header.top .gh{display:flex;color:#C8C8C8;flex:none;padding:6px}
+header.top .gh:hover{color:var(--yellow)}
+.early{margin:22px 0 0;font-size:15px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.steps{counter-reset:s}
+.steps li{counter-increment:s}
+.steps li b::before{content:counter(s) ". "}
 </style>
 </head>
 <body>
@@ -101,15 +102,13 @@ footer a{color:var(--yellow)}
   <div class="wrap">
     <a class="brand" href="#"><svg class="mk" viewBox="0 0 96 96" width="28" height="28" aria-hidden="true" style="color:#FFC20E"><use href="#se20"/></svg>HELMSMAN</a>
     <nav aria-label="Sections">
-      <a href="playground/">Playground</a>
-      <a href="#what">What</a>
-      <a href="#crates">Crates</a>
-      <a href="#cli">CLI</a>
-      <a href="#runtime">Runtime</a>
+      <a href="#agentic">How it works</a>
+      <a href="#why">Why Helmsman</a>
+      <a href="#connect">Connects to</a>
       <a href="#status">Status</a>
-      <a href="brand/">Brand</a>
-      <a href="https://github.com/JimothyJohn/helmsman">GitHub</a>
+      <a href="playground/">Try it</a>
     </nav>
+    <a class="gh" href="https://github.com/JimothyJohn/helmsman" aria-label="Source on GitHub" title="Source on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
   </div>
 </header>
 
@@ -120,183 +119,97 @@ footer a{color:var(--yellow)}
       <svg class="mk" viewBox="0 0 96 96" width="160" height="160" role="img" aria-label="Helmsman stencil encoder mark" style="color:#141414"><use href="#se"/></svg>
       <h1><span class="wm">HELMSMAN</span><span class="desc">FACTORY AUTOMATION</span></h1>
     </div>
-    <p class="lede">A small soft PLC for factory edge boxes, a Raspberry Pi 5 being the reference. Structured Text modules that an agent drafts and an engineer approves run against named signals on the devices the box masters. Alongside it, an open-source CIP-over-Ethernet originator and adapter. Early, written in Rust.</p>
+    <p class="lede">The soft PLC you program by describing the machine. The agent writes standard IEC 61131-3 Structured Text from your spec, and you check it on a live diagram before it runs.</p>
     <div class="cta">
-      <a class="btn primary" href="playground/">Try the ST playground</a>
-      <a class="btn" href="https://github.com/JimothyJohn/helmsman">View on GitHub</a>
-      <a class="btn" href="#cli">Quick start</a>
+      <a class="btn primary" href="playground/">Try it in your browser</a>
+      <a class="btn" href="#agentic">How it works</a>
     </div>
+    <p class="early"><span class="chip pending">Early release</span> Running on the bench today. The source is open.</p>
   </div>
 </div>
 
-<div class="facts">
+<div class="facts" id="why">
   <div class="wrap">
-    <div><b>Cargo workspace</b><span>eight crates, edition 2024</span></div>
-    <div><b>std only runtime</b><span>the protocol, I/O and PLC crates have no runtime dependencies</span></div>
-    <div><b>Interop in CI</b><span>tested against OpENer in Docker</span></div>
-    <div><b>MIT</b><span>open source</span></div>
+    <div><b>Robust</b><span>Built on a minimal set of dependencies. Every change passes more than 1,300 automated tests and interoperability tests before it ships.</span></div>
+    <div><b>Simple</b><span>One controller, one service, its own web screen. No cloud needed to run the machine, no database server, no stack of microservices.</span></div>
+    <div><b>Safe</b><span>Written in a memory-safe language. Changes need an engineer's approval, every change is audited, and the safeguards stay out of your way.</span></div>
+    <div><b>Reliable</b><span>Compiled, native performance on a fixed scan. A watchdog bounds every scan, and a faulted program stops alone with its outputs safe.</span></div>
   </div>
 </div>
 
-<section id="playground">
+<section id="agentic">
   <div class="wrap">
-    <h2>Playground</h2>
-    <h3>Write ST. Run it here.</h3>
-    <p>The <a href="playground/">ST playground</a> is the box's Structured Text compiler and interpreter built for the browser. Write a program, and its <code>VAR_INPUT</code>s and <code>%IX</code> bits become buttons and sliders, its <code>VAR_OUTPUT</code>s and <code>%QX</code> bits become lamps. Run, stop or step it, watch the live diagram and a trend, and tap an output to see why it is on. Nothing is sent anywhere: it all runs in the page.</p>
-    <p>Stuck? <b>Ask Claude</b> in the side panel with your own Anthropic API key. The key stays in the page (optionally in this browser, if you tick “remember”) and goes only to <code>api.anthropic.com</code>; Claude sees your program and its compile errors and answers with a whole program you can load with one click. It never runs until you press Run.</p>
-  </div>
-</section>
-
-<section id="what">
-  <div class="wrap">
-    <h2>What it is</h2>
-    <h3>The box is the PLC.</h3>
-    <p>Helmsman runs IEC 61131-3 Structured Text modules on a headless edge box. Each module has its own scan rate and its own windows into the process image, and logic names signals rather than addresses: the I/O map binds each signal to a point on a device the box masters, such as a Modbus TCP remote I/O block or the box's own channels. The roadmap adds an agent that drafts modules, an approval step with an engineer's PIN, and a browser canvas that shows the running code as a live diagram; those parts are planned, not built.</p>
-    <ul class="rules">
-      <li><b>Devices it masters</b>Read and write, only through the I/O map. One writer per point.</li>
-      <li><b>Controllers it observes</b>Read-only. The box reads a CompactLogix's tags; it never writes them.</li>
-      <li><b>A scanner that owns it</b>The box is a CIP adapter: the scanner writes assembly 150 and reads assembly 100.</li>
-    </ul>
-    <p class="muted" style="margin-top:28px">The map of the code and its trust boundaries is <a href="https://github.com/JimothyJohn/helmsman/blob/master/docs/ARCHITECTURE.md">docs/ARCHITECTURE.md</a>; the plan is <a href="https://github.com/JimothyJohn/helmsman/blob/master/TODO.md">TODO.md</a>.</p>
-
-    <div class="diagram" role="img" aria-label="The helmsman-proto originator talking to an adapter device: ListIdentity over UDP broadcast, explicit messages over TCP 44818, and Class 1 cyclic I/O over UDP 2222 in both directions.">
-      <svg viewBox="0 0 760 230" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow" d="M0,0 L10,5 L0,10 z"/></marker>
-          <marker id="aio" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrow io" d="M0,0 L10,5 L0,10 z"/></marker>
-        </defs>
-        <rect class="us" x="10" y="30" width="210" height="170"/>
-        <text class="us-t" x="115" y="70" text-anchor="middle" font-size="15" font-weight="700">helmsman-proto</text>
-        <text class="us-t" x="115" y="92" text-anchor="middle" font-size="12">originator</text>
-        <text class="us-t" x="115" y="130" text-anchor="middle" font-size="12">discover · session</text>
-        <text class="us-t" x="115" y="150" text-anchor="middle" font-size="12">explicit messaging</text>
-        <text class="us-t" x="115" y="170" text-anchor="middle" font-size="12">Forward_Open · scanner</text>
-
-        <rect class="box" x="540" y="30" width="210" height="170"/>
-        <text x="645" y="70" text-anchor="middle" font-size="15" font-weight="700">adapter</text>
-        <text x="645" y="92" text-anchor="middle" font-size="12" class="dim">target device</text>
-        <text x="645" y="130" text-anchor="middle" font-size="12" class="dim">PLC · drive · I/O block</text>
-        <text x="645" y="150" text-anchor="middle" font-size="12" class="dim">OpENer · helmsman-plc</text>
-
-        <path class="wire" d="M222,62 H538" marker-end="url(#a)"/>
-        <text x="380" y="54" text-anchor="middle" font-size="12">ListIdentity · UDP broadcast</text>
-
-        <path class="wire" d="M222,106 H538" marker-start="url(#a)" marker-end="url(#a)"/>
-        <text x="380" y="98" text-anchor="middle" font-size="12">explicit messages · TCP 44818</text>
-
-        <path class="wire io" d="M222,152 H538" marker-end="url(#aio)"/>
-        <text x="380" y="144" text-anchor="middle" font-size="12">O→T outputs · UDP 2222 every RPI</text>
-        <path class="wire io" d="M538,184 H222" marker-end="url(#aio)"/>
-        <text x="380" y="176" text-anchor="middle" font-size="12">T→O inputs · UDP 2222 every RPI</text>
-      </svg>
-    </div>
-    <p class="muted">Most open CIP stacks are adapters, the device end that answers requests. <code>helmsman-proto</code> is the other end: it finds devices, reads their attributes over TCP 44818 and opens Class 1 connections that exchange I/O over UDP 2222 at a fixed requested packet interval (RPI). The workspace ships the adapter side too, so both ends run without hardware.</p>
-  </div>
-</section>
-
-<section id="crates" class="on-black">
-  <div class="wrap">
-    <h2>Crates</h2>
-    <h3>Eight crates, one workspace.</h3>
-    <div class="crates">
-      <div class="crate"><h4>helmsman-proto</h4><p>CIP originator: encapsulation and CPF codecs, <code>ListIdentity</code> discovery, sessions and explicit messaging, Forward_Open and the Class 1 scanner.</p><span class="st">built</span></div>
-      <div class="crate"><h4>helmsman-adapter</h4><p>CIP target: a sans-IO <code>Device</code> state machine (every call takes <code>now</code>) and a std-thread server. Identity, assemblies, Forward_Open, cyclic I/O.</p><span class="st">built</span></div>
-      <div class="crate"><h4>helmsman-cli</h4><p>The <code>helmsman</code> command: the originator from a shell.</p><span class="st">built</span></div>
-      <div class="crate"><h4>helmsman-iec</h4><p>IEC 61131-3: ST lexer, parser, checker and interpreter; PLCopen TC6 XML (LD, FBD, ST) lowered to ST; the standard function block library.</p><span class="st">built</span></div>
-      <div class="crate"><h4>helmsman-plc</h4><p>The runtime: the multi-module scheduler, signals bound by name, and the binary that puts it behind the CIP adapter.</p><span class="st">built</span></div>
-      <div class="crate"><h4>helmsman-io</h4><p>The I/O map (devices, signals, bindings) and its validation, the <code>Driver</code> contract, the Modbus TCP driver, the box's own channels, a device simulator and a conformance harness.</p><span class="st">built</span></div>
-      <div class="crate"><h4>helmsman-graph</h4><p>Node-graph model and scan simulator behind the canvas.</p><span class="st">built · lab tool</span></div>
-      <div class="crate"><h4>helmsman-canvas</h4><p>egui node canvas, native and wasm; becomes the read-only view of the running ST.</p><span class="st">built · lab tool</span></div>
-    </div>
-  </div>
-</section>
-
-<section id="cli">
-  <div class="wrap">
-    <h2>Command line</h2>
-    <h3>Build it, point it at a device.</h3>
-<pre><span class="k">cargo</span> build --release
-
-<span class="c"># ListIdentity broadcast</span>
-target/release/helmsman discover
-
-<span class="c"># Identity object, attributes 1-7</span>
-target/release/helmsman identity 10.0.0.50
-
-<span class="c"># any attribute, class.instance.attribute, printed as hex</span>
-target/release/helmsman get 10.0.0.50 0xF5.1.5
-
-<span class="c"># Class 1 exclusive-owner connection</span>
-target/release/helmsman io 10.0.0.50 --config 151 --out 150 --in 100 \
-    --out-len 32 --in-len 32 --rpi 50 --set 0102...</pre>
-    <p><code>helmsman help</code> lists every flag. <code>io</code> binds UDP 2222 locally, because targets send their input data there.</p>
-  </div>
-</section>
-
-<section id="runtime" class="on-black">
-  <div class="wrap two">
-    <div>
-      <h2>Runtime</h2>
-      <h3>Modules on a scan.</h3>
-      <p><code>helmsman-plc</code> runs one or more Structured Text modules, each with its own scan period and its own <code>%I</code>, <code>%Q</code> and <code>%M</code> windows. Two modules may not drive the same output byte. With <code>--io-map</code>, a module's <code>VAR_INPUT</code>s and <code>VAR_OUTPUT</code>s bind to named signals; a module whose inputs are missing is held with its outputs at their safe values rather than computing on stale data.</p>
-      <p>An instruction budget bounds every scan, so an endless loop is a watchdog fault, not a hang. A fault zeroes that module's outputs and stops only it; the adapter stays on the network so the box can still be found. PLCopen XML projects (ladder and FBD from Beremiz or the OpenPLC Editor) run too; <code>--emit-st</code> shows the Structured Text they lower to.</p>
-      <p class="muted">Ships as a systemd unit for a Raspberry Pi (<code>deploy/helmsman-plc.service</code>).</p>
-    </div>
-<pre><span class="k">PROGRAM</span> blink
-<span class="k">VAR</span> count : INT; <span class="k">END_VAR</span>
-  count := count + 1;
-  %QX0.0 := count MOD 2 = 0;
-  %QW1 := INT_TO_WORD(count);
+    <h2>Agentic programming</h2>
+    <h3>Write specs, not code</h3>
+    <p>Tell Helmsman what the machine should do, in plain language. Drop in a P&amp;ID, an electrical drawing or a photo of the panel and it reads them. The agent drafts the program and you check how it behaves.</p>
+    <ol class="rules steps">
+      <li><b>Describe</b>State the sequence, the interlocks and the alarms the way you would to a colleague. Attach the drawings.</li>
+      <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see exactly what drives it.</li>
+      <li><b>Approve</b>An engineer signs off with a PIN. The change goes live between scans; every version is kept and can be rolled back.</li>
+    </ol>
+    <div class="two" style="margin-top:40px">
+      <div>
+        <h2>Why there is no ladder</h2>
+        <p>Ladder was built so electricians could read relay circuits. Here the agent writes the program, so Helmsman shows it as a live function-block diagram with values on the wires. Underneath is standard IEC 61131-3 Structured Text that you can read, compare between versions and move to another controller.</p>
+      </div>
+<pre><span class="k">PROGRAM</span> line
+<span class="k">VAR</span>
+  s1, s2 : station;
+  jam_1 <span class="k">AT</span> %IX0.0 : BOOL;
+  alarm <span class="k">AT</span> %QX0.2 : BOOL;
+<span class="k">END_VAR</span>
+s1(enable := TRUE, jam := jam_1);
+s2(enable := TRUE, jam := FALSE);
+alarm := s1.alarm <span class="k">OR</span> s2.alarm;
 <span class="k">END_PROGRAM</span></pre>
+    </div>
+  </div>
+</section>
+
+<section id="connect" class="on-black">
+  <div class="wrap">
+    <h2>Standards and interoperability</h2>
+    <h3>A pure soft PLC on your network.</h3>
+    <p>Helmsman is only the controller. Field I/O stays in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols.</p>
+    <ul class="rules">
+      <li><b>IEC 61131-3</b>Structured Text, the proven standard, plus PLCopen XML import from other tools.</li>
+      <li><b>EtherNet/IP (CIP)</b>Appears to your existing PLCs as a standard adapter, and reads their tags without ever writing to them.</li>
+      <li><b>Modbus TCP</b>Drives remote I/O blocks and devices directly, through a named I/O map.</li>
+    </ul>
+    <p class="muted" style="margin-top:24px">Ethernet protocols today; others as customers need them.</p>
   </div>
 </section>
 
 <section id="status">
   <div class="wrap">
     <h2>Status</h2>
-    <h3>Verified means a test.</h3>
-    <p>Every interop claim is backed by a capture or a passing test in this repo. CI runs a lint and test gate plus an interop suite against the OpENer POSIX sample adapter in Docker.</p>
+    <h3>What has been tested</h3>
+    <p>Each result below comes from a passing test or a capture. The suite runs on every change against an open-source EtherNet/IP device in a container.</p>
     <div class="table-scroll">
     <table>
-      <thead><tr><th>Target</th><th>Role for us</th><th>Status</th></tr></thead>
+      <thead><tr><th>Device</th><th>Role</th><th>Status</th></tr></thead>
       <tbody>
-        <tr><td>OpENer POSIX sample (Docker)</td><td>Adapter under CI</td><td><span class="chip ok">verified</span></td></tr>
-        <tr><td><code>helmsman-adapter</code> (Docker)</td><td>In-repo adapter, same interop suite</td><td><span class="chip ok">verified</span></td></tr>
-        <tr><td>Rockwell CompactLogix</td><td>Explicit-message server, Class 1 target, observed read-only by the box</td><td><span class="chip pending">bench pending</span></td></tr>
-        <tr><td>Panasonic FP0H</td><td>Explicit client; Class 1 originator and target</td><td><span class="chip pending">bench pending</span></td></tr>
+        <tr><td>OpENer reference adapter</td><td>EtherNet/IP device under continuous test</td><td><span class="chip ok">verified</span></td></tr>
+        <tr><td>Helmsman's own adapter</td><td>Same interoperability suite</td><td><span class="chip ok">verified</span></td></tr>
+        <tr><td>Moxa ioLogik E1213</td><td>Remote I/O over Modbus TCP</td><td><span class="chip pending">bench pending</span></td></tr>
+        <tr><td>Rockwell CompactLogix</td><td>Existing PLC, read without writing</td><td><span class="chip pending">bench pending</span></td></tr>
       </tbody>
     </table>
     </div>
-    <p class="muted">Details per target are in <a href="https://github.com/JimothyJohn/helmsman/blob/master/docs/INTEROP.md">docs/INTEROP.md</a>; the reference stacks and documents this project draws on are reviewed in <a href="https://github.com/JimothyJohn/helmsman/blob/master/docs/SOURCES.md">docs/SOURCES.md</a>.</p>
-  </div>
-</section>
-
-<section id="develop" class="on-black">
-  <div class="wrap">
-    <h2>Develop</h2>
-    <h3>A Makefile is the entry point.</h3>
-<pre><span class="k">make</span> help              <span class="c"># list targets</span>
-<span class="k">make</span> lint              <span class="c"># rustfmt check + clippy, warnings denied</span>
-<span class="k">make</span> test-all          <span class="c"># everything, locked to Cargo.lock</span>
-
-<span class="k">make</span> opener-up         <span class="c"># OpENer adapter in Docker</span>
-<span class="k">make</span> test-interop      <span class="c"># interop suite against it</span>
-<span class="k">make</span> opener-down</pre>
   </div>
 </section>
 
 <div class="brandband">
   <div class="wrap">
-    <p>Marks, wordmarks, color themes and the stencil encoder: the brand concepts.</p>
-    <a class="btn primary" href="brand/">Brand gallery</a>
+    <p>Run a program in your browser, with nothing to install.</p>
+    <a class="btn primary" href="playground/">Try it in your browser</a>
   </div>
 </div>
 </main>
 
 <footer>
   <div class="wrap">
-    <span>Helmsman Factory Automation · MIT</span>
-    <a href="https://github.com/JimothyJohn/helmsman">github.com/JimothyJohn/helmsman</a>
+    <span>Helmsman Factory Automation · early release · open source (MIT)</span>
   </div>
 </footer>
 </body>

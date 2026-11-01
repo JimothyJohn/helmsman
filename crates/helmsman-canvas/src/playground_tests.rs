@@ -8,16 +8,17 @@ use std::rc::Rc;
 use eframe::egui::{self, Event, Id, PointerButton, Pos2, RawInput, Rect, Vec2};
 use helmsman_iec::{Ty, Value};
 
-use crate::app::{App, Mode};
+use crate::app::{App, Source};
 use crate::claude::{
     self, ANTHROPIC_URL, API_VERSION, Answer, ApiKey, Chat, Context, Event as SseEvent, Exchange,
     FALLBACK_BETA, HISTORY, Incoming, KeyStore, MAX_ANSWER, MAX_PROGRAM, Model, PROXY_URL, Phase, Proxy,
     Route, Segment, Sse, extract_program, request, segments,
 };
+use crate::editor::{Chrome, Tab, highlight};
 use crate::playground::{
     Dir, EXAMPLES, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget,
 };
-use crate::playground_view::{PlaygroundView, Tab, highlight};
+use crate::playground_view::PlaygroundView;
 
 const KEY: &str = "sk-ant-api03-TESTKEY-not-a-real-key-0123456789";
 
@@ -934,14 +935,19 @@ fn segments_split_prose_and_code_and_show_an_open_block() {
 struct Screen {
     ctx: egui::Context,
     view: PlaygroundView,
+    chrome: Chrome,
     time: f64,
 }
 
 impl Screen {
     fn new() -> Self {
+        // The ST open beside the diagram, as the simulation starts.
+        let mut chrome = Chrome::default();
+        chrome.st = true;
         let mut s = Self {
             ctx: egui::Context::default(),
             view: PlaygroundView::new(),
+            chrome,
             time: 0.0,
         };
         s.frame(vec![]);
@@ -957,8 +963,10 @@ impl Screen {
             ..Default::default()
         };
         self.time += 1.0 / 60.0;
-        let Self { ctx, view, .. } = self;
-        let mut out = ctx.run_ui(input, |ui| view.show(ui));
+        let Self {
+            ctx, view, chrome, ..
+        } = self;
+        let mut out = ctx.run_ui(input, |ui| view.show(ui, chrome));
         out.textures_delta.clear();
     }
 
@@ -989,6 +997,244 @@ impl Screen {
     }
 }
 
+impl Screen {
+    /// Where the diagram draws the first block reading `name`.
+    fn block(&self, name: &str) -> Rect {
+        let v = self.view.viewer.as_ref().expect("a diagram");
+        v.reads_on_screen()
+            .into_iter()
+            .find(|(p, _)| p.eq_ignore_ascii_case(name))
+            .unwrap_or_else(|| panic!("no block reads {name}"))
+            .1
+    }
+
+    fn input(&self, name: &str) -> Value {
+        self.view
+            .session
+            .inputs()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .unwrap_or_else(|| panic!("no input {name}"))
+            .value
+    }
+
+    fn output(&self, name: &str) -> Value {
+        self.view
+            .session
+            .outputs()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .unwrap_or_else(|| panic!("no output {name}"))
+            .value
+    }
+
+    fn button(&mut self, at: Pos2, pressed: bool) {
+        self.frame(vec![Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+    }
+}
+
+#[test]
+fn a_switch_flips_where_the_diagram_reads_it() {
+    let mut s = Screen::new();
+    assert_eq!(s.input("enable"), b(true));
+    let at = s.block("enable").center();
+    s.click(at);
+    assert_eq!(s.input("enable"), b(false), "a click on its block flips it");
+    s.click(at);
+    assert_eq!(s.input("enable"), b(true));
+    // The diagram stayed where it was: the click was the switch's, not a pan.
+    assert_eq!(s.block("enable").center(), at);
+}
+
+#[test]
+fn a_push_button_on_the_diagram_is_on_while_held() {
+    let mut s = Screen::new();
+    s.view.load(example("latch"), "latch");
+    s.view.session.set_running(true);
+    s.wait(0.1);
+    let at = s.block("start").center();
+    s.frame(vec![Event::PointerMoved(at)]);
+    s.button(at, true);
+    s.wait(0.1);
+    assert_eq!(s.input("start"), b(true), "held");
+    assert_eq!(s.output("motor"), b(true), "the motor seals in");
+    s.button(at, false);
+    s.wait(0.1);
+    assert_eq!(s.input("start"), b(false), "released");
+    assert_eq!(s.output("motor"), b(true), "and stays latched");
+}
+
+impl Screen {
+    /// Presses at `from`, moves to `to` in steps, releases.
+    fn drag(&mut self, from: Pos2, to: Pos2) {
+        self.frame(vec![Event::PointerMoved(from)]);
+        self.button(from, true);
+        for k in 1..=10 {
+            #[allow(clippy::cast_precision_loss)]
+            let at = from + (to - from) * (k as f32 / 10.0);
+            self.frame(vec![Event::PointerMoved(at)]);
+        }
+        self.button(to, false);
+    }
+
+    /// The diagram's first block reading `name` (world units).
+    fn node(&self, name: &str) -> helmsman_diagram::Rect {
+        let v = self.view.viewer.as_ref().unwrap();
+        v.diagram()
+            .nodes
+            .iter()
+            .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Read { path } if path.eq_ignore_ascii_case(name)))
+            .unwrap_or_else(|| panic!("no block reads {name}"))
+            .rect
+    }
+
+    /// Where world point `(x, y)` is on screen.
+    fn screen(&self, x: f32, y: f32) -> Pos2 {
+        let v = self.view.viewer.as_ref().unwrap();
+        v.cams[v.scope].to_screen(x, y)
+    }
+}
+
+#[test]
+fn dragging_a_block_by_its_header_moves_it_and_not_the_view() {
+    let mut s = Screen::new();
+    let before = s.node("enable");
+    let offset = {
+        let v = s.view.viewer.as_ref().unwrap();
+        v.cams[v.scope].offset
+    };
+    let header = s.screen(before.x + before.w / 2.0, before.y + 6.0);
+    // Into the clear below the diagram.
+    let size = s.view.viewer.as_ref().unwrap().diagram().size;
+    let clear = s.screen(before.x + before.w / 2.0, size.1 + 40.0);
+    s.drag(header, clear);
+    let after = s.node("enable");
+    assert!(after.y > size.1, "{before:?} -> {after:?}");
+    assert!((after.x - before.x).abs() < 0.01, "moved straight down");
+    let v = s.view.viewer.as_ref().unwrap();
+    assert_eq!(v.cams[v.scope].offset, offset, "the view did not pan");
+    assert!(v.rearranged());
+    assert_eq!(
+        s.input("enable"),
+        b(true),
+        "a header drag is no click on the switch"
+    );
+    // Its switch went with it.
+    let at = s.block("enable").center();
+    s.click(at);
+    assert_eq!(s.input("enable"), b(false));
+}
+
+#[test]
+fn dragging_empty_space_pans_and_moves_no_block() {
+    let mut s = Screen::new();
+    s.view.session.set_running(false);
+    let before = s.node("enable");
+    let size = s.view.viewer.as_ref().unwrap().diagram().size;
+    // Below and right of everything drawn.
+    let empty = s.screen(size.0 + 40.0, size.1 + 40.0);
+    s.drag(empty, empty + Vec2::new(-60.0, -30.0));
+    assert_eq!(s.node("enable"), before);
+    assert!(!s.view.viewer.as_ref().unwrap().rearranged());
+}
+
+#[test]
+fn dragging_an_if_by_its_label_carries_its_statements() {
+    let mut s = Screen::new();
+    s.view.session.set_running(false);
+    let v = s.view.viewer.as_ref().unwrap();
+    let d = v.diagram();
+    let r = d.regions.first().expect("blink has an IF").clone();
+    let inside: Vec<usize> = helmsman_diagram::layout::inside(d, r.id)
+        .iter()
+        .map(|n| n.0 as usize)
+        .collect();
+    let before: Vec<helmsman_diagram::Rect> = d.nodes.iter().map(|n| n.rect).collect();
+    let label = s.screen(r.rect.x + 4.0, r.rect.y + 4.0);
+    s.drag(label, label + Vec2::new(0.0, 90.0));
+    let d = s.view.viewer.as_ref().unwrap().diagram();
+    for (i, was) in before.iter().enumerate() {
+        let now = d.nodes[i].rect;
+        if inside.contains(&i) {
+            assert!(now.y > was.y + 20.0, "{} stayed", d.nodes[i].label);
+        } else {
+            assert_eq!(now, *was, "{} moved", d.nodes[i].label);
+        }
+    }
+    assert!(d.region(r.id).rect.y > r.rect.y + 20.0, "the box followed");
+}
+
+#[test]
+fn a_rearranged_diagram_survives_an_edit_and_resets() {
+    let mut s = Screen::new();
+    s.view.session.set_running(false);
+    let auto = s.node("enable");
+    let header = s.screen(auto.x + auto.w / 2.0, auto.y + 6.0);
+    s.drag(header, header + Vec2::new(0.0, 120.0));
+    let moved = s.node("enable");
+    assert!(moved.y > auto.y + 20.0);
+    // An edit (a comment line on top) recompiles into a new diagram.
+    let src = format!("(* edited *)\n{}", s.view.session.src);
+    s.view.session.set_source(&src);
+    s.wait(0.1);
+    assert_eq!(s.node("enable"), moved, "kept across the edit");
+    s.view.viewer.as_mut().unwrap().reset_arrangement();
+    assert_eq!(s.node("enable"), auto);
+    assert!(!s.view.viewer.as_ref().unwrap().rearranged());
+}
+
+#[test]
+fn a_number_on_the_diagram_drags_sideways() {
+    let mut s = Screen::new();
+    let Value::Int(before) = s.input("period") else {
+        panic!("TIME is an Int")
+    };
+    let at = s.block("period").center();
+    s.frame(vec![Event::PointerMoved(at)]);
+    s.button(at, true);
+    for dx in 1..=8 {
+        #[allow(clippy::cast_precision_loss)]
+        s.frame(vec![Event::PointerMoved(at + Vec2::new(dx as f32 * 10.0, 0.0))]);
+    }
+    s.button(at + Vec2::new(80.0, 0.0), false);
+    let Value::Int(after) = s.input("period") else {
+        panic!("TIME is an Int")
+    };
+    assert!(after > before, "{before} -> {after}");
+}
+
+#[test]
+fn the_side_panel_keeps_only_the_inputs_the_diagram_does_not_read() {
+    let mut s = Screen::new();
+    s.view.load(
+        "PROGRAM p
+VAR_INPUT
+  used : BOOL;
+  unused : BOOL;
+END_VAR
+VAR_OUTPUT
+  q : BOOL;
+END_VAR
+q := used;
+END_PROGRAM
+",
+        "two inputs",
+    );
+    s.wait(0.1);
+    let on_map = s.view.on_map();
+    assert!(
+        on_map.iter().any(|p| p.eq_ignore_ascii_case("used")),
+        "{on_map:?}"
+    );
+    assert!(
+        !on_map.iter().any(|p| p.eq_ignore_ascii_case("unused")),
+        "{on_map:?}"
+    );
+}
+
 #[test]
 fn the_playground_opens_running_the_first_example() {
     let mut s = Screen::new();
@@ -996,8 +1242,21 @@ fn the_playground_opens_running_the_first_example() {
     s.wait(0.5);
     assert!(s.view.session.scans >= 30, "{}", s.view.session.scans);
     assert!(s.view.viewer.is_some(), "the diagram is up");
-    assert_eq!(s.view.viewer.as_ref().unwrap().because.as_deref(), Some("LAMP"));
+    assert_eq!(s.view.viewer.as_ref().unwrap().because, None, "no path lit");
     assert!(s.view.chat.proxy == Proxy::No, "no proxy natively");
+}
+
+#[test]
+fn a_pick_survives_an_edit_while_its_variable_does() {
+    let mut s = Screen::new();
+    s.view.pick("LAMP");
+    // An edit that keeps lamp: still picked.
+    let src = s.view.session.src.replace("(* A timer", "(* Still a timer");
+    s.view.load(&src, "an edit");
+    assert_eq!(s.view.viewer.as_ref().unwrap().because.as_deref(), Some("LAMP"));
+    // A program without it: nothing lit.
+    s.view.load(example("latch"), "latch");
+    assert_eq!(s.view.viewer.as_ref().unwrap().because, None);
 }
 
 #[test]
@@ -1024,7 +1283,7 @@ fn typing_in_the_editor_compiles_after_a_pause_and_marks_the_error_line() {
     assert!(s.view.session.running);
     // The highlighter marks line 1.
     let diags = [(1, 13)];
-    let job = highlight(&s.view.session.src, &diags, &egui::FontId::monospace(13.0));
+    let job = highlight(&s.view.session.src, &diags, None, &egui::FontId::monospace(13.0));
     assert!(job.sections.iter().any(|x| x.format.underline.width > 0.0));
     assert_eq!(job.text, s.view.session.src, "the layout keeps the text as is");
 }
@@ -1036,8 +1295,8 @@ fn every_tab_and_example_draws() {
         s.view.load(e.src, e.name);
         assert!(!s.view.session.running, "loading never runs");
         s.view.session.set_running(true);
-        for tab in [Tab::Io, Tab::Why, Tab::Claude] {
-            s.view.tab = tab;
+        for tab in [Tab::Io, Tab::Trend, Tab::Claude] {
+            s.chrome.tab = tab;
             s.wait(0.1);
         }
         assert!(s.view.session.scans > 0, "{k}");
@@ -1048,35 +1307,20 @@ fn every_tab_and_example_draws() {
 }
 
 #[test]
-fn tapping_an_output_explains_it() {
+fn tapping_an_output_picks_it() {
     let mut s = Screen::new();
     s.view.load(example("latch"), "latch");
-    s.view.explain("MOTOR");
-    assert_eq!(s.view.tab, Tab::Why);
+    s.view.pick("MOTOR");
     s.view.session.step();
     s.wait(0.1);
-    let v = s.view.viewer.as_mut().unwrap();
-    let said = v
-        .explanation(
-            s.view
-                .session
-                .trace
-                .as_ref()
-                .map(|t| t as &dyn helmsman_diagram::Scan),
-            Some(10),
-        )
-        .unwrap();
-    assert!(
-        said.sentences[0].text.to_ascii_lowercase().contains("motor"),
-        "{:?}",
-        said.sentences
-    );
+    assert_eq!(s.view.viewer.as_ref().unwrap().because.as_deref(), Some("MOTOR"));
+    assert_eq!(s.chrome.tab, Tab::Io, "no tab of its own");
 }
 
 #[test]
 fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
     let mut s = Screen::new();
-    s.view.tab = Tab::Claude;
+    s.chrome.tab = Tab::Claude;
     s.frame(vec![]);
     s.view.chat.question = "a latch please".into();
     s.view.ask(&s.ctx.clone());
@@ -1124,10 +1368,122 @@ fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
     assert_eq!(s.view.session.scans, 0);
 }
 
+/// The scope labelled `label` (`s1.infeed : MOTOR` → "s1.infeed").
+fn scope(s: &Screen, path: &str) -> usize {
+    let v = s.view.viewer.as_ref().unwrap();
+    let want = format!("{path}.");
+    v.scopes
+        .iter()
+        .position(|x| x.prefix.eq_ignore_ascii_case(&want))
+        .unwrap_or_else(|| panic!("no instance {path}"))
+}
+
 #[test]
-fn the_canvas_has_a_playground_mode() {
-    let mut app = App::with_project(crate::example::project());
-    app.mode = Mode::Playground;
+fn the_tree_nests_instances_by_call_and_folds() {
+    let mut s = Screen::new();
+    s.view.load(example("stations"), "stations");
+    s.wait(0.1);
+    let v = s.view.viewer.as_mut().unwrap();
+    let rows: Vec<(String, usize)> = v
+        .tree_rows()
+        .iter()
+        .map(|r| (v.scopes[r.scope].prefix.to_ascii_lowercase(), r.depth))
+        .collect();
+    let want: Vec<(String, usize)> = [
+        ("", 0),
+        ("s1.", 1),
+        ("s1.infeed.", 2),
+        ("s1.outfeed.", 2),
+        ("s2.", 1),
+        ("s2.infeed.", 2),
+        ("s2.outfeed.", 2),
+    ]
+    .iter()
+    .map(|(p, d)| ((*p).to_string(), *d))
+    .collect();
+    assert_eq!(rows, want);
+    // The program is the root: it never folds. A station folds its motors.
+    assert!(!v.tree_rows()[0].has_kids);
+    let s1 = v
+        .scopes
+        .iter()
+        .position(|x| x.prefix.eq_ignore_ascii_case("s1."))
+        .unwrap();
+    v.toggle_fold(s1);
+    let shown: Vec<String> = v
+        .tree_rows()
+        .iter()
+        .map(|r| v.scopes[r.scope].prefix.to_ascii_lowercase())
+        .collect();
+    assert_eq!(shown, ["", "s1.", "s2.", "s2.infeed.", "s2.outfeed."]);
+    assert!(v.tree_rows()[1].folded);
+    v.toggle_fold(s1);
+    assert_eq!(v.tree_rows().len(), 7);
+}
+
+#[test]
+fn up_and_down_the_levels() {
+    let mut s = Screen::new();
+    s.view.load(example("stations"), "stations");
+    s.wait(0.1);
+    let infeed = scope(&s, "s1.infeed");
+    let s1 = scope(&s, "s1");
+    let v = s.view.viewer.as_mut().unwrap();
+    v.open(infeed);
+    assert_eq!(v.trail(), vec![0, s1, infeed], "program › s1 › s1.infeed");
+    assert_eq!(v.parent(), Some(s1));
+    // Alt+↑ climbs one level per press, and stops at the program.
+    for want in [s1, 0, 0] {
+        s.frame(vec![Event::Key {
+            key: egui::Key::ArrowUp,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::ALT,
+        }]);
+        assert_eq!(s.view.viewer.as_ref().unwrap().scope, want);
+    }
+}
+
+#[test]
+fn double_clicking_a_block_instance_opens_it() {
+    let mut s = Screen::new();
+    s.view.load(example("stations"), "stations");
+    s.wait(0.1);
+    let s1 = scope(&s, "s1");
+    let (at, other) = {
+        let v = s.view.viewer.as_ref().unwrap();
+        let d = v.diagram();
+        let fb = d
+            .nodes
+            .iter()
+            .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Fb { instance, .. } if instance.eq_ignore_ascii_case("s1")))
+            .expect("s1's block");
+        let read = d
+            .nodes
+            .iter()
+            .find(|n| matches!(n.kind, helmsman_diagram::NodeKind::Write { .. }))
+            .unwrap();
+        let cam = v.cams[v.scope];
+        (
+            cam.to_screen(fb.rect.x + fb.rect.w / 2.0, fb.rect.y + 8.0),
+            cam.to_screen(read.rect.x + read.rect.w / 2.0, read.rect.y + 8.0),
+        )
+    };
+    // A double click anywhere else only refits: the program stays.
+    s.click(other);
+    s.click(other);
+    assert_eq!(s.view.viewer.as_ref().unwrap().scope, 0);
+    s.wait(0.6);
+    s.click(at);
+    s.click(at);
+    assert_eq!(s.view.viewer.as_ref().unwrap().scope, s1, "into the station");
+}
+
+#[test]
+fn a_page_no_box_serves_runs_the_simulation() {
+    let mut app = App::sim();
+    assert_eq!(app.source, Source::Sim);
     let ctx = egui::Context::default();
     for _ in 0..3 {
         let input = RawInput {
@@ -1137,5 +1493,6 @@ fn the_canvas_has_a_playground_mode() {
         let mut out = ctx.run_ui(input, |ui| app.show(ui));
         out.textures_delta.clear();
     }
-    assert!(app.playground.is_some());
+    assert!(app.sim.is_some());
+    assert!(app.boxv.is_none() && app.review.is_none(), "no box asked");
 }

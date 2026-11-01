@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Serve the node canvas with live rebuild on every edit. Listens on all
+# Serve the canvas with live rebuild on every edit. Listens on all
 # interfaces so another machine on the LAN can open it. No box API behind
-# it: open /?demo (or the "Open the demo" button once the box is unreachable).
+# it: open /?playground (or "Simulate in this browser" once the box is unreachable).
 #
 # Usage: scripts/canvas-serve.sh [PORT]      # default 8790
 # Stop:  Ctrl-C, or kill $(lsof -tiTCP:PORT -sTCP:LISTEN)

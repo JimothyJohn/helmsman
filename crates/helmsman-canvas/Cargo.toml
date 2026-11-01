@@ -1,7 +1,7 @@
 [package]
 name = "helmsman-canvas"
 version = "0.1.0"
-description = "Live, read-only diagram of a module's Structured Text, plus a lab node editor (egui; native and web)"
+description = "The Helmsman browser app: a program's Structured Text and its live diagram, on a box or simulated in the page (egui; native and web)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -9,10 +9,10 @@ repository.workspace = true
 
 [dependencies]
 helmsman-diagram = { path = "../helmsman-diagram" }
-helmsman-graph = { path = "../helmsman-graph" }
 helmsman-iec = { path = "../helmsman-iec" }
-# The runtime only: no SQLite store, HTTP API or TLS, so it builds for wasm32.
-helmsman-plc = { path = "../helmsman-plc", default-features = false }
+# A project's rules and its .zip, the box's own (the simulation's
+# Upload and Download).
+helmsman-project = { path = "../helmsman-project" }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 # The box API's JSON (already in the workspace through helmsman-plc).
 serde_json = "1.0"
@@ -22,21 +22,33 @@ wasm-bindgen-futures = "0.4"
 # fetch (Request, RequestInit, Headers, Response; RequestCache,
 # RequestCredentials and ReferrerPolicy for the calls made with the
 # session cookie) and EventSource (Event, EventTarget, MessageEvent) for
-# the box API; Location for `?demo`. ReadableStream(DefaultReader) and
-# TextDecoder(Options): POST /api/explain, read as it streams.
-# The playground: AbortController/AbortSignal to stop an answer, Storage
-# for a key the user asked to remember, Element for the page's mode.
+# the box API; Location for `?playground` and the proxy check.
+# The simulation's Claude: ReadableStream(DefaultReader) and
+# TextDecoder(Options) to read an answer as it streams,
+# AbortController/AbortSignal to stop one, Storage for a key the user
+# asked to remember, Element for the page's mode.
+# Projects: HtmlInputElement, File and FileList for Upload's file picker;
+# Blob, BlobPropertyBag, Url and HtmlAnchorElement for Download.
+# CustomEvent(Init) to tell the page's loading screen how starting went.
 web-sys = { version = "0.3", features = [
     "AbortController",
     "AbortSignal",
+    "Blob",
+    "BlobPropertyBag",
     "console",
+    "CustomEvent",
+    "CustomEventInit",
     "Document",
     "Element",
     "Event",
     "EventSource",
     "EventTarget",
+    "File",
+    "FileList",
     "Headers",
+    "HtmlAnchorElement",
     "HtmlCanvasElement",
+    "HtmlInputElement",
     "Location",
     "MessageEvent",
     "ReadableStream",
@@ -51,6 +63,7 @@ web-sys = { version = "0.3", features = [
     "Storage",
     "TextDecodeOptions",
     "TextDecoder",
+    "Url",
     "Window",
 ] }
 

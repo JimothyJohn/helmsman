@@ -65,12 +65,12 @@ Three directions of traffic, three different rules:
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
+| `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
-| `helmsman-graph` | Node-graph model and scan simulator behind the canvas's lab editor. | built (lab tool) |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
-| `helmsman-canvas` | egui canvas, native and wasm: the live ST view (in a browser served by the box, that box's modules over its API; else a demo module running in-process, traced every frame), the public ST playground (`?playground`, docs/playground/: edit, run against virtual I/O, ask Claude with the visitor's key) and the lab editor over `helmsman-graph`. | built |
+| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header (the open project, Save, Deploy, Sign in; Proposals, Upload and Download behind its ⋯ menu) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
@@ -190,7 +190,12 @@ scan; the scheduler bounds how often.
   is a link error: the driver closes the connection (releasing exclusive
   ownership) and reopens it with the outputs it held from the first packet.
   A point past an assembly or a value its format can't hold is a point
-  error. Behind helmsman-io's `enip` feature, which `box` turns on.
+  error. Behind helmsman-io's `enip` feature, which helmsman-plc's `enip-io`
+  feature turns on; the box build (`box`) leaves it out until the E1213
+  bench passes (TODO.md `enip-in-box`), so a box map naming `enip-io` is
+  refused as "not in this build" (`helmsman_plc::drivers::not_in_build`)
+  and the E1213 runs over Modbus/TCP meanwhile. `scripts/lint.sh` lints
+  helmsman-plc with `enip-io` so it keeps compiling.
   `enip_sim` (feature `enip-sim`) is a simulated Moxa ioLogik E1213 for
   the harness: `conformance -- --sim-e1213`. The device:
   `docs/devices/moxa-iologik-e1213.md`.
@@ -248,7 +253,8 @@ scan; the scheduler bounds how often.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
-  screen TILE` a floor screen tile (below). Older maps read unchanged;
+  screen TILE` an output no device takes (the retired floor screen's
+  tiles, below). Older maps read unchanged;
   `box`, `module` and `screen` are reserved device ids.
 
 ## Signals in the scan (`io-runtime`, built)
@@ -431,38 +437,85 @@ it); the interface is in the module docs of `wasm.rs`.
   native driver passes, and agrees with the native driver, on the same
   simulator and on hostile peers, call for call (property tests in
   `tests/wasm_driver.rs`).
-- **Stored, approved and named by the map** (`wasm-driver-map`; where
-  it lives is `wasm-driver-home`, built as its recommended option and
-  still open): a driver is a blob in the change set under a name
-  (`ChangeSet::drivers`, a `wasm-driver NAME SHA256` tree line after the
-  modules; store schema 3, which a store reaches with its first driver as
-  it reached 2 with its first WASM module). `POST /api/proposals` takes
-  `{kind: driver, name, wasm}` (base64); the proposal is refused unless the
-  binary passes `wasm::check` and starts under the default limits without
-  a device (`wasm::sandbox`: memory within the cap, segments in bounds,
-  `configure` not called), and unless the running map still loads with it.
-  Adding, removing or changing a driver is `output-affecting`
-  (`policy::classify`): engineer PIN and a replay, like a map change. A
-  map device line names one as `device ID wasm:NAME ENDPOINT ...`; the
-  map is checked against the approved set (`Layout::build_with`,
-  `drivers::Points`: an unapproved name is refused, even on a device no
-  signal uses, and each point is parsed by the guest loaded with that
-  device's params), and the link opens on the guest (`drivers::open`,
-  `LinkSet::plan_with`). A link's identity includes the driver's SHA-256,
-  so approving a new version under an unchanged map line is a reload that
-  replaces those links (outputs the new link still has are written by it,
-  as for any changed device, and the old guest's connection is not
-  carried); rollback brings back the old bytes and the old links.
-  Bundles carry drivers as `wasm-driver` blobs, list each as `wasm:NAME`
-  under `drivers` in the capability manifest, and are refused as content
-  if one would not pass the proposal's check; an imported bundle's drivers
-  join the box's. The API shows a driver as `render::driver` (interface,
-  size, SHA-256, imports), never the binary. The box ships none built in:
-  the Modbus guest is a test fixture (`tests/driver_map.rs` reads the
-  simulator through it, end to end).
+- **Files, named by the map** (`wasm-driver-map`, `wasm-driver-home`:
+  "a file path on the box"; `helmsman_plc::driver_dir`, contract in
+  `helmsman-plc/tests/driver_map.rs`). A map device line `device ID
+  wasm:NAME ENDPOINT ...` runs on the file `drivers/NAME.wasm`, looked
+  for in the project first (`<state-dir>/projects/P/drivers/`: the
+  project being deployed, else the one `running-project` names), then in
+  the box's folder (`<state-dir>/drivers/`, in every mode, a store or
+  none). **The first file found is the one**: a project that carries a
+  driver runs the bytes it was written and tested with wherever it is
+  deployed, the box's folder supplies what a project leaves out, and a
+  bad project file is an error, never a fall back to the box's.
+  - **Names** are slugs (`helmsman_project::driver_name`: 1..=48 of `a-z
+    0-9 _ -`, starting with a letter or digit), so a name is one path
+    segment and two never differ by case alone; `wasm:../x`,
+    `wasm:Modbus` are refused as "not a driver name" before any file is
+    looked for.
+  - **Read safely**: regular files only, at most 256 KiB
+    (`helmsman_project::MAX_DRIVER`); a symbolic link (the file or a
+    `drivers/` folder) is refused, never followed, and on Unix the file
+    opened must be the one looked at (device and inode; a rename racing
+    the read is read again).
+  - **Checked on load** as a driver always was: `wasm::check` and an
+    instance started under the default limits without a device
+    (`wasm::sandbox`: memory within the cap, segments in bounds,
+    `configure` not called), then each point parsed by the guest loaded
+    with its device's params (`drivers::Points`, even on a device no
+    signal uses). A bad file is a map error naming the device and the
+    file (`device rio: wasm:modbus: drivers/modbus.wasm in the box:
+    ...`) and nothing loads; a name no file answers is "no such WASM
+    driver (no file drivers/NAME.wasm in the project or on the box)".
+  - **When a change runs**: files are read when a map loads (at boot,
+    and by every apply, rollback or deploy, which reads each file the
+    target map names once and loads exactly those bytes), never while
+    one runs. A link's identity includes its driver's SHA-256
+    (`LinkSet::plan_with`), so a changed file under an unchanged map line
+    replaces that device's link at the next load, between scans (outputs
+    the new link still has are written by it, as for any changed device;
+    the old guest's connection is not carried). A step whose loaded
+    driver bytes differ from what the links run on (added, dropped, or
+    the file changed) is `output-affecting` (`policy::classify_with`),
+    whatever else it changes, so a changed file never rides in on a
+    param or logic change; the apply's `reload.drivers` says which bytes
+    loaded from where (`{name: {from, sha256}}`). Rollback restores a
+    map, not driver bytes: it loads the files as they are then.
+  - **The box's folder** is managed by an engineer (the `/api/drivers`
+    routes below): uploads are held to the load's check first, then
+    written atomically (a temporary file renamed over the old), at most
+    64 files; a file the running map loads from the box (no project
+    driver in front of it) is not deleted (409).
+  - **A project's** `drivers/` travels in its `.zip` as
+    `drivers/NAME.wasm` (at most 16, files and drivers together within
+    the project's 900 KiB), is copied with it, and is checked as a box
+    upload is when an archive is installed (a bad one refuses the whole
+    archive). The browser's simulation runs no WASM driver: an archive
+    with one is refused there (`helmsman_project::from_zip`).
+  - **Not in snapshots or bundles.** A change set holds no driver; a
+    bundle carries none (its capability manifest still lists `wasm:NAME`
+    under `drivers`, as the map names it) and one an older build wrote
+    with a `wasm-driver` line is refused as malformed, saying so. A store
+    written when drivers were store blobs (#89, schema 3) still opens:
+    a snapshot with `wasm-driver` lines is read without them (their blobs
+    still checked; `store::Loaded::ignored_drivers`, logged at boot and
+    on every read through the API), and rolling back to one commits that
+    content as its own snapshot, recorded as a rollback to the old id
+    (`tests/fixtures/store-v3-drivers`).
+  - The API shows a driver as interface, size, SHA-256 and problems,
+    never the binary. The box ships none built in: the Modbus guest is a
+    test fixture (`tests/driver_map.rs` reads the simulator through it
+    from a driver file, end to end through the box runtime).
+
+| route | who | body / answer |
+| --- | --- | --- |
+| `GET /api/drivers` | engineer | `{drivers: [{name, map_name, bytes, sha256, ok, problems}]}` |
+| `PUT /api/drivers/{name}` | engineer | the `.wasm` bytes (`application/wasm` or `application/octet-stream`); 201 new, 200 replaced: `{name, ..., replaced, takes_effect}`; 400 name, 413 size, 415 type, 422 `{error, problems}`, 409 a link in its place, 507 full |
+| `DELETE /api/drivers/{name}` | engineer | `{deleted}`; 409 while the running map loads it from the box |
+
 - **Not yet**: stream sockets only: a protocol over UDP would need a
-  datagram import. Removing a driver is a rollback, not a proposal kind.
-  A driver from `--module-dir` files (no store) has nowhere to live.
+  datagram import. Adding a driver to a project is an archive upload (no
+  per-file route).
 
 ## The trace tap (`trace-tap`, built)
 
@@ -514,45 +567,23 @@ load.
   calendar's signals are missing, so modules reading them are held, and
   driven outputs go to their safe values.
 
-## Floor screen (`andon-screen`, built)
+## Floor screen (`andon-screen`, retired)
 
-A box-driven full-screen andon view, an output kind next to GPIO lights
-(`screen.rs` in `helmsman-plc`, `andon.rs` in the canvas; contracts in
-`tests/screen.rs`, `andon_tests.rs`).
+The box-driven andon view (a `--screen FILE` layout of tiles, state codes
+and colours, served at `GET /api/screen` and drawn by the canvas at
+`/?andon`) is retired: the Monitor replaced it and builds its tiles from
+the program, not from a layout file (card `andon-layout-after-monitor`).
+helmsman-plc refuses `--screen` with that reason, `/api/screen` is a 404,
+and the startup line for `/?andon` is gone; `?andon` opens the Monitor.
+The code is in git history (`crates/helmsman-plc/src/screen.rs`,
+`crates/helmsman-canvas/src/andon.rs`).
 
-- **Tiles are outputs.** `out line1_state int screen line1` in the I/O map
-  (`Binding::Screen`): an `out` signal no device takes, so no link polls or
-  writes it. A module drives it through a `VAR_OUTPUT` of that name, so the
-  one-writer rule, safe values (a held or faulted module's tile goes to its
-  `safe=` state), the approval tiers (a map change is output-affecting) and
-  the audit apply as to a stack light. Several signals may feed one tile.
-- **Messages are state codes, not strings.** A module drives an `INT` (or a
-  `BOOL`, read as 0/1); the layout maps each code to a fixed colour and a
-  fixed message. Signals stay scalar (no string type in the scan, recorder,
-  replay or sinks), and the words in front of the line are reviewed box
-  configuration, never text a module computes. A code the layout does not
-  name shows as "UNKNOWN STATE n".
-- **Layout file** (`--screen FILE`, `helmsman-screen 1`, hand-parsed, 64 KiB
-  cap): `title`, `grid COLS ROWS` (1..=8), `code SET N COLOUR TEXT`, `tile
-  ID COL,ROW[,W,H] SET SIGNAL TITLE`, `value ID SIGNAL LABEL` (a number
-  under the message). Colours are a fixed palette (IEC 60073 stack-light
-  colours plus the brand's safety yellow and graphite; no user theming).
-  Checked at startup against the map: each tile's signals are `screen`
-  outputs on that tile, of a type it can show, and every `screen` output is
-  on a tile; a map with tiles and no layout is refused while the API runs.
-  Changing it is a box config change (a restart), like the sinks file; it
-  is not in snapshots (`screen-layout-snapshot` asks).
-- **Served read-only** at `GET /api/screen`: the file byte for byte (the
-  canvas parses it with the same parser), the parsed layout and the palette.
-- **The view** is the served canvas at `/?andon`: a header (title, and the
-  shift from the calendar's `in_shift`/`shift_id`/`on_break`/`planned_down`
-  when the box has them), big tiles filling the window, type sized to fit
-  each tile. Fed by `/api/events`. **Stale data never shows as a colour**:
-  when the stream fails the values are dropped, and when no event arrives
-  for 3 s every tile shows "NO DATA" on black under a red banner ("BOX
-  UNREACHABLE", "NO DATA FROM THE BOX FOR n s"); a stream quiet for 10 s is
-  reopened. Full screen is the browser's (F11, or `chromium --kiosk
-  http://BOX:8080/?andon`).
+What stays: `out NAME TYPE screen TILE` still parses in an I/O map
+(helmsman-io's `Binding::Screen`), so an old map loads and reloads
+unchanged. Such an output is one no device takes: no link polls or writes
+it, a module drives it through a `VAR_OUTPUT` of that name under the
+one-writer rule and safe values, and the Monitor shows it as one of the
+program's outputs. No layout has to fit it any more.
 
 ## Sim replay (`sim-replay`, built)
 
@@ -612,6 +643,37 @@ one did. `record.rs` and `replay.rs` in `helmsman-plc`; contract in
   running module sees data at the running tick rate
   (`replay-granularity` asks).
 
+## Trends on the box (`box-trend-source`, built)
+
+The Editor's Trend tab on a box opens with the last minutes of each pinned
+signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
+`api.rs` and canvas `box_projects_tests.rs` tests; the canvas side is
+`box_trend.rs`).
+
+- **Not the recorder.** It keeps only what modules read, never their
+  outputs, and a pinned lamp is an output. Instead a ring per tracked
+  signal, fed from the views the scan thread publishes (the values
+  stream's source; the API's accept loop samples the newest one every
+  stream period, so the scan never waits): a point when the value
+  changes, on the scheduler's clock.
+- **Bounds.** 10 min a signal (the value the window opens on kept), 2400
+  changes a signal, 64 signals at once (one more is refused, never
+  swapped for another's): about 7 MiB worst case. At most 16 signals a
+  request (400 past that); names the box has no signal for come back
+  `unknown` and are never tracked.
+- **Who pins.** Signed in, the person's pins (an account; a role-PIN
+  session pins for its role) are kept by the box: `GET /api/trends/pins`
+  and `PUT /api/trends/pins {signals}` (a login session; the box token is
+  no one, 400), at most 16, 256 people, in memory (card
+  `trend-pins-persist`). Signed out, the browser keeps them
+  (`localStorage`, wrapped). `GET /api/trends?signals=a,b` (open, like
+  every read) answers `{now_ms, window_ms, signals: [{name, points: [[t_ms,
+  value]]}], unknown, refused}` and keeps those signals tracked for a day
+  after the last ask; the page asks on open, on every pin change and every
+  10 min. A person's pins stay tracked while pinned.
+- **The tab** draws up to six pins as steps over the box's window,
+  extended by each values event (`at_ms`), the last value held to now.
+
 ## Snapshots (`snapshots`, built)
 
 `helmsman_plc::store` (`store.rs`; contract in `tests/store.rs`) keeps
@@ -627,8 +689,7 @@ module, map or calendar source).
 - **Content-addressed**: blobs are keyed by SHA-256; a snapshot's id is the
   SHA-256 of a canonical text tree (`helmsman-snapshot 1`, then one
   `module NAME MANIFEST SOURCE` or `wasm-module NAME MANIFEST WASM` line
-  per module by name, `wasm-driver NAME H` per WASM driver by name,
-  `io-map H`, `calendar H`). Same content, same id, in
+  per module by name, `io-map H`, `calendar H`). Same content, same id, in
   any store; an ST snapshot's id is what it was before WASM modules. Blobs
   are bytes; the tree says which are text, and one read as text that is not
   UTF-8 is an error. Every read re-hashes
@@ -647,9 +708,10 @@ module, map or calendar source).
   tables plus `wasm-module` lines: a schema 1 store opens as it is and is
   marked 2 by the first commit holding a WASM module, so an older build
   keeps opening it until then and is told to upgrade after
-  (`tests/fixtures/store-v1` is a store from before). Schema 3 adds
-  `wasm-driver` lines the same way, marked by the first commit holding a
-  driver. Writers take SQLite's write
+  (`tests/fixtures/store-v1` is a store from before). Schema 3 added
+  `wasm-driver NAME H` lines (drivers as store blobs, #89); this build
+  writes none and reads them as "WASM drivers" says (the driver left out
+  and logged). Writers take SQLite's write
   lock up front (`BEGIN IMMEDIATE`, WAL), so concurrent commits never lose
   an entry. Author and approver are one line, prompt may span lines; none
   may carry controls or invisible formatting characters (as the manifest).
@@ -692,6 +754,37 @@ LAN, `off`): one HTTP/1.1 + JSON surface for the canvas, the agent's tools
 and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are listed at
 `GET /api` and in `api/mod.rs`.
 
+- **HTTPS (`box-https`, built; `api/tls.rs`, contract in
+  `tests/https.rs`).** On by default (`--https on|off`; a build without
+  the `https` feature is plain HTTP). At first start the box makes a
+  P-256 key with `ring` and a self-signed X.509 v3 certificate for it,
+  written in `api/tls.rs` rather than by a crate (rcgen is not in the
+  lockfile, and a few hundred bytes of DER do not need one): `CN=helmsman-plc`, valid to
+  9999-12-31, CA false, serverAuth, names `localhost`, the host's name,
+  `127.0.0.1` and `::1`. Cert and key are one PEM file, `tls.pem` (mode
+  0600) in the state directory, made once (atomically: starts racing
+  settle on one) and then only read, so the fingerprint stays across
+  restarts and upgrades. A file that does not hold a matching cert and
+  key stops the box rather than being replaced: a new certificate means
+  every browser trusting it again, so it is the operator's call (delete
+  the file). The SHA-256 fingerprint (as browsers and `openssl x509
+  -fingerprint -sha256` print it) goes to the journal at every start and
+  is at `GET /api/policy` as `transport.fingerprint`, which the canvas
+  shows in its ⋯ menu. The person compares it once with what the
+  browser shows, then trusts the certificate. rustls (ring, TLS 1.2 and
+  1.3, ALPN `http/1.1`) serves it on the API's own port: the first byte
+  of a connection decides. A TLS handshake (`0x16`) is TLS. Plain HTTP
+  from this host (loopback, or the box's own address: scripts, the
+  agent's own calls, `curl` in the deploy script, an SSH tunnel) is
+  served as before. Plain HTTP from anywhere else is never served: a
+  `GET`/`HEAD` is redirected (301) to `https://` on the Host it asked
+  for, anything else is 403. A client mid-handshake gets nothing back,
+  not even an error, and every connection stays under the request
+  deadline whatever it sends; at the worker cap a box with HTTPS drops
+  the connection instead of a plain 503. Relative URLs and the
+  `EventSource` streams follow the page's scheme, so the canvas needs
+  nothing.
+
 - **Reads** (`GET`) are open: signals with live values, quality and point errors, modules
   (source, manifest, ports, status, stats), a module's latest trace (a
   `GET` requests the next traced scan; 202 until one lands), output commands
@@ -701,8 +794,13 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   parser serves it): live values and status, and a module's traces.
 - **Everything else** needs `Authorization: Bearer <token>` (64 hex
   digits, made on first start in `api-token`, mode 0600, under
-  `--state-dir` or systemd's `StateDirectory=`, printed once to the
-  journal), or a login session from `POST /api/login` (below). A token,
+  `--state-dir` or systemd's `StateDirectory=`, else `helmsman-state` in
+  the working directory, printed once to the journal), or a login session
+  from `POST /api/login` (below). The working-directory default is for a
+  bench run: its token and certificate stay beside where it was started,
+  not in one per-user folder every checkout and test copy would share.
+  Tests pass `--state-dir` or run the binary from a directory of their
+  own; `tests/bin.rs` fails if one leaves `helmsman-state` in the crate. A token,
   password, PIN or session in a query string is refused on any request.
   Every authenticated call is appended to the audit log whatever its
   outcome, with the snapshot id it concerns and, for an account's
@@ -724,9 +822,9 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   SHA-256, in the accounts session table (1 h, 15 min idle, 8 per
   account or per role, 256 per box); a role-PIN session is the role's
   (audited with the role and no person; history says `ROLE (PIN)`) and
-  ends at its next use once an accounts file appears. **No `Secure`
-  flag:** boxes serve plain HTTP on the LAN, where a browser would drop
-  a `Secure` cookie; it goes on with TLS, if a box ever serves it.
+  ends at its next use once an accounts file appears. Over the box's
+  HTTPS (below) the cookie is also `Secure`; over plain HTTP (this host
+  only, or a box run with `--https off`) it is not.
   `GET /api/session` says who the cookie (or a bearer session) is, so a
   reloaded page knows; `POST /api/logout` ends it on the box and sends
   `Max-Age=0`; any 401 on a cookie also clears it.
@@ -734,7 +832,8 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   which is a read) must carry exactly one `X-Helmsman-Request: 1` (a
   cross-site form cannot send a custom header; a cross-site `fetch` with
   one needs a preflight the box never answers) and an `Origin` equal to
-  `http://` + its `Host`, or, with no `Origin`, a `Referer` on that
+  the scheme the request came over (`https://` over TLS, `http://`
+  otherwise) + its `Host`, or, with no `Origin`, a `Referer` on that
   origin; anything else (missing or wrong header, another site's or an
   opaque `null` origin, two origins, a look-alike `http://box.evil/`
   referer, a form post) is 403 before the session is looked up, so a
@@ -756,7 +855,8 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   when the box runs a change set, carrying the change set applying it would
   commit, its snapshot id, its diff and its tier. The only way a draft runs
   is `apply`, the only way back `rollback`, both through the approval
-  policy (below).
+  policy (below). A project deploy (`projects`, below) is an apply of
+  the project's build, through the same path, by an engineer's session.
 - **The scan never waits on it.** The scheduler publishes a view (signal
   values, module status and stats, `%Q`) at most every 100 ms with a
   `try_lock`, dropping it if a reader holds the slot; the API reads only
@@ -774,7 +874,7 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   screens at once.
 - **The canvas** (`--ui DIR`, `api/ui.rs`; contract in `tests/ui.rs`):
   `GET /` and the files beside it are the wasm canvas `make canvas-web`
-  builds (`/?andon` is the floor screen, above), on the API's origin (no CORS). Only `GET`; a path is refused
+  builds, on the API's origin (no CORS). Only `GET`; a path is refused
   (404) before the file system is asked unless every segment is
   `[A-Za-z0-9._-]`, not empty, not dot-led (after percent-decoding, so
   `%2e%2e`, `%2f`, `%5c`, `%00` and any non-ASCII never pass), at most 8
@@ -800,8 +900,8 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
   every module drives the same signals and `%Q` bytes, the map is the same,
   and the calendar's `drive` lines are the same; `output-affecting` for
   anything else that can move an output: the I/O map changed at all
-  (bindings, devices, safe values), a WASM driver added, removed or
-  changed (it is what reaches a device), a module's `drives` or `%Q` window
+  (bindings, devices, safe values), the WASM driver bytes the map loads
+  added, dropped or changed (its file; it is what reaches a device), a module's `drives` or `%Q` window
   changed, a module that drives something was added or removed, the
   calendar's `drive` lines changed, or a manifest or calendar does not
   parse. When in doubt, up. What a proposal says about itself is never
@@ -908,7 +1008,7 @@ and `api/approve.rs` (the apply path); contracts in `tests/policy.rs` and
 
 ## Map and calendar reload (`map-reload`, built)
 
-An apply or rollback whose I/O map, calendar or WASM drivers differ from
+An apply or rollback whose I/O map, calendar or WASM driver files differ from
 what runs reloads them on the running box, through the same approval path
 (always `output-affecting` for a map, `logic` for a calendar with the same
 `drive` lines). `POST /api/proposals` takes `{kind: io_map|calendar, text}`;
@@ -945,16 +1045,318 @@ threads, the Modbus simulator over TCP).
   dropped; if the device does not answer that cannot happen (the box only
   reaches a device through its link), and the apply says so in
   `reload.notes`: the device's own comm watchdog is the backstop.
-- **The floor screen** (`--screen`) must fit the new map as it must at
-  startup (`screen::Layout::check`: every tile's signals are screen
-  outputs on it, every screen output is on a tile; no screen, no screen
-  outputs); if not, 409 and the old map keeps running. A screen output's
-  tile is part of its binding, so it carries like any other signal.
+- **`screen` outputs** (the retired floor screen's tiles) carry like any
+  other signal; with no layout file there is nothing they must fit.
 - **Around it.** Sinks rebind their emits by name; the API's catalog,
   device list and replay table follow. The recording restarts, so the
   next replay's window starts at the reload. A published live view from
   just before the catalog moves can be read against the other one for a
   moment (display only).
+
+## Projects on the box (`projects`, built: server side)
+
+The editor's projects (docs/UI.md "Projects", build step 2):
+`helmsman_plc::project` (folders, rules, `build`, `zip`) and
+`api/projects.rs` (routes); contract in `tests/projects.rs`.
+`helmsman-plc --projects` turns it on: projects live in
+`<state-dir>/projects/<name>/` (`/var/lib/helmsman-plc/projects/` on a
+Pi), the store defaults to `<state-dir>/store/`, and the box boots the
+store's head, or nothing (zero modules, the adapter up) before a first
+deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
+`--io-map` or `--calendar`.
+
+- **A project is a folder** of free-form `.st` files (any PROGRAMs,
+  FUNCTION_BLOCKs, FUNCTIONs and TYPEs, compiled together), plus an
+  optional `io.map` (the I/O map it runs with, `helmsman_io::text`), an
+  optional `diagram.layout` (the diagram's shared arrangement, below;
+  the build ignores it) and an optional `project.settings` (`author`; `program NAME scan_ms=
+  i= q= m=`; `param PROGRAM NAME TYPE VALUE ...`, a manifest's param
+  line), and optional WASM drivers its map names, `drivers/NAME.wasm`
+  ("WASM drivers"; they come in with its `.zip`). Many are stored; one
+  runs; editing or saving one never touches what runs (a driver file is
+  read at the next deploy or map reload, as the box's are).
+- **Names and contents.** A project is 1..=48 of `a-z 0-9 _ -` (lower
+  case, so a case-folding file system never merges two); a file is
+  `NAME.st` (1..=64 of `A-Z a-z 0-9 _ -`, no case-only twins), `io.map`
+  or `project.settings`. Checked after percent-decoding, so `..`,
+  `%2e%2e`, `a%2fb`, `a\b`, `C:` and NUL name nothing. Contents are
+  UTF-8 without NUL, other controls (tab, CR, LF aside) or bidirectional
+  overrides (no Trojan Source in reviewed code); at most 256 KiB a file,
+  64 `.st` files and 900 KiB a project, 256 projects. Symbolic links
+  under the folder are never followed.
+- **Writes** are atomic (temporary file, rename) and serialized for the
+  whole folder, so a deploy or a download reads each file whole, before
+  or after a racing save. A save may name the version (SHA-256) it read
+  (`version`, or `null` for "new only"): a stale one is 409, so two
+  editors never silently clobber each other.
+- **Build** (`project::build`): each PROGRAM becomes a module named as
+  the PROGRAM in lower case. Its `module.st` is every file in name
+  order under a `(* file NAME *)` line with every other PROGRAM blanked
+  to spaces (line breaks kept), so it is one self-contained unit with one
+  PROGRAM and a module line is a line of one file: compile errors come
+  back as `{file, line, col, message}`. Its manifest is generated:
+  `reads` its signal `VAR_INPUT`s, `drives` its `VAR_OUTPUT`s, `author`
+  the settings' (else `project NAME`), schedule and windows from the
+  settings (else `--scan-ms` and no windows; the only PROGRAM of a
+  project gets the whole image, like a bare program). The same files
+  always build the same snapshot. The project's `io.map` is the map; the
+  calendar is carried over from what runs. The WASM drivers its map
+  names are its own `drivers/NAME.wasm` files, then the box's ("WASM
+  drivers"): files, not part of the snapshot.
+- **Deploy is an apply** (`approve::apply` with `Target::Project`): the
+  build is the target change set, then the same steps as an apply:
+  tier from the diff, the policy's role and replay rule
+  (`POST /api/projects/{p}/replay` makes the evidence), compile, swap
+  between scans (`swap.rs`, state carried by name), commit with author
+  `project NAME`, approver the engineer. A project that does not build is
+  422 with its diagnostics and nothing changes; rollback is the snapshot
+  rollback it always was. A deploy records `NAME SNAPSHOT` in
+  `<state-dir>/running-project`; `GET /api/running` says which project
+  that is and whether it is still what runs (a later apply or rollback
+  moves the head, and `current` goes false). The running project cannot
+  be deleted; a rename carries the record.
+- **ZIP** (`project::zip`, in the `helmsman-project` crate since the
+  simulation uses it too; hand-written on APPNOTE 6.3.10; DEFLATE through
+  `miniz_oxide`, already in the lockfile): a download is the files
+  stored, sorted, with fixed timestamps, so download, upload, download is
+  byte-identical. An upload (2 MiB body) is hostile: at most 128 entries
+  and 900 KiB uncompressed (declared and actual; each entry inflates into
+  at most its declared size, then CRC and length must match), no ZIP64,
+  encryption, symlinks or other non-files, names UTF-8, local and central
+  headers agreeing. One common top-level folder (a plain name, never
+  `..`) is stripped and `__MACOSX/` and `.DS_Store` skipped; anything
+  else must be a project file name at the top level or a WASM driver,
+  `drivers/NAME.wasm` (NAME a slug; "WASM drivers"), so zip-slip names
+  are refused, not cleaned. A refused upload writes nothing, and a
+  replacing one leaves the old project whole until the new one is in.
+- **Import** (`POST .../import?file=F`): `F.st` as it is; `F.xml`
+  (PLCopen TC6) lowered to `F.st` by the existing importer; `F.L5X`
+  (Rockwell ladder) converted to `F.st` by `helmsman_iec::ladder` (below,
+  "L5X ladder import"), or 422 with every problem, each at its program,
+  routine and rung (the first 20 in the message, then a count).
+- **The engineer gate.** Every write (create, copy, rename, delete,
+  save, upload, import, replay, deploy) needs a login session of an
+  engineer or above (an account's, or the engineer's role-PIN session on
+  a box without accounts). The box token alone is 403 there: the agent
+  drafts proposals, never edits the editor's files. `check` takes the
+  token or any session; reads are open like every `GET`. Every call is
+  audited with the person.
+
+Endpoints (also in `api/projects.rs` and `GET /api`):
+
+| route | who | body / answer |
+| --- | --- | --- |
+| `GET /api/projects` | open | `{projects: [{name, running}], running}` |
+| `POST /api/projects` | engineer | `{name}` or `{name, from}` (copy); 201 |
+| `GET /api/projects/{p}` | open | `{name, running, files: [{name, bytes, version}], drivers: [{name, bytes, sha256}]}` |
+| `DELETE /api/projects/{p}` | engineer | 409 for the running project |
+| `POST /api/projects/{p}/rename` | engineer | `{to}` |
+| `GET /api/projects/{p}/files/{f}` | open | `{name, text, version}` |
+| `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
+| `DELETE /api/projects/{p}/files/{f}` | engineer | |
+| `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval}`, or 422 `{diagnostics: [{file, line, col, message}]}` |
+| `POST /api/projects/{p}/replay` | engineer | sim replay evidence, as `POST /api/proposals/{id}/replay` |
+| `POST /api/projects/{p}/deploy` | engineer | `{replay?}`; as apply, plus `project: {name, recorded}` |
+| `GET /api/projects/{p}/zip` | open | `application/zip` |
+| `POST /api/projects/{p}/zip[?replace=true]` | engineer | `application/zip` body; 201 new, 200 replaced |
+| `POST /api/projects/{p}/import?file=F[&replace=true]` | engineer | the file's bytes; 201 `{name, version, bytes}` |
+| `GET /api/running` | open | `{project, snapshot, running, current}` |
+
+**In the Editor** (`helmsman-canvas`: `box_projects.rs` decides,
+`box_view.rs` draws, `projects.rs` is the Files sidebar the simulation
+shares; contract in `box_projects_tests.rs`, against this API with real
+accounts). A box without `--projects` (`GET /api/projects` 404) keeps the
+module view. Otherwise:
+
+- **Sign in** is in the header: the box's own login panel (user and
+  password, or role and PIN), the session the browser's `HttpOnly`
+  cookie. Signed out or below engineer, the ST is read-only and every
+  write control is disabled, with why on hover; a 401 on any project
+  call signs the header out.
+- **Files** lists the projects (the running one marked), the open
+  project's files (every file is read on open; a dot marks unsaved
+  edits), and new, copy, rename and delete for both. A file rename is a
+  write of the new name (`version: null`, never over another file),
+  then a delete of the old.
+- **Save** writes every edited file with the version it read; a 409 says
+  someone else saved it and offers Reload (the box's text, the edits
+  here dropped). **Deploy** saves first, then `check`, then `replay` when
+  `approval.needs.replay` says so (or the deploy answers 428), then
+  `deploy` citing it, and says what runs (project, modules, snapshot). A
+  422 lists every error as `file:line:col`; a click opens the file at the
+  line. A click on a block of the running project's diagram opens its
+  file at its line (`(* file NAME *)` headers in the build).
+- **Upload** (⋯): a `.zip` becomes the project its file name says
+  (`projects::slug`), a taken name offers Replace; any other file is
+  imported into the open project, and a refusal (an L5X outside the
+  ladder subset, 422) is shown in the box's words. **Download**: the browser fetches `GET .../zip`.
+
+**In the simulation** (`sim_projects.rs`, the same Files sidebar and
+header; contract in `sim_projects_tests.rs`): projects live in the page's
+`localStorage` (`helmsman-projects 1` JSON, every project held to the
+rules on read; every access wrapped, and a page whose storage throws
+keeps them in memory and says so). The built-in examples are read-only
+projects (named after their PROGRAM): they open and edit like any other,
+and Save keeps a copy under a free name. The build is the box's (one
+`.st` as it is; several in name order under `(* file NAME *)` lines), so
+errors and block clicks map to a file and line. Deploy compiles and runs
+it in the page. Upload and Download use `helmsman-project`'s `.zip`;
+`.st`, `PLCopen` `.xml` and `.L5X` import into the open project. An
+L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
+so it becomes the same `.st` the box makes, or is refused whole with the
+box's list of reasons (`sim_projects_tests.rs`).
+
+**The diagram's arrangement** (`arrangement-persist`; `arrange.rs` in
+the canvas, the file format in `helmsman_project::layout`; contract in
+`arrange_tests.rs`, `box_projects_tests.rs` and `sim_projects_tests.rs`).
+Two layers. The shared default is the project's `diagram.layout`
+(`helmsman-layout 1`, one tab-separated `move` line per block: POU, which
+of the blocks with that label and text, offset, label, text; at most 4096
+moves, offsets within ±10⁶, refused whole when it does not read, on a
+save and in an upload). On a box it is the running project's, read with
+the project list and saved by Save as default as an ordinary file write
+(engineer only, with the version read: a stale save is 409 and read
+again); in the simulation it is a file of the browser-stored project
+(not of a read-only example). Personal tweaks are offsets on top of the
+default, kept in the browser's `localStorage`
+(`helmsman-canvas/arrangements`, every access wrapped, at most 32 views,
+the least recently changed dropped), keyed by view (`box:PROJECT`,
+`box-modules`, `sim:PROJECT`). A new default reaches a screen with its
+tweaks still on top. Blocks are matched by POU, label, text and
+ordinal, so an edit that renumbers them keeps both layers; one
+arrangement per POU serves every module that uses it. Reset layout drops
+the tweaks; a second step stores the automatic layout as the tweak.
+
+ `scripts/pi-deploy-plc.sh` installs the
+binary and the canvas and runs `helmsman-plc --projects`
+(`PLC_MODE=program` keeps one program file). Its unit runs `helmsman-plc
+project seed NAME FILE.st` before every start (`project::seed`): only on
+a first install (no project, nothing deployed) it makes the project and
+commits its build as the store's first snapshot (approver `first
+install`), so the box boots running `line`; afterwards it touches
+nothing. `scripts/pi-account.sh` makes the engineer login.
+
+### L5X ladder import (`l5x-import`, built)
+
+`helmsman_iec::ladder` (`mod.rs` the converter, `rung.rs` the rung
+neutral text, `lib.st` the Logix semantics in ST); contracts in
+`helmsman-iec/tests/ladder.rs` (fixtures, refusals, hostile files) and
+`tests/ladder_equiv.rs` (the proof below). Card `l5x-scope`: the ladder
+subset converts, the rest is refused, and either the whole export
+converts or nothing is written.
+
+- **Subset.** XIC, XIO, OTE, OTL, OTU; branches (legs may be empty);
+  ONS, OSR, OSF; TON, TOF, RTO, CTU, CTD, RES; EQU/EQ, NEQ/NE, LES/LT,
+  LEQ/LE, GRT/GT, GEQ/GE, LIM/LIMIT (both the old and the v36
+  mnemonics); ADD, SUB, MUL, DIV, MOD, CPT (`+ - * / MOD`, negation,
+  parentheses), MOV/MOVE, CLR, COP between elements of one type; JSR to a
+  ladder routine of the same program, without parameters, as the last
+  instruction of its rung (inlined there under the rung condition, each
+  call site a copy; recursion, more than 25 levels or more than 4 MiB of
+  inlined text is refused). Tags of controller and program scope of type
+  BOOL, SINT, INT, DINT, REAL, TIMER, COUNTER and arrays of them, with
+  constant subscripts; bits of integers (`Word.5`); aliases of such tags
+  (replaced by the tag they name).
+- **Semantics** (each from RM003's execution table or flow chart, pages
+  in docs/SOURCES.md): a rung runs left to right with a rung condition;
+  a branch gives each leg the condition at its start and ORs the legs. A
+  TIMER or COUNTER stays a structure (`LOGIX_TIMER`: PRE, ACC, EN, TT,
+  DN and a hidden `LAST`; `LOGIX_COUNTER`: PRE, ACC, CU, CD, DN, OV, UN)
+  the rungs read and write; TON/TOF/RTO/CTU/CTD are stateless blocks in
+  `lib.st` that copy it in and out and follow the flow charts: ACC in ms
+  from the scan's clock (a TON on `T#100000d` read once a scan, so a
+  scan sees one time), overflow pinning ACC at 2147483647, a negative
+  PRE or ACC faulting the program (Logix's major fault 4/34), counters
+  wrapping with OV/UN and DN left alone while either is set. Numbers
+  follow Logix's conversions: SINT and INT widen to DINT, an operation is
+  REAL if any operand or the destination is, a REAL stored in an integer
+  rounds to the nearest (ties to even) and keeps the low bits, narrowing
+  keeps the low bits; integer DIV by zero gives Source A, MOD by zero 0
+  (CPT's `/` and `MOD` too: RM003 does not say, see SOURCES). Before the
+  first scan the PROGRAM runs Logix's prescan once (`LOGIX_PRESCANNED`):
+  OTE clears, ONS/OSR arm, OSF clears, TON/TOF/RTO reset as their
+  Prescan rows say, CTU/CTD set CU/CD, every called routine once.
+- **Shape.** One file (`F.st`): a header with the notes (a periodic
+  task's rate, renamed tags, tags left out), only the helpers it uses,
+  then one `PROGRAM` per Logix task, named as the task, running its
+  programs in order from each main routine. A program's `Input`/`Output`
+  parameters of an elementary type are the PROGRAM's `VAR_INPUT`/
+  `VAR_OUTPUT` (the box's ports, bound to signals); every other tag is a
+  `VAR` with its decorated initial value (RM014 pp.43-46) and the
+  timers' and counters' pseudo-operands (RM003 p.856). Program tags of
+  two programs in one task that share a name, or that shadow a
+  controller tag, become `PROGRAM_TAG`; a tag whose name ST keeps
+  (`Log`, `Max`, `Limit`) becomes `Log_tag`. An export without tasks is
+  one PROGRAM named as the controller. Every PROGRAM is compiled before
+  it is returned: a converter fault is a refusal, never a broken file.
+- **Refused**, each with its place: any other instruction (add-on
+  instructions named as such), FBD, SFC and ST routines (Logix ST calls
+  instructions IEC ST lacks), tags of other types (UDTs, LINT, STRING,
+  CONTROL, module I/O such as `Local:1:I.Data.3`, also through an alias),
+  indirect subscripts, produced/consumed and InOut tags, constant tags
+  written, JSR with parameters or inside a branch, JSR to the main
+  routine, programs in no task or disabled, event tasks, a controller
+  tag two tasks use (the box's PROGRAMs share no memory), conflicting
+  pseudo-operands, malformed rungs. The file passes the L5X reader's
+  limits (no DTD so no entities or XXE, nesting 256, 8 MiB, 100 000
+  items); rungs nest at most 32 branches and 1000 instructions.
+- **Not reproduced:** math status flags and minor faults (no tag
+  changes), `S:FS` and other system values (refused as unknown tags),
+  forces (noted), the microsecond clock (a timer reads the scan's ms).
+- **The proof** (`tests/ladder_equiv.rs`): random rungs from the subset
+  (branches three deep, every instruction, a JSR to a subroutine, bits,
+  arrays, SINT/INT/DINT/REAL mixes and extremes) run through a reference
+  evaluator written in the test from RM003 and through the converted ST
+  on the interpreter, with random inputs and scan times; every tag must
+  match after every scan and a fault must come on the same scan (400
+  property cases and 200 fixed seeds; the fixed run also checks that
+  most programs run all 40 scans, so it is never vacuous). A real Studio
+  5000 export is still to come (`l5x-real-export`).
+
+### Forced inputs (`force-inputs`, built)
+
+`helmsman_plc::force` (the set and how it applies) and `api/forces.rs`
+(routes); contract in `tests/projects.rs` (`force` tests) and the
+module's unit tests.
+
+- **What.** An engineer pins an input to a value: an input signal (an
+  `in` signal of the map or the calendar, never another module's output)
+  with a value of its type, or an address of the box's input image
+  (`%IXb.n`, `%IBn`, `%IWn`, `%IDn`, little-endian as the image is) with
+  a value that fits. Forcing a forced point again replaces it; at most 64
+  at once.
+- **When.** Every scan, after the I/O read (the assembly copied into
+  `%I`, the calendar evaluated) and before any module runs, the scan
+  thread writes every force over what was read (`force::Reader::apply`).
+  The API publishes a new immutable set on each change and bumps a
+  generation; the scan picks it up with a `try_lock` and otherwise keeps
+  applying the set it has, so it never waits on the API.
+- **Who and how long.** `POST /api/forces` and the releases need an
+  engineer session (the box token and lesser roles are 403). A force
+  belongs to the session that made it (kept as the session token's
+  SHA-256): it ends at that session's logout, and the API sweeps once a
+  second for sessions that expired or were revoked (`Logins::live`, which
+  never restarts a session's idle time). Every force ends when a project
+  is deployed. Making, replacing and releasing are audited with the
+  person; an automatic release is audited as the box's, with why.
+- **Seen.** `GET /api/forces` lists them; `/api/signals` (and each
+  signal) carries `forced`; the values stream carries `forced` per
+  signal and a `forces` list; every trace (`GET .../trace` and its
+  stream) carries `forces`, so the diagram marks forced points FORCED.
+- **In the Editor.** For an engineer, an input signal's block on the
+  diagram is a control: a BOOL flips, a number drags, and either forces
+  it. A forced input is marked FORCED in the warning colour over its
+  block and in the I/O tab, from the values stream; a banner over the
+  diagram lists every force with release and Release all (disabled, with
+  why, for anyone else). Address forces (`%IX...`) have no click: the
+  diagram's reads are variables, and only map signals are clickable.
+
+| route | who | body / answer |
+| --- | --- | --- |
+| `GET /api/forces` | open | `{forces: [{id, signal, address, value, by, at}]}` |
+| `POST /api/forces` | engineer | `{signal, value}` or `{address, value}`; 201 the force |
+| `DELETE /api/forces/{id}` | engineer | `{released: [id]}` |
+| `DELETE /api/forces` | engineer | `{released: [ids]}` |
 
 ## Agent loop (`agent-loop`, built)
 
@@ -1019,8 +1421,12 @@ serves those per agent version (relay protocol v1).
 `POST /mcp` on the box API's listener (`api/mcp.rs`; contract in
 `helmsman-plc/tests/mcp.rs`) serves the chat agent's tools to an
 engineer's own MCP client (Claude Code, Claude Desktop): `claude mcp add
---transport http helmsman http://<box>:8080/mcp --header "Authorization:
-Bearer <token>"`. Sources: `docs/SOURCES.md`, MCP specification.
+--transport http helmsman http://localhost:8080/mcp --header "Authorization:
+Bearer <token>"` on the box or through an SSH tunnel; from the LAN,
+`https://<box-name>:8080/mcp`, with the client trusting the certificate
+part of the box's `tls.pem` (Node: `NODE_EXTRA_CA_CERTS`), since plain
+HTTP from another host is refused (Box API, HTTPS). Sources:
+`docs/SOURCES.md`, MCP specification.
 
 - **Transport.** Streamable HTTP, one JSON-RPC message per POST, answered
   with one JSON object, through the same bounded parser, worker cap,
@@ -1215,7 +1621,12 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   or the model API's `messages.i.content.j`), or names no block but is
   about PDFs (the per-request page and document caps: the documents of
   the trailing, unanswered user message go); any other refusal touches
-  nothing. A PDF
+  nothing. A refused drop-in stays in the conversation's proposal binding,
+  marked refused (`Drafts::refused`, `refused-dropin-binding`): every
+  later proposal of that chat cites it in `dropins` and lists it again in
+  `refused_dropins`, so the engineer sees everything the conversation
+  touched and which of it the model never read (the box refuses a
+  `refused_dropins` that is not a subset of `dropins`, 400). A PDF
   has no text on the box: `read_dropin` and the PLC view answer 404 saying
   so. Attached to a chat message it goes in that user message as a
   `document` block (`source.type: base64`, `media_type: application/pdf`,
@@ -1269,6 +1680,8 @@ host-enforced checks; an AI review (`marketplace`) can only refuse on top.
   manifest not in canonical form; a blob the tree reads as text (all but
   a `wasm-module`'s binary) that is not UTF-8. A box from before
   `wasm-store` refuses a bundle with a WASM module as an unknown tree line.
+  A bundle carries no WASM driver: a `wasm-driver` line (#89's) is
+  refused, saying that drivers are files on the box now.
 - **Bundle manifest** (`helmsman-bundle-manifest 1`, canonical): name,
   version, author, description, and the **capability manifest**: modules,
   signals read, signals driven (modules and calendar `drive` lines), `%Q`
@@ -1465,6 +1878,16 @@ agent as ST; nothing here writes ST back).
   selector); each loop is a region gated by its head or condition. Every
   node, region and statement carries its `StmtId`, found by POU, line and
   column in the `TraceMap`, so a trace maps straight onto it.
+- **NOT is a bubble**, the FBD convention, not a block: a boolean `NOT`
+  is `Wire::negated` (a circle on the pin it feeds; `y := NOT x` puts it
+  on the write's pin) or `Region::negated` (`IF NOT jam`). `NOT NOT x` is
+  a plain wire, `NOT TRUE` folds into the constant `FALSE`, and FB
+  outputs, array elements, bits, struct fields and BOOL functions get a
+  bubble like any variable. NOT on a BYTE/WORD/DWORD/LWORD stays a block
+  (a bitwise complement; a bubble would hide that every bit flips), as
+  does NOT on an operand whose type the declarations do not give.
+  Properties over generated programs: every negated wire carries a BOOL
+  (by the compiled program's types), and no NOT block has a BOOL input.
 - **Layout**: statements stack in source order, each a band laid out as a
   tidy tree layered by longest path (inputs left, assignment right); arms
   are boxes to the right of their conditions. Sizes come from label
@@ -1473,15 +1896,32 @@ agent as ST; nothing here writes ST back).
 - **Live**: `annotate` puts one `Trace` on a diagram (FB bodies viewed
   through one instance's prefix): variable values at scan end, logic and
   comparisons re-evaluated from them, arithmetic left blank; gates open,
-  closed or not reached from arm hits and loop passes.
+  closed or not reached from arm hits and loop passes. A negated wire
+  shows its source's value; the block it feeds sees the inverse
+  (`Live::input`, `Live::gate_value`), and the bubble is outlined in the
+  colour of what the consumer sees.
 - **"On because"** (`explain`): the last assignment to the variable that
   ran, the gates around it with the conditions they needed TRUE or FALSE
   and their values, and the same question for every variable read, to a
   depth. FB outputs are followed into user FB bodies (and FB inputs back
   out to the caller's argument); library FBs report their inputs. No
   assignment ran: "held", with the closed gate that stopped each. Data, not
-  prose: explain-mode phrases it.
-- **Canvas**: "Live ST view" in the top bar, with two sources. **Box**
+  prose: explain-mode phrases it. Negated gates read as such (`NOT JAM`
+  with its inverted value), so the phrases are unchanged.
+- **The highlighted path** (`drivers`): the same rules as `explain`, as
+  sets of nodes, wires and regions of the diagram shown (one POU, one
+  instance prefix): the assignment that ran last, everything wired into
+  it, the gates around it (an ELSIF/ELSE with the earlier arms' conditions
+  that had to fail), and the same for every variable read; held, the
+  closed gates, their conditions and the skipped assignments; an
+  instance's output, its last call. Each node and variable is visited
+  once, so it runs every frame. Tapping an output, an assignment or a
+  variable's block sets the "because" variable and the canvas draws its
+  path at full strength and dims the rest; tapping empty space clears it.
+  Contract: `tests/live.rs` (the latch's MOTOR is start, stop and the
+  seal-in, nothing else), a property that the path holds the assignment
+  `explain` names, and a headless canvas test in `st_view.rs`.
+- **Canvas**: the Editor (docs/UI.md), with two sources. **Box**
   (`canvas-web`; the default in a browser the box served): the module list
   and a module's source from the box API, its traces from
   `/api/modules/{name}/trace/events` and live values and module status
@@ -1494,16 +1934,32 @@ agent as ST; nothing here writes ST back).
   connected, reconnecting, unreachable after 3 failures; a failed stream
   is closed and reopened after 2 s doubling to 30 s (the canvas's backoff,
   not the browser's). The decisions (`remote::BoxState`) are free of I/O
-  and tested natively against the real API. **Demo** (`?demo`, native,
-  or the button when the box is unreachable): a module runs in a
-  `helmsman_plc::Runtime` on the page clock with a `TraceTap` asked for
-  the last scan of every frame; scripted or hand-switched inputs. Pan,
-  zoom, click a block for its source line, click an output for why.
+  and tested natively against the real API. **Simulation** (the ST
+  playground below: docs/playground/, `?playground` or `?demo`, native,
+  or "Simulate in this browser" from the ⋯ menu or when the box is
+  unreachable). Pan, zoom, drag blocks; a click on a block sends the ST
+  editor ("ST", beside the diagram; read-only on a box) to its line;
+  tapping an output shows its highlighted path.
+- **Monitor** (docs/UI.md; `monitor.rs`, contract in `monitor_tests.rs`
+  against the real API scanning `programs/line.st`). One `Feed` trait
+  over both sources: a box's `BoxState` (module status from
+  `/api/events`; while the Monitor shows, every module's traced scans on
+  one stream, `GET /api/traces/events`, which holds one of the box's
+  eight stream slots however many modules run, each module's source
+  fetched and lowered against its trace) and the simulation's session.
+  Tiles come from the source's declarations (`Shape`: the PROGRAM's
+  outputs, then each user FB instance, nested) and the scan's values by
+  path. A program whose newest scan is over 3 s old, or every program
+  while the values stream is down or silent for 3 s, is drawn grey with
+  the age: never a colour. It sends only GETs and stream opens (tested);
+  leaving it closes the all-modules stream and reopens the Editor's.
 
 ## Explain mode (`explain-mode`, built)
 
-Tap any block or output on the live diagram: the side panel says why it
-is in its state right now, in two layers.
+Why a variable is in its state right now, in two layers. The library and
+the box route are built; the canvas's Why panel and its "Ask why" were
+removed (docs/UI.md: the diagram itself carries why, as the highlighted
+path that drives an output).
 
 - **The box's own words** (`helmsman_diagram::phrase`, no model, works
   offline and in the demo): the `explain` facts phrased by fixed
@@ -1534,14 +1990,13 @@ is in its state right now, in two layers.
   `--relay-explain-agent V` asks the relay for an explain profile
   (default `explain-v1`: the relay's read-only, floor-language profile;
   the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
-  agent; the canvas disables Ask why with its reason (box offline, no
-  relay) and the first layer stays up. Asking rides the browser's
-  session cookie (signed in on the Proposals screen); a 401 says to sign
-  in there.
+  agent. The route takes the browser's session cookie as well as the
+  token; no canvas screen calls it now.
 
 ## Proposal review (`proposal-ui`, built)
 
-The screen an engineer approves on: "Proposals" in the canvas top bar
+The screen an engineer approves on: "Proposals" in the header's ⋯ menu,
+badged with the drafts waiting (the list is read every 30 s)
 (`review.rs` decides, `review_view.rs` draws, `web::Http` fetches; contract
 in `review.rs`'s tests and `review_tests.rs`, which runs the screen's own
 requests against a real box: runtime, recorder, store, floor policy, PIN
@@ -1619,19 +2074,36 @@ in `tests/site.rs`, `site_tests.rs`).
   It is the one route other origins may read (`Access-Control-Allow-Origin:
   *`, no credentials, no preflight), and with `--site` the canvas page's
   CSP allows `connect-src http:` (question `site-view-cors`).
-- **The view** (`?site`, or the Site tab): the list from this box, each
-  peer's status from that peer's own `/api/site` fetched by the browser
-  (no credentials, 64 KiB cap, 8 s timeout, the answering box's id must be
-  the beacon's), every row a link to `http://ADDR/` built only from a
-  parsed IPv4:port. Unreachable, silent and conflicting boxes say so.
+- **No view for now.** The canvas's Site view (`?site`) was removed with
+  docs/UI.md's clean-up; the site returns with a fleet view. The box side
+  above is unchanged.
+
+## The canvas's loading screen
+
+Both pages (`index.html` on the box, `playground.html`) include
+`crates/helmsman-canvas/loading/`: trunk inlines `loading.js` into the head
+and `loading.html` into the body, so the only new file served is the
+initializer (`<hash>-helmsman-canvas-initializer.js`, trunk's
+`data-initializer`). Trunk's fetch reports decoded bytes against a size it
+writes into the page, so the bar is exact behind a compressing server; it
+writes the size from before wasm-opt, so `scripts/patch-wasm-size.sh`
+corrects it after the build (a total it cannot use shows the moving bar).
+`loading.js` also listens for script and
+preload errors, uncaught errors and rejections until the app says
+`helmsman-started` or `helmsman-start-failed` (`main.rs`), and shows the
+plain message with the failing address. Sixty seconds with no progress says
+so without giving up. `helmsman-started` removes the screen, whatever it was
+showing.
 
 ## ST playground (`playground`, built)
 
-The public demo: the canvas in a mode of its own (`?playground`, or the
-page `scripts/build-playground.sh` builds into `docs/playground/`, which
-GitHub Pages serves from master as /helmsman/playground/). No box, no
-server: everything runs in the page (`playground.rs`, `playground_view.rs`,
-`claude.rs` in the canvas; contracts in `playground_tests.rs`).
+The public demo: the canvas's Editor with the simulation as its source
+(the page `scripts/build-playground.sh` builds into `docs/playground/`,
+which GitHub Pages serves from master as /playground/ on helmsman.advin.io; `?playground`
+anywhere). The same screens as on a box (`editor.rs` lays them out for
+both). No box, no server: everything runs in the page (`playground.rs`,
+`playground_view.rs`, `claude.rs` in the canvas; contracts in
+`playground_tests.rs` and `ui_tests.rs`).
 
 - **Editor → program.** A multiline ST editor with line numbers; it
   compiles 0.35 s after the last keystroke with `helmsman_iec::compile`
@@ -1650,11 +2122,10 @@ server: everything runs in the page (`playground.rs`, `playground_view.rs`,
   switch; integers: slider and field in the type's range; REAL: field;
   TIME: ms slider), each `VAR_OUTPUT` a lamp or readout; `AT %IXn.m` /
   `%QXn.m` bits and direct `%IX`/`%QX` addresses in the code likewise. A
-  value outside its type's range never reaches the program. A trend of up
-  to six chosen signals over the last 10 s.
-- **The live diagram and "on because"** are the live ST view's
-  (`st_view::Viewer`): tapping an output opens its explanation.
-- **Ask Claude.** A panel that calls the Messages API from the page:
+  value outside its type's range never reaches the program. The Trend
+  tab: up to six pinned signals over the last 10 s.
+- **The live diagram** is the box's (`st_view::Viewer`).
+- **Claude** (its tab). Calls the Messages API from the page:
   `claude-sonnet-5-5` by default (Opus 5.5 and Haiku 5.5 selectable),
   streamed, API version `2026-10-21`, `max_tokens` 16000, effort medium,
   the fixed system prompt (the playground's dialect: what helmsman-iec
@@ -1699,14 +2170,14 @@ server: everything runs in the page (`playground.rs`, `playground_view.rs`,
 | module ↔ CPU | one scan's work | instruction budget per scan (`Watchdog` fault); a WASM module's fuel per scan (the same fault) and linear-memory cap | built |
 | module ↔ network | nothing | ST has no network primitives, and a WASM module can import only `helmsman/v1` (its ports and the scan time: no WASI, sockets, files or clocks), refused at load otherwise; a module drives a signal and core-owned sinks publish it (address checks, no redirects, bounded queue, never blocking the scan) | built: webhook sink and the OPC UA server (read-only, SecurityPolicy None; `sink-opcua`) |
 | module ↔ devices | signal values by name | the I/O map (only bound signals, one writer per point, writable points only), binding at load (one writer per output signal: a module or the calendar), hold-on-missing-input | built |
-| driver ↔ box | strings and values | the `Driver` contract; a WASM driver (`helmsman-driver/v1`) imports only its socket to its own device's endpoint (it never names a host or port; no files, clocks or WASI, refused at load otherwise), and only in `read` and `write`, under fuel and memory limits and a per-call deadline; a trap fails that point (`Error::Driver`), not the link or the runtime | built (`wasm-driver`; `helmsman-io/tests/wasm_driver.rs`, `helmsman-plc/tests/wasm_driver.rs`); a map can't name one yet (`wasm-driver-map`) |
-| box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` exist only with the feature; the Class 1 scanner (its own `scanner` feature, in the box build for the adapters the box masters, below) sends only `Forward_Open`/`Forward_Close` to an Assembly path. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
+| driver ↔ box | strings and values | the `Driver` contract; a WASM driver (`helmsman-driver/v1`) imports only its socket to its own device's endpoint (it never names a host or port; no files, clocks or WASI, refused at load otherwise), and only in `read` and `write`, under fuel and memory limits and a per-call deadline; a trap fails that point (`Error::Driver`), not the link or the runtime; the binary is a file (`drivers/NAME.wasm`, a slug, regular files only, links never followed, checked at upload and at every load) | built (`wasm-driver`, `wasm-driver-map`; `helmsman-io/tests/wasm_driver.rs`, `helmsman-plc/tests/wasm_driver.rs`, `helmsman-plc/tests/driver_map.rs`) |
+| box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` exist only with the feature; the Class 1 scanner (its own `scanner` feature, out of the box build for now, below) sends only `Forward_Open`/`Forward_Close` to an Assembly path. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
-| box ↔ mastered EtherNet/IP adapters | Class 1 I/O: the device's output assembly, its input assembly | `helmsman-proto`'s `scanner` feature, which the box build has: it sends `Forward_Open` and `Forward_Close` to an Assembly-class path and nothing else (no other service, no `Session::request`); only devices in the I/O map, through `enip-io`, with the map's one-writer rule and approval tier. `tests/box_build.rs` checks `scanner` is in and `unrestricted` still out. | built (`enip-io`); real-device check `e1213-bench` |
+| box ↔ mastered EtherNet/IP adapters | Class 1 I/O: the device's output assembly, its input assembly | `helmsman-proto`'s `scanner` feature, which only helmsman-plc's `enip-io` feature turns on (out of the box build until `e1213-bench` passes): it sends `Forward_Open` and `Forward_Close` to an Assembly-class path and nothing else (no other service, no `Session::request`); only devices in the I/O map, through `enip-io`, with the map's one-writer rule and approval tier. `tests/box_build.rs` checks the box build has neither `scanner` nor `unrestricted`, and that `enip-io` brings `scanner` alone. | built (`enip-io`, out of the box); real-device check `e1213-bench` |
 | box ↔ LAN peers | site beacons in, this box's beacon out | strict parse, source-address rule, intake and refresh limits, a bounded list, no takeover of a live id; the box only lists peers and never connects to one; `/api/site` is the only cross-origin read | built (`site-view`) |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) and `local-accounts` (per-person logins that replace the PINs once an accounts file exists; the audit names the person) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |
-| browser (canvas) ↔ box | sign-in, drafts' replays, approvals, Ask why | the session is an `HttpOnly; SameSite=Strict; Path=/api` cookie the page cannot read (no API token in the browser); every cookie call but a `GET` needs `X-Helmsman-Request: 1` and the box's own `Origin` (or `Referer`), else 403; a bearer, when sent, wins and the cookie is not read; no `Secure` flag on plain-HTTP LAN boxes | built (`canvas-token`; `helmsman-plc/tests/accounts.rs`, the canvas's `review_tests.rs`) |
+| browser (canvas) ↔ box | sign-in, drafts' replays, approvals, Ask why | the session is an `HttpOnly; SameSite=Strict; Path=/api` cookie the page cannot read (no API token in the browser); every cookie call but a `GET` needs `X-Helmsman-Request: 1` and the box's own `Origin` (or `Referer`), else 403; a bearer, when sent, wins and the cookie is not read; the box serves HTTPS with a self-signed certificate whose fingerprint the person checks once (journal, ⋯ menu), the cookie is `Secure` over it, and plain HTTP is served only from the box's own host | built (`canvas-token`, `box-https`; `helmsman-plc/tests/https.rs`, `helmsman-plc/tests/accounts.rs`, the canvas's `review_tests.rs`) |
 | engineer's MCP client ↔ box | tool calls, plant data | `POST /mcp`: the box token, an `Origin` check, the agent's fixed tool set run in process against only the read and draft routes (no apply, rollback or PIN), results in the `<box-data>` envelope, every call audited as `mcp` | built (`box-mcp`; `helmsman-plc/tests/mcp.rs`) |
 | playground visitor ↔ Claude | the visitor's own key, program and question | the key only in `x-api-key` to api.anthropic.com (redacted `Debug`, page CSP `connect-src` to that host and self), memory unless "remember" is ticked; the program and errors in tags it cannot close; Claude's code only loaded into the editor, never run; or the local proxy holds the key | built (`playground`) |
 | box ↔ Claude | prompts, tool calls | the relay holds the key; boxes hold only a per-box token, sent only to the relay; the box API token never leaves the box | box side built (`agent-loop`); relay `relay-v0` |
@@ -1723,8 +2194,9 @@ prompt. The agent never touches the Rust core.
   `apply`. `box-mcp` (built, above) wraps the same routes;
   `local-accounts` (built, above) replaces role PINs with people, keeping
   the role check and the gate.
-- `canvas-web` (built, above) → `andon-screen`: another page the box
-  serves from the same directory, on the same streams.
+- `canvas-web` (built, above) → the Monitor (built, above; docs/UI.md,
+  step 3): a screen of the same app, on the same values stream plus one
+  stream of every module's traces; it replaced the andon view.
 - `snapshots` (built, above) → `approval-policy` / `box-api`: apply =
   compile, check, swap, then `Store::commit` with the approver; the box API
   serves `list`, `diff` and `rollback`. `bundle-format` (built) exports a

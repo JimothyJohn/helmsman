@@ -15,10 +15,12 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
 
 - **`box` is a feature boundary.** helmsman-plc's store, API, policy, bundles,
   site discovery and OPC UA sit behind its default `box` feature (WASM behind
-  `wasm` and sink TLS behind `https`, both on with the defaults); the canvas
-  embeds the runtime with `default-features = false` and ships as wasm32.
-  New code that touches the network, SQLite, TLS or the OS goes behind `box`
-  (and its test targets get `required-features = ["box"]`).
+  `wasm` and sink TLS behind `https`, both on with the defaults), and
+  helmsman-plc must still build without them (`lint.sh` checks it). New
+  code that touches the network, SQLite, TLS or the OS goes behind `box`
+  (and its test targets get `required-features = ["box"]`). The canvas
+  ships as wasm32 on helmsman-iec and helmsman-diagram alone; helmsman-plc
+  is only its native dev-dependency (the real box API in its tests).
   crates/helmsman-canvas/tests/wasm_deps.rs fails if a native-only crate
   reaches the canvas.
 - **Test helpers that start the binary** (`plc()` in tests/bin.rs and its
@@ -30,6 +32,21 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
 - **PRs land one at a time.** dev's protection isn't strict: test-merge
   overlapping PRs on a throwaway branch and run the gate before both land.
 - **Protocol claims** get a docs/SOURCES.md entry and a § / page citation.
+
+## Voice (anything a user reads: the site, README intro, UI text, release notes)
+
+The reader is a controls or plant engineer, not a developer. Benefits, not
+features: **robust** (few dependencies, CI), **simple** (one controller, no
+microservices), **safe** (memory-safe, approval and audit, friction hidden
+to keep the user in flow), **reliable** (native performance, fixed scan,
+watchdog). The headline is agentic programming: you write specs and
+validate results, you don't write code. Proven IEC 61131-3 Structured Text,
+no ladder and proud of it. EtherNet/IP (CIP) and Modbus TCP, Ethernet only;
+a pure soft PLC with I/O in remote modules (e.g. Moxa ioLogik). Say "early
+release". Never mention Rust, crates, the Raspberry Pi or the model vendor
+by name. Claims must be true of what is built. Write like an engineer, with
+no AI tells: no "you don't X, you Y", "X, not Y" contrasts used as flourish,
+staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
 
 ## Next door
 

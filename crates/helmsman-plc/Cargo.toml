@@ -27,14 +27,19 @@ webpki-roots = { version = "1.0.11", optional = true }
 ring = { version = "0.17.14", optional = true }
 # The WASM module tier (`wasm`): a pure-Rust interpreter with fuel
 # metering; ARCHITECTURE "WASM modules" says why not wasmtime.
+# A project's rules and its .zip (`project`), shared with the canvas's
+# simulation; pure Rust (miniz_oxide for DEFLATE).
+helmsman-project = { path = "../helmsman-project", optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
 
 [dev-dependencies]
+# Deflated entries for hostile upload archives (tests/projects.rs).
+miniz_oxide = "0.9.1"
 # The box build itself never enables `unrestricted`; its tests play scanner.
 helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
-# The simulated Moxa ioLogik E1213 (tests/enip_link.rs); `enip` itself is
-# in `box`. `wasm`: a WASM driver behind a link (tests/wasm_driver.rs).
+# The simulated Moxa ioLogik E1213 (tests/enip_link.rs, which drives
+# helmsman-io's driver directly; the box's own is the `enip-io` feature). `wasm`: a WASM driver behind a link (tests/wasm_driver.rs).
 helmsman-io = { path = "../helmsman-io", features = ["enip-sim", "wasm"] }
 # The WASM tier's test modules are hand-written WAT, assembled in the test.
 wat = { version = "1.262.0", default-features = false }
@@ -52,15 +57,20 @@ workspace = true
 [features]
 # `box`: what only a real box needs: the snapshot store (SQLite, built from
 # C), the HTTP API, serial ports (modbus-rtu) and the board's GPIO / I2C
-# (Linux), EtherNet/IP adapters the box masters (helmsman-io's enip-io:
-# the Class 1 scanner, never `unrestricted`), and the binary. Without it the crate is the runtime
+# (Linux), and the binary. Without it the crate is the runtime
 # alone (scheduler, signals, links, tap, replay), which the canvas embeds
 # and which builds for wasm32.
 # `https`: https:// sinks (rustls with the ring provider, Mozilla roots
 # compiled in). On by default so the Pi can post to a cloud receiver;
 # `--no-default-features --features box` builds an http-only box.
+# `enip-io`: EtherNet/IP adapters the box masters (helmsman-io's enip-io
+# driver: the Class 1 scanner, never `unrestricted`). Out of the box build
+# until the E1213 bench passes (TODO.md `enip-in-box`); a box map that
+# names `enip-io` without it is refused as "not in this build".
+# scripts/lint.sh keeps it compiling.
 default = ["box", "https"]
-box = ["dep:rusqlite", "dep:ring", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "helmsman-io/enip", "wasm"]
+box = ["dep:rusqlite", "dep:ring", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
+enip-io = ["box", "helmsman-io/enip"]
 # `wasm`: modules compiled to WebAssembly (`module.wasm`) beside ST ones,
 # run by an interpreter under fuel and memory limits, and the map's WASM
 # drivers (`wasm:NAME`, helmsman-io's `wasm`). In `box`; the canvas's
@@ -148,3 +158,15 @@ required-features = ["box"]
 [[example]]
 name = "wasm_bench"
 required-features = ["wasm"]
+
+[[test]]
+name = "projects"
+required-features = ["box"]
+
+[[test]]
+name = "trend"
+required-features = ["box"]
+
+[[test]]
+name = "https"
+required-features = ["box", "https"]

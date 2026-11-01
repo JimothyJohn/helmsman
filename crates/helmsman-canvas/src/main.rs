@@ -1,19 +1,16 @@
-//! `helmsman-canvas`: the operator's live view of a module's Structured
-//! Text, drawn as a diagram with a traced scan on it every frame (opens on
-//! it), the review screen for the agent's proposals (diffs, sim replay,
-//! approve with a PIN), and a lab node editor for building logic out of
-//! inputs, outputs, timers, counters and latches, grouped into nested
-//! function blocks.
+//! `helmsman-canvas`: the browser app (docs/UI.md). An always-on header
+//! over the Editor (a program's Structured Text and its live diagram, the
+//! ST beside it on demand, the program tree, I/O, a trend and Claude) or
+//! the Monitor (status tiles, phone to wall TV, watch only); and the
+//! agent's proposals (diffs, sim replay, approve with a PIN) behind the ⋯
+//! menu.
 //!
-//! Native: `cargo run -p helmsman-canvas` (the demo). Web: built by
-//! `make canvas-web` and served by the box (`helmsman-plc --ui`), it
-//! watches that box over its API; `?demo` (or `make canvas-serve`, with
-//! no box behind it) runs the demo in the page instead, `?andon` is
-//! the box's floor screen, full screen, and `?site` lists every box of its
-//! site (`--site`), each a link to its own canvas. `?playground` (and the
-//! page `scripts/build-playground.sh` builds into docs/playground/) is the
-//! public ST playground: write ST, run it in the page against a virtual
-//! I/O panel, and ask Claude for help with your own API key.
+//! Where the program runs is a setting, not a mode. Served by a box
+//! (`make canvas-web`, `helmsman-plc --ui`), the page watches that box
+//! over its API. Opened from the public site (`make playground`, into
+//! docs/playground/), or with the old `?playground` and `?demo` links, or
+//! natively (`cargo run -p helmsman-canvas`), it runs a simulated box in
+//! the page against virtual I/O, with Claude on the visitor's own key.
 
 // Screen geometry is f32 throughout; counts and sim values convert into it.
 // Drawing code reads best with short geometry names (r, z, p, x, y).
@@ -26,32 +23,37 @@
     clippy::similar_names
 )]
 
-mod andon;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-mod andon_tests;
 mod app;
+mod arrange;
+#[cfg(test)]
+mod arrange_tests;
+mod box_projects;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod box_projects_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_tests;
+mod box_trend;
 mod box_view;
-mod canvas;
 mod claude;
-mod example;
-mod explain;
-mod look;
+mod editor;
+mod monitor;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod monitor_tests;
 mod playground;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod playground_tests;
 mod playground_view;
+mod projects;
 mod remote;
 mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod review_tests;
 mod review_view;
-mod site;
+mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
-mod site_tests;
+mod sim_projects_tests;
 mod st_view;
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod ui_tests;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -61,7 +63,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1400.0, 860.0])
-            .with_title("Helmsman canvas"),
+            .with_title("Helmsman"),
         ..Default::default()
     };
     eframe::run_native(
@@ -88,8 +90,28 @@ fn main() {
                 Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
             )
             .await;
-        if let Err(e) = started {
-            web_sys::console::error_1(&e);
+        // The page's loading screen waits for one of these (loading/loading.js).
+        match started {
+            Ok(()) => announce("helmsman-started", None),
+            Err(e) => {
+                web_sys::console::error_1(&e);
+                announce("helmsman-start-failed", Some(&e));
+            }
         }
     });
+}
+
+/// Tells the page, which has no other way to know, how starting went.
+#[cfg(target_arch = "wasm32")]
+fn announce(name: &str, detail: Option<&eframe::wasm_bindgen::JsValue>) {
+    let init = web_sys::CustomEventInit::new();
+    if let Some(detail) = detail {
+        init.set_detail(detail);
+    }
+    if let (Some(window), Ok(event)) = (
+        web_sys::window(),
+        web_sys::CustomEvent::new_with_event_init_dict(name, &init),
+    ) {
+        let _ = window.dispatch_event(&event);
+    }
 }
