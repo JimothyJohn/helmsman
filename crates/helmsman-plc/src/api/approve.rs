@@ -749,18 +749,6 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         }
     };
     let loaded_drivers = layout.as_ref().map(|l| l.drivers.clone());
-    if let Some(Err(problems)) = layout.as_ref().map(|l| ctx.screen_fits(l.map.as_ref())) {
-        return refuse(
-            ctx,
-            req,
-            409,
-            &json!({ "error": "the floor screen's layout does not fit the new I/O map", "problems": problems, "tier": tier.as_str(), "changed": false }),
-            &format!(
-                "{label} failed ({tier}, {who}): the floor screen's layout does not fit the new I/O map; nothing was changed"
-            ),
-            note,
-        );
-    }
     if let Some(l) = &layout {
         let fits = crate::Runtime::with_signals(appr.plant.i_len, appr.plant.q_len, new.clone(), &l.table);
         if let Err(errs) = fits {

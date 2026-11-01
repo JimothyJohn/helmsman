@@ -760,7 +760,7 @@ impl BoxState {
                 w.relower(&name, &mut generation, &mut self.queue);
                 self.generation = generation;
             }
-            // The floor screen's fetch is not this view's.
+            // Any other stream's events are not this view's.
             Msg::Event(..) => {}
         }
     }
