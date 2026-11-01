@@ -564,6 +564,13 @@ impl BoxState {
             .reduce(f64::min)
     }
 
+    /// Whether this box ever answered: a page that never reached one is
+    /// probably not served by a box at all.
+    #[must_use]
+    pub const fn ever_connected(&self) -> bool {
+        self.ever_connected
+    }
+
     #[must_use]
     pub fn link(&self) -> Link {
         let r = if self.ever_connected || self.values.failures > 0 {

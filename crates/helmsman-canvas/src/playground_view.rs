@@ -788,6 +788,13 @@ impl PlaygroundView {
         if r.changed() {
             self.chat.key_changed();
         }
+        if self.chat.from_env {
+            ui.label(
+                RichText::new("Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
+                    .small()
+                    .color(STEEL),
+            );
+        }
         if self.chat.has_key() && !self.chat.key_looks_right() {
             ui.label(
                 RichText::new("That does not look like an Anthropic key (sk-ant-…).")
