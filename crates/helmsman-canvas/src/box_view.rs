@@ -698,6 +698,7 @@ impl Body for BoxView {
                 current: open.as_ref().and_then(|o| o.current.as_deref()),
                 write,
                 dirty: self.projects.dirty(),
+                starters: true,
             };
             let act = self.files_ui.show(ui, &listing, chrome);
             match act {
@@ -705,6 +706,7 @@ impl Body for BoxView {
                 Some(Act::OpenFile(f)) => self.projects.open_file(&f),
                 Some(Act::NewProject(p)) => self.projects.create(&p, None),
                 Some(Act::CopyProject { from, to }) => self.projects.create(&to, Some(&from)),
+                Some(Act::FromStarter { from, to }) => self.projects.create_from(&to, &from),
                 Some(Act::RenameProject { from, to }) => self.projects.rename(&from, &to),
                 Some(Act::DeleteProject(p)) => self.projects.delete(&p),
                 Some(Act::NewFile(f)) => self.projects.new_file(&f),

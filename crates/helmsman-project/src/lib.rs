@@ -19,6 +19,7 @@
 //!   [`LAYOUT`] file must also read as one ([`layout::parse`]).
 
 pub mod layout;
+pub mod starters;
 pub mod zip;
 
 use std::collections::BTreeMap;

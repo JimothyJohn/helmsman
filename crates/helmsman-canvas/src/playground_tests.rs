@@ -1301,6 +1301,19 @@ fn every_tab_and_example_draws() {
         }
         assert!(s.view.session.scans > 0, "{k}");
     }
+    for st in helmsman_project::starters::STARTERS {
+        let mut src = String::new();
+        for (f, text) in st.files {
+            if helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St) {
+                src.push_str(text);
+            }
+        }
+        s.view.load(&src, st.name);
+        s.view.session.set_running(true);
+        s.wait(0.1);
+        assert!(s.view.session.scans > 0, "{}", st.name);
+        assert_eq!(s.view.session.fault, None, "{}", st.name);
+    }
     // A program with no diagram still runs and the screen says why not.
     s.view.load("", "nothing");
     s.wait(0.1);
