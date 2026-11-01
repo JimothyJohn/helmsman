@@ -83,8 +83,10 @@ this; change it here first when a decision changes.
 
 ## Monitor (phone to wall TV; replaces Andon)
 
-- **Top:** status tiles: running or faulted, scan time, then one tile per
-  top-level instance with its key outputs, green or red.
+- **Top:** status tiles: running or faulted, then one tile per top-level
+  instance with its key outputs, green or red. The scan period and
+  counts are too low level for the wall: hidden unless an engineer turns
+  "Scan detail" on (card `monitor-scan-time`).
 - **Tap a tile:** the same tiles one level down (that instance's instances
   and outputs). Back and breadcrumbs go up; the full diagram is one tap
   away.
@@ -92,7 +94,9 @@ this; change it here first when a decision changes.
 
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
-period and count), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
+period and count only while an engineer is signed in and this browser's
+"Scan detail" is on, kept with the Editor's layout; nothing is measured
+box-side), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
 and located `%Q` variables), then a tile per user function block
 instance in declaration order (standard blocks such as TON are not
 tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
