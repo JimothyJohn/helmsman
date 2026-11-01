@@ -35,8 +35,25 @@ impl Drop for Running {
     }
 }
 
+/// A fresh, empty directory of its own for each call: the process id and
+/// a counter keep parallel copies of this suite, and parallel tests in one
+/// copy, out of each other's files.
+fn tmp(name: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "bin-{name}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// `NAME.st` in a directory of its own (error messages name the file).
 fn program_file(name: &str, src: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}.st"));
+    let path = tmp(name).join(format!("{name}.st"));
     std::fs::write(&path, src).unwrap();
     path
 }
@@ -47,22 +64,19 @@ fn ladder() -> PathBuf {
 
 fn plc() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"));
-    // The OPC UA server's default port is shared; tests/opcua.rs covers it.
-    c.args(["--opcua", "off"]);
+    // The OPC UA server's and the API's default ports are shared by every
+    // copy of this suite (tests/opcua.rs covers OPC UA); a test's own
+    // --api comes later and wins.
+    c.args(["--opcua", "off", "--api", "127.0.0.1:0"]);
+    // A run without --state-dir writes ./helmsman-state into a working
+    // directory of its own, never the crate's or another copy's.
+    c.current_dir(tmp("cwd")).env_remove("STATE_DIRECTORY");
     c
 }
 
-/// A fresh, empty state directory for one PLC process.
+/// A fresh, empty state directory for one PLC process (not made yet).
 fn state_dir() -> PathBuf {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static N: AtomicUsize = AtomicUsize::new(0);
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "bin-state-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
+    tmp("state").join("state")
 }
 
 /// Starts the PLC on free loopback ports; returns it and its CIP and I/O addresses.
@@ -322,7 +336,7 @@ fn modules_fighting_for_an_output_are_refused_before_the_adapter_starts() {
 }
 
 fn text_file(name: &str, text: &str) -> PathBuf {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let path = tmp(name).join(name);
     std::fs::write(&path, text).unwrap();
     path
 }
@@ -683,7 +697,7 @@ fn emit_st_prints_the_lowered_project() {
 
 #[test]
 fn project_errors_exit_1_with_xml_positions() {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bad.xml");
+    let path = tmp("bad_xml").join("bad.xml");
     let xml = std::fs::read_to_string(ladder())
         .unwrap()
         .replace("<variable>Stop</variable>", "<variable>Stopp</variable>");
@@ -794,9 +808,7 @@ fn a_bad_calendar_is_refused_before_the_adapter_starts() {
 }
 
 fn module_dir(name: &str, manifest: &str, source: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("bin-modules")
-        .join(name);
+    let dir = tmp(name).join(name);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("module.manifest"), manifest).unwrap();
     std::fs::write(dir.join("module.st"), source).unwrap();
@@ -876,10 +888,7 @@ fn a_module_directory_whose_manifest_lies_is_refused_before_the_adapter_starts()
 
 #[test]
 fn a_wasm_module_directory_runs_and_one_whose_manifest_lies_is_refused() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("bin-modules")
-        .join("blink-wasm");
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = tmp("blink-wasm");
     let wasm = wat::parse_str(
         r#"(module (import "helmsman/v1" "now_ms" (func $now (result i64)))
                    (global $t (export "t") (mut i64) (i64.const 0))
@@ -915,11 +924,7 @@ fn a_wasm_module_directory_runs_and_one_whose_manifest_lies_is_refused() {
 // ---- --store -----------------------------------------------------------------
 
 fn store_dir(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("bin-stores")
-        .join(name);
-    let _ = std::fs::remove_dir_all(&dir);
-    dir
+    tmp(name).join("store")
 }
 
 /// One module that writes `base + 2` to output byte 0 while the stored
@@ -1382,13 +1387,12 @@ fn the_default_agent_versions_are_the_ones_the_relay_serves() {
 /// the network, naming the file.
 #[test]
 fn the_binary_boots_a_wasm_driver_from_its_state_directory() {
-    let tag = std::process::id();
     let prog = program_file(
-        &format!("wasm_driver_{tag}"),
+        "wasm_driver",
         "PROGRAM p VAR_INPUT level : DINT; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR lamp := level > 10; END_PROGRAM",
     );
     let map = text_file(
-        &format!("wasm_driver_{tag}.iomap"),
+        "wasm_driver.iomap",
         "device rio wasm:modbus 127.0.0.1:1 unit=1\nin level int rio hr:0\nout lamp bool box do:0\n",
     );
     let boot = |state: &Path| {
@@ -1433,4 +1437,41 @@ fn the_binary_boots_a_wasm_driver_from_its_state_directory() {
     }
     drop(running);
     assert!(said.contains("WASM driver modbus from the box"), "{said}");
+}
+
+/// Without `--state-dir` (and without systemd's `$STATE_DIRECTORY`) the box
+/// keeps its token, certificate and PINs in `./helmsman-state` of its
+/// working directory. No test leaves one in the crate: every helper here
+/// runs the binary from a working directory of its own.
+#[test]
+fn the_default_state_directory_is_in_the_working_directory_never_the_crate() {
+    let in_crate = Path::new(env!("CARGO_MANIFEST_DIR")).join("helmsman-state");
+    let leaked = || {
+        format!(
+            "{} exists: a test ran helmsman-plc from the crate without --state-dir",
+            in_crate.display()
+        )
+    };
+    assert!(!in_crate.exists(), "{}", leaked());
+    let cwd = tmp("default_state");
+    let echo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
+    let mut child = plc()
+        .current_dir(&cwd)
+        .arg(&echo)
+        .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut running = Running { child, stderr };
+    let mut said = String::new();
+    while !said.contains("API token") {
+        let mut line = String::new();
+        assert!(running.stderr.read_line(&mut line).unwrap() > 0, "exited: {said}");
+        said.push_str(&line);
+    }
+    drop(running);
+    assert!(said.contains("helmsman-state/api-token"), "{said}");
+    assert!(cwd.join("helmsman-state/api-token").is_file(), "{said}");
+    assert!(!in_crate.exists(), "{}", leaked());
 }

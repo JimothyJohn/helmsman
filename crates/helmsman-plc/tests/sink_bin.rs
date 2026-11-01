@@ -14,13 +14,21 @@ fn plc() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"));
     // No box API here: its default port and state directory are shared.
     c.args(["--api", "off", "--opcua", "off"]);
+    // Should one start anyway, its ./helmsman-state is not the crate's.
+    c.current_dir(dir("cwd")).env_remove("STATE_DIRECTORY");
     c
 }
 
+/// A fresh directory of its own: the pid and a counter keep parallel
+/// copies of this suite apart.
 fn dir(name: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("sink-bin")
-        .join(name);
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "sink-bin-{name}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
