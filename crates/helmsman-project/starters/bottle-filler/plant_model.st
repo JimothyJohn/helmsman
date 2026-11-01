@@ -15,7 +15,6 @@ VAR_OUTPUT
   nozzle_up : BOOL;
   press_down : BOOL;
   press_up : BOOL;
-  operator_start : BOOL;
 END_VAR
 VAR CONSTANT
   pitch : TIME := T#1500ms;  (* belt time from one bottle to the next *)
@@ -23,7 +22,6 @@ VAR CONSTANT
   motor_delay : TIME := T#200ms;
 END_VAR
 VAR
-  operator : TP;
   motor : TON;
   belt_started : R_TRIG;
   travel : TON;
@@ -32,8 +30,6 @@ VAR
   prs_down : TON;
   prs_up : TON;
 END_VAR
-operator(IN := TRUE, PT := T#1s);  (* as if someone pressed start *)
-operator_start := operator.Q;
 motor(IN := belt, PT := motor_delay);
 belt_fb := motor.Q;
 noz_down(IN := nozzle, PT := stroke);

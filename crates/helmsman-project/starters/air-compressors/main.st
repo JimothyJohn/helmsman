@@ -144,7 +144,7 @@ fb_3 := fb_3_in OR plant.fb_3;  (* PLANT: keep the _in input *)
 
 header_tx(raw := header_raw, eng_min := 0.0, eng_max := 16.0);
 overpressure(condition := overpressure_in OR header_tx.value >= over_bar, ack := ack_pb, on_delay := T#0s);
-run := (run OR start_pb OR plant.operator_start) AND NOT stop_pb AND NOT overpressure.showing;  (* PLANT: drop operator_start *)
+run := (run OR start_pb) AND NOT stop_pb AND NOT overpressure.showing;
 staging(run := run, bar := header_tx.value);
 
 (* Give the stages to whoever is available, starting from the lead. *)
