@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Something behaves wrongly in the runtime, the canvas or the CLI
+about: Something behaves wrongly in the runtime, the canvas or the playground
 title: ""
 labels: bug
 ---

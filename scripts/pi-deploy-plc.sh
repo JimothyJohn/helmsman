@@ -27,7 +27,8 @@
 # (glibc must match the build image), and trunk here for the canvas
 # (`cargo install trunk --locked`; the wasm is the same on every machine, so
 # it is built here, not in the arm64 image). Runs here: `! scripts/pi-deploy-plc.sh nick@<pi-ip>`.
-# Then smoke it from here: scripts/adapter-smoke.sh <pi-ip> (needs echo.st).
+# Then smoke it from here (needs echo.st on the Pi, UDP 2222 free here):
+#   HELMSMAN_OPENER_ADDR=<pi-ip> HELMSMAN_OPENER_IO=1 scripts/test-interop.sh
 #
 # Usage: scripts/pi-deploy-plc.sh user@host [SEED.st]
 #        PLC_MODE=program scripts/pi-deploy-plc.sh user@host [PROGRAM.st|PROJECT.xml]
@@ -267,7 +268,7 @@ if [ "$mode" = projects ]; then
 else
     echo "PLC is up on $host running $(basename "$program") every ${scan_ms} ms"
 fi
-echo "  from here:  scripts/adapter-smoke.sh $host"
+echo "  from here:  HELMSMAN_OPENER_ADDR=$host HELMSMAN_OPENER_IO=1 scripts/test-interop.sh"
 case "$api" in
     127.*) echo "  canvas:     ssh -L $api_port:127.0.0.1:$api_port $target, then https://localhost:$api_port/" ;;
     *) echo "  canvas:     https://$host:$api_port/ from $ui_allow (use the Pi's address on that network)" ;;
