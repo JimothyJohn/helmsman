@@ -562,6 +562,21 @@ fn storage() -> Result<web_sys::Storage, String> {
         .ok_or_else(|| "no localStorage".into())
 }
 
+/// One `localStorage` slot (the Trend's pins: `box_trend.rs`), every
+/// access wrapped as for [`LocalProjects`].
+#[derive(Debug)]
+pub struct LocalSlot(pub &'static str);
+
+impl crate::sim_projects::Storage for LocalSlot {
+    fn load(&self) -> Result<Option<String>, String> {
+        storage()?.get_item(self.0).map_err(|e| text(&e))
+    }
+
+    fn save(&mut self, value: &str) -> Result<(), String> {
+        storage()?.set_item(self.0, value).map_err(|e| text(&e))
+    }
+}
+
 /// The diagram's personal layouts in `localStorage` (`arrange.rs`), every
 /// access wrapped as for [`LocalProjects`].
 #[derive(Debug, Default)]

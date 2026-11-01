@@ -116,6 +116,7 @@ pub mod swap;
 #[cfg(feature = "https")]
 pub mod tls;
 pub mod token;
+pub mod trend;
 pub mod ui;
 
 use std::collections::BTreeMap;
@@ -305,6 +306,8 @@ struct Ctx {
     projects: Option<crate::project::Projects>,
     /// Forced inputs (see [`forces`]); `None`: those routes answer 404.
     forces: Option<Arc<crate::force::Forces>>,
+    /// Pinned signals' history ([`trend`]).
+    trends: Mutex<trend::Trends>,
     /// The box's HTTPS ([`Api::start_secure`]); `None`: plain HTTP only.
     tls: Option<Tls>,
 }
@@ -312,6 +315,10 @@ struct Ctx {
 impl Ctx {
     fn catalog(&self) -> Arc<Catalog> {
         Arc::clone(&self.catalog.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    fn trends(&self) -> MutexGuard<'_, trend::Trends> {
+        self.trends.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn dropins(&self) -> MutexGuard<'_, dropin::Store> {
@@ -545,6 +552,7 @@ impl Api {
             mcp: Mutex::new(mcp::Workspace::default()),
             projects,
             forces,
+            trends: Mutex::new(trend::Trends::default()),
             tls,
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
@@ -580,10 +588,15 @@ impl Drop for Api {
 fn accept(listener: &TcpListener, ctx: &Arc<Ctx>) {
     let workers = Arc::new(AtomicUsize::new(0));
     let mut swept = Instant::now();
+    let mut sampled = Instant::now();
     while !ctx.stop.load(Ordering::Acquire) {
         if swept.elapsed() >= Duration::from_secs(1) {
             forces::sweep(ctx);
             swept = Instant::now();
+        }
+        if sampled.elapsed() >= ctx.cfg.stream_every {
+            trend::sample(ctx);
+            sampled = Instant::now();
         }
         let (stream, peer) = match listener.accept() {
             Ok(s) => s,
@@ -1158,6 +1171,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         (_, ["api", "projects", ..]) => return projects::mutate(req, ctx, &segs[1..]),
         (_, ["api", "forces", ..]) => return forces::mutate(req, ctx, &segs[1..]),
+        ("PUT", ["api", "trends", "pins"]) => return trend::put_pins(req, ctx),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
@@ -1202,6 +1216,8 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "forces"] => return Some("GET, POST, DELETE"),
         ["api", "forces", _] => return Some("DELETE"),
+        ["api", "trends"] => return Some("GET"),
+        ["api", "trends", "pins"] => return Some("GET, PUT"),
         _ => {}
     }
     match path {
@@ -1566,6 +1582,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "traces", "events"] => return Reply::AllTraces,
         ["api", "projects", ..] | ["api", "running"] => projects::get(ctx, &segs[1..]),
         ["api", "forces"] => forces::get(ctx),
+        ["api", "trends", rest @ ..] => trend::get(req, ctx, rest),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "site"] => site_route(ctx, c, &view),
@@ -1697,6 +1714,9 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/projects/{p}/zip", false, "the project as a .zip (its .st files, io.map, project.settings)"),
             e("POST", "/api/projects/{p}/zip?replace=true", true, "engineer session: a .zip (application/zip) as project p, new or (replace=true) in its place"),
             e("POST", "/api/projects/{p}/import?file=F&replace=true", true, "engineer session: one file into the project: F.st as it is, F.xml (PLCopen TC6) lowered to F.st"),
+            e("GET", "/api/trends?signals=a,b", false, "each signal's history (10 min, on change) on the scheduler's clock; keeps them tracked a day: {now_ms, window_ms, signals: [{name, points: [[t_ms, value]]}], unknown, refused}"),
+            e("GET", "/api/trends/pins", false, "the signed-in person's pinned signals"),
+            e("PUT", "/api/trends/pins", true, "a login session: {signals: [...]} (at most 16), that person's pins"),
             e("GET", "/api/forces", false, "active forced inputs: {id, signal | address, value, by, at}"),
             e("POST", "/api/forces", true, "engineer session: force an input {signal, value} or {address: %IX0.0 | %IBn | %IWn | %IDn, value}; ends at that session's logout or expiry and on deploy"),
             e("DELETE", "/api/forces/{id}", true, "engineer session: release one force"),
