@@ -29,9 +29,18 @@ pub mod brand {
     pub const PANEL: Color32 = Color32::from_rgb(0x24, 0x24, 0x24);
     /// The warning colour: a forced input, the force banner.
     pub const WARN: Color32 = Color32::from_rgb(0xFF, 0x8A, 0x1E);
+    /// TRUE, running: green.
+    pub const GREEN: Color32 = Color32::from_rgb(0x3C, 0xC8, 0x5C);
+    /// FALSE, stopped: red.
+    pub const RED: Color32 = Color32::from_rgb(0xFF, 0x6E, 0x64);
+    /// A switch that is off: a dark red ground.
+    pub const OFF_RED: Color32 = Color32::from_rgb(0x6A, 0x22, 0x1E);
 }
 
 use brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
+
+/// How much of the diagram a pan must leave in view, points.
+pub const KEEP: f32 = 120.0;
 
 /// Pan and zoom: `screen = origin + offset + world * zoom`.
 #[derive(Clone, Copy, Debug)]
@@ -71,6 +80,19 @@ impl Cam {
         let (wx, wy) = self.to_world(screen);
         self.zoom = (self.zoom * factor).clamp(0.15, 3.0);
         self.offset = screen - self.origin - Vec2::new(wx, wy) * self.zoom;
+    }
+
+    /// Keeps the diagram in view: however far a pan or zoom went, at
+    /// least [`KEEP`] points of it stay inside `area` on each side (Nick,
+    /// 2026-11-01: no dragging it off into half a screen of nothing).
+    fn clamp(&mut self, area: Rect, size: (f32, f32)) {
+        let (w, h) = (size.0.max(1.0) * self.zoom, size.1.max(1.0) * self.zoom);
+        let keep = KEEP.min(w / 2.0).min(h / 2.0);
+        let left = self.origin.x + self.offset.x;
+        let top = self.origin.y + self.offset.y;
+        let x = left.clamp(area.left() + keep - w, area.right() - keep);
+        let y = top.clamp(area.top() + keep - h, area.bottom() - keep);
+        self.offset += Vec2::new(x - left, y - top);
     }
 
     fn fit(&mut self, area: Rect, size: (f32, f32)) {
@@ -866,6 +888,8 @@ impl Viewer {
         if response.drag_stopped() {
             self.grab = None;
         }
+        let size = self.diagram().size;
+        self.cams[self.scope].clamp(area, size);
         let cam = self.cams[self.scope];
         if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
@@ -1266,13 +1290,17 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                 && let Some(v) = live.and_then(|l| l.values[n.id.0 as usize].first().copied().flatten())
                 && let Some(label) = value_text(d, n.id, v, vars)
             {
-                let on = v == Value::Bool(true);
+                let color = match v {
+                    Value::Bool(true) => brand::GREEN,
+                    Value::Bool(false) => brand::RED,
+                    _ => WHITE,
+                };
                 painter.text(
                     Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0),
                     Align2::CENTER_CENTER,
                     label,
                     font(11.0 * z),
-                    (if on { YELLOW } else { WHITE }).gamma_multiply(on_path),
+                    color.gamma_multiply(on_path),
                 );
             }
         }

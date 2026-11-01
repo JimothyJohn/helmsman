@@ -16,7 +16,7 @@ use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{MAX_PERIOD, MAX_SOURCE, Point, Session, TREND_MS, TREND_SIGNALS, Widget};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, Storage};
-use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, GRAPHITE, GREEN, OFF_RED, STEEL, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
@@ -177,11 +177,17 @@ impl PlaygroundView {
         self.sync_viewer();
     }
 
-    /// Opens project `name`, compiled and stopped (Deploy runs it).
+    /// Opens project `name` and runs it if it compiles (Nick, 2026-11-01:
+    /// an example that opens stopped looks dead); an edit still waits for
+    /// Deploy.
     pub fn open_project(&mut self, name: &str) {
         self.proj.open_project(name);
         self.reload();
         self.notice = None;
+        if self.session.build.as_ref().is_some_and(|b| b.module.is_some()) {
+            self.session.set_running(true);
+            self.proj.running = Some(self.proj.open.clone());
+        }
     }
 
     /// The editor's text changed: the session's source follows at once
@@ -473,7 +479,12 @@ impl Body for PlaygroundView {
             ui.label(
                 RichText::new(format!("{state} · {secs:.1}s"))
                     .monospace()
-                    .color(if s.fault.is_some() { RED } else { STEEL }),
+                    .strong()
+                    .color(if s.running && s.fault.is_none() {
+                        GREEN
+                    } else {
+                        RED
+                    }),
             )
             .on_hover_text(format!("{} scans", s.scans));
         }
@@ -1051,7 +1062,7 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
             } else {
                 WHITE
             }))
-            .fill(if on { YELLOW } else { GRAPHITE })
+            .fill(if on { GREEN } else { OFF_RED })
             .sense(Sense::click_and_drag());
             let r = ui
                 .add_sized(rect.size(), b)
@@ -1061,12 +1072,12 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
         Some(Widget::Toggle) => {
             let on = p.value == Value::Bool(true);
             let b = egui::Button::new(
-                RichText::new(format!("{label} {}", if on { "ON" } else { "OFF" }))
+                RichText::new(format!("{label} {}", if on { "TRUE" } else { "FALSE" }))
                     .strong()
                     .size(size)
                     .color(if on { BLACK } else { WHITE }),
             )
-            .fill(if on { YELLOW } else { GRAPHITE });
+            .fill(if on { GREEN } else { OFF_RED });
             if ui
                 .add_sized(rect.size(), b)
                 .on_hover_text("switch: click to flip")

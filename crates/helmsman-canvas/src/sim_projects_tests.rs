@@ -354,7 +354,11 @@ fn opening_another_project_with_unsaved_edits_asks_first() {
     assert_eq!(app.title(), "latch");
     let v = app.sim.as_ref().unwrap();
     assert!(!v.proj.dirty());
-    assert!(!v.session.running, "opened stopped: Deploy runs it");
+    assert!(
+        v.session.running,
+        "opened running (an example that sits still looks dead)"
+    );
+    assert_eq!(v.proj.running.as_deref(), Some("latch"));
     // A fresh page with nothing stored starts clean.
     assert!(!SimProjects::load(Box::new(Shared::default())).dirty());
     assert!(Files(BTreeMap::new()).check().is_ok());
@@ -550,4 +554,36 @@ fn machines_and_templates_are_folded_groups_and_save_copies_one() {
         rows.iter().any(|r| r.name == "batch-mixer" && r.example()),
         "still there"
     );
+}
+
+/// Nick, 2026-11-01: one program runs in the page; opening or deploying
+/// another stops the one before and the running mark moves with it.
+#[test]
+fn opening_or_deploying_another_program_stops_the_one_running() {
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.open_project("blink");
+    assert!(v.session.running);
+    assert_eq!(v.proj.running.as_deref(), Some("blink"));
+    assert!(v.session.src.contains("PROGRAM blink"));
+    v.open_project("latch");
+    assert!(v.session.running, "the new one runs");
+    assert_eq!(v.proj.running.as_deref(), Some("latch"), "and is the one marked");
+    assert!(
+        !v.session.src.contains("PROGRAM blink"),
+        "blink is gone from the page"
+    );
+    let rows = v.proj.rows();
+    assert_eq!(rows.iter().filter(|r| r.running).count(), 1, "{rows:?}");
+    // A deploy that does not compile is refused: what ran keeps running.
+    v.proj.create("broken", None);
+    v.open_project("broken");
+    assert_eq!(
+        v.proj.running.as_deref(),
+        Some("broken"),
+        "a new project compiles and runs"
+    );
+    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\n  x := ;\nEND_PROGRAM\n".into();
+    v.deploy();
+    assert!(v.session.running, "the last good build still runs");
+    assert!(!v.session.diags.is_empty(), "and the error is listed");
 }
