@@ -35,6 +35,7 @@ mod box_tests;
 mod box_trend;
 mod box_view;
 mod claude;
+mod commit;
 mod editor;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]

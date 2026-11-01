@@ -1359,8 +1359,10 @@ module's unit tests.
   signal and a `forces` list; every trace (`GET .../trace` and its
   stream) carries `forces`, so the diagram marks forced points FORCED.
 - **In the Editor.** For an engineer, an input signal's block on the
-  diagram is a control: a BOOL flips, a number drags, and either forces
-  it. A forced input is marked FORCED in the warning colour over its
+  diagram is a control: a BOOL flips, a number is typed and committed
+  with Enter (or by leaving the field; Escape puts it back; nothing is
+  written while typing, `canvas::commit`), and either forces it. A forced
+  input is marked FORCED in the warning colour over its
   block and in the I/O tab, from the values stream; a banner over the
   diagram lists every force with release and Release all (disabled, with
   why, for anyone else). Address forces (`%IX...`) have no click: the
