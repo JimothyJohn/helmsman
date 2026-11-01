@@ -41,22 +41,19 @@ else
   echo "==> EDS: no $eds here (E1213_EDS=PATH to check it); using the built-in profile"
 fi
 
-cargo build --release -q --locked -p helmsman-cli
+cargo build --release -q --locked -p helmsman-proto --example discover
 cargo build --release -q --locked -p helmsman-io --example conformance
-cli=target/release/helmsman
+discover=target/release/examples/discover
 conformance=target/release/examples/conformance
 
-echo "==> discover"
-found="$("$cli" discover "$host" --window 1500)"
+echo "==> discover (ListIdentity, with the identity it answers)"
+found="$("$discover" "$host" 1500)"
 echo "$found"
-if ! echo "$found" | grep -q "vendor=991 .*product=515"; then
-  echo "FAIL: no ListIdentity reply from an E1213 (vendor 991, product 515) at $host" >&2
+if ! echo "$found" | grep -q "vendor=991 .*code=515"; then
+  echo "FAIL: no ListIdentity reply from an E1213 (vendor 991, product code 515) at $host" >&2
   echo "      (EtherNet/IP enabled and activated? manual pp. 3-26, 5-1)" >&2
   exit 1
 fi
-
-echo "==> identity"
-"$cli" identity "$host"
 
 echo "==> class 1 conformance (exclusive owner, RPI 100 ms)"
 args=(--enip "$host" --param profile=moxa-e1213 --param rpi_ms=100 --settle-ms 1000)

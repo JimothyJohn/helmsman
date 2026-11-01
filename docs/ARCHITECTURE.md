@@ -40,7 +40,7 @@ roadmap card, by id).
  └──────────┼─────────────────────────────┼──────────────┼────────────────────────┘
             │ EtherNet/IP, box is target  │ box is master│ box GPIO (do:N/di:N)
      a scanner (CODESYS,               remote I/O,      stack light, relays
-     a Logix PLC, our CLI)             drives, sensors
+     a Logix PLC, our tests)           drives, sensors
 
   observed controllers (a CompactLogix): read-only, via helmsman-proto (originator)
   (built: logix-tag driver; no Write Tag, no unrestricted session in the box build)
@@ -63,7 +63,6 @@ Three directions of traffic, three different rules:
 | --- | --- | --- |
 | `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Logix tag reads (`logix`: Read Tag, Multiple Service Packet, Read Tag Fragmented, Symbol object browse, backplane routing), Class 1 scanner, the box's one Class 1 I/O endpoint (`endpoint`), EDS reader (`eds`). Byte codecs plus socket-level session, discovery and scanner. Any-service requests sit behind the `unrestricted` feature, the scanner behind `scanner` (which `unrestricted` implies). | built |
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
-| `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |

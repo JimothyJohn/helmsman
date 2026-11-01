@@ -15,17 +15,6 @@
   notes: 2026-10-31: the local repo is now ../agent-relay (renamed, client-agnostic, profiles namespaced helmsman/<name> with the old bare names as aliases). Tick once the GitHub repo exists: run its scripts/create-github-repo.sh.
   answer: private repo JimothyJohn/agent-relay (recommended), an agnostic endpoint that happens to work with helmsman
 
-- [ ] **Which product lines stay in this repo?** — the deep clean found four things built here, all wired into CI or a script: the box (helmsman-plc, deploy/, the Pi scripts), the browser playground (docs/playground, the same canvas built for the web), the scanner command line (helmsman-cli over helmsman-proto: `helmsman discover / get / io`, used by scripts/adapter-smoke.sh and scripts/bench-e1213.sh), and the test adapter (helmsman-adapter, docker/adapter, the interop-adapter CI job, which checks the scanner against our own target). The oracle (docker/rusty) is dev-only. Dropping a line is a code removal, so it waits for you; the branches, the CODESYS plan and the flash script went without asking.
-  needs: your call
-  result: the lines you keep stay wired; the rest leaves in one PR each (crates, scripts, Makefile targets, CI jobs, README rows)
-  options: keep all four | drop the scanner command line | drop the command line and the test adapter | split the scanner into its own repo
-  est: 2h
-  difficulty: low
-  id: product-lines
-  asked: 2026-11-01
-  by: claude-session
-  answer: I like the scanner functionality but the command line is unnecessary.
-
 ## Tasks
 
 - [ ] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.

@@ -17,7 +17,7 @@
 //!   plain HTTP is served only from the box's own host then (an SSH
 //!   tunnel, a local browser), where it is not. The same-origin proof
 //!   compares the Origin with the scheme the request came over.
-//! - **Anything else** (scripts, the CLI): as `token` in the body, sent
+//! - **Anything else** (scripts): as `token` in the body, sent
 //!   back as `Authorization: Bearer`, as before.
 //!
 //! A cookie is only ever a session: the box token is never a cookie, and

@@ -14,7 +14,7 @@
 //! [`logix::TagReader`] (Read Tag, Multiple Service Packet of reads, Read
 //! Tag Fragmented, Symbol object browse). [`session::Session::request`] /
 //! `request_raw` (any service) exist only with `unrestricted`. The box
-//! build (`helmsman-plc`) must not enable it; the CLI and tests do. The
+//! build (`helmsman-plc`) must not enable it; the tests do. The
 //! byte codecs stay public either way: the adapter needs them to answer
 //! requests, and they open no socket.
 //!

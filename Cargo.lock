@@ -1556,13 +1556,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "helmsman-cli"
-version = "0.1.0"
-dependencies = [
- "helmsman-proto",
-]
-
-[[package]]
 name = "helmsman-diagram"
 version = "0.1.0"
 dependencies = [
