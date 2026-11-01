@@ -61,8 +61,9 @@ pub enum Action {
 pub struct Hotkey {
     pub action: Action,
     pub keys: KeyboardShortcut,
-    /// Where the key comes from; the module doc's table, as data.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Where the key comes from; the module doc's table, as data (the
+    /// help page prints it; the browser build never does).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub codesys: &'static str,
 }
 
@@ -108,6 +109,84 @@ pub const TABLE: &[Hotkey] = &[
     key(Action::Trend, Modifiers::ALT, Key::Num2, "Modules"),
     key(Action::Panel, Modifiers::ALT, Key::Num3, "Messages"),
 ];
+
+/// What each action does, for the help page.
+#[cfg(not(target_arch = "wasm32"))]
+const fn does(action: Action) -> &'static str {
+    match action {
+        Action::Save => "Save",
+        Action::Deploy => "Deploy",
+        Action::RunStop => "Run or stop the simulation",
+        Action::Stop => "Stop the simulation",
+        Action::Step => "Step one scan (stopped)",
+        Action::SignIn => "Sign in (box)",
+        Action::SignOut => "Sign out (box)",
+        Action::Undo => "Undo in the Structured Text",
+        Action::Redo => "Redo in the Structured Text",
+        Action::Files => "Files pane",
+        Action::St => "Structured Text pane",
+        Action::Trend => "The bottom panel (Trend, Messages)",
+        Action::Panel => "The side panel (I/O, Agent)",
+        Action::GoToDefinition => "Go to definition: the picked block's variable, at its VAR line",
+        Action::CrossReferences => "Cross references: every read and write of it lit",
+        Action::Restart | Action::Upload | Action::Download | Action::Help => "",
+    }
+}
+
+/// A key as the help page prints it: `Ctrl S`, `Shift F8`, `Alt 0`.
+/// Ctrl stands for ⌘ on a Mac.
+#[cfg(not(target_arch = "wasm32"))]
+fn key_text(k: KeyboardShortcut) -> String {
+    let m = k.modifiers;
+    let mut out = Vec::new();
+    if m.ctrl || m.command || m.mac_cmd {
+        out.push("Ctrl");
+    }
+    if m.alt {
+        out.push("Alt");
+    }
+    if m.shift {
+        out.push("Shift");
+    }
+    let key = match k.logical_key {
+        Key::Enter => "Enter".to_string(),
+        Key::ArrowUp => "↑".to_string(),
+        k => k.symbol_or_name().to_string(),
+    };
+    out.push(&key);
+    out.join(" ")
+}
+
+/// The shortcut table as Markdown (docs/help/keyboard.md is generated
+/// from it by scripts/build-help.sh, so the page cannot drift).
+#[must_use]
+#[cfg(not(target_arch = "wasm32"))]
+pub fn markdown() -> String {
+    use std::fmt::Write as _;
+    let mut out = String::from(
+        "# Keyboard\n\n\
+         CODESYS's default keys where the browser leaves them alone, nothing on a key the \
+         browser owns (F5 and Ctrl R reload, F11 goes full screen). The page keeps the \
+         browser's default off these. **Ctrl is ⌘ on a Mac.** Every menu item shows its key.\n\n\
+         | key | does | CODESYS command on that key |\n|---|---|---|\n",
+    );
+    for h in TABLE {
+        let d = does(h.action);
+        if d.is_empty() {
+            continue;
+        }
+        let codesys = if h.codesys.is_empty() { "" } else { h.codesys };
+        let _ = writeln!(out, "| {} | {d} | {codesys} |", key_text(h.keys));
+    }
+    out.push_str("| Alt ↑ | Up one level in the diagram | |\n");
+    out.push_str(
+        "\nReserved, not built yet, on chords rather than function keys: Ctrl B toggle a \
+         breakpoint on the picked block, Ctrl ] / Ctrl [ step into / out of an instance, \
+         Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F find in \
+         the Structured Text with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2 the Agent.\n",
+    );
+    out
+}
 
 /// The first shortcut of `action`, as the menus print it (`⌘S` on a
 /// Mac, `Ctrl+S` elsewhere).

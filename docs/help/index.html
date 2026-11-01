@@ -3,34 +3,115 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Helmsman Help</title>
+<title>Helmsman Help · Getting started</title>
 <link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
 <style>
-:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;
+:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;--white:#FFFFFF;
+--stencil:'Saira Stencil One',Impact,sans-serif;
 --mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif}
-body{margin:0;font:16px/1.55 var(--sans);color:var(--black);background:#fff}
-header{background:var(--black);color:#fff;border-bottom:4px solid var(--yellow)}
-header .wrap{display:flex;align-items:center;gap:16px;min-height:56px}
-.wrap{max-width:860px;margin:0 auto;padding:0 16px}
-header a{color:#fff;text-decoration:none;font-weight:600}
-main .wrap{padding:40px 16px 64px}
-h1{font-size:28px;margin:0 0 8px}
-p.muted{color:var(--steel)}
-code{font-family:var(--mono);font-size:.95em}
+*{box-sizing:border-box}
+body{margin:0;background:var(--white);color:var(--black);font:16px/1.6 var(--sans)}
+.wrap{max-width:1040px;margin:0 auto;padding:0 16px}
+header.top{background:var(--black);color:#fff;border-bottom:4px solid var(--yellow)}
+header.top .wrap{display:flex;align-items:center;gap:16px;min-height:56px}
+header.top .brand{color:#fff;text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em;flex:none}
+header.top .section{color:var(--steel);font:13px var(--mono)}
+header.top .site{margin-left:auto;color:#C8C8C8;text-decoration:none;font:13px var(--mono)}
+header.top .site:hover{color:var(--yellow)}
+.page{display:grid;grid-template-columns:220px 1fr;gap:40px;padding:32px 0 64px}
+nav.help{position:sticky;top:16px;align-self:start;display:flex;flex-direction:column;gap:4px;font:14px var(--mono)}
+nav.help a{color:var(--graphite);text-decoration:none;padding:6px 10px;border-left:3px solid transparent}
+nav.help a:hover{color:var(--black);border-left-color:var(--steel)}
+nav.help a.current{color:var(--black);border-left-color:var(--yellow);font-weight:600}
+main{min-width:0}
+main h1{font-size:32px;line-height:1.15;margin:0 0 16px}
+main h2{font-size:22px;margin:36px 0 10px;padding-top:12px;border-top:1px solid #E6E6E6}
+main h3{font-size:17px;margin:24px 0 6px}
+main p,main li{max-width:72ch}
+main code{font-family:var(--mono);font-size:.92em;background:#F2F2F2;padding:1px 4px;border-radius:3px}
+main pre{background:var(--black);color:#F0F0F0;padding:14px 16px;overflow-x:auto;border-radius:6px;font:14px/1.5 var(--mono)}
+main pre code{background:none;padding:0;color:inherit}
+main table{border-collapse:collapse;margin:12px 0;font-size:15px}
+main th,main td{text-align:left;padding:6px 12px;border-bottom:1px solid #E6E6E6;vertical-align:top}
+main th{font:600 13px var(--mono);color:var(--graphite)}
+main kbd{font:13px var(--mono);background:#F2F2F2;border:1px solid #D8D8D8;border-bottom-width:2px;border-radius:4px;padding:1px 6px}
+main a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
+.note{border-left:4px solid var(--yellow);background:#FFF8E0;padding:10px 14px;margin:14px 0}
+footer{background:var(--graphite);color:#C8C8C8;font:13px var(--mono);padding:18px 0}
+@media (max-width:760px){.page{grid-template-columns:1fr;gap:16px}nav.help{position:static;flex-direction:row;flex-wrap:wrap}}
 </style>
 </head>
 <body>
-<header><div class="wrap"><a href="../">HELMSMAN</a><span style="color:var(--steel)">Help</span></div></header>
-<main><div class="wrap">
-<h1>Help</h1>
-<p class="muted">The user guide is being written. Until it is here, the
-<a href="https://github.com/JimothyJohn/helmsman#readme">README</a> and the
-<a href="../playground/">playground</a> are the best start. In the app, every menu item shows its key.</p>
-<h2 id="keyboard">Keyboard</h2>
-<p>Ctrl S save · Ctrl D deploy · Ctrl Enter run or stop the simulation · Shift F8 stop · F10 step one scan ·
-Alt F8 sign in · Ctrl F8 sign out · Ctrl Z / Ctrl Y undo, redo · Ctrl Shift D go to definition ·
-Ctrl Shift X cross references · Alt 0 files · Alt 1 Structured Text · Alt 2 trend · Alt 3 side panel · Alt ↑ up one level.
-Ctrl is ⌘ on a Mac.</p>
-</div></main>
+<header class="top"><div class="wrap">
+  <a class="brand" href="../">HELMSMAN</a><span class="section">Help</span>
+  <a class="site" href="../playground/">Playground</a>
+</div></header>
+<div class="wrap page">
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples and starters</a></nav>
+<main>
+<h1 id="getting-started">Getting started</h1>
+<p>Helmsman is a soft PLC you program by describing the machine. You
+write a specification in plain words, the agent writes standard IEC
+61131-3 Structured Text from it, you check what it does on a live
+diagram, and an engineer approves it before it runs. This is an early
+release: everything on these pages is built and in use on the bench; the
+pages say so where a part is still to come.</p>
+<h2 id="try-it-in-your-browser">Try it in your browser</h2>
+<p>The <a href="../playground/">playground</a> runs a controller inside
+the page, with no install and nothing to sign up for. It opens with a
+small example running: a lamp that blinks. The diagram in the middle is
+the program as it runs, live; the Structured Text that makes it is one
+key away (View › Structured Text, or <kbd>Alt</kbd> <kbd>1</kbd>).</p>
+<p>Things to try, in order:</p>
+<ol type="1">
+<li>Click the <code>enable</code> block on the diagram. It is an input;
+the click flips it and the lamp stops. Click again.</li>
+<li>Open <strong>Files</strong> on the left and pick another example,
+then one of the machines. Each opens running. The machines run against a
+small plant model so they move with nothing wired; press
+<code>start_pb</code> on the diagram to start one.</li>
+<li>Open the Structured Text and change something. The program keeps
+running what it had; the editor marks any error as you type. Press
+<strong>Deploy</strong> (File › Deploy, <kbd>Ctrl</kbd> <kbd>D</kbd>) to
+run your change.</li>
+<li>Click an output block, say the lamp. Everything that drives it stays
+lit and the rest dims: that is the diagram's answer to "why".</li>
+</ol>
+<h2 id="the-two-places-it-runs">The two places it runs</h2>
+<p><strong>The simulation</strong> is the playground: the controller
+runs in the page, against virtual inputs you flip on the diagram or in
+the I/O panel. It is the place to learn, to try a program, and to write
+one before a box exists.</p>
+<p><strong>A box</strong> is a real controller on the machine's network.
+Its page is the same app served by the box itself; the diagram shows
+what the box is running, the inputs and outputs are the real ones, and
+changes go through the box's approval policy. Sign in (<kbd>Alt</kbd>
+<kbd>F8</kbd>) to edit and deploy. If no box answers at the address, the
+page runs the simulation by itself and says so.</p>
+<h2 id="where-things-are">Where things are</h2>
+<ul>
+<li><a href="editor.html">The Editor</a>: the screen, its menus and
+glyphs, the diagram, the panels.</li>
+<li><a href="simulation.html">The simulation</a>: running, stepping,
+inputs, the trend.</li>
+<li><a href="projects.html">Projects</a>: files, save, deploy, upload
+and download, the examples and the machine starters.</li>
+<li><a href="box.html">On a box</a>: signing in, deploying through the
+approval policy, forcing, the Monitor.</li>
+<li><a href="agent.html">The Agent</a>: writing and changing programs
+from a description.</li>
+<li><a href="keyboard.html">Keyboard</a> and <a
+href="starters.html">Examples and starters</a>, generated from the
+program itself.</li>
+</ul>
+</main>
+</div>
+<footer><div class="wrap">Helmsman Factory Automation · early release · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>
+<script>
+(function(){var c=document.querySelectorAll('nav.help a');for(var i=0;i<c.length;i++){if(c[i].getAttribute('href')==='index.html'){c[i].className='current';}}})();
+</script>
 </body>
 </html>
