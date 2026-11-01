@@ -846,7 +846,7 @@ fn compile_errors_name_file_and_line_and_a_click_opens_it_there() {
     let session = v.session.clone();
     v.projects.open_file("blocks.st");
     let mut h = Harness::new(v, session);
-    h.app.chrome.st = true;
+    h.app.chrome.show_code();
     h.wait(0.5);
     assert_eq!(
         h.bv().projects.open.as_ref().unwrap().current.as_deref(),
@@ -887,7 +887,7 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
         }
         let session = v.session.clone();
         let mut h = Harness::new(v, session);
-        h.app.chrome.st = true;
+        h.app.chrome.show_code();
         h.wait(0.5);
         assert!(h.app.chrome.rect("read-only").is_some(), "the ST says why");
         // The editor takes no typing.
@@ -902,6 +902,9 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
             .unwrap()
             .text
             .push_str("(* not mine *)");
+        // The sidebar's buttons are on the Files tab.
+        h.app.chrome.show_files();
+        h.wait(0.3);
         for k in ["save", "new project", "delete project", "new file"] {
             h.press(k);
         }

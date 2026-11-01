@@ -224,7 +224,9 @@ impl BoxView {
             self.open_at = None;
         }
         if let Some(at) = self.state.next_retry() {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).clamp(0.05, 60.0)));
+            // Every second while waiting, so the status line's countdown
+            // ticks and the page is visibly alive (Nick, 2026-11-01).
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).clamp(0.05, 1.0)));
         }
     }
 
@@ -465,7 +467,7 @@ impl BoxView {
     fn goto(&mut self, file: &str, line: u32, chrome: &mut Chrome) {
         self.projects.open_file(file);
         if self.projects.current().is_some() {
-            chrome.st = true;
+            chrome.show_code();
             chrome.goto(line);
         }
     }
@@ -585,6 +587,9 @@ fn force_ui(ui: &mut egui::Ui, rect: Rect, s: &SignalRow, forced: bool) -> Optio
                     .color(ink),
             )
             .fill(fill)
+            // Never wrapped: a narrow block at low zoom would stack the
+            // letters one a row.
+            .wrap_mode(egui::TextWrapMode::Truncate)
             .sense(Sense::click());
             ui.add_sized(rect.size(), b)
                 .on_hover_text(tip)
@@ -641,7 +646,7 @@ impl Workspace for BoxView {
                 self.goto(&file, l, chrome);
             }
             None if !self.has_projects() => {
-                chrome.st = true;
+                chrome.show_code();
                 chrome.goto(line);
             }
             _ => return false,
@@ -832,6 +837,25 @@ impl Body for BoxView {
                 Some(Act::NewFile(f)) => self.projects.new_file(&f),
                 Some(Act::RenameFile { from, to }) => self.projects.rename_file(&from, &to),
                 Some(Act::DeleteFile(f)) => self.projects.delete_file(&f),
+                Some(Act::CopyFile(f)) => {
+                    if let Some(b) = open.as_ref().and_then(|o| o.bufs.get(&f)).filter(|b| b.loaded) {
+                        self.files_ui.clipboard = Some((f, b.text.clone()));
+                    }
+                }
+                Some(Act::DuplicateFile(f)) => {
+                    if let Some(o) = &open
+                        && let Some(b) = o.bufs.get(&f).filter(|b| b.loaded)
+                    {
+                        let name = projects::free_file_name(&f, |n| o.bufs.contains_key(n));
+                        self.projects.new_file_with(&name, &b.text);
+                    }
+                }
+                Some(Act::PasteFile { name, text }) => {
+                    if let Some(o) = &open {
+                        let name = projects::free_file_name(&name, |n| o.bufs.contains_key(n));
+                        self.projects.new_file_with(&name, &text);
+                    }
+                }
                 // The Agent's answer lands in the simulation's projects.
                 Some(Act::UseAnswer { .. }) | None => {}
             }
@@ -997,8 +1021,16 @@ impl Body for BoxView {
         let mut jump = None;
         let mut reads = Vec::new();
         let mut area = Rect::NOTHING;
+        let icons = self
+            .projects
+            .open
+            .as_ref()
+            .and_then(|o| o.bufs.get(crate::icons::FILE))
+            .filter(|b| b.loaded)
+            .map(|b| b.text.clone());
         match &mut self.view {
             Some(v) if v.drawable() => {
+                v.icons.update(icons.as_deref());
                 let outer = vec![
                     "This box".to_string(),
                     self.state.selected.clone().unwrap_or_default(),

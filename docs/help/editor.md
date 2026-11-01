@@ -69,15 +69,35 @@ you cannot draw into it. What you can do:
 Values that would clutter the diagram are left off it: a constant shows
 its name alone, a time reads as `T#500ms`. A wire that would cross the
 whole diagram is drawn as a pair of tagged stubs naming the signal
-instead of a long lead.
+instead of a long lead. Fitting the diagram to the view never shrinks it
+past the point where its labels read: a big program shows its left part
+and you pan.
+
+**Icons.** A block can carry one character at the left of its header, so
+you can tell a timer from a counter at a glance: the standard blocks have
+built-in ones (T for timers, # for counters, ↑ and ↓ for the edge
+detectors, S and R for the bistables, ~ for the blink pattern), and a file
+named `icons.map` in the project adds your own, one rule a line:
+
+```
+MOTOR = M        # every block of type MOTOR
+conveyor* = >    # every variable or instance whose name starts so
+TON = ⏱          # over the built-in one
+```
+
+The project's rules win over the built-in ones. Zoomed out past where the
+label is drawn, the icon stands alone at a readable size.
 
 ## The panes
 
-- **Files**, on the left (<kbd>Alt</kbd> <kbd>0</kbd>): the project's
-  files, the examples and starters, and the program tree under them.
-- **Structured Text** (<kbd>Alt</kbd> <kbd>1</kbd>): the editor, beside
-  the diagram. Errors are marked on the line as you type; the program
-  running does not change until you deploy.
+- **The left pane** has two tabs. **Files** (<kbd>Alt</kbd> <kbd>0</kbd>):
+  the project's files, the examples and starters, and the program tree
+  under them; a right-click on a file offers Copy, Paste, Duplicate,
+  Rename and Delete, and what you copy pastes into any project you open
+  next. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the Structured Text
+  editor. Errors are marked on the line as you type; the program running
+  does not change until you deploy. The key for a tab opens the pane on
+  it, or shuts the pane when that tab already shows.
 - **The bottom panel** (<kbd>Alt</kbd> <kbd>2</kbd>): the **Trend** of the
   signals you pin, with a long time axis, and **Messages**, the last two
   hundred things the page had to say, with the error count on the tab.

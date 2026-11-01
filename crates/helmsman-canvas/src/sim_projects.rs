@@ -357,14 +357,7 @@ impl SimProjects {
     /// (`name-2.st`, ... when it is).
     #[must_use]
     pub fn free_file(&self, want: &str) -> String {
-        if !self.files.contains_key(want) {
-            return want.to_string();
-        }
-        let (stem, ext) = want.rsplit_once('.').unwrap_or((want, "st"));
-        (2..=400)
-            .map(|k| format!("{stem}-{k}.{ext}"))
-            .find(|n| !self.files.contains_key(n))
-            .unwrap_or_else(|| want.to_string())
+        crate::projects::free_file_name(want, |n| self.files.contains_key(n))
     }
 
     fn free(&self, base: &str) -> String {
@@ -513,6 +506,12 @@ impl SimProjects {
     }
 
     pub fn new_file(&mut self, file: &str) {
+        self.add_file(file, String::new());
+    }
+
+    /// A new file `file` holding `text`, opened; refused with a note when
+    /// the name is not a project file's or is taken.
+    pub fn add_file(&mut self, file: &str, text: String) {
         if file_name(file).is_none() {
             self.note(
                 format!(
@@ -527,7 +526,7 @@ impl SimProjects {
             self.note(format!("{file} already exists."), true);
             return;
         }
-        self.files.insert(file.to_string(), String::new());
+        self.files.insert(file.to_string(), text);
         file.clone_into(&mut self.current);
     }
 

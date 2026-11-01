@@ -39,6 +39,7 @@ mod commit;
 mod editor;
 mod glyphs;
 mod hotkeys;
+mod icons;
 mod messages;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]
