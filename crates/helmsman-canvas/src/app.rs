@@ -180,7 +180,7 @@ impl App {
                 .as_mut()
                 .filter(|b| b.has_projects())
                 .map(|b| b as &mut dyn Workspace),
-            Source::Sim => None,
+            Source::Sim => self.sim.as_mut().map(|s| s as &mut dyn Workspace),
         }
     }
 
@@ -399,8 +399,13 @@ impl App {
     }
 
     /// The open project's name with its dirty marker, Save and Deploy;
-    /// disabled, with why on hover, when this page may not write.
+    /// disabled, with why on hover, when this page may not write. Not on
+    /// a phone's width.
     fn project_controls(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        // A phone is the Monitor's: no room, and nothing to edit there.
+        if ui.ctx().content_rect().width() < NARROW {
+            return;
+        }
         let Some(w) = self.workspace() else { return };
         let dirty = w.dirty();
         let write = w.writable();
@@ -552,6 +557,24 @@ impl App {
                             self.screen = Screen::Editor;
                             close = true;
                         }
+                    }
+                    // The box's HTTPS certificate, to compare with the
+                    // browser's and the box's startup line (`box-https`).
+                    let policy = self.review.as_ref().and_then(|r| r.state.policy.as_ref());
+                    if let Some(fp) = policy.and_then(|p| p["transport"]["fingerprint"].as_str()) {
+                        ui.separator();
+                        let (a, b) = fp.split_at(if fp.is_char_boundary(48) { 48 } else { fp.len() });
+                        let l = ui
+                            .label(
+                                RichText::new(format!("HTTPS certificate SHA-256\n{a}\n{b}"))
+                                    .small()
+                                    .monospace()
+                                    .color(STEEL),
+                            )
+                            .on_hover_text(
+                                "the browser shows this page's certificate fingerprint too: they must match",
+                            );
+                        hits.push(("tls fingerprint".to_string(), l.rect));
                     }
                 });
             });

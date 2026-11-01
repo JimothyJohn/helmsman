@@ -27,13 +27,14 @@ webpki-roots = { version = "1.0.11", optional = true }
 ring = { version = "0.17.14", optional = true }
 # The WASM module tier (`wasm`): a pure-Rust interpreter with fuel
 # metering; ARCHITECTURE "WASM modules" says why not wasmtime.
-# Project uploads (`project::zip`): DEFLATE entries inflated under a
-# size limit. Pure Rust, one dependency (adler2); both already in the
-# lockfile through the canvas's png. The ZIP container itself is ours.
-miniz_oxide = { version = "0.9.1", optional = true }
+# A project's rules and its .zip (`project`), shared with the canvas's
+# simulation; pure Rust (miniz_oxide for DEFLATE).
+helmsman-project = { path = "../helmsman-project", optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
 
 [dev-dependencies]
+# Deflated entries for hostile upload archives (tests/projects.rs).
+miniz_oxide = "0.9.1"
 # The box build itself never enables `unrestricted`; its tests play scanner.
 helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
@@ -68,7 +69,7 @@ workspace = true
 # names `enip-io` without it is refused as "not in this build".
 # scripts/lint.sh keeps it compiling.
 default = ["box", "https"]
-box = ["dep:rusqlite", "dep:ring", "dep:miniz_oxide", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
+box = ["dep:rusqlite", "dep:ring", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
 enip-io = ["box", "helmsman-io/enip"]
 # `wasm`: modules compiled to WebAssembly (`module.wasm`) beside ST ones,
 # run by an interpreter under fuel and memory limits, and the map's WASM
@@ -161,3 +162,11 @@ required-features = ["wasm"]
 [[test]]
 name = "projects"
 required-features = ["box"]
+
+[[test]]
+name = "trend"
+required-features = ["box"]
+
+[[test]]
+name = "https"
+required-features = ["box", "https"]

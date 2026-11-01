@@ -707,8 +707,8 @@ fn an_engineer_lists_opens_edits_saves_and_deploys_a_project_on_the_box() {
         "{:?}",
         p.notice
     );
-    // A single .st goes into the open project; L5X is refused, in the
-    // box's words.
+    // A single .st goes into the open project; an L5X the box cannot
+    // convert is refused, in the box's words.
     p.upload(
         "Extra.st",
         b"FUNCTION f : INT\n  f := 1;\nEND_FUNCTION\n".to_vec(),
@@ -723,7 +723,7 @@ fn an_engineer_lists_opens_edits_saves_and_deploys_a_project_on_the_box() {
     p.upload("plant.L5X", b"<RSLogix5000Content/>".to_vec(), false);
     settle(&b, &jar, p);
     let (msg, err) = p.notice.clone().unwrap();
-    assert!(err && msg.contains("L5X import is not built yet"), "{msg}");
+    assert!(err && msg.contains("plant.L5X is not converted"), "{msg}");
 }
 
 #[test]
@@ -869,13 +869,14 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
         for k in ["save", "deploy", "new project", "delete project", "new file"] {
             h.press(k);
         }
-        let sent = h.sent();
+        // Reads (the Trend's pins) go; no write does.
+        let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
         assert!(sent.is_empty(), "{sent:?}");
         assert_eq!(h.app.chrome.rect("name"), None, "no name asked for");
         // A force asked for in code is not sent either; the box would
         // refuse it anyway.
         h.bv().force("start", helmsman_iec::Value::Bool(false));
-        let sent = h.sent();
+        let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
         assert!(sent.is_empty(), "{sent:?}");
     }
     // As the engineer, the same page writes.
@@ -1030,4 +1031,215 @@ fn a_session_the_box_ended_signs_the_header_out() {
     h.frame(vec![]);
     assert_eq!(h.app.session(), None, "the header shows Sign in again");
     assert!(h.app.chrome.rect("sign in").is_some());
+}
+
+/// A browser's storage two page loads share (`localStorage`).
+#[derive(Clone, Default)]
+struct Slot(std::rc::Rc<std::cell::RefCell<Option<String>>>);
+
+impl crate::sim_projects::Storage for Slot {
+    fn load(&self) -> Result<Option<String>, String> {
+        Ok(self.0.borrow().clone())
+    }
+
+    fn save(&mut self, text: &str) -> Result<(), String> {
+        *self.0.borrow_mut() = Some(text.to_string());
+        Ok(())
+    }
+}
+
+/// A trend page: signed in as `who`, its browser's pins in `slot`, run
+/// until its requests are answered.
+fn trend_page(b: &Bench, jar: &Jar, who: Option<(&str, &str)>, slot: &Slot) -> BoxView {
+    let mut v = BoxView::with_pins(Box::new(slot.clone()));
+    v.session = who.map(|(u, p)| b.login(jar, u, p));
+    let ctx = egui::Context::default();
+    for k in 0..6 {
+        pump(b, jar, &mut v, &ctx, f64::from(k));
+    }
+    v
+}
+
+/// Card `box-trend-source`: pins follow the signed-in person (or stay in
+/// the browser signed out), and a Trend opens with the box's history.
+#[test]
+fn the_trend_on_a_box_opens_with_history_and_pins_follow_the_person() {
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let jar = Jar::default();
+    let mut a = trend_page(&b, &jar, Some(("alice", ALICE)), &Slot::default());
+    assert_eq!(a.trend.pins, Vec::<String>::new());
+    let session = a.session.clone();
+    a.trend.toggle("lamp", session.as_ref(), 10.0);
+    for k in 10..14 {
+        pump(&b, &jar, &mut a, &ctx, f64::from(k));
+    }
+    assert_eq!(a.trend.notice, None);
+    assert_eq!(b.json("/api/trends?signals=lamp")["signals"][0]["name"], "lamp");
+
+    // Alice on another screen: her pins, and the history before any
+    // values event of that page.
+    let jar2 = Jar::default();
+    let mut v = BoxView::with_pins(Box::new(Slot::default()));
+    v.session = Some(b.login(&jar2, "alice", ALICE));
+    // Only the page's own requests are answered: no values stream.
+    v.step_all(&ctx, vec![], vec![], 0.0);
+    for _ in 0..4 {
+        let answers: Vec<_> = std::mem::take(&mut v.psent)
+            .into_iter()
+            .map(|q| {
+                let a = b.send(&jar2, &q);
+                (q.call, a)
+            })
+            .collect();
+        v.step_all(&ctx, vec![], answers, 1.0);
+    }
+    assert_eq!(v.trend.pins, ["lamp"], "her pins follow her");
+    wait("lamp's history on open", || {
+        let r = b.send(
+            &jar2,
+            &PReq::get(
+                crate::box_projects::PCall::Trend,
+                "/api/trends?signals=lamp".into(),
+            ),
+        );
+        v.trend.answer(&crate::box_projects::PCall::Trend, &r, 2.0);
+        v.trend
+            .series
+            .get("lamp")
+            .is_some_and(|s| s.iter().any(|p| (p.1 - 1.0).abs() < 1e-9))
+    });
+    assert_eq!(v.state.seq, None, "no values event yet: it is the box's history");
+
+    // Bob's pins are his own.
+    let bob = trend_page(&b, &Jar::default(), Some(("bob", BOB)), &Slot::default());
+    assert_eq!(bob.trend.pins, Vec::<String>::new());
+
+    // Signed out: this browser keeps the pins, across a reload.
+    let slot = Slot::default();
+    let jar3 = Jar::default();
+    let mut anon = trend_page(&b, &jar3, None, &slot);
+    anon.trend.toggle("start", None, 20.0);
+    assert!(anon.psent.is_empty() || anon.psent.iter().all(|q| q.method == "GET"));
+    let anon = trend_page(&b, &jar3, None, &slot);
+    assert_eq!(anon.trend.pins, ["start"]);
+
+    // Hostile pin lists: too many, unknown signals, no session.
+    let send = |jar: &Jar, body: Json| {
+        b.send(
+            jar,
+            &PReq::json(
+                crate::box_projects::PCall::SavePins,
+                "PUT",
+                "/api/trends/pins".into(),
+                &body,
+            ),
+        )
+    };
+    let many: Vec<String> = (0..17).map(|k| format!("s{k}")).collect();
+    assert_eq!(send(&jar, serde_json::json!({ "signals": many })).status, 400);
+    let r = send(&jar, serde_json::json!({ "signals": ["lamp", "nosuch"] }));
+    assert_eq!(r.status, 422, "{r:?}");
+    assert!(r.body.contains("nosuch"));
+    assert_eq!(send(&jar, serde_json::json!({ "signals": "lamp" })).status, 400);
+    assert_eq!(
+        send(&Jar::default(), serde_json::json!({ "signals": ["lamp"] })).status,
+        401
+    );
+    assert!(b.json("/api/trends/pins")["error"].is_string());
+}
+
+/// Card `arrangement-persist`: an engineer saves the diagram's arrangement
+/// as the running project's default (its `diagram.layout`, so it travels
+/// in the `.zip`); every page reads it; an operator cannot save one.
+#[test]
+fn the_shared_layout_round_trips_through_the_running_project_for_an_engineer_only() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut eng = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut eng.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    // Nothing deployed from a project yet: no project to keep it in.
+    assert!(eng.projects.running.is_none());
+    eng.projects.save_layout("helmsman-layout 1\n".into());
+    assert!(eng.projects.poll().is_empty() && eng.projects.notice.as_ref().unwrap().1);
+    eng.projects.deploy();
+    settle(&b, &jar, &mut eng.projects);
+    assert_eq!(eng.projects.running.as_deref(), Some("line"));
+    let none = eng.projects.layout.clone().expect("read after the deploy");
+    assert_eq!((none.text.as_str(), none.version), ("", None), "no default yet");
+
+    let text = "helmsman-layout 1\nmove\tconveyor\t0\t0\t120\tLAMP :=\tLAMP := L.Q\nmove\tLatch\t0\t40\t0\tQ :=\tQ := (Q OR SET) AND NOT RESET\n";
+    eng.projects.save_layout(text.into());
+    settle(&b, &jar, &mut eng.projects);
+    assert_eq!(
+        eng.projects.layout_saved.as_deref(),
+        Some(text),
+        "{:?}",
+        eng.projects.notice
+    );
+    assert_eq!(eng.projects.shared_layout(), text);
+    assert_eq!(
+        b.json("/api/projects/line/files/diagram.layout")["text"],
+        text,
+        "kept on the box"
+    );
+    let (_, zip) = b.get("/api/projects/line/zip");
+    let files = helmsman_project::read_zip(&zip).unwrap();
+    assert_eq!(files.get("diagram.layout"), Some(text), "in the .zip");
+    // The layout is no program change: what runs is still the project.
+    assert_eq!(b.json("/api/running")["current"], true);
+
+    // Another page, any role, starts from it.
+    for who in [None, Some(("bob", BOB))] {
+        let jar = Jar::default();
+        let mut v = page(&b, &jar, who);
+        assert_eq!(v.projects.shared_layout(), text);
+        // An operator's page offers no Save as default and sends nothing.
+        v.save_layout();
+        assert_eq!(v.projects.poll(), Vec::<PReq>::new());
+        // Asked for anyway, the box refuses it and keeps the engineer's.
+        v.projects.save_layout("helmsman-layout 1\n".into());
+        settle(&b, &jar, &mut v.projects);
+        let (msg, err) = v.projects.notice.clone().unwrap();
+        // Signed out, a 401 (sign in again); an operator, a 403.
+        let want = if who.is_some() {
+            "not saved"
+        } else {
+            "Sign in again"
+        };
+        assert!(err && msg.contains(want), "{msg}");
+        assert!(v.projects.layout_saved.is_none());
+        assert_eq!(b.json("/api/projects/line/files/diagram.layout")["text"], text);
+    }
+
+    // A stale save (someone else saved since) is a 409, read again.
+    let jar2 = Jar::default();
+    let mut other = page(&b, &jar2, Some(("alice", ALICE)));
+    let newer = "helmsman-layout 1\nmove\tconveyor\t0\t0\t300\tLAMP :=\tLAMP := L.Q\n";
+    other.projects.save_layout(newer.into());
+    settle(&b, &jar2, &mut other.projects);
+    eng.projects.save_layout("helmsman-layout 1\n".into());
+    settle(&b, &jar, &mut eng.projects);
+    let (msg, err) = eng.projects.notice.clone().unwrap();
+    assert!(err && msg.contains("Someone else saved"), "{msg}");
+    assert_eq!(eng.projects.shared_layout(), newer, "read again");
+    // A layout that does not read is refused by the box.
+    let bad = PReq {
+        call: crate::box_projects::PCall::SaveLayout("line".into()),
+        method: "PUT",
+        url: "/api/projects/line/files/diagram.layout".into(),
+        body: Some(
+            serde_json::json!({ "text": "move\tx\n", "version": null })
+                .to_string()
+                .into_bytes(),
+        ),
+        ctype: "application/json",
+    };
+    assert_eq!(b.send(&jar, &bad).status, 422);
 }

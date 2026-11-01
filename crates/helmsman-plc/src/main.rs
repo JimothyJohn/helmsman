@@ -50,6 +50,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
        helmsman-plc account add USER ROLE | passwd USER | disable USER | enable USER | list
                     [--state-dir DIR]   (per-person logins; passwords on stdin. Once
                     any account exists, approvers log in and role PINs are refused)
+       helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE.st ...]
+                    (first install only: with no project and nothing deployed,
+                    makes NAME from the files and deploys it for --projects)
   --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
@@ -83,7 +86,14 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        (default 127.0.0.1:8080: loopback only; 0.0.0.0:8080
                        for the LAN), or `off`. Reads are open; anything
                        else needs the token from the state directory.
-  --opcua ADDR         read-only OPC UA server (see helmsman_plc::opcua) on
+  --https on|off       serve the API and canvas over HTTPS (default on): a
+                       self-signed certificate made at first start and kept
+                       in the state directory (tls.pem); its SHA-256
+                       fingerprint is printed at start and shown in the
+                       canvas's ⋯ menu. Plain HTTP on the same port is
+                       served only from this host (loopback, an SSH
+                       tunnel); from the LAN it is redirected to https://
+  --opcua ADDR        read-only OPC UA server (see helmsman_plc::opcua) on
                        ADDR (default 127.0.0.1:4840: loopback only), or `off`.
                        Anonymous, SecurityPolicy None: nothing is signed or
                        encrypted, so bind it to the plant LAN only.
@@ -97,9 +107,6 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        the agent version POST /api/explain asks for (an
                        explain profile; default explain-v1). The box runs
                        only read-only tools for it either way.
-  --screen FILE        the floor screen's layout (see helmsman_plc::screen):
-                       tiles showing the I/O map's `screen` outputs, served
-                       at /api/screen and drawn by the canvas at /?andon
   --site NAME          announce this box on the LAN as part of site NAME
                        (a UDP multicast beacon to 239.255.72.77:41910, TTL
                        1, every 5 s) and list the boxes of that site it
@@ -154,6 +161,9 @@ struct Opts {
     projects: bool,
     emit_st: bool,
     api: Option<SocketAddr>,
+    /// Serve the API over HTTPS (`--https`, on by default in a build with
+    /// the `https` feature).
+    https: bool,
     opcua: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
     relay: Option<String>,
@@ -161,7 +171,6 @@ struct Opts {
     relay_agent: String,
     relay_explain_agent: Option<String>,
     ui: Option<PathBuf>,
-    screen: Option<PathBuf>,
     site: Option<String>,
     box_name: Option<String>,
     policy: Option<PathBuf>,
@@ -210,6 +219,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         projects: false,
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
+        https: cfg!(feature = "https"),
         opcua: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 4840))),
         state_dir: None,
         relay: None,
@@ -217,7 +227,6 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_agent: "v3".into(),
         relay_explain_agent: None,
         ui: None,
-        screen: None,
         site: None,
         box_name: None,
         policy: None,
@@ -269,6 +278,14 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     .map_err(|_| format!("--bind: not an IPv4 address: {v:?}"))?;
             }
             "--api" if v == "off" => o.api = None,
+            "--https" => {
+                o.https = match v.as_str() {
+                    "on" if cfg!(feature = "https") => true,
+                    "on" => return Err("--https on: this build has no TLS (the `https` feature)".into()),
+                    "off" => false,
+                    _ => return Err(format!("--https: expected on or off, got {v:?}")),
+                };
+            }
             "--opcua" if v == "off" => o.opcua = None,
             "--opcua" => {
                 o.opcua = Some(
@@ -301,7 +318,11 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "--sink-dir" => once(&mut o.sink_dir, flag, v)?,
             "--store" => once(&mut o.store, flag, v)?,
             "--ui" => once(&mut o.ui, flag, v)?,
-            "--screen" => once(&mut o.screen, flag, v)?,
+            "--screen" => {
+                return Err(
+                    "--screen is retired: the Monitor (/?monitor) builds its tiles from the program".into(),
+                );
+            }
             "--site" if site::valid_token(v) => o.site = Some(v.clone()),
             "--site" => return Err(format!("--site: 1 to 32 of A-Z a-z 0-9 . _ -, got {v:?}")),
             "--box-name" if site::valid_name(v) => o.box_name = Some(v.clone()),
@@ -322,9 +343,6 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.ui.is_some() && o.api.is_none() {
         return Err("--ui is served by the API; it does not go with --api off".into());
-    }
-    if o.screen.is_some() && o.api.is_none() {
-        return Err("--screen is served by the API; it does not go with --api off".into());
     }
     if o.site.is_some() && o.api.is_none_or(|a| a.port() == 0) {
         return Err("--site announces the API's port; it needs --api IP:PORT with a fixed port".into());
@@ -613,44 +631,6 @@ fn load_io(
     Ok((table, uses_box, parsed.map))
 }
 
-/// The floor screen's layout, checked against the I/O map; `None` without
-/// `--screen`. A map with `screen` outputs needs one when the API runs
-/// (without it, nothing would show them).
-fn load_screen(o: &Opts, map: Option<&helmsman_io::IoMap>) -> Result<Option<api::Screen>, String> {
-    let screens = map.is_some_and(|m| {
-        m.signals
-            .iter()
-            .any(|s| matches!(s.binding, helmsman_io::Binding::Screen { .. }))
-    });
-    let Some(path) = &o.screen else {
-        if screens && o.api.is_some() {
-            return Err("the I/O map declares screen tiles: give their layout with --screen FILE".into());
-        }
-        return Ok(None);
-    };
-    let file = path.display();
-    let mut buf = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|f| {
-            use std::io::Read as _;
-            f.take(helmsman_plc::screen::MAX_FILE as u64 + 1)
-                .read_to_end(&mut buf)
-        })
-        .map_err(|e| format!("{file}: {e}"))?;
-    let source = String::from_utf8(buf).map_err(|_| format!("{file}: not UTF-8"))?;
-    let layout = helmsman_plc::screen::parse(&source).map_err(|errs| {
-        let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
-        format!("{file} is not a valid screen layout:{}", lines.concat())
-    })?;
-    layout
-        .check(map.unwrap_or(&helmsman_io::IoMap::default()))
-        .map_err(|errs| {
-            let lines: Vec<String> = errs.iter().map(|e| format!("\n  {file}: {e}")).collect();
-            format!("{file} does not fit the I/O map:{}", lines.concat())
-        })?;
-    Ok(Some(api::Screen { source, layout }))
-}
-
 /// The calendar file, bound to `table`.
 fn load_calendar((path, src): &Text, table: &mut SignalTable) -> Result<Source, String> {
     let file = path.display();
@@ -932,7 +912,6 @@ fn start_api(
     live: &Arc<Live>,
     devices: &Arc<Devices>,
     approval: Approval,
-    screen: Option<api::Screen>,
     forces: &Arc<Forces>,
 ) -> Result<(Api, Option<Site>), String> {
     let ui =
@@ -979,10 +958,8 @@ fn start_api(
     };
     let trust = TrustStore::load(&dir)?;
     let has_ui = ui.is_some();
-    let has_screen = screen.is_some();
     let extras = api::Extras {
         ui,
-        screen,
         trust: Some(trust),
     };
     let site = o
@@ -1003,21 +980,20 @@ fn start_api(
             p.root().display()
         );
     }
+    let tls = box_tls(o, &dir)?;
+    let scheme = if tls.is_some() { "https" } else { "http" };
     let more = api::More {
         projects,
         forces: Some(Arc::clone(forces)),
     };
-    let server = Api::start_box(cfg, shared, extras, site.as_ref().map(Site::handle), more)
+    let server = Api::start_secure(cfg, shared, extras, site.as_ref().map(Site::handle), more, tls)
         .map_err(|e| format!("--api {bind}: {e}"))?;
     eprintln!(
-        "helmsman-plc: API on http://{}/api (reads open; changes need the token)",
+        "helmsman-plc: API on {scheme}://{}/api (reads open; changes need the token)",
         server.addr()
     );
     if has_ui {
-        eprintln!("helmsman-plc: canvas on http://{}/", server.addr());
-        if has_screen {
-            eprintln!("helmsman-plc: floor screen on http://{}/?andon", server.addr());
-        }
+        eprintln!("helmsman-plc: canvas on {scheme}://{}/", server.addr());
     }
     if token.new {
         eprintln!(
@@ -1029,6 +1005,38 @@ fn start_api(
         eprintln!("helmsman-plc: API token in {}", token.path.display());
     }
     Ok((server, site))
+}
+
+/// The box's HTTPS (`--https`, on by default): its certificate from the
+/// state directory, made on the first start, and the fingerprint printed
+/// for the journal. `None` with `--https off` or without the `https`
+/// feature.
+#[cfg(feature = "https")]
+fn box_tls(o: &Opts, dir: &Path) -> Result<Option<api::Tls>, String> {
+    if !o.https {
+        eprintln!(
+            "helmsman-plc: --https off: the API and canvas are plain HTTP, sign-ins can be sniffed on the LAN"
+        );
+        return Ok(None);
+    }
+    let id = api::tls::load_or_create(dir, host_name().as_deref())
+        .map_err(|e| format!("TLS certificate in {}: {e}", dir.display()))?;
+    let tls = api::Tls::new(&id).map_err(|e| format!("TLS certificate {}: {e}", id.path.display()))?;
+    eprintln!(
+        "helmsman-plc: TLS certificate ({}, {}) SHA-256 fingerprint {}; check that your browser shows the same before you trust it",
+        if id.new { "new" } else { "kept" },
+        id.path.display(),
+        id.fingerprint()
+    );
+    eprintln!(
+        "helmsman-plc: plain HTTP on the API's port is served only from this host; from the LAN it is sent to https://"
+    );
+    Ok(Some(tls))
+}
+
+#[cfg(not(feature = "https"))]
+fn box_tls(_: &Opts, _: &Path) -> Result<Option<api::Tls>, String> {
+    Ok(None)
 }
 
 /// The host's name as a site box name, if it is one.
@@ -1286,7 +1294,6 @@ fn run(o: &Opts) -> Result<(), String> {
         let lines: Vec<String> = errs.iter().map(|e| format!("\n  {e}")).collect();
         format!("modules do not fit together:{}", lines.concat())
     })?;
-    let screen = load_screen(o, map.as_ref())?;
     let mut sinks = start_sinks(o, &table.lock().unwrap_or_else(PoisonError::into_inner))?;
     let catalog = catalog(&rt, &loaded, sources, &table, map.as_ref());
     let specs: Vec<Spec> = loaded.into_iter().map(|(s, _)| s).collect();
@@ -1353,7 +1360,6 @@ fn run(o: &Opts) -> Result<(), String> {
                 &live,
                 &devices,
                 approval,
-                screen,
                 &forces,
             )
         })
@@ -1451,11 +1457,100 @@ fn run(o: &Opts) -> Result<(), String> {
     }
 }
 
+/// `helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE...]`:
+/// on a first install (no project, nothing deployed) makes project NAME
+/// from the files and deploys it, so a `--projects` box boots running it
+/// (`helmsman_plc::project::seed`); otherwise, or with no NAME, nothing.
+/// Run by the Pi's unit before every start (`ExecStartPre`), as the service.
+fn project_cli(args: &[String]) -> Result<String, String> {
+    const USE: &str = "usage: helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE.st...]";
+    let Some((verb, rest)) = args.split_first() else {
+        return Err(USE.into());
+    };
+    if verb != "seed" {
+        return Err(USE.into());
+    }
+    let mut state = None;
+    let mut scan = Duration::from_millis(10);
+    let mut words = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--state-dir" => {
+                state = Some(PathBuf::from(rest.get(i + 1).ok_or(USE)?));
+                i += 2;
+            }
+            "--scan-ms" => {
+                scan = match rest.get(i + 1).map(|v| v.parse::<u64>()) {
+                    Some(Ok(ms @ 1..=10_000)) => Duration::from_millis(ms),
+                    _ => return Err(format!("--scan-ms: expected 1..=10000\n{USE}")),
+                };
+                i += 2;
+            }
+            w if w.starts_with("--") => return Err(format!("unknown flag {w}\n{USE}")),
+            w => {
+                words.push(w.to_string());
+                i += 1;
+            }
+        }
+    }
+    let Some((name, paths)) = words.split_first() else {
+        return Ok("helmsman-plc: no project to seed\n".into());
+    };
+    let files = paths
+        .iter()
+        .map(|p| {
+            let path = Path::new(p);
+            let file = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .ok_or_else(|| format!("{p}: not a file name"))?
+                .to_string();
+            let text = fs::read_to_string(path).map_err(|e| format!("{p}: {e}"))?;
+            Ok((file, text))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let cfg = device_config(1);
+    let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
+    let shape = helmsman_plc::project::build::Shape {
+        defaults: Defaults {
+            period: scan,
+            i: Window::new(0, i_len),
+            q: Window::new(0, q_len),
+            m: 1024,
+        },
+        i_len,
+        q_len,
+    };
+    let state = state.unwrap_or_else(default_state_dir);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    match helmsman_plc::project::seed(&state, name, &files, &shape, now)? {
+        helmsman_plc::project::Seeded::Deployed { snapshot } => Ok(format!(
+            "helmsman-plc: first install: project {name} made and deployed as snapshot {snapshot}\n"
+        )),
+        helmsman_plc::project::Seeded::Left(why) => Ok(format!("helmsman-plc: {why}\n")),
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "account") {
         let stdin = std::io::stdin();
         return match account::cli(&args[1..], &mut stdin.lock(), default_state_dir()) {
+            Ok(out) => {
+                print!("{out}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if args.first().is_some_and(|a| a == "project") {
+        return match project_cli(&args[1..]) {
             Ok(out) => {
                 print!("{out}");
                 ExitCode::SUCCESS

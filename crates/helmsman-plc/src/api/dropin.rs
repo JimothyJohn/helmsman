@@ -444,6 +444,7 @@ fn from_st(src: &str, source: &str) -> Result<Project, Refused> {
                 external_access: None,
                 constant: v.constant,
                 description: None,
+                data: None,
             });
         }
         let from = starts[k].min(lines.len());

@@ -67,6 +67,8 @@ pub struct Listing<'a> {
     pub current: Option<&'a str>,
     /// Whether this page may write, or why not.
     pub write: Result<(), String>,
+    /// The open project has unsaved edits (opening another asks first).
+    pub dirty: bool,
 }
 
 /// Which name the sidebar's text field is for.
@@ -114,7 +116,13 @@ impl FilesUi {
             let r = ui.selectable_label(open, RichText::new(text).monospace().color(color));
             chrome.hit(format!("project {}", p.name), r.rect);
             if r.clicked() && !open {
-                act = Some(Act::OpenProject(p.name.clone()));
+                let a = Act::OpenProject(p.name.clone());
+                if l.dirty {
+                    self.naming = None;
+                    self.confirm = Some(a);
+                } else {
+                    act = Some(a);
+                }
             }
         }
         if l.projects.is_empty() {
@@ -190,7 +198,9 @@ impl FilesUi {
         }
         if l.write.is_err() {
             self.naming = None;
-            self.confirm = None;
+            if !matches!(self.confirm, Some(Act::OpenProject(_))) {
+                self.confirm = None;
+            }
         }
         act
     }
@@ -250,19 +260,24 @@ impl FilesUi {
 
     fn confirm_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) -> Option<Act> {
         let a = self.confirm.clone()?;
-        let what = match &a {
-            Act::DeleteProject(p) => format!("Delete project {p} and all its files?"),
-            Act::DeleteFile(f) => format!("Delete {f}?"),
+        let (what, verb, stay) = match &a {
+            Act::DeleteProject(p) => (format!("Delete project {p} and all its files?"), "Delete", "Keep"),
+            Act::DeleteFile(f) => (format!("Delete {f}?"), "Delete", "Keep"),
+            Act::OpenProject(p) => (
+                format!("The edits here are not saved and are dropped if you open {p}."),
+                "Open, drop them",
+                "Stay",
+            ),
             _ => return None,
         };
         let mut out = None;
         ui.separator();
         ui.colored_label(RED, what);
         ui.horizontal(|ui| {
-            let yes = ui.button("Delete");
-            chrome.hit("confirm delete", yes.rect);
-            let no = ui.button("Keep");
-            chrome.hit("confirm keep", no.rect);
+            let yes = ui.button(verb);
+            chrome.hit("confirm yes", yes.rect);
+            let no = ui.button(stay);
+            chrome.hit("confirm no", no.rect);
             if yes.clicked() {
                 out = Some(a.clone());
                 self.confirm = None;

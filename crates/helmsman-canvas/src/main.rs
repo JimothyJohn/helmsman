@@ -24,11 +24,15 @@
 )]
 
 mod app;
+mod arrange;
+#[cfg(test)]
+mod arrange_tests;
 mod box_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_projects_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod box_tests;
+mod box_trend;
 mod box_view;
 mod claude;
 mod editor;
@@ -45,6 +49,9 @@ mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod review_tests;
 mod review_view;
+mod sim_projects;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod sim_projects_tests;
 mod st_view;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod ui_tests;

@@ -22,13 +22,20 @@ this; change it here first when a decision changes.
 - **Left sidebar, collapsible:** the open project's files, with the program
   tree under them (PROGRAM › instance › instance, foldable; a click opens
   that scope's diagram).
-- **Centre: the live diagram.** Pan, zoom, drag blocks to rearrange (kept
-  per project, Reset layout), breadcrumbs with ↑ (Alt+↑), double-click an
-  instance to go into it.
+- **Centre: the live diagram.** Pan, zoom, drag blocks to rearrange,
+  breadcrumbs with ↑ (Alt+↑), double-click an instance to go into it.
+  An engineer saves the arrangement as the project's shared default
+  (Save as default; the project's `diagram.layout`, so it travels in the
+  `.zip`); anyone's further moves are kept in their browser on top of it.
+  Reset layout goes back to the shared default, a second step to the
+  automatic layout. The simulation does the same with its projects.
 - **ST on demand:** an "ST" toggle slides the editor open beside the
   diagram; clicking a block jumps the editor to its line.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
-  not show), Trend (pinned signals), Claude.
+  not show), Trend (pinned signals), Claude. On a Pi the Trend opens with
+  the box's history of each pinned signal (the last 10 minutes), then
+  streams; pins are the signed-in person's, kept by the box, or the
+  browser's when signed out.
 - **NOT is a bubble** on the pin it feeds (or the output it inverts), the
   FBD convention, not a block of its own. Display only.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
@@ -57,9 +64,12 @@ this; change it here first when a decision changes.
   saying why. Sign in and out from the header.
 - **Download:** a `.zip` of the project folder (its `.st` files, the I/O map,
   settings). **Upload:** that `.zip` back, or single `.st`, PLCopen XML or
-  L5X files into the open project (XML and L5X converted to ST).
+  L5X files into the open project (XML and L5X ladder converted to ST).
 - In the browser simulation, projects persist in the browser's storage, with
-  the same Upload and Download.
+  the same Upload and Download (the box's `.zip`). The built-in examples are
+  read-only starter projects: Save keeps your own copy. Deploy compiles and
+  runs the project in the page. A browser that keeps nothing (a private
+  window) still works; the projects last until the page closes.
 
 ## Monitor (phone to wall TV; replaces Andon)
 

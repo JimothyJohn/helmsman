@@ -15,6 +15,9 @@
 //! - `POST .../zip`, `POST .../import?file=F`: Upload. `GET .../zip`:
 //!   Download (the browser fetches it itself).
 //! - `POST /api/forces`, `DELETE /api/forces[/{id}]`: forcing.
+//! - `GET` and `PUT .../files/diagram.layout` of the running project: the
+//!   diagram's shared default arrangement (`arrange.rs`), saved by an
+//!   engineer like any project file.
 //!
 //! Every write needs an engineer's login session, which the browser holds
 //! as an `HttpOnly` cookie; the page never sees a credential. A 401 means
@@ -75,6 +78,26 @@ pub enum PCall {
     Forces,
     Force,
     Release,
+    /// The signed-in person's trend pins (`box_trend.rs`), read.
+    TrendPins,
+    /// ... and saved.
+    SavePins,
+    /// The pins' history.
+    Trend,
+    /// The running project's shared diagram layout, read.
+    Layout(String),
+    /// ... and saved.
+    SaveLayout(String),
+}
+
+/// The running project's shared diagram layout, as the box holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SharedLayout {
+    pub project: String,
+    /// The file's text (`""`: the project has none).
+    pub text: String,
+    /// Its version (`None`: no file yet).
+    pub version: Option<String>,
 }
 
 /// One HTTP call: same-origin, with the browser's session cookie and, for
@@ -107,7 +130,7 @@ pub use crate::review::Answer;
 const JSON: &str = "application/json";
 
 impl PReq {
-    fn get(call: PCall, url: String) -> Self {
+    pub(crate) fn get(call: PCall, url: String) -> Self {
         Self {
             call,
             method: "GET",
@@ -117,7 +140,7 @@ impl PReq {
         }
     }
 
-    fn json(call: PCall, method: &'static str, url: String, body: &Json) -> Self {
+    pub(crate) fn json(call: PCall, method: &'static str, url: String, body: &Json) -> Self {
         Self {
             call,
             method,
@@ -244,6 +267,12 @@ pub struct BoxProjects {
     pub deployed: bool,
     /// Links to hand the browser as downloads.
     pub downloads: Vec<String>,
+    /// The running project's shared diagram layout, once read.
+    pub layout: Option<SharedLayout>,
+    /// A layout this page saved as the default, for the view to adopt.
+    pub layout_saved: Option<String>,
+    /// The layout being saved.
+    saving_layout: Option<String>,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
     queue: Vec<PReq>,
@@ -587,6 +616,49 @@ impl BoxProjects {
         ));
     }
 
+    /// The running project's shared layout, if it is read (`""`: none).
+    #[must_use]
+    pub fn shared_layout(&self) -> &str {
+        match (&self.layout, &self.running) {
+            (Some(l), Some(r)) if l.project == *r => &l.text,
+            _ => "",
+        }
+    }
+
+    /// Saves `text` as the running project's shared diagram layout (an
+    /// engineer's; the box refuses anyone else), over the version read.
+    pub fn save_layout(&mut self, text: String) {
+        let Some(p) = self.running.clone() else {
+            self.note(
+                "Nothing deployed from a project runs: its default layout is kept with it.",
+                true,
+            );
+            return;
+        };
+        if self.saving_layout.is_some() {
+            return;
+        }
+        let version = self
+            .layout
+            .as_ref()
+            .filter(|l| l.project == p)
+            .and_then(|l| l.version.clone());
+        self.queue.push(PReq::json(
+            PCall::SaveLayout(p.clone()),
+            "PUT",
+            file_url(&p, helmsman_project::LAYOUT),
+            &json!({ "text": text, "version": version }),
+        ));
+        self.saving_layout = Some(text);
+    }
+
+    fn read_layout(&mut self, p: &str) {
+        self.queue.push(PReq::get(
+            PCall::Layout(p.to_string()),
+            file_url(p, helmsman_project::LAYOUT),
+        ));
+    }
+
     /// Releases force `id`, or every force.
     pub fn release(&mut self, id: Option<u64>) {
         let url = id.map_or_else(|| "/api/forces".to_string(), |id| format!("/api/forces/{id}"));
@@ -600,6 +672,7 @@ impl BoxProjects {
         let j: Json = serde_json::from_str(&a.body).unwrap_or(Json::Null);
         if a.status == 401 {
             self.ended = true;
+            self.saving_layout = None;
             if self.deploy.busy() {
                 self.deploy = Deploy::Failed("signed out: sign in again to deploy".into());
             }
@@ -645,6 +718,10 @@ impl BoxProjects {
                             .collect()
                     })
                     .unwrap_or_default();
+                match self.running.clone() {
+                    Some(r) => self.read_layout(&r),
+                    None => self.layout = None,
+                }
                 let keep = self
                     .open
                     .as_ref()
@@ -922,7 +999,56 @@ impl BoxProjects {
                 }
                 self.queue.push(PReq::get(PCall::Forces, "/api/forces".into()));
             }
+            // The Trend tab's (`box_trend.rs`).
+            PCall::TrendPins | PCall::SavePins | PCall::Trend => {}
+            PCall::Layout(p) => {
+                if self.running.as_deref() != Some(p.as_str()) {
+                    return;
+                }
+                let text = j["text"].as_str().filter(|_| ok);
+                if ok || a.status == 404 {
+                    self.layout = Some(SharedLayout {
+                        project: p,
+                        text: text.unwrap_or_default().to_string(),
+                        version: j["version"].as_str().filter(|_| ok).map(str::to_string),
+                    });
+                }
+            }
+            PCall::SaveLayout(p) => self.layout_answer(&p, a, &j),
         }
+    }
+
+    fn layout_answer(&mut self, p: &str, a: &Answer, j: &Json) {
+        let sent = self.saving_layout.take().unwrap_or_default();
+        if !(200..300).contains(&a.status) {
+            if a.status == 409 {
+                self.note(
+                    format!("Someone else saved {p}'s default layout since this page read it: it was read again; save again to replace it."),
+                    true,
+                );
+                self.read_layout(p);
+            } else {
+                self.note(format!("The default layout was not saved: {}", error_of(a)), true);
+            }
+            return;
+        }
+        let version = j["version"].as_str().map(str::to_string);
+        if let Some(o) = self.open.as_mut().filter(|o| o.name == p) {
+            let b = o.bufs.entry(helmsman_project::LAYOUT.to_string()).or_default();
+            if !b.dirty() {
+                b.text.clone_from(&sent);
+                b.base.clone_from(&sent);
+                b.version.clone_from(&version);
+                b.loaded = true;
+            }
+        }
+        self.layout = Some(SharedLayout {
+            project: p.to_string(),
+            text: sent.clone(),
+            version,
+        });
+        self.layout_saved = Some(sent);
+        self.note(format!("Saved this arrangement as {p}'s default layout."), false);
     }
 
     fn saved(&mut self, project: &str, file: &str, a: &Answer, j: &Json) {

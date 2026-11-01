@@ -465,6 +465,8 @@ pub struct BoxState {
     pub seq: Option<u64>,
     /// Page time the last `values` event arrived, s.
     pub values_at: Option<f64>,
+    /// The box's clock at the newest values event (`at_ms`).
+    pub values_at_ms: Option<u64>,
     /// Every module, as the Monitor watches it (while it shows).
     pub programs: BTreeMap<String, Watched>,
     /// The Monitor shows: every module's traces are streamed.
@@ -503,6 +505,7 @@ impl BoxState {
             forces: Vec::new(),
             seq: None,
             values_at: None,
+            values_at_ms: None,
             programs: BTreeMap::new(),
             monitor: false,
             traces: Retry::default(),
@@ -724,6 +727,7 @@ impl BoxState {
                     self.ever_connected = true;
                     self.seq = j["seq"].as_u64();
                     self.values_at = Some(now);
+                    self.values_at_ms = j["at_ms"].as_u64();
                     if let Some(s) = rows(&j["signals"], SignalRow::parse) {
                         self.signals = s;
                     }
@@ -760,7 +764,7 @@ impl BoxState {
                 w.relower(&name, &mut generation, &mut self.queue);
                 self.generation = generation;
             }
-            // The floor screen's fetch is not this view's.
+            // Any other stream's events are not this view's.
             Msg::Event(..) => {}
         }
     }

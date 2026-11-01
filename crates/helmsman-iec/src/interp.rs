@@ -103,6 +103,31 @@ pub enum FaultKind {
     /// indirect call, a stack overflow, or an import it called wrongly).
     /// `line` is 0.
     Trap,
+    /// A built-in library block was given a parameter it cannot work with
+    /// (library.st raises it). `line` is the caller's: the statement that
+    /// called the block.
+    BadParam(BadParam),
+}
+
+/// Which parameter of which built-in library block was unusable
+/// ([`FaultKind::BadParam`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BadParam {
+    /// `BLINK_PATTERN` in a blinking MODE (2, 3 or 4) with a PERIOD of 0,
+    /// below 0, or too short to divide into the pattern's steps.
+    BlinkPeriod,
+}
+
+impl BadParam {
+    /// What the fault says, naming the block and the parameter.
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            Self::BlinkPeriod => {
+                "BLINK_PATTERN: PERIOD is 0, negative or too short to blink (MODE 2, 3 or 4 needs a PERIOD above 0)"
+            }
+        }
+    }
 }
 
 /// A runtime error. The program is in an undefined state afterwards; the
@@ -122,6 +147,7 @@ impl fmt::Display for Fault {
             FaultKind::Watchdog => "watchdog: scan exceeded its instruction budget",
             FaultKind::OutputRange => "an output's value does not fit its signal",
             FaultKind::Trap => "the WASM module trapped",
+            FaultKind::BadParam(p) => p.text(),
         };
         write!(f, "line {}: {what}", self.line)
     }
@@ -302,6 +328,7 @@ fn builtin(b: Builtin, args: &[Value], ty: Ty, now: i128) -> Result<Value, Fault
     };
     Ok(match b {
         Builtin::Now => Value::Int(now),
+        Builtin::Fault(p) => return Err(FaultKind::BadParam(p)),
         Builtin::Abs => match args[0] {
             Value::Real(x) => Value::Real(x.abs()),
             v => Value::Int(ty.arith().wrap(int(v).abs())),
@@ -378,6 +405,9 @@ pub struct Machine<'a> {
     pub mem: &'a mut [Value],
     pub image: &'a mut Image,
     pub pous: &'a [PouCode],
+    /// POUs `0..library` are the built-in library's: a fault inside one is
+    /// reported at the line that called it, not a line of library.st.
+    pub library: usize,
     /// The running POU's frame base.
     pub base: usize,
     pub budget: u64,
@@ -574,7 +604,13 @@ impl Machine<'_> {
         self.base = callee;
         let r = self.block(&pou.body);
         self.base = saved;
-        r?;
+        r.map_err(|f| {
+            if c.pou < self.library {
+                Fault { line, ..f }
+            } else {
+                f
+            }
+        })?;
         for o in &c.outs {
             if let Some((from, to)) = o.conv {
                 let v = convert(self.mem[callee + o.off], from, to);
@@ -742,6 +778,7 @@ pub fn eval_const(e: &Ex) -> Result<Value, String> {
         mem: &mut mem,
         image: &mut image,
         pous: &[],
+        library: 0,
         base: 0,
         budget: 0,
         now: 0,

@@ -659,7 +659,7 @@
   notes: built as the recommended option on feat/wasm-driver-map (reversible; card left open for your call): a driver is a `wasm-driver` blob in the change set, proposed as `{kind: driver, name, wasm}`, checked at proposal (`wasm::check` + `wasm::sandbox`, and the running map must still load), output-affecting so engineer PIN + replay, carried by bundles, rolled back like anything else. The Modbus guest stays a test fixture. To undo: drop `ChangeSet::drivers` and the `driver` proposal kind; the store's schema 3 only matters to stores that hold a driver.
   answer: file path on the box
 
-- [ ] **BLINK_PATTERN with PERIOD 0 or negative: steady on, off, or a fault?** The stack-light block (#88, `BLINK_PATTERN(EN, MODE, PERIOD) -> Q` in helmsman-iec's library.st) has to do something when a blinking mode (slow, fast, double flash) gets a PERIOD of zero or below, which a bad param or an uninitialised TIME produces. Built: steady on, so a misconfigured alarm light still lights and nothing divides by zero. The alternatives are off (quiet, but a bad setting hides the alarm) or a runtime fault on the module (loud, but one bad param stops every output that module drives). Reversible: one branch in library.st and its property test.
+- [x] **BLINK_PATTERN with PERIOD 0 or negative: steady on, off, or a fault?** The stack-light block (#88, `BLINK_PATTERN(EN, MODE, PERIOD) -> Q` in helmsman-iec's library.st) has to do something when a blinking mode (slow, fast, double flash) gets a PERIOD of zero or below, which a bad param or an uninitialised TIME produces. Built: steady on, so a misconfigured alarm light still lights and nothing divides by zero. The alternatives are off (quiet, but a bad setting hides the alarm) or a runtime fault on the module (loud, but one bad param stops every output that module drives). Reversible: one branch in library.st and its property test.
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -681,7 +681,7 @@
   id: dropin-size-caps
   answer: 2 MiB per PDF, 3.5 MiB history (recommended, built)
 
-- [ ] **A drop-in the relay refused: should proposals still cite it?** When the relay refuses a PDF (encrypted, over 100 pages), #87 swaps the document in the chat history for a note so the chat goes on. The refused drop-in stays in the conversation's proposal binding (`Drafts::dropins`), so a proposal drafted later in that chat lists it as a source even though the model never read it. Built that way because over-citing is the safe side: a reviewer sees everything the conversation touched. The other way drops it from the binding, so the proposal lists only what the model actually saw.
+- [x] **A drop-in the relay refused: should proposals still cite it?** When the relay refuses a PDF (encrypted, over 100 pages), #87 swaps the document in the chat history for a note so the chat goes on. The refused drop-in stays in the conversation's proposal binding (`Drafts::dropins`), so a proposal drafted later in that chat lists it as a source even though the model never read it. Built that way because over-citing is the safe side: a reviewer sees everything the conversation touched. The other way drops it from the binding, so the proposal lists only what the model actually saw.
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -727,7 +727,7 @@
   id: driver-udp
   answer: when a device on a real job needs it (recommended)
 
-- [ ] **Diagram arrangement on the box: where is it kept?** Since #93 anyone can drag blocks and IF/CASE boxes in the live diagram to make it easier to read; it changes only the drawing, never the program. In the playground the arrangement survives edits. On the box it lives in that browser tab's memory and is gone on reload, and every operator starts from the automatic layout. Options: per browser (localStorage, no box change), per box and shared (stored with the snapshot or beside it, so the engineer arranges once and every screen shows that), or both (shared default, personal tweaks on top).
+- [x] **Diagram arrangement on the box: where is it kept?** Since #93 anyone can drag blocks and IF/CASE boxes in the live diagram to make it easier to read; it changes only the drawing, never the program. In the playground the arrangement survives edits. On the box it lives in that browser tab's memory and is gone on reload, and every operator starts from the automatic layout. Options: per browser (localStorage, no box change), per box and shared (stored with the snapshot or beside it, so the engineer arranges once and every screen shows that), or both (shared default, personal tweaks on top).
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -738,6 +738,7 @@
   depends: ui-roles-view
   id: arrangement-persist
   answer: both: shared default + personal tweaks
+  notes: built (feat/arrangement-persist): the shared default is the project's `diagram.layout` (helmsman_project::layout; travels in the .zip, the build ignores it), saved by an engineer from the running project's diagram (Save as default) or the sim's open project; tweaks per browser in localStorage on top; Reset layout to the default, then to the automatic layout. Keyed per POU (a POU's diagram is the same in every module). docs/ARCHITECTURE.md "The diagram's arrangement".
 
 - [x] **Who may rearrange the diagram and use the program browser: everyone, or engineers?** The live diagram (#93) and the program browser (in progress) change only what a screen shows, so they're built for every role. Two reasons to restrict: a shared arrangement (`arrangement-persist`) is something an operator could make worse for everyone, and some plants want the floor screen locked to one view. Options: viewing tools for all, saving a shared layout for engineers (recommended); everything for all; a "kiosk" floor screen that can't navigate or rearrange.
   asked: 2026-10-31
@@ -899,7 +900,7 @@
   id: license-split
   answer: helmsman MIT, relay source-available (BSL or similar)
 
-- [ ] **HTTPS on the box's own web UI?** The box serves its API and canvas over plain HTTP; sign-in uses an `HttpOnly; SameSite=Strict` session cookie, without the `Secure` flag because the page isn't HTTPS. On a flat plant LAN anyone who can sniff traffic can lift a session (1 h max, 15 min idle). Options: a self-signed certificate made at first boot, with its fingerprint shown on the box's screen for the browser to trust once; a local CA you install on plant PCs; or stay HTTP on the LAN and loopback-only by default (`canvas-lan-default`), which is what's built.
+- [x] **HTTPS on the box's own web UI?** The box serves its API and canvas over plain HTTP; sign-in uses an `HttpOnly; SameSite=Strict` session cookie, without the `Secure` flag because the page isn't HTTPS. On a flat plant LAN anyone who can sniff traffic can lift a session (1 h max, 15 min idle). Options: a self-signed certificate made at first boot, with its fingerprint shown on the box's screen for the browser to trust once; a local CA you install on plant PCs; or stay HTTP on the LAN and loopback-only by default (`canvas-lan-default`), which is what's built.
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -910,7 +911,7 @@
   id: box-https
   answer: self-signed cert at first boot, fingerprint on screen (recommended)
 
-- [ ] **The box's andon layout (`--screen`, `/api/screen`) now has no screen: keep it for the Monitor or retire it?** UI.md step 1 removed the canvas's Andon mode (`?andon` now opens the Editor). The box side is untouched: `Binding::Screen` outputs, the `--screen` layout file, `GET /api/screen`, and helmsman-plc still prints "floor screen on http://…/?andon" at start. UI.md's Monitor (step 3) builds its tiles from the program's top-level instances, not from a layout file. Built default: nothing removed, the startup line is stale.
+- [x] **The box's andon layout (`--screen`, `/api/screen`) now has no screen: keep it for the Monitor or retire it?** UI.md step 1 removed the canvas's Andon mode (`?andon` now opens the Editor). The box side is untouched: `Binding::Screen` outputs, the `--screen` layout file, `GET /api/screen`, and helmsman-plc still prints "floor screen on http://…/?andon" at start. UI.md's Monitor (step 3) builds its tiles from the program's top-level instances, not from a layout file. Built default: nothing removed, the startup line is stale.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -920,8 +921,9 @@
   difficulty: low
   id: andon-layout-after-monitor
   answer: retire --screen and /api/screen once the Monitor ships (recommended)
+  notes: done (chore/retire-screen): helmsman-plc refuses `--screen` with the reason, `/api/screen` and `screen.rs` are gone, no "?andon" startup line. `out NAME TYPE screen TILE` still parses (helmsman-io) as an output no device takes, so old maps load; docs/ARCHITECTURE.md "Floor screen".
 
-- [ ] **The Trend tab on a box: where does its history come from?** On a box the Editor's right panel has only I/O for now; the simulation's Trend records every scan in the page. A box sends values over `/api/events` several times a second, and its recorder (sim-replay) already keeps the last minutes of inputs on the box. Built default: no Trend tab on a box (nor Claude, until step 2).
+- [x] **The Trend tab on a box: where does its history come from?** On a box the Editor's right panel has only I/O for now; the simulation's Trend records every scan in the page. A box sends values over `/api/events` several times a second, and its recorder (sim-replay) already keeps the last minutes of inputs on the box. Built default: no Trend tab on a box (nor Claude, until step 2).
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -931,6 +933,7 @@
   difficulty: med
   id: box-trend-source
   answer: box-side, from the recorder, so history is there on open
+  notes: built (feat/box-trend), not from the recorder itself: it keeps only what modules read, never their outputs, and a pinned lamp is an output. A ring per pinned signal instead, fed from the published views (the values stream's source): changes only, 10 min, 2400 points a signal, 64 signals at once (about 7 MiB worst case). `GET /api/trends?signals=` (open) answers the history and keeps the signals tracked a day; pins are the signed-in person's on the box (`GET/PUT /api/trends/pins`), the browser's when signed out. docs/ARCHITECTURE.md "Trends on the box".
 
 - [x] **Does Deploy skip the sim replay for an engineer?** docs/UI.md says Deploy compiles, snapshots and hot-swaps. The approval floor in code says a `logic` or `output-affecting` change needs an engineer *and* a sim replay. Built (reversible): Deploy goes through the same approval path, so the UI calls `POST /api/projects/{p}/replay` then `POST .../deploy {replay: N}` (one click can do both; the replay is real evidence of exactly that build against the box's recording). Options: keep it (the floor holds everywhere); let an engineer's Deploy skip the replay (the policy floor gets an exception for the editor); or have Deploy run the replay itself and refuse only if it faults.
   asked: 2026-10-31
@@ -943,7 +946,7 @@
   id: deploy-replay
   answer: keep replay, UI does both calls (built)
 
-- [ ] **What should an L5X upload become?** `helmsman_iec::l5x` reads an L5X as an inventory (tags, rungs as text, ST routines as lines); there is no ladder-to-ST translator, so `POST /api/projects/{p}/import?file=X.L5X` is refused (415) for now. Options: translate the common ladder instructions (XIC/XIO/OTE/OTL/OTU/TON/TOF/CTU/MOV/compare) and Logix TIMER/COUNTER semantics into ST, refusing a file with anything else; import only its ST routines plus tags as VARs (rarely compiles); or keep L5X as an agent drop-in and have the agent write the ST.
+- [x] **What should an L5X upload become?** `helmsman_iec::l5x` reads an L5X as an inventory (tags, rungs as text, ST routines as lines); there is no ladder-to-ST translator, so `POST /api/projects/{p}/import?file=X.L5X` is refused (415) for now. Options: translate the common ladder instructions (XIC/XIO/OTE/OTL/OTU/TON/TOF/CTU/MOV/compare) and Logix TIMER/COUNTER semantics into ST, refusing a file with anything else; import only its ST routines plus tags as VARs (rarely compiles); or keep L5X as an agent drop-in and have the agent write the ST.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -953,6 +956,7 @@
   difficulty: med
   id: l5x-scope
   answer: ladder subset to ST, refuse the rest (recommended)
+  result-note: built as card l5x-import (feat/l5x-ladder): helmsman_iec::ladder, docs/ARCHITECTURE.md "L5X ladder import".
 
 - [ ] **Monitor lamps: is TRUE always green?** docs/UI.md says a tile's outputs are green or red. Built (reversible, one function in `monitor.rs`): a BOOL output TRUE is a green lamp, FALSE a red one, whatever its name, so the line's `alarm` and a motor's `tripped` light green when they are on. Options: keep it literal; invert by name (alarm, fault, trip, jam, error, estop light red when TRUE, off otherwise); or let the source say per output (a `(* monitor: alarm *)` comment on the declaration).
   asked: 2026-10-31
@@ -993,6 +997,58 @@
   est: 30m
   difficulty: low
   id: save-scope
+
+- [ ] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether the simulation's editor behaves like the box's
+  options: typing runs, Deploy marks (built) | typing only checks (errors marked), Deploy runs, like a box
+  est: 1h
+  difficulty: low
+  id: sim-typing-runs
+
+- [ ] **A project with two PROGRAMs in the simulation?** On a box each PROGRAM of a project is a module of its own. The simulation's interpreter runs one program, so a project with two PROGRAMs fails there with "only one PROGRAM is supported". Built: that error, pointing at the second PROGRAM's file and line.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: what the simulation runs for a multi-PROGRAM project
+  options: refuse, as built | run the first PROGRAM and say so | run each as its own task, like a box (simulation runtime work)
+  est: 1d
+  difficulty: med
+  id: sim-multi-program
+
+- [ ] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether a fresh box runs the demo or waits for an engineer's first deploy
+  options: seed and deploy (built) | seed the project only, nothing runs until an engineer deploys | no seed
+  est: 30m
+  difficulty: low
+  id: seed-deploys
+
+- [ ] **HTTPS box: plain HTTP from the LAN refused, and a certificate without the box's IP: OK?** `box-https` (built) serves TLS on the API's port. Plain HTTP is served only from the box's own host (loopback or its own address: local scripts, the agent, the deploy script's curl, an SSH tunnel). From the LAN, a GET is redirected to https:// and anything else, `POST /mcp` from an engineer's MCP client included, is 403. The certificate names `localhost`, the host name (and NAME.local), 127.0.0.1 and ::1, not the LAN IP, because a bind of 0.0.0.0 doesn't say which address that is. A browser asks once either way. A strict client reaching the box by IP (an MCP client with the cert in `NODE_EXTRA_CA_CERTS`) fails the name check, and one using the host name passes. Built: as described.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether LAN scripts and MCP clients must use https://<box-name>, or the box bends for them
+  options: as built: HTTPS by name from the LAN, plain HTTP from the box itself (recommended) | a --tls-name NAME/IP flag adding names to the certificate (a new cert, so a new fingerprint) | also serve plain HTTP from the LAN to a bearer-token request (no cookie) for scripts
+  est: 2h
+  difficulty: low
+  depends: box-https
+  id: box-https-lan-clients
+
+- [ ] **Trend pins and history: survive a box restart?** `box-trend-source` (built) keeps each signed-in person's pins and the pinned signals' 10 minutes of history in memory, so a restart (a deploy of the binary, a power cut) forgets both: people pin again, and the history starts over. Built (reversible): memory only. Keeping pins means a small file in the state dir (`trend-pins`, written on each change). Keeping history means writing it out on shutdown, which a power cut skips anyway.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether pins (and history) come back after a restart
+  options: pins in a state-dir file, history in memory (recommended) | both in memory (built) | both on disk
+  est: 1h
+  difficulty: low
+  depends: box-trend-source
+  id: trend-pins-persist
 
 ## Tasks
 
@@ -1226,18 +1282,20 @@
   asked: 2026-10-31
   by: claude-agent
 
-- [ ] **L5X to ST import** — `POST /api/projects/{p}/import?file=X.L5X` produces ST that compiles.
+- [x] **L5X to ST import** — `POST /api/projects/{p}/import?file=X.L5X` produces ST that compiles.
   depends: l5x-scope
   est: 3d
   difficulty: high
   id: l5x-import
   asked: 2026-10-31
   by: claude-agent
+  notes: built on feat/l5x-ladder (2026-10-31): `helmsman_iec::ladder` converts the ladder subset (contacts, coils, branches, one-shots, TON/TOF/RTO/CTU/CTD/RES on TIMER/COUNTER structures, compares, math, CPT, MOV/CLR/COP, JSR inlined) to one F.st with a PROGRAM per task, and refuses anything else with its program, routine and rung; semantics from RM003 (docs/SOURCES.md), proven against a reference evaluator over random rungs (tests/ladder_equiv.rs). Left: the browser simulation still refuses L5X (sim_projects.rs; the converter is wasm-safe), and UDTs, indirect subscripts and JSR parameters are refused until a real export shows they matter.
 
-- [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc) instead of one PLC_PROGRAM file, once the editor UI can deploy.
-  needs: the editor UI (UI.md step 2, canvas side)
-  result: the Pi boots the deployed project; the first boot runs nothing until a deploy
-  est: 1h
+- [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc); a first install seeds project `line` from programs/line.st, deployed (`helmsman-plc project seed`, the unit's ExecStartPre); `PLC_MODE=program` keeps the old one-file mode. Built and tested here; yours to run against the Pi (native terminal or `!`: it needs Docker, trunk, and SSH with sudo on the Pi, and the firewall step is refused from an agent).
+  needs: you to run the two commands (the Pi's IP); the Pi on Debian Trixie with key SSH and passwordless sudo (scripts/pi-prep.sh)
+  result: the Pi serves the editor with projects, running `line`; you can sign in as an engineer and edit, deploy and force
+  notes: PLC_API=0.0.0.0:8080 scripts/pi-deploy-plc.sh nick@<pi-ip>   then   scripts/pi-account.sh nick@<pi-ip> nick engineer
+  est: 15m
   difficulty: low
   id: pi-projects
   asked: 2026-10-31
@@ -1561,7 +1619,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: low
   depends: dropin-plc
   id: l5x-real-export
-  notes: source (l5x-source, 2026-10-31): Nick exports one from his bench project.
+  notes: source (l5x-source, 2026-10-31): Nick exports one from his bench project. Later 2026-10-31: RM014 is read and cited; the ladder converter (l5x-import) also needs the real export: run `POST .../import?file=X.L5X` on it and check the refusal list (or the ST) against the project, the neutral text of each instruction it uses (JSR's `JSR(Name,0)` form, `?` pseudo-operands, v36 mnemonics such as EQ/MOVE), decorated data of TIMER/COUNTER tags, and rung Type attributes other than N. The fixtures (line3.L5X, ladder.L5X) are hand-written, not exports.
 
 - [x] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
   notes: built on feat/dropin-photo: `POST /api/dropins` takes PNG/JPEG/WebP known by their bytes and read from headers only (`api/photo.rs`: 512 KiB, 8000 px a side, no trailing bytes, no animation); an attached photo goes to the model as a base64 `image` block plus the box's note; see ARCHITECTURE "Drop-ins". Works with relay protocol v1 as it is (no block-type check); relay caps and prompt in `relay-images`.

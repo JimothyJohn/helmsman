@@ -1549,6 +1549,7 @@ dependencies = [
  "helmsman-iec",
  "helmsman-io",
  "helmsman-plc",
+ "helmsman-project",
  "serde_json",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1602,6 +1603,7 @@ dependencies = [
  "helmsman-diagram",
  "helmsman-iec",
  "helmsman-io",
+ "helmsman-project",
  "helmsman-proto",
  "miniz_oxide 0.9.1",
  "proptest",
@@ -1615,6 +1617,14 @@ dependencies = [
  "wasmi",
  "wat",
  "webpki-roots",
+]
+
+[[package]]
+name = "helmsman-project"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide 0.9.1",
+ "proptest",
 ]
 
 [[package]]
