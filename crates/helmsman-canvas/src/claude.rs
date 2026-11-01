@@ -716,6 +716,19 @@ pub trait KeyStore {
     fn forget(&mut self);
 }
 
+/// `ANTHROPIC_API_KEY` from the environment, natively; never in a test
+/// (they must not depend on the machine) nor in a browser (no environment).
+fn env_key() -> Option<String> {
+    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
+    {
+        std::env::var("ANTHROPIC_API_KEY").ok()
+    }
+    #[cfg(any(target_arch = "wasm32", test))]
+    {
+        None
+    }
+}
+
 /// Remembers nothing (native builds).
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 #[derive(Debug, Default)]
@@ -770,6 +783,9 @@ pub struct Chat {
     key: String,
     /// Keep the key in this browser's storage.
     pub remember: bool,
+    /// The key came from `ANTHROPIC_API_KEY` in the environment (native
+    /// only), so the panel says so; cleared when the field is edited.
+    pub from_env: bool,
     pub model: Model,
     pub question: String,
     pub history: Vec<Exchange>,
@@ -807,8 +823,9 @@ impl Chat {
     #[must_use]
     pub fn new(store: Box<dyn KeyStore>) -> Self {
         let key = store.load().unwrap_or_default();
-        Self {
+        let mut chat = Self {
             remember: !key.is_empty(),
+            from_env: false,
             key,
             model: Model::default(),
             question: String::new(),
@@ -819,6 +836,26 @@ impl Chat {
             seq: 0,
             sse: Sse::default(),
             store,
+        };
+        // Developing natively: the key the shell holds, said so in the
+        // panel (Nick, 2026-11-01), never remembered by the store.
+        chat.take_env(env_key());
+        chat
+    }
+
+    /// Fills an empty key field from the environment's `ANTHROPIC_API_KEY`
+    /// (`env`), marking it preloaded; a key already held, or an `env`
+    /// that is no key, changes nothing.
+    pub fn take_env(&mut self, env: Option<String>) {
+        if !self.key.is_empty() {
+            return;
+        }
+        if let Some(k) = env
+            && ApiKey::new(&k).is_some()
+        {
+            self.key = k;
+            self.from_env = true;
+            self.remember = false;
         }
     }
 
@@ -840,6 +877,7 @@ impl Chat {
 
     /// After the key field changed: kept in storage only if "remember".
     pub fn key_changed(&mut self) {
+        self.from_env = false;
         if self.remember {
             match ApiKey::new(&self.key) {
                 Some(k) => self.store.save(&k.0),
