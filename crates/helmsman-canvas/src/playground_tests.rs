@@ -1014,7 +1014,13 @@ impl Screen {
         let Self {
             ctx, view, chrome, ..
         } = self;
-        let mut out = ctx.run_ui(input, |ui| view.show(ui, chrome));
+        let mut out = ctx.run_ui(input, |ui| {
+            // The app's header draws the view's actions; so does this.
+            egui::Panel::top("test-actions").show(ui, |ui| {
+                ui.horizontal(|ui| crate::editor::Body::toolbar(view, ui, chrome));
+            });
+            view.show(ui, chrome);
+        });
         out.textures_delta.clear();
     }
 

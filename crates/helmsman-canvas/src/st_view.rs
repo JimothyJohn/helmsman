@@ -289,6 +289,11 @@ impl Viewer {
         }
     }
 
+    /// Fits the open level to its area on the next frame (View menu).
+    pub fn refit(&mut self) {
+        self.cams[self.scope].fitted = false;
+    }
+
     /// Counts every change to the arrangement (a drag step, an
     /// [`Self::arrange`], a reset): a new count means something moved.
     #[must_use]
