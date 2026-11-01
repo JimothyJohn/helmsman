@@ -905,9 +905,12 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
         // The sidebar's buttons are on the Files tab.
         h.app.chrome.show_files();
         h.wait(0.3);
-        for k in ["save", "new project", "delete project", "new file"] {
+        for k in ["save", "rename project", "delete project", "new file"] {
             h.press(k);
         }
+        // New project is the File menu's (disabled here; pressing it is nothing).
+        h.press("bar file");
+        h.press("file new");
         // Deploy is the File menu's (disabled here; pressing it is nothing).
         h.press("bar file");
         h.press("file deploy");

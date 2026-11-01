@@ -226,23 +226,43 @@ impl FilesUi {
                     act = Some(a);
                 }
             }
+            // Right-click a project: copy it, and for one of your own
+            // rename or delete it (Nick, 2026-11-01).
+            let can_write = l.write.is_ok();
+            let mine = !p.example();
+            r.context_menu(|ui| {
+                if menu_item(ui, chrome, "menu copy project", "Copy project…", can_write) {
+                    self.copy_project(&p.name);
+                }
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu rename project",
+                    "Rename project…",
+                    can_write && mine,
+                ) {
+                    self.ask(Naming::RenameProject(p.name.clone()), &p.name);
+                }
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu delete project",
+                    "Delete project…",
+                    can_write && mine,
+                ) {
+                    self.naming = None;
+                    self.confirm = Some(Act::DeleteProject(p.name.clone()));
+                }
+            });
         }
         if l.projects.is_empty() {
             ui.label(RichText::new("No projects yet.").color(STEEL));
         }
+        // New project and Copy project are the File menu's (and a
+        // right-click's); Rename and Delete of the open project stay here.
         ui.horizontal_wrapped(|ui| {
-            let r = write_button(ui, &l.write, "New", "a new, empty project");
-            chrome.hit("new project", r.rect);
-            if r.clicked() {
-                self.ask(Naming::NewProject, "");
-            }
             if let Some(open) = l.open {
                 let is_example = l.projects.iter().any(|p| p.name == open && p.example());
-                let r = write_button(ui, &l.write, "Copy", "a copy of the open project");
-                chrome.hit("copy project", r.rect);
-                if r.clicked() {
-                    self.ask(Naming::CopyProject(open.into()), &format!("{open}-copy"));
-                }
                 if !is_example {
                     let r = write_button(ui, &l.write, "Rename", "rename the open project");
                     chrome.hit("rename project", r.rect);
@@ -413,6 +433,49 @@ impl FilesUi {
         self.confirm = None;
     }
 
+    /// Asks for a new, empty project's name (File › New project, or a
+    /// right-click on the pane's blank space).
+    pub fn new_project(&mut self) {
+        self.ask(Naming::NewProject, "");
+    }
+
+    /// Asks for the name of a copy of `project` (File › Copy project, or
+    /// a right-click on the project).
+    pub fn copy_project(&mut self, project: &str) {
+        self.ask(Naming::CopyProject(project.into()), &format!("{project}-copy"));
+    }
+
+    /// The pane's blank space under everything else: a right-click there
+    /// offers a new project, and a paste when the clipboard has a file
+    /// (`can_paste`). Returns what was asked.
+    pub fn blank_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        chrome: &mut Chrome,
+        write: &Result<(), String>,
+        can_paste: bool,
+    ) -> Option<Act> {
+        // What is left of the view (the pane scrolls: its own height is
+        // unbounded), at least a tap.
+        let left = (ui.clip_rect().bottom() - ui.cursor().top()).max(TAP);
+        let size = Vec2::new(ui.available_width(), left);
+        let r = ui.allocate_response(size, egui::Sense::click());
+        chrome.hit("files blank", r.rect);
+        let mut act = None;
+        r.context_menu(|ui| {
+            if menu_item(ui, chrome, "menu new project", "New project…", write.is_ok()) {
+                self.new_project();
+            }
+            let paste = can_paste && write.is_ok() && self.clipboard.is_some();
+            if menu_item(ui, chrome, "menu paste", "Paste", paste)
+                && let Some((name, text)) = self.clipboard.clone()
+            {
+                act = Some(Act::PasteFile { name, text });
+            }
+        });
+        act
+    }
+
     fn naming_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) -> Option<Act> {
         let n = self.naming.clone()?;
         let what = match &n {
@@ -545,6 +608,10 @@ pub trait Workspace {
     fn upload(&mut self, file: &str, bytes: Vec<u8>);
     /// The open project as a `.zip`.
     fn download(&mut self);
+    /// File › New project: asks for the name, on the Files tab.
+    fn new_project(&mut self, chrome: &mut Chrome);
+    /// File › Copy project: asks for the copy's name, on the Files tab.
+    fn copy_project(&mut self, chrome: &mut Chrome);
     /// The View menu's layout items (`arrange::menu_items`), acting on
     /// this view's diagram.
     fn layout_menu(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);

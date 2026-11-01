@@ -9,8 +9,11 @@ shows them.
 
 ## Files
 
-- **New project**, **Copy**, **Rename**, **Delete** are in the Files tab.
-  A copy of an example or a starter is how you begin from one.
+- **New project** and **Copy project** are in the File menu; a right-click
+  on the pane's blank space offers New project too, and a right-click on a
+  project offers Copy, Rename and Delete. A copy of an example or a
+  starter is how you begin from one. **Rename** and **Delete** of the
+  open project are also buttons under the list.
 - **New file**, **Rename file**, **Delete file** likewise. A file is
   Structured Text (`.st`), the I/O map, or one of the editor's own.
 - **Right-click a file** for Copy, Paste, Duplicate, Rename and Delete.

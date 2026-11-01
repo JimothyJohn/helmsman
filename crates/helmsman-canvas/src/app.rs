@@ -759,6 +759,21 @@ impl App {
                     .map_or((false, Err(String::new())), |w| (w.dirty(), w.writable()));
                 let can = write.is_ok();
                 let k = |a| hotkeys::label(&ctx, a);
+                // New project and Copy project moved here from the Files
+                // tab's buttons (Nick, 2026-11-01).
+                ui.add_enabled_ui(can, |ui| {
+                    if menu_item(ui, &mut chrome, "file new", "New project…", false)
+                        && let Some(w) = self.workspace()
+                    {
+                        w.new_project(&mut chrome);
+                    }
+                    if menu_item(ui, &mut chrome, "file copy", "Copy project…", false)
+                        && let Some(w) = self.workspace()
+                    {
+                        w.copy_project(&mut chrome);
+                    }
+                });
+                ui.separator();
                 ui.add_enabled_ui(can && dirty, |ui| {
                     if menu_item_keyed(ui, &mut chrome, "file save", "Save", false, &k(Action::Save))
                         && let Some(w) = self.workspace()

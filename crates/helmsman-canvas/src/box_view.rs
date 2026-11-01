@@ -613,9 +613,64 @@ fn force_ui(ui: &mut egui::Ui, rect: Rect, s: &SignalRow, forced: bool) -> Optio
     }
 }
 
+impl BoxView {
+    /// What the Files tab asked for, done through the project API.
+    fn project_act(&mut self, a: Act) {
+        let open = self.projects.open.clone();
+        match a {
+            Act::OpenProject(p) => self.projects.open_project(&p),
+            Act::OpenFile(f) => self.projects.open_file(&f),
+            Act::NewProject(p) => self.projects.create(&p, None),
+            Act::CopyProject { from, to } => self.projects.create(&to, Some(&from)),
+            Act::FromStarter { from, to } => self.projects.create_from(&to, &from),
+            Act::RenameProject { from, to } => self.projects.rename(&from, &to),
+            Act::DeleteProject(p) => self.projects.delete(&p),
+            Act::NewFile(f) => self.projects.new_file(&f),
+            Act::RenameFile { from, to } => self.projects.rename_file(&from, &to),
+            Act::DeleteFile(f) => self.projects.delete_file(&f),
+            Act::CopyFile(f) => {
+                if let Some(b) = open.as_ref().and_then(|o| o.bufs.get(&f)).filter(|b| b.loaded) {
+                    self.files_ui.clipboard = Some((f, b.text.clone()));
+                }
+            }
+            Act::DuplicateFile(f) => {
+                if let Some(o) = &open
+                    && let Some(b) = o.bufs.get(&f).filter(|b| b.loaded)
+                {
+                    let name = projects::free_file_name(&f, |n| o.bufs.contains_key(n));
+                    self.projects.new_file_with(&name, &b.text);
+                }
+            }
+            Act::PasteFile { name, text } => {
+                if let Some(o) = &open {
+                    let name = projects::free_file_name(&name, |n| o.bufs.contains_key(n));
+                    self.projects.new_file_with(&name, &text);
+                }
+            }
+            // The Agent's answer lands in the simulation's projects.
+            Act::UseAnswer { .. } => {}
+        }
+    }
+}
+
 impl Workspace for BoxView {
     fn dirty(&self) -> bool {
         self.projects.dirty()
+    }
+
+    fn new_project(&mut self, chrome: &mut Chrome) {
+        if self.has_projects() {
+            self.files_ui.new_project();
+            chrome.show_files();
+        }
+    }
+
+    fn copy_project(&mut self, chrome: &mut Chrome) {
+        if let Some(o) = &self.projects.open {
+            let name = o.name.clone();
+            self.files_ui.copy_project(&name);
+            chrome.show_files();
+        }
     }
 
     fn layout_menu(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -825,39 +880,8 @@ impl Body for BoxView {
                 dirty: self.projects.dirty(),
                 starters: true,
             };
-            let act = self.files_ui.show(ui, &listing, chrome);
-            match act {
-                Some(Act::OpenProject(p)) => self.projects.open_project(&p),
-                Some(Act::OpenFile(f)) => self.projects.open_file(&f),
-                Some(Act::NewProject(p)) => self.projects.create(&p, None),
-                Some(Act::CopyProject { from, to }) => self.projects.create(&to, Some(&from)),
-                Some(Act::FromStarter { from, to }) => self.projects.create_from(&to, &from),
-                Some(Act::RenameProject { from, to }) => self.projects.rename(&from, &to),
-                Some(Act::DeleteProject(p)) => self.projects.delete(&p),
-                Some(Act::NewFile(f)) => self.projects.new_file(&f),
-                Some(Act::RenameFile { from, to }) => self.projects.rename_file(&from, &to),
-                Some(Act::DeleteFile(f)) => self.projects.delete_file(&f),
-                Some(Act::CopyFile(f)) => {
-                    if let Some(b) = open.as_ref().and_then(|o| o.bufs.get(&f)).filter(|b| b.loaded) {
-                        self.files_ui.clipboard = Some((f, b.text.clone()));
-                    }
-                }
-                Some(Act::DuplicateFile(f)) => {
-                    if let Some(o) = &open
-                        && let Some(b) = o.bufs.get(&f).filter(|b| b.loaded)
-                    {
-                        let name = projects::free_file_name(&f, |n| o.bufs.contains_key(n));
-                        self.projects.new_file_with(&name, &b.text);
-                    }
-                }
-                Some(Act::PasteFile { name, text }) => {
-                    if let Some(o) = &open {
-                        let name = projects::free_file_name(&name, |n| o.bufs.contains_key(n));
-                        self.projects.new_file_with(&name, &text);
-                    }
-                }
-                // The Agent's answer lands in the simulation's projects.
-                Some(Act::UseAnswer { .. }) | None => {}
+            if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
+                self.project_act(a);
             }
             ui.separator();
             ui.label(RichText::new("Running").strong().color(brand::STEEL));
@@ -888,6 +912,15 @@ impl Body for BoxView {
         }
         if let Some(name) = chosen {
             self.state.select(&name);
+        }
+        // The blank space under it all: a right-click offers a new project
+        // (and a paste into the open one).
+        if self.has_projects() {
+            let write = self.writable();
+            let can_paste = self.projects.open.is_some();
+            if let Some(a) = self.files_ui.blank_menu(ui, chrome, &write, can_paste) {
+                self.project_act(a);
+            }
         }
     }
 
