@@ -22,9 +22,13 @@ this; change it here first when a decision changes.
 - **Left sidebar, collapsible:** the open project's files, with the program
   tree under them (PROGRAM › instance › instance, foldable; a click opens
   that scope's diagram).
-- **Centre: the live diagram.** Pan, zoom, drag blocks to rearrange (kept
-  per project, Reset layout), breadcrumbs with ↑ (Alt+↑), double-click an
-  instance to go into it.
+- **Centre: the live diagram.** Pan, zoom, drag blocks to rearrange,
+  breadcrumbs with ↑ (Alt+↑), double-click an instance to go into it.
+  An engineer saves the arrangement as the project's shared default
+  (Save as default; the project's `diagram.layout`, so it travels in the
+  `.zip`); anyone's further moves are kept in their browser on top of it.
+  Reset layout goes back to the shared default, a second step to the
+  automatic layout. The simulation does the same with its projects.
 - **ST on demand:** an "ST" toggle slides the editor open beside the
   diagram; clicking a block jumps the editor to its line.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does

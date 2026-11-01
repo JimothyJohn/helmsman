@@ -1148,3 +1148,98 @@ fn the_trend_on_a_box_opens_with_history_and_pins_follow_the_person() {
     );
     assert!(b.json("/api/trends/pins")["error"].is_string());
 }
+
+/// Card `arrangement-persist`: an engineer saves the diagram's arrangement
+/// as the running project's default (its `diagram.layout`, so it travels
+/// in the `.zip`); every page reads it; an operator cannot save one.
+#[test]
+fn the_shared_layout_round_trips_through_the_running_project_for_an_engineer_only() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut eng = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut eng.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    // Nothing deployed from a project yet: no project to keep it in.
+    assert!(eng.projects.running.is_none());
+    eng.projects.save_layout("helmsman-layout 1\n".into());
+    assert!(eng.projects.poll().is_empty() && eng.projects.notice.as_ref().unwrap().1);
+    eng.projects.deploy();
+    settle(&b, &jar, &mut eng.projects);
+    assert_eq!(eng.projects.running.as_deref(), Some("line"));
+    let none = eng.projects.layout.clone().expect("read after the deploy");
+    assert_eq!((none.text.as_str(), none.version), ("", None), "no default yet");
+
+    let text = "helmsman-layout 1\nmove\tconveyor\t0\t0\t120\tLAMP :=\tLAMP := L.Q\nmove\tLatch\t0\t40\t0\tQ :=\tQ := (Q OR SET) AND NOT RESET\n";
+    eng.projects.save_layout(text.into());
+    settle(&b, &jar, &mut eng.projects);
+    assert_eq!(
+        eng.projects.layout_saved.as_deref(),
+        Some(text),
+        "{:?}",
+        eng.projects.notice
+    );
+    assert_eq!(eng.projects.shared_layout(), text);
+    assert_eq!(
+        b.json("/api/projects/line/files/diagram.layout")["text"],
+        text,
+        "kept on the box"
+    );
+    let (_, zip) = b.get("/api/projects/line/zip");
+    let files = helmsman_project::read_zip(&zip).unwrap();
+    assert_eq!(files.get("diagram.layout"), Some(text), "in the .zip");
+    // The layout is no program change: what runs is still the project.
+    assert_eq!(b.json("/api/running")["current"], true);
+
+    // Another page, any role, starts from it.
+    for who in [None, Some(("bob", BOB))] {
+        let jar = Jar::default();
+        let mut v = page(&b, &jar, who);
+        assert_eq!(v.projects.shared_layout(), text);
+        // An operator's page offers no Save as default and sends nothing.
+        v.save_layout();
+        assert_eq!(v.projects.poll(), Vec::<PReq>::new());
+        // Asked for anyway, the box refuses it and keeps the engineer's.
+        v.projects.save_layout("helmsman-layout 1\n".into());
+        settle(&b, &jar, &mut v.projects);
+        let (msg, err) = v.projects.notice.clone().unwrap();
+        // Signed out, a 401 (sign in again); an operator, a 403.
+        let want = if who.is_some() {
+            "not saved"
+        } else {
+            "Sign in again"
+        };
+        assert!(err && msg.contains(want), "{msg}");
+        assert!(v.projects.layout_saved.is_none());
+        assert_eq!(b.json("/api/projects/line/files/diagram.layout")["text"], text);
+    }
+
+    // A stale save (someone else saved since) is a 409, read again.
+    let jar2 = Jar::default();
+    let mut other = page(&b, &jar2, Some(("alice", ALICE)));
+    let newer = "helmsman-layout 1\nmove\tconveyor\t0\t0\t300\tLAMP :=\tLAMP := L.Q\n";
+    other.projects.save_layout(newer.into());
+    settle(&b, &jar2, &mut other.projects);
+    eng.projects.save_layout("helmsman-layout 1\n".into());
+    settle(&b, &jar, &mut eng.projects);
+    let (msg, err) = eng.projects.notice.clone().unwrap();
+    assert!(err && msg.contains("Someone else saved"), "{msg}");
+    assert_eq!(eng.projects.shared_layout(), newer, "read again");
+    // A layout that does not read is refused by the box.
+    let bad = PReq {
+        call: crate::box_projects::PCall::SaveLayout("line".into()),
+        method: "PUT",
+        url: "/api/projects/line/files/diagram.layout".into(),
+        body: Some(
+            serde_json::json!({ "text": "move\tx\n", "version": null })
+                .to_string()
+                .into_bytes(),
+        ),
+        ctype: "application/json",
+    };
+    assert_eq!(b.send(&jar, &bad).status, 422);
+}

@@ -234,8 +234,12 @@ mod chrome {
         // Every control the app draws, on every screen and source, with the
         // menu open: nothing leads to Lab, Site, Demo, Andon or Playground.
         let mut seen = Vec::new();
-        for (app, proposals) in [(App::sim(), false), (App::boxed(), false), (App::boxed(), true)] {
-            let mut h = Harness::new(app);
+        for (make, proposals) in [
+            (App::sim as fn() -> App, false),
+            (App::boxed, false),
+            (App::boxed, true),
+        ] {
+            let mut h = Harness::new(make());
             if proposals {
                 h.app.screen = Screen::Proposals;
             }
