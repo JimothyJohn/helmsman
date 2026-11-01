@@ -1347,17 +1347,21 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         }
         if text {
             let band = if two_tone { h } else { r };
+            // With an icon the label sits right of it, so the two never
+            // overlap on a block sized to its label alone.
+            let mut centre = band.center();
             if let Some(i) = icon {
                 painter.text(
-                    Pos2::new(band.left() + 4.0 * z, band.center().y),
+                    Pos2::new(band.left() + 3.0 * z, band.center().y),
                     Align2::LEFT_CENTER,
                     i,
                     font(11.5 * z),
                     ink.gamma_multiply(fade),
                 );
+                centre.x += 6.0 * z;
             }
             painter.text(
-                band.center(),
+                centre,
                 Align2::CENTER_CENTER,
                 &n.label,
                 font(11.5 * z),
