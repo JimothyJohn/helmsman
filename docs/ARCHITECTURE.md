@@ -1089,6 +1089,21 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   or after a racing save. A save may name the version (SHA-256) it read
   (`version`, or `null` for "new only"): a stale one is 409, so two
   editors never silently clobber each other.
+- **Starters** (`helmsman_project::starters`): the worked machines and
+  templates, real files under `crates/helmsman-project/starters/`, compiled
+  in with `include_str!` so the browser's simulation and a box offer the
+  same text. A starter is `main.st` (the controls and its PROGRAM, one per
+  project), `plant_model.st` (a simulation of the machine, its calls marked
+  PLANT, deleted when real I/O is wired), `io.map` (every signal, on the
+  box's own channels or `screen`, so it deploys with nothing wired) and the
+  shared blocks it uses (`starters/blocks/`). They are built on what the
+  library has (`BLINK_PATTERN` in `stack_light`); PID is written in ST
+  (`pid_loop.st`). The box has no route for them: the canvas holds them and
+  sends a new project as its `.zip` to `POST /api/projects/{p}/zip`.
+  A project opens on its `main.st` when it has one. Tests:
+  `helmsman-canvas/src/starter_tests.rs` (each machine runs on the simulated
+  scan clock and trips when an input is forced) and
+  `box_projects_tests.rs` (each deploys against the real API).
 - **Build** (`project::build`): each PROGRAM becomes a module named as
   the PROGRAM in lower case. Its `module.st` is every file in name
   order under a `(* file NAME *)` line with every other PROGRAM blanked

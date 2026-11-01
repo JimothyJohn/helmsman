@@ -12,7 +12,7 @@ use helmsman_project::Files;
 
 use crate::app::App;
 use crate::playground_view::PlaygroundView;
-use crate::projects::{Act, Workspace};
+use crate::projects::{Act, ProjectRow, Workspace};
 use crate::sim_projects::{SimProjects, Storage, example_project};
 
 /// A storage two page loads share (a browser's `localStorage`).
@@ -120,8 +120,11 @@ fn examples_are_read_only_starters_and_saving_one_keeps_a_copy() {
     assert_eq!(v.title(), "blink", "opens the first example");
     assert!(v.session.running, "running, as the playground always opened");
     let rows = v.proj.rows();
-    assert!(rows.iter().all(|r| r.example), "{rows:?}");
-    assert_eq!(rows.len(), crate::playground::EXAMPLES.len());
+    assert!(rows.iter().all(ProjectRow::example), "{rows:?}");
+    assert_eq!(
+        rows.len(),
+        crate::playground::EXAMPLES.len() + helmsman_project::starters::STARTERS.len()
+    );
     assert!(rows.iter().any(|r| r.name == "blink" && r.running));
     // Edited and saved: a copy under a free name, opened; the example
     // itself is unchanged.
@@ -495,4 +498,56 @@ fn an_l5x_upload_becomes_the_boxs_st_or_is_refused_whole() {
         assert!(msg.contains(&p.to_string()), "{p} missing from {msg}");
     }
     assert_eq!(v.proj.files, before, "nothing imported");
+}
+
+/// The long lists start folded, a heading opens them, and a machine copied
+/// with Save is the visitor's own, with every file.
+#[test]
+fn machines_and_templates_are_folded_groups_and_save_copies_one() {
+    let ctx = egui::Context::default();
+    let mut app = App::sim();
+    frame(&ctx, &mut app, 0.1);
+    for key in ["project blink", "group Machines", "group Templates"] {
+        assert!(app.chrome.rect(key).is_some(), "{key}");
+    }
+    assert!(
+        app.chrome.rect("project batch-mixer").is_none(),
+        "folded at first"
+    );
+    assert!(
+        app.chrome.rect("project discrete-template").is_none(),
+        "folded at first"
+    );
+
+    let at = app.chrome.rect("group Machines").unwrap().center();
+    click(&ctx, &mut app, at, 0.2);
+    frame(&ctx, &mut app, 0.3);
+    let at = app.chrome.rect("project batch-mixer").expect("unfolded").center();
+    assert!(
+        app.chrome.rect("project discrete-template").is_none(),
+        "its own fold"
+    );
+    click(&ctx, &mut app, at, 0.4);
+    frame(&ctx, &mut app, 0.5);
+    let v = app.sim.as_mut().unwrap();
+    assert_eq!(v.title(), "batch-mixer");
+    assert_eq!(v.proj.current, "main.st", "the controls first");
+    assert!(v.proj.is_example());
+    assert!(v.session.diags.is_empty(), "{:?}", v.session.diag_lines());
+    assert!(v.proj.files.contains_key("plant_model.st") && v.proj.files.contains_key("io.map"));
+    let files = v.proj.files.clone();
+    v.save();
+    assert_eq!(v.title(), "batch-mixer-2");
+    assert!(!v.proj.is_example());
+    assert_eq!(v.proj.saved["batch-mixer-2"].0, files, "the whole project");
+    assert!(helmsman_project::starters::starter("batch-mixer").is_some());
+
+    // The copy opens with the visitor's own projects, above the examples.
+    let rows = v.proj.rows();
+    assert_eq!(rows[0].name, "batch-mixer-2");
+    assert!(!rows[0].example());
+    assert!(
+        rows.iter().any(|r| r.name == "batch-mixer" && r.example()),
+        "still there"
+    );
 }

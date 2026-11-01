@@ -229,7 +229,7 @@ impl PlaygroundView {
                 self.proj.create(&p, None);
                 self.reload();
             }
-            Act::CopyProject { from, to } => {
+            Act::CopyProject { from, to } | Act::FromStarter { from, to } => {
                 self.proj.create(&to, Some(&from));
                 self.reload();
             }
@@ -587,6 +587,7 @@ impl Body for PlaygroundView {
             current: Some(&current),
             write: Ok(()),
             dirty: self.proj.dirty(),
+            starters: false,
         };
         if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
             self.act(a);

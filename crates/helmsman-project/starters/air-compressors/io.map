@@ -1,0 +1,28 @@
+# Every input and output of this project, on the box's own channels so it
+# runs with nothing wired. To use a remote I/O module, declare it and change
+# the device on each line, for example:
+#   device rio modbus-tcp 192.168.1.50:502 unit=1 timeout_ms=300 poll_ms=20
+#   in  start_pb bool rio di:0
+# The plant model presses start by itself, so if this box's own channels are
+# wired to anything, these lines drive it: check them before you deploy.
+in  start_pb        bool box di:0
+in  stop_pb         bool box di:1
+in  ack_pb          bool box di:2
+in  fb_1_in         bool box di:3
+in  fb_2_in         bool box di:4
+in  fb_3_in         bool box di:5
+in  overload_1_in   bool box di:6
+in  overload_2_in   bool box di:7
+in  overload_3_in   bool box di:8
+in  hot_1_in        bool box di:9
+in  hot_2_in        bool box di:10
+in  hot_3_in        bool box di:11
+in  overpressure_in bool box di:12
+out comp_1     bool box do:0 safe=false
+out comp_2     bool box do:1 safe=false
+out comp_3     bool box do:2 safe=false
+out lamp_green bool box do:3 safe=false
+out lamp_red   bool box do:4 safe=false
+out stages int screen stages safe=0
+out lead   int screen lead safe=0
+out header_bar real screen header_bar unit=bar

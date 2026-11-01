@@ -1052,6 +1052,26 @@
   depends: box-trend-source
   id: trend-pins-persist
 
+- [ ] **Should a machine example start itself on a box?** Each machine's plant model presses Start after power-up so the diagram moves with nothing wired, and its io.map uses the box's own channels. Fine on a box with nothing connected; on a box run with `--gpio-chip` those channels are real pins, and the example drives them on Deploy. Built default: it starts itself, and each io.map says in a comment to check the channels first.
+  needs: your call
+  result: keep the default, or the plant model waits for Start on a box
+  options: keep; plant waits for Start (the diagram sits still until someone forces start_pb); refuse a starter's io.map on a box with GPIO
+  est: 15m
+  difficulty: low
+  asked: 2026-11-01
+  by: claude-agent
+  id: starter-autostart-on-box
+
+- [ ] **Offer the five short examples on a box too?** Blink, Latch, Counter, Traffic and Line stay simulation-only: they read `VAR_INPUT`s with no io.map, so a box refuses them at Deploy. Built default: a box offers the seven machines and two templates only. Giving the short ones an io.map would show that file in the first program a visitor opens.
+  needs: your call
+  result: leave them out, or add io.maps and list them
+  options: leave out; add io.maps and list them
+  est: 30m
+  difficulty: low
+  asked: 2026-11-01
+  by: claude-agent
+  id: starter-short-examples-on-box
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.

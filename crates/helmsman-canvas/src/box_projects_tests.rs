@@ -17,11 +17,14 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
 use helmsman_iec::{ImageSizes, compile};
+use helmsman_io::local::Channels;
+use helmsman_plc::api::swap::Scene;
 use helmsman_plc::api::{
     Api, Approval, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, ModuleInfo, More,
     Plant, Publisher, Shared, swap,
 };
 use helmsman_plc::force::{self, Forces};
+use helmsman_plc::link::LinkSet;
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::policy::account::{Accounts, Logins};
 use helmsman_plc::policy::pin::{Gate, Pins};
@@ -155,6 +158,11 @@ impl Jar {
 impl Bench {
     #[allow(clippy::too_many_lines)]
     pub fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// `links`: run device links, so a deploy may change the map.
+    pub fn build(links: bool) -> Self {
         let d = Defaults {
             period: Duration::from_millis(2),
             i: Window::new(0, 0),
@@ -199,8 +207,28 @@ impl Bench {
         a.add("alice", Role::Engineer, ALICE, 1, [1; 16]).unwrap();
         a.add("bob", Role::Operator, BOB, 1, [2; 16]).unwrap();
         a.save(&state).unwrap();
-        let mut recorder = Recorder::new(&table, RecordConfig::default(), None);
+        let recorder = Recorder::new(&table, RecordConfig::default(), None);
+        let plant_table = table.clone();
+        let table = Arc::new(Mutex::new(table));
+        let devices = Arc::new(Devices::new(["box".to_string()]));
         let (handle, swapper) = swap::channel(Duration::from_secs(5));
+        // As the real binary does: a deploy may change the map, and the
+        // device links follow. Off otherwise, so `start` stays as held below.
+        let handle = if links {
+            let dv = Arc::clone(&devices);
+            let mut set = LinkSet::new(
+                Arc::clone(&table),
+                Arc::new(helmsman_io::open),
+                Arc::new(|| Box::new(Channels::new())),
+                Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
+                    dv.set(name, err.map(ToString::to_string));
+                }),
+            );
+            set.start(&parsed.map).unwrap();
+            handle.with_links(Arc::new(Mutex::new(set)))
+        } else {
+            handle
+        };
         let t0 = Instant::now();
         let approval =
             Approval {
@@ -209,7 +237,7 @@ impl Bench {
                     Logins::new(state.clone(), 1, FLOOR.lockout, Arc::new(Instant::now)),
                 ),
                 plant: Plant {
-                    table: table.clone(),
+                    table: plant_table,
                     i_len: 32,
                     q_len: 32,
                     defaults: d,
@@ -217,7 +245,6 @@ impl Bench {
                 },
                 swap: handle,
             };
-        let table = Arc::new(Mutex::new(table));
         let live = Arc::new(Live::default());
         let cfg = Config {
             bind: "127.0.0.1:0".parse().unwrap(),
@@ -230,7 +257,7 @@ impl Bench {
         let shared = Shared {
             catalog,
             live: Arc::clone(&live),
-            devices: Arc::new(Devices::new(["box".to_string()])),
+            devices,
             audit: Box::new(MemAudit::new(100_000)),
             proposals: Box::new(MemProposals::new(1000)),
             running: Some(running()),
@@ -252,17 +279,26 @@ impl Bench {
             let (stop, table, ticks) = (Arc::clone(&stop), Arc::clone(&table), Arc::clone(&ticks));
             let mut publisher = Publisher::new(live, Duration::from_millis(5));
             let mut reader = force::Reader::default();
+            let mut scene = Scene {
+                calendar: None,
+                recorder: Some(recorder),
+                wall: None,
+            };
             thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     {
                         let mut t = table.lock().unwrap_or_else(PoisonError::into_inner);
                         // The I/O read: start is held on.
-                        t.set_input(start, Some(helmsman_io::Value::Bool(true)));
+                        if !links {
+                            t.set_input(start, Some(helmsman_io::Value::Bool(true)));
+                        }
                         let mut inputs = vec![0u8; 32];
-                        swapper.serve(&mut rt, &mut t);
+                        swapper.serve_scene(&mut rt, &mut t, Some(&mut scene));
                         reader.apply(&forces, &mut inputs, &mut t);
                         let now = t0.elapsed();
-                        recorder.observe(now, &t);
+                        if let Some(r) = &mut scene.recorder {
+                            r.observe(now, &t);
+                        }
                         rt.tick_with(now, &inputs, &mut t);
                         publisher.publish(now, &rt, &t);
                     }
@@ -601,7 +637,7 @@ fn an_engineer_lists_opens_edits_saves_and_deploys_a_project_on_the_box() {
     settle(&b, &Jar::default(), &mut other);
     assert_eq!(other.open.as_ref().unwrap().name, "line");
     assert_eq!(files(&other), ["blocks.st", "io.map", "main.st"]);
-    assert_eq!(other.current().unwrap().text, BLOCKS, "the first program file");
+    assert_eq!(other.current().unwrap().text, MAIN, "main.st first");
     assert!(!other.dirty());
 
     // An edit is dirty until saved, and saving it carries the version read.
@@ -1242,4 +1278,105 @@ fn the_shared_layout_round_trips_through_the_running_project_for_an_engineer_onl
         ctype: "application/json",
     };
     assert_eq!(b.send(&jar, &bad).status, 422);
+}
+
+/// Every built-in machine and template arrives on the box as a project, all
+/// its files at once, and deploys there against the real API as it stands.
+#[test]
+fn a_new_project_from_any_machine_or_template_deploys_on_the_box() {
+    use helmsman_project::starters::STARTERS;
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    for s in STARTERS {
+        let name = format!("my-{}", s.name);
+        p.create_from(&name, s.name);
+        settle(&b, &jar, p);
+        assert_eq!(p.open.as_ref().unwrap().name, name, "{:?}", p.notice);
+        let mut want: Vec<&str> = s.files.iter().map(|(f, _)| *f).collect();
+        want.sort_unstable();
+        assert_eq!(files(p), want);
+        assert_eq!(
+            p.current().unwrap().text,
+            s.files[0].1,
+            "{}: main.st first",
+            s.name
+        );
+        p.deploy();
+        settle(&b, &jar, p);
+        assert!(
+            matches!(p.deploy, Deploy::Done(_)),
+            "{}: {:?} {:?}",
+            s.name,
+            p.deploy,
+            p.diags
+        );
+        assert_eq!(p.running.as_deref(), Some(name.as_str()));
+        // It runs there, with nothing wired: not held for a missing input.
+        wait("the program scanning", || {
+            b.events("/api/events", 1).iter().any(|(_, data)| {
+                let j: Json = serde_json::from_str(data).unwrap_or_default();
+                j["modules"].as_array().is_some_and(|m| {
+                    m.iter().any(|m| {
+                        m["status"]["state"] == "running" && m["stats"]["scans"].as_u64().unwrap_or(0) > 0
+                    })
+                })
+            })
+        });
+    }
+    // A name that is taken is not overwritten without asking.
+    p.create_from("my-batch-mixer", "pump-station");
+    settle(&b, &jar, p);
+    let (msg, err) = p.notice.clone().unwrap();
+    assert!(err && msg.contains("Replace it?"), "{msg}");
+    assert!(
+        b.json("/api/projects/my-batch-mixer/files/main.st")["text"]
+            .as_str()
+            .unwrap()
+            .contains("mixer_tank"),
+        "still the mixer"
+    );
+}
+
+/// The list is an engineer's: anyone else sees it disabled and sends nothing.
+#[test]
+fn only_an_engineer_can_start_a_project_from_the_list() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let v = page(&b, &jar, Some(("alice", ALICE)));
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.wait(0.2);
+    h.press("starters");
+    h.wait(0.1);
+    h.press("starter pump-station");
+    h.wait(0.1);
+    assert!(h.app.chrome.rect("name").is_some(), "the name is asked for");
+    h.press("name ok");
+    let sent = h.sent();
+    let up = sent
+        .iter()
+        .find(|q| q.method == "POST")
+        .unwrap_or_else(|| panic!("nothing sent: {sent:?}"));
+    assert_eq!(up.url, "/api/projects/pump-station/zip");
+    assert_eq!(up.ctype, "application/zip");
+    for q in sent {
+        let a = b.send(&jar, &q);
+        h.bv().projects.answer(q.call, &a);
+    }
+    assert_eq!(b.get("/api/projects/pump-station/files/plant_model.st").0, 200);
+
+    let jar = Jar::default();
+    let v = page(&b, &jar, Some(("bob", BOB)));
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.wait(0.2);
+    h.press("starters");
+    h.wait(0.1);
+    h.press("starter pump-station");
+    h.wait(0.1);
+    assert_eq!(h.app.chrome.rect("name"), None, "disabled for an operator");
+    let writes: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
+    assert!(writes.is_empty(), "{writes:?}");
 }

@@ -53,6 +53,8 @@ mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;
 mod st_view;
+#[cfg(test)]
+mod starter_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod ui_tests;
 #[cfg(target_arch = "wasm32")]

@@ -70,6 +70,16 @@ this; change it here first when a decision changes.
   read-only starter projects: Save keeps your own copy. Deploy compiles and
   runs the project in the page. A browser that keeps nothing (a private
   window) still works; the projects last until the page closes.
+- **Machines and templates.** Worked machines (conveyor sorter, pump
+  station, batch mixer, pick and place, bottle filler, air compressors,
+  air handler) and templates (discrete machine, process loop) are one list,
+  kept as files in `crates/helmsman-project/starters/`. In the simulation
+  the Files sidebar shows Examples (the short teaching programs, in view,
+  and the one a first visit opens), then Machines and Templates, folded
+  until opened; each is a read-only starter that Save copies. On a box,
+  "Start from a machine or template" in the sidebar asks an engineer for a
+  name and sends the project as its `.zip`; nothing else changes what the
+  box holds, and a first install still seeds `line` alone.
 
 ## Monitor (phone to wall TV; replaces Andon)
 
