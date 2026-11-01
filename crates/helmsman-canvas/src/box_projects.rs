@@ -78,6 +78,12 @@ pub enum PCall {
     Forces,
     Force,
     Release,
+    /// The signed-in person's trend pins (`box_trend.rs`), read.
+    TrendPins,
+    /// ... and saved.
+    SavePins,
+    /// The pins' history.
+    Trend,
     /// The running project's shared diagram layout, read.
     Layout(String),
     /// ... and saved.
@@ -124,7 +130,7 @@ pub use crate::review::Answer;
 const JSON: &str = "application/json";
 
 impl PReq {
-    fn get(call: PCall, url: String) -> Self {
+    pub(crate) fn get(call: PCall, url: String) -> Self {
         Self {
             call,
             method: "GET",
@@ -134,7 +140,7 @@ impl PReq {
         }
     }
 
-    fn json(call: PCall, method: &'static str, url: String, body: &Json) -> Self {
+    pub(crate) fn json(call: PCall, method: &'static str, url: String, body: &Json) -> Self {
         Self {
             call,
             method,
@@ -993,6 +999,8 @@ impl BoxProjects {
                 }
                 self.queue.push(PReq::get(PCall::Forces, "/api/forces".into()));
             }
+            // The Trend tab's (`box_trend.rs`).
+            PCall::TrendPins | PCall::SavePins | PCall::Trend => {}
             PCall::Layout(p) => {
                 if self.running.as_deref() != Some(p.as_str()) {
                     return;
