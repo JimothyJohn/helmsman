@@ -16,7 +16,6 @@ VAR_OUTPUT
   back : BOOL;
   gripped : BOOL;
   released : BOOL;
-  operator_start : BOOL;
 END_VAR
 VAR CONSTANT
   lift_stroke : TIME := T#400ms;
@@ -25,7 +24,6 @@ VAR CONSTANT
   part_after : TIME := T#2s;  (* a new part this long after the last is taken *)
 END_VAR
 VAR
-  operator : TP;
   lift_down : TON;
   lift_up : TON;
   slide_over : TON;
@@ -34,8 +32,6 @@ VAR
   grip_open : TON;
   feeder : TON;
 END_VAR
-operator(IN := TRUE, PT := T#1s);  (* as if someone pressed start *)
-operator_start := operator.Q;
 lift_down(IN := lift AND NOT lift_stuck, PT := lift_stroke);
 lift_up(IN := NOT lift, PT := lift_stroke);
 slide_over(IN := slide, PT := slide_stroke);

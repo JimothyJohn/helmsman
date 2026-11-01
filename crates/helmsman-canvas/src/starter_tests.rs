@@ -70,6 +70,13 @@ fn press(s: &mut Session, name: &str) {
     run(s, 100);
 }
 
+/// A started simulation of starter `name`, Start pressed once.
+fn started(name: &str) -> Session {
+    let mut s = rig(name);
+    press(&mut s, "START_PB");
+    s
+}
+
 #[test]
 fn every_starter_compiles_lowers_with_nesting_and_has_io() {
     for st in STARTERS {
@@ -94,9 +101,34 @@ fn every_starter_compiles_lowers_with_nesting_and_has_io() {
     assert!(STARTERS.iter().any(|s| s.kind == Kind::Machine));
 }
 
+/// Card starter-autostart-on-box: the plant model never presses Start, so
+/// a deployed starter sits still (no output on) until someone presses or
+/// forces start_pb, and then it moves.
+#[test]
+fn every_starter_sits_still_until_start_is_pressed() {
+    for st in STARTERS {
+        let mut s = rig(st.name);
+        run(&mut s, 10_000);
+        let on_before: Vec<String> = s
+            .outputs()
+            .filter(|p| s.value(&p.name) == Some(Value::Bool(true)))
+            .map(|p| p.name.clone())
+            .collect();
+        assert_eq!(on_before, Vec::<String>::new(), "{}: still before Start", st.name);
+        press(&mut s, "START_PB");
+        assert!(
+            run_until(&mut s, 60_000, |s| {
+                s.outputs().any(|p| s.value(&p.name) == Some(Value::Bool(true)))
+            }),
+            "{}: moves after Start",
+            st.name
+        );
+    }
+}
+
 #[test]
 fn batch_mixer_runs_batches_and_trips_on_overtemp_and_a_stuck_valve() {
-    let mut s = rig("batch-mixer");
+    let mut s = started("batch-mixer");
     // The whole sequence, step by step, in order.
     for want in [1, 2, 3, 4] {
         assert!(
@@ -131,6 +163,7 @@ fn batch_mixer_runs_batches_and_trips_on_overtemp_and_a_stuck_valve() {
     // A stuck inlet valve: the valve's travel timeout trips, and it recovers.
     let mut s = rig("batch-mixer");
     set(&mut s, "SIM_INLET_STUCK", true);
+    press(&mut s, "START_PB");
     run(&mut s, 5000);
     assert!(!on(&s, "INLET_VALVE") && !on(&s, "LAMP_GREEN"), "tripped");
     set(&mut s, "SIM_INLET_STUCK", false);
@@ -142,7 +175,7 @@ fn batch_mixer_runs_batches_and_trips_on_overtemp_and_a_stuck_valve() {
 
 #[test]
 fn conveyor_sorter_diverts_long_parts_and_a_blocked_eye_stops_the_belt() {
-    let mut s = rig("conveyor-sorter");
+    let mut s = started("conveyor-sorter");
     let mut gate_moved = false;
     assert!(
         run_until(&mut s, 120_000, |s| {
@@ -172,7 +205,7 @@ fn conveyor_sorter_diverts_long_parts_and_a_blocked_eye_stops_the_belt() {
 
 #[test]
 fn pump_station_shares_duty_assists_and_survives_a_trip_and_a_low_level() {
-    let mut s = rig("pump-station");
+    let mut s = started("pump-station");
     let (mut a, mut b, mut both) = (false, false, false);
     run_until(&mut s, 900_000, |s| {
         a |= on(s, "PUMP_A") && !on(s, "PUMP_B");
@@ -214,7 +247,7 @@ fn pump_station_shares_duty_assists_and_survives_a_trip_and_a_low_level() {
 
 #[test]
 fn pick_and_place_cycles_and_a_stuck_cylinder_or_low_air_stops_it() {
-    let mut s = rig("pick-and-place");
+    let mut s = started("pick-and-place");
     let mut seen = [false; 9];
     assert!(
         run_until(&mut s, 120_000, |s| {
@@ -242,6 +275,7 @@ fn pick_and_place_cycles_and_a_stuck_cylinder_or_low_air_stops_it() {
 
     let mut s = rig("pick-and-place");
     set(&mut s, "SIM_LIFT_STUCK", true);
+    press(&mut s, "START_PB");
     assert!(
         run_until(&mut s, 60_000, |s| int(s, "STEP") == 1),
         "the cycle started"
@@ -260,7 +294,7 @@ fn pick_and_place_cycles_and_a_stuck_cylinder_or_low_air_stops_it() {
 
 #[test]
 fn bottle_filler_fills_and_caps_and_trips_on_no_bottles_and_a_low_tank() {
-    let mut s = rig("bottle-filler");
+    let mut s = started("bottle-filler");
     let (mut filled, mut capped, mut indexed) = (false, false, false);
     assert!(
         run_until(&mut s, 120_000, |s| {
@@ -306,7 +340,7 @@ fn bottle_filler_fills_and_caps_and_trips_on_no_bottles_and_a_low_tank() {
 
 #[test]
 fn air_compressors_stage_rotate_and_skip_a_hot_machine() {
-    let mut s = rig("air-compressors");
+    let mut s = started("air-compressors");
     let mut units = [false; 3];
     let mut most = 0;
     let (mut leads, mut low, mut high) = ([false; 3], f64::MAX, f64::MIN);
@@ -363,7 +397,7 @@ fn air_compressors_stage_rotate_and_skip_a_hot_machine() {
 
 #[test]
 fn air_handler_proves_air_holds_temperature_and_trips_on_freeze() {
-    let mut s = rig("air-handler");
+    let mut s = started("air-handler");
     assert!(run_until(&mut s, 60_000, |s| int(s, "STATE") == 3), "proved");
     assert!(on(&s, "DAMPER") && on(&s, "FAN"));
     run(&mut s, 240_000);
@@ -393,6 +427,7 @@ fn air_handler_proves_air_holds_temperature_and_trips_on_freeze() {
     // A broken belt: the fan runs, the air does not prove, the unit trips.
     let mut s = rig("air-handler");
     set(&mut s, "SIM_BELT_BROKEN", true);
+    press(&mut s, "START_PB");
     assert!(run_until(&mut s, 60_000, |s| on(s, "FAN")));
     assert!(run_until(&mut s, 30_000, |s| !on(s, "FAN")), "tripped");
     assert!(!on(&s, "LAMP_GREEN"));
@@ -405,7 +440,7 @@ fn air_handler_proves_air_holds_temperature_and_trips_on_freeze() {
 
 #[test]
 fn the_templates_move_and_their_blocks_trip() {
-    let mut s = rig("discrete-template");
+    let mut s = started("discrete-template");
     assert!(run_until(&mut s, 60_000, |s| int(s, "CYCLES") >= 3), "cycles");
     set(&mut s, "MOTOR_OVERLOAD_IN", true);
     assert!(run_until(&mut s, 20_000, |s| on(s, "LAMP_RED")), "overload seen");
@@ -419,7 +454,7 @@ fn the_templates_move_and_their_blocks_trip() {
         "recovered"
     );
 
-    let mut s = rig("process-template");
+    let mut s = started("process-template");
     run(&mut s, 180_000);
     let p = real(&s, "PRESSURE");
     assert!((p - 4.0).abs() < 0.5, "held at setpoint: {p}");

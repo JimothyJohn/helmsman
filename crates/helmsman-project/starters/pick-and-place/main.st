@@ -117,7 +117,7 @@ released_sw := released_in OR plant.released;  (* PLANT: keep the _in input *)
 cylinder(condition := arm.fault OR seq.timed_out, ack := ack_pb, on_delay := T#0s);
 low_air(condition := low_air_in, ack := ack_pb, on_delay := T#500ms);
 tripped := cylinder.showing OR low_air.showing;
-run := (run OR start_pb OR plant.operator_start) AND NOT stop_pb AND NOT tripped;  (* PLANT: drop operator_start *)
+run := (run OR start_pb) AND NOT stop_pb AND NOT tripped;
 home := arm.is_up AND arm.is_back AND arm.is_released;
 
 seq(start := run AND home AND part_here, advance := step_done, abort := NOT run,
