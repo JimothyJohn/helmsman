@@ -1546,10 +1546,10 @@ fn plcopen_and_st_files_import_into_a_project_and_build() {
     );
     assert_eq!(r.status, 201, "{r:?}");
     assert_eq!(file(b.addr, "imp", "extra.st").json()["text"], COUNTER);
-    let l5x = std::fs::read(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../helmsman-iec/tests/fixtures/l5x/line3.L5X"),
-    )
-    .unwrap();
+    // An L5X outside the ladder subset is refused whole, every problem
+    // with its routine and rung; nothing is written.
+    let l5x_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../helmsman-iec/tests/fixtures/l5x");
+    let l5x = std::fs::read(l5x_dir.join("line3.L5X")).unwrap();
     let r = send(
         b.addr,
         "POST",
@@ -1558,7 +1558,46 @@ fn plcopen_and_st_files_import_into_a_project_and_build() {
         "application/xml",
         &l5x,
     );
-    assert_eq!(r.status, 415, "L5X conversion is not built: {r:?}");
+    assert_eq!(r.status, 422, "{r:?}");
+    let e = r.json()["error"].as_str().unwrap().to_string();
+    for part in [
+        "line3.L5X is not converted",
+        "routine MainRoutine, rung 1",
+        "routine Calc",
+        "routine Seq",
+    ] {
+        assert!(e.contains(part), "{part} in {e}");
+    }
+    assert_eq!(file(b.addr, "imp", "line3.st").status, 404);
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/imp/import?file=x.L5X",
+        Some(&s),
+        "application/xml",
+        b"<!DOCTYPE x [<!ENTITY e SYSTEM \"file:///etc/passwd\">]><RSLogix5000Content>&e;</RSLogix5000Content>",
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    // Ladder in the subset becomes one file that builds: a PROGRAM per task.
+    b.project(&s, "lad", &[]);
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/lad/import?file=bench.L5X",
+        Some(&s),
+        "application/xml",
+        &std::fs::read(l5x_dir.join("ladder.L5X")).unwrap(),
+    );
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(r.json()["name"], "bench.st");
+    let st = file(b.addr, "lad", "bench.st").json()["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(st.contains("PROGRAM MainTask"), "{st}");
+    let r = post_json(b.addr, "/api/projects/lad/check", Some(&s), &json!({}));
+    assert_eq!(r.status, 200, "the converted ladder builds: {r:?}");
+    assert_eq!(r.json()["modules"][0]["name"], "maintask", "{r:?}");
     for bad in ["..%2fx.st", "x.exe", "noext", "%2e%2e.st"] {
         let r = send(
             b.addr,
@@ -1609,7 +1648,10 @@ fn plc_projects(state: &Path) -> Plc {
     while addr.is_none() {
         let mut line = String::new();
         assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
-        if let Some(rest) = line.strip_prefix("helmsman-plc: API on http://") {
+        if let Some(rest) = line
+            .strip_prefix("helmsman-plc: API on https://")
+            .or_else(|| line.strip_prefix("helmsman-plc: API on http://"))
+        {
             addr = rest.split('/').next().and_then(|a| a.parse().ok());
         }
     }
@@ -1886,4 +1928,69 @@ fn forces_end_on_logout_on_expiry_and_on_deploy() {
     wait("the lamp on under the new program", || {
         b.cmd("lamp") == Some(Value::Bool(true))
     });
+}
+
+fn seed(state: &Path, args: &[&str]) -> (bool, String) {
+    let out = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
+        .args(["project", "seed", "--state-dir"])
+        .arg(state)
+        .args(["--scan-ms", "10"])
+        .args(args)
+        .output()
+        .unwrap();
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.success(), text)
+}
+
+#[test]
+fn a_first_install_seeds_and_deploys_a_project_and_never_again() {
+    let state = tmp("seed");
+    let line = concat!(env!("CARGO_MANIFEST_DIR"), "/programs/line.st");
+    // Nothing named: nothing done (the program-mode unit runs it so).
+    let (ok, out) = seed(&state, &[]);
+    assert!(ok && out.contains("no project to seed"), "{out}");
+    // A first install: made, deployed, recorded.
+    let (ok, out) = seed(&state, &["line", line]);
+    assert!(ok && out.contains("project line made and deployed"), "{out}");
+    let plc = plc_projects(&state);
+    let r = get(plc.addr, "/api/running").json();
+    assert_eq!(
+        (r["project"].as_str(), r["current"].as_bool()),
+        (Some("line"), Some(true)),
+        "{r}"
+    );
+    let modules = get(plc.addr, "/api/modules").json();
+    assert_eq!(modules[0]["name"], "line", "{modules}");
+    let log = get(plc.addr, "/api/snapshots").json();
+    assert_eq!(log["log"][0]["approver"], "first install", "{log}");
+    drop(plc);
+    // Edited since: the next install (every service start) touches nothing.
+    let projects = Projects::in_state_dir(&state).unwrap();
+    let mine = "(* mine *)\n".to_string() + &std::fs::read_to_string(line).unwrap();
+    projects.save("line", "line.st", mine.as_bytes(), None).unwrap();
+    let (ok, out) = seed(&state, &["line", line]);
+    assert!(ok && out.contains("nothing seeded"), "{out}");
+    assert_eq!(projects.file("line", "line.st").unwrap(), mine, "never clobbered");
+    // Nor on a box that already ran something, with no project.
+    let other = tmp("seed-other");
+    Store::open(&other.join("store"))
+        .unwrap()
+        .commit(&running(), &meta())
+        .unwrap();
+    let (ok, out) = seed(&other, &["line", line]);
+    assert!(ok && out.contains("already deployed"), "{out}");
+    assert_eq!(
+        Projects::in_state_dir(&other).unwrap().list().unwrap(),
+        Vec::<String>::new()
+    );
+    // A file that does not build: refused, saying where.
+    let bad = tmp("seed-bad");
+    let src = bad.join("broken.st");
+    std::fs::write(&src, "PROGRAM broken\n  x := ;\nEND_PROGRAM\n").unwrap();
+    let (ok, out) = seed(&bad, &["broken", src.to_str().unwrap()]);
+    assert!(!ok && out.contains("broken.st:2"), "{out}");
 }

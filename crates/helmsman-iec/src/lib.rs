@@ -33,7 +33,8 @@
 //! trigonometry, EXPT, MIN, MAX, LIMIT, SEL, MUX, SHL, SHR, ROL, ROR, TRUNC,
 //! MOVE) and function blocks (TON, TOF, TP, CTU, CTD, CTUD, `R_TRIG`,
 //! `F_TRIG`, SR, RS, and `BLINK_PATTERN`, a stack light's patterns that
-//! IEC 61131-3 does not have; see library.st). Pragmas (`{...}`) are skipped. Not yet: STRING, DATE,
+//! IEC 61131-3 does not have; see library.st: a blinking MODE with a
+//! PERIOD of 0 or below faults the module, [`BadParam::BlinkPeriod`]). Pragmas (`{...}`) are skipped. Not yet: STRING, DATE,
 //! DT and TOD, `VAR_IN_OUT`, `VAR_GLOBAL`, function outputs, pointers and
 //! references, multi-level addresses (`%QW0.1.2`). Nesting is capped at
 //! `MAX_NESTING` levels so hostile input cannot overflow the stack.
@@ -74,6 +75,7 @@ pub mod ast {
 mod check;
 mod interp;
 pub mod l5x;
+pub mod ladder;
 mod lexer;
 mod parser;
 pub mod plcopen;
@@ -86,7 +88,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 pub use check::{Area, Diagnostic, ImageSizes};
-pub use interp::{Fault, FaultKind, Image};
+pub use interp::{BadParam, Fault, FaultKind, Image};
 pub use lexer::Pos;
 pub use state::{Carry, State};
 pub use types::{Ty, Value};
@@ -215,7 +217,8 @@ impl Program {
     /// [`Program::reset`] restores the initial values.
     ///
     /// # Errors
-    /// A [`Fault`]: division by zero, an index out of range, or the watchdog.
+    /// A [`Fault`]: division by zero, an index out of range, the watchdog,
+    /// or a library block refusing a parameter ([`FaultKind::BadParam`]).
     pub fn scan_at(&mut self, image: &mut Image, now: Duration) -> Result<(), Fault> {
         self.run(image, now, None)
     }
@@ -251,6 +254,7 @@ impl Program {
             mem: &mut self.mem,
             image,
             pous: &self.code.pous,
+            library: self.code.library,
             base: 0,
             budget: self.budget,
             now: i128::try_from(now.as_nanos())

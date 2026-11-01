@@ -529,3 +529,64 @@ fn click_download(href: &str, name: &str) {
 pub fn download_url(url: &str, name: &str) {
     click_download(url, name);
 }
+
+/// Downloads `bytes` made in the page as `name`, of type `mime`.
+pub fn download_bytes(name: &str, bytes: &[u8], mime: &str) {
+    let array = web_sys::js_sys::Array::new();
+    array.push(&web_sys::js_sys::Uint8Array::from(bytes));
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type(mime);
+    let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&array, &opts) else {
+        return;
+    };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        return;
+    };
+    click_download(&url, name);
+    let _ = web_sys::Url::revoke_object_url(&url);
+}
+
+/// The simulation's projects in `localStorage`. Every access is wrapped:
+/// a private window, blocked site data or a full quota throws, and the
+/// page then keeps its projects in memory (`sim_projects`).
+#[derive(Debug, Default)]
+pub struct LocalProjects;
+
+const PROJECTS_SLOT: &str = "helmsman-canvas/projects";
+
+fn storage() -> Result<web_sys::Storage, String> {
+    web_sys::window()
+        .ok_or("no window")?
+        .local_storage()
+        .map_err(|e| text(&e))?
+        .ok_or_else(|| "no localStorage".into())
+}
+
+/// The diagram's personal layouts in `localStorage` (`arrange.rs`), every
+/// access wrapped as for [`LocalProjects`].
+#[derive(Debug, Default)]
+pub struct LocalArrangements;
+
+const ARRANGEMENTS_SLOT: &str = "helmsman-canvas/arrangements";
+
+impl crate::sim_projects::Storage for LocalArrangements {
+    fn load(&self) -> Result<Option<String>, String> {
+        storage()?.get_item(ARRANGEMENTS_SLOT).map_err(|e| text(&e))
+    }
+
+    fn save(&mut self, value: &str) -> Result<(), String> {
+        storage()?
+            .set_item(ARRANGEMENTS_SLOT, value)
+            .map_err(|e| text(&e))
+    }
+}
+
+impl crate::sim_projects::Storage for LocalProjects {
+    fn load(&self) -> Result<Option<String>, String> {
+        storage()?.get_item(PROJECTS_SLOT).map_err(|e| text(&e))
+    }
+
+    fn save(&mut self, value: &str) -> Result<(), String> {
+        storage()?.set_item(PROJECTS_SLOT, value).map_err(|e| text(&e))
+    }
+}

@@ -1,7 +1,13 @@
-# helmsman-plc: one IEC 61131-3 program behind the CIP adapter.
-# Installed by scripts/pi-deploy-plc.sh, which also writes the program to
-# /etc/helmsman-plc/ and its path to /etc/helmsman-plc/env, and the canvas
-# (the browser HMI) to /usr/local/share/helmsman-plc/ui (PLC_UI).
+# helmsman-plc: IEC 61131-3 programs behind the CIP adapter.
+# Installed by scripts/pi-deploy-plc.sh, which writes /etc/helmsman-plc/env
+# and the canvas (the browser editor) to /usr/local/share/helmsman-plc/ui
+# (PLC_UI). PLC_SOURCE is `--projects` (the editor's projects in the state
+# directory, the deployed one booted from its store) or, in the old mode,
+# one program file under /etc/helmsman-plc/. PLC_SEED (`NAME FILE.st`, or
+# empty) seeds a first install with a deployed project: `project seed`
+# acts only while there is no project and nothing deployed; if it fails
+# (a seed that does not build) the box starts anyway, running nothing, and
+# the journal says why.
 [Unit]
 Description=Helmsman soft PLC (IEC 61131-3, CIP adapter on 44818/2222)
 After=network-online.target
@@ -9,7 +15,8 @@ Wants=network-online.target
 
 [Service]
 EnvironmentFile=/etc/helmsman-plc/env
-ExecStart=/usr/local/bin/helmsman-plc ${PLC_PROGRAM} --scan-ms ${PLC_SCAN_MS} --api ${PLC_API} --ui ${PLC_UI}
+ExecStartPre=-/usr/local/bin/helmsman-plc project seed --scan-ms ${PLC_SCAN_MS} $PLC_SEED
+ExecStart=/usr/local/bin/helmsman-plc ${PLC_SOURCE} --scan-ms ${PLC_SCAN_MS} --api ${PLC_API} --ui ${PLC_UI}
 DynamicUser=yes
 # The box API's token (api-token, 0600) lives here: /var/lib/helmsman-plc,
 # writable under ProtectSystem=strict and passed in as $STATE_DIRECTORY.

@@ -505,6 +505,107 @@ into the code.
   attributes (they are in real exports and in the `l5x` package; RM014's
   root example is not in the extracted text). Still to do: run the reader
   over a real Studio 5000 export (TODO `l5x-real-export`).
+- **Leaned on by `helmsman_iec::ladder` (2026-10-31):** decorated tag
+  data, `DataValue`, `Array`/`Element Index`, `Structure`/
+  `DataValueMember` and `ForceValue` (pp.43-46); rung neutral text, a rung
+  ends with `;`, branches `[leg,leg]` with empty legs allowed (pp.209-211);
+  the neutral text of every converted instruction, e.g.
+  `TON(timer,preset,accum)`, `CPT(destination,expression)`,
+  `COP(source,destination,length)`,
+  `JSR(routine_name,input_1,...,return_n)` (pp.211-221). The order a rung
+  runs in (left to right; a branch's legs top to bottom, ORed) is not
+  stated in RM014 or RM003; it is Logix's documented ladder model in the
+  Ladder Diagram programming manual (1756-PM008), not in hand.
+
+### Logix 5000 Controllers General Instructions, reference manual (publication 1756-RM003)
+
+- **What:** Rockwell, *Logix 5000 Controllers General Instructions*,
+  publication 1756-RM003Z-EN-P, September 2024, 905 pp. Rockwell's
+  literature site answers 403 to scripts; the copy read is the official
+  PDF as Rockwell's distributor NHP hosts it
+  (https://www.nhp.com.au/public/assets/pim/Original/10045/Allen-Bradley-Logix5000-Controllers-General-Instructions-User-Manual.pdf,
+  fetched 2026-10-31, sha256
+  f7016d7c2d9cdbf8c7910935db3b16b61d6f5ce82181ea9462ec74dd9bc7c409), kept
+  with PM020 and RM014 in `~/github/helmsman-refs/1756-rm003_-en-p.pdf`,
+  not committed. Printed page numbers equal PDF page numbers. Cite as
+  `RM003 p.<n>`. The flow charts are images: read rendered, not as text.
+- **Leaned on by `helmsman_iec::ladder` (its `lib.st` and the converter),
+  and by the reference evaluator in `helmsman-iec/tests/ladder_equiv.rs`:**
+  - XIC, XIO (pp.80-85), OTE (pp.76-77; prescan and postscan clear the
+    bit), OTL (pp.77-78), OTU (pp.79-80). The OTU execution table on p.80
+    says "the data bit is set to true", contradicting its own text on
+    p.79 ("clears (unlatches)"); the text is taken.
+  - ONS (pp.65-67 and its flow chart p.67): rung false clears the
+    storage bit and the rung; rung true with the bit clear sets it and
+    passes the rung, with it set makes the rung false; prescan sets it.
+    OSR (pp.72-73, flow chart p.73) and OSF (pp.67-69, flow chart p.69):
+    the rung passes through; storage and output bits as charted; prescan
+    sets OSR's storage bit, clears OSF's, clears both outputs.
+  - TON (pp.119-122, flow chart p.122), TOF (pp.111-114, flow chart
+    p.114), RTO (pp.103-106): the TIMER members (pp.104-105,
+    111-112, 119-120); time base 1 ms (p.87); `ACC = ACC +
+    (current_time - last_time_scanned)` (pp.105, 112-113, 120); a
+    negative PRE or ACC is major fault 4/34 (pp.105, 113, 121); overflow
+    pins ACC at 2147483647; the rung-false and prescan rows. ACC is not
+    clamped to PRE: the flow chart sets DN on the scan ACC reaches PRE and
+    stops timing, so ACC may pass PRE by part of a scan. **Not verified:**
+    RTO's flow chart is missing from p.106 (the heading has no figure);
+    its rung-true path is taken from TON's chart, which RTO's description
+    (p.105) matches.
+  - CTU (pp.92-96, flow charts pp.95-96), CTD (pp.87-91, flow charts
+    pp.90-91): the COUNTER members (pp.88-89, 93); counting on the
+    false-to-true edge held in CU/CD; on wrap, OV (CTU) or UN (CTD) is
+    set unless the opposite flag was set, in which case both clear; DN =
+    ACC >= PRE, updated only while OV and UN are clear (both charts; CTD's
+    member table on p.88 describes DN as "when clear indicates ...
+    complete", which its own chart does not do; the chart is taken).
+    Prescan sets CU/CD (pp.89, 94).
+  - RES (pp.101-102): ACC to 0 and the status bits false (all of a
+    COUNTER's: CU, CD, DN, OV, UN; p.97's example says "clears the status
+    bits").
+  - Compares (pp.319-388): the v36 renames EQU->EQ, GRT->GT, GEQ->GE,
+    LES->LT, NEQ->NE, LIM->LIMIT, MOV->MOVE (pp.320, 331, 338, 348, 364,
+    379, 482; p.356 says "from LES to LE", a typo for LEQ); EQ is false
+    and NE true on a NaN (pp.324, 383); LIMIT's circular range when
+    Low > High and false on a NaN (pp.364, 368).
+  - Math: ADD (pp.395-400), SUB (pp.433-438), MUL (pp.417-421), DIV
+    (pp.405-410: integer results truncated; by zero, Source A for
+    integers and infinity ("1.$") for floats, a minor fault), MOD
+    (pp.411-416: `Dest = Source A - (truncate(Source A / Source B) *
+    Source B)`, by zero 0 (p.416, stated under the FBD function and taken
+    for all)), CPT (pp.401-404: REAL when any operand or the destination
+    is REAL; operator order, equal order left to right).
+  - Conversions (pp.849-856): integer immediates are DINT, non-decimal
+    radixes zero-filled to 32 bits (pp.850-851, 855); operands rank SINT <
+    INT < DINT < REAL (p.851); SINT/INT sign-extend (pp.851-852); REAL to
+    integer rounds to the nearest, ties to even, and keeps the low bits
+    (pp.853, 855-856); narrowing keeps the low bits (pp.853, 855); integer
+    overflow wraps (S:V example, p.849). Pseudo-operands (PRE, ACC of
+    timers and counters) are initial values written at download (pp.856-
+    858). MOVE copies with these conversions (pp.482-485). CLR sets 0
+    (pp.473-475). COP is a byte copy of Length destination elements,
+    clamped to the destination tag's end, and on 5x80 controllers also to
+    the source's (p.510; the converter refuses a length past the source
+    so the controller family does not matter); an overlapping forward copy
+    replicates (p.512, example 5).
+  - Array subscripts out of range are major fault 4/20 (p.864); bit
+    addressing `tag.n` (p.864).
+  - JSR (pp.622-627): `JSR(RoutineName,InputCount,...)` (p.623, so
+    `JSR(Name,0)` is a JSR without parameters); a JSR may not
+    call the main routine (p.626); at most 25 nested subroutines (p.627);
+    rung false does nothing, rung true runs the routine (p.627); prescan
+    runs every called routine once, ignoring RET (p.627).
+- **Not in RM003 / not verified:** what `/` and `MOD` by zero do inside a
+  CPT expression (the converter applies DIV's and MOD's rules); the sign
+  of a float division by zero and 0/0 (IEEE is used: ±inf, NaN); a REAL
+  too large for any integer (the converter stores 0, the low bits of its
+  integer value); whether ADD/SUB/MUL with integer sources and a REAL
+  destination compute in REAL (the converter does, by CPT's rule on
+  p.401 and DIV's footnote on p.410); the rung condition after a JSR
+  (refused unless JSR ends the rung); p.853's note that Logix Designer
+  reads literal 2 as a REAL on 5x70 controllers (the converter follows
+  p.855: immediates are DINT). Real-controller checks wait for the bench
+  CompactLogix and a real export (`l5x-real-export`).
 
 ### Model Context Protocol specification, revisions 2026-07-28 and 2025-11-25
 

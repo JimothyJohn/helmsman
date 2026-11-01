@@ -1,19 +1,21 @@
 //! Rockwell L5X (the Logix Designer XML export), read for its inventory:
 //! the controller, its data types and add-on instruction names, controller
 //! tags, programs with their tags (type, dimensions, usage, alias target,
-//! description) and routines (ladder rungs as text with their comments, ST
-//! lines, the kind of anything else), and tasks with the programs they
-//! schedule. Nothing here gives the file meaning: rungs stay text for a
-//! reader (the agent) to understand, and nothing is ever written back.
+//! description, decorated data as text) and routines (ladder rungs as text
+//! with their comments, ST lines, the kind of anything else), and tasks
+//! with the programs they schedule. Nothing here gives the file meaning:
+//! rungs stay text for a reader (the agent, or [`crate::ladder`], which
+//! converts a subset to Structured Text), and nothing is ever written back.
 //!
 //! The structure is that of an export as the Rockwell reference describes
 //! it (`RSLogix5000Content` > `Controller` > `DataTypes`, `Tags`,
 //! `Programs`, `Tasks`), checked against Rockwell's *Logix 5000 Controllers
 //! Import/Export* (1756-RM014D-EN-P): root pp.37-38, tag attributes
-//! pp.106-107, `MainRoutineName` p.196, rungs pp.206-208, ST p.264ff.,
-//! tasks p.313. The root's `TargetName`/`TargetType` are not in RM014's
-//! text (docs/SOURCES.md). Everything else in the file (modules, data values, trends,
-//! safety info) is ignored.
+//! pp.106-107, decorated data pp.43-46, `MainRoutineName` p.196, rungs
+//! pp.206-208, ST p.264ff., tasks p.313. The root's
+//! `TargetName`/`TargetType` are not in RM014's text (docs/SOURCES.md).
+//! Everything else in the file (modules, raw and L5K data, trends, safety
+//! info) is ignored.
 //!
 //! An L5X comes from a customer's PLC project, so it is treated as hostile:
 //! it goes through the same non-validating reader as `PLCopen` files (no
@@ -135,6 +137,31 @@ pub struct Tag {
     pub constant: bool,
     /// Clipped to [`MAX_DESCRIPTION`] characters.
     pub description: Option<String>,
+    /// The value the export holds, from its decorated data (RM014
+    /// pp.43-46), when it has some.
+    pub data: Option<TagData>,
+}
+
+/// A tag's decorated data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagData {
+    pub value: Data,
+    /// Some value in it carries a `ForceValue` (RM014 p.46).
+    pub forced: bool,
+}
+
+/// A value in decorated form. Atomic values stay text as exported
+/// (`Value`, clipped to 64 characters); the reader of the value decides
+/// what it means.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Data {
+    /// `DataValue` / `DataValueMember`: an atomic value.
+    Value(String),
+    /// `Structure` / `StructureMember`: members by name, in order.
+    Structure(Vec<(String, Data)>),
+    /// `Array` / `ArrayMember`: elements with their `Index` text
+    /// (`[0]`, `[1,2]`), in order.
+    Array(Vec<(String, Data)>),
 }
 
 /// What a routine is written in.
@@ -338,6 +365,15 @@ impl Cx {
             .child("Description")
             .map(|d| clip(&d.text().0, MAX_DESCRIPTION))
             .filter(|d| !d.is_empty());
+        let mut forced = false;
+        let mut value = None;
+        if let Some(d) = e
+            .children_named("Data")
+            .find(|d| d.attr("Format") == Some("Decorated"))
+            .and_then(|d| d.elements().next())
+        {
+            value = self.data(d, &mut forced, 0)?;
+        }
         Ok(Some(Tag {
             name,
             data_type,
@@ -347,7 +383,54 @@ impl Cx {
             external_access,
             constant: e.attr("Constant") == Some("true"),
             description,
+            data: value.map(|value| TagData { value, forced }),
         }))
+    }
+
+    /// Decorated data (RM014 pp.43-46): `DataValue`, `Structure`,
+    /// `Array` and their members and elements. Anything else is left out
+    /// (`None`); every value counts toward [`MAX_ITEMS`].
+    fn data(&mut self, e: &Element, forced: &mut bool, depth: usize) -> Result<Option<Data>, Error> {
+        self.count(e)?;
+        if depth > 8 {
+            return Ok(None);
+        }
+        *forced |= e.attr("ForceValue").is_some();
+        Ok(match e.name.as_str() {
+            "DataValue" | "DataValueMember" => e.attr("Value").map(|v| Data::Value(clip(v, 64))),
+            "Structure" | "StructureMember" => {
+                let mut members = Vec::new();
+                for m in e.elements() {
+                    let Some(n) = m.attr("Name").filter(|n| is_name(n)) else {
+                        continue;
+                    };
+                    if let Some(d) = self.data(m, forced, depth + 1)? {
+                        members.push((n.to_string(), d));
+                    }
+                }
+                Some(Data::Structure(members))
+            }
+            "Array" | "ArrayMember" => {
+                let mut elems = Vec::new();
+                for el in e.children_named("Element") {
+                    self.count(el)?;
+                    *forced |= el.attr("ForceValue").is_some();
+                    let Some(ix) = el.attr("Index").filter(|i| is_ref(i)) else {
+                        continue;
+                    };
+                    let d = match (el.attr("Value"), el.elements().next()) {
+                        (Some(v), _) => Some(Data::Value(clip(v, 64))),
+                        (None, Some(inner)) => self.data(inner, forced, depth + 1)?,
+                        (None, None) => None,
+                    };
+                    if let Some(d) = d {
+                        elems.push((ix.to_string(), d));
+                    }
+                }
+                Some(Data::Array(elems))
+            }
+            _ => None,
+        })
     }
 
     fn tags(&mut self, parent: &Element) -> Result<Vec<Tag>, Error> {

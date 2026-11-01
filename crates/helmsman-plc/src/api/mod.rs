@@ -38,7 +38,6 @@
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
-//! GET  /api/screen                        the floor screen's layout (with --screen FILE; see [`crate::screen`])
 //! GET  /api/site                          this box and the boxes it heard on the LAN (with --site NAME; see [`crate::site`])
 //! POST /api/dropins?name=N&kind=K         token: a document, a photo or a PDF for the agent, stored in memory (see [`dropin`], [`photo`], [`pdf`])
 //! GET  /api/dropins                       the drop-ins held
@@ -61,6 +60,11 @@
 //! same path. The token alone
 //! (what the agent holds) can draft and replay, never apply. Limits are
 //! enforced here, by the host, never by whatever is calling.
+//!
+//! **Transport.** With [`Api::start_secure`] the port serves HTTPS
+//! ([`tls`]: a self-signed certificate whose fingerprint the person
+//! checks), and plain HTTP only to this host; from elsewhere plain HTTP
+//! is redirected, never served ([`to_https`]).
 //!
 //! **Auth.** Reads (`GET`) are open to whoever can reach the socket (the
 //! default bind is loopback; the LAN only when asked). Every other method
@@ -109,6 +113,8 @@ pub mod render;
 pub mod sim;
 pub mod store;
 pub mod swap;
+#[cfg(feature = "https")]
+pub mod tls;
 pub mod token;
 pub mod ui;
 
@@ -129,7 +135,7 @@ use crate::store::{self as snapshots, ChangeSet, SnapshotId, Store};
 
 pub use approve::{Approval, Replays};
 pub use catalog::{Catalog, Devices, ModuleInfo, SignalInfo};
-pub use http::{Limits, Request, Response};
+pub use http::{Conn, Limits, Request, Response};
 pub use live::{Live, ModuleLive, Publisher, View};
 pub use store::{Audit, AuditEntry, MemAudit, MemProposals, Proposals};
 pub use swap::{Plant, SwapHandle, Swapper};
@@ -201,8 +207,6 @@ pub struct Shared {
 pub struct Extras {
     /// The canvas, at `/`.
     pub ui: Option<ui::Ui>,
-    /// The floor screen's layout, at `/api/screen`.
-    pub screen: Option<Screen>,
     /// Publishers whose bundles import (`POST /api/bundles`); `None`:
     /// import answers 501.
     pub trust: Option<TrustStore>,
@@ -220,32 +224,41 @@ pub struct More {
     pub forces: Option<Arc<crate::force::Forces>>,
 }
 
-/// A floor screen layout as loaded: the file, byte for byte, and what it
-/// parsed to (already checked against the I/O map).
-#[derive(Debug, Clone)]
-pub struct Screen {
-    pub source: String,
-    pub layout: crate::screen::Layout,
+/// The box's HTTPS: what it serves with, and the certificate's
+/// fingerprint, shown at `GET /api/policy` (`transport`).
+#[derive(Clone)]
+pub struct Tls {
+    #[cfg(feature = "https")]
+    config: Arc<rustls::ServerConfig>,
+    fingerprint: String,
 }
 
-/// `GET /api/screen`: the layout, its source (the canvas parses that with
-/// the same parser) and the fixed palette.
-fn screen_json(s: &Screen) -> Json {
-    let hex = |c: [u8; 3]| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
-    let palette: serde_json::Map<String, Json> = crate::screen::Colour::ALL
-        .iter()
-        .map(|c| {
-            (
-                c.name().to_string(),
-                json!({ "fill": hex(c.fill()), "ink": hex(c.ink()) }),
-            )
+impl Tls {
+    /// Serving `id` ([`tls::load_or_create`]).
+    ///
+    /// # Errors
+    /// rustls refuses its key or certificate.
+    #[cfg(feature = "https")]
+    pub fn new(id: &tls::Identity) -> Result<Self, String> {
+        Ok(Self {
+            config: id.server_config()?,
+            fingerprint: id.fingerprint(),
         })
-        .collect();
-    json!({
-        "source": s.source,
-        "layout": serde_json::to_value(&s.layout).unwrap_or(Json::Null),
-        "palette": palette,
-    })
+    }
+
+    /// The certificate's SHA-256 fingerprint ([`tls::fingerprint`]).
+    #[must_use]
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+}
+
+impl std::fmt::Debug for Tls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tls")
+            .field("fingerprint", &self.fingerprint)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A traced scan's number and its JSON.
@@ -277,10 +290,6 @@ struct Ctx {
     streams: AtomicUsize,
     chat: Option<chat::Chat>,
     ui: Option<ui::Ui>,
-    /// `GET /api/screen`'s body, rendered once.
-    screen: Option<Json>,
-    /// The floor screen's layout, which a reloaded I/O map must still fit.
-    screen_layout: Option<crate::screen::Layout>,
     /// Publishers whose bundles import; `None`: import answers 501.
     trust: Option<TrustStore>,
     /// Drop-in documents (see [`dropin`]).
@@ -296,6 +305,8 @@ struct Ctx {
     projects: Option<crate::project::Projects>,
     /// Forced inputs (see [`forces`]); `None`: those routes answer 404.
     forces: Option<Arc<crate::force::Forces>>,
+    /// The box's HTTPS ([`Api::start_secure`]); `None`: plain HTTP only.
+    tls: Option<Tls>,
 }
 
 impl Ctx {
@@ -322,29 +333,6 @@ impl Ctx {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
-    }
-
-    /// Whether the floor screen (or its absence) fits `map`, as the box
-    /// checks at startup: every tile's signals are screen outputs on it and
-    /// every screen output is on a tile; without a screen, the map has no
-    /// screen outputs.
-    fn screen_fits(&self, map: Option<&helmsman_io::IoMap>) -> Result<(), Vec<String>> {
-        let empty = helmsman_io::IoMap::default();
-        let map = map.unwrap_or(&empty);
-        match &self.screen_layout {
-            Some(l) => l.check(map),
-            None if map
-                .signals
-                .iter()
-                .any(|s| matches!(s.binding, helmsman_io::Binding::Screen { .. })) =>
-            {
-                Err(vec![
-                    "the I/O map declares screen tiles, but this box shows no floor screen (--screen FILE)"
-                        .into(),
-                ])
-            }
-            None => Ok(()),
-        }
     }
 
     fn shape(&self) -> approve::Shape {
@@ -465,15 +453,7 @@ impl Api {
         ui: Option<ui::Ui>,
         trust: Option<TrustStore>,
     ) -> io::Result<Self> {
-        Self::start_with(
-            cfg,
-            shared,
-            Extras {
-                ui,
-                screen: None,
-                trust,
-            },
-        )
+        Self::start_with(cfg, shared, Extras { ui, trust })
     }
 
     /// [`Api::start`], with what a box may serve besides its state.
@@ -507,12 +487,30 @@ impl Api {
     /// The bind fails.
     pub fn start_box(
         cfg: Config,
-        mut shared: Shared,
+        shared: Shared,
         extras: Extras,
         site: Option<crate::site::Handle>,
         more: More,
     ) -> io::Result<Self> {
-        let Extras { ui, screen, trust } = extras;
+        Self::start_secure(cfg, shared, extras, site, more, None)
+    }
+
+    /// [`Api::start_box`], serving HTTPS with `tls` ([`Tls`]): TLS on the
+    /// API's port, and plain HTTP there only from this host (from anywhere
+    /// else it is sent to `https://`, never served). `None`: plain HTTP
+    /// for everyone, as [`Api::start_box`].
+    ///
+    /// # Errors
+    /// The bind fails.
+    pub fn start_secure(
+        cfg: Config,
+        mut shared: Shared,
+        extras: Extras,
+        site: Option<crate::site::Handle>,
+        more: More,
+        tls: Option<Tls>,
+    ) -> io::Result<Self> {
+        let Extras { ui, trust } = extras;
         let More { projects, forces } = more;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
@@ -540,8 +538,6 @@ impl Api {
             stop: Arc::clone(&stop),
             streams: AtomicUsize::new(0),
             ui,
-            screen_layout: screen.as_ref().map(|s| s.layout.clone()),
-            screen: screen.map(|s| screen_json(&s)),
             trust,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
@@ -549,6 +545,7 @@ impl Api {
             mcp: Mutex::new(mcp::Workspace::default()),
             projects,
             forces,
+            tls,
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
         let thread = thread::Builder::new()
@@ -588,7 +585,7 @@ fn accept(listener: &TcpListener, ctx: &Arc<Ctx>) {
             forces::sweep(ctx);
             swept = Instant::now();
         }
-        let (mut stream, _) = match listener.accept() {
+        let (stream, peer) = match listener.accept() {
             Ok(s) => s,
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(5));
@@ -606,15 +603,19 @@ fn accept(listener: &TcpListener, ctx: &Arc<Ctx>) {
         }
         let limits = ctx.cfg.limits;
         if workers.load(Ordering::Acquire) >= limits.workers {
-            let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
-            let _ = http::respond(&mut stream, &Response::error(503, "busy; try again"));
+            // Over HTTPS the client may be mid-handshake: a plain 503 would
+            // be noise to it, and a handshake here would stall accepting.
+            if !ctx.serves_tls() {
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(100)));
+                let _ = http::respond(&mut Conn::Plain(stream), &Response::error(503, "busy; try again"));
+            }
             continue;
         }
         workers.fetch_add(1, Ordering::AcqRel);
         let (ctx, n) = (Arc::clone(ctx), Arc::clone(&workers));
         let spawned = thread::Builder::new().name("api-conn".into()).spawn(move || {
             let _slot = Slot(&n);
-            serve(stream, &ctx, accepted);
+            serve(stream, peer, &ctx, accepted);
         });
         if spawned.is_err() {
             workers.fetch_sub(1, Ordering::AcqRel);
@@ -655,13 +656,120 @@ enum Reply {
     File(ui::Asset),
 }
 
-fn serve(mut stream: TcpStream, ctx: &Ctx, accepted: Instant) {
+/// How a connection is served, once its first byte is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Channel {
+    /// TLS (the box's HTTPS), or plain HTTP on a box without it.
+    Served,
+    /// Plain HTTP to a box that serves HTTPS, from another host: told
+    /// where the HTTPS is, never served.
+    Redirected,
+}
+
+impl Ctx {
+    /// Whether the box serves HTTPS.
+    fn serves_tls(&self) -> bool {
+        self.tls.is_some()
+    }
+
+    /// Its certificate's fingerprint, when it does.
+    fn fingerprint(&self) -> Option<&str> {
+        self.tls.as_ref().map(Tls::fingerprint)
+    }
+}
+
+/// Whether `peer` is this host: loopback, or the address it reached us
+/// on (the box's own agent calls its API that way when bound to one IP).
+#[cfg(feature = "https")]
+fn this_host(stream: &TcpStream, peer: SocketAddr) -> bool {
+    peer.ip().is_loopback() || stream.local_addr().is_ok_and(|me| me.ip() == peer.ip())
+}
+
+/// The connection as the box serves it: on a box with HTTPS, a TLS
+/// handshake (`0x16`, a TLS record carrying a handshake, RFC 8446 5.1)
+/// is served as TLS; plain HTTP from this host is served as ever (local
+/// tools, scripts, an SSH tunnel), and from anywhere else only redirected.
+/// `None`: the client sent nothing before the deadline, or went away.
+fn open(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, deadline: Instant) -> Option<(Conn, Channel)> {
+    #[cfg(feature = "https")]
+    if let Some(tls) = &ctx.tls {
+        let mut first = [0u8; 1];
+        loop {
+            let left = deadline
+                .checked_duration_since(Instant::now())
+                .filter(|d| !d.is_zero())?;
+            stream
+                .set_read_timeout(Some(left.min(Duration::from_millis(250))))
+                .ok()?;
+            match stream.peek(&mut first) {
+                Ok(0) => return None,
+                Ok(_) => break,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => return None,
+            }
+        }
+        if first[0] == 0x16 {
+            let conn = rustls::ServerConnection::new(Arc::clone(&tls.config)).ok()?;
+            let tls = Conn::Tls(Box::new(rustls::StreamOwned::new(conn, stream)));
+            return Some((tls, Channel::Served));
+        }
+        let channel = if this_host(&stream, peer) {
+            Channel::Served
+        } else {
+            Channel::Redirected
+        };
+        return Some((Conn::Plain(stream), channel));
+    }
+    let _ = (peer, ctx, deadline);
+    Some((Conn::Plain(stream), Channel::Served))
+}
+
+/// What plain HTTP from another host gets from a box serving HTTPS: a
+/// `GET` or `HEAD` is sent to the same path over `https://` on the Host
+/// it asked for (when that is a plain host name or address), anything
+/// else is refused, so nothing is served, and nothing changed, in clear.
+fn to_https(req: &Request) -> Response {
+    let mut hosts = req.header("host");
+    let host = match (hosts.next(), hosts.next()) {
+        (Some(h), None)
+            if !h.is_empty()
+                && h.len() <= 260
+                && h.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']')) =>
+        {
+            Some(h)
+        }
+        _ => None,
+    };
+    let why = "this box serves its API and page over HTTPS: use https://";
+    match host {
+        Some(h) if req.method == "GET" || req.method == "HEAD" => {
+            Response::error(301, why).with("Location", format!("https://{h}{}", req.path))
+        }
+        _ => Response::error(403, why),
+    }
+}
+
+fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
     let limits = ctx.cfg.limits;
     if stream.set_write_timeout(Some(limits.write_timeout)).is_err() {
         return;
     }
+    let Some((mut stream, channel)) = open(stream, peer, ctx, accepted + limits.deadline) else {
+        return;
+    };
     let reply = match http::read_request(&mut stream, &limits, accepted) {
-        Ok(mut req) => handle(&mut req, ctx),
+        Ok(req) if channel == Channel::Redirected => Reply::Once(to_https(&req)),
+        Ok(mut req) => {
+            req.tls = stream.is_tls();
+            handle(&mut req, ctx)
+        }
+        // A TLS client that never finished its handshake gets nothing.
+        Err(_) if stream.handshaking() => return,
         Err(http::ReadError::Status(code, why)) => Reply::Once(Response::error(code, why)),
         Err(http::ReadError::Closed) => return,
     };
@@ -718,9 +826,16 @@ fn secret(key: &str) -> bool {
 
 /// `GET /api/policy`: the policy, and what approvals take on this box now
 /// (`accounts`: a login session; `pins`: a role PIN; `unavailable`: an
-/// accounts file that cannot be used).
-fn policy_json(a: &Approval) -> Json {
+/// accounts file that cannot be used), and `transport`: whether the box
+/// serves HTTPS and its certificate's SHA-256 fingerprint.
+fn policy_json(a: &Approval, ctx: &Ctx) -> Json {
     let mut j = approve::policy_json(&a.policy);
+    // How the page reached the box: HTTPS, and the certificate's fingerprint
+    // for a person to compare with what the browser shows (`box-https`).
+    j["transport"] = json!({
+        "https": ctx.serves_tls(),
+        "fingerprint": ctx.fingerprint(),
+    });
     j["credentials"] = json!(match a.gate.logins().map(Logins::mode) {
         None | Some(Mode::Pins) => "pins",
         Some(Mode::Accounts(_)) => "accounts",
@@ -1100,7 +1215,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | [
             "api",
             "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
-            | "session" | "screen" | "site" | "io_map",
+            | "session" | "site" | "io_map",
         ]
         | [
             "api",
@@ -1453,13 +1568,9 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "forces"] => forces::get(ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
-        ["api", "screen"] => match &ctx.screen {
-            Some(j) => Response::json(200, j),
-            None => Response::error(404, "no floor screen on this box (--screen FILE)"),
-        },
         ["api", "site"] => site_route(ctx, c, &view),
         ["api", "policy"] => match &ctx.approval {
-            Some(a) => Response::json(200, &policy_json(a)),
+            Some(a) => Response::json(200, &policy_json(a, ctx)),
             None => Response::error(404, "no approval path on this box"),
         },
         ["api", "session"] => login::whoami(req, ctx),
@@ -1543,7 +1654,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/io_map", false, "the running I/O map file and its snapshot id"),
             e("GET", "/api/proposals", false, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", false, "one proposal"),
-            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, {kind: io_map|calendar, text}, or {kind: driver, name, wasm (base64)}: a WASM driver the map names as wasm:NAME"),
+            e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, {kind: io_map|calendar, text}, or {kind: driver, name, wasm (base64)}: a WASM driver the map names as wasm:NAME; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
@@ -1561,7 +1672,7 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: as apply, checked against the policy"),
             e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
-            e("GET", "/api/policy", false, "the approval policy this box enforces"),
+            e("GET", "/api/policy", false, "the approval policy this box enforces, and its transport: https and the certificate's SHA-256 fingerprint"),
             e("GET", "/api/events", false, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
@@ -1571,7 +1682,6 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", false, "a PLC drop-in's inventory: overview, tags, routine, names"),
             e("POST", "/api/devices/{name}/browse", true, "an observed Logix controller's tag list, read-only"),
             e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
-            e("GET", "/api/screen", false, "the floor screen's layout: tiles, state codes, colours (with --screen)"),
             e("GET", "/api/site", false, "this box's status and the boxes it heard on the LAN (with --site); readable from other origins"),
             e("GET", "/api/projects", false, "the editor's projects (with --projects) and which one runs"),
             e("POST", "/api/projects", true, "engineer session: {name} a new empty project, or {name, from} a copy"),
@@ -1739,7 +1849,7 @@ fn latest_trace(ctx: &Ctx, k: usize) -> Option<Rendered> {
     traces.get(&m.name).cloned()
 }
 
-fn event(stream: &mut TcpStream, name: &str, data: &Json) -> io::Result<()> {
+fn event(stream: &mut Conn, name: &str, data: &Json) -> io::Result<()> {
     let body = serde_json::to_string(data).unwrap_or_default();
     write!(stream, "event: {name}\ndata: {body}\n\n")?;
     stream.flush()
@@ -1748,7 +1858,7 @@ fn event(stream: &mut TcpStream, name: &str, data: &Json) -> io::Result<()> {
 /// Streams until the client goes, a write stalls past the write timeout,
 /// or the API stops. `next` yields what to send, if anything is new.
 fn pump(
-    stream: &mut TcpStream,
+    stream: &mut Conn,
     ctx: &Ctx,
     mut next: impl FnMut() -> Option<(&'static str, Json)>,
 ) -> io::Result<()> {
@@ -1757,7 +1867,7 @@ fn pump(
 
 /// [`pump`], sending every event `next` yields at once.
 fn pump_many(
-    stream: &mut TcpStream,
+    stream: &mut Conn,
     ctx: &Ctx,
     mut next: impl FnMut() -> Vec<(&'static str, Json)>,
 ) -> io::Result<()> {
@@ -1782,7 +1892,7 @@ fn pump_many(
     Ok(())
 }
 
-fn value_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
+fn value_stream(stream: &mut Conn, ctx: &Ctx) -> io::Result<()> {
     let mut last = None;
     let mut agent = None;
     pump(stream, ctx, || {
@@ -1813,7 +1923,7 @@ fn value_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
     })
 }
 
-fn trace_stream(stream: &mut TcpStream, ctx: &Ctx, k: usize) -> io::Result<()> {
+fn trace_stream(stream: &mut Conn, ctx: &Ctx, k: usize) -> io::Result<()> {
     let mut last = None;
     pump(stream, ctx, || {
         let (scan, j) = latest_trace(ctx, k)?;
@@ -1829,7 +1939,7 @@ fn trace_stream(stream: &mut TcpStream, ctx: &Ctx, k: usize) -> io::Result<()> {
 /// lands (the same `trace` events as a module's own stream): a screen
 /// watching every program holds one stream slot, not one per module.
 /// Modules come and go with deploys; each is followed by name.
-fn all_traces_stream(stream: &mut TcpStream, ctx: &Ctx) -> io::Result<()> {
+fn all_traces_stream(stream: &mut Conn, ctx: &Ctx) -> io::Result<()> {
     let mut last: BTreeMap<String, u64> = BTreeMap::new();
     pump_many(stream, ctx, || {
         let names: Vec<String> = ctx.catalog().modules.iter().map(|m| m.name.clone()).collect();
@@ -1857,4 +1967,43 @@ fn with_forces(ctx: &Ctx, trace: &Json) -> Json {
         j["forces"] = forces::list(ctx);
     }
     j
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(head: &str) -> Request {
+        http::parse_head(head.as_bytes(), &Limits::default()).unwrap().0
+    }
+
+    fn location(r: &Response) -> Option<&str> {
+        r.headers
+            .iter()
+            .find(|(n, _)| *n == "Location")
+            .map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn plain_http_from_the_lan_is_sent_to_https_and_never_served() {
+        let r = to_https(&req("GET /api/modules?x=1 HTTP/1.1\r\nHost: box-1:8080"));
+        assert_eq!(r.status, 301);
+        assert_eq!(location(&r), Some("https://box-1:8080/api/modules"), "{r:?}");
+        let r = to_https(&req("HEAD / HTTP/1.1\r\nHost: [fe80::1]:8080"));
+        assert_eq!(location(&r), Some("https://[fe80::1]:8080/"), "{r:?}");
+        // A change is refused, not redirected: nothing happens in clear.
+        for m in ["POST", "PUT", "DELETE"] {
+            let r = to_https(&req(&format!("{m} /api/proposals HTTP/1.1\r\nHost: box")));
+            assert_eq!((r.status, location(&r)), (403, None), "{m}");
+        }
+        // A Host that is not a plain name or address gets no Location.
+        for host in ["", "evil.example/x", "box@evil", "box%0d%0a"] {
+            let r = to_https(&req(&format!("GET / HTTP/1.1\r\nHost: {host}")));
+            assert_eq!((r.status, location(&r)), (403, None), "{host:?}");
+        }
+        let r = to_https(&req("GET / HTTP/1.1\r\nHost: a\r\nHost: b"));
+        assert_eq!(r.status, 403, "two Hosts");
+        let r = to_https(&req("GET / HTTP/1.1"));
+        assert_eq!(r.status, 403, "no Host");
+    }
 }

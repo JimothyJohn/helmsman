@@ -2248,6 +2248,82 @@ fn a_refusal_that_is_not_about_the_pdf_drops_nothing() {
     assert!(!texts(&seen, 3).contains("refused"));
 }
 
+/// A PDF the relay refused stays in the conversation's proposal binding,
+/// marked refused (`refused-dropin-binding`): a proposal drafted later in
+/// that chat cites it in `dropins` and lists it in `refused_dropins`,
+/// while a photo the model did see is cited unmarked.
+#[test]
+fn a_refused_pdf_is_still_cited_by_later_proposals_marked_refused() {
+    let mut script = vec![refused(
+        400,
+        "invalid_request",
+        "messages[0].content[1]: encrypted or password-protected PDFs are not supported",
+    )];
+    script.extend(sketch_script().into_iter().skip(1));
+    let relay = FakeRelay::start(script);
+    let b = Bench::new(with_relay(&relay));
+    let (s, j) = upload_bytes(&b, "?name=locked.pdf", "application/pdf", &small_pdf());
+    assert_eq!(s, 201, "{j}");
+    let pdf = j["id"].as_u64().unwrap();
+    let (s, j) = upload_bytes(&b, "?name=sketch.jpg", "image/jpeg", JPEG_3X2);
+    assert_eq!(s, 201, "{j}");
+    let photo = j["id"].as_u64().unwrap();
+
+    let evs = b.say_with("Turn this SOP into a module", &[pdf]);
+    assert_eq!(last(&evs, "error")["kind"], "document_refused", "{evs:?}");
+    let (s, evs) = b.chat(&json!({
+        "message": "Use this sketch instead", "dropins": [photo], "session": session(&evs),
+    }));
+    assert_eq!(s, 200, "{evs:?}");
+    assert_eq!(last(&evs, "done")["stop"], "end_turn", "{evs:?}");
+    let evs = b.say("Flash it. Propose.", Some(&session(&evs)));
+    assert_eq!(last(&evs, "done")["proposals"], json!([1]), "{evs:?}");
+    let p = b.get("/api/proposals/1");
+    assert_eq!(p["dropins"], json!([pdf, photo]), "both cited: {p}");
+    assert_eq!(p["refused_dropins"], json!([pdf]), "only the PDF marked: {p}");
+
+    // The box keeps the mark straight whatever a caller sends: sorted, once
+    // each, and only for a drop-in the proposal cites.
+    let param = |dropins: Json, refused: Json| {
+        json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 2.0,
+                "dropins": dropins, "refused_dropins": refused })
+    };
+    let (s, j) = b.call(
+        "POST",
+        "/api/proposals",
+        Some(TOKEN),
+        Some(&param(json!([photo, pdf]), json!([pdf, pdf]))),
+    );
+    assert_eq!(s, 201, "{j}");
+    assert_eq!(j["refused_dropins"], json!([pdf]), "{j}");
+    let id = j["id"].as_u64().unwrap();
+    assert_eq!(
+        b.get(&format!("/api/proposals/{id}"))["refused_dropins"],
+        json!([pdf])
+    );
+    for (dropins, refused) in [
+        (json!([photo]), json!([pdf])),
+        (json!([]), json!([pdf])),
+        (Json::Null, json!([photo])),
+    ] {
+        let body = param(dropins, refused);
+        let (s, j) = b.call("POST", "/api/proposals", Some(TOKEN), Some(&body));
+        assert_eq!(s, 400, "{body}: {j}");
+        assert!(j["error"].as_str().unwrap().contains("subset"), "{j}");
+        let (s, _) = b.call("POST", "/api/proposals/check", Some(TOKEN), Some(&body));
+        assert_eq!(s, 400, "{body}");
+    }
+    // Without the field, nothing is marked.
+    let (s, j) = b.call(
+        "POST",
+        "/api/proposals",
+        Some(TOKEN),
+        Some(&json!({ "kind": "param", "module": "conveyor", "param": "speed", "value": 2.0, "dropins": [photo] })),
+    );
+    assert_eq!(s, 201, "{j}");
+    assert_eq!(j["refused_dropins"], json!([]), "{j}");
+}
+
 // --------------------------------------------- P&ID / electrical drawings
 
 /// The map a model would draw from a P&ID of line 3: the running map

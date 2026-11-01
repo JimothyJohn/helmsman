@@ -185,6 +185,24 @@ mod chrome {
     }
 
     #[test]
+    fn the_menu_shows_the_boxs_https_fingerprint_when_it_has_one() {
+        let mut h = Harness::new(App::boxed());
+        h.press("menu");
+        assert!(!h.has("tls fingerprint"), "not before the policy says");
+        let fp = "AB:".repeat(31) + "AB";
+        h.app.review.as_mut().unwrap().state.policy =
+            Some(serde_json::json!({ "transport": { "https": true, "fingerprint": fp } }));
+        h.frame(vec![]);
+        assert!(h.has("tls fingerprint"));
+        assert_eq!(h.menu_items(), ["menu editor", "menu proposals", "menu sim"]);
+        // Plain HTTP (--https off): nothing to show.
+        h.app.review.as_mut().unwrap().state.policy =
+            Some(serde_json::json!({ "transport": { "https": false, "fingerprint": null } }));
+        h.frame(vec![]);
+        assert!(!h.has("tls fingerprint"));
+    }
+
+    #[test]
     fn the_source_is_a_setting_in_the_menu_on_a_box_and_absent_without_one() {
         let mut h = Harness::new(App::boxed());
         h.press("menu");
@@ -195,8 +213,8 @@ mod chrome {
         h.press("menu");
         assert_eq!(
             h.menu_items(),
-            ["menu box", "menu editor"],
-            "no proposals without a box"
+            ["menu box", "menu download", "menu editor", "menu upload"],
+            "no proposals without a box; the simulation's projects upload and download"
         );
         h.press("menu box");
         assert_eq!(h.app.source, Source::Box);
@@ -204,7 +222,7 @@ mod chrome {
         // The public page: no box to go back to, no proposals.
         let mut h = Harness::new(App::sim());
         h.press("menu");
-        assert_eq!(h.menu_items(), ["menu editor"]);
+        assert_eq!(h.menu_items(), ["menu download", "menu editor", "menu upload"]);
         h.app.screen = Screen::Proposals;
         h.frame(vec![]);
         assert_eq!(h.app.screen, Screen::Editor, "proposals need a box");
@@ -216,8 +234,12 @@ mod chrome {
         // Every control the app draws, on every screen and source, with the
         // menu open: nothing leads to Lab, Site, Demo, Andon or Playground.
         let mut seen = Vec::new();
-        for (app, proposals) in [(App::sim(), false), (App::boxed(), false), (App::boxed(), true)] {
-            let mut h = Harness::new(app);
+        for (make, proposals) in [
+            (App::sim as fn() -> App, false),
+            (App::boxed, false),
+            (App::boxed, true),
+        ] {
+            let mut h = Harness::new(make());
             if proposals {
                 h.app.screen = Screen::Proposals;
             }

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use helmsman_iec::{FaultKind, Image, ImageSizes, Program, Value, compile};
+use helmsman_iec::{BadParam, Fault, FaultKind, Image, ImageSizes, Program, Value, compile};
 use proptest::prelude::*;
 
 const SIZES: ImageSizes = ImageSizes { i: 32, q: 32, m: 64 };
@@ -662,12 +662,19 @@ impl Light {
         }
     }
 
-    /// One scan at `ns` on the scan clock with these inputs; Q after it.
-    fn at_ns(&mut self, ns: u64, en: bool, mode: i32) -> bool {
+    /// One scan at `ns` on the scan clock with these inputs; Q after it,
+    /// or the scan's fault.
+    fn try_at_ns(&mut self, ns: u64, en: bool, mode: i32) -> Result<bool, Fault> {
         self.img.i[0] = (self.img.i[0] & !1) | u8::from(en);
         self.img.i[1] = u8::try_from(mode + 2).unwrap();
-        self.p.scan_at(&mut self.img, Duration::from_nanos(ns)).unwrap();
-        boolean(&self.p, "b.Q")
+        self.p.scan_at(&mut self.img, Duration::from_nanos(ns))?;
+        Ok(boolean(&self.p, "b.Q"))
+    }
+
+    /// [`Light::try_at_ns`] for a scan that must not fault.
+    fn at_ns(&mut self, ns: u64, en: bool, mode: i32) -> bool {
+        self.try_at_ns(ns, en, mode)
+            .unwrap_or_else(|f| panic!("{ns} ns en {en} mode {mode}: {f}"))
     }
 
     fn at(&mut self, ms: u64, en: bool, mode: i32) -> bool {
@@ -680,33 +687,57 @@ fn period_ms(ms: i64) -> String {
     format!("T#{ms}ms")
 }
 
+/// Whether `mode` with a PERIOD of `period` ns faults: a blinking mode
+/// whose step (half a cycle, an eighth for double flash) is not above 0.
+/// TIME / n rounds to the nearest nanosecond, half away from zero, so
+/// 2 ns of fast blink is a 1 ns cycle with 1 ns steps.
+fn blink_faults(en: bool, mode: i32, period: i64) -> bool {
+    if !en || !(SLOW..=DOUBLE).contains(&mode) {
+        return false;
+    }
+    let div = |t: i64, n: i64| if t <= 0 { t / n } else { (t + n / 2) / n };
+    let cycle = if mode == FAST { div(period, 4) } else { period };
+    let step = if mode == DOUBLE {
+        div(cycle, 8)
+    } else {
+        div(cycle, 2)
+    };
+    step <= 0
+}
+
 /// `BLINK_PATTERN` by its definition, for a fixed PERIOD of `period` ns:
-/// Q at `now`, with `run` the pattern's start and mode while it blinks.
-fn blink_def(en: bool, mode: i32, period: i64, now: i64, run: &mut Option<(i64, i32)>) -> bool {
+/// Q at `now`, with `run` the pattern's start and mode while it blinks;
+/// `None` where the block faults ([`blink_faults`]).
+fn blink_def(en: bool, mode: i32, period: i64, now: i64, run: &mut Option<(i64, i32)>) -> Option<bool> {
+    if blink_faults(en, mode, period) {
+        return None;
+    }
     if !en || !(STEADY..=DOUBLE).contains(&mode) {
         *run = None;
-        return false;
+        return Some(false);
     }
     if mode == STEADY {
         *run = None;
-        return true;
+        return Some(true);
     }
     let cycle = if mode == FAST { period / 4 } else { period };
     let step = if mode == DOUBLE { cycle / 8 } else { cycle / 2 };
-    if step <= 0 {
-        *run = None;
-        return true;
-    }
     if run.is_none_or(|(_, m)| m != mode) {
         *run = Some((now, mode));
     }
     let phase = (now - run.unwrap().0) % cycle;
-    if mode == DOUBLE {
+    Some(if mode == DOUBLE {
         phase < step || (2 * step..3 * step).contains(&phase)
     } else {
         phase < step
-    }
+    })
 }
+
+/// The fault an unusable PERIOD raises, at the line of `Light`'s call.
+const BAD_PERIOD: Fault = Fault {
+    kind: FaultKind::BadParam(BadParam::BlinkPeriod),
+    line: 3,
+};
 
 proptest! {
     /// Against its definition, scan by scan: EN, MODE (in range and out)
@@ -721,17 +752,25 @@ proptest! {
         let (mut now, mut run) = (0u64, None);
         for (en, mode, dt) in steps {
             now += dt;
-            let q = l.at(now, en, mode);
+            let q = l.try_at_ns(now * NS_PER_MS, en, mode);
             let want = blink_def(en, mode, period * 1_000_000, i64::try_from(now * NS_PER_MS).unwrap(), &mut run);
-            prop_assert_eq!(q, want, "now {}ms en {} mode {} period {}ms", now, en, mode, period);
+            if let Some(want) = want {
+                prop_assert_eq!(q, Ok(want), "now {}ms en {} mode {} period {}ms", now, en, mode, period);
+            } else {
+                // A faulted module is stopped and cold-started.
+                prop_assert_eq!(q, Err(BAD_PERIOD), "now {}ms mode {} period {}ms", now, mode, period);
+                l.p.reset();
+                run = None;
+            }
         }
     }
 
-    /// Any PERIOD to the nanosecond, any gap: the block never faults (no
-    /// division by zero, no runaway), EN FALSE is always off, steady always
-    /// on, and a blinking mode without a usable PERIOD is steady on.
+    /// Any PERIOD to the nanosecond, any gap: the block faults only with
+    /// BadParam, only in a blinking mode with EN and an unusable PERIOD
+    /// (never a division by zero or a runaway); EN FALSE is always off and
+    /// steady always on, whatever PERIOD is.
     #[test]
-    fn blink_pattern_never_faults_and_keeps_its_safe_rules(
+    fn blink_pattern_faults_only_on_an_unusable_period_and_keeps_its_safe_rules(
         steps in proptest::collection::vec((any::<bool>(), -2i32..7, 0u64..(1 << 50)), 1..60),
         period in prop_oneof![-(1i64 << 60)..(1i64 << 60), -10i64..10],
     ) {
@@ -739,11 +778,16 @@ proptest! {
         let mut now = 0u64;
         for (en, mode, dt) in steps {
             now += dt;
-            let q = l.at_ns(now, en, mode);
-            if !en || !(STEADY..=DOUBLE).contains(&mode) {
-                prop_assert!(!q);
-            } else if mode == STEADY || (period <= 0) {
-                prop_assert!(q);
+            let q = l.try_at_ns(now, en, mode);
+            if blink_faults(en, mode, period) {
+                prop_assert_eq!(q, Err(BAD_PERIOD));
+                l.p.reset();
+            } else if !en || !(STEADY..=DOUBLE).contains(&mode) {
+                prop_assert_eq!(q, Ok(false));
+            } else if mode == STEADY {
+                prop_assert_eq!(q, Ok(true));
+            } else {
+                prop_assert!(q.is_ok(), "{:?}", q);
             }
         }
     }
@@ -838,24 +882,67 @@ fn blink_pattern_restarts_on_a_mode_change_or_a_rising_en() {
 }
 
 #[test]
-fn blink_pattern_with_no_usable_period_is_steady_on() {
-    // PERIOD 0 or negative: every blinking mode is steady on, scan after
-    // scan, and the off modes stay off.
+fn blink_pattern_with_no_usable_period_faults_the_module() {
+    // PERIOD 0 or negative: every blinking mode faults, on its first scan
+    // and after a cold restart, at the line that called the block, saying
+    // which block and which parameter. Off, steady and EN FALSE don't.
     for period in ["T#0s", "T#-1s", "T#-1ns"] {
+        for mode in [SLOW, FAST, DOUBLE] {
+            let mut l = Light::new(period);
+            for ms in [0, 7, 10_000] {
+                let f = l.try_at_ns(ms * NS_PER_MS, true, mode).unwrap_err();
+                assert_eq!(f, BAD_PERIOD, "{period} mode {mode} at {ms}");
+                assert_eq!(
+                    f.to_string(),
+                    "line 3: BLINK_PATTERN: PERIOD is 0, negative or too short to blink \
+                     (MODE 2, 3 or 4 needs a PERIOD above 0)"
+                );
+                l.p.reset();
+            }
+        }
         let mut l = Light::new(period);
         for ms in [0, 1, 7, 500, 10_000] {
-            for mode in [SLOW, FAST, DOUBLE, STEADY] {
-                assert!(l.at(ms, true, mode), "{period} mode {mode} at {ms}");
-            }
+            assert!(l.at(ms, true, STEADY), "{period}");
             assert!(!l.at(ms, true, OFF), "{period}");
-            assert!(!l.at(ms, false, SLOW), "{period}");
+            assert!(!l.at(ms, false, SLOW), "{period}: EN FALSE never looks at PERIOD");
+            assert!(!l.at(ms, true, 7), "{period}: an unknown MODE is off");
         }
     }
-    // Too short to divide into its steps is the same: 3 ns has no eighth (it rounds to 0).
+    // Too short to divide into its steps is the same: 3 ns has no eighth
+    // (it rounds to 0), though it has a half.
     let mut l = Light::new("T#3ns");
-    for ns in [0, 1, 3, 5, 100] {
-        assert!(l.at_ns(ns, true, DOUBLE), "{ns}");
-    }
+    assert_eq!(l.try_at_ns(0, true, DOUBLE), Err(BAD_PERIOD));
+    let mut l = Light::new("T#3ns");
+    assert!(l.at_ns(0, true, SLOW));
+    // A blinking light whose PERIOD goes bad mid-run faults then.
+    let mut l = Light::new("SEL(alt, T#1s, T#0s)");
+    assert!(l.at(0, true, SLOW));
+    assert!(!l.at(600, true, SLOW));
+    l.img.i[0] |= 2;
+    assert_eq!(l.try_at_ns(700 * NS_PER_MS, true, SLOW), Err(BAD_PERIOD));
+}
+
+#[test]
+fn a_library_fault_is_reported_at_the_users_line_and_users_cannot_raise_one() {
+    // Inside a user function block, the line is that block's call of the
+    // library block, in the user's source.
+    let mut p = build(
+        "FUNCTION_BLOCK lamp
+           VAR_INPUT p : TIME; END_VAR
+           VAR b : BLINK_PATTERN; END_VAR
+           b(EN := TRUE, MODE := 3, PERIOD := p);
+         END_FUNCTION_BLOCK
+         PROGRAM t
+           VAR l : lamp; END_VAR
+           l(p := T#0s);
+         END_PROGRAM",
+    );
+    let f = p.scan_at(&mut Image::new(SIZES), Duration::ZERO).unwrap_err();
+    assert_eq!(f.kind, FaultKind::BadParam(BadParam::BlinkPeriod));
+    assert_eq!(f.line, 4, "{f}");
+    // The fault builtin is the library's: '__' names are refused in user code.
+    let e = errors("PROGRAM t VAR q : BOOL; END_VAR q := __BAD_BLINK_PERIOD(); END_PROGRAM");
+    assert!(e.contains("'__' is not allowed"), "{e}");
 }
 
 #[test]

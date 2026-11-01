@@ -13,9 +13,10 @@
 //!   SameSite=Strict; Path=/api; Max-Age=<session life>`, and never in
 //!   the body, so no script on the page can read it. A login over a
 //!   cookie the browser already has ends that session first (the session
-//!   is rotated, never reused). There is no `Secure` flag: boxes serve
-//!   plain HTTP on the LAN, where a browser would drop a `Secure` cookie;
-//!   it goes on the day the box serves TLS.
+//!   is rotated, never reused). Over the box's HTTPS it is also `Secure`;
+//!   plain HTTP is served only from the box's own host then (an SSH
+//!   tunnel, a local browser), where it is not. The same-origin proof
+//!   compares the Origin with the scheme the request came over.
 //! - **Anything else** (scripts, the CLI): as `token` in the body, sent
 //!   back as `Authorization: Bearer`, as before.
 //!
@@ -126,7 +127,7 @@ pub(super) fn same_origin(req: &Request) -> Result<(), &'static str> {
     let Some(host) = one(req, "host").filter(|h| !h.is_empty()) else {
         return Err("a browser session needs exactly one Host header");
     };
-    let me = format!("http://{host}");
+    let me = format!("{}://{host}", if req.tls { "https" } else { "http" });
     let origins: Vec<&str> = req.header("origin").collect();
     match origins.as_slice() {
         [o] if o.eq_ignore_ascii_case(&me) => Ok(()),
@@ -150,6 +151,13 @@ pub(super) fn same_origin(req: &Request) -> Result<(), &'static str> {
 #[must_use]
 pub fn set_cookie(token: &str, max_age_s: u64) -> String {
     format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/api; Max-Age={max_age_s}")
+}
+
+/// `cookie` with `Secure` when `req` came over the box's HTTPS, so the
+/// browser never sends it back in clear (`box-https`). Over plain HTTP
+/// (this host only, on a box with HTTPS) it stays as it was.
+fn secure(req: &Request, cookie: String) -> String {
+    if req.tls { cookie + "; Secure" } else { cookie }
 }
 
 /// `Set-Cookie` that makes the browser drop the session cookie.
@@ -177,7 +185,7 @@ pub(super) fn by_cookie(req: &mut Request, ctx: &Ctx) -> Result<(), Response> {
         log(why);
         return Err(Response::error(403, why));
     }
-    let gone = |why: &str| Response::error(401, why).with("Set-Cookie", clear_cookie());
+    let gone = |why: &str| Response::error(401, why).with("Set-Cookie", secure(req, clear_cookie()));
     let [token] = req.cookies.as_slice() else {
         log("more than one");
         return Err(gone("more than one session cookie; sign in again"));
@@ -270,7 +278,10 @@ pub(super) fn login(req: &Request, ctx: &Ctx) -> Response {
     body["cookie"] = json!(true);
     Response::json(200, &body)
         .with("Cache-Control", "no-store".into())
-        .with("Set-Cookie", set_cookie(&issued.token, issued.ttl.as_secs()))
+        .with(
+            "Set-Cookie",
+            secure(req, set_cookie(&issued.token, issued.ttl.as_secs())),
+        )
 }
 
 const fn credential_name(who: &Principal) -> &'static str {
@@ -442,7 +453,7 @@ pub(super) fn logout(req: &Request, ctx: &Ctx) -> Response {
     // That session's forces end with it.
     super::forces::sweep(ctx);
     if req.by_cookie {
-        r.with("Set-Cookie", clear_cookie())
+        r.with("Set-Cookie", secure(req, clear_cookie()))
     } else {
         r
     }
@@ -463,7 +474,7 @@ pub(super) fn whoami(req: &Request, ctx: &Ctx) -> Response {
     let refused = |why: &str| {
         let r = Response::error(401, why);
         if cookie && !req.cookies.is_empty() {
-            r.with("Set-Cookie", clear_cookie())
+            r.with("Set-Cookie", secure(req, clear_cookie()))
         } else {
             r
         }
@@ -483,5 +494,42 @@ pub(super) fn whoami(req: &Request, ctx: &Ctx) -> Response {
             }),
         ),
         Err(e) => refused(refused_why(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::Limits;
+
+    fn req(origin: &str, tls: bool) -> Request {
+        let head = format!(
+            "POST /api/login HTTP/1.1\r\nHost: box:8080\r\nX-Helmsman-Request: 1\r\nOrigin: {origin}"
+        );
+        let mut r = super::super::http::parse_head(head.as_bytes(), &Limits::default())
+            .unwrap()
+            .0;
+        r.tls = tls;
+        r
+    }
+
+    #[test]
+    fn the_same_origin_proof_takes_the_scheme_the_request_came_over() {
+        assert!(same_origin(&req("https://box:8080", true)).is_ok());
+        assert!(same_origin(&req("http://box:8080", false)).is_ok());
+        // A page over plain HTTP cannot pass for the HTTPS one, nor back.
+        assert!(same_origin(&req("http://box:8080", true)).is_err());
+        assert!(same_origin(&req("https://box:8080", false)).is_err());
+    }
+
+    #[test]
+    fn a_cookie_over_tls_is_secure_and_over_plain_http_as_before() {
+        let c = set_cookie("t", 60);
+        assert_eq!(
+            secure(&req("https://box:8080", true), c.clone()),
+            format!("{c}; Secure")
+        );
+        assert_eq!(secure(&req("http://box:8080", false), c.clone()), c);
+        assert!(secure(&req("https://box:8080", true), clear_cookie()).ends_with("Max-Age=0; Secure"));
     }
 }

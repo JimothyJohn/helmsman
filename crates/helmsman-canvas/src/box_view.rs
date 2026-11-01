@@ -9,17 +9,23 @@
 //! else reads. The diagram is always what runs, live, and an engineer
 //! forces an input by clicking its block. On a box without projects the
 //! sidebar lists its modules and the ST is read-only, as before.
+//!
+//! The diagram's arrangement is the running project's shared default with
+//! this browser's tweaks on top (`arrange.rs`); an engineer saves it as
+//! the default.
 
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Vec2};
 use helmsman_diagram::Scan;
 use helmsman_iec::Value;
 use serde_json::json;
 
+use crate::arrange::{self, Layers};
 use crate::box_projects::{Answer, BoxProjects, Deploy, PCall, PReq};
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::projects::{self, Act, FilesUi, Listing, Workspace};
 use crate::remote::{BoxState, Cmd, Link, Msg, SignalRow};
 use crate::review::Session;
+use crate::sim_projects::Storage;
 use crate::st_view::brand::{BLACK, GRAPHITE, WARN};
 use crate::st_view::{Pick, Viewer, brand, show};
 
@@ -36,6 +42,8 @@ pub struct BoxView {
     /// before every frame.
     pub session: Option<Session>,
     pub view: Option<Viewer>,
+    /// The diagram's shared default and this browser's tweaks.
+    pub layers: Layers,
     /// The lowering the view was built from.
     generation: u64,
     /// Set when the operator, with the box out of reach, asks for the
@@ -79,12 +87,23 @@ pub fn is_engineer(s: Option<&Session>) -> Result<(), String> {
 impl BoxView {
     #[must_use]
     pub fn new() -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let tweaks: Box<dyn Storage> = Box::new(crate::web::LocalArrangements);
+        #[cfg(not(target_arch = "wasm32"))]
+        let tweaks: Box<dyn Storage> = Box::new(crate::sim_projects::MemStorage::default());
+        Self::with_tweaks(tweaks)
+    }
+
+    /// The Editor, with the diagram's personal layouts kept in `tweaks`.
+    #[must_use]
+    pub fn with_tweaks(tweaks: Box<dyn Storage>) -> Self {
         Self {
             state: BoxState::new(),
             projects: BoxProjects::new(),
             files_ui: FilesUi::default(),
             session: None,
             view: None,
+            layers: Layers::load(tweaks),
             generation: 0,
             wants_sim: false,
             last_pick: None,
@@ -128,28 +147,39 @@ impl BoxView {
         let reqs = self.projects.poll();
         self.send(ctx, reqs);
         self.downloads();
+        let mut fresh = false;
         match &self.state.lowered {
             Some(l) if l.generation != self.generation => {
                 self.generation = l.generation;
                 let mut v = Viewer::new(&l.src, l.module.clone());
                 // The same source again (refetched): keep what was being
-                // looked at, as arranged. A new version keeps the blocks
-                // the operator moved that are still there.
+                // looked at, as arranged. A new version is laid out from
+                // the layers (the moves so far kept as tweaks first).
                 // Opens with no path lit; the operator's pick survives a
                 // new version while its variable does.
                 if let Some(old) = self.view.take() {
+                    self.layers.track(&old);
                     if old.src == v.src {
                         v = old;
                     } else {
-                        v.arrange(&old.arrangement());
                         v.because = old.because.filter(|b| v.knows(b));
+                        fresh = true;
                     }
+                } else {
+                    fresh = true;
                 }
                 self.last_pick = v.pick;
                 self.view = Some(v);
             }
             None => self.view = None,
             Some(_) => {}
+        }
+        let key = self.layout_key();
+        if let Some(v) = &mut self.view {
+            if let Some(text) = self.projects.layout_saved.take() {
+                self.layers.adopt(v, &text);
+            }
+            self.layers.show(v, &key, self.projects.shared_layout(), fresh);
         }
         if let (Some(v), Some(p)) = (&mut self.view, &self.open_at) {
             if let Some(k) = v.scopes.iter().position(|s| s.prefix == *p) {
@@ -226,6 +256,41 @@ impl BoxView {
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
         editor::show(ui, chrome, self);
+    }
+
+    /// Whose personal layout the diagram shows: the running project's, or
+    /// on a box without one the modules'.
+    #[must_use]
+    pub fn layout_key(&self) -> String {
+        match &self.projects.running {
+            Some(p) => format!("box:{p}"),
+            None => "box-modules".into(),
+        }
+    }
+
+    /// Whether this page may save the arrangement as the shared default.
+    fn can_save_layout(&self) -> Result<(), String> {
+        is_engineer(self.session.as_ref())?;
+        if !self.has_projects() {
+            return Err("This box runs without projects (helmsman-plc --projects): there is no project to keep a default layout in.".into());
+        }
+        if self.projects.running.is_none() {
+            return Err("Deploy a project first: its default layout is kept with it.".into());
+        }
+        if self.projects.layout.is_none() {
+            return Err("Reading the project's default layout…".into());
+        }
+        Ok(())
+    }
+
+    /// Saves the diagram as it stands as the running project's default.
+    pub fn save_layout(&mut self) {
+        if self.can_save_layout().is_err() {
+            return;
+        }
+        if let Some(v) = &self.view {
+            self.projects.save_layout(v.arrangement().to_text());
+        }
     }
 
     /// The box runs with projects.
@@ -538,14 +603,9 @@ impl Body for BoxView {
                 ui.colored_label(RED, format!("fault: {f}"));
             }
         }
-        let moved = self.view.as_ref().is_some_and(Viewer::rearranged);
-        if ui
-            .add_enabled(moved, egui::Button::new("Reset layout"))
-            .on_hover_text("drag blocks, or an IF/CASE/loop by its label, to rearrange the diagram")
-            .clicked()
-            && let Some(v) = &mut self.view
-        {
-            v.reset_arrangement();
+        let can = self.can_save_layout();
+        if arrange::buttons(ui, chrome, &mut self.layers, self.view.as_mut(), can) {
+            self.save_layout();
         }
         match &self.projects.deploy {
             Deploy::Idle => {}
@@ -616,6 +676,7 @@ impl Body for BoxView {
                 files,
                 current: open.as_ref().and_then(|o| o.current.as_deref()),
                 write,
+                dirty: self.projects.dirty(),
             };
             let act = self.files_ui.show(ui, &listing, chrome);
             match act {

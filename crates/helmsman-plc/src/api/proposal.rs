@@ -48,6 +48,12 @@ pub struct New {
     /// on the proposal for the engineer.
     #[serde(default)]
     pub dropins: Option<Vec<u64>>,
+    /// Of `dropins`, the ones the relay refused (a PDF it would not
+    /// read): cited, but the model never saw them. Recorded on the
+    /// proposal as `refused_dropins` (`refused-dropin-binding`); each must
+    /// be one of `dropins`.
+    #[serde(default)]
+    pub refused_dropins: Option<Vec<u64>>,
 }
 
 /// Longest `note`, in characters.
@@ -72,6 +78,28 @@ fn note(n: Option<&str>) -> Result<Option<String>, Refusal> {
             &[],
         )),
         Some(n) => Ok(Some(n.to_string())),
+    }
+}
+
+/// The refused drop-ins `new` cites, sorted and once each: every one
+/// must be among its `dropins`.
+fn refused_dropins(new: &New) -> Result<Vec<u64>, Refusal> {
+    let cited = new.dropins.as_deref().unwrap_or_default();
+    let mut refused = new.refused_dropins.clone().unwrap_or_default();
+    refused.sort_unstable();
+    refused.dedup();
+    let stray: Vec<String> = refused
+        .iter()
+        .filter(|id| !cited.contains(id))
+        .map(|id| format!("drop-in {id} is marked refused but not among dropins"))
+        .collect();
+    if stray.is_empty() {
+        Ok(refused)
+    } else {
+        Err((
+            400,
+            json!({ "error": "refused_dropins must be a subset of dropins", "problems": stray }),
+        ))
     }
 }
 
@@ -123,6 +151,7 @@ pub fn check(
     p["note"] = json!(note);
     p["watch"] = json!(watch);
     p["dropins"] = json!(new.dropins.clone().unwrap_or_default());
+    p["refused_dropins"] = json!(refused_dropins(new)?);
     let cs = if let (Some(base), Some(edit)) = (running, edit) {
         let mut cs = base.clone();
         match edit {

@@ -27,13 +27,12 @@
 
 use std::fs::File;
 use std::io::{self, Read as _, Write as _};
-use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest as _, Sha256};
 
-use super::http::{Response, SECURITY};
+use super::http::{Conn, Response, SECURITY};
 
 /// Longest path segment, bytes.
 pub const MAX_SEGMENT: usize = 128;
@@ -273,7 +272,7 @@ fn base64(bytes: &[u8]) -> String {
 ///
 /// # Errors
 /// The socket's or the file's, or `TimedOut` past the deadline.
-pub fn send(stream: &mut TcpStream, mut asset: Asset) -> io::Result<()> {
+pub fn send(stream: &mut Conn, mut asset: Asset) -> io::Result<()> {
     let started = Instant::now();
     let csp = asset
         .csp
