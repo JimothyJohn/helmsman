@@ -89,6 +89,8 @@ pub struct Var {
     pub ty: String,
     /// Declared in a `VAR CONSTANT` section.
     pub constant: bool,
+    /// The source line of its declaration.
+    pub line: u32,
 }
 
 /// One POU of the module.
@@ -266,6 +268,7 @@ fn vars(p: &ast::Pou, fbs: &HashSet<String>) -> HashMap<String, Var> {
                     array,
                     ty: named,
                     constant: v.constant,
+                    line: v.pos.line,
                 },
             )
         })

@@ -122,6 +122,9 @@ pub struct Viewer {
     ran_at: std::collections::HashMap<(usize, u32), f64>,
     /// When each region (scope, id) was last seen taken, and how.
     taken_at: std::collections::HashMap<(usize, u32), (f64, Gate)>,
+    /// The variable (upper-cased head name in this scope) whose reads and
+    /// writes are lit instead of the "because" path: Cross references.
+    xref: Option<String>,
     /// Instances folded in the tree (their prefixes).
     folded: Vec<String>,
     /// How far the operator moved each block from where the layout put it,
@@ -290,9 +293,74 @@ impl Viewer {
             grab: None,
             ran_at: std::collections::HashMap::new(),
             taken_at: std::collections::HashMap::new(),
+            xref: None,
             folded: Vec::new(),
             moved,
             edits: 0,
+        }
+    }
+
+    /// The variable of this scope the picked block is about: the head of
+    /// a read, write or access path (`M` for `M.ON`, `A` for `A[I]`), or
+    /// a block instance's name. Upper-cased, as the POU's `vars` are.
+    #[must_use]
+    pub fn picked_var(&self) -> Option<String> {
+        let Some(Pick::Node(n)) = self.pick else {
+            return None;
+        };
+        let node = self.diagram().nodes.get(n.0 as usize)?;
+        let head = match &node.kind {
+            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
+                path.split(['.', '[']).next()?
+            }
+            NodeKind::Fb { instance, .. } => instance.as_str(),
+            _ => return None,
+        };
+        (!head.starts_with('%')).then(|| head.to_ascii_uppercase())
+    }
+
+    /// The source line where the picked block's variable is declared
+    /// (Go to definition).
+    #[must_use]
+    pub fn definition_line(&self) -> Option<u32> {
+        let head = self.picked_var()?;
+        let pou = self.module.pous.get(self.scopes[self.scope].pou)?;
+        pou.vars.get(&head).map(|v| v.line)
+    }
+
+    /// Lights every block that reads or writes the picked block's
+    /// variable, in place of the "because" path, until the next click
+    /// (Cross references). Whether there was a variable to show.
+    pub fn cross_references(&mut self) -> bool {
+        let Some(head) = self.picked_var() else {
+            return false;
+        };
+        self.xref = Some(head);
+        true
+    }
+
+    /// The reads and writes of `head` on this diagram, with the wires
+    /// between them.
+    fn references(&self, head: &str) -> Drivers {
+        let d = self.diagram();
+        let of = |n: &helmsman_diagram::Node| match &n.kind {
+            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => path
+                .split(['.', '['])
+                .next()
+                .is_some_and(|h| h.eq_ignore_ascii_case(head)),
+            NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
+            _ => false,
+        };
+        let nodes: Vec<bool> = d.nodes.iter().map(of).collect();
+        let wires = d
+            .wires
+            .iter()
+            .map(|w| nodes[w.from.0 as usize] && nodes[w.to.0 as usize])
+            .collect();
+        Drivers {
+            nodes,
+            wires,
+            regions: vec![false; d.regions.len()],
         }
     }
 
@@ -810,6 +878,8 @@ impl Viewer {
             self.pick = node_near(d, x, y, slop)
                 .map(Pick::Node)
                 .or_else(|| d.region_at(x, y).map(Pick::Region));
+            // A click ends a cross-reference view.
+            self.xref = None;
             match self.pick {
                 // An output, an assignment or a variable's block: its path.
                 Some(Pick::Node(n)) => {
@@ -826,7 +896,12 @@ impl Viewer {
             let now = ui.input(|i| i.time);
             self.hold(l, now);
         }
-        self.lit = self.path(scan);
+        self.lit = self
+            .xref
+            .as_ref()
+            .map(|h| self.references(h))
+            .filter(|r| !r.is_empty())
+            .or_else(|| self.path(scan));
         draw(
             &painter,
             area,
@@ -1475,6 +1550,39 @@ END_PROGRAM
 
     fn write(path: &str) -> NodeKind {
         NodeKind::Write { path: path.into() }
+    }
+
+    /// Edit › Go to definition and Cross references (hotkey cards,
+    /// 2026-11-01): the picked block's variable, its VAR line, and every
+    /// read and write of it lit until the next click.
+    #[test]
+    fn a_picked_block_knows_its_declaration_and_lights_its_references() {
+        let mut h = Harness::new();
+        assert_eq!(h.sv.view.picked_var(), None, "nothing picked");
+        assert_eq!(h.sv.view.definition_line(), None);
+        assert!(!h.sv.view.cross_references());
+        h.click(h.at(&write("MOTOR")));
+        assert_eq!(h.sv.view.picked_var().as_deref(), Some("MOTOR"));
+        assert_eq!(h.sv.view.definition_line(), Some(5), "motor AT %QX0.0 is line 5");
+        assert!(h.sv.view.cross_references());
+        h.frame(vec![]);
+        let lit = h.lit();
+        assert!(lit.contains(&"MOTOR".to_string()), "the read of motor: {lit:?}");
+        assert!(
+            lit.iter().any(|l| l.starts_with("MOTOR :=")),
+            "its write: {lit:?}"
+        );
+        assert!(
+            !lit.iter().any(|l| l.contains("OTHER")),
+            "not another variable: {lit:?}"
+        );
+        // A click anywhere ends it; the because path is back.
+        h.click(h.at(&write("LAMP")));
+        h.frame(vec![]);
+        assert_eq!(h.sv.view.picked_var().as_deref(), Some("LAMP"));
+        assert_eq!(h.sv.view.definition_line(), Some(7));
+        let lit = h.lit();
+        assert!(!lit.iter().any(|l| l.starts_with("MOTOR :=")), "{lit:?}");
     }
 
     #[test]

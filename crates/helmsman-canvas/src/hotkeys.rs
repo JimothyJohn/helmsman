@@ -17,6 +17,8 @@
 //! | Files sidebar | Alt 0 | Devices view |
 //! | Structured Text | Alt 1 | POUs view |
 //! | Side panel | Alt 3 | Messages view |
+//! | Go to definition (picked block's variable) | Ctrl/⌘ Shift D | Go to Definition |
+//! | Cross references (its reads and writes lit) | Ctrl/⌘ Shift X | Display Cross References |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
 //!
 //! The shortcuts are read at the end of the frame, after every widget
@@ -41,6 +43,8 @@ pub enum Action {
     Files,
     St,
     Panel,
+    GoToDefinition,
+    CrossReferences,
 }
 
 /// One shortcut: the action, its keys and the CODESYS command the keys
@@ -79,6 +83,18 @@ pub const TABLE: &[Hotkey] = &[
         Key::Z,
         "",
     ),
+    key(
+        Action::GoToDefinition,
+        Modifiers::COMMAND.plus(Modifiers::SHIFT),
+        Key::D,
+        "Go to Definition",
+    ),
+    key(
+        Action::CrossReferences,
+        Modifiers::COMMAND.plus(Modifiers::SHIFT),
+        Key::X,
+        "Display Cross References",
+    ),
     key(Action::Files, Modifiers::ALT, Key::Num0, "Devices"),
     key(Action::St, Modifiers::ALT, Key::Num1, "POUs"),
     key(Action::Panel, Modifiers::ALT, Key::Num3, "Messages"),
@@ -97,14 +113,23 @@ pub fn label(ctx: &egui::Context, action: Action) -> String {
 
 /// The actions whose shortcut was pressed this frame, consumed so no
 /// later reader sees them. Called once per frame, after the widgets.
+/// The most modified shortcuts go first: egui matches a shortcut when
+/// its modifiers are held, extra ones too, so Ctrl+D would otherwise
+/// swallow Ctrl+Shift+D and Ctrl+Z Ctrl+Shift+Z.
 pub fn pressed(ctx: &egui::Context) -> Vec<Action> {
+    let mut order: Vec<&Hotkey> = TABLE.iter().collect();
+    order.sort_by_key(|h| std::cmp::Reverse(modifier_count(h.keys.modifiers)));
     ctx.input_mut(|i| {
-        TABLE
-            .iter()
+        order
+            .into_iter()
             .filter(|h| i.consume_shortcut(&h.keys))
             .map(|h| h.action)
             .collect()
     })
+}
+
+fn modifier_count(m: Modifiers) -> u8 {
+    u8::from(m.alt) + u8::from(m.shift) + u8::from(m.ctrl || m.command || m.mac_cmd)
 }
 
 /// Whether the page should keep `e` (a key down) from the browser: it is
@@ -127,9 +152,38 @@ pub fn wants(e: &Event) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use eframe::egui::{Event, Key, Modifiers};
+    use eframe::egui::{self, Event, Key, Modifiers, RawInput};
 
-    use super::{Action, TABLE, wants};
+    use super::{Action, TABLE, pressed, wants};
+
+    /// What one frame with `key` down reports.
+    fn frame(modifiers: Modifiers, key: Key) -> Vec<Action> {
+        let ctx = egui::Context::default();
+        let input = RawInput {
+            events: vec![down(modifiers, key)],
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        let mut full = ctx.run_ui(input, |ui| out = pressed(ui.ctx()));
+        full.textures_delta.clear();
+        out
+    }
+
+    #[test]
+    fn a_shortcut_with_more_modifiers_is_not_swallowed_by_a_shorter_one() {
+        assert_eq!(frame(Modifiers::COMMAND, Key::D), [Action::Deploy]);
+        assert_eq!(
+            frame(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::D),
+            [Action::GoToDefinition]
+        );
+        assert_eq!(frame(Modifiers::COMMAND, Key::Z), [Action::Undo]);
+        assert_eq!(
+            frame(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z),
+            [Action::Redo]
+        );
+        assert_eq!(frame(Modifiers::NONE, Key::F10), [Action::Step]);
+        assert_eq!(frame(Modifiers::NONE, Key::D), []);
+    }
 
     fn down(modifiers: Modifiers, key: Key) -> Event {
         Event::Key {
