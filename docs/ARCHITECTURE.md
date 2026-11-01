@@ -2078,6 +2078,23 @@ in `tests/site.rs`, `site_tests.rs`).
   docs/UI.md's clean-up; the site returns with a fleet view. The box side
   above is unchanged.
 
+## The canvas's loading screen
+
+Both pages (`index.html` on the box, `playground.html`) include
+`crates/helmsman-canvas/loading/`: trunk inlines `loading.js` into the head
+and `loading.html` into the body, so the only new file served is the
+initializer (`<hash>-helmsman-canvas-initializer.js`, trunk's
+`data-initializer`). Trunk's fetch reports decoded bytes against a size it
+writes into the page, so the bar is exact behind a compressing server; it
+writes the size from before wasm-opt, so `scripts/patch-wasm-size.sh`
+corrects it after the build (a total it cannot use shows the moving bar).
+`loading.js` also listens for script and
+preload errors, uncaught errors and rejections until the app says
+`helmsman-started` or `helmsman-start-failed` (`main.rs`), and shows the
+plain message with the failing address. Sixty seconds with no progress says
+so without giving up. `helmsman-started` removes the screen, whatever it was
+showing.
+
 ## ST playground (`playground`, built)
 
 The public demo: the canvas's Editor with the simulation as its source

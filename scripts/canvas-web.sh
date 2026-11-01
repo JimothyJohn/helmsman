@@ -9,3 +9,4 @@ command -v trunk >/dev/null || { echo "needs trunk: cargo install trunk --locked
 rustup target add wasm32-unknown-unknown >/dev/null
 cd crates/helmsman-canvas
 trunk build --release --dist ../../target/canvas-dist
+../../scripts/patch-wasm-size.sh ../../target/canvas-dist

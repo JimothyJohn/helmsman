@@ -29,12 +29,15 @@ wasm-bindgen-futures = "0.4"
 # asked to remember, Element for the page's mode.
 # Projects: HtmlInputElement, File and FileList for Upload's file picker;
 # Blob, BlobPropertyBag, Url and HtmlAnchorElement for Download.
+# CustomEvent(Init) to tell the page's loading screen how starting went.
 web-sys = { version = "0.3", features = [
     "AbortController",
     "AbortSignal",
     "Blob",
     "BlobPropertyBag",
     "console",
+    "CustomEvent",
+    "CustomEventInit",
     "Document",
     "Element",
     "Event",

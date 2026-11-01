@@ -90,8 +90,28 @@ fn main() {
                 Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
             )
             .await;
-        if let Err(e) = started {
-            web_sys::console::error_1(&e);
+        // The page's loading screen waits for one of these (loading/loading.js).
+        match started {
+            Ok(()) => announce("helmsman-started", None),
+            Err(e) => {
+                web_sys::console::error_1(&e);
+                announce("helmsman-start-failed", Some(&e));
+            }
         }
     });
+}
+
+/// Tells the page, which has no other way to know, how starting went.
+#[cfg(target_arch = "wasm32")]
+fn announce(name: &str, detail: Option<&eframe::wasm_bindgen::JsValue>) {
+    let init = web_sys::CustomEventInit::new();
+    if let Some(detail) = detail {
+        init.set_detail(detail);
+    }
+    if let (Some(window), Ok(event)) = (
+        web_sys::window(),
+        web_sys::CustomEvent::new_with_event_init_dict(name, &init),
+    ) {
+        let _ = window.dispatch_event(&event);
+    }
 }

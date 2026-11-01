@@ -11,11 +11,250 @@
     <meta name="referrer" content="no-referrer">
     
     <link rel="icon" type="image/svg+xml" href="helmsman-mark-16-yellow.svg">
+    <!-- Before the loader, so it hears every failure (loading/). -->
+    <script>// The loading screen's logic, inlined by trunk into the head of both pages
+// (the box hashes inline scripts into its CSP). It runs before anything else
+// so it hears every failure, and in old-style JavaScript so that even a very
+// old browser reaches the message instead of a blank page.
+//
+// Told by: helmsman-canvas-initializer.js (download progress, init failure)
+// and the app itself (helmsman-started, helmsman-start-failed, src/main.rs).
+// Must never contain a script tag's text: the box scans the page for them.
+(function () {
+    'use strict';
+
+    // No progress for this long and the screen says so, and stays honest:
+    // if the app then starts after all, the message goes away with the rest.
+    var STALL_MS = 60000;
+
+    var WHY = {
+        load: 'A file this page needs did not load. Reload the page. If it happens again, the connection or the server may be down.',
+        start: 'The page loaded, but the program could not start in this browser. Reload the page. If it happens again, try a current version of your browser.',
+        unsupported: 'This browser cannot run the program: it needs WebAssembly, which is missing or turned off. Use a current version of Chrome, Edge, Firefox or Safari.',
+        stalled: 'This is taking longer than it should. The connection may be slow or down. You can keep waiting, or reload the page.'
+    };
+
+    var started = false;
+    var failure = null; // { kind, details: [string] }
+    var text = 'Loading Helmsman…';
+    var percent = null; // null: the bar shows activity, not an amount
+    var stall = null;
+
+    function el(id) {
+        return document.getElementById(id);
+    }
+
+    function render() {
+        if (!el('loading')) {
+            return; // not parsed yet: DOMContentLoaded renders
+        }
+        var bar = el('loading-bar');
+        el('loading-text').textContent = text;
+        bar.className = percent === null ? 'indeterminate' : '';
+        el('loading-fill').style.width = percent === null ? '' : percent + '%';
+        if (percent === null) {
+            bar.removeAttribute('aria-valuenow');
+        } else {
+            bar.setAttribute('aria-valuenow', String(percent));
+        }
+        var showing = failure !== null;
+        el('loading-progress').hidden = showing;
+        el('loading-failed').hidden = !showing;
+        if (showing) {
+            el('loading-why').textContent = WHY[failure.kind];
+            el('loading-detail').textContent = failure.details.join('\n');
+            el('loading-detail').hidden = failure.details.length === 0;
+        }
+    }
+
+    function fail(kind, detail) {
+        if (started) {
+            return;
+        }
+        if (failure === null || (failure.kind === 'stalled' && kind !== 'stalled')) {
+            failure = { kind: kind, details: failure ? failure.details : [] };
+        }
+        if (detail && failure.details.indexOf(detail) < 0) {
+            failure.details.push(detail);
+        }
+        render();
+    }
+
+    // The program's address, from the preload link trunk puts in the page.
+    function wasmUrl() {
+        var link = document.querySelector('link[rel="preload"][href$=".wasm"]');
+        return link ? link.href : '';
+    }
+
+    function watch() {
+        clearTimeout(stall);
+        stall = setTimeout(function () {
+            fail('stalled', wasmUrl());
+        }, STALL_MS);
+    }
+
+    function megabytes(bytes) {
+        return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    function messageOf(reason) {
+        return String((reason && reason.message) || reason);
+    }
+
+    function kindOf(message) {
+        return (/fetch|network/i).test(message) ? 'load' : 'start';
+    }
+
+    // Capture: a script's or link's load error does not bubble.
+    window.addEventListener('error', function (e) {
+        var target = e.target;
+        if (target && target !== window) {
+            if (target.tagName === 'SCRIPT') {
+                fail('load', target.src);
+            } else if (target.tagName === 'LINK' && (target.rel === 'preload' || target.rel === 'modulepreload')) {
+                fail('load', target.href);
+            }
+            return;
+        }
+        // Another origin's error (a browser extension) is not this page's.
+        if (e.filename && e.filename.indexOf(location.origin) !== 0) {
+            return;
+        }
+        if (e.message === 'Script error.' || (/^ResizeObserver loop/).test(e.message || '')) {
+            return;
+        }
+        fail('start', e.message);
+    }, true);
+
+    // A download cut off half way ends here: nothing else hears it.
+    window.addEventListener('unhandledrejection', function (e) {
+        var message = messageOf(e.reason);
+        fail(kindOf(message), message);
+    });
+
+    window.addEventListener('helmsman-start-failed', function (e) {
+        fail('start', messageOf(e.detail));
+    });
+
+    window.addEventListener('helmsman-started', function () {
+        started = true;
+        clearTimeout(stall);
+        var box = el('loading');
+        if (box) {
+            box.parentNode.removeChild(box);
+        }
+    });
+
+    document.addEventListener('DOMContentLoaded', function () {
+        el('loading-reload').addEventListener('click', function () {
+            location.reload();
+        });
+        render();
+    });
+
+    window.helmsmanLoading = {
+        progress: function (current, total) {
+            if (failure !== null && failure.kind === 'stalled') {
+                failure = null;
+            }
+            watch();
+            if (total > 0 && current <= total) {
+                percent = Math.floor((current / total) * 100);
+                text = current === total
+                    ? 'Starting…'
+                    : 'Downloading: ' + megabytes(current) + ' of ' + megabytes(total) + ' (' + percent + '%)';
+            } else {
+                percent = null;
+                text = 'Downloading: ' + megabytes(current);
+            }
+            render();
+        },
+        failed: function (reason) {
+            var message = messageOf(reason);
+            fail(kindOf(message), wasmUrl());
+            fail('start', message);
+        }
+    };
+
+    if (typeof WebAssembly !== 'object' || typeof WebAssembly.instantiate !== 'function') {
+        fail('unsupported', '');
+    } else {
+        watch();
+    }
+}());
+</script>
     <!-- trunk builds the crate to wasm and injects the loader here -->
     
 <script type="module">
-import init, * as bindings from '/playground/helmsman-canvas-a9edda8d8f7b0663.js';
-const wasm = await init({ module_or_path: '/playground/helmsman-canvas-a9edda8d8f7b0663_bg.wasm' });
+async function __trunkInitializer(init, source, sourceSize, initializer, initWithObject) {
+  if (initializer === undefined) {
+    return await init(initWithObject ? { module_or_path: source } : source);
+  }
+
+  const {
+    onStart, onProgress, onComplete, onSuccess, onFailure
+  } = initializer;
+
+  onStart?.();
+
+  const response = fetch(source)
+      .then((response) => {
+        const reader = response.body.getReader();
+        const headers = response.headers;
+        const status = response.status;
+        const statusText = response.statusText;
+
+        const total = sourceSize;
+        let current = 0;
+
+        const stream = new ReadableStream({
+          start(controller) {
+            function push() {
+              reader.read().then(({done, value}) => {
+                if (done) {
+                  onProgress?.({current: total, total});
+                  controller.close();
+                  return;
+                }
+
+                current += value.byteLength;
+                onProgress?.({current, total});
+                controller.enqueue(value);
+                push();
+              });
+            }
+
+            push();
+          },
+        });
+
+        return {
+          stream, init: {
+            headers, status, statusText
+          }
+        };
+      })
+      .then(({stream, init}) =>
+          new Response(stream, init),
+      );
+
+  return init(initWithObject ? { module_or_path: response } : response)
+      .then((value) => {
+        onComplete?.();
+        onSuccess?.(value);
+        return value;
+      }, (reason) => {
+        onComplete?.();
+        onFailure?.(reason);
+        return reason;
+      });
+}
+
+
+import init, * as bindings from '/playground/helmsman-canvas-9a6e58251e3f8ba6.js';
+import initializer from '/playground/53465a22e1851b4-helmsman-canvas-initializer.js';
+
+const wasm = await __trunkInitializer(init, '/playground/helmsman-canvas-9a6e58251e3f8ba6_bg.wasm', 4731266, initializer(), true);
 
 
 window.wasmBindings = bindings;
@@ -26,13 +265,40 @@ dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
 </script>
     <style>
         html, body { margin: 0; height: 100%; overflow: hidden; background: #141414; }
-        canvas { display: block; width: 100%; height: 100%; position: relative; }
-        #loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-                   color: #8C8C8C; font: 15px ui-monospace, Menlo, Consolas, monospace; margin: 0; }
+        canvas { display: block; width: 100%; height: 100%; }
     </style>
-<link rel="modulepreload" href="/playground/helmsman-canvas-a9edda8d8f7b0663.js" crossorigin="anonymous" integrity="sha384-M4wEFFebPRXTJRo4gErvW8o685f/d9opi9C6iZ9C8t1+xT3lL2o398zab2l3SGRx"><link rel="preload" href="/playground/helmsman-canvas-a9edda8d8f7b0663_bg.wasm" crossorigin="anonymous" integrity="sha384-Y94UCb+kroDzlMwyFmBdbP6NEl/+pzidgTIgRZx4GcYYTDUi6NVJbXqPmsQXph5A" as="fetch" type="application/wasm"></head>
+<link rel="modulepreload" href="/playground/helmsman-canvas-9a6e58251e3f8ba6.js" crossorigin="anonymous" integrity="sha384-reWg/AvwvdnBlMECnf7u4UQzle9ysuc2yd4rDI1y5gvKs7bZKIhhU9vre4e0Xcr0"><link rel="modulepreload" href="/playground/53465a22e1851b4-helmsman-canvas-initializer.js" crossorigin="anonymous" integrity="sha384-/lAKd4xg5n/NVR7x4keg+rFjyUed9e34qki4yL7DUjPkc1qzlAnaykLymM8kZ5Gq"><link rel="preload" href="/playground/helmsman-canvas-9a6e58251e3f8ba6_bg.wasm" crossorigin="anonymous" integrity="sha384-5XMCm0MDSFdBu6E4VKeCgXQ6/sRaEMs8Du6oryfCau747HXWIAC2yHrGXqt3zCaH" as="fetch" type="application/wasm"></head>
 <body>
-    <p id="loading">Loading the Helmsman ST playground…</p>
+    <style>
+    #loading { position: fixed; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center;
+               padding: 16px; box-sizing: border-box; background: #141414; color: #E6E6E6;
+               font: 15px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+    #loading [hidden] { display: none; }
+    #loading > div { width: 100%; max-width: 32em; }
+    #loading p { margin: 0 0 12px; }
+    #loading-bar { height: 8px; background: #2E2E2E; overflow: hidden; }
+    #loading-fill { height: 100%; width: 0; background: #FFC20E; }
+    #loading-bar.indeterminate #loading-fill { width: 30%; animation: loading-slide 1.2s ease-in-out infinite alternate; }
+    @keyframes loading-slide { from { margin-left: 0; } to { margin-left: 70%; } }
+    @media (prefers-reduced-motion: reduce) { #loading-bar.indeterminate #loading-fill { animation: none; width: 100%; opacity: .4; } }
+    #loading-title { color: #FFC20E; font-weight: bold; }
+    #loading-detail { margin: 0 0 16px; color: #8C8C8C; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+                      white-space: pre-wrap; overflow-wrap: anywhere; }
+    #loading-reload { background: #FFC20E; color: #141414; border: 0; padding: 8px 16px; font: inherit; font-weight: bold; cursor: pointer; }
+</style>
+<div id="loading">
+    <div id="loading-progress">
+        <p id="loading-text" aria-live="polite">Loading Helmsman…</p>
+        <div id="loading-bar" class="indeterminate" role="progressbar" aria-label="Loading" aria-valuemin="0" aria-valuemax="100"><div id="loading-fill"></div></div>
+    </div>
+    <div id="loading-failed" role="alert" hidden>
+        <p id="loading-title">Helmsman could not start.</p>
+        <p id="loading-why"></p>
+        <pre id="loading-detail" hidden></pre>
+        <button id="loading-reload" type="button">Reload</button>
+    </div>
+</div>
+
     <noscript><p style="color:#fff;font-family:sans-serif;padding:16px">The playground runs in your browser and needs JavaScript and WebAssembly.</p></noscript>
     <canvas id="canvas" data-mode="playground"></canvas>
 </body>

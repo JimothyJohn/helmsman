@@ -29,6 +29,7 @@ if [ -f "$dist/playground.html" ]; then
 fi
 test -f "$dist/index.html" || { echo "trunk produced no page in $dist" >&2; exit 1; }
 ls "$dist"/*.wasm >/dev/null 2>&1 || { echo "trunk produced no .wasm in $dist" >&2; exit 1; }
+./scripts/patch-wasm-size.sh "$dist"
 rm -rf "$out"
 mkdir -p "$out"
 cp -R "$dist"/. "$out"/
