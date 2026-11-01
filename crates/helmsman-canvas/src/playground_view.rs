@@ -721,6 +721,11 @@ impl Body for PlaygroundView {
                 ui.label(RichText::new("Nothing compiled yet.").color(STEEL));
             }
         }
+        // The blank space under it all: a right-click offers a new project
+        // (and a paste into the open one).
+        if let Some(a) = self.files_ui.blank_menu(ui, chrome, &Ok(()), true) {
+            self.act(a);
+        }
     }
 
     fn trend(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
@@ -1315,6 +1320,17 @@ const TYPE_HINT: &str = "type a value, then Enter (Esc puts it back)";
 impl Workspace for PlaygroundView {
     fn dirty(&self) -> bool {
         self.proj.dirty()
+    }
+
+    fn new_project(&mut self, chrome: &mut Chrome) {
+        self.files_ui.new_project();
+        chrome.show_files();
+    }
+
+    fn copy_project(&mut self, chrome: &mut Chrome) {
+        let open = self.proj.open.clone();
+        self.files_ui.copy_project(&open);
+        chrome.show_files();
     }
 
     fn layout_menu(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {

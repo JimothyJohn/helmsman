@@ -714,14 +714,30 @@ mod chrome {
     #[test]
     fn a_right_click_on_a_file_copies_pastes_and_duplicates_it() {
         let mut h = Harness::new(App::sim());
-        h.press("pane files");
-        h.wait(0.3);
-        // An example is read-only: its menu offers Copy alone. Copy the
-        // project first (the sidebar's own button) to get a writable one.
-        h.press("copy project");
+        // An example is read-only: its file menu offers Copy alone. File ›
+        // Copy project first to get a writable one; it lands on the Files
+        // tab asking for the name.
+        h.press("bar file");
+        h.press("file copy");
+        assert!(h.app.chrome.files_open(), "the name is asked on the Files tab");
         h.press("name ok");
         h.wait(0.3);
         assert!(h.has("file blink.st"), "blink-copy open with its file");
+        assert!(
+            !h.has("new project") && !h.has("copy project"),
+            "the buttons are gone"
+        );
+        // A right-click on a project offers its copy, rename and delete.
+        h.right_click(h.rect("project blink").center());
+        assert!(h.has("menu copy project"));
+        assert!(
+            !h.has("menu rename project") || {
+                // Listed but disabled for an example: a press does nothing.
+                h.press("menu rename project");
+                h.app.sim.as_ref().unwrap().files_ui.naming.is_none()
+            }
+        );
+        h.frame(vec![]);
         let text = h.app.sim.as_ref().unwrap().proj.files["blink.st"].clone();
         let at = h.rect("file blink.st").center();
         h.right_click(at);
@@ -751,7 +767,11 @@ mod chrome {
             "pasted under the next free name"
         );
         // The clipboard crosses projects: a new, empty one takes the paste.
-        h.press("new project");
+        // New project from a right-click on the pane's blank space.
+        h.right_click(h.rect("files blank").center());
+        h.press("menu new project");
+        // The name field is drawn above the blank space, so a frame later.
+        h.frame(vec![]);
         h.press("name");
         h.frame(vec![Event::Text("mine".into())]);
         h.press("name ok");

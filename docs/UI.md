@@ -20,7 +20,8 @@ this; change it here first when a decision changes.
 ## Editor (desktop and tablet; a phone opens the Monitor)
 
 - **One header row (48 pt):** on the left the HELMSMAN wordmark (a link
-  to the site) and a menu bar: File (Save, Deploy, Upload, Download),
+  to the site) and a menu bar: File (New project, Copy project, Save,
+  Deploy, Upload, Download),
   Edit (Undo, Redo, Go to definition, Cross references), View (Editor /
   Monitor, Structured Text, Files, the side panel and its tabs, Trend,
   Zoom to fit, the layout items, Scan detail for an engineer) and Help
@@ -43,10 +44,12 @@ this; change it here first when a decision changes.
   errors, with the error count on the tab), so a fault or a refused
   deploy is still there to read after the line under the header has gone.
 - **Left pane, collapsible, tabs (160 pt):** Files (the projects, the
-  open one's files, the program tree; a right-click on a file offers
-  Copy, Paste, Duplicate, Rename and Delete, with an app-wide clipboard
-  so a file pastes into any open project) and Code (the Structured Text
-  editor). One width for both tabs; Alt 0 and Alt 1 open the pane on its
+  open one's files, the program tree; a right-click on a project offers
+  Copy, Rename and Delete, on a file Copy, Paste, Duplicate, Rename and
+  Delete with an app-wide clipboard so a file pastes into any open
+  project, and on the blank space New project and Paste; New project and
+  Copy project are also the File menu's first items) and Code (the
+  Structured Text editor). One width for both tabs; Alt 0 and Alt 1 open the pane on its
   tab, or shut it when that tab shows.
 - **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the
   diagram does not show), Agent. On a Pi the Trend opens with
