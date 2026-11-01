@@ -134,11 +134,94 @@ fn write_to(path: &str) -> impl Fn(&NodeKind) -> bool + '_ {
 // ---- the header and the Editor's frame ----
 
 mod polish {
-    use eframe::egui::{self, Event};
+    use eframe::egui::{self, Event, Key, Modifiers};
 
     use super::{App, Harness, Screen};
     use crate::app::HEADER_H;
     use crate::editor::{Tab, numbering};
+
+    impl Harness {
+        fn key(&mut self, modifiers: Modifiers, key: Key) {
+            self.frame(vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }]);
+            self.frame(vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers,
+            }]);
+        }
+    }
+
+    /// CODESYS's keys where the browser leaves them alone (docs/UI.md,
+    /// Keyboard): the simulation's run controls, the panes, Save.
+    #[test]
+    fn the_shortcuts_run_step_stop_save_and_toggle_the_panes() {
+        let mut h = Harness::new(App::sim());
+        assert!(
+            h.app.sim.as_ref().unwrap().session.running,
+            "the playground opens running"
+        );
+        h.key(Modifiers::SHIFT, Key::F8);
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "Shift+F8 stops");
+        let scans = h.app.sim.as_ref().unwrap().session.scans;
+        h.key(Modifiers::NONE, Key::F10);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().session.scans,
+            scans + 1,
+            "F10 steps one scan"
+        );
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(h.app.sim.as_ref().unwrap().session.running, "Ctrl+Enter runs");
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "and stops");
+        // The panes.
+        let (st, left, right) = (h.app.chrome.st, h.app.chrome.left, h.app.chrome.right);
+        h.key(Modifiers::ALT, Key::Num1);
+        assert_eq!(h.app.chrome.st, !st, "Alt+1: Structured Text");
+        h.key(Modifiers::ALT, Key::Num0);
+        assert_eq!(h.app.chrome.left, !left, "Alt+0: Files");
+        h.key(Modifiers::ALT, Key::Num3);
+        assert_eq!(h.app.chrome.right, !right, "Alt+3: the side panel");
+        // Save: edit, then Ctrl+S.
+        h.key(Modifiers::ALT, Key::Num1);
+        h.wait(0.2);
+        let editor = h
+            .ctx
+            .read_response(egui::Id::unique("pg-source"))
+            .expect("the editor")
+            .rect;
+        h.click(editor.left_top() + egui::vec2(60.0, 6.0));
+        h.frame(vec![Event::Text("!".into())]);
+        h.wait(0.6);
+        assert!(h.has("dirty"));
+        h.key(Modifiers::COMMAND, Key::S);
+        h.frame(vec![]);
+        assert!(!h.has("dirty"), "Ctrl+S saved");
+        // A box's keys do nothing here.
+        h.key(Modifiers::ALT, Key::F8);
+        assert!(!h.app.login, "no sign-in in the simulation");
+    }
+
+    #[test]
+    fn alt_f8_opens_sign_in_and_ctrl_f8_signs_out_on_a_box() {
+        let mut h = Harness::new(App::boxed());
+        assert!(!h.app.login);
+        h.key(Modifiers::ALT, Key::F8);
+        assert!(h.app.login, "Alt+F8: Login");
+        h.key(Modifiers::CTRL, Key::F8);
+        assert!(!h.app.login, "Ctrl+F8: Logout closes it and ends any session");
+        assert!(h.app.session().is_none());
+        // Run keys do nothing on a box's page.
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(h.app.sim.is_none());
+    }
 
     /// Nick, 2026-11-01: one tall row, menus left, the project right; the
     /// bar that held ST, Reset layout and Save as default is gone.

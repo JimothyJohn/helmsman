@@ -96,6 +96,31 @@ this; change it here first when a decision changes.
   name and sends the project as its `.zip`; nothing else changes what the
   box holds, and a first install still seeds `line` alone, undeployed.
 
+## Keyboard
+
+CODESYS's default keys where the browser leaves them alone (its
+"Shortcuts" help page, checked 2026-11-01); nothing on a key the browser
+owns (F5 and Ctrl+R reload, F11 goes full screen, Ctrl+F5 reloads hard).
+The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
+
+| key | does | CODESYS command on that key |
+|---|---|---|
+| Ctrl S | Save | Save Project |
+| Ctrl D | Deploy | (Download has no key) |
+| Ctrl Enter | Run / Stop the simulation | (Start is F5, the browser's) |
+| Shift F8 | Stop the simulation | Stop |
+| F10 | Step one scan (stopped) | Step Over |
+| Alt F8 | Sign in (box) | Login |
+| Ctrl F8 | Sign out (box) | Logout |
+| Ctrl Z, Ctrl Y | Undo, Redo in the ST editor | Undo, Restore |
+| Alt 0 | Files sidebar | Devices view |
+| Alt 1 | Structured Text pane | POUs view |
+| Alt 3 | Side panel | Messages view |
+| Alt ↑ | Up one level in the diagram | |
+
+Each menu item prints its key. Keys reserved for what is not built yet
+are TODO cards (`hotkey-*`).
+
 ## Monitor (phone to wall TV; replaces Andon)
 
 - **Top:** status tiles: running or faulted, then one tile per top-level
