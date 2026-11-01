@@ -41,17 +41,19 @@ fn the_source_page_is_locked_to_the_api() {
 
 #[test]
 fn the_published_page_is_built_and_complete() {
+    const PUBLIC_URL: &str = "/playground/";
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/playground");
     let html = read(&dir.join("index.html"));
     check(&html);
     // trunk's loader, from the Pages path, and the files it names are there.
+    assert!(
+        !html.contains("/helmsman/playground/"),
+        "the site is at the root of helmsman.advin.io"
+    );
     let mut named = 0;
     for ext in [".js", "_bg.wasm"] {
         let at = html.find(ext).unwrap_or_else(|| panic!("no {ext} in the page"));
-        let start = html[..at]
-            .rfind("/helmsman/playground/")
-            .expect("Pages public URL")
-            + 21;
+        let start = html[..at].rfind(PUBLIC_URL).expect("Pages public URL") + PUBLIC_URL.len();
         let file = &html[start..at + ext.len()];
         assert!(dir.join(file).is_file(), "{file} is missing from docs/playground");
         named += 1;
