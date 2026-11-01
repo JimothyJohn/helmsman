@@ -984,8 +984,9 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
 
 - **A project is a folder** of free-form `.st` files (any PROGRAMs,
   FUNCTION_BLOCKs, FUNCTIONs and TYPEs, compiled together), plus an
-  optional `io.map` (the I/O map it runs with, `helmsman_io::text`) and
-  an optional `project.settings` (`author`; `program NAME scan_ms=
+  optional `io.map` (the I/O map it runs with, `helmsman_io::text`), an
+  optional `diagram.layout` (the diagram's shared arrangement, below;
+  the build ignores it) and an optional `project.settings` (`author`; `program NAME scan_ms=
   i= q= m=`; `param PROGRAM NAME TYPE VALUE ...`, a manifest's param
   line). Many are stored; one runs; editing or saving one never touches
   what runs.
@@ -1116,7 +1117,28 @@ it in the page. Upload and Download use `helmsman-project`'s `.zip`;
 refused there (the converter is wasm-safe; wiring it in is a canvas
 change, card `l5x-import` notes).
 
-**The Pi** (`pi-projects`): `scripts/pi-deploy-plc.sh` installs the
+**The diagram's arrangement** (`arrangement-persist`; `arrange.rs` in
+the canvas, the file format in `helmsman_project::layout`; contract in
+`arrange_tests.rs`, `box_projects_tests.rs` and `sim_projects_tests.rs`).
+Two layers. The shared default is the project's `diagram.layout`
+(`helmsman-layout 1`, one tab-separated `move` line per block: POU, which
+of the blocks with that label and text, offset, label, text; at most 4096
+moves, offsets within ±10⁶, refused whole when it does not read, on a
+save and in an upload). On a box it is the running project's, read with
+the project list and saved by Save as default as an ordinary file write
+(engineer only, with the version read: a stale save is 409 and read
+again); in the simulation it is a file of the browser-stored project
+(not of a read-only example). Personal tweaks are offsets on top of the
+default, kept in the browser's `localStorage`
+(`helmsman-canvas/arrangements`, every access wrapped, at most 32 views,
+the least recently changed dropped), keyed by view (`box:PROJECT`,
+`box-modules`, `sim:PROJECT`). A new default reaches a screen with its
+tweaks still on top. Blocks are matched by POU, label, text and
+ordinal, so an edit that renumbers them keeps both layers; one
+arrangement per POU serves every module that uses it. Reset layout drops
+the tweaks; a second step stores the automatic layout as the tweak.
+
+ `scripts/pi-deploy-plc.sh` installs the
 binary and the canvas and runs `helmsman-plc --projects`
 (`PLC_MODE=program` keeps one program file). Its unit runs `helmsman-plc
 project seed NAME FILE.st` before every start (`project::seed`): only on
