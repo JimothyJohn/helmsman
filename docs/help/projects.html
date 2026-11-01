@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Helmsman Help · Projects</title>
+<link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
+<style>
+:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;--white:#FFFFFF;
+--stencil:'Saira Stencil One',Impact,sans-serif;
+--mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:var(--white);color:var(--black);font:16px/1.6 var(--sans)}
+.wrap{max-width:1040px;margin:0 auto;padding:0 16px}
+header.top{background:var(--black);color:#fff;border-bottom:4px solid var(--yellow)}
+header.top .wrap{display:flex;align-items:center;gap:16px;min-height:56px}
+header.top .brand{color:#fff;text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em;flex:none}
+header.top .section{color:var(--steel);font:13px var(--mono)}
+header.top .site{margin-left:auto;color:#C8C8C8;text-decoration:none;font:13px var(--mono)}
+header.top .site:hover{color:var(--yellow)}
+.page{display:grid;grid-template-columns:220px 1fr;gap:40px;padding:32px 0 64px}
+nav.help{position:sticky;top:16px;align-self:start;display:flex;flex-direction:column;gap:4px;font:14px var(--mono)}
+nav.help a{color:var(--graphite);text-decoration:none;padding:6px 10px;border-left:3px solid transparent}
+nav.help a:hover{color:var(--black);border-left-color:var(--steel)}
+nav.help a.current{color:var(--black);border-left-color:var(--yellow);font-weight:600}
+main{min-width:0}
+main h1{font-size:32px;line-height:1.15;margin:0 0 16px}
+main h2{font-size:22px;margin:36px 0 10px;padding-top:12px;border-top:1px solid #E6E6E6}
+main h3{font-size:17px;margin:24px 0 6px}
+main p,main li{max-width:72ch}
+main code{font-family:var(--mono);font-size:.92em;background:#F2F2F2;padding:1px 4px;border-radius:3px}
+main pre{background:var(--black);color:#F0F0F0;padding:14px 16px;overflow-x:auto;border-radius:6px;font:14px/1.5 var(--mono)}
+main pre code{background:none;padding:0;color:inherit}
+main table{border-collapse:collapse;margin:12px 0;font-size:15px}
+main th,main td{text-align:left;padding:6px 12px;border-bottom:1px solid #E6E6E6;vertical-align:top}
+main th{font:600 13px var(--mono);color:var(--graphite)}
+main kbd{font:13px var(--mono);background:#F2F2F2;border:1px solid #D8D8D8;border-bottom-width:2px;border-radius:4px;padding:1px 6px}
+main a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
+.note{border-left:4px solid var(--yellow);background:#FFF8E0;padding:10px 14px;margin:14px 0}
+footer{background:var(--graphite);color:#C8C8C8;font:13px var(--mono);padding:18px 0}
+@media (max-width:760px){.page{grid-template-columns:1fr;gap:16px}nav.help{position:static;flex-direction:row;flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="../">HELMSMAN</a><span class="section">Help</span>
+  <a class="site" href="../playground/">Playground</a>
+</div></header>
+<div class="wrap page">
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples and starters</a></nav>
+<main>
+<h1 id="projects">Projects</h1>
+<p>A project is a folder of files: the program's Structured Text (one or
+more <code>.st</code> files, one <code>PROGRAM</code>), an
+<code>io.map</code> that says which signal is which channel, and
+<code>project.settings</code>. The Files pane shows them.</p>
+<h2 id="files">Files</h2>
+<ul>
+<li><strong>New project</strong>, <strong>Copy</strong>,
+<strong>Rename</strong>, <strong>Delete</strong> are in the Files pane.
+A copy of an example or a starter is how you begin from one.</li>
+<li><strong>New file</strong>, <strong>Rename file</strong>,
+<strong>Delete file</strong> likewise. A file is Structured Text
+(<code>.st</code>) or the I/O map.</li>
+<li>The tree under the files is the program: the <code>PROGRAM</code>,
+then each function block instance it calls, nested. Click one to see its
+diagram.</li>
+</ul>
+<h2 id="save-and-deploy">Save and Deploy</h2>
+<p><strong>Save</strong> (<kbd>Ctrl</kbd> <kbd>S</kbd>, File › Save, the
+glyph) writes every file with unsaved edits. A mark in the header shows
+there are some. Saving changes nothing about what runs.</p>
+<p><strong>Deploy</strong> (<kbd>Ctrl</kbd> <kbd>D</kbd>, File › Deploy)
+saves first, then compiles the project and runs it: in the page in the
+simulation, on the box through its approval policy on a box. A project
+that does not compile is refused with its errors by file and line.</p>
+<p>On a box, a file someone else saved since you opened it is refused
+alone and offers Reload; the other files land.</p>
+<h2 id="upload-and-download">Upload and download</h2>
+<p><strong>Download</strong> (the glyph, File › Download) gives you the
+project as a <code>.zip</code>. <strong>Upload</strong> takes a
+<code>.zip</code> (a whole project), an <code>.st</code> file (into the
+open project), a PLCopen <code>.xml</code> export, or a ladder export
+(<code>.l5x</code>), which is converted to Structured Text where the
+conversion is exact and refused where it is not, saying why.</p>
+<h2 id="examples-and-starters">Examples and starters</h2>
+<p>The simulation ships with short <strong>examples</strong> that teach
+one thing each, and with <strong>machines</strong> and
+<strong>templates</strong>: worked programs for a conveyor sorter, a
+pump station, a batch mixer and the like, each with a plant model so it
+runs with nothing wired, and two templates to begin a discrete or a
+process program from. They are read-only; Save copies one into a project
+of your own. On a box, "Start from a machine or template" in the Files
+pane asks for a name and sends the copy to the box.</p>
+<p><a href="starters.html">Examples and starters</a> lists them,
+generated from the program itself.</p>
+<h2 id="the-io-map">The I/O map</h2>
+<p><code>io.map</code> binds the program's inputs and outputs to
+channels: a line per signal with its direction, name, type, the device
+and the channel, and for an output its safe value. The starters' maps
+use the box's own channels and say in a comment to check them before
+deploying to a box with anything wired.</p>
+</main>
+</div>
+<footer><div class="wrap">Helmsman Factory Automation · early release · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>
+<script>
+(function(){var c=document.querySelectorAll('nav.help a');for(var i=0;i<c.length;i++){if(c[i].getAttribute('href')==='projects.html'){c[i].className='current';}}})();
+</script>
+</body>
+</html>
