@@ -11,8 +11,10 @@
 # service installed (scripts/pi-deploy-plc.sh). The password is typed on the
 # Pi's terminal (ssh -t, not echoed) and piped to the binary's stdin; it is
 # never an argument or an environment variable, here or there.
-# Runs here or in the native terminal: `! scripts/pi-account.sh nick@<pi-ip> nick engineer`
-# (the `!` prompt has a terminal for the password).
+# Needs a real terminal for the password, so not Claude Code's `!` prompt.
+# Over SSH into the Studio the key isn't loaded: load it for that login first:
+#   ssh -t nick@<studio> 'eval "$(ssh-agent -s)" >/dev/null; ssh-add ~/.ssh/id_ed25519;
+#     cd <checkout> && scripts/pi-account.sh nick@<pi-ip> nick engineer; ssh-agent -k >/dev/null'
 #
 # Usage: scripts/pi-account.sh user@host USER [ROLE]
 #        ROLE: operator | engineer (default) | integrator
