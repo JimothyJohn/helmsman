@@ -159,10 +159,26 @@ pub fn menu_item(
     text: impl Into<RichText>,
     on: bool,
 ) -> bool {
-    let r = ui.add(
-        egui::Button::selectable(on, text.into())
-            .min_size(Vec2::new(ui.available_width().max(180.0), TAP * 0.7)),
-    );
+    menu_item_keyed(ui, chrome, key, text, on, "")
+}
+
+/// [`menu_item`] with its keyboard shortcut printed at the right.
+pub fn menu_item_keyed(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    text: impl Into<RichText>,
+    on: bool,
+    shortcut: &str,
+) -> bool {
+    let b = egui::Button::selectable(on, text.into())
+        .min_size(Vec2::new(ui.available_width().max(220.0), TAP * 0.7));
+    let b = if shortcut.is_empty() {
+        b
+    } else {
+        b.shortcut_text(RichText::new(shortcut).weak())
+    };
+    let r = ui.add(b);
     chrome.hit(key, r.rect);
     if r.clicked() {
         ui.close();
@@ -174,14 +190,17 @@ pub fn menu_item(
 /// The View menu's part that is the Editor's frame: the ST pane, the two
 /// sidebars and the right panel's tab.
 pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
+    use crate::hotkeys::{Action, label};
     let (st, left, right) = (chrome.st, chrome.left, chrome.right);
-    if menu_item(ui, chrome, "view st", "Structured Text", st) {
+    let ctx = ui.ctx().clone();
+    let k = |a| label(&ctx, a);
+    if menu_item_keyed(ui, chrome, "view st", "Structured Text", st, &k(Action::St)) {
         chrome.st = !st;
     }
-    if menu_item(ui, chrome, "view files", "Files", left) {
+    if menu_item_keyed(ui, chrome, "view files", "Files", left, &k(Action::Files)) {
         chrome.left = !left;
     }
-    if menu_item(ui, chrome, "view panel", "Side panel", right) {
+    if menu_item_keyed(ui, chrome, "view panel", "Side panel", right, &k(Action::Panel)) {
         chrome.right = !right;
     }
     for &t in tabs {

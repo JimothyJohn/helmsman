@@ -8,7 +8,8 @@
 use eframe::egui::{self, Rect, RichText, Vec2};
 
 use crate::box_view::{BoxView, is_engineer};
-use crate::editor::{Body, CHROME_KEY, Chrome, menu_item};
+use crate::editor::{Body, CHROME_KEY, Chrome, menu_item, menu_item_keyed};
+use crate::hotkeys::{self, Action};
 use crate::monitor::{Monitor, NARROW, Wish};
 use crate::playground_view::PlaygroundView;
 use crate::projects::Workspace;
@@ -310,6 +311,76 @@ impl App {
             self.open_diagram(&program, &prefix);
         }
         self.chrome.hits.extend(header);
+        // Last, so a focused text editor has had its own Ctrl+Z first.
+        for a in hotkeys::pressed(&ctx) {
+            self.act(a, &ctx);
+        }
+    }
+
+    /// Does what a shortcut (or its menu item) asks; nothing where it
+    /// does not apply (Run in a box's page, Sign in in the simulation).
+    pub fn act(&mut self, a: Action, ctx: &egui::Context) {
+        match a {
+            Action::Save => {
+                if let Some(w) = self.workspace()
+                    && w.dirty()
+                    && w.writable().is_ok()
+                    && !w.busy()
+                {
+                    w.save();
+                }
+            }
+            Action::Deploy => {
+                if let Some(w) = self.workspace()
+                    && w.writable().is_ok()
+                    && !w.busy()
+                {
+                    w.deploy();
+                }
+            }
+            Action::RunStop | Action::Stop | Action::Step => {
+                if self.source != Source::Sim || self.screen != Screen::Editor {
+                    return;
+                }
+                let Some(s) = self.sim.as_mut() else { return };
+                if s.session.build.is_none() {
+                    return;
+                }
+                match a {
+                    Action::RunStop => {
+                        let on = !s.session.running;
+                        s.session.set_running(on);
+                    }
+                    Action::Stop => s.session.set_running(false),
+                    _ => {
+                        if !s.session.running {
+                            s.session.step();
+                        }
+                    }
+                }
+            }
+            Action::SignIn => {
+                if self.source == Source::Box {
+                    self.login = true;
+                }
+            }
+            Action::SignOut => {
+                if self.source == Source::Box
+                    && let Some(r) = &mut self.review
+                {
+                    r.state.logout();
+                    self.login = false;
+                }
+            }
+            Action::Undo | Action::Redo => {
+                if let Some(w) = self.workspace() {
+                    w.undo(ctx, a == Action::Redo);
+                }
+            }
+            Action::Files => self.chrome.left = !self.chrome.left,
+            Action::St => self.chrome.st = !self.chrome.st,
+            Action::Panel => self.chrome.right = !self.chrome.right,
+        }
     }
 
     /// The Editor's diagram of `program` (empty: the one open), at the
@@ -441,16 +512,23 @@ impl App {
                     .workspace()
                     .map_or((false, Err(String::new())), |w| (w.dirty(), w.writable()));
                 let can = write.is_ok();
+                let k = |a| hotkeys::label(&ctx, a);
                 ui.add_enabled_ui(can && dirty, |ui| {
-                    if menu_item(ui, &mut chrome, "file save", "Save", false)
+                    if menu_item_keyed(ui, &mut chrome, "file save", "Save", false, &k(Action::Save))
                         && let Some(w) = self.workspace()
                     {
                         w.save();
                     }
                 });
                 ui.add_enabled_ui(can, |ui| {
-                    if menu_item(ui, &mut chrome, "file deploy", "Deploy", false)
-                        && let Some(w) = self.workspace()
+                    if menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "file deploy",
+                        "Deploy",
+                        false,
+                        &k(Action::Deploy),
+                    ) && let Some(w) = self.workspace()
                     {
                         w.deploy();
                     }
@@ -477,12 +555,13 @@ impl App {
             });
             hits.push(("bar file".to_string(), f.response.rect));
             let e = ui.menu_button("Edit", |ui| {
-                if menu_item(ui, &mut chrome, "edit undo", "Undo", false)
+                let k = |a| hotkeys::label(&ctx, a);
+                if menu_item_keyed(ui, &mut chrome, "edit undo", "Undo", false, &k(Action::Undo))
                     && let Some(w) = self.workspace()
                 {
                     w.undo(&ctx, false);
                 }
-                if menu_item(ui, &mut chrome, "edit redo", "Redo", false)
+                if menu_item_keyed(ui, &mut chrome, "edit redo", "Redo", false, &k(Action::Redo))
                     && let Some(w) = self.workspace()
                 {
                     w.undo(&ctx, true);
