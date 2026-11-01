@@ -52,7 +52,8 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                     any account exists, approvers log in and role PINs are refused)
        helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE.st ...]
                     (first install only: with no project and nothing deployed,
-                    makes NAME from the files and deploys it for --projects)
+                    makes NAME from the files for --projects; nothing runs
+                    until an engineer deploys it)
   --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
@@ -1548,8 +1549,8 @@ fn run(o: &Opts) -> Result<(), String> {
 
 /// `helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE...]`:
 /// on a first install (no project, nothing deployed) makes project NAME
-/// from the files and deploys it, so a `--projects` box boots running it
-/// (`helmsman_plc::project::seed`); otherwise, or with no NAME, nothing.
+/// from the files, for an engineer to open and deploy on a `--projects`
+/// box (`helmsman_plc::project::seed`); otherwise, or with no NAME, nothing.
 /// Run by the Pi's unit before every start (`ExecStartPre`), as the service.
 fn project_cli(args: &[String]) -> Result<String, String> {
     const USE: &str = "usage: helmsman-plc project seed [--state-dir DIR] [--scan-ms MS] [NAME FILE.st...]";
@@ -1612,12 +1613,9 @@ fn project_cli(args: &[String]) -> Result<String, String> {
         q_len,
     };
     let state = state.unwrap_or_else(default_state_dir);
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    match helmsman_plc::project::seed(&state, name, &files, &shape, now)? {
-        helmsman_plc::project::Seeded::Deployed { snapshot } => Ok(format!(
-            "helmsman-plc: first install: project {name} made and deployed as snapshot {snapshot}\n"
+    match helmsman_plc::project::seed(&state, name, &files, &shape)? {
+        helmsman_plc::project::Seeded::Made => Ok(format!(
+            "helmsman-plc: first install: project {name} made; nothing runs until an engineer deploys it\n"
         )),
         helmsman_plc::project::Seeded::Left(why) => Ok(format!("helmsman-plc: {why}\n")),
     }

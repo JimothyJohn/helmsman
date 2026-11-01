@@ -51,8 +51,10 @@ impl Tab {
     }
 }
 
-/// The Editor's layout (kept per browser) and what was drawn where this
-/// frame (tests click by it).
+/// The Editor's layout and the Monitor's scan detail (kept per browser)
+/// and what was drawn where this frame (tests click by it).
+// Independent toggles a browser keeps, not states of one thing.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chrome {
     /// The left sidebar (files and tree) is open.
@@ -62,6 +64,9 @@ pub struct Chrome {
     /// The ST editor is open beside the diagram.
     pub st: bool,
     pub tab: Tab,
+    /// The Monitor's status tiles show the scan period and counts: an
+    /// engineer's choice, and only shown while one is signed in.
+    pub scan: bool,
     /// The source line a block click sent the ST editor to.
     pub line: Option<u32>,
     /// [`Self::line`] not scrolled to yet.
@@ -77,6 +82,7 @@ impl Default for Chrome {
             right: true,
             st: false,
             tab: Tab::Io,
+            scan: false,
             line: None,
             jump: None,
             hits: Vec::new(),
@@ -89,11 +95,12 @@ impl Chrome {
     #[must_use]
     pub fn saved(&self) -> String {
         format!(
-            "left={} right={} st={} tab={}",
+            "left={} right={} st={} tab={} scan={}",
             u8::from(self.left),
             u8::from(self.right),
             u8::from(self.st),
-            self.tab.key()
+            self.tab.key(),
+            u8::from(self.scan)
         )
     }
 
@@ -106,6 +113,7 @@ impl Chrome {
                 Some(("left", v)) => c.left = v == "1",
                 Some(("right", v)) => c.right = v == "1",
                 Some(("st", v)) => c.st = v == "1",
+                Some(("scan", v)) => c.scan = v == "1",
                 Some(("tab", v)) => {
                     if let Some(t) = [Tab::Io, Tab::Trend, Tab::Claude]
                         .into_iter()

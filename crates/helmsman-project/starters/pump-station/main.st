@@ -123,7 +123,7 @@ plant(pump_a := pump_a, pump_b := pump_b);  (* PLANT *)
 level_raw := plant.level_raw;  (* PLANT: read your analog input here *)
 fb_a := fb_a_in OR plant.fb_a;  (* PLANT: keep the _in input *)
 fb_b := fb_b_in OR plant.fb_b;  (* PLANT: keep the _in input *)
-run := (run OR start_pb OR plant.operator_start) AND NOT stop_pb;  (* PLANT: drop operator_start *)
+run := (run OR start_pb) AND NOT stop_pb;
 
 level_tx(raw := level_raw, eng_min := 0.0, eng_max := 4.0);
 well(level_m := level_tx.value, level_bad := level_tx.bad, low_float := low_float_in, ack := ack_pb);
