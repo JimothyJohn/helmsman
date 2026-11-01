@@ -3,8 +3,8 @@
 # the device on each line, for example:
 #   device rio modbus-tcp 192.168.1.50:502 unit=1 timeout_ms=300 poll_ms=20
 #   in  start_pb bool rio di:0
-# The plant model presses start by itself, so if this box's own channels are
-# wired to anything, these lines drive it: check them before you deploy.
+# Nothing moves until start_pb is pressed or forced. If this box's own
+# channels are wired to anything, these lines drive it: check them first.
 in  start_pb         bool box di:0
 in  stop_pb          bool box di:1
 in  ack_pb           bool box di:2

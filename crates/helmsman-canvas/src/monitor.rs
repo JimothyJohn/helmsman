@@ -1,5 +1,7 @@
 //! The Monitor (docs/UI.md): phone to wall TV, watch only. Status tiles
-//! per program (running or faulted, the scan), then a tile per top-level
+//! per program (running or faulted; the scan period and counts only for
+//! an engineer who turned "Scan detail" on, kept per browser in
+//! [`Chrome::scan`]: card `monitor-scan-time`), then a tile per top-level
 //! instance with its outputs (a BOOL a green or red lamp, a number its
 //! value) and one for the program's own outputs; a tap goes one level
 //! down into that instance, Back and the breadcrumbs go up, and "Open
@@ -392,7 +394,13 @@ fn stale_text(fresh: &Fresh) -> Option<String> {
     }
 }
 
-fn status_sub(p: &Program<'_>) -> String {
+/// The status tile's second line: the scan period and count when
+/// `detail` (an engineer's choice), else nothing; the numbers are too low
+/// level for everyone's wall.
+fn status_sub(p: &Program<'_>, detail: bool) -> String {
+    if !detail {
+        return String::new();
+    }
     let period = p
         .period_ms
         .map_or_else(String::new, |ms| format!("scan {ms} ms · "));
@@ -410,9 +418,10 @@ impl Monitor {
         self.shapes.get(name).map(|(_, s)| s)
     }
 
-    /// The tiles for the level shown, as of page time `now`. A level that
+    /// The tiles for the level shown, as of page time `now`; `detail`
+    /// puts the scan period and count on the status tiles. A level that
     /// no longer exists (redeployed, renamed) falls back to the top.
-    pub fn groups(&mut self, feed: &dyn Feed, now: f64) -> Vec<Group> {
+    pub fn groups(&mut self, feed: &dyn Feed, now: f64, detail: bool) -> Vec<Group> {
         let programs = feed.programs(now);
         let trouble = feed.trouble(now);
         if let Some((prog, prefix)) = self.at.clone() {
@@ -439,7 +448,7 @@ impl Monitor {
             let status = Tile {
                 key: format!("status {}", p.name),
                 title: p.name.clone(),
-                sub: status_sub(p),
+                sub: status_sub(p, detail),
                 kind: TileKind::Status(p.run.clone()),
                 lamps: Vec::new(),
                 stale: trouble.clone().map(|t| format!("stale · {t}")),
@@ -535,20 +544,22 @@ impl Monitor {
     }
 
     /// One frame: the crumbs and the tiles, filling `ui`. Draws what was
-    /// where into `chrome`'s hits.
-    pub fn show(&mut self, ui: &mut egui::Ui, feed: &dyn Feed, chrome: &mut Chrome) {
+    /// where into `chrome`'s hits. `engineer`: the page is signed in as
+    /// one, so the "Scan detail" toggle is offered and honoured.
+    pub fn show(&mut self, ui: &mut egui::Ui, feed: &dyn Feed, chrome: &mut Chrome, engineer: bool) {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
         // Ages tick and data goes stale with no event to wake the page.
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
-        let groups = self.groups(feed, now);
         let trouble = feed.trouble(now);
         let area = ctx.content_rect();
         let k = (area.width() / 1100.0).min(area.height() / 650.0).clamp(1.0, 3.5);
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BLACK).inner_margin(12.0 * k))
             .show(ui, |ui| {
-                self.top(ui, k, trouble.as_deref(), chrome);
+                self.top(ui, k, trouble.as_deref(), chrome, engineer);
+                // After the toggle, so a tap shows on the same frame.
+                let groups = self.groups(feed, now, engineer && chrome.scan);
                 ui.add_space(10.0 * k);
                 egui::ScrollArea::vertical()
                     .id_salt("monitor-scroll")
@@ -580,9 +591,9 @@ impl Monitor {
             });
     }
 
-    /// Back, the crumbs, "Open diagram", and a red banner when the source
-    /// cannot be trusted.
-    fn top(&mut self, ui: &mut egui::Ui, k: f32, trouble: Option<&str>, chrome: &mut Chrome) {
+    /// Back, the crumbs, "Open diagram", an engineer's "Scan detail"
+    /// toggle, and a red banner when the source cannot be trusted.
+    fn top(&mut self, ui: &mut egui::Ui, k: f32, trouble: Option<&str>, chrome: &mut Chrome, engineer: bool) {
         let mut go: Option<Option<(String, String)>> = None;
         let crumbs = self.crumbs();
         ui.horizontal_wrapped(|ui| {
@@ -627,6 +638,18 @@ impl Monitor {
             if open.clicked() {
                 let (program, prefix) = self.at.clone().unwrap_or_default();
                 self.wish = Some(Wish::Diagram { program, prefix });
+            }
+            if engineer {
+                let scan = ui
+                    .add(
+                        egui::Button::selectable(chrome.scan, egui::RichText::new("Scan detail").size(size))
+                            .min_size(Vec2::new(TAP * 2.5 * k, TAP * k)),
+                    )
+                    .on_hover_text("the scan period and count on each status tile (kept in this browser)");
+                chrome.hit("monitor scan", scan.rect);
+                if scan.clicked() {
+                    chrome.scan = !chrome.scan;
+                }
             }
         });
         if let Some(to) = go {
