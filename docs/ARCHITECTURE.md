@@ -519,7 +519,12 @@ it); the interface is in the module docs of `wasm.rs`.
 
 ## The trace tap (`trace-tap`, built)
 
-What the live canvas draws: one scan of one module, as it ran.
+What the live canvas draws: one scan of one module, as it ran. One
+exception on screen: a statement that ran, and the arm it ran in, stay
+lit for `st_view::HOLD` (300 ms) after the scan they ran in. A frame shows
+one scan, so a statement that runs for a single scan (the body of `IF
+pulse.Q`) would otherwise brighten for one frame on the frames that land
+on it and never on the others: the Blink lamp's flicker.
 
 - **`helmsman_iec::trace`**. `Program::scan_traced` runs a scan and returns
   a `Trace`: per statement (a `StmtId`, with POU, line, column, shape and
