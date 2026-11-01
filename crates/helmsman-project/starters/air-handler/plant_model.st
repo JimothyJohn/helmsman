@@ -16,7 +16,6 @@ VAR_OUTPUT
   damper_shut : BOOL;
   fan_fb : BOOL;
   airflow : BOOL;
-  operator_start : BOOL;
 END_VAR
 VAR CONSTANT
   outside_c : REAL := 5.0;
@@ -29,7 +28,6 @@ VAR CONSTANT
   dt_s : REAL := 0.1;
 END_VAR
 VAR
-  operator : TP;
   opening : TON;
   closing : TON;
   motor : TON;
@@ -39,8 +37,6 @@ VAR
   aim_c : REAL;
   dirt_pa : REAL := 120.0;
 END_VAR
-operator(IN := TRUE, PT := T#1s);  (* as if someone pressed start *)
-operator_start := operator.Q;
 opening(IN := damper, PT := stroke);
 closing(IN := NOT damper, PT := stroke);
 motor(IN := fan, PT := motor_delay);

@@ -165,7 +165,7 @@ eye := eye_in OR plant.eye;  (* PLANT: keep the _in input *)
 belt_fb := belt_fb_in OR plant.belt_fb;  (* PLANT: keep the _in input *)
 gate_out_sw := gate_out_in OR plant.gate_out;  (* PLANT: keep the _in input *)
 gate_home_sw := gate_home_in OR plant.gate_home;  (* PLANT: keep the _in input *)
-run := (run OR start_pb OR plant.operator_start) AND NOT stop_pb AND NOT line.tripped;  (* PLANT: drop operator_start *)
+run := (run OR start_pb) AND NOT stop_pb AND NOT line.tripped;
 
 line(run := run, ack := ack_pb, eye := eye, belt_fb := belt_fb, belt_overload := belt_overload_in,
      gate_out_sw := gate_out_sw, gate_home_sw := gate_home_sw);

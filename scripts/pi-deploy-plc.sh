@@ -7,7 +7,7 @@
 # editor's projects in /var/lib/helmsman-plc/projects/ and the deployed one
 # booted from its store. On a first install (no project, nothing deployed)
 # it seeds project `line` from crates/helmsman-plc/programs/line.st (or the
-# .st given) and deploys it, so the box runs it from the first boot; a later
+# .st given); nothing runs until an engineer opens it and deploys. A later
 # deploy never touches projects (`helmsman-plc project seed`, run by the
 # unit before every start, only acts on a first install).
 # PLC_MODE=program keeps the old mode: one PROGRAM.st or PROJECT.xml file.
@@ -262,7 +262,7 @@ fi
 host="${target#*@}"
 echo
 if [ "$mode" = projects ]; then
-    echo "PLC is up on $host with projects (first install seeds $seed_name), scanning every ${scan_ms} ms"
+    echo "PLC is up on $host with projects (first install seeds $seed_name, undeployed: open it in the editor and Deploy), scanning every ${scan_ms} ms"
     echo "  engineer:   scripts/pi-account.sh $target USER engineer   (once, to edit and deploy)"
 else
     echo "PLC is up on $host running $(basename "$program") every ${scan_ms} ms"

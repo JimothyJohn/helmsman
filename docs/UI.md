@@ -67,9 +67,12 @@ this; change it here first when a decision changes.
   L5X files into the open project (XML and L5X ladder converted to ST).
 - In the browser simulation, projects persist in the browser's storage, with
   the same Upload and Download (the box's `.zip`). The built-in examples are
-  read-only starter projects: Save keeps your own copy. Deploy compiles and
-  runs the project in the page. A browser that keeps nothing (a private
-  window) still works; the projects last until the page closes.
+  read-only starter projects: Save keeps your own copy. Typing only checks:
+  errors are marked after a pause, and what runs is unchanged, as on a box.
+  Deploy compiles and runs the project in the page; one that does not
+  compile is refused and the old program keeps running. A browser that
+  keeps nothing (a private window) still works; the projects last until
+  the page closes.
 - **Machines and templates.** Worked machines (conveyor sorter, pump
   station, batch mixer, pick and place, bottle filler, air compressors,
   air handler) and templates (discrete machine, process loop) are one list,
@@ -79,7 +82,7 @@ this; change it here first when a decision changes.
   until opened; each is a read-only starter that Save copies. On a box,
   "Start from a machine or template" in the sidebar asks an engineer for a
   name and sends the project as its `.zip`; nothing else changes what the
-  box holds, and a first install still seeds `line` alone.
+  box holds, and a first install still seeds `line` alone, undeployed.
 
 ## Monitor (phone to wall TV; replaces Andon)
 
