@@ -5,14 +5,14 @@
 #
 # Usage: scripts/build-playground.sh [OUT_DIR] [PUBLIC_URL]
 #   default OUT_DIR    docs/playground   (GitHub Pages serves master's docs/)
-#   default PUBLIC_URL /helmsman/playground/
+#   default PUBLIC_URL /playground/ (the site is at the root of helmsman.advin.io)
 # Needs: trunk (`cargo install trunk --locked`); adds the wasm32 target.
 # The built files are committed: Pages builds nothing, it serves docs/ as is,
 # and nothing goes live until dev is merged to master.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out="${1:-docs/playground}"
-public_url="${2:-/helmsman/playground/}"
+public_url="${2:-/playground/}"
 command -v trunk >/dev/null || { echo "needs trunk: cargo install trunk --locked" >&2; exit 1; }
 rustup target add wasm32-unknown-unknown >/dev/null
 # Smaller wasm for a public page (6.2 MB -> 4.7 MB on 2026-10-31), for this

@@ -1,23 +1,37 @@
 # Helmsman Factory Automation
 
-A small soft PLC for factory edge boxes (a Raspberry Pi 5 is the reference):
-Structured Text modules that an agent drafts and an engineer approves, run
-against named signals on the devices the box masters, plus an open-source
-CIP-over-Ethernet originator and adapter. `docs/ARCHITECTURE.md` is the map
-of the code; `TODO.md` is the plan.
+The soft PLC you program by describing the machine. The agent writes
+standard IEC 61131-3 Structured Text from your spec, you check it on a live
+diagram, and an engineer approves it before it runs. **Early release.**
 
-**Try it in your browser:** <https://jimothyjohn.github.io/helmsman/playground/>
-writes and runs Structured Text against a simulated box, with its live
-diagram; no install. Asking Claude there takes your own API key, kept in
-the page's memory unless you tick "remember".
+- **Robust:** a minimal set of dependencies; every change passes more than
+  1,300 automated tests and interoperability tests in CI.
+- **Simple:** one controller, one service, its own web screen. No cloud
+  needed to run the machine, no database server, no microservices.
+- **Safe:** a memory-safe language, engineer approval for every change, an
+  audit trail, and safeguards that stay out of your way.
+- **Reliable:** compiled, native performance on a fixed scan; a watchdog
+  bounds every scan, and a faulted program stops alone with outputs safe.
 
-Status: early. Rust cargo workspace, crates under `crates/helmsman-*`:
-`helmsman-proto` (CIP originator), `helmsman-adapter` (CIP target),
-`helmsman-cli` (the `helmsman` command), `helmsman-iec` (ST compiler and
-interpreter, PLCopen XML), `helmsman-io` (I/O map, drivers, Modbus TCP),
-`helmsman-plc` (the runtime), `helmsman-diagram` (ST as a live diagram),
-`helmsman-canvas` (the browser app: ST and its live diagram, docs/UI.md). `make help` lists the dev targets. See `docs/SOURCES.md` for the
-reference stacks and ODVA documents this project draws on.
+A pure soft PLC: field I/O lives in junction boxes and remote I/O modules
+(such as the Moxa ioLogik) on industrial Ethernet. It speaks EtherNet/IP
+(CIP) and Modbus TCP, and imports PLCopen XML.
+
+**Try it in your browser:** <https://helmsman.advin.io/playground/>
+writes and runs Structured Text against a simulated controller, with its
+live diagram; no install.
+
+## For developers
+
+`docs/ARCHITECTURE.md` is the map of the code, `docs/UI.md` the shape of the
+app, `TODO.md` the plan. A Rust cargo workspace, crates under
+`crates/helmsman-*`: `helmsman-proto` (CIP originator), `helmsman-adapter`
+(CIP target), `helmsman-cli` (the `helmsman` command), `helmsman-iec` (ST
+compiler and interpreter, PLCopen XML), `helmsman-io` (I/O map, drivers,
+Modbus TCP), `helmsman-plc` (the runtime), `helmsman-diagram` (ST as a live
+diagram), `helmsman-canvas` (the browser app). `make help` lists the dev
+targets. `docs/SOURCES.md` reviews the reference stacks and ODVA documents
+this project draws on.
 
 ## Command line
 
