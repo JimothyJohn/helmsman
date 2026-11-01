@@ -1775,3 +1775,28 @@ fn a_page_no_box_serves_runs_the_simulation() {
     assert!(app.sim.is_some());
     assert!(app.boxv.is_none() && app.review.is_none(), "no box asked");
 }
+
+/// Nick, 2026-11-01: developing natively, an empty key field takes the
+/// shell's `ANTHROPIC_API_KEY` and the panel says so.
+#[test]
+fn an_empty_key_is_preloaded_from_the_environment_and_said_so() {
+    use crate::claude::{Chat, NoStore};
+    let mut c = Chat::new(Box::new(NoStore));
+    assert!(!c.has_key() && !c.from_env);
+    c.take_env(Some("not a key".into()));
+    assert!(!c.has_key(), "nonsense is not taken");
+    c.take_env(Some("sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789".into()));
+    assert!(
+        c.has_key() && c.from_env && !c.remember,
+        "taken, said so, not remembered"
+    );
+    // The user types over it: no longer the environment's.
+    c.key_mut().push('x');
+    c.key_changed();
+    assert!(!c.from_env);
+    // A key already held is never replaced.
+    let mut keep = Chat::new(Box::new(NoStore));
+    *keep.key_mut() = "sk-ant-api03-keptkeptkeptkeptkeptkeptkept".into();
+    keep.take_env(Some("sk-ant-api03-otherotherotherotherotherother".into()));
+    assert!(keep.key_mut().starts_with("sk-ant-api03-kept") && !keep.from_env);
+}
