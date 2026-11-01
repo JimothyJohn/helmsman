@@ -1,6 +1,6 @@
 <a href="https://helmsman.advin.io/"><img src="docs/brand/helmsman-banner.svg" alt="Helmsman Factory Automation" width="100%"></a>
 
-**[Try it in your browser →](https://helmsman.advin.io/playground/)** A simulated controller and its live diagram, no install.
+**[Try it in your browser →](https://helmsman.advin.io/playground/)** A simulated controller and its live diagram, no install. **[Datasheet (PDF)](https://helmsman.advin.io/helmsman-datasheet.pdf)**, one page.
 
 # Helmsman Factory Automation
 
