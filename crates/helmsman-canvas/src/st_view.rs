@@ -1039,7 +1039,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         // The gate's wire into the region's label, through its bubble.
         if let Some((g, port)) = r.gate {
             let n = d.node(g);
-            let (x, y) = out_port(&n.rect, port);
+            let (x, y) = out_port(n, port);
             let v = live.and_then(|l| l.values[g.0 as usize].get(port).copied().flatten());
             let (c, w) = wire_color(v);
             let end = cam.to_screen(r.rect.x, r.rect.y + LABEL_H / 2.0);
@@ -1061,8 +1061,8 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         let w = &d.wires[k];
         let f = strength(lit.is_some_and(|l| l.wire(k)));
         let (a, b) = (d.node(w.from), d.node(w.to));
-        let (ax, ay) = out_port(&a.rect, w.out);
-        let (bx, by) = in_port(&b.rect, w.inp);
+        let (ax, ay) = out_port(a, w.out);
+        let (bx, by) = in_port(b, w.inp);
         let v = live.and_then(|l| l.wire(d, k));
         let (c, width) = wire_color(v);
         let (pa, pb) = (cam.to_screen(ax, ay), cam.to_screen(bx, by));
@@ -1116,10 +1116,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         // A block that shows a value under its header (a variable) or
         // keeps its instance's ports apart (a function block) has a body
         // of its own; an operator, function or literal is one shade.
-        let two_tone = matches!(
-            n.kind,
-            NodeKind::Read { .. } | NodeKind::Write { .. } | NodeKind::Fb { .. } | NodeKind::For { .. }
-        );
+        let two_tone = n.kind.headed();
         if two_tone {
             painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7) * on_path));
             painter.rect_filled(
@@ -1152,14 +1149,14 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
         if text {
             painter.text(
-                h.center(),
+                if two_tone { h.center() } else { r.center() },
                 Align2::CENTER_CENTER,
                 &n.label,
                 font(11.5 * z),
                 ink.gamma_multiply(fade),
             );
             for (k, name) in n.ins.iter().enumerate() {
-                let (x, y) = in_port(&n.rect, k);
+                let (x, y) = in_port(n, k);
                 let p = cam.to_screen(x, y);
                 if !bubbled.contains(&(n.id, k)) {
                     painter.circle_filled(p, 3.0 * z, STEEL.gamma_multiply(on_path));
@@ -1175,7 +1172,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                 }
             }
             for (k, name) in n.outs.iter().enumerate() {
-                let (x, y) = out_port(&n.rect, k);
+                let (x, y) = out_port(n, k);
                 let p = cam.to_screen(x, y);
                 let v = live.and_then(|l| l.values[n.id.0 as usize].get(k).copied().flatten());
                 painter.circle_filled(p, 3.5 * z, wire_color(v).0.gamma_multiply(on_path));
