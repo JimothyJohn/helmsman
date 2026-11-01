@@ -960,7 +960,7 @@
   answer: ladder subset to ST, refuse the rest (recommended)
   result-note: built as card l5x-import (feat/l5x-ladder): helmsman_iec::ladder, docs/ARCHITECTURE.md "L5X ladder import".
 
-- [ ] **Monitor lamps: is TRUE always green?** docs/UI.md says a tile's outputs are green or red. Built (reversible, one function in `monitor.rs`): a BOOL output TRUE is a green lamp, FALSE a red one, whatever its name, so the line's `alarm` and a motor's `tripped` light green when they are on. Options: keep it literal; invert by name (alarm, fault, trip, jam, error, estop light red when TRUE, off otherwise); or let the source say per output (a `(* monitor: alarm *)` comment on the declaration).
+- [x] **Monitor lamps: is TRUE always green?** docs/UI.md says a tile's outputs are green or red. Built (reversible, one function in `monitor.rs`): a BOOL output TRUE is a green lamp, FALSE a red one, whatever its name, so the line's `alarm` and a motor's `tripped` light green when they are on. Options: keep it literal; invert by name (alarm, fault, trip, jam, error, estop light red when TRUE, off otherwise); or let the source say per output (a `(* monitor: alarm *)` comment on the declaration).
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -982,7 +982,7 @@
   id: monitor-scan-time
   answer: Those are 2 low level and should be hidden by default, that should be an engineer-mode only thing if they choose to display it. period and counts is fine, though.
 
-- [ ] **What does a click on an input's block force on a box?** The Editor (UI.md step 2) makes an input signal's block a control for an engineer: a BOOL flips (forced to the opposite of what it reads), a number drags (forced on every change). Built (reversible): only inputs that are signals of the map or calendar are clickable, since the diagram's reads are variables; a `%IX` address force has no click and is made through `POST /api/forces` only. A click on a forced BOOL forces it the other way; nothing but the banner releases.
+- [x] **What does a click on an input's block force on a box?** The Editor (UI.md step 2) makes an input signal's block a control for an engineer: a BOOL flips (forced to the opposite of what it reads), a number drags (forced on every change). Built (reversible): only inputs that are signals of the map or calendar are clickable, since the diagram's reads are variables; a `%IX` address force has no click and is made through `POST /api/forces` only. A click on a forced BOOL forces it the other way; nothing but the banner releases.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -993,7 +993,7 @@
   id: force-click
   answer: signals only, click flips, banner releases (built)
 
-- [ ] **Save writes every edited file at once?** A project is several files; the header has one Save. Built (reversible): Save writes every file with unsaved edits (a dot marks each in Files), each with the version it read, and Deploy saves first. A stale file (someone else saved it) is refused alone and offers Reload; the others land.
+- [x] **Save writes every edited file at once?** A project is several files; the header has one Save. Built (reversible): Save writes every file with unsaved edits (a dot marks each in Files), each with the version it read, and Deploy saves first. A stale file (someone else saved it) is refused alone and offers Reload; the others land.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -1015,7 +1015,7 @@
   id: sim-typing-runs
   answer: typing only checks (errors marked), Deploy runs, like a box
 
-- [ ] **A project with two PROGRAMs in the simulation?** On a box each PROGRAM of a project is a module of its own. The simulation's interpreter runs one program, so a project with two PROGRAMs fails there with "only one PROGRAM is supported". Built: that error, pointing at the second PROGRAM's file and line.
+- [x] **A project with two PROGRAMs in the simulation?** On a box each PROGRAM of a project is a module of its own. The simulation's interpreter runs one program, so a project with two PROGRAMs fails there with "only one PROGRAM is supported". Built: that error, pointing at the second PROGRAM's file and line.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -1037,7 +1037,7 @@
   id: seed-deploys
   answer: seed the project only, nothing runs until an engineer deploys
 
-- [ ] **HTTPS box: plain HTTP from the LAN refused, and a certificate without the box's IP: OK?** `box-https` (built) serves TLS on the API's port. Plain HTTP is served only from the box's own host (loopback or its own address: local scripts, the agent, the deploy script's curl, an SSH tunnel). From the LAN, a GET is redirected to https:// and anything else, `POST /mcp` from an engineer's MCP client included, is 403. The certificate names `localhost`, the host name (and NAME.local), 127.0.0.1 and ::1, not the LAN IP, because a bind of 0.0.0.0 doesn't say which address that is. A browser asks once either way. A strict client reaching the box by IP (an MCP client with the cert in `NODE_EXTRA_CA_CERTS`) fails the name check, and one using the host name passes. Built: as described.
+- [x] **HTTPS box: plain HTTP from the LAN refused, and a certificate without the box's IP: OK?** `box-https` (built) serves TLS on the API's port. Plain HTTP is served only from the box's own host (loopback or its own address: local scripts, the agent, the deploy script's curl, an SSH tunnel). From the LAN, a GET is redirected to https:// and anything else, `POST /mcp` from an engineer's MCP client included, is 403. The certificate names `localhost`, the host name (and NAME.local), 127.0.0.1 and ::1, not the LAN IP, because a bind of 0.0.0.0 doesn't say which address that is. A browser asks once either way. A strict client reaching the box by IP (an MCP client with the cert in `NODE_EXTRA_CA_CERTS`) fails the name check, and one using the host name passes. Built: as described.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
