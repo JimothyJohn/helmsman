@@ -503,7 +503,9 @@ pub struct Session {
     pub src: String,
     /// Diagnostics for `src` (empty: it compiles).
     pub diags: Vec<Diagnostic>,
-    /// The program running: the last source that compiled.
+    /// The program running: the last source deployed (or loaded). An
+    /// edit only reaches it through [`Self::set_source`]; [`Self::check`]
+    /// leaves it alone.
     pub build: Option<Build>,
     pub running: bool,
     pub period_ms: u64,
@@ -543,10 +545,39 @@ impl Session {
     }
 
     /// Whether the program running is not what the editor shows (the
-    /// editor's text does not compile, or was not compiled yet).
+    /// editor's text was not deployed, does not compile, or was not
+    /// compiled yet).
     #[must_use]
     pub fn stale(&self) -> bool {
         self.build.as_ref().is_none_or(|b| b.src != self.src)
+    }
+
+    /// Takes `src` as the editor's text, cut at [`MAX_SOURCE`].
+    fn take(&mut self, src: &str) {
+        let mut cut = MAX_SOURCE.min(src.len());
+        while !src.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        self.src = src[..cut].to_string();
+    }
+
+    /// Checks `src` (cut at [`MAX_SOURCE`]): `diags` say whether it
+    /// compiles. What runs is untouched either way, as on a box, where an
+    /// edit runs only once deployed ([`Self::set_source`]).
+    ///
+    /// Returns whether it compiles.
+    pub fn check(&mut self, src: &str) -> bool {
+        self.take(src);
+        match compile(&self.src, SIZES) {
+            Ok(_) => {
+                self.diags.clear();
+                true
+            }
+            Err(d) => {
+                self.diags = d;
+                false
+            }
+        }
     }
 
     /// Compiles `src` (cut at [`MAX_SOURCE`]). If it compiles, it replaces
@@ -557,11 +588,7 @@ impl Session {
     ///
     /// Returns whether it compiled.
     pub fn set_source(&mut self, src: &str) -> bool {
-        let mut cut = MAX_SOURCE.min(src.len());
-        while !src.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        self.src = src[..cut].to_string();
+        self.take(src);
         match Build::new(&self.src) {
             Ok(mut b) => {
                 if let Some(old) = &self.build {
