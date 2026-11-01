@@ -7,7 +7,7 @@
 
 use eframe::egui::{self, Rect, RichText, Vec2};
 
-use crate::box_view::BoxView;
+use crate::box_view::{BoxView, is_engineer};
 use crate::editor::{CHROME_KEY, Chrome};
 use crate::monitor::{Monitor, NARROW, Wish};
 use crate::playground_view::PlaygroundView;
@@ -190,6 +190,14 @@ impl App {
         self.review.as_ref().and_then(|r| r.state.session.clone())
     }
 
+    /// Whether the Monitor's status tiles carry the scan period and
+    /// count: this browser chose it, and an engineer is signed in.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[must_use]
+    pub fn scan_detail(&self) -> bool {
+        self.chrome.scan && is_engineer(self.session().as_ref()).is_ok()
+    }
+
     /// Files the browser's picker read since the last frame, uploaded to
     /// whatever is open.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
@@ -251,6 +259,7 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         self.uploaded(crate::web::take_picked());
         let session = self.session();
+        let engineer = is_engineer(session.as_ref()).is_ok();
         if let Some(b) = &mut self.boxv {
             b.session = session;
         }
@@ -286,12 +295,12 @@ impl App {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.state.set_monitor(true);
                 b.tick(&ctx);
-                self.monitor.show(ui, &b.state, &mut self.chrome);
+                self.monitor.show(ui, &b.state, &mut self.chrome, engineer);
             }
             (Screen::Monitor, Source::Sim) => {
                 let s = self.sim.get_or_insert_with(PlaygroundView::new);
                 s.tick(&ctx);
-                self.monitor.show(ui, &*s, &mut self.chrome);
+                self.monitor.show(ui, &*s, &mut self.chrome, engineer);
             }
         }
         if let Some(Wish::Diagram { program, prefix }) = self.monitor.wish.take() {

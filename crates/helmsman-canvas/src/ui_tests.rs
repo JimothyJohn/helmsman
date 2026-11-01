@@ -299,17 +299,21 @@ mod chrome {
         let mut c = Chrome::default();
         c.tab = Tab::Trend;
         c.st = true;
+        c.scan = true;
         let back = Chrome::restored(&c.saved());
         assert_eq!(
-            (back.left, back.right, back.st, back.tab),
-            (true, true, true, Tab::Trend)
+            (back.left, back.right, back.st, back.tab, back.scan),
+            (true, true, true, Tab::Trend, true)
         );
         // Anything else keeps the defaults; the Why tab is gone.
         for junk in ["", "left", "tab=why", "=== =1"] {
             assert_eq!(Chrome::restored(junk), Chrome::default(), "{junk:?}");
         }
-        let c = Chrome::restored("right=yes left=0 st=1 \u{0}");
-        assert_eq!((c.left, c.right, c.st, c.tab), (false, false, true, Tab::Io));
+        let c = Chrome::restored("right=yes left=0 st=1 scan=yes \u{0}");
+        assert_eq!(
+            (c.left, c.right, c.st, c.tab, c.scan),
+            (false, false, true, Tab::Io, false)
+        );
     }
 
     #[test]

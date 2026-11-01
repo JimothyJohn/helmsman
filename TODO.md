@@ -971,7 +971,7 @@
   id: monitor-lamp-polarity
   answer: literal TRUE green, FALSE red (built)
 
-- [ ] **Monitor "scan time": the period, or the measured scan?** The box publishes each module's scan period (`scan_ms`) and its counts (scans, overruns, held), not how long a scan took: the runtime has no clock (it also runs in the canvas's wasm build). Built: the status tile shows "scan 2 ms · N scans" (the period). Measuring would time `tick_with` in the box binary's loop (behind `box`) and publish last/max per module in `/api/events`.
+- [x] **Monitor "scan time": the period, or the measured scan?** The box publishes each module's scan period (`scan_ms`) and its counts (scans, overruns, held), not how long a scan took: the runtime has no clock (it also runs in the canvas's wasm build). Built: the status tile shows "scan 2 ms · N scans" (the period). Measuring would time `tick_with` in the box binary's loop (behind `box`) and publish last/max per module in `/api/events`.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
