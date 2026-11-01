@@ -42,7 +42,7 @@ pub mod pin;
 use std::fmt;
 use std::time::Duration;
 
-pub use classify::{Class, classify};
+pub use classify::{Class, classify, classify_with};
 
 /// How far a change reaches, from least to most.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

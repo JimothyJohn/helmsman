@@ -941,7 +941,6 @@ fn offset_set(base: u8) -> ChangeSet {
         modules: [("offset".to_string(), module)].into_iter().collect(),
         io_map: Some("out lamp bool box do:0\n".into()),
         calendar: Some("zone UTC\nshift 7 daily 00:00-24:00\n".into()),
-        drivers: std::collections::BTreeMap::new(),
     }
 }
 
@@ -1376,4 +1375,62 @@ fn the_default_agent_versions_are_the_ones_the_relay_serves() {
     let usage = String::from_utf8_lossy(&out.stdout);
     assert!(usage.contains("(default v3)"), "{usage}");
     assert!(usage.contains("default explain-v1"), "{usage}");
+}
+
+/// A map naming `wasm:NAME` boots on `<state-dir>/drivers/NAME.wasm`, with
+/// no store: a missing or bad file stops the boot before the box goes on
+/// the network, naming the file.
+#[test]
+fn the_binary_boots_a_wasm_driver_from_its_state_directory() {
+    let tag = std::process::id();
+    let prog = program_file(
+        &format!("wasm_driver_{tag}"),
+        "PROGRAM p VAR_INPUT level : DINT; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR lamp := level > 10; END_PROGRAM",
+    );
+    let map = text_file(
+        &format!("wasm_driver_{tag}.iomap"),
+        "device rio wasm:modbus 127.0.0.1:1 unit=1\nin level int rio hr:0\nout lamp bool box do:0\n",
+    );
+    let boot = |state: &Path| {
+        plc()
+            .arg(&prog)
+            .arg("--io-map")
+            .arg(&map)
+            .args(["--encap-port", "0", "--io-port", "0", "--state-dir"])
+            .arg(state)
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let state = state_dir();
+    for (bytes, says) in [
+        (None, "drivers/modbus.wasm"),
+        (Some(b"\0asm junk".as_slice()), "drivers/modbus.wasm in the box"),
+    ] {
+        if let Some(b) = bytes {
+            std::fs::create_dir_all(state.join("drivers")).unwrap();
+            std::fs::write(state.join("drivers/modbus.wasm"), b).unwrap();
+        }
+        let out = boot(&state).wait_with_output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{err}");
+        assert!(err.contains(says), "{err}");
+        assert!(
+            !err.contains("CIP on"),
+            "refused before going on the network: {err}"
+        );
+    }
+    let guest = include_bytes!("../../helmsman-io/guests/modbus-tcp.wasm");
+    std::fs::write(state.join("drivers/modbus.wasm"), guest).unwrap();
+    let mut child = boot(&state);
+    let stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut running = Running { child, stderr };
+    let mut said = String::new();
+    while !said.contains("CIP on") {
+        let mut line = String::new();
+        assert!(running.stderr.read_line(&mut line).unwrap() > 0, "exited: {said}");
+        said.push_str(&line);
+    }
+    drop(running);
+    assert!(said.contains("WASM driver modbus from the box"), "{said}");
 }

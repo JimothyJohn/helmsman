@@ -100,7 +100,6 @@ fn running() -> ChangeSet {
         )]),
         io_map: Some(MAP.into()),
         calendar: None,
-        drivers: BTreeMap::new(),
     }
 }
 
@@ -1124,7 +1123,13 @@ fn a_wasm_proposal_over_the_file_cap_is_refused_whatever_the_body_limit() {
             json!({ "kind": "module", "manifest": MANIFEST, "wasm": b64(&vec![0; len]) }),
         )
         .unwrap();
-        helmsman_plc::api::proposal::check(&new, &Catalog::default(), 16, Some(&running()))
+        helmsman_plc::api::proposal::check(
+            &new,
+            &Catalog::default(),
+            16,
+            Some(&running()),
+            &helmsman_plc::driver_dir::Sources::default(),
+        )
     };
     let (status, j) = check(cap + 1).unwrap_err();
     assert_eq!(status, 422);

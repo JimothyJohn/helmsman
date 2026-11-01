@@ -19,8 +19,9 @@
 //!   files always build the same manifests, so deploying a project twice
 //!   is one snapshot.
 //! - **The I/O map is the project's** `io.map` (none if it has none). The
-//!   calendar and the WASM drivers are not part of a project: a deploy
-//!   carries the running ones over.
+//!   calendar is not part of a project: a deploy carries the running one
+//!   over. Its WASM drivers (`drivers/NAME.wasm`) are files the deploy
+//!   loads the map with (`crate::driver_dir`), not part of the snapshot.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -282,7 +283,7 @@ fn len_of(window: Option<&str>) -> usize {
 }
 
 /// Builds `files` (project `name`) into the change set a deploy applies:
-/// `base`'s calendar and drivers, the project's map and one module per
+/// `base`'s calendar, the project's map and one module per
 /// PROGRAM, each compiled and held to its manifest.
 ///
 /// # Errors
@@ -455,7 +456,6 @@ pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape)
         modules,
         io_map: files.get(IO_MAP).map(str::to_string),
         calendar: base.and_then(|b| b.calendar.clone()),
-        drivers: base.map(|b| b.drivers.clone()).unwrap_or_default(),
     };
     if let Err(errs) = change.validate() {
         return Err(errs.into_iter().map(|e| diag("", 0, e)).collect());
