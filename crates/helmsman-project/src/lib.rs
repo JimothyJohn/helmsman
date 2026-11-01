@@ -9,14 +9,16 @@
 //!   letter or digit ([`project_name`]): one path segment, lower case so
 //!   two projects never differ by case alone (a case-folding file system
 //!   would merge them). A file is `NAME.st` with `NAME` 1..=64 of `A-Z a-z
-//!   0-9 _ -` starting with a letter or digit, or one of [`IO_MAP`] and
-//!   [`SETTINGS`] ([`file_name`]); two files that differ only by case are
-//!   refused.
+//!   0-9 _ -` starting with a letter or digit, or one of [`IO_MAP`],
+//!   [`SETTINGS`] and [`LAYOUT`] ([`file_name`]); two files that differ
+//!   only by case are refused.
 //! - **Contents.** UTF-8 without NUL, other control characters (tab, CR
 //!   and LF aside) or bidirectional overrides (no "Trojan Source" in a
 //!   program an engineer reviews); at most [`MAX_FILE`] bytes a file,
-//!   [`MAX_FILES`] `.st` files and [`MAX_TOTAL`] bytes a project.
+//!   [`MAX_FILES`] `.st` files and [`MAX_TOTAL`] bytes a project. A
+//!   [`LAYOUT`] file must also read as one ([`layout::parse`]).
 
+pub mod layout;
 pub mod zip;
 
 use std::collections::BTreeMap;
@@ -25,6 +27,12 @@ use std::collections::BTreeMap;
 pub const IO_MAP: &str = "io.map";
 /// The settings file's name in a project.
 pub const SETTINGS: &str = "project.settings";
+/// The diagram arrangement's file name in a project ([`layout`]): the
+/// shared default an engineer saves; the build ignores it.
+pub const LAYOUT: &str = "diagram.layout";
+/// What a project file may be named, for messages.
+pub const FILE_NAMES: &str =
+    "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings or diagram.layout";
 /// Largest file, bytes.
 pub const MAX_FILE: usize = 256 * 1024;
 /// Most `.st` files in a project.
@@ -52,6 +60,7 @@ pub enum FileKind {
     St,
     IoMap,
     Settings,
+    Layout,
 }
 
 /// What `s` names in a project, if it names anything.
@@ -60,6 +69,7 @@ pub fn file_name(s: &str) -> Option<FileKind> {
     match s {
         IO_MAP => return Some(FileKind::IoMap),
         SETTINGS => return Some(FileKind::Settings),
+        LAYOUT => return Some(FileKind::Layout),
         _ => {}
     }
     let stem = s.strip_suffix(".st")?;
@@ -93,6 +103,19 @@ pub fn check_text(bytes: &[u8]) -> Result<&str, String> {
                 ));
             }
         }
+    }
+    Ok(text)
+}
+
+/// Why file `name`'s bytes are refused, if they are: [`check_text`], and
+/// for [`LAYOUT`] that it reads as an arrangement.
+///
+/// # Errors
+/// What [`check_text`] or [`layout::parse`] refuse, the first problem.
+pub fn check_file<'a>(name: &str, bytes: &'a [u8]) -> Result<&'a str, String> {
+    let text = check_text(bytes)?;
+    if file_name(name) == Some(FileKind::Layout) {
+        layout::parse(text).map_err(|e| e.into_iter().next().unwrap_or_default())?;
     }
     Ok(text)
 }
@@ -146,7 +169,7 @@ impl Files {
                 errs.push(format!("{}: not a project file name", clean(name)));
                 continue;
             }
-            if let Err(e) = check_text(text.as_bytes()) {
+            if let Err(e) = check_file(name, text.as_bytes()) {
                 errs.push(format!("{name}: {e}"));
             }
             if let Some(other) = folded.insert(name.to_ascii_lowercase(), name) {
@@ -217,11 +240,11 @@ pub fn from_zip(entries: Vec<zip::Entry>) -> Result<Files, String> {
             .to_string();
         if file_name(&name).is_none() {
             return Err(format!(
-                "{}: not a project file (NAME.st, {IO_MAP} or {SETTINGS} at the archive's top level)",
+                "{}: not a project file ({FILE_NAMES} at the archive's top level)",
                 clean(&e.name)
             ));
         }
-        let text = check_text(&e.data).map_err(|why| format!("{name}: {why}"))?;
+        let text = check_file(&name, &e.data).map_err(|why| format!("{name}: {why}"))?;
         if files.insert(name.clone(), text.to_string()).is_some() {
             return Err(format!("{name}: twice in the archive"));
         }

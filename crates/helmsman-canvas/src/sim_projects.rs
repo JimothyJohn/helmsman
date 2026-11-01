@@ -361,6 +361,55 @@ impl SimProjects {
         self.persist();
     }
 
+    /// The open project's shared diagram layout (`""`: none), as edited.
+    #[must_use]
+    pub fn layout(&self) -> &str {
+        self.files
+            .get(helmsman_project::LAYOUT)
+            .map_or("", String::as_str)
+    }
+
+    /// Why the open project cannot keep a default layout, if it cannot.
+    ///
+    /// # Errors
+    /// It is a built-in example.
+    pub fn can_save_layout(&self) -> Result<(), String> {
+        if self.is_example() {
+            return Err(
+                "A built-in example is read-only: Save your own copy first, then save its layout.".into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Saves `text` as the open project's shared diagram layout, that one
+    /// file alone (other edits stay unsaved). Whether it was saved.
+    pub fn save_layout(&mut self, text: &str) -> bool {
+        if let Err(e) = self.can_save_layout() {
+            self.note(e, true);
+            return false;
+        }
+        if let Err(e) = helmsman_project::check_file(helmsman_project::LAYOUT, text.as_bytes()) {
+            self.note(format!("The layout was not saved: {e}"), true);
+            return false;
+        }
+        let mut stored = self.base().cloned().unwrap_or_default();
+        stored.0.insert(helmsman_project::LAYOUT.into(), text.to_string());
+        if let Err(e) = stored.check() {
+            self.note(format!("The layout was not saved: {}", e.join("; ")), true);
+            return false;
+        }
+        self.files
+            .insert(helmsman_project::LAYOUT.into(), text.to_string());
+        self.saved.insert(self.open.clone(), stored);
+        self.note(
+            format!("Saved this arrangement as {}'s default layout.", self.open),
+            false,
+        );
+        self.persist();
+        true
+    }
+
     /// A new project with a starter program, opened.
     pub fn create(&mut self, name: &str, from: Option<&str>) {
         if !project_name(name) {
@@ -425,7 +474,10 @@ impl SimProjects {
     pub fn new_file(&mut self, file: &str) {
         if file_name(file).is_none() {
             self.note(
-                format!("{file:?} is not a project file name: NAME.st, io.map or project.settings"),
+                format!(
+                    "{file:?} is not a project file name: {}",
+                    helmsman_project::FILE_NAMES
+                ),
                 true,
             );
             return;

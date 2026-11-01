@@ -15,9 +15,10 @@
 //!   letter or digit ([`project_name`]): one path segment, lower case so
 //!   two projects never differ by case alone (a case-folding file system
 //!   would merge them). A file is `NAME.st` with `NAME` 1..=64 of `A-Z a-z
-//!   0-9 _ -` starting with a letter or digit, or one of [`IO_MAP`] and
-//!   [`SETTINGS`] ([`file_name`]); two files that differ only by case are
-//!   refused. Checked after percent-decoding, so `..`, `%2e%2e`, `a/b`,
+//!   0-9 _ -` starting with a letter or digit, or one of [`IO_MAP`],
+//!   [`SETTINGS`] and [`LAYOUT`] (the diagram's shared arrangement, which
+//!   the build ignores; [`file_name`]); two files that differ only by
+//!   case are refused. Checked after percent-decoding, so `..`, `%2e%2e`, `a/b`,
 //!   `a\b`, `C:x` and NUL never name anything.
 //! - **Contents.** UTF-8 without NUL, other control characters (tab, CR
 //!   and LF aside) or bidirectional overrides (no "Trojan Source" in a
@@ -38,8 +39,8 @@ pub mod build;
 pub mod settings;
 
 pub use helmsman_project::{
-    FileKind, Files, IO_MAP, MAX_FILE, MAX_FILES, MAX_TOTAL, NAME_LEN, SETTINGS, STEM_LEN, check_text,
-    file_name, from_zip, project_name, zip,
+    FILE_NAMES, FileKind, Files, IO_MAP, LAYOUT, MAX_FILE, MAX_FILES, MAX_TOTAL, NAME_LEN, SETTINGS,
+    STEM_LEN, check_file, check_text, file_name, from_zip, layout, project_name, zip,
 };
 
 use std::collections::BTreeMap;
@@ -427,14 +428,9 @@ impl Projects {
     /// version mismatch (409), a project grown past the caps (413).
     pub fn save(&self, name: &str, file: &str, text: &[u8], if_match: Option<Option<&str>>) -> R<String> {
         if file_name(file).is_none() {
-            return Err(Refusal::new(
-                400,
-                format!(
-                    "a project file is NAME.st (NAME 1 to {STEM_LEN} of A-Z a-z 0-9 _ -), {IO_MAP} or {SETTINGS}"
-                ),
-            ));
+            return Err(Refusal::new(400, format!("a project file is {FILE_NAMES}")));
         }
-        let text = check_text(text).map_err(|e| Refusal::new(422, format!("{file}: {e}")))?;
+        let text = check_file(file, text).map_err(|e| Refusal::new(422, format!("{file}: {e}")))?;
         let _g = self.guard();
         let mut files = self.read_locked(name)?;
         let current = files.0.get(file).map(|t| version(t.as_bytes()));

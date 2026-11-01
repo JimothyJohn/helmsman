@@ -562,6 +562,25 @@ fn storage() -> Result<web_sys::Storage, String> {
         .ok_or_else(|| "no localStorage".into())
 }
 
+/// The diagram's personal layouts in `localStorage` (`arrange.rs`), every
+/// access wrapped as for [`LocalProjects`].
+#[derive(Debug, Default)]
+pub struct LocalArrangements;
+
+const ARRANGEMENTS_SLOT: &str = "helmsman-canvas/arrangements";
+
+impl crate::sim_projects::Storage for LocalArrangements {
+    fn load(&self) -> Result<Option<String>, String> {
+        storage()?.get_item(ARRANGEMENTS_SLOT).map_err(|e| text(&e))
+    }
+
+    fn save(&mut self, value: &str) -> Result<(), String> {
+        storage()?
+            .set_item(ARRANGEMENTS_SLOT, value)
+            .map_err(|e| text(&e))
+    }
+}
+
 impl crate::sim_projects::Storage for LocalProjects {
     fn load(&self) -> Result<Option<String>, String> {
         storage()?.get_item(PROJECTS_SLOT).map_err(|e| text(&e))
