@@ -17,8 +17,9 @@
 //!
 //! Reconnects work like `EventSource`'s own, but here, so the canvas can
 //! say what is happening: a failed stream is closed and reopened after
-//! [`backoff`] (2 s, doubling to 30 s), and after [`UNREACHABLE_AFTER`]
-//! failures in a row the box is called unreachable (still retrying).
+//! [`backoff`] ([`RETRY_SECS`], the same every time, counted down on the
+//! status line), and after [`UNREACHABLE_AFTER`] failures in a row the
+//! box is called unreachable (still retrying).
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
@@ -32,11 +33,15 @@ use serde_json::Value as Json;
 /// before anything ever worked) after which the box is "unreachable".
 pub const UNREACHABLE_AFTER: u32 = 3;
 
+/// Seconds between retries: a steady 5 s, so the countdown on the status
+/// line reads the same every time (Nick, 2026-11-01; it was 2 s doubling
+/// to 30, which read as a hang).
+pub const RETRY_SECS: f64 = 5.0;
+
 /// Seconds to wait before retry number `failures` (1-based).
 #[must_use]
-pub fn backoff(failures: u32) -> f64 {
-    let doublings = failures.saturating_sub(1).min(4);
-    (2.0 * f64::from(1u32 << doublings)).min(30.0)
+pub fn backoff(_failures: u32) -> f64 {
+    RETRY_SECS
 }
 
 /// What to fetch once.
@@ -846,10 +851,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backoff_starts_at_the_servers_retry_and_caps() {
+    fn the_retry_wait_is_the_same_every_time() {
         let d: Vec<f64> = (1..=7).map(backoff).collect();
-        assert_eq!(d, [2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]);
-        assert!((backoff(u32::MAX) - 30.0).abs() < f64::EPSILON);
+        assert_eq!(d, [5.0; 7]);
+        assert!((backoff(u32::MAX) - RETRY_SECS).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -924,12 +929,12 @@ mod tests {
             s.link(),
             Link::Reconnecting {
                 failures: 1,
-                at: 12.0
+                at: 15.0
             }
         );
-        assert_eq!(s.poll(11.9), [], "not before the backoff");
-        assert_eq!(s.next_retry(), Some(12.0));
-        assert_eq!(s.poll(12.0), [Cmd::Listen(Stream::Values, "/api/events".into())]);
+        assert_eq!(s.poll(14.9), [], "not before the backoff");
+        assert_eq!(s.next_retry(), Some(15.0));
+        assert_eq!(s.poll(15.0), [Cmd::Listen(Stream::Values, "/api/events".into())]);
         assert_eq!(s.next_retry(), None);
 
         let now = failed_values(&mut s, 2, 13.0);

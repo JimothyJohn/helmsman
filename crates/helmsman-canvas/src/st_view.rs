@@ -41,6 +41,11 @@ use brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
 
 /// How much of the diagram a pan must leave in view, points.
 pub const KEEP: f32 = 120.0;
+/// The smallest zoom a fit goes to: a block's label (11.5 units of type)
+/// still reads at about 9 px. A diagram too big to fit at that zoom shows
+/// its left part and you pan, instead of shrinking to an unreadable whole
+/// (Nick, 2026-11-01).
+pub const LEGIBLE: f32 = 0.75;
 /// The band along the diagram's top the glyph buttons sit in, points: a
 /// fit keeps the diagram below it.
 pub const GLYPH_BAND: f32 = 52.0;
@@ -108,7 +113,7 @@ impl Cam {
 
     fn fit(&mut self, area: Rect, size: (f32, f32)) {
         let (w, h) = (size.0.max(1.0) + 60.0, size.1.max(1.0) + 60.0);
-        self.zoom = (area.width() / w).min(area.height() / h).clamp(0.2, 1.2);
+        self.zoom = (area.width() / w).min(area.height() / h).clamp(LEGIBLE, 1.2);
         self.origin = area.min;
         self.offset = Vec2::splat(30.0 * self.zoom);
         self.fitted = true;
@@ -166,6 +171,9 @@ pub struct Viewer {
     moved: Vec<Vec<(NodeId, Vec2)>>,
     /// Counts changes to `moved` (see [`Self::edits`]).
     edits: u64,
+    /// The blocks' one-character icons (the project's `icons.map` over
+    /// the built-in ones).
+    pub icons: crate::icons::Icons,
 }
 
 /// One row of the program tree.
@@ -331,6 +339,7 @@ impl Viewer {
             folded: Vec::new(),
             moved,
             edits: 0,
+            icons: crate::icons::Icons::default(),
         }
     }
 
@@ -965,6 +974,7 @@ impl Viewer {
                 lines: &self.highlight,
                 lit: self.lit.as_ref(),
                 vars: self.module.program().map(|p| &p.vars),
+                icons: &self.icons,
             },
         );
     }
@@ -1054,6 +1064,8 @@ struct Marks<'a> {
     /// The POU's variables, by upper-cased name: how a value prints
     /// (`T#500ms` for a TIME) and which are constants (no value shown).
     vars: Option<&'a std::collections::HashMap<String, Var>>,
+    /// The blocks' icons.
+    icons: &'a crate::icons::Icons,
 }
 
 /// The program variable a node's path starts at (`M.ON` is `M`'s).
@@ -1142,6 +1154,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         lines,
         lit,
         vars,
+        icons,
     } = marks;
     let z = cam.zoom;
     let strength = |on: bool| if lit.is_none() || on { 1.0 } else { DIMMED };
@@ -1319,9 +1332,36 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
             Stroke::new(1.0 * z, Color32::from_black_alpha(200))
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
-        if text {
+        // The block's one-character icon: at the header's left edge beside
+        // the label, or alone and large enough to read when the label is
+        // too small to draw (Nick, 2026-11-01).
+        let icon = icons.of(n);
+        if !text && let Some(i) = icon {
             painter.text(
-                if two_tone { h.center() } else { r.center() },
+                r.center(),
+                Align2::CENTER_CENTER,
+                i,
+                font((14.0 * z).max(11.0)),
+                ink.gamma_multiply(fade),
+            );
+        }
+        if text {
+            let band = if two_tone { h } else { r };
+            // With an icon the label sits right of it, so the two never
+            // overlap on a block sized to its label alone.
+            let mut centre = band.center();
+            if let Some(i) = icon {
+                painter.text(
+                    Pos2::new(band.left() + 3.0 * z, band.center().y),
+                    Align2::LEFT_CENTER,
+                    i,
+                    font(11.5 * z),
+                    ink.gamma_multiply(fade),
+                );
+                centre.x += 6.0 * z;
+            }
+            painter.text(
+                centre,
                 Align2::CENTER_CENTER,
                 &n.label,
                 font(11.5 * z),

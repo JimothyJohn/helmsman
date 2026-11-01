@@ -55,16 +55,25 @@ footer{background:var(--graphite);color:#C8C8C8;font:13px var(--mono);padding:18
 <h1 id="projects">Projects</h1>
 <p>A project is a folder of files: the program's Structured Text (one or
 more <code>.st</code> files, one <code>PROGRAM</code>), an
-<code>io.map</code> that says which signal is which channel, and
-<code>project.settings</code>. The Files pane shows them.</p>
+<code>io.map</code> that says which signal is which channel,
+<code>project.settings</code>, and two the editor keeps for itself,
+<code>diagram.layout</code> (a saved arrangement) and
+<code>icons.map</code> (the blocks' icons, see <a href="editor.html">The
+Editor</a>). The Files tab of the left pane shows them.</p>
 <h2 id="files">Files</h2>
 <ul>
 <li><strong>New project</strong>, <strong>Copy</strong>,
-<strong>Rename</strong>, <strong>Delete</strong> are in the Files pane.
-A copy of an example or a starter is how you begin from one.</li>
+<strong>Rename</strong>, <strong>Delete</strong> are in the Files tab. A
+copy of an example or a starter is how you begin from one.</li>
 <li><strong>New file</strong>, <strong>Rename file</strong>,
 <strong>Delete file</strong> likewise. A file is Structured Text
-(<code>.st</code>) or the I/O map.</li>
+(<code>.st</code>), the I/O map, or one of the editor's own.</li>
+<li><strong>Right-click a file</strong> for Copy, Paste, Duplicate,
+Rename and Delete. Copy keeps the file in the editor's own clipboard,
+and Paste puts it into whichever project is open, under the next free
+name (<code>main-2.st</code> after <code>main.st</code>), so moving a
+block between projects is a copy, an open, and a paste. Right-click the
+files heading to paste without a file under the pointer.</li>
 <li>The tree under the files is the program: the <code>PROGRAM</code>,
 then each function block instance it calls, nested. Click one to see its
 diagram.</li>

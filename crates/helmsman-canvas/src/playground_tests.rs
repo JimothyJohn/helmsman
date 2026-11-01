@@ -989,9 +989,9 @@ struct Screen {
 
 impl Screen {
     fn new() -> Self {
-        // The ST open beside the diagram, as the simulation starts.
+        // The ST open on the left pane's Code tab, as the simulation starts.
         let mut chrome = Chrome::default();
-        chrome.st = true;
+        chrome.show_code();
         let mut s = Self {
             ctx: egui::Context::default(),
             view: PlaygroundView::new(),

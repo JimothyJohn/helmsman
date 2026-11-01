@@ -42,13 +42,31 @@ this; change it here first when a decision changes.
   with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
   deploy is still there to read after the line under the header has gone.
-- **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
-  not show), Agent. On a Pi the Trend opens with
+- **Left pane, collapsible, tabs (160 pt):** Files (the projects, the
+  open one's files, the program tree; a right-click on a file offers
+  Copy, Paste, Duplicate, Rename and Delete, with an app-wide clipboard
+  so a file pastes into any open project) and Code (the Structured Text
+  editor). One width for both tabs; Alt 0 and Alt 1 open the pane on its
+  tab, or shut it when that tab shows.
+- **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the
+  diagram does not show), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.
 - **NOT is a bubble** on the pin it feeds (or the output it inverts), the
   FBD convention, not a block of its own. Display only.
+- **Icons on blocks:** one character at the header's left, from the
+  project's `icons.map` (`WHAT = ICON` a line: a block type, a name, or a
+  prefix with `*`; the project's rules over the built-in ones for the
+  standard blocks: T for timers, # for counters, ↑ ↓ for the edges, S R
+  for the bistables, ~ for `BLINK_PATTERN`). Zoomed out past where the
+  label is drawn, the icon stands alone at a readable size.
+- **A fit never goes below a legible zoom** (0.75, about 9 px type): a
+  diagram too big for the view at that zoom shows its left part and you
+  pan, instead of shrinking to one-letter labels. Controls on blocks cut
+  their text instead of wrapping it.
+- **The box link's status counts down:** "reconnecting (retry in 5s)",
+  ticking each second; every retry waits 5 s.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.
@@ -112,8 +130,8 @@ The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
 | Alt F8 | Sign in (box) | Login |
 | Ctrl F8 | Sign out (box) | Logout |
 | Ctrl Z, Ctrl Y | Undo, Redo in the ST editor | Undo, Restore |
-| Alt 0 | Files sidebar | Devices view |
-| Alt 1 | Structured Text pane | POUs view |
+| Alt 0 | The left pane's Files tab | Devices view |
+| Alt 1 | The left pane's Code tab (the Structured Text) | POUs view |
 | Alt 2 | Trend along the bottom | Modules view |
 | Alt 3 | Side panel | Messages view |
 | Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |

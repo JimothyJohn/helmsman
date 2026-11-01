@@ -120,15 +120,31 @@ leaves the view, and a double-click on empty space fits it again.</li>
 <p>Values that would clutter the diagram are left off it: a constant
 shows its name alone, a time reads as <code>T#500ms</code>. A wire that
 would cross the whole diagram is drawn as a pair of tagged stubs naming
-the signal instead of a long lead.</p>
+the signal instead of a long lead. Fitting the diagram to the view never
+shrinks it past the point where its labels read: a big program shows its
+left part and you pan.</p>
+<p><strong>Icons.</strong> A block can carry one character at the left
+of its header, so you can tell a timer from a counter at a glance: the
+standard blocks have built-in ones (T for timers, # for counters, ↑ and
+↓ for the edge detectors, S and R for the bistables, ~ for the blink
+pattern), and a file named <code>icons.map</code> in the project adds
+your own, one rule a line:</p>
+<pre><code>MOTOR = M        # every block of type MOTOR
+conveyor* = &gt;    # every variable or instance whose name starts so
+TON = ⏱          # over the built-in one</code></pre>
+<p>The project's rules win over the built-in ones. Zoomed out past where
+the label is drawn, the icon stands alone at a readable size.</p>
 <h2 id="the-panes">The panes</h2>
 <ul>
-<li><strong>Files</strong>, on the left (<kbd>Alt</kbd> <kbd>0</kbd>):
-the project's files, the examples and starters, and the program tree
-under them.</li>
-<li><strong>Structured Text</strong> (<kbd>Alt</kbd> <kbd>1</kbd>): the
-editor, beside the diagram. Errors are marked on the line as you type;
-the program running does not change until you deploy.</li>
+<li><strong>The left pane</strong> has two tabs. <strong>Files</strong>
+(<kbd>Alt</kbd> <kbd>0</kbd>): the project's files, the examples and
+starters, and the program tree under them; a right-click on a file
+offers Copy, Paste, Duplicate, Rename and Delete, and what you copy
+pastes into any project you open next. <strong>Code</strong>
+(<kbd>Alt</kbd> <kbd>1</kbd>): the Structured Text editor. Errors are
+marked on the line as you type; the program running does not change
+until you deploy. The key for a tab opens the pane on it, or shuts the
+pane when that tab already shows.</li>
 <li><strong>The bottom panel</strong> (<kbd>Alt</kbd> <kbd>2</kbd>): the
 <strong>Trend</strong> of the signals you pin, with a long time axis,
 and <strong>Messages</strong>, the last two hundred things the page had

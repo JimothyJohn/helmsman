@@ -94,6 +94,17 @@ pub enum Act {
         to: String,
     },
     DeleteFile(String),
+    /// A file's text to the sidebar's clipboard (right-click › Copy).
+    CopyFile(String),
+    /// A copy of a file beside it, under a free name (right-click ›
+    /// Duplicate).
+    DuplicateFile(String),
+    /// The clipboard's file into the open project under a free name
+    /// (right-click › Paste); works across projects.
+    PasteFile {
+        name: String,
+        text: String,
+    },
     /// The Agent's answer as a new project (a PROGRAM) or a new file in
     /// the open project, named after what it declares; `save`: the open
     /// project's unsaved edits are saved first, else dropped.
@@ -141,6 +152,35 @@ pub struct FilesUi {
     pub unfolded: HashSet<Group>,
     /// The list of machines and templates to start from is open.
     pub starters_open: bool,
+    /// The file last copied (name, text): the app's own, not the
+    /// system's, so a paste works in any open project here.
+    pub clipboard: Option<(String, String)>,
+}
+
+/// A file name not taken, from `want`: `want` itself, else `stem-2.ext`,
+/// `stem-3.ext`, ... (`taken` says which names are).
+#[must_use]
+pub fn free_file_name(want: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(want) {
+        return want.to_string();
+    }
+    let (stem, ext) = want.rsplit_once('.').unwrap_or((want, "st"));
+    (2..=400)
+        .map(|k| format!("{stem}-{k}.{ext}"))
+        .find(|n| !taken(n))
+        .unwrap_or_else(|| want.to_string())
+}
+
+/// A right-click menu's item: whether it was clicked (the menu closes).
+fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enabled: bool) -> bool {
+    let b = egui::Button::new(text).min_size(Vec2::new(ui.available_width().max(110.0), TAP * 0.6));
+    let r = ui.add_enabled(enabled, b);
+    chrome.hit(key, r.rect);
+    if r.clicked() {
+        ui.close();
+        return true;
+    }
+    false
 }
 
 /// A button that is disabled, with why on hover, unless writes are allowed.
@@ -222,7 +262,18 @@ impl FilesUi {
         }
         if let Some(open) = l.open {
             ui.separator();
-            ui.label(RichText::new(format!("{open}: files")).strong().color(STEEL));
+            let is_example = l.projects.iter().any(|p| p.name == open && p.example());
+            let can_write = l.write.is_ok() && !is_example;
+            let head = ui.label(RichText::new(format!("{open}: files")).strong().color(STEEL));
+            // Right-click the heading: paste into this project.
+            head.context_menu(|ui| {
+                let paste = self.clipboard.is_some() && can_write;
+                if menu_item(ui, chrome, "menu paste", "Paste", paste)
+                    && let Some((name, text)) = self.clipboard.clone()
+                {
+                    act = Some(Act::PasteFile { name, text });
+                }
+            });
             for (f, dirty) in &l.files {
                 let here = l.current == Some(f.as_str());
                 let text = format!("{f}{}", if *dirty { " ●" } else { "" });
@@ -231,8 +282,30 @@ impl FilesUi {
                 if r.clicked() && !here {
                     act = Some(Act::OpenFile(f.clone()));
                 }
+                // Right-click a file: copy, paste, duplicate, rename, delete
+                // (Nick, 2026-11-01: easy copy and paste of files).
+                r.context_menu(|ui| {
+                    if menu_item(ui, chrome, "menu copy", "Copy", true) {
+                        act = Some(Act::CopyFile(f.clone()));
+                    }
+                    let paste = self.clipboard.is_some() && can_write;
+                    if menu_item(ui, chrome, "menu paste", "Paste", paste)
+                        && let Some((name, text)) = self.clipboard.clone()
+                    {
+                        act = Some(Act::PasteFile { name, text });
+                    }
+                    if menu_item(ui, chrome, "menu duplicate", "Duplicate", can_write) {
+                        act = Some(Act::DuplicateFile(f.clone()));
+                    }
+                    if menu_item(ui, chrome, "menu rename", "Rename…", can_write) {
+                        self.ask(Naming::RenameFile(f.clone()), f);
+                    }
+                    if menu_item(ui, chrome, "menu delete", "Delete…", can_write) {
+                        self.naming = None;
+                        self.confirm = Some(Act::DeleteFile(f.clone()));
+                    }
+                });
             }
-            let is_example = l.projects.iter().any(|p| p.name == open && p.example());
             if !is_example {
                 ui.horizontal_wrapped(|ui| {
                     let r = write_button(ui, &l.write, "New file", "a new .st file in this project");

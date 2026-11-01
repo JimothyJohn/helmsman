@@ -290,6 +290,23 @@ impl PlaygroundView {
                 self.proj.delete_file(&f);
                 self.edited(f64::NEG_INFINITY);
             }
+            Act::CopyFile(f) => {
+                if let Some(text) = self.proj.files.get(&f) {
+                    self.files_ui.clipboard = Some((f, text.clone()));
+                }
+            }
+            Act::DuplicateFile(f) => {
+                if let Some(text) = self.proj.files.get(&f).cloned() {
+                    let name = self.proj.free_file(&f);
+                    self.proj.add_file(&name, text);
+                    self.edited(f64::NEG_INFINITY);
+                }
+            }
+            Act::PasteFile { name, text } => {
+                let name = self.proj.free_file(&name);
+                self.proj.add_file(&name, text);
+                self.edited(f64::NEG_INFINITY);
+            }
         }
     }
 
@@ -728,6 +745,8 @@ impl Body for PlaygroundView {
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
         if let Some(v) = &mut self.viewer {
+            v.icons
+                .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
             v.crumbs_ui(ui, &[]);
             let area = ui.available_rect_before_wrap();
             v.canvas(ui, scan);
@@ -794,14 +813,20 @@ impl PlaygroundView {
                         .color(STEEL),
                 );
             }
-            // Two columns (Nick, 2026-11-01: denser).
+            // Two columns when the panel is wide enough for them (Nick,
+            // 2026-11-01: denser); each cell capped at its column's width,
+            // or the row overflows and the resizable panel grows to fit.
+            let (cols, col) = columns(ui);
             let mut set = Vec::new();
-            egui::Grid::new("pg-io-in").num_columns(2).show(ui, |ui| {
-                for pair in off_map.chunks(2) {
+            egui::Grid::new("pg-io-in").num_columns(cols).show(ui, |ui| {
+                for pair in off_map.chunks(cols) {
                     for p in pair {
-                        if let Some(v) = input_ui(ui, p) {
-                            set.push((p.name.clone(), v));
-                        }
+                        ui.scope(|ui| {
+                            ui.set_max_width(col);
+                            if let Some(v) = input_ui(ui, p) {
+                                set.push((p.name.clone(), v));
+                            }
+                        });
                     }
                     ui.end_row();
                 }
@@ -820,12 +845,16 @@ impl PlaygroundView {
                 );
             }
             let mut picked = None;
-            egui::Grid::new("pg-io-out").num_columns(2).show(ui, |ui| {
-                for pair in outputs.chunks(2) {
+            let (cols, col) = columns(ui);
+            egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
+                for pair in outputs.chunks(cols) {
                     for p in pair {
-                        if output_ui(ui, p) {
-                            picked = Some(p.name.clone());
-                        }
+                        ui.scope(|ui| {
+                            ui.set_max_width(col);
+                            if output_ui(ui, p) {
+                                picked = Some(p.name.clone());
+                            }
+                        });
                     }
                     ui.end_row();
                 }
@@ -864,6 +893,9 @@ impl PlaygroundView {
     fn claude(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().id_salt("pg-claude").show(ui, |ui| {
+            // Room for the scroll bar: a full-width field plus the bar is
+            // wider than the panel, and a resizable panel grows to fit.
+            ui.set_max_width(ui.available_width() - 12.0);
             match self.chat.proxy {
                 Proxy::Yes => {
                     ui.label(
@@ -878,7 +910,10 @@ impl PlaygroundView {
             }
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Model").color(STEEL));
+                // No wider than the panel: a row that overflows a resizable
+                // panel widens it every frame.
                 egui::ComboBox::from_id_salt("pg-model")
+                    .width((ui.available_width() - 40.0).max(60.0))
                     .selected_text(self.chat.model.label())
                     .show_ui(ui, |ui| {
                         for m in Model::ALL {
@@ -965,7 +1000,9 @@ impl PlaygroundView {
                 .color(RED),
             );
         }
-        ui.horizontal(|ui| {
+        // Wrapped: in a plain row a label extends, and a row wider than a
+        // resizable panel widens it every frame.
+        ui.horizontal_wrapped(|ui| {
             if self.chat.has_key() && ui.button("Forget key").clicked() {
                 self.chat.forget_key();
             }
@@ -1204,6 +1241,9 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
                 WHITE
             }))
             .fill(if on { GREEN } else { OFF_RED })
+            // Never wrapped: a narrow block at low zoom would stack the
+            // letters one a row.
+            .wrap_mode(egui::TextWrapMode::Truncate)
             .sense(Sense::click_and_drag());
             let r = ui
                 .add_sized(rect.size(), b)
@@ -1218,7 +1258,8 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
                     .size(size)
                     .color(if on { BLACK } else { WHITE }),
             )
-            .fill(if on { GREEN } else { OFF_RED });
+            .fill(if on { GREEN } else { OFF_RED })
+            .wrap_mode(egui::TextWrapMode::Truncate);
             if ui
                 .add_sized(rect.size(), b)
                 .on_hover_text("switch: click to flip")
@@ -1297,7 +1338,7 @@ impl Workspace for PlaygroundView {
             Some((file, l)) => self.goto(&file, l, chrome),
             None => chrome.goto(line),
         }
-        chrome.st = true;
+        chrome.show_code();
         true
     }
 
@@ -1399,13 +1440,27 @@ impl Default for PlaygroundView {
 
 /// One input's control; the value it sets, if it changed (a push button
 /// reports every frame).
+/// How many columns an I/O grid gets in `ui`, and each one's width: two
+/// once the panel is wide enough for two controls, else one.
+fn columns(ui: &egui::Ui) -> (usize, f32) {
+    let avail = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    if avail >= 2.0 * TAP * 3.0 + gap {
+        (2, (avail - gap) / 2.0)
+    } else {
+        (1, avail)
+    }
+}
+
 fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
     let label = match p.address() {
         Some(a) => format!("{}  {a}", p.name.to_ascii_lowercase()),
         None => p.name.to_ascii_lowercase(),
     };
     let mut out = None;
-    ui.horizontal(|ui| match p.widget {
+    // Wrapped, with a slider that fits: a row wider than the panel grows it.
+    ui.spacing_mut().slider_width = (ui.available_width() - 110.0).clamp(40.0, 100.0);
+    ui.horizontal_wrapped(|ui| match p.widget {
         Some(Widget::Push) => {
             let on = p.value == Value::Bool(true);
             let b = egui::Button::new(
@@ -1415,7 +1470,8 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             )
             .fill(if on { YELLOW } else { GRAPHITE })
             .sense(Sense::click_and_drag())
-            .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
+            .wrap_mode(egui::TextWrapMode::Truncate)
+            .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
             let r = ui.add(b).on_hover_text("push button: on while held");
             out = Some(Value::Bool(r.is_pointer_button_down_on()));
         }
@@ -1427,7 +1483,8 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                     .color(if on { BLACK } else { WHITE }),
             )
             .fill(if on { YELLOW } else { GRAPHITE })
-            .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
+            .wrap_mode(egui::TextWrapMode::Truncate)
+            .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
             if ui.add(b).on_hover_text("switch: click to flip").clicked() {
                 out = Some(Value::Bool(!on));
             }
@@ -1524,6 +1581,7 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
                 .size(15.0)
                 .color(if on { YELLOW } else { WHITE }),
         )
+        .wrap_mode(egui::TextWrapMode::Truncate)
         .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
     ui.add(b).on_hover_text("click: pick it").clicked()
 }

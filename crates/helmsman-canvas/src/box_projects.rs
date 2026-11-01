@@ -425,6 +425,12 @@ impl BoxProjects {
 
     /// A new, empty `.st` file in the open project.
     pub fn new_file(&mut self, file: &str) {
+        self.new_file_with(file, "");
+    }
+
+    /// A new file in the open project holding `text` (a paste or a
+    /// duplicate), written only if no file of that name exists.
+    pub fn new_file_with(&mut self, file: &str, text: &str) {
         let Some(o) = &self.open else { return };
         let project = o.name.clone();
         self.queue.push(PReq::json(
@@ -434,7 +440,7 @@ impl BoxProjects {
             },
             "PUT",
             file_url(&project, file),
-            &json!({ "text": "", "version": null }),
+            &json!({ "text": text, "version": null }),
         ));
     }
 

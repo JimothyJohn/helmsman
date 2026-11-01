@@ -16,8 +16,8 @@ CODESYS's default keys where the browser leaves them alone, nothing on a key the
 | Ctrl Shift Z | Redo in the Structured Text |  |
 | Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
 | Ctrl Shift X | Cross references: every read and write of it lit | Display Cross References |
-| Alt 0 | Files pane | Devices |
-| Alt 1 | Structured Text pane | POUs |
+| Alt 0 | The left pane's Files tab | Devices |
+| Alt 1 | The left pane's Code tab (the Structured Text) | POUs |
 | Alt 2 | The bottom panel (Trend, Messages) | Modules |
 | Alt 3 | The side panel (I/O, Agent) | Messages |
 | Alt ↑ | Up one level in the diagram | |

@@ -138,7 +138,7 @@ impl App {
     pub fn sim() -> Self {
         // Writing ST is what a visitor came for: the editor starts open.
         let mut chrome = Chrome::default();
-        chrome.st = true;
+        chrome.show_code();
         Self {
             screen: Screen::Editor,
             source: Source::Sim,
@@ -437,8 +437,8 @@ impl App {
                     w.download();
                 }
             }
-            Action::Files => self.chrome.left = !self.chrome.left,
-            Action::St => self.chrome.st = !self.chrome.st,
+            Action::Files => self.chrome.toggle_files(),
+            Action::St => self.chrome.toggle_code(),
             Action::Panel => self.chrome.right = !self.chrome.right,
             Action::Trend => self.chrome.trend = !self.chrome.trend,
         }

@@ -2,14 +2,23 @@
 
 A project is a folder of files: the program's Structured Text (one or
 more `.st` files, one `PROGRAM`), an `io.map` that says which signal is
-which channel, and `project.settings`. The Files pane shows them.
+which channel, `project.settings`, and two the editor keeps for itself,
+`diagram.layout` (a saved arrangement) and `icons.map` (the blocks'
+icons, see [The Editor](editor.html)). The Files tab of the left pane
+shows them.
 
 ## Files
 
-- **New project**, **Copy**, **Rename**, **Delete** are in the Files pane.
+- **New project**, **Copy**, **Rename**, **Delete** are in the Files tab.
   A copy of an example or a starter is how you begin from one.
 - **New file**, **Rename file**, **Delete file** likewise. A file is
-  Structured Text (`.st`) or the I/O map.
+  Structured Text (`.st`), the I/O map, or one of the editor's own.
+- **Right-click a file** for Copy, Paste, Duplicate, Rename and Delete.
+  Copy keeps the file in the editor's own clipboard, and Paste puts it
+  into whichever project is open, under the next free name (`main-2.st`
+  after `main.st`), so moving a block between projects is a copy, an
+  open, and a paste. Right-click the files heading to paste without a
+  file under the pointer.
 - The tree under the files is the program: the `PROGRAM`, then each
   function block instance it calls, nested. Click one to see its diagram.
 

@@ -318,6 +318,7 @@ fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
 #[test]
 fn opening_another_project_with_unsaved_edits_asks_first() {
     let mut app = App::sim();
+    app.chrome.show_files();
     app.sim = Some(PlaygroundView::with_storage(Box::new(Shared::default())));
     let ctx = egui::Context::default();
     frame(&ctx, &mut app, 0.0);
@@ -510,6 +511,7 @@ fn an_l5x_upload_becomes_the_boxs_st_or_is_refused_whole() {
 fn machines_and_templates_are_folded_groups_and_save_copies_one() {
     let ctx = egui::Context::default();
     let mut app = App::sim();
+    app.chrome.show_files();
     frame(&ctx, &mut app, 0.1);
     for key in ["project blink", "group Machines", "group Templates"] {
         assert!(app.chrome.rect(key).is_some(), "{key}");
