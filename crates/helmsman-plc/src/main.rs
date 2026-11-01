@@ -1016,6 +1016,24 @@ fn load_access(o: &Opts) -> Result<(Policy, Pins), String> {
     Ok((policy, pins))
 }
 
+/// The projects folder in the state directory `dir`, with `--projects`.
+fn open_projects(o: &Opts, dir: &Path) -> Result<Option<helmsman_plc::project::Projects>, String> {
+    let projects = o
+        .projects
+        .then(|| {
+            helmsman_plc::project::Projects::in_state_dir(dir)
+                .map_err(|e| format!("--projects in {}: {e}", dir.display()))
+        })
+        .transpose()?;
+    if let Some(p) = &projects {
+        eprintln!(
+            "helmsman-plc: projects in {}; deploying one needs an engineer login",
+            p.root().display()
+        );
+    }
+    Ok(projects)
+}
+
 // What the API serves is that many separate things; a struct for one caller adds nothing.
 #[allow(clippy::too_many_arguments)]
 fn start_api(
@@ -1085,23 +1103,10 @@ fn start_api(
         .as_deref()
         .map(|name| start_site(o, name, bind.port(), &token.token))
         .transpose()?;
-    let projects = o
-        .projects
-        .then(|| {
-            helmsman_plc::project::Projects::in_state_dir(&dir)
-                .map_err(|e| format!("--projects in {}: {e}", dir.display()))
-        })
-        .transpose()?;
-    if let Some(p) = &projects {
-        eprintln!(
-            "helmsman-plc: projects in {}; deploying one needs an engineer login",
-            p.root().display()
-        );
-    }
     let tls = box_tls(o, &dir)?;
     let scheme = if tls.is_some() { "https" } else { "http" };
     let more = api::More {
-        projects,
+        projects: open_projects(o, &dir)?,
         forces: Some(Arc::clone(forces)),
         drivers: Some(helmsman_plc::driver_dir::DriverDir::in_state_dir(&dir)),
         running_drivers,
