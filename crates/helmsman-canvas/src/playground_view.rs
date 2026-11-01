@@ -9,6 +9,7 @@ use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, RichText, Sense, S
 use helmsman_diagram::Scan;
 use helmsman_iec::{Ty, Value};
 
+use crate::arrange::Layers;
 use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{
@@ -89,6 +90,11 @@ pub struct PlaygroundView {
     pub session: Session,
     /// The diagram of the program running, rebuilt when it changes.
     pub viewer: Option<Viewer>,
+    /// Its shared default layout (the project's) and this browser's
+    /// tweaks (`arrange.rs`).
+    pub layers: Layers,
+    /// The viewer was just built: lay it out from the layers.
+    fresh: bool,
     viewer_of: String,
     /// When the editor last changed and is not compiled yet.
     pending: Option<f64>,
@@ -124,6 +130,17 @@ impl PlaygroundView {
     #[must_use]
     pub fn with_storage(projects: Box<dyn Storage>) -> Self {
         #[cfg(target_arch = "wasm32")]
+        let tweaks: Box<dyn Storage> = Box::new(crate::web::LocalArrangements);
+        #[cfg(not(target_arch = "wasm32"))]
+        let tweaks: Box<dyn Storage> = Box::new(crate::sim_projects::MemStorage::default());
+        Self::with_stores(projects, tweaks)
+    }
+
+    /// [`Self::with_storage`], with the diagram's personal layouts kept in
+    /// `tweaks`.
+    #[must_use]
+    pub fn with_stores(projects: Box<dyn Storage>, tweaks: Box<dyn Storage>) -> Self {
+        #[cfg(target_arch = "wasm32")]
         let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::web::LocalKeyStore);
         #[cfg(not(target_arch = "wasm32"))]
         let store: Box<dyn crate::claude::KeyStore> = Box::new(crate::claude::NoStore);
@@ -131,6 +148,8 @@ impl PlaygroundView {
         let mut v = Self {
             session: Session::new(&proj.build_src()),
             viewer: None,
+            layers: Layers::load(tweaks),
+            fresh: false,
             viewer_of: String::new(),
             pending: None,
             last_pick: None,
@@ -245,11 +264,14 @@ impl PlaygroundView {
         }
         self.viewer_of.clone_from(&b.src);
         let old = self.viewer.as_ref().and_then(|v| v.because.clone());
-        // Blocks the user moved stay moved across edits.
-        let arranged = self.viewer.as_ref().map(Viewer::arrangement).unwrap_or_default();
+        // Blocks the user moved stay moved across edits: kept as tweaks,
+        // and the new diagram is laid out from the layers.
+        if let Some(v) = &self.viewer {
+            self.layers.track(v);
+        }
+        self.fresh = true;
         self.viewer = b.module.clone().map(|m| {
             let mut v = Viewer::new(&b.src, m);
-            v.arrange(&arranged);
             // Opens with no path lit; the user's pick survives an edit
             // while its variable does.
             v.because = old.filter(|o| v.knows(o));
@@ -367,6 +389,7 @@ impl PlaygroundView {
         }
         let t = ctx.input(|i| i.time);
         self.compile_due(t, false);
+        self.arrange();
         self.session.advance(t);
         if self.session.running || self.pending.is_some() || self.chat.busy() {
             ctx.request_repaint();
@@ -374,17 +397,32 @@ impl PlaygroundView {
     }
 }
 
+impl PlaygroundView {
+    /// Lays the diagram out from its layers, or keeps a finished move.
+    pub fn arrange(&mut self) {
+        let fresh = std::mem::take(&mut self.fresh);
+        if let Some(v) = &mut self.viewer {
+            let key = format!("sim:{}", self.proj.open);
+            self.layers.show(v, &key, self.proj.layout(), fresh);
+        }
+    }
+
+    /// Saves the diagram as it stands as the open project's default.
+    pub fn save_layout(&mut self) {
+        let Some(v) = &self.viewer else { return };
+        let text = v.arrangement().to_text();
+        if self.proj.save_layout(&text) {
+            self.layers.adopt(v, &text);
+        }
+    }
+}
+
 impl Body for PlaygroundView {
     fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         {
-            let moved = self.viewer.as_ref().is_some_and(Viewer::rearranged);
-            if ui
-                .add_enabled(moved, egui::Button::new("Reset layout"))
-                .on_hover_text("drag blocks, or an IF/CASE/loop by its label, to rearrange the diagram")
-                .clicked()
-                && let Some(v) = &mut self.viewer
-            {
-                v.reset_arrangement();
+            let can = self.proj.can_save_layout();
+            if crate::arrange::buttons(ui, chrome, &mut self.layers, self.viewer.as_mut(), can) {
+                self.save_layout();
             }
             ui.separator();
             let s = &mut self.session;

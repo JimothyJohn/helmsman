@@ -372,3 +372,77 @@ fn two_programs_in_the_simulation_are_refused_at_the_second() {
         "{d:?}"
     );
 }
+
+/// Where the block whose text is `text` sits.
+fn block_at(v: &PlaygroundView, text: &str) -> (f32, f32) {
+    let n = v
+        .viewer
+        .as_ref()
+        .unwrap()
+        .diagram()
+        .nodes
+        .iter()
+        .find(|n| n.text == text)
+        .unwrap_or_else(|| panic!("no {text}"));
+    (n.rect.x, n.rect.y)
+}
+
+fn nudge(v: &mut PlaygroundView, text: &str, by: Vec2) {
+    let w = v.viewer.as_mut().unwrap();
+    let n = w.diagram().nodes.iter().find(|n| n.text == text).unwrap().id;
+    w.move_node(n, by);
+    v.arrange();
+}
+
+/// Card `arrangement-persist` in the simulation: the open project keeps a
+/// shared default layout (in its stored files and its `.zip`), this
+/// browser keeps tweaks on top, and both come back on a reload.
+#[test]
+fn the_simulation_keeps_a_default_layout_and_tweaks_across_a_reload() {
+    let (projects, tweaks) = (Shared::default(), Shared::default());
+    let ctx = egui::Context::default();
+    let mut v = PlaygroundView::with_stores(Box::new(projects.clone()), Box::new(tweaks.clone()));
+    // An example is read-only: its layout is not saved.
+    assert!(v.proj.can_save_layout().is_err());
+    v.save_layout();
+    assert!(v.proj.notice.as_ref().unwrap().1, "{:?}", v.proj.notice);
+    assert_eq!(v.proj.layout(), "");
+
+    two_files(&mut v);
+    v.deploy();
+    v.tick(&ctx);
+    let (lamp, horn) = ("LAMP := L.Q", "L(SET := START, RESET := STOP)");
+    let auto = (block_at(&v, lamp), block_at(&v, horn));
+    nudge(&mut v, lamp, Vec2::new(0.0, 90.0));
+    v.save_layout();
+    assert!(v.proj.layout().contains("LAMP := L.Q"), "{:?}", v.proj.notice);
+    assert!(!v.layers.tweaked(), "saved as the default: no tweak");
+    let zip = v.proj.saved["two"].to_zip().unwrap();
+    assert!(
+        helmsman_project::read_zip(&zip)
+            .unwrap()
+            .get("diagram.layout")
+            .is_some_and(|t| t.contains("LAMP := L.Q")),
+        "in the project's .zip"
+    );
+    // A personal tweak on top.
+    nudge(&mut v, horn, Vec2::new(70.0, 0.0));
+    assert!(v.layers.tweaked());
+    let both = (block_at(&v, lamp), block_at(&v, horn));
+    assert_eq!(both.0, (auto.0.0, auto.0.1 + 90.0));
+    assert_eq!(both.1, (auto.1.0 + 70.0, auto.1.1));
+
+    // Reloaded: the project opens as it was left, laid out as it was.
+    let mut v = PlaygroundView::with_stores(Box::new(projects), Box::new(tweaks));
+    assert_eq!(v.title(), "two");
+    v.tick(&ctx);
+    assert_eq!((block_at(&v, lamp), block_at(&v, horn)), both);
+    // Reset: the default; again: the automatic layout.
+    let w = v.viewer.as_mut().unwrap();
+    v.layers.reset(w);
+    assert_eq!(block_at(&v, horn), auto.1);
+    assert_eq!(block_at(&v, lamp), both.0);
+    let w = v.viewer.as_mut().unwrap();
+    v.layers.reset(w);
+    assert_eq!((block_at(&v, lamp), block_at(&v, horn)), auto);
+}
