@@ -248,3 +248,48 @@ fn an_operator_is_as_tall_as_its_ports_and_a_variable_keeps_its_header() {
     let (_, y) = out_port(go, 0);
     assert!(y > go.rect.y + HEADER, "under the header: {y} vs {}", go.rect.y);
 }
+
+/// Nick, 2026-11-01: a program should fill a screen, not a column.
+/// Statements flow in rows and wrap past `WRAP_W`; nothing above a row
+/// moves when a later statement changes.
+#[test]
+fn statements_wrap_into_rows_and_the_diagram_is_not_a_column() {
+    use helmsman_diagram::layout::WRAP_W;
+    let body: String = (0..24)
+        .map(|k| format!("x := x + {k};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let d = diagram(&body);
+    check(&d);
+    assert!(d.size.0 <= WRAP_W + 200.0, "wrapped: {:?}", d.size);
+    assert!(d.size.0 > d.size.1 * 0.5, "not a column: {:?}", d.size);
+    let rows: std::collections::BTreeSet<i64> = d
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, helmsman_diagram::NodeKind::Write { .. }))
+        .map(|n| {
+            #[allow(clippy::cast_possible_truncation)]
+            let band = (n.rect.y * 100.0) as i64;
+            band
+        })
+        .collect();
+    assert!(rows.len() >= 2, "more than one row: {rows:?}");
+    // A row's statements sit side by side, in source order.
+    let writes: Vec<&helmsman_diagram::Node> = d
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, helmsman_diagram::NodeKind::Write { .. }))
+        .collect();
+    assert!(
+        (writes[0].rect.y - writes[1].rect.y).abs() < writes[0].rect.h && writes[0].rect.x < writes[1].rect.x,
+        "{:?} then {:?}",
+        writes[0].rect,
+        writes[1].rect
+    );
+    // Editing the last statement moves nothing before it.
+    let edited = body.replace("x := x + 23;", "x := x + 23 * n - 1;");
+    let e = diagram(&edited);
+    for (a, b) in d.nodes.iter().zip(&e.nodes).take(writes.len() - 1) {
+        assert_eq!(a.rect, b.rect);
+    }
+}

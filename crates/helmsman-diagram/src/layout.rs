@@ -1,7 +1,9 @@
 //! Deterministic left-to-right layout.
 //!
-//! Statements stack top to bottom in source order, each in its own band;
-//! within a band its nodes are layered by longest path from the band's
+//! Statements flow left to right in source order and wrap into a new row
+//! past [`WRAP_W`] (Nick, 2026-11-01: a program should fill a screen,
+//! not a column), each in its own band; within a band its nodes are
+//! layered by longest path from the band's
 //! sources (reads and literals in column 0, the assignment in the last
 //! column) and stacked as a tidy tree from the band's roots. An IF or CASE
 //! puts each arm's condition on the left of the arm's region box, the box
@@ -23,6 +25,11 @@ pub const PORT_ROW: f32 = 16.0;
 const COL_GAP: f32 = 36.0;
 const ROW_GAP: f32 = 10.0;
 const STMT_GAP: f32 = 18.0;
+/// Between statements on one row.
+const STMT_GAP_X: f32 = 48.0;
+/// A row of statements wraps past this width (diagram units): about one
+/// screen, so a program reads as rows of statements, not one column.
+pub const WRAP_W: f32 = 1000.0;
 const PAD: f32 = 12.0;
 /// Room for a region's label above its statements.
 pub const LABEL_H: f32 = 22.0;
@@ -57,6 +64,8 @@ pub fn layout(d: &mut Diagram) {
     let mut l = Layout {
         d,
         placed: HashSet::new(),
+        order: Vec::new(),
+        touched: Vec::new(),
     };
     let top = l.d.top.clone();
     let (w, h) = l.block(&top, 0.0, 0.0);
@@ -137,21 +146,38 @@ fn bounds(rects: impl Iterator<Item = Rect>) -> Option<(f32, f32, f32, f32)> {
 struct Layout<'a> {
     d: &'a mut Diagram,
     placed: HashSet<NodeId>,
+    /// Nodes in the order placed, so a statement can be moved as a whole.
+    order: Vec<NodeId>,
+    /// Regions in the order their box was set, likewise.
+    touched: Vec<usize>,
 }
 
 impl Layout<'_> {
     /// Stacks statements from `(x0, y0)`; returns the block's size.
     fn block(&mut self, stmts: &[usize], x0: f32, y0: f32) -> (f32, f32) {
-        let (mut w, mut y) = (0.0f32, y0);
+        let (mut x, mut y, mut row_h, mut w) = (x0, y0, 0.0f32, 0.0f32);
         for (k, &s) in stmts.iter().enumerate() {
-            if k > 0 {
-                y += STMT_GAP;
+            let (np, nr) = (self.order.len(), self.touched.len());
+            let (sw, sh) = self.stmt(s, x, y);
+            if k > 0 && x > x0 && x + sw > x0 + WRAP_W {
+                // Past the row's end: this statement starts the next row.
+                let (dx, dy) = (x0 - x, row_h + STMT_GAP);
+                let moved: Vec<NodeId> = self.order[np..].to_vec();
+                self.shift(&moved, dx, dy);
+                for &r in &self.touched[nr..] {
+                    let rect = &mut self.d.regions[r].rect;
+                    rect.x += dx;
+                    rect.y += dy;
+                }
+                y += row_h + STMT_GAP;
+                x = x0;
+                row_h = 0.0;
             }
-            let (sw, sh) = self.stmt(s, x0, y);
-            w = w.max(sw);
-            y += sh;
+            w = w.max(x + sw - x0);
+            row_h = row_h.max(sh);
+            x += sw + STMT_GAP_X;
         }
-        (w, y - y0)
+        (w, y + row_h - y0)
     }
 
     fn stmt(&mut self, s: usize, x0: f32, y0: f32) -> (f32, f32) {
@@ -187,6 +213,7 @@ impl Layout<'_> {
                 h: LABEL_H + ih + PAD,
             };
             self.d.regions[r.0 as usize].rect = rect;
+            self.touched.push(r.0 as usize);
             let mut band = rect.h;
             if let Some((members, gw, gh)) = gate {
                 // Right-aligned against the box, level with its label.
@@ -277,6 +304,7 @@ impl Layout<'_> {
             .fold(0.0f32, f32::max);
         for &n in &members {
             self.placed.insert(n);
+            self.order.push(n);
         }
         (members, w, h)
     }
