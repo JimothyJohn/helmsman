@@ -109,7 +109,6 @@ fn horner_content() -> ChangeSet {
         modules: BTreeMap::from([("horner".to_string(), files(HORNER_MANIFEST, HORNER_SOURCE))]),
         io_map: Some(TEMPLATE.into()),
         calendar: None,
-        drivers: BTreeMap::new(),
     }
 }
 
@@ -406,7 +405,6 @@ drives
         modules: BTreeMap::from([("qmod".to_string(), files(manifest, source))]),
         io_map: None,
         calendar: Some("zone UTC\nshift 1 daily 06:00-14:00\ndrive beacon working\n".into()),
-        drivers: BTreeMap::new(),
     };
     let caps = capabilities(&cs, &d()).unwrap();
     assert_eq!(caps.q_bytes, 2);
@@ -754,7 +752,6 @@ prop_compose! {
             modules: modules.into_iter().map(|(n, (m, s))| (n, ModuleFiles::st(m, s))).collect(),
             io_map,
             calendar,
-            drivers: BTreeMap::new(),
         }
     }
 }
@@ -792,7 +789,6 @@ fn running() -> ChangeSet {
         modules: BTreeMap::from([("conveyor".to_string(), files(CONVEYOR_MANIFEST, CONVEYOR_SOURCE))]),
         io_map: Some(MAP.into()),
         calendar: None,
-        drivers: BTreeMap::new(),
     }
 }
 
@@ -1166,7 +1162,6 @@ out lamp     bool box do:0
         modules: BTreeMap::from([("odd".to_string(), files(manifest, source))]),
         io_map: Some(template.into()),
         calendar: None,
-        drivers: BTreeMap::new(),
     };
     let r = import(&b, &signed(cs).encode());
     assert_eq!(r.status, 422, "{r:?}");
@@ -1405,7 +1400,6 @@ fn horner_wasm_content() -> ChangeSet {
         )]),
         io_map: Some(TEMPLATE.into()),
         calendar: None,
-        drivers: BTreeMap::new(),
     }
 }
 
@@ -1601,101 +1595,44 @@ fn the_api_exports_a_wasm_snapshot_and_imports_it_signed_as_a_proposal() {
     );
 }
 
-// ---- WASM drivers (wasm-driver-map) ---------------------------------------------
+// ---- WASM drivers are files, not bundle content (wasm-driver-home) ------------
 
 /// helmsman-io's Modbus/TCP guest, a `helmsman-driver/v1` driver.
 const MODBUS_GUEST: &[u8] = include_bytes!("../../helmsman-io/guests/modbus-tcp.wasm");
 
-/// [`horner_content`] carrying the Modbus guest as driver `modbus`, its
-/// template's device on it.
+/// [`horner_content`] with its template's device on a WASM driver.
 fn driver_content() -> ChangeSet {
     let mut cs = horner_content();
     cs.io_map = Some(TEMPLATE.replace("modbus-tcp", "wasm:modbus"));
-    cs.drivers.insert("modbus".into(), MODBUS_GUEST.to_vec());
     cs
 }
 
 #[test]
-fn a_wasm_driver_bundles_verifies_and_round_trips_byte_identical() {
+fn a_bundle_whose_map_names_a_wasm_driver_lists_it_and_carries_no_binary() {
     let cs = driver_content();
     let b = signed(cs.clone());
     assert_eq!(
         b.manifest.caps.drivers.iter().collect::<Vec<_>>(),
         ["wasm:modbus"]
     );
+    assert!(!cs.tree().contains("wasm-driver"), "{}", cs.tree());
     let file = b.encode();
+    let head = &MODBUS_GUEST[..64];
+    assert!(file.windows(64).all(|w| w != head), "no driver bytes in the file");
     let v = verify(&file, &trust(), &d()).unwrap();
     assert_eq!(v.bundle.content, cs);
-    assert_eq!(v.bundle.content.drivers["modbus"], MODBUS_GUEST);
-    assert_eq!(v.bundle.id(), cs.id());
-    let dir = tmp("driver-bundle-store");
-    let mut s = Store::open(&dir).unwrap();
-    let meta = Meta {
-        author: "Test".into(),
-        prompt: String::new(),
-        approver: None,
-        time_ms: 1,
-    };
-    let id = s.commit(&v.bundle.content, &meta).unwrap();
-    let mut again = Bundle::new(b.manifest.clone(), s.get(&id).unwrap());
-    again.signatures.clone_from(&b.signatures);
-    assert_eq!(again.encode(), file, "through a store and out: the same file");
 }
 
+/// A bundle an older build (#89) exported with a `wasm-driver` line: it
+/// is refused as malformed, saying where drivers live now, whatever the
+/// line's name, before any blob is read as one.
 #[test]
-fn a_carried_driver_the_capability_manifest_leaves_out_is_refused() {
-    // The template names only modbus-tcp; the bundle also carries a driver.
-    let mut cs = horner_content();
-    cs.drivers.insert("modbus".into(), MODBUS_GUEST.to_vec());
-    let mut m = manifest_for(&cs);
-    assert!(m.caps.drivers.contains("wasm:modbus"), "{:?}", m.caps);
-    m.caps.drivers.remove("wasm:modbus");
-    let mut b = Bundle::new(m, cs);
-    b.sign(&publisher());
-    match refused(&b.encode()) {
-        Error::Capabilities(why) => {
-            assert!(
-                why.iter()
-                    .any(|w| w.contains("wasm:modbus") && w.contains("understated")),
-                "{why:?}"
-            );
-        }
-        e => panic!("{e}"),
-    }
-}
-
-#[test]
-fn a_bundled_driver_that_is_not_a_v1_driver_is_refused_as_content() {
-    for (why, bytes) in [
-        ("a WASM module", horner_wasm(false)),
-        ("junk", b"\0asm junk".to_vec()),
-        ("text", b"device rio modbus-tcp".to_vec()),
-    ] {
-        let mut cs = driver_content();
-        cs.drivers.insert("modbus".into(), bytes);
-        let e = capabilities(&cs, &d()).unwrap_err();
-        assert!(e.join("\n").contains("driver modbus"), "{why}: {e:?}");
-        let mut b = Bundle::new(manifest_for(&driver_content()), cs);
-        b.sign(&publisher());
-        assert!(
-            matches!(verify(&b.encode(), &trust(), &d()), Err(Error::Content(_))),
-            "{why}"
-        );
-    }
-}
-
-#[test]
-fn a_tampered_driver_blob_or_driver_line_is_refused() {
-    let file = signed(driver_content()).encode();
-    let at = find(&file, MODBUS_GUEST);
-    for k in [at, at + 100, at + MODBUS_GUEST.len() - 1] {
-        let mut evil = file.clone();
-        evil[k] ^= 0x01;
-        assert!(matches!(refused(&evil), Error::Tampered(_)), "byte {k}");
-    }
+fn an_older_builds_bundle_carrying_a_driver_is_refused_and_says_why() {
     let cs = driver_content();
     let manifest = manifest_for(&cs).render();
     let template = cs.io_map.clone().unwrap();
+    let line = format!("wasm-driver modbus {}", sha(MODBUS_GUEST));
+    let tree = cs.tree().replacen("io-map ", &format!("{line}\nio-map "), 1);
     let blobs = sorted_blobs(&[
         HORNER_MANIFEST.as_bytes(),
         HORNER_SOURCE.as_bytes(),
@@ -1704,78 +1641,23 @@ fn a_tampered_driver_blob_or_driver_line_is_refused() {
     ]);
     let mut dev = TrustStore::default();
     dev.dev_bundles = true;
-    assert!(
-        verify(&raw(&cs.tree(), &manifest, &blobs, &[]), &dev, &d()).is_ok(),
-        "the raw form is right"
-    );
-    for (why, from, to) in [
-        ("a path for a name", "wasm-driver modbus", "wasm-driver ../modbus"),
+    for (why, tree) in [
+        ("as #89 wrote it", tree.clone()),
         (
-            "a lookalike name",
-            "wasm-driver modbus",
-            "wasm-driver m\u{43e}dbus",
+            "a path for a name",
+            tree.replace("wasm-driver modbus", "wasm-driver ../modbus"),
         ),
-        ("an unknown kind", "wasm-driver modbus", "elf-driver modbus"),
+        (
+            "a control character in the name",
+            tree.replace("wasm-driver modbus", "wasm-driver mo\u{1b}[2Jdbus"),
+        ),
     ] {
-        let tree = cs.tree().replace(from, to);
-        assert!(
-            matches!(refused(&raw(&tree, &manifest, &blobs, &[])), Error::Malformed(_)),
-            "{why}"
-        );
+        match verify(&raw(&tree, &manifest, &blobs, &[]), &dev, &d()) {
+            Err(Error::Malformed(w)) => {
+                assert!(w.contains("drivers are files"), "{why}: {w}");
+                assert!(!w.contains('\u{1b}'), "{why}: the name is escaped: {w}");
+            }
+            r => panic!("{why}: {r:?}"),
+        }
     }
-    let line = cs
-        .tree()
-        .lines()
-        .find(|l| l.starts_with("wasm-driver"))
-        .unwrap()
-        .to_string();
-    let tree = cs.tree().replace(&line, &format!("{line}\n{line}"));
-    assert!(
-        matches!(refused(&raw(&tree, &manifest, &blobs, &[])), Error::Malformed(_)),
-        "named twice"
-    );
-}
-
-#[test]
-fn the_api_exports_a_snapshot_with_a_driver_and_imports_it_as_an_output_affecting_proposal() {
-    let b = bench(Some(trust()));
-    let mut cs = running();
-    cs.drivers.insert("modbus".into(), MODBUS_GUEST.to_vec());
-    let meta = Meta {
-        author: "Test".into(),
-        prompt: String::new(),
-        approver: None,
-        time_ms: 2,
-    };
-    let id = Store::open(&b.store)
-        .unwrap()
-        .commit(&cs, &meta)
-        .unwrap()
-        .to_string();
-    let get = |path: &str| request(b.addr, "GET", path, false, "application/json", b"");
-    let r = get(&format!("/api/snapshots/{id}/bundle"));
-    assert_eq!(r.status, 200, "{r:?}");
-    let mut exported = Bundle::decode(&r.body).unwrap();
-    assert_eq!(exported.content, cs, "byte for byte");
-    // As JSON: what the driver is and imports, never the binary.
-    let j = get(&format!("/api/snapshots/{id}")).json();
-    let shown = &j["drivers"]["modbus"];
-    assert_eq!(shown["abi"], "helmsman-driver/v1", "{j}");
-    assert_eq!(shown["bytes"], MODBUS_GUEST.len(), "{j}");
-    assert!(
-        shown["imports"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|i| i["module"] == "helmsman-driver/v1"),
-        "{j}"
-    );
-    exported.sign(&publisher());
-    let r = import(&b, &exported.encode());
-    assert_eq!(r.status, 201, "{r:?}");
-    let p = r.json();
-    assert_eq!(p["drivers"], json!(["modbus"]), "{p}");
-    assert_eq!(p["touches_outputs"], true, "{p}");
-    assert_eq!(p["approval"]["tier"], "output-affecting", "{p}");
-    assert_eq!(p["snapshot"], json!(id), "{p}");
 }

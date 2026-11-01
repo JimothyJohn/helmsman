@@ -789,6 +789,13 @@ impl Eval<'_> {
             }
             "LIM" | "LIMIT" => {
                 let (lo, x, hi) = (self.get_n(&a[0]), self.get_n(&a[1]), self.get_n(&a[2]));
+                // RM003 pp.852-853: an integer operand mixed with a REAL one
+                // in the same instruction is converted to REAL before the
+                // instruction executes, so all three compare in the
+                // instruction's type, not pairwise (a DINT Low and High one
+                // apart can round to the same REAL).
+                let t = lo.1.max(x.1).max(hi.1).max(Num::DInt);
+                let (lo, x, hi) = ((lo.0, t), (x.0, t), (hi.0, t));
                 let le = |p: (V, Num), q: (V, Num)| matches!(Self::cmp(p, q), Some(Less | Equal));
                 let gt = |p: (V, Num), q: (V, Num)| Self::cmp(p, q) == Some(Greater);
                 // RM003 p.368: low <= high: inside or on the limits; low >

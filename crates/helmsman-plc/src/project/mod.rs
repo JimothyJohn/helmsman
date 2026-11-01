@@ -8,6 +8,8 @@
 //!     blocks.st            FUNCTIONs and TYPEs, compiled together
 //!     io.map               optional: the I/O map it runs with (helmsman_io::text)
 //!     project.settings     optional: per-PROGRAM schedule, windows, params
+//!     drivers/NAME.wasm    optional: WASM drivers its map names (`wasm:NAME`),
+//!                          found before the box's (`crate::driver_dir`)
 //! <state-dir>/running-project   which project was last deployed, and as what
 //! ```
 //!
@@ -39,8 +41,9 @@ pub mod build;
 pub mod settings;
 
 pub use helmsman_project::{
-    FILE_NAMES, FileKind, Files, IO_MAP, LAYOUT, MAX_FILE, MAX_FILES, MAX_TOTAL, NAME_LEN, SETTINGS,
-    STEM_LEN, check_file, check_text, file_name, from_zip, layout, project_name, zip,
+    DRIVER_EXT, DRIVERS, Drivers, FILE_NAMES, FileKind, Files, IO_MAP, LAYOUT, MAX_DRIVER, MAX_DRIVERS,
+    MAX_FILE, MAX_FILES, MAX_TOTAL, NAME_LEN, SETTINGS, STEM_LEN, check_file, check_text, driver_name,
+    file_name, from_zip, from_zip_with_drivers, layout, project_name, zip,
 };
 
 use std::collections::BTreeMap;
@@ -135,6 +138,33 @@ fn tmp_name(what: &str) -> String {
     )
 }
 
+/// A project's drivers held to the rules: names, sizes, count, the
+/// project's total with its files, and each one a driver a box can run.
+fn check_drivers(files: &Files, drivers: &Drivers) -> Result<(), Vec<String>> {
+    let mut errs = Vec::new();
+    if drivers.len() > MAX_DRIVERS {
+        errs.push(format!(
+            "{} drivers; a project carries at most {MAX_DRIVERS}",
+            drivers.len()
+        ));
+    }
+    for (n, b) in drivers {
+        let shown = format!("{DRIVERS}/{}{DRIVER_EXT}", helmsman_project::clean(n));
+        if !driver_name(n) {
+            errs.push(format!("{shown}: not a driver name"));
+        } else if b.len() > MAX_DRIVER {
+            errs.push(format!("{shown}: larger than {MAX_DRIVER} bytes"));
+        } else if let Err(e) = crate::drivers::check(b) {
+            errs.push(format!("{shown}: not a driver a box can run: {}", e.join("; ")));
+        }
+    }
+    let total = files.total() + drivers.values().map(Vec::len).sum::<usize>();
+    if total > MAX_TOTAL {
+        errs.push(format!("{total} bytes; a project is at most {MAX_TOTAL}"));
+    }
+    if errs.is_empty() { Ok(()) } else { Err(errs) }
+}
+
 /// Whether `path` is a real directory (not a link to one).
 fn is_dir(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
@@ -202,6 +232,25 @@ impl Projects {
 
     fn guard(&self) -> MutexGuard<'_, ()> {
         self.lock.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Project `name`'s folder, if it is one (a real directory, not a
+    /// link), for reading its `drivers/` (`crate::driver_dir`).
+    #[must_use]
+    pub fn folder(&self, name: &str) -> Option<PathBuf> {
+        self.dir(name).ok()
+    }
+
+    /// Project `name`'s WASM drivers (`drivers/NAME.wasm`), by name, as
+    /// the files are: what its `.zip` carries and a deploy loads first.
+    ///
+    /// # Errors
+    /// No such project (404), or its `drivers/` cannot be used (500,
+    /// naming the file).
+    pub fn drivers(&self, name: &str) -> R<Drivers> {
+        let _g = self.guard();
+        let dir = self.dir(name)?;
+        crate::driver_dir::read_folder(&dir.join(DRIVERS)).map_err(|e| Refusal::new(500, e))
     }
 
     fn dir(&self, name: &str) -> R<PathBuf> {
@@ -310,6 +359,18 @@ impl Projects {
     /// A bad name (400), files that break the rules (422), an existing
     /// project without `replace` (409), too many projects (507).
     pub fn install(&self, name: &str, files: &Files, replace: bool) -> R<()> {
+        self.install_with(name, files, &Drivers::new(), replace)
+    }
+
+    /// [`Projects::install`] with the project's WASM drivers, written to
+    /// its `drivers/` in the same step. Each must be one a box can run
+    /// (`crate::drivers::check`), so a project never carries one a deploy
+    /// would refuse for its bytes alone.
+    ///
+    /// # Errors
+    /// As [`Projects::install`]; a driver name, size or count past the
+    /// rules, or a driver that would not run (422).
+    pub fn install_with(&self, name: &str, files: &Files, drivers: &Drivers, replace: bool) -> R<()> {
         if !project_name(name) {
             return Err(Refusal::new(
                 400,
@@ -317,6 +378,7 @@ impl Projects {
             ));
         }
         files.check().map_err(|e| Refusal::new(422, e.join("; ")))?;
+        check_drivers(files, drivers).map_err(|e| Refusal::new(422, e.join("; ")))?;
         let _g = self.guard();
         let dest = self.root.join(name);
         let exists = fs::symlink_metadata(&dest).is_ok();
@@ -340,6 +402,13 @@ impl Projects {
             fs::create_dir(&tmp)?;
             for (f, text) in &files.0 {
                 write_atomic(&tmp, f, text.as_bytes())?;
+            }
+            if !drivers.is_empty() {
+                let d = tmp.join(DRIVERS);
+                fs::create_dir(&d)?;
+                for (n, bytes) in drivers {
+                    write_atomic(&d, &format!("{n}{DRIVER_EXT}"), bytes)?;
+                }
             }
             Ok::<_, io::Error>(())
         })();
@@ -372,7 +441,8 @@ impl Projects {
     /// No such project (404), or as [`Projects::install`].
     pub fn copy(&self, from: &str, to: &str) -> R<()> {
         let files = self.read(from)?;
-        self.install(to, &files, false)
+        let drivers = self.drivers(from)?;
+        self.install_with(to, &files, &drivers, false)
     }
 
     /// Renames a project. The running project's record follows it.
@@ -478,13 +548,28 @@ impl Projects {
         fs::remove_file(&path).map_err(|e| Refusal::io(&e))
     }
 
-    /// The project as a ZIP (its files at the archive's root, sorted).
+    /// The project as a ZIP: its files at the archive's root and its
+    /// drivers as `drivers/NAME.wasm`, sorted by name.
     ///
     /// # Errors
     /// No such project.
     pub fn zip(&self, name: &str) -> R<Vec<u8>> {
-        let files = self.read(name)?;
-        let list: Vec<(String, Vec<u8>)> = files.0.into_iter().map(|(n, t)| (n, t.into_bytes())).collect();
+        let (files, drivers) = {
+            let _g = self.guard();
+            let files = self.read_locked(name)?;
+            let dir = self.dir(name)?;
+            let drivers =
+                crate::driver_dir::read_folder(&dir.join(DRIVERS)).map_err(|e| Refusal::new(500, e))?;
+            (files, drivers)
+        };
+        let mut list: Vec<(String, Vec<u8>)> =
+            files.0.into_iter().map(|(n, t)| (n, t.into_bytes())).collect();
+        list.extend(
+            drivers
+                .into_iter()
+                .map(|(n, b)| (format!("{DRIVERS}/{n}{DRIVER_EXT}"), b)),
+        );
+        list.sort_by(|a, b| a.0.cmp(&b.0));
         zip::write(&list).map_err(|e| Refusal::new(500, e))
     }
 

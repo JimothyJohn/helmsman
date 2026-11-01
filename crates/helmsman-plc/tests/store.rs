@@ -74,7 +74,6 @@ fn set(mods: &[(&str, f64)]) -> ChangeSet {
         modules: mods.iter().map(|(n, s)| files(n, *s, SRC)).collect(),
         io_map: Some(MAP.into()),
         calendar: None,
-        drivers: BTreeMap::new(),
     }
 }
 
@@ -170,7 +169,6 @@ fn equal_files_in_different_modules_are_one_blob() {
         modules: [files("a", 1.0, SRC), files("b", 2.0, SRC)].into_iter().collect(),
         io_map: None,
         calendar: None,
-        drivers: BTreeMap::new(),
     };
     s.commit(&cs, &meta("Nick")).unwrap();
     // two manifests + one shared source
@@ -391,7 +389,6 @@ fn a_huge_change_set_round_trips() {
         modules,
         io_map: Some(MAP.into()),
         calendar: Some("zone +01:00\n".into()),
-        drivers: BTreeMap::new(),
     };
     let id = s.commit(&cs, &meta("Nick")).unwrap();
     assert_eq!(s.get(&id).unwrap(), cs);
@@ -542,7 +539,6 @@ fn diff_names_modules_params_and_bindings() {
         .collect(),
         io_map: Some(MAP.into()),
         calendar: None,
-        drivers: BTreeMap::new(),
     };
     let mut b = a.clone();
     b.modules.remove("old");
@@ -621,7 +617,6 @@ fn diff_names_modules_params_and_bindings() {
             },
         ],
         calendar: true,
-        drivers: Vec::new(),
     };
     assert_eq!(d, want);
     assert!(diff(&a, &a).is_empty());
@@ -661,7 +656,6 @@ fn arb_change_set() -> impl Strategy<Value = ChangeSet> {
                 .collect(),
             io_map,
             calendar,
-            drivers: BTreeMap::new(),
         })
 }
 
@@ -894,7 +888,6 @@ fn v1_content(speed: f64) -> ChangeSet {
         modules: [files("conveyor", speed, SRC)].into(),
         io_map: Some(MAP.into()),
         calendar: Some("zone +01:00\n".into()),
-        drivers: BTreeMap::new(),
     }
 }
 

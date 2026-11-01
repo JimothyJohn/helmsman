@@ -346,19 +346,12 @@ pub fn diff(d: &Diff) -> Json {
         "devices": named(d.devices.iter().map(|f| presence(&f.name, f.from.as_ref(), f.to.as_ref())).collect()),
         "bindings": named(d.bindings.iter().map(|f| presence(&f.name, f.from.as_ref(), f.to.as_ref())).collect()),
         "calendar": d.calendar,
-        "drivers": named(d.drivers.iter().map(|f| {
-            let mut j = presence(&f.name, f.from.as_ref(), f.to.as_ref());
-            j["from_sha256"] = json!(f.from);
-            j["to_sha256"] = json!(f.to);
-            j
-        }).collect()),
     })
 }
 
-/// A change set's content: each module's two files, the map, the calendar,
-/// and each WASM driver as [`driver`] shows it.
-/// A WASM module's binary is not shown: `source` is null and `wasm` says
-/// what it is and imports ([`wasm`]).
+/// A change set's content: each module's two files, the map and the
+/// calendar. A WASM module's binary is not shown: `source` is null and
+/// `wasm` says what it is and imports ([`wasm`]).
 #[must_use]
 pub fn change_set(cs: &ChangeSet) -> Json {
     let modules: serde_json::Map<String, Json> = cs
@@ -377,7 +370,6 @@ pub fn change_set(cs: &ChangeSet) -> Json {
         "modules": modules,
         "io_map": cs.io_map,
         "calendar": cs.calendar,
-        "drivers": cs.drivers.iter().map(|(n, b)| (n.clone(), driver(b))).collect::<serde_json::Map<_, _>>(),
     })
 }
 

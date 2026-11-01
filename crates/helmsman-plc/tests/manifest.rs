@@ -362,10 +362,19 @@ fn a_param_must_fit_its_port_over_its_whole_range() {
 
 // ---- module directories ---------------------------------------------------
 
+/// A module directory `NAME` in a fresh directory of its own: the pid and a
+/// counter keep parallel copies of this suite apart.
 fn module_dir(name: &str, manifest: &str, source: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("modules")
+        .join(format!(
+            "modules-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ))
         .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(FILE), manifest).unwrap();
     std::fs::write(dir.join(SOURCE), source).unwrap();

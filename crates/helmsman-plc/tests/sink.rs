@@ -172,8 +172,15 @@ fn wait_until(what: &str, ok: impl Fn() -> bool) {
     }
 }
 
+/// A fresh directory of its own: the pid and a counter keep parallel
+/// copies of this suite apart.
 fn tmpdir(name: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("sink").join(name);
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "sink-{name}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -618,7 +625,10 @@ fn fails_three_times_then_delivers_with_one_key() {
     let logs = Logs::default();
     let h = worker::spawn(cfg("mes", &srv.url("/hook")), &dir, 1, logs.log()).unwrap();
     assert!(h.offer(ev("parts", Value::Int(42))));
-    wait_until("delivery", || Stats::get(&h.stats().delivered) == 1);
+    // The worker counts the delivery, then says "up": wait for both.
+    wait_until("delivery", || {
+        Stats::get(&h.stats().delivered) == 1 && logs.all().contains("up;")
+    });
     let reqs = srv.reqs();
     assert_eq!(reqs.len(), 4);
     let keys: Vec<_> = reqs
