@@ -1,8 +1,9 @@
 //! The Editor on the simulation in the page (docs/playground/, or any page
-//! no box serves): an ST editor that compiles as you type, the program
-//! running in the page with Run / Stop / Step, a virtual I/O panel built
-//! from the program's ports, a trend, the live diagram, and Claude with
-//! the visitor's own key. No box and no server: the state is
+//! no box serves): an ST editor that checks as you type (errors marked
+//! after a pause; what runs is unchanged until Deploy, as on a box), the
+//! program running in the page with Run / Stop / Step, a virtual I/O
+//! panel built from the program's ports, a trend, the live diagram, and
+//! Claude with the visitor's own key. No box and no server: the state is
 //! [`crate::playground::Session`] and [`crate::claude::Chat`].
 
 use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, RichText, Sense, Stroke, Vec2};
@@ -21,7 +22,7 @@ use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
-/// Quiet time after the last keystroke before the editor compiles, s.
+/// Quiet time after the last keystroke before the editor checks, s.
 const DEBOUNCE: f64 = 0.35;
 /// Trend line colours, in signal order.
 const TREND: [Color32; TREND_SIGNALS] = [
@@ -96,7 +97,7 @@ pub struct PlaygroundView {
     /// The viewer was just built: lay it out from the layers.
     fresh: bool,
     viewer_of: String,
-    /// When the editor last changed and is not compiled yet.
+    /// When the editor last changed and is not checked yet.
     pending: Option<f64>,
     /// The diagram's pick last frame (a new one sends the ST there).
     last_pick: Option<Pick>,
@@ -186,7 +187,7 @@ impl PlaygroundView {
     }
 
     /// The editor's text changed: the session's source follows at once
-    /// and compiles after the pause.
+    /// and is checked after the pause. What runs waits for Deploy.
     fn edited(&mut self, t: f64) {
         self.session.src = self.proj.build_src();
         self.pending = Some(t);
@@ -310,15 +311,16 @@ impl PlaygroundView {
         });
     }
 
-    /// Compiles the editor if it has been quiet long enough (or `now`).
-    fn compile_due(&mut self, t: f64, now: bool) {
+    /// Checks the editor if it has been quiet long enough (or `now`):
+    /// errors are marked, and the program running (and its diagram) stay
+    /// as deployed.
+    fn check_due(&mut self, t: f64, now: bool) {
         if let Some(at) = self.pending
             && (now || t - at >= DEBOUNCE)
         {
             self.pending = None;
             let src = self.session.src.clone();
-            self.session.set_source(&src);
-            self.sync_viewer();
+            self.session.check(&src);
         }
     }
 
@@ -388,7 +390,7 @@ impl PlaygroundView {
             self.chat.receive(m);
         }
         let t = ctx.input(|i| i.time);
-        self.compile_due(t, false);
+        self.check_due(t, false);
         self.arrange();
         self.session.advance(t);
         if self.session.running || self.pending.is_some() || self.chat.busy() {
@@ -508,22 +510,25 @@ impl Body for PlaygroundView {
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = ui.ctx().input(|i| i.time);
         let stale = self.session.stale();
+        let errors = self.session.diags.len();
         ui.horizontal(|ui| {
             ui.label(RichText::new("Structured Text").strong());
-            if self.session.diags.is_empty() && !stale {
-                ui.label(RichText::new("✔ compiles").color(STEEL));
-            } else if !self.session.diags.is_empty() {
-                ui.label(RichText::new(format!("✖ {} error(s)", self.session.diags.len())).color(RED));
-            } else {
+            if self.pending.is_some() {
                 ui.label(RichText::new("…").color(STEEL));
+            } else if errors > 0 {
+                ui.label(RichText::new(format!("✖ {errors} error(s)")).color(RED));
+            } else {
+                ui.label(RichText::new("✔ compiles").color(STEEL));
             }
         });
-        if stale && self.session.build.is_some() && !self.session.diags.is_empty() {
-            ui.label(
-                RichText::new("Still running the last version that compiled.")
-                    .small()
-                    .color(STEEL),
-            );
+        // An edit is only checked: what runs is the last deploy, as on a box.
+        if stale && self.pending.is_none() && self.session.build.is_some() {
+            let note = if errors > 0 {
+                "The program running is unchanged. Fix the errors, then Deploy."
+            } else {
+                "The program running is unchanged. Deploy runs this version."
+            };
+            ui.label(RichText::new(note).small().color(STEEL));
         }
         let all = self.diags();
         let current = self.proj.current.clone();
@@ -1138,7 +1143,9 @@ impl Workspace for PlaygroundView {
         self.proj.save();
     }
 
-    /// Compiles the open project and runs it in the page.
+    /// Compiles the open project and runs it in the page: the one place
+    /// an edit reaches the program running. One that does not compile is
+    /// refused, its errors listed, and the program running is unchanged.
     fn deploy(&mut self) {
         let src = self.proj.build_src();
         let ok = self.session.set_source(&src);

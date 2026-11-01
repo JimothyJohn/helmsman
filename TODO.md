@@ -1004,7 +1004,7 @@
   id: save-scope
   answer: every edited file (built)
 
-- [ ] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
+- [x] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
