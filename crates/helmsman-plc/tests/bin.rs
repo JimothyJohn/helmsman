@@ -116,6 +116,17 @@ fn spawn_with(args: &[&std::ffi::OsStr], peer_io_port: u16) -> (Running, SocketA
     (Running { child, stderr }, addrs[0], addrs[1])
 }
 
+/// Exclusive owner, 32 bytes each way at a 10 ms RPI. The inactivity
+/// timeout is RPI × 2^(7+2), about 5 s, not the 80 ms of multiplier 1: with
+/// six copies of the suite running, a scanner thread can stall longer than
+/// 80 ms, the box then drops the connection as timed out, and the closing
+/// Forward_Close is refused (0x0107). No test here is about the timeout.
+fn io_config() -> IoConfig {
+    let mut cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    cfg.timeout_multiplier = 7;
+    cfg
+}
+
 fn wait_for(conn: &IoConnection, what: &str, mut ok: impl FnMut(&Input) -> bool) -> Input {
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
@@ -154,7 +165,7 @@ fn program_drives_class1_io() {
         s.get_attribute_single(class::IDENTITY, 1, 7).unwrap()[1..],
         *b"Helmsman PLC"
     );
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
 
     let mut out = [0u8; 32];
@@ -190,7 +201,7 @@ fn a_fault_zeroes_outputs_and_keeps_the_adapter_up() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (plc, encap, io) = spawn(&prog, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     conn.set_output(&[0; 32]).unwrap();
     wait_for(&conn, "the program to run", |i| i.data[0] == 0xFF);
@@ -244,7 +255,7 @@ fn modules_share_the_image_and_a_fault_stops_only_its_module() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     conn.set_output(&[0; 32]).unwrap();
     let first = wait_for(&conn, "both modules to run", |i| {
@@ -444,7 +455,7 @@ in  clamp_fb bool rio di:0
     let args = [prog.as_os_str(), "--io-map".as_ref(), map.as_os_str()];
     let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
 
     wait_until("the link to the E1213", || !sim.o_to_t_sources().is_empty());
@@ -647,7 +658,7 @@ fn shipped_echo_program_echoes() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (_plc, encap, io) = spawn(&prog, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     let pattern: Vec<u8> = (1..=32).collect();
     conn.set_output(&pattern).unwrap();
@@ -663,7 +674,7 @@ fn ladder_project_drives_class1_io() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (_plc, encap, io) = spawn(&ladder(), scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     let mut out = [0u8; 32];
     conn.set_output(&out).unwrap();
@@ -736,7 +747,7 @@ fn a_module_sees_the_shift_calendar_through_the_scan() {
     let args = [prog.as_os_str(), "--calendar".as_ref(), cal.as_os_str()];
     let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     wait_for(&conn, "in shift 7 all day", |i| {
         i.data[0] & 1 == 1 && i.data[2..4] == 7u16.to_le_bytes()
@@ -843,7 +854,7 @@ fn a_module_directory_runs_with_its_param_beside_a_module_flag() {
     let scanner_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let (_plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     conn.set_output(&[0; 32]).unwrap();
     wait_for(&conn, "the param through the directory's module", |i| {
@@ -970,7 +981,7 @@ fn the_store_runs_its_head_snapshot_after_a_rollback() {
     let args = [std::ffi::OsStr::new("--store"), dir.as_os_str()];
     let (plc, encap, io) = spawn_with(&args, scanner_sock.local_addr().unwrap().port());
     let mut s = Session::connect(encap, Duration::from_secs(2)).unwrap();
-    let cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
+    let cfg = io_config();
     let conn = IoConnection::open(&mut s, &scanner_sock, io, cfg).unwrap();
     conn.set_output(&[0; 32]).unwrap();
     wait_for(
