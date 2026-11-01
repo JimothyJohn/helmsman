@@ -1400,3 +1400,63 @@ fn the_retired_screen_route_is_gone() {
         "{index}"
     );
 }
+
+/// Card `box-trend-source`: a signal asked for once keeps its history on
+/// the box, so the next page that opens the Trend gets the last minutes.
+#[test]
+fn a_trend_opens_with_the_history_the_box_kept() {
+    let b = Bench::new();
+    let first = get(b.addr, "/api/trends?signals=lamp,start,nosuch");
+    assert_eq!(first.status, 200, "{first:?}");
+    let j = first.json();
+    assert_eq!(j["unknown"], json!(["nosuch"]));
+    assert_eq!(j["window_ms"], 600_000);
+    // Another page, later: lamp's history is there on open.
+    Bench::wait("lamp's history", || {
+        let j = get(b.addr, "/api/trends?signals=lamp").json();
+        j["signals"][0]["points"]
+            .as_array()
+            .is_some_and(|p| p.last().is_some_and(|p| p[1] == json!(true)))
+    });
+    let j = get(b.addr, "/api/trends?signals=lamp").json();
+    let pts = j["signals"][0]["points"].as_array().unwrap();
+    let now = j["now_ms"].as_u64().unwrap();
+    assert!(pts.iter().all(|p| p[0].as_u64().unwrap() <= now), "{j}");
+
+    // Hostile asks: too many names, a huge one, none.
+    let many: Vec<String> = (0..17).map(|k| format!("s{k}")).collect();
+    let r = get(b.addr, &format!("/api/trends?signals={}", many.join(",")));
+    assert_eq!(r.status, 400, "{r:?}");
+    let r = get(b.addr, &format!("/api/trends?signals={}", "x".repeat(3000)));
+    assert!(
+        matches!(r.status, 200 | 400 | 414 | 431),
+        "refused by the request limits, or unknown: {r:?}"
+    );
+    if r.status == 200 {
+        assert_eq!(r.json()["signals"], json!([]));
+    }
+    assert_eq!(get(b.addr, "/api/trends").json()["signals"], json!([]));
+    // Pins are a person's: no session, no pins; the token is no one.
+    assert_eq!(get(b.addr, "/api/trends/pins").status, 401);
+    let body = r#"{"signals":["lamp"]}"#;
+    let r = request(b.addr, "PUT", "/api/trends/pins", None, "application/json", body);
+    assert_eq!(r.status, 401, "{r:?}");
+    let r = request(
+        b.addr,
+        "PUT",
+        "/api/trends/pins",
+        Some(&bearer()),
+        "application/json",
+        body,
+    );
+    assert_eq!(r.status, 400, "{r:?}");
+    let r = request(
+        b.addr,
+        "POST",
+        "/api/trends",
+        Some(&bearer()),
+        "application/json",
+        "{}",
+    );
+    assert_eq!(r.status, 405, "{r:?}");
+}
