@@ -290,6 +290,11 @@ const BLOCK_END: &[&str] = &[
     "END_FUNCTION_BLOCK",
 ];
 
+/// Whether an upper-cased name is a reserved word.
+pub(crate) fn is_reserved(upper: &str) -> bool {
+    RESERVED.contains(&upper)
+}
+
 /// Reserved words that cannot be names.
 const RESERVED: &[&str] = &[
     "PROGRAM",
