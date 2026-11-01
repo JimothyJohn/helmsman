@@ -141,7 +141,7 @@ mod polish {
     use crate::editor::{Tab, numbering};
 
     impl Harness {
-        fn key(&mut self, modifiers: Modifiers, key: Key) {
+        pub(super) fn key(&mut self, modifiers: Modifiers, key: Key) {
             self.frame(vec![Event::Key {
                 key,
                 physical_key: None,
@@ -259,11 +259,14 @@ mod polish {
         assert!(!h.app.chrome.left);
         h.view_menu("view panel");
         assert!(!h.app.chrome.right);
-        h.view_menu("view tab trend");
+        h.view_menu("view tab claude");
         assert!(
-            h.app.chrome.right && h.app.chrome.tab == Tab::Trend,
+            h.app.chrome.right && h.app.chrome.tab == Tab::Claude,
             "a tab opens the panel"
         );
+        assert!(h.app.chrome.trend, "the Trend runs along the bottom");
+        h.view_menu("view trend");
+        assert!(!h.app.chrome.trend);
         h.press("bar view");
         for k in ["view fit", "reset layout", "save layout"] {
             assert!(h.has(k), "no {k}");
@@ -518,13 +521,14 @@ mod chrome {
     #[test]
     fn the_layout_read_back_from_storage_is_forgiving() {
         let mut c = Chrome::default();
-        c.tab = Tab::Trend;
+        c.tab = Tab::Claude;
         c.st = true;
         c.scan = true;
+        c.trend = false;
         let back = Chrome::restored(&c.saved());
         assert_eq!(
-            (back.left, back.right, back.st, back.tab, back.scan),
-            (true, true, true, Tab::Trend, true)
+            (back.left, back.right, back.st, back.tab, back.scan, back.trend),
+            (true, true, true, Tab::Claude, true, false)
         );
         // Anything else keeps the defaults; the Why tab is gone.
         for junk in ["", "left", "tab=why", "=== =1"] {
@@ -589,7 +593,7 @@ mod chrome {
 // ---- the Editor on the simulation ----
 
 mod simulated {
-    use eframe::egui::{Event, Modifiers, MouseWheelUnit, Pos2, Vec2};
+    use eframe::egui::{Event, Key, Modifiers, MouseWheelUnit, Pos2, Vec2};
 
     use super::{Harness, node, sim_view, write_to};
     use crate::app::App;
@@ -614,7 +618,10 @@ mod simulated {
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
         h.click(at);
         assert!(matches!(sim_view(&h).pick, Some(Pick::Node(_))));
-        // The canvas's bottom right corner, left of the right panel.
+        // The canvas's bottom right corner, left of the right panel and
+        // with the Trend folded away from the bottom.
+        h.app.chrome.trend = false;
+        h.wait(0.5);
         let far = Pos2::new(h.rect("right").left() - 30.0, h.size.y - 6.0);
         h.click(far);
         assert_eq!(sim_view(&h).pick, None);
@@ -667,24 +674,25 @@ mod simulated {
         assert_eq!(sim_view(&h).diagram().pou, "STATION");
     }
 
+    /// Nick, 2026-11-01: the Trend runs along the bottom, where its time
+    /// axis is long, not in the side panel's tabs.
     #[test]
-    fn the_trend_has_its_own_tab() {
+    fn the_trend_runs_along_the_bottom_and_the_tabs_are_io_and_agent() {
         let mut h = Harness::new(App::sim());
         assert_eq!(h.app.chrome.tab, Tab::Io);
-        for (key, tab) in [
-            ("tab trend", Tab::Trend),
-            ("tab claude", Tab::Claude),
-            ("tab io", Tab::Io),
-        ] {
+        for (key, tab) in [("tab claude", Tab::Claude), ("tab io", Tab::Io)] {
             h.press(key);
             assert_eq!(h.app.chrome.tab, tab);
         }
-        h.press("tab trend");
+        assert!(!h.has("tab trend"), "no Trend tab");
+        assert!(h.app.chrome.trend, "open by default");
         let s = &mut h.app.sim.as_mut().unwrap().session;
         s.trend.toggle("LAMP");
         h.wait(0.2);
         let s = &h.app.sim.as_ref().unwrap().session;
         assert!(!s.trend.samples.is_empty(), "it records while shown");
+        h.key(Modifiers::ALT, Key::Num2);
+        assert!(!h.app.chrome.trend, "Alt+2 folds it");
     }
 }
 
@@ -721,8 +729,8 @@ mod boxed {
         assert_eq!(v.because, None, "opens with no path lit");
         assert_eq!(b.status(h.time).0, "● connected");
         assert!(
-            h.has("tab trend") && !h.has("tab claude"),
-            "I/O and Trend on a box; Claude comes later"
+            !h.has("tab trend") && !h.has("tab claude"),
+            "I/O alone on a box (the Trend is along the bottom); Claude comes later"
         );
         assert_eq!(h.app.chrome.tab, Tab::Io);
 
@@ -1063,7 +1071,7 @@ mod reviewing {
 #[test]
 fn the_simulation_survives_a_click_storm_on_every_tab() {
     let mut h = Harness::new(App::sim());
-    for tab in ["tab io", "tab trend", "tab claude"] {
+    for tab in ["tab io", "tab claude"] {
         h.press(tab);
         let below = h.rect("header").bottom() + 4.0;
         for x in (0..1400u16).step_by(131) {

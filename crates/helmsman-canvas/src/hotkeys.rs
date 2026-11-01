@@ -16,6 +16,7 @@
 //! | Undo / Redo | Ctrl/⌘ Z, Ctrl/⌘ Y | Undo / Restore |
 //! | Files sidebar | Alt 0 | Devices view |
 //! | Structured Text | Alt 1 | POUs view |
+//! | Trend along the bottom | Alt 2 | Modules view |
 //! | Side panel | Alt 3 | Messages view |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
 //!
@@ -41,6 +42,7 @@ pub enum Action {
     Files,
     St,
     Panel,
+    Trend,
 }
 
 /// One shortcut: the action, its keys and the CODESYS command the keys
@@ -81,6 +83,7 @@ pub const TABLE: &[Hotkey] = &[
     ),
     key(Action::Files, Modifiers::ALT, Key::Num0, "Devices"),
     key(Action::St, Modifiers::ALT, Key::Num1, "POUs"),
+    key(Action::Trend, Modifiers::ALT, Key::Num2, "Modules"),
     key(Action::Panel, Modifiers::ALT, Key::Num3, "Messages"),
 ];
 
