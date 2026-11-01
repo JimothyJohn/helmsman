@@ -116,10 +116,16 @@ The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
 | Alt 0 | Files sidebar | Devices view |
 | Alt 1 | Structured Text pane | POUs view |
 | Alt 3 | Side panel | Messages view |
+| Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
+| Ctrl Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References |
 | Alt ↑ | Up one level in the diagram | |
 
-Each menu item prints its key. Keys reserved for what is not built yet
-are TODO cards (`hotkey-*`).
+Each menu item prints its key. Reserved, not built (TODO cards
+`hotkey-*`), on chords rather than F keys: Ctrl B toggle a breakpoint on
+the picked block, Ctrl ] / Ctrl [ step into / out of an instance,
+Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F
+find in the ST with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2
+the Agent.
 
 ## Monitor (phone to wall TV; replaces Andon)
 

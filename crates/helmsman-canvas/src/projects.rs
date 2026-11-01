@@ -455,6 +455,12 @@ pub trait Workspace {
     fn zoom_to_fit(&mut self);
     /// Undoes (or redoes) the last edit in the ST editor; whether it did.
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool;
+    /// Sends the ST editor to the declaration of the picked block's
+    /// variable (Go to definition); whether there was one.
+    fn go_to_definition(&mut self, chrome: &mut Chrome) -> bool;
+    /// Lights every read and write of the picked block's variable on the
+    /// diagram (Cross references); whether there was one.
+    fn cross_references(&mut self) -> bool;
 }
 
 /// The file and line a line of a project build is from: the build is every
