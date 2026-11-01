@@ -1026,7 +1026,7 @@
   id: sim-multi-program
   answer: refuse, as built
 
-- [ ] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
+- [x] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
