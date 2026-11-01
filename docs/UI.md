@@ -34,8 +34,8 @@ this; change it here first when a decision changes.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
   not show), Trend (pinned signals), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
-  streams; pins are the signed-in person's, kept by the box, or the
-  browser's when signed out.
+  streams; pins are the signed-in person's, kept by the box across
+  restarts (history is not), or the browser's when signed out.
 - **NOT is a bubble** on the pin it feeds (or the output it inverts), the
   FBD convention, not a block of its own. Display only.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
