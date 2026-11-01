@@ -11,7 +11,7 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Vec2,
 };
 use helmsman_diagram::diff::{self, Change, Line};
-use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
+use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, in_port_at, out_port, out_port_at};
 use helmsman_diagram::{Diagram, NodeId};
 
 use crate::review::{
@@ -709,8 +709,8 @@ fn draw_diff(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, m: &Mar
     }
     for w in &d.wires {
         let (a, b) = (d.node(w.from), d.node(w.to));
-        let (ax, ay) = out_port(&a.rect, w.out);
-        let (bx, by) = in_port(&b.rect, w.inp);
+        let (ax, ay) = out_port(a, w.out);
+        let (bx, by) = in_port(b, w.inp);
         let hot = m.added.contains(&w.to) || m.added.contains(&w.from);
         let color = if hot { YELLOW } else { STEEL.gamma_multiply(0.8) };
         painter.line_segment(
@@ -791,8 +791,8 @@ fn draw_ghosts(
         let (Some(a), Some(b)) = (at(w.from), at(w.to)) else {
             continue;
         };
-        let (ax, ay) = out_port(&a, w.out);
-        let (bx, by) = in_port(&b, w.inp);
+        let (ax, ay) = out_port_at(&a, old.node(w.from).kind.headed(), w.out);
+        let (bx, by) = in_port_at(&b, old.node(w.to).kind.headed(), w.inp);
         painter.extend(Shape::dashed_line(
             &[cam.to_screen(ax, ay), cam.to_screen(bx, by)],
             stroke,
