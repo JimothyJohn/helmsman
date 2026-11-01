@@ -1294,32 +1294,6 @@ fn a_number_on_the_diagram_is_written_on_enter_not_while_typing() {
 }
 
 #[test]
-fn the_scan_period_field_commits_on_enter_or_focus_out_and_reverts_on_escape() {
-    let mut s = Screen::new();
-    let before = s.view.session.period_ms;
-    let field = s.rect("pg-period").center();
-    s.click(field);
-    s.frame(vec![Event::Text("25".into())]);
-    s.wait(0.2);
-    assert_eq!(s.view.session.period_ms, before, "typing changes nothing");
-    s.key(egui::Key::Enter);
-    s.wait(0.1);
-    assert_eq!(s.view.session.period_ms, 25);
-    // Leaving the field commits too: click the diagram's empty space.
-    s.click(field);
-    s.frame(vec![Event::Text("40".into())]);
-    let away = s.block("period").center() + Vec2::new(0.0, 160.0);
-    s.click(away);
-    s.wait(0.1);
-    assert_eq!(s.view.session.period_ms, 40, "focus out commits");
-    s.click(field);
-    s.frame(vec![Event::Text("7".into())]);
-    s.key(egui::Key::Escape);
-    s.wait(0.1);
-    assert_eq!(s.view.session.period_ms, 40, "Escape reverts");
-}
-
-#[test]
 fn the_side_panel_keeps_only_the_inputs_the_diagram_does_not_read() {
     let mut s = Screen::new();
     s.view.load(

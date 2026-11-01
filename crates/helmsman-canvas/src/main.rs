@@ -37,6 +37,7 @@ mod box_view;
 mod claude;
 mod commit;
 mod editor;
+mod glyphs;
 mod hotkeys;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]

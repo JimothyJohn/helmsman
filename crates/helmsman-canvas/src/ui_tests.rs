@@ -133,6 +133,72 @@ fn write_to(path: &str) -> impl Fn(&NodeKind) -> bool + '_ {
 
 // ---- the header and the Editor's frame ----
 
+mod glyphs_and_help {
+    use eframe::egui::Rect;
+
+    use super::{App, Harness, Screen};
+
+    /// Nick, 2026-11-01: run/stop, step and restart as glyphs over the
+    /// diagram's top-right corner, with save, upload, download and help.
+    #[test]
+    fn the_glyphs_sit_on_the_diagram_and_drive_the_simulation() {
+        let mut h = Harness::new(App::sim());
+        let diagram = h.app.chrome.diagram;
+        assert_ne!(diagram, Rect::NOTHING);
+        for k in ["run", "step", "restart", "save", "upload", "download", "help"] {
+            let r = h.rect(k);
+            assert!(
+                diagram.contains(r.center()),
+                "{k} over the diagram: {r:?} in {diagram:?}"
+            );
+            assert!(r.top() < diagram.top() + 40.0, "{k} along the top: {r:?}");
+        }
+        let help = h.rect("help");
+        assert!(
+            help.right() > diagram.right() - 40.0,
+            "the strip ends at the right edge: {help:?}"
+        );
+        assert!(h.app.sim.as_ref().unwrap().session.running);
+        h.press("run");
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "the glyph stops");
+        let scans = h.app.sim.as_ref().unwrap().session.scans;
+        h.press("step");
+        assert_eq!(h.app.sim.as_ref().unwrap().session.scans, scans + 1);
+        h.press("restart");
+        assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "a cold restart");
+        h.press("run");
+        assert!(h.app.sim.as_ref().unwrap().session.running, "and starts again");
+        // The Monitor has no diagram, so no glyphs.
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Monitor);
+        assert!(!h.has("run") && !h.has("help"));
+    }
+
+    #[test]
+    fn editor_and_monitor_are_one_toggle_and_help_has_an_about() {
+        let mut h = Harness::new(App::sim());
+        let (e, m) = (h.rect("editor"), h.rect("monitor"));
+        assert!(
+            (e.right() - m.left()).abs() < 1.0 && (e.top() - m.top()).abs() < 1.0,
+            "one control: {e:?} {m:?}"
+        );
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Monitor);
+        h.press("editor");
+        assert_eq!(h.app.screen, Screen::Editor);
+        h.press("bar help");
+        for k in ["help docs", "help keys", "help about"] {
+            assert!(h.has(k), "no {k}");
+        }
+        h.press("help about");
+        assert!(h.app.about);
+        h.frame(vec![]);
+        assert!(h.has("about close"));
+        h.press("about close");
+        assert!(!h.app.about);
+    }
+}
+
 mod polish {
     use eframe::egui::{self, Event, Key, Modifiers};
 
@@ -266,11 +332,11 @@ mod polish {
         let header = h.rect("header");
         assert!(header.height() >= HEADER_H, "{header:?}");
         for k in [
-            "mark", "bar file", "bar edit", "bar view", "title", "save", "deploy", "editor", "monitor",
-            "menu",
+            "mark", "bar file", "bar edit", "bar view", "bar help", "title", "editor", "monitor", "menu",
         ] {
             assert!(h.has(k), "no {k}");
         }
+        assert!(!h.has("deploy"), "Deploy is the File menu's");
         let (file, view, menu) = (h.rect("bar file"), h.rect("bar view"), h.rect("menu"));
         assert!(
             file.left() < view.left() && view.right() < menu.left(),

@@ -74,6 +74,9 @@ pub struct Chrome {
     jump: Option<u32>,
     /// Controls drawn this frame, by name.
     pub hits: Vec<(String, Rect)>,
+    /// Where the diagram was drawn this frame (the glyph buttons sit in
+    /// its top-right corner).
+    pub diagram: Rect,
 }
 
 impl Default for Chrome {
@@ -88,6 +91,7 @@ impl Default for Chrome {
             line: None,
             jump: None,
             hits: Vec::new(),
+            diagram: Rect::NOTHING,
         }
     }
 }
@@ -425,7 +429,10 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         .show_collapsible(ui, &mut st, |ui| body.st(ui, chrome));
     chrome.st = st;
 
-    egui::CentralPanel::no_frame().show(ui, |ui| body.diagram(ui, chrome));
+    egui::CentralPanel::no_frame().show(ui, |ui| {
+        chrome.diagram = ui.available_rect_before_wrap();
+        body.diagram(ui, chrome);
+    });
 }
 
 /// The ST, with line numbers, diagnostics marked (`(line, column)`), and

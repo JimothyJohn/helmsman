@@ -282,7 +282,7 @@ fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     assert!(why.contains("does not keep projects"), "{why}");
     assert!(v.session.running, "the example runs anyway");
     assert!(app.chrome.rect("storage").is_some(), "the page says so");
-    for k in ["mark", "title", "save", "deploy", "menu"] {
+    for k in ["mark", "title", "save", "bar file", "menu"] {
         assert!(app.chrome.rect(k).is_some(), "{k} drawn");
     }
     // Projects still work, in memory.
