@@ -17,7 +17,7 @@ use helmsman_iec::{ImageSizes, compile};
 use helmsman_io::Value;
 use helmsman_plc::api::{
     Api, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, ModuleInfo, Publisher,
-    Screen, Shared, http, token,
+    Shared, http, token,
 };
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::spec::Defaults;
@@ -92,7 +92,6 @@ struct Setup {
     stream_every: Duration,
     running: Option<ChangeSet>,
     store: Option<PathBuf>,
-    screen: Option<Screen>,
 }
 
 impl Default for Setup {
@@ -105,7 +104,6 @@ impl Default for Setup {
             stream_every: Duration::from_millis(20),
             running: None,
             store: None,
-            screen: None,
         }
     }
 }
@@ -181,7 +179,6 @@ impl Bench {
         };
         let extras = Extras {
             ui: None,
-            screen: setup.screen,
             trust: None,
         };
         let api = Api::start_with(cfg, shared, extras).unwrap();
@@ -1375,77 +1372,33 @@ proptest! {
     }
 }
 
-const LAYOUT: &str = "\
-helmsman-screen 1
-title Hall 2 andon
-grid 1 1
-code line 0 grey Idle
-code line 3 red Down: call maintenance
-tile line1 0,0 line line1_state Line 1
-";
-
+/// The floor screen's layout route is retired with `--screen`: the Monitor
+/// builds its tiles from the program.
 #[test]
-fn the_screen_layout_is_served_read_only() {
-    let none = Bench::new();
-    let r = get(none.addr, "/api/screen");
+fn the_retired_screen_route_is_gone() {
+    let b = Bench::new();
+    for path in ["/api/screen", "/api/screen/x"] {
+        let r = get(b.addr, path);
+        assert_eq!(r.status, 404, "{path}: {r:?}");
+    }
+    let r = request(
+        b.addr,
+        "POST",
+        "/api/screen",
+        Some(&bearer()),
+        "application/json",
+        "{}",
+    );
     assert_eq!(r.status, 404, "{r:?}");
-    assert!(r.body.contains("--screen"), "{r:?}");
-    drop(none);
-
-    let b = Bench::with(Setup {
-        screen: Some(Screen {
-            source: LAYOUT.into(),
-            layout: helmsman_plc::screen::parse(LAYOUT).unwrap(),
-        }),
-        ..Setup::default()
-    });
-    let r = get(b.addr, "/api/screen");
-    assert_eq!(r.status, 200, "{r:?}");
-    let j = r.json();
-    assert_eq!(j["source"], LAYOUT, "byte for byte, for the canvas to parse");
-    assert_eq!(j["layout"]["title"], "Hall 2 andon");
-    assert_eq!(j["layout"]["tiles"][0]["state"], "line1_state");
-    assert_eq!(j["layout"]["sets"]["line"]["3"]["colour"], "red");
-    assert_eq!(
-        j["palette"]["yellow"]["fill"], "#FFC20E",
-        "the brand's safety yellow"
-    );
-    assert_eq!(j["palette"]["yellow"]["ink"], "#141414");
-    assert_eq!(
-        helmsman_plc::screen::parse(j["source"].as_str().unwrap()).unwrap(),
-        helmsman_plc::screen::parse(LAYOUT).unwrap()
-    );
     let index = get(b.addr, "/api").json();
     assert!(
-        index["endpoints"]
+        !index["endpoints"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|e| e["path"] == "/api/screen")
+            .any(|e| e["path"] == "/api/screen"),
+        "{index}"
     );
-
-    // No method but GET, with or without the token; refusals are audited.
-    for method in ["POST", "PUT", "DELETE", "PATCH"] {
-        let r = request(
-            b.addr,
-            method,
-            "/api/screen",
-            Some(&bearer()),
-            "application/json",
-            "{}",
-        );
-        assert_eq!(r.status, 405, "{method}: {r:?}");
-        assert!(r.head.contains("Allow: GET"), "{r:?}");
-        let r = request(b.addr, method, "/api/screen", None, "application/json", "{}");
-        assert_eq!(r.status, 401, "{method}: {r:?}");
-    }
-    assert!(
-        audit(b.addr)
-            .iter()
-            .any(|e| e["path"] == "/api/screen" && e["status"] == 405)
-    );
-    assert_eq!(get(b.addr, "/api/screen").json()["source"], LAYOUT, "unchanged");
-    assert_eq!(get(b.addr, "/api/screen/x").status, 404);
 }
 
 /// Card `box-trend-source`: a signal asked for once keeps its history on
