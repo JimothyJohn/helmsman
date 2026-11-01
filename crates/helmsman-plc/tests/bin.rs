@@ -120,7 +120,7 @@ fn spawn_with(args: &[&std::ffi::OsStr], peer_io_port: u16) -> (Running, SocketA
 /// timeout is RPI × 2^(7+2), about 5 s, not the 80 ms of multiplier 1: with
 /// six copies of the suite running, a scanner thread can stall longer than
 /// 80 ms, the box then drops the connection as timed out, and the closing
-/// Forward_Close is refused (0x0107). No test here is about the timeout.
+/// `Forward_Close` is refused (0x0107). No test here is about the timeout.
 fn io_config() -> IoConfig {
     let mut cfg = IoConfig::exclusive_owner(151, 150, 100, 32, 32, Duration::from_millis(10));
     cfg.timeout_multiplier = 7;
