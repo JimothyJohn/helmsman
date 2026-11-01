@@ -564,6 +564,33 @@ impl Workspace for BoxView {
         }
     }
 
+    fn go_to_definition(&mut self, chrome: &mut Chrome) -> bool {
+        let Some(v) = &self.view else { return false };
+        let Some(line) = v.definition_line() else {
+            return false;
+        };
+        // As a block click: the file and line of the project build when the
+        // project open is the one running; the build's line without projects.
+        match projects::file_line(&v.src, line) {
+            Some((file, l))
+                if self.has_projects()
+                    && self.projects.open.as_ref().map(|o| &o.name) == self.projects.running.as_ref() =>
+            {
+                self.goto(&file, l, chrome);
+            }
+            None if !self.has_projects() => {
+                chrome.st = true;
+                chrome.goto(line);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn cross_references(&mut self) -> bool {
+        self.view.as_mut().is_some_and(Viewer::cross_references)
+    }
+
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
         if self.writable().is_err() {
             return false;
