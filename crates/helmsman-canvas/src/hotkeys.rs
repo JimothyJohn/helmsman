@@ -51,8 +51,6 @@ pub enum Action {
     Restart,
     Upload,
     Download,
-    /// The help page on the site (a glyph, the Help menu; no key).
-    Help,
 }
 
 /// One shortcut: the action, its keys and the CODESYS command the keys
@@ -129,7 +127,7 @@ const fn does(action: Action) -> &'static str {
         Action::Panel => "The side panel (I/O, Agent)",
         Action::GoToDefinition => "Go to definition: the picked block's variable, at its VAR line",
         Action::CrossReferences => "Cross references: every read and write of it lit",
-        Action::Restart | Action::Upload | Action::Download | Action::Help => "",
+        Action::Restart | Action::Upload | Action::Download => "",
     }
 }
 

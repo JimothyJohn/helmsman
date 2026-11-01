@@ -94,6 +94,14 @@ pub enum Act {
         to: String,
     },
     DeleteFile(String),
+    /// The Agent's answer as a new project (a PROGRAM) or a new file in
+    /// the open project, named after what it declares; `save`: the open
+    /// project's unsaved edits are saved first, else dropped.
+    UseAnswer {
+        name: String,
+        text: String,
+        save: bool,
+    },
 }
 
 /// What the sidebar shows.
@@ -148,7 +156,6 @@ impl FilesUi {
     /// The projects, then the open project's files. Returns what was asked.
     pub fn show(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, chrome: &mut Chrome) -> Option<Act> {
         let mut act = None;
-        ui.label(RichText::new("Projects").strong().color(STEEL));
         let mut shown = Group::Mine;
         for p in l.projects {
             if p.group != shown {
@@ -392,6 +399,11 @@ impl FilesUi {
                 "Open, drop them",
                 "Stay",
             ),
+            Act::UseAnswer { name, .. } => (
+                format!("The edits here are not saved. Save them before opening {name}, or drop them?"),
+                "Save, then open",
+                "Stay",
+            ),
             _ => return None,
         };
         let mut out = None;
@@ -400,6 +412,18 @@ impl FilesUi {
         ui.horizontal(|ui| {
             let yes = ui.button(verb);
             chrome.hit("confirm yes", yes.rect);
+            if let Act::UseAnswer { name, text, .. } = &a {
+                let drop = ui.button("Drop them, then open");
+                chrome.hit("confirm drop", drop.rect);
+                if drop.clicked() {
+                    out = Some(Act::UseAnswer {
+                        name: name.clone(),
+                        text: text.clone(),
+                        save: false,
+                    });
+                    self.confirm = None;
+                }
+            }
             let no = ui.button(stay);
             chrome.hit("confirm no", no.rect);
             if yes.clicked() {

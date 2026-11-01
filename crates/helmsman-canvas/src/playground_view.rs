@@ -234,6 +234,35 @@ impl PlaygroundView {
     /// Carries out what the Files sidebar asked.
     fn act(&mut self, a: Act) {
         match a {
+            Act::UseAnswer { name, text, save } => {
+                if save {
+                    self.proj.save();
+                } else {
+                    let open = self.proj.open.clone();
+                    self.proj.open_project(&open);
+                }
+                if text.to_ascii_uppercase().contains("PROGRAM ") {
+                    let project = self.proj.free_name(&name);
+                    self.proj.create(&project, None);
+                    self.proj.open_project(&project);
+                    let file = format!("{name}.st");
+                    self.proj.files.clear();
+                    self.proj.files.insert(file.clone(), text);
+                    self.proj.current = file;
+                } else {
+                    let file = self.proj.free_file(&format!("{name}.st"));
+                    self.proj.new_file(&file);
+                    if let Some(t) = self.proj.current_text_mut() {
+                        *t = text;
+                    }
+                }
+                self.proj.save();
+                self.reload();
+                self.notice = Some(format!(
+                    "{} opened from the Agent's answer; Deploy runs it.",
+                    self.proj.current
+                ));
+            }
             Act::OpenProject(p) => self.open_project(&p),
             Act::OpenFile(f) => self.proj.open_file(&f),
             Act::NewProject(p) => {
@@ -287,37 +316,6 @@ impl PlaygroundView {
             // while its variable does.
             v.because = old.filter(|o| v.knows(o));
             v
-        });
-    }
-
-    /// Loads `src` into the editor (the open file, or the project's first
-    /// program file when a map or settings file is open), compiled and
-    /// stopped.
-    pub fn load(&mut self, src: &str, what: &str) {
-        if crate::sim_projects::is_st(&self.proj.current) {
-            if let Some(t) = self.proj.current_text_mut() {
-                src.clone_into(t);
-            }
-        } else if let Some(f) = self
-            .proj
-            .files
-            .keys()
-            .find(|f| crate::sim_projects::is_st(f))
-            .cloned()
-        {
-            self.proj.files.insert(f.clone(), src.to_string());
-            self.proj.current = f;
-        } else {
-            self.proj.files.insert("main.st".into(), src.to_string());
-            self.proj.current = "main.st".into();
-        }
-        let ok = self.session.load(&self.proj.build_src());
-        self.pending = None;
-        self.sync_viewer();
-        self.notice = Some(if ok {
-            format!("Loaded {what}. Press Run to start it.")
-        } else {
-            format!("Loaded {what}; it does not compile yet (see the errors under the editor).")
         });
     }
 
@@ -375,12 +373,63 @@ impl PlaygroundView {
     }
 
     /// Loads the program in Claude's answer (never runs it).
+    /// Loads `src` into the editor (the open file, or the project's first
+    /// program file when a map or settings file is open), compiled and
+    /// stopped.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn load(&mut self, src: &str, what: &str) {
+        if crate::sim_projects::is_st(&self.proj.current) {
+            if let Some(t) = self.proj.current_text_mut() {
+                src.clone_into(t);
+            }
+        } else if let Some(f) = self
+            .proj
+            .files
+            .keys()
+            .find(|f| crate::sim_projects::is_st(f))
+            .cloned()
+        {
+            self.proj.files.insert(f.clone(), src.to_string());
+            self.proj.current = f;
+        } else {
+            self.proj.files.insert("main.st".into(), src.to_string());
+            self.proj.current = "main.st".into();
+        }
+        let ok = self.session.load(&self.proj.build_src());
+        self.pending = None;
+        self.sync_viewer();
+        self.notice = Some(if ok {
+            format!("Loaded {what}. Press Run to start it.")
+        } else {
+            format!("Loaded {what}; it does not compile yet (see the errors under the editor).")
+        });
+    }
+
+    /// Takes the Agent's answer into the project tree (Nick, 2026-11-01):
+    /// a PROGRAM becomes a new project named after it, anything else a new
+    /// file in the open project; it opens, and nothing runs until Deploy.
+    /// Unsaved edits in the open project ask first (save or drop).
     pub fn use_answer(&mut self) -> bool {
         let Some(code) = self.chat.answer.as_ref().and_then(crate::claude::Answer::program) else {
             return false;
         };
-        self.load(&code, "Claude's program");
+        self.take_code(code);
         true
+    }
+
+    /// [`Self::use_answer`] for `code` already in hand.
+    pub fn take_code(&mut self, code: String) {
+        let name = answer_name(&code);
+        let act = Act::UseAnswer {
+            name,
+            text: code,
+            save: true,
+        };
+        if self.proj.dirty() {
+            self.files_ui.confirm = Some(act);
+        } else {
+            self.act(act);
+        }
     }
 
     /// One frame of the Editor.
@@ -661,8 +710,8 @@ impl Body for PlaygroundView {
         self.trend_tab(ui);
     }
 
-    fn messages(&mut self, _ui: &mut egui::Ui) -> &crate::messages::Log {
-        &self.log
+    fn messages(&mut self) -> &mut crate::messages::Log {
+        &mut self.log
     }
 
     fn tabs(&self) -> &'static [Tab] {
@@ -745,10 +794,20 @@ impl PlaygroundView {
                         .color(STEEL),
                 );
             }
-            for p in off_map {
-                if let Some(v) = input_ui(ui, p) {
-                    self.session.set_input(&p.name, v);
+            // Two columns (Nick, 2026-11-01: denser).
+            let mut set = Vec::new();
+            egui::Grid::new("pg-io-in").num_columns(2).show(ui, |ui| {
+                for pair in off_map.chunks(2) {
+                    for p in pair {
+                        if let Some(v) = input_ui(ui, p) {
+                            set.push((p.name.clone(), v));
+                        }
+                    }
+                    ui.end_row();
                 }
+            });
+            for (name, v) in set {
+                self.session.set_input(&name, v);
             }
             ui.add_space(8.0);
             ui.label(RichText::new("Outputs").strong())
@@ -760,10 +819,19 @@ impl PlaygroundView {
                         .color(STEEL),
                 );
             }
-            for p in &outputs {
-                if output_ui(ui, p) {
-                    self.pick(&p.name);
+            let mut picked = None;
+            egui::Grid::new("pg-io-out").num_columns(2).show(ui, |ui| {
+                for pair in outputs.chunks(2) {
+                    for p in pair {
+                        if output_ui(ui, p) {
+                            picked = Some(p.name.clone());
+                        }
+                    }
+                    ui.end_row();
                 }
+            });
+            if let Some(name) = picked {
+                self.pick(&name);
             }
         });
     }
@@ -961,7 +1029,7 @@ impl PlaygroundView {
                 .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
             if ui
                 .add(b)
-                .on_hover_text("replaces the editor's program; it does not run until you press Run")
+                .on_hover_text("a new project (or file) named after it, opened; Deploy runs it")
                 .clicked()
             {
                 self.use_answer();
@@ -1093,6 +1161,32 @@ enum MapInput {
     /// A push button: whether it is held.
     Held(bool),
     Set(Value),
+}
+
+/// A name for the Agent's answer: the `PROGRAM`, `FUNCTION_BLOCK` or
+/// `FUNCTION` it declares, lower-cased, else `agent`.
+#[must_use]
+pub fn answer_name(code: &str) -> String {
+    let mut words = code.split_whitespace();
+    while let Some(w) = words.next() {
+        if matches!(
+            w.to_ascii_uppercase().as_str(),
+            "PROGRAM" | "FUNCTION_BLOCK" | "FUNCTION"
+        ) && let Some(name) = words.next()
+        {
+            let name: String = name
+                .trim_end_matches(':')
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .take(40)
+                .collect::<String>()
+                .to_ascii_lowercase();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    "agent".into()
 }
 
 /// One input's control filling its block at `rect`.

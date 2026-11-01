@@ -92,23 +92,9 @@ impl Harness {
 
     /// The header's controls, all there.
     fn header_is_up(&self) {
-        for k in ["mark", "title", "editor", "menu"] {
+        for k in ["mark", "title", "editor", "help"] {
             assert!(self.has(k), "no {k} in the header");
         }
-    }
-
-    /// The menu's items on screen now.
-    fn menu_items(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .app
-            .chrome
-            .hits
-            .iter()
-            .filter(|(k, _)| k.starts_with("menu "))
-            .map(|(k, _)| k.clone())
-            .collect();
-        out.sort();
-        out
     }
 }
 
@@ -145,7 +131,7 @@ mod glyphs_and_help {
         let mut h = Harness::new(App::sim());
         let diagram = h.app.chrome.diagram;
         assert_ne!(diagram, Rect::NOTHING);
-        for k in ["run", "step", "restart", "save", "upload", "download", "help"] {
+        for k in ["run", "step", "restart", "save", "upload", "download"] {
             let r = h.rect(k);
             assert!(
                 diagram.contains(r.center()),
@@ -153,10 +139,10 @@ mod glyphs_and_help {
             );
             assert!(r.top() < diagram.top() + 40.0, "{k} along the top: {r:?}");
         }
-        let help = h.rect("help");
+        let last = h.rect("download");
         assert!(
-            help.right() > diagram.right() - 40.0,
-            "the strip ends at the right edge: {help:?}"
+            last.right() > diagram.right() - 40.0,
+            "the strip ends at the right edge: {last:?}"
         );
         assert!(h.app.sim.as_ref().unwrap().session.running);
         h.press("run");
@@ -171,7 +157,32 @@ mod glyphs_and_help {
         // The Monitor has no diagram, so no glyphs.
         h.press("monitor");
         assert_eq!(h.app.screen, Screen::Monitor);
-        assert!(!h.has("run") && !h.has("help"));
+        assert!(!h.has("run") && !h.has("download"));
+        assert!(h.has("help"), "? stays in the header");
+    }
+
+    /// Nick, 2026-11-01: the toggle flips on a click on either side; the
+    /// Messages tab filters by level; the Projects pane has no "Files"
+    /// header.
+    #[test]
+    fn the_toggle_flips_from_either_side_and_messages_filter_by_level() {
+        use crate::editor::Bottom;
+        let mut h = Harness::new(App::sim());
+        assert_eq!(h.app.screen, Screen::Editor);
+        h.press("editor");
+        assert_eq!(h.app.screen, Screen::Monitor, "the active side flips too");
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Editor);
+        h.press("bottom messages");
+        h.frame(vec![]);
+        for k in ["messages info", "messages warnings", "messages errors"] {
+            assert!(h.has(k), "no {k}");
+        }
+        h.press("messages info");
+        let log = &h.app.sim.as_ref().unwrap().log;
+        assert_eq!(log.show, [false, true, true], "info filtered out");
+        assert_eq!(h.app.chrome.bottom, Bottom::Messages);
+        assert!(!h.has("st"), "no Files header row either");
     }
 
     #[test]
@@ -352,17 +363,27 @@ mod polish {
         let header = h.rect("header");
         assert!(header.height() >= HEADER_H, "{header:?}");
         for k in [
-            "mark", "bar file", "bar edit", "bar view", "bar help", "title", "editor", "monitor", "menu",
+            "mark", "bar file", "bar edit", "bar view", "bar help", "title", "editor", "monitor", "help",
         ] {
             assert!(h.has(k), "no {k}");
         }
         assert!(!h.has("deploy"), "Deploy is the File menu's");
-        let (file, view, menu) = (h.rect("bar file"), h.rect("bar view"), h.rect("menu"));
-        assert!(
-            file.left() < view.left() && view.right() < menu.left(),
-            "menus left, ⋯ right"
+        assert!(!h.has("menu"), "no ⋯ any more");
+        let (file, view, help, toggle) = (
+            h.rect("bar file"),
+            h.rect("bar view"),
+            h.rect("help"),
+            h.rect("monitor"),
         );
-        assert!(menu.right() <= 1400.0, "on screen");
+        assert!(
+            file.left() < view.left() && view.right() < help.left(),
+            "menus left, ? right"
+        );
+        assert!(
+            help.left() >= toggle.right(),
+            "? right of the Editor | Monitor toggle: {help:?} {toggle:?}"
+        );
+        assert!(help.right() <= 1400.0, "on screen");
         assert!(!h.has("st") && !h.has("reset layout"), "no second bar");
         // The menus are there on the Monitor too.
         h.press("monitor");
@@ -482,86 +503,78 @@ mod chrome {
         h.app.screen = Screen::Proposals;
         h.frame(vec![]);
         h.header_is_up();
-        // The menu open over the screen: still there.
-        h.press("menu");
-        assert!(h.app.menu);
-        h.header_is_up();
     }
 
     #[test]
-    fn the_menu_opens_proposals_and_the_header_leads_back() {
+    fn view_opens_proposals_and_the_toggle_leads_back() {
         let mut h = Harness::new(App::boxed());
-        assert!(!h.app.menu);
-        h.press("menu");
-        assert!(h.app.menu, "⋯ opens the menu");
-        assert_eq!(h.menu_items(), ["menu editor", "menu proposals", "menu sim"]);
-        h.press("menu proposals");
+        h.press("bar view");
+        for k in ["view proposals", "view sim"] {
+            assert!(h.has(k), "no {k} in View on a box");
+        }
+        h.press("view proposals");
         assert_eq!(h.app.screen, Screen::Proposals);
-        assert!(!h.app.menu, "picking closes it");
         assert!(h.app.review.is_some());
-        // Back by the header's Editor...
+        // Back by the toggle (either side leaves Proposals for the Editor).
         h.press("editor");
         assert_eq!(h.app.screen, Screen::Editor);
-        // ...or by the menu's.
-        h.press("menu");
-        h.press("menu proposals");
+        h.press("bar view");
+        h.press("view proposals");
         assert_eq!(h.app.screen, Screen::Proposals);
-        h.press("menu");
-        h.press("menu editor");
-        assert_eq!(h.app.screen, Screen::Editor);
-        // A click elsewhere closes the menu and changes nothing.
-        h.press("menu");
-        assert!(h.app.menu);
+        h.press("monitor");
+        assert_eq!(
+            h.app.screen,
+            Screen::Editor,
+            "from Proposals either side goes to the Editor"
+        );
+        // A click elsewhere with the menu open closes it and changes nothing.
+        h.press("bar view");
         h.click(Pos2::new(700.0, 500.0));
-        assert!(!h.app.menu);
         assert_eq!(h.app.screen, Screen::Editor);
-        // ⋯ again closes it too.
-        h.press("menu");
-        h.press("menu");
-        assert!(!h.app.menu);
     }
 
     #[test]
-    fn the_menu_shows_the_boxs_https_fingerprint_when_it_has_one() {
+    fn about_shows_the_boxs_https_fingerprint_when_it_has_one() {
         let mut h = Harness::new(App::boxed());
-        h.press("menu");
+        h.press("bar help");
+        h.press("help about");
+        h.frame(vec![]);
         assert!(!h.has("tls fingerprint"), "not before the policy says");
         let fp = "AB:".repeat(31) + "AB";
         h.app.review.as_mut().unwrap().state.policy =
             Some(serde_json::json!({ "transport": { "https": true, "fingerprint": fp } }));
         h.frame(vec![]);
         assert!(h.has("tls fingerprint"));
-        assert_eq!(h.menu_items(), ["menu editor", "menu proposals", "menu sim"]);
         // Plain HTTP (--https off): nothing to show.
         h.app.review.as_mut().unwrap().state.policy =
             Some(serde_json::json!({ "transport": { "https": false, "fingerprint": null } }));
         h.frame(vec![]);
         assert!(!h.has("tls fingerprint"));
+        h.press("about close");
     }
 
     #[test]
-    fn the_source_is_a_setting_in_the_menu_on_a_box_and_absent_without_one() {
+    fn the_source_is_a_setting_in_view_on_a_box_and_absent_without_one() {
         let mut h = Harness::new(App::boxed());
-        h.press("menu");
-        h.press("menu sim");
+        h.press("bar view");
+        h.press("view sim");
         assert_eq!(h.app.source, Source::Sim);
         assert!(h.app.sim.is_some(), "the simulation runs");
         h.header_is_up();
-        h.press("menu");
-        assert_eq!(
-            h.menu_items(),
-            ["menu box", "menu editor"],
-            "no proposals without a box; upload and download are the File menu's"
+        h.press("bar view");
+        assert!(
+            h.has("view box") && !h.has("view proposals"),
+            "no proposals without a box"
         );
-        h.press("menu box");
+        h.press("view box");
         assert_eq!(h.app.source, Source::Box);
 
         // The public page: no box to go back to, no proposals.
         let mut h = Harness::new(App::sim());
-        h.press("menu");
-        assert_eq!(h.menu_items(), ["menu editor"]);
-        h.press("menu");
-        // Upload and Download live in the File menu now.
+        h.press("bar view");
+        assert!(!h.has("view box") && !h.has("view sim") && !h.has("view proposals"));
+        h.press("bar view");
+        // Upload and Download live in the File menu.
         h.press("bar file");
         assert!(
             h.has("file upload") && h.has("file download"),
@@ -589,7 +602,7 @@ mod chrome {
                 h.app.screen = Screen::Proposals;
             }
             h.frame(vec![]);
-            h.press("menu");
+            h.press("bar view");
             seen.extend(h.app.chrome.hits.iter().map(|(k, _)| k.to_ascii_lowercase()));
         }
         for gone in ["lab", "site", "demo", "andon", "playground"] {
@@ -943,9 +956,9 @@ mod fallback {
             "{:?}",
             s.notice
         );
-        // Back to the box from ⋯ stays: the fallback happens once.
-        h.press("menu");
-        h.press("menu box");
+        // Back to the box from View stays: the fallback happens once.
+        h.press("bar view");
+        h.press("view box");
         assert_eq!(h.app.source, Source::Box);
         h.wait(0.2);
         assert_eq!(h.app.source, Source::Box, "not yanked back to the simulation");
@@ -1035,9 +1048,8 @@ mod reviewing {
         pump(&mut h, &b);
         assert_eq!(h.app.waiting(), Some(1), "the draft waits");
         assert_eq!(h.app.screen, Screen::Editor);
-        h.press("menu");
-        assert!(h.menu_items().contains(&"menu proposals".to_string()));
-        h.press("menu proposals");
+        assert!(h.has("proposals waiting"), "the header badges it");
+        h.press("proposals waiting");
         assert_eq!(h.app.screen, Screen::Proposals);
         pump(&mut h, &b);
         assert_eq!(rv(&mut h).state.list.len(), 1);
