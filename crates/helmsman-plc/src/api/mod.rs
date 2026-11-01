@@ -38,7 +38,6 @@
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
-//! GET  /api/screen                        the floor screen's layout (with --screen FILE; see [`crate::screen`])
 //! GET  /api/site                          this box and the boxes it heard on the LAN (with --site NAME; see [`crate::site`])
 //! POST /api/dropins?name=N&kind=K         token: a document, a photo or a PDF for the agent, stored in memory (see [`dropin`], [`photo`], [`pdf`])
 //! GET  /api/dropins                       the drop-ins held
@@ -208,8 +207,6 @@ pub struct Shared {
 pub struct Extras {
     /// The canvas, at `/`.
     pub ui: Option<ui::Ui>,
-    /// The floor screen's layout, at `/api/screen`.
-    pub screen: Option<Screen>,
     /// Publishers whose bundles import (`POST /api/bundles`); `None`:
     /// import answers 501.
     pub trust: Option<TrustStore>,
@@ -264,34 +261,6 @@ impl std::fmt::Debug for Tls {
     }
 }
 
-/// A floor screen layout as loaded: the file, byte for byte, and what it
-/// parsed to (already checked against the I/O map).
-#[derive(Debug, Clone)]
-pub struct Screen {
-    pub source: String,
-    pub layout: crate::screen::Layout,
-}
-
-/// `GET /api/screen`: the layout, its source (the canvas parses that with
-/// the same parser) and the fixed palette.
-fn screen_json(s: &Screen) -> Json {
-    let hex = |c: [u8; 3]| format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
-    let palette: serde_json::Map<String, Json> = crate::screen::Colour::ALL
-        .iter()
-        .map(|c| {
-            (
-                c.name().to_string(),
-                json!({ "fill": hex(c.fill()), "ink": hex(c.ink()) }),
-            )
-        })
-        .collect();
-    json!({
-        "source": s.source,
-        "layout": serde_json::to_value(&s.layout).unwrap_or(Json::Null),
-        "palette": palette,
-    })
-}
-
 /// A traced scan's number and its JSON.
 type Rendered = (u64, Arc<Json>);
 
@@ -321,10 +290,6 @@ struct Ctx {
     streams: AtomicUsize,
     chat: Option<chat::Chat>,
     ui: Option<ui::Ui>,
-    /// `GET /api/screen`'s body, rendered once.
-    screen: Option<Json>,
-    /// The floor screen's layout, which a reloaded I/O map must still fit.
-    screen_layout: Option<crate::screen::Layout>,
     /// Publishers whose bundles import; `None`: import answers 501.
     trust: Option<TrustStore>,
     /// Drop-in documents (see [`dropin`]).
@@ -368,29 +333,6 @@ impl Ctx {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
-    }
-
-    /// Whether the floor screen (or its absence) fits `map`, as the box
-    /// checks at startup: every tile's signals are screen outputs on it and
-    /// every screen output is on a tile; without a screen, the map has no
-    /// screen outputs.
-    fn screen_fits(&self, map: Option<&helmsman_io::IoMap>) -> Result<(), Vec<String>> {
-        let empty = helmsman_io::IoMap::default();
-        let map = map.unwrap_or(&empty);
-        match &self.screen_layout {
-            Some(l) => l.check(map),
-            None if map
-                .signals
-                .iter()
-                .any(|s| matches!(s.binding, helmsman_io::Binding::Screen { .. })) =>
-            {
-                Err(vec![
-                    "the I/O map declares screen tiles, but this box shows no floor screen (--screen FILE)"
-                        .into(),
-                ])
-            }
-            None => Ok(()),
-        }
     }
 
     fn shape(&self) -> approve::Shape {
@@ -511,15 +453,7 @@ impl Api {
         ui: Option<ui::Ui>,
         trust: Option<TrustStore>,
     ) -> io::Result<Self> {
-        Self::start_with(
-            cfg,
-            shared,
-            Extras {
-                ui,
-                screen: None,
-                trust,
-            },
-        )
+        Self::start_with(cfg, shared, Extras { ui, trust })
     }
 
     /// [`Api::start`], with what a box may serve besides its state.
@@ -576,7 +510,7 @@ impl Api {
         more: More,
         tls: Option<Tls>,
     ) -> io::Result<Self> {
-        let Extras { ui, screen, trust } = extras;
+        let Extras { ui, trust } = extras;
         let More { projects, forces } = more;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
@@ -604,8 +538,6 @@ impl Api {
             stop: Arc::clone(&stop),
             streams: AtomicUsize::new(0),
             ui,
-            screen_layout: screen.as_ref().map(|s| s.layout.clone()),
-            screen: screen.map(|s| screen_json(&s)),
             trust,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
@@ -1283,7 +1215,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | [
             "api",
             "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
-            | "session" | "screen" | "site" | "io_map",
+            | "session" | "site" | "io_map",
         ]
         | [
             "api",
@@ -1636,10 +1568,6 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "forces"] => forces::get(ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
-        ["api", "screen"] => match &ctx.screen {
-            Some(j) => Response::json(200, j),
-            None => Response::error(404, "no floor screen on this box (--screen FILE)"),
-        },
         ["api", "site"] => site_route(ctx, c, &view),
         ["api", "policy"] => match &ctx.approval {
             Some(a) => Response::json(200, &policy_json(a, ctx)),
@@ -1754,7 +1682,6 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", false, "a PLC drop-in's inventory: overview, tags, routine, names"),
             e("POST", "/api/devices/{name}/browse", true, "an observed Logix controller's tag list, read-only"),
             e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
-            e("GET", "/api/screen", false, "the floor screen's layout: tiles, state codes, colours (with --screen)"),
             e("GET", "/api/site", false, "this box's status and the boxes it heard on the LAN (with --site); readable from other origins"),
             e("GET", "/api/projects", false, "the editor's projects (with --projects) and which one runs"),
             e("POST", "/api/projects", true, "engineer session: {name} a new empty project, or {name, from} a copy"),
