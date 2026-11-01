@@ -5,10 +5,11 @@
 //! (a narrow window) opens on the Monitor, as do `?monitor` and the old
 //! `?andon`.
 
-use eframe::egui::{self, Rect, RichText, Vec2};
+use eframe::egui::{self, CornerRadius, Rect, RichText, Vec2};
 
 use crate::box_view::{BoxView, is_engineer};
 use crate::editor::{Body, CHROME_KEY, Chrome, menu_item, menu_item_keyed};
+use crate::glyphs;
 use crate::hotkeys::{self, Action};
 use crate::monitor::{Monitor, NARROW, Wish};
 use crate::playground_view::PlaygroundView;
@@ -19,6 +20,10 @@ use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
 
 /// The header's height, points: one row, as tall as the two it replaced.
 pub const HEADER_H: f32 = 48.0;
+
+/// The product site, and its help page (Help menu, the ? glyph).
+pub const SITE_URL: &str = "https://helmsman.advin.io/";
+pub const HELP_URL: &str = "https://helmsman.advin.io/help/";
 
 /// Seconds between re-reads of the proposal list for the ⋯ badge.
 const PROPOSALS_EVERY: f64 = 30.0;
@@ -97,6 +102,8 @@ pub struct App {
     pub monitor: Monitor,
     /// The first frame chose the screen (a phone opens the Monitor).
     routed: bool,
+    /// Help › About is open.
+    pub about: bool,
     /// The page fell back to the simulation by itself (no box answered);
     /// once, so ⋯ › Back to this box is not undone.
     fell_back: bool,
@@ -146,6 +153,7 @@ impl App {
             review: None,
             monitor: Monitor::default(),
             routed: false,
+            about: false,
             fell_back: false,
             listed: None,
         }
@@ -333,6 +341,7 @@ impl App {
         if let Some(Wish::Diagram { program, prefix }) = self.monitor.wish.take() {
             self.open_diagram(&program, &prefix);
         }
+        self.glyphs(ui);
         self.chrome.hits.extend(header);
         // Last, so a focused text editor has had its own Ctrl+Z first.
         for a in hotkeys::pressed(&ctx) {
@@ -412,6 +421,26 @@ impl App {
                     w.cross_references();
                 }
             }
+            Action::Restart => {
+                if self.source == Source::Sim
+                    && let Some(s) = self.sim.as_mut()
+                    && s.session.build.is_some()
+                {
+                    s.session.restart();
+                }
+            }
+            Action::Upload => {
+                if self.workspace().is_some_and(|w| w.writable().is_ok()) {
+                    #[cfg(target_arch = "wasm32")]
+                    crate::web::pick_file(UPLOAD_ACCEPT, ctx);
+                }
+            }
+            Action::Download => {
+                if let Some(w) = self.workspace() {
+                    w.download();
+                }
+            }
+            Action::Help => ctx.open_url(egui::OpenUrl::new_tab(HELP_URL)),
             Action::Files => self.chrome.left = !self.chrome.left,
             Action::St => self.chrome.st = !self.chrome.st,
             Action::Panel => self.chrome.right = !self.chrome.right,
@@ -454,8 +483,14 @@ impl App {
         let panel = egui::Panel::top("header").show(ui, |ui| {
             let size = Vec2::new(ui.available_width(), HEADER_H);
             ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let mark = ui.label(RichText::new("HELMSMAN").strong().color(YELLOW));
+                // The wordmark is the way to the site.
+                let mark = ui
+                    .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(YELLOW)).frame(false))
+                    .on_hover_text(SITE_URL);
                 hits.push(("mark".to_string(), mark.rect));
+                if mark.clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
+                }
                 self.menus(ui, engineer, waiting, &mut hits);
                 ui.separator();
                 self.actions(ui, &mut hits);
@@ -481,32 +516,9 @@ impl App {
                     }
                     // ⋯ keeps the corner whether or not Sign in is shown.
                     self.login_button(ui, &mut hits);
-                    let mon = ui.add(
-                        egui::Button::selectable(
-                            self.screen == Screen::Monitor,
-                            RichText::new("Monitor").strong(),
-                        )
-                        .min_size(Vec2::new(TAP * 1.5, 0.0)),
-                    );
-                    hits.push(("monitor".to_string(), mon.rect));
-                    if mon.clicked() {
-                        self.screen = Screen::Monitor;
-                        self.menu = false;
-                    }
-                    let e = ui.add(
-                        egui::Button::selectable(
-                            self.screen == Screen::Editor,
-                            RichText::new("Editor").strong(),
-                        )
-                        .min_size(Vec2::new(TAP * 1.5, 0.0)),
-                    );
-                    hits.push(("editor".to_string(), e.rect));
-                    if e.clicked() {
-                        self.screen = Screen::Editor;
-                        self.menu = false;
-                    }
+                    self.screen_toggle(ui, &mut hits);
                     ui.separator();
-                    self.project_controls(ui, &mut hits);
+                    self.dirty_mark(ui, &mut hits);
                     if self.source == Source::Sim {
                         ui.label(RichText::new("simulation").color(STEEL));
                     }
@@ -526,7 +538,199 @@ impl App {
         if self.login {
             self.login_ui(ui.ctx(), menu_at, &mut hits);
         }
+        if self.about {
+            self.about_ui(ui.ctx(), &mut hits);
+        }
         hits
+    }
+
+    /// Editor | Monitor as one two-way toggle: the active side filled.
+    fn screen_toggle(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        let half = Vec2::new(TAP * 1.6, TAP * 0.62);
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(half.x * 2.0, half.y), egui::Sense::hover());
+        ui.painter().rect_filled(rect, CornerRadius::same(6), GRAPHITE);
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(6),
+            egui::Stroke::new(1.0, STEEL.gamma_multiply(0.6)),
+            egui::StrokeKind::Inside,
+        );
+        let sides = [
+            (Screen::Editor, "Editor", "editor"),
+            (Screen::Monitor, "Monitor", "monitor"),
+        ];
+        for (k, (screen, label, key)) in sides.into_iter().enumerate() {
+            #[allow(clippy::cast_precision_loss)]
+            let r = Rect::from_min_size(rect.min + Vec2::new(half.x * k as f32, 0.0), half);
+            let id = ui.scope_id().with(key);
+            let resp = ui.interact(r, id, egui::Sense::click());
+            let on = self.screen == screen;
+            if on {
+                ui.painter()
+                    .rect_filled(r.shrink(2.0), CornerRadius::same(5), YELLOW);
+            }
+            ui.painter().text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(14.0),
+                if on { BLACK } else { WHITE },
+            );
+            hits.push((key.to_string(), r));
+            if resp.clicked() {
+                self.screen = screen;
+                self.menu = false;
+            }
+        }
+    }
+
+    /// The glyph buttons over the diagram's top-right corner: run/stop,
+    /// step and restart in the simulation, then save, upload, download
+    /// and help. Drawn after the screen, so they sit on top.
+    fn glyphs(&mut self, ui: &mut egui::Ui) {
+        if self.screen != Screen::Editor || self.chrome.diagram == Rect::NOTHING {
+            return;
+        }
+        let at = self.chrome.diagram.right_top() + Vec2::new(-8.0, 8.0);
+        let mut hits = Vec::new();
+        let mut act: Vec<Action> = Vec::new();
+        let (dirty, can_write) = self
+            .workspace()
+            .map_or((false, false), |w| (w.dirty(), w.writable().is_ok() && !w.busy()));
+        let has_ws = self.workspace().is_some();
+        let sim = (self.source == Source::Sim).then(|| {
+            self.sim
+                .as_ref()
+                .map(|s| (s.session.build.is_some(), s.session.running))
+                .unwrap_or_default()
+        });
+        egui::Area::new(egui::Id::unique("glyphs"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(at)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(BLACK.gamma_multiply(0.75))
+                    .corner_radius(CornerRadius::same(7))
+                    .inner_margin(4.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut g =
+                                |ui: &mut egui::Ui, key: &str, icon: glyphs::Icon, enabled, on, tip, a| {
+                                    let r = glyphs::button(ui, icon, enabled, on, tip);
+                                    hits.push((key.to_string(), r.rect));
+                                    if r.clicked() {
+                                        act.push(a);
+                                    }
+                                };
+                            if let Some((built, running)) = sim {
+                                let (icon, tip) = if running {
+                                    (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
+                                } else {
+                                    (glyphs::Icon::Run, "Run (Ctrl+Enter)")
+                                };
+                                g(ui, "run", icon, built, false, tip, Action::RunStop);
+                                g(
+                                    ui,
+                                    "step",
+                                    glyphs::Icon::Step,
+                                    built && !running,
+                                    false,
+                                    "Step one scan (F10)",
+                                    Action::Step,
+                                );
+                                g(
+                                    ui,
+                                    "restart",
+                                    glyphs::Icon::Restart,
+                                    built,
+                                    false,
+                                    "Restart: initial values, clock to zero",
+                                    Action::Restart,
+                                );
+                                ui.separator();
+                            }
+                            g(
+                                ui,
+                                "save",
+                                glyphs::Icon::Save,
+                                can_write && dirty,
+                                false,
+                                "Save (Ctrl+S)",
+                                Action::Save,
+                            );
+                            g(
+                                ui,
+                                "upload",
+                                glyphs::Icon::Upload,
+                                can_write,
+                                false,
+                                "Upload a .zip, .st, .xml or .l5x",
+                                Action::Upload,
+                            );
+                            g(
+                                ui,
+                                "download",
+                                glyphs::Icon::Download,
+                                has_ws,
+                                false,
+                                "Download the project as .zip",
+                                Action::Download,
+                            );
+                            ui.separator();
+                            g(
+                                ui,
+                                "help",
+                                glyphs::Icon::Help,
+                                true,
+                                false,
+                                "Help (opens the site)",
+                                Action::Help,
+                            );
+                        });
+                    });
+            });
+        let ctx = ui.ctx().clone();
+        for a in act {
+            self.act(a, &ctx);
+        }
+        self.chrome.hits.extend(hits);
+    }
+
+    /// Help › About: the product, its version and build, the licence, the site.
+    fn about_ui(&mut self, ctx: &egui::Context, hits: &mut Vec<(String, Rect)>) {
+        let mut open = self.about;
+        egui::Window::new("About Helmsman")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(RichText::new("HELMSMAN").strong().size(22.0).color(YELLOW));
+                ui.label(RichText::new("FACTORY AUTOMATION").strong().color(STEEL));
+                ui.add_space(8.0);
+                ui.label(format!(
+                    "Version {} (build {})",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("HELMSMAN_GIT_SHA")
+                ));
+                ui.label("Early release. Licensed under the Apache License, Version 2.0.");
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.link(SITE_URL).clicked() {
+                        ctx.open_url(egui::OpenUrl::new_tab(SITE_URL));
+                    }
+                });
+                ui.add_space(6.0);
+                let c = ui.button("Close");
+                hits.push(("about close".to_string(), c.rect));
+                if c.clicked() {
+                    self.about = false;
+                }
+            });
+        if !open {
+            self.about = false;
+        }
     }
 
     /// File, Edit and View: what exists today, nothing greyed for later.
@@ -541,8 +745,10 @@ impl App {
         let ctx = ui.ctx().clone();
         let mut chrome = std::mem::take(&mut self.chrome);
         let before = chrome.hits.len();
-        // Plain menu buttons in the row: a MenuBar would take the whole width.
+        // Plain menu buttons in the row, in a menu bar's frameless style
+        // (a MenuBar itself would take the whole width).
         ui.scope(|ui| {
+            egui::containers::menu::menu_style(ui.style_mut());
             let f = ui.menu_button("File", |ui| {
                 let (dirty, write) = self
                     .workspace()
@@ -670,6 +876,19 @@ impl App {
                 }
             });
             hits.push(("bar view".to_string(), v.response.rect));
+            let h = ui.menu_button("Help", |ui| {
+                if menu_item(ui, &mut chrome, "help docs", "Help", false) {
+                    ctx.open_url(egui::OpenUrl::new_tab(HELP_URL));
+                }
+                if menu_item(ui, &mut chrome, "help keys", "Keyboard shortcuts", false) {
+                    ctx.open_url(egui::OpenUrl::new_tab(format!("{HELP_URL}#keyboard")));
+                }
+                ui.separator();
+                if menu_item(ui, &mut chrome, "help about", "About Helmsman…", self.about) {
+                    self.about = true;
+                }
+            });
+            hits.push(("bar help".to_string(), h.response.rect));
         });
         hits.extend(chrome.hits.drain(before..));
         self.chrome = chrome;
@@ -699,55 +918,17 @@ impl App {
         self.chrome = chrome;
     }
 
-    /// The open project's name with its dirty marker, Save and Deploy;
-    /// disabled, with why on hover, when this page may not write. Not on
-    /// a phone's width.
-    fn project_controls(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
-        // A phone is the Monitor's: no room, and nothing to edit there.
+    /// The edited-not-saved mark (Save and Deploy are the File menu's and
+    /// the glyphs'). Not on a phone's width.
+    fn dirty_mark(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
         if ui.ctx().content_rect().width() < NARROW {
             return;
         }
-        let Some(w) = self.workspace() else { return };
-        let dirty = w.dirty();
-        let write = w.writable();
-        let busy = w.busy();
-        let button = |ui: &mut egui::Ui, text: &str, hint: &str, on: bool| {
-            let b = egui::Button::new(RichText::new(text).strong()).min_size(Vec2::new(TAP * 1.5, 0.0));
-            match &write {
-                Ok(()) => ui.add_enabled(on && !busy, b).on_hover_text(hint),
-                Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
-            }
-        };
-        // Laid out right to left: Deploy, Save, then the dirty mark.
-        let deploy = button(
-            ui,
-            "Deploy",
-            "save, compile and run this project (through the box's approval policy)",
-            true,
-        );
-        hits.push(("deploy".to_string(), deploy.rect));
-        let save = button(
-            ui,
-            "Save",
-            "write the edited files (a draft: what runs does not change)",
-            dirty,
-        );
-        hits.push(("save".to_string(), save.rect));
-        ui.separator();
-        if dirty {
+        if self.workspace().is_some_and(|w| w.dirty()) {
             let d = ui
                 .label(RichText::new("●").strong().color(YELLOW))
                 .on_hover_text("edited, not saved");
             hits.push(("dirty".to_string(), d.rect));
-        }
-        let (save, deploy) = (save.clicked(), deploy.clicked());
-        if let Some(w) = self.workspace() {
-            if save {
-                w.save();
-            }
-            if deploy {
-                w.deploy();
-            }
         }
     }
 

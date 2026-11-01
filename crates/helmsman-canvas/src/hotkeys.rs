@@ -47,6 +47,12 @@ pub enum Action {
     Trend,
     GoToDefinition,
     CrossReferences,
+    /// Cold restart of the simulation (a glyph; no key).
+    Restart,
+    Upload,
+    Download,
+    /// The help page on the site (a glyph, the Help menu; no key).
+    Help,
 }
 
 /// One shortcut: the action, its keys and the CODESYS command the keys

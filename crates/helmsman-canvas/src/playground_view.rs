@@ -13,7 +13,7 @@ use helmsman_iec::{Ty, Value};
 use crate::arrange::Layers;
 use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
 use crate::editor::{self, Body, Chrome, Tab};
-use crate::playground::{MAX_PERIOD, MAX_SOURCE, Point, Session, TREND_MS, TREND_SIGNALS, Widget};
+use crate::playground::{MAX_SOURCE, Point, Session, TREND_MS, TREND_SIGNALS, Widget};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, Storage};
 use crate::st_view::brand::{BLACK, GRAPHITE, GREEN, OFF_RED, STEEL, WHITE, YELLOW};
@@ -87,6 +87,10 @@ impl Link {
 
 pub struct PlaygroundView {
     pub session: Session,
+    /// The Messages tab's log.
+    pub log: crate::messages::Log,
+    /// What the log last saw, to report changes once.
+    seen: Seen,
     /// The diagram of the program running, rebuilt when it changes.
     pub viewer: Option<Viewer>,
     /// Its shared default layout (the project's) and this browser's
@@ -155,6 +159,8 @@ impl PlaygroundView {
             chat: Chat::new(store),
             link: Link::default(),
             proxy_asked: false,
+            log: crate::messages::Log::default(),
+            seen: Seen::default(),
             notice: None,
             ask_error: None,
             proj,
@@ -397,13 +403,80 @@ impl PlaygroundView {
         self.check_due(t, false);
         self.arrange();
         self.session.advance(t);
+        self.watch(t);
         if self.session.running || self.pending.is_some() || self.chat.busy() {
             ctx.request_repaint();
         }
     }
 }
 
+/// What [`PlaygroundView::watch`] compares against.
+#[derive(Default)]
+struct Seen {
+    fault: Option<String>,
+    diags: Vec<String>,
+    notice: Option<String>,
+    storage: Option<String>,
+    running: Option<bool>,
+}
+
 impl PlaygroundView {
+    /// Reports to the log what changed since the last frame: compile
+    /// errors (as they appear), a fault, a notice, a storage problem,
+    /// the program starting or stopping.
+    fn watch(&mut self, t: f64) {
+        let fault = self.session.fault.as_ref().map(ToString::to_string);
+        if fault != self.seen.fault {
+            if let Some(f) = &fault {
+                self.log
+                    .error(t, format!("Fault: {f}. Run or Step restarts the program."));
+            }
+            self.seen.fault = fault;
+        }
+        let diags = self.session.diag_lines();
+        if diags != self.seen.diags {
+            if !diags.is_empty() {
+                let n = diags.len();
+                self.log
+                    .error(t, format!("{n} problem(s): {}", diags.join(" · ")));
+            } else if !self.seen.diags.is_empty() {
+                self.log.info(t, "Compiles.");
+            }
+            self.seen.diags = diags;
+        }
+        let notice = self.proj.notice.as_ref().map(|(n, _)| n.clone());
+        if notice != self.seen.notice {
+            if let Some((n, error)) = &self.proj.notice {
+                if *error {
+                    self.log.error(t, n.clone());
+                } else {
+                    self.log.info(t, n.clone());
+                }
+            }
+            self.seen.notice = notice;
+        }
+        if self.proj.storage_problem != self.seen.storage {
+            if let Some(w) = &self.proj.storage_problem {
+                self.log.warning(t, w.clone());
+            }
+            self.seen.storage.clone_from(&self.proj.storage_problem);
+        }
+        let running = Some(self.session.running);
+        if running != self.seen.running {
+            if self.seen.running.is_some() {
+                self.log.info(
+                    t,
+                    if self.session.running {
+                        "Running."
+                    } else {
+                        "Stopped."
+                    },
+                );
+            }
+            self.seen.running = running;
+        }
+    }
+
     /// Lays the diagram out from its layers, or keeps a finished move.
     pub fn arrange(&mut self) {
         let fresh = std::mem::take(&mut self.fresh);
@@ -425,69 +498,29 @@ impl PlaygroundView {
 
 impl Body for PlaygroundView {
     fn toolbar(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
-        {
-            let s = &mut self.session;
-            let (label, fill) = if s.running {
-                ("■ Stop", GRAPHITE)
-            } else {
-                ("▶ Run", YELLOW)
-            };
-            let ink = if s.running { WHITE } else { BLACK };
-            let run = egui::Button::new(RichText::new(label).strong().color(ink))
-                .fill(fill)
-                .min_size(Vec2::new(80.0, 28.0));
-            if ui.add_enabled(s.build.is_some(), run).clicked() {
-                let on = !s.running;
-                s.set_running(on);
-            }
-            if ui
-                .add_enabled(!s.running && s.build.is_some(), egui::Button::new("Step"))
-                .on_hover_text("one scan")
-                .clicked()
-            {
-                s.step();
-            }
-            if ui
-                .add_enabled(s.build.is_some(), egui::Button::new("Restart"))
-                .on_hover_text("cold restart: initial values, clock to zero")
-                .clicked()
-            {
-                s.restart();
-            }
-            ui.label(RichText::new("scan").color(STEEL));
-            let c = crate::commit::number(
-                ui,
-                egui::Id::unique("pg-period"),
-                &s.period_ms.to_string(),
-                "ms",
-                Vec2::new(64.0, 20.0),
-                "scan period: type, then Enter",
-            );
-            if let Some(p) = crate::commit::int(&c, 0, i64::MAX) {
-                s.set_period(u64::try_from(p).unwrap_or(MAX_PERIOD));
-            }
-            ui.separator();
-            let state = if s.fault.is_some() {
-                "faulted"
-            } else if s.running {
-                "running"
-            } else {
-                "stopped"
-            };
-            #[allow(clippy::cast_precision_loss)]
-            let secs = s.now_ms as f64 / 1000.0;
-            ui.label(
-                RichText::new(format!("{state} · {secs:.1}s"))
-                    .monospace()
-                    .strong()
-                    .color(if s.running && s.fault.is_none() {
-                        GREEN
-                    } else {
-                        RED
-                    }),
-            )
-            .on_hover_text(format!("{} scans", s.scans));
-        }
+        // Run, step and restart are glyphs over the diagram (app::glyphs);
+        // here only what state the program is in.
+        let s = &self.session;
+        let state = if s.fault.is_some() {
+            "faulted"
+        } else if s.running {
+            "running"
+        } else {
+            "stopped"
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let secs = s.now_ms as f64 / 1000.0;
+        ui.label(
+            RichText::new(format!("{state} · {secs:.1}s"))
+                .monospace()
+                .strong()
+                .color(if s.running && s.fault.is_none() {
+                    GREEN
+                } else {
+                    RED
+                }),
+        )
+        .on_hover_text(format!("{} scans", s.scans));
     }
 
     fn has_notices(&self) -> bool {
@@ -626,6 +659,10 @@ impl Body for PlaygroundView {
 
     fn trend(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
         self.trend_tab(ui);
+    }
+
+    fn messages(&mut self, _ui: &mut egui::Ui) -> &crate::messages::Log {
+        &self.log
     }
 
     fn tabs(&self) -> &'static [Tab] {
@@ -1211,12 +1248,24 @@ impl Workspace for PlaygroundView {
                 .and_then(|v| v.module.program())
                 .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
             self.notice = Some(format!("{} is running in this page{program}.", self.proj.open));
+            self.log.info(
+                self.session.now_ms as f64 / 1000.0,
+                format!("Deployed {}: running in this page{program}.", self.proj.open),
+            );
         } else {
             self.notice = Some(format!(
                 "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
                 self.proj.open,
                 self.session.diags.len()
             ));
+            self.log.error(
+                self.session.now_ms as f64 / 1000.0,
+                format!(
+                    "Deploy of {} refused: {} problem(s).",
+                    self.proj.open,
+                    self.session.diags.len()
+                ),
+            );
         }
     }
 

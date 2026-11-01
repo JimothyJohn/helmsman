@@ -19,32 +19,25 @@ this; change it here first when a decision changes.
 
 ## Editor (desktop and tablet; a phone opens the Monitor)
 
-- **One header row, as tall as the two it replaced:** on the left the
-  mark and the File / Edit / View menus (File: Save, Deploy, Upload,
-  Download; Edit: Undo, Redo in the ST editor; View: Editor / Monitor,
-  Structured Text, Files, the side panel and its tabs, Zoom to fit, the
-  layout items, and Scan detail for an engineer), then the open view's
-  actions (the simulation's Run, Step, Restart, scan period and a short
-  status; a box's link status), and on the right the project's name, its
-  edited mark, Save, Deploy, the Editor / Monitor switch, ⋯ (proposals,
-  where the program runs) and Sign in. A fault, a deploy under way or a
-  stale file shows on a line under the header only while it lasts.
-- **Left sidebar, collapsible:** the open project's files, with the program
-  tree under them (PROGRAM › instance › instance, foldable; a click opens
-  that scope's diagram).
-- **Centre: the live diagram.** Pan, zoom, drag blocks to rearrange,
-  breadcrumbs with ↑ (Alt+↑), double-click an instance to go into it.
-  An engineer saves the arrangement as the project's shared default
-  (View › Save layout as default; the project's `diagram.layout`, so it
-  travels in the `.zip`); anyone's further moves are kept in their browser
-  on top of it. View › Reset layout goes back to the shared default, a
-  second step to the automatic layout. The simulation does the same with
-  its projects.
-- **ST on demand:** View › Structured Text slides the editor open beside
-  the diagram (220 pt, resizable, lines wrapped); clicking a block jumps
-  the editor to its line.
-- **Trend along the bottom**, under the diagram, collapsible and
-  resizable (View › Trend, Alt 2): its time axis is the long side.
+- **One header row (48 pt):** on the left the HELMSMAN wordmark (a link
+  to the site) and a menu bar: File (Save, Deploy, Upload, Download),
+  Edit (Undo, Redo, Go to definition, Cross references), View (Editor /
+  Monitor, Structured Text, Files, the side panel and its tabs, Trend,
+  Zoom to fit, the layout items, Scan detail for an engineer) and Help
+  (Help and Keyboard shortcuts on the site, About Helmsman: version,
+  build, licence). After them the program's state, green running, red
+  stopped or faulted (a box: its link). On the right the project's name,
+  its edited mark, the Editor | Monitor toggle, ⋯ (proposals, where the
+  program runs) and Sign in. A fault, a deploy under way or a stale file
+  shows on a line under the header only while it lasts.
+- **Glyphs over the diagram's top-right corner:** run/stop, step and
+  restart (the simulation), then save, upload, download and ? (help on
+  the site). Strokes in the brand colours; each tells its key on hover.
+- **Bottom panel**, under the diagram, collapsible and resizable (View ›
+  Trend, Alt 2), two tabs: Trend (its time axis is the long side) and
+  Messages (the last 200 things the page had to say: info, warnings,
+  errors, with the error count on the tab), so a fault or a refused
+  deploy is still there to read after the line under the header has gone.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
   not show), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then

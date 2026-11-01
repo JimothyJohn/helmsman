@@ -18,7 +18,9 @@ use helmsman_iec::{Diagnostic, Image, ImageSizes, PortDir, Program, Ty, Value, c
 /// Process image: 8 bytes each way (`%IX0.0` .. `%IX7.7`), some memory.
 pub const SIZES: ImageSizes = ImageSizes { i: 8, q: 8, m: 64 };
 /// Scan period bounds, ms.
+#[cfg_attr(not(test), allow(dead_code))]
 pub const MIN_PERIOD: u64 = 1;
+#[cfg_attr(not(test), allow(dead_code))]
 pub const MAX_PERIOD: u64 = 1000;
 /// At most this many scans per frame (a slow tab catches up gradually).
 pub const MAX_CATCH_UP: u64 = 500;
@@ -634,6 +636,7 @@ impl Session {
         self.set_source(src)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_period(&mut self, ms: u64) {
         self.period_ms = ms.clamp(MIN_PERIOD, MAX_PERIOD);
     }
