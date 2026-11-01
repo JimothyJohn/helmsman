@@ -150,7 +150,7 @@ no_bottle(condition := seq.timed_out, ack := ack_pb, on_delay := T#0s);
 tank_low(condition := tank_low_in, ack := ack_pb, on_delay := T#1s);
 equipment(condition := conveyor.fault OR filling.fault OR capping.fault, ack := ack_pb, on_delay := T#0s);
 tripped := no_bottle.showing OR tank_low.showing OR equipment.showing;
-run := (run OR start_pb OR plant.operator_start) AND NOT stop_pb AND NOT tripped;  (* PLANT: drop operator_start *)
+run := (run OR start_pb) AND NOT stop_pb AND NOT tripped;
 
 seq(start := run, advance := step_done, abort := NOT run, last_step := 2, step_limit := step_max);
 step := seq.step;

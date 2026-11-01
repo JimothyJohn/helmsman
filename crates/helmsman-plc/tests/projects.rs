@@ -1946,30 +1946,50 @@ fn seed(state: &Path, args: &[&str]) -> (bool, String) {
     (out.status.success(), text)
 }
 
+/// Card seed-deploys: a first install makes the project and nothing
+/// else. The store stays empty and the box boots running nothing, until
+/// an engineer deploys through the approval path (covered by
+/// `a_project_deploys_through_the_approval_path_and_records_what_runs`).
 #[test]
-fn a_first_install_seeds_and_deploys_a_project_and_never_again() {
+fn a_first_install_seeds_a_project_without_deploying_it_and_never_again() {
     let state = tmp("seed");
     let line = concat!(env!("CARGO_MANIFEST_DIR"), "/programs/line.st");
     // Nothing named: nothing done (the program-mode unit runs it so).
     let (ok, out) = seed(&state, &[]);
     assert!(ok && out.contains("no project to seed"), "{out}");
-    // A first install: made, deployed, recorded.
+    // A first install: made, not deployed, not recorded as running.
     let (ok, out) = seed(&state, &["line", line]);
-    assert!(ok && out.contains("project line made and deployed"), "{out}");
+    assert!(
+        ok && out.contains("project line made; nothing runs until an engineer deploys it"),
+        "{out}"
+    );
+    assert!(
+        Store::open(&state.join("store"))
+            .unwrap()
+            .head()
+            .unwrap()
+            .is_none(),
+        "no snapshot"
+    );
+    let projects = Projects::in_state_dir(&state).unwrap();
+    assert_eq!(projects.running(), None, "nothing recorded as running");
+    assert_eq!(projects.list().unwrap(), ["line"]);
+    assert_eq!(
+        projects.file("line", "line.st").unwrap(),
+        std::fs::read_to_string(line).unwrap()
+    );
     let plc = plc_projects(&state);
     let r = get(plc.addr, "/api/running").json();
+    assert_eq!(r["project"], Json::Null, "{r}");
+    assert_eq!(get(plc.addr, "/api/modules").json(), json!([]));
     assert_eq!(
-        (r["project"].as_str(), r["current"].as_bool()),
-        (Some("line"), Some(true)),
-        "{r}"
+        get(plc.addr, "/api/projects").json()["projects"][0]["name"],
+        "line"
     );
-    let modules = get(plc.addr, "/api/modules").json();
-    assert_eq!(modules[0]["name"], "line", "{modules}");
     let log = get(plc.addr, "/api/snapshots").json();
-    assert_eq!(log["log"][0]["approver"], "first install", "{log}");
+    assert_eq!(log["log"], json!([]), "{log}");
     drop(plc);
     // Edited since: the next install (every service start) touches nothing.
-    let projects = Projects::in_state_dir(&state).unwrap();
     let mine = "(* mine *)\n".to_string() + &std::fs::read_to_string(line).unwrap();
     projects.save("line", "line.st", mine.as_bytes(), None).unwrap();
     let (ok, out) = seed(&state, &["line", line]);

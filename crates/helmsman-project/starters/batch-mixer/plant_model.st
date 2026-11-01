@@ -17,7 +17,6 @@ VAR_OUTPUT
   outlet_open : BOOL;
   outlet_closed : BOOL;
   agitator_fb : BOOL;
-  operator_start : BOOL;
 END_VAR
 VAR CONSTANT
   fill_m_per_s : REAL := 0.1;
@@ -33,15 +32,12 @@ VAR
   clock : TON;
   level_m : REAL;
   temp_c : REAL := 20.0;
-  operator : TP;
   in_open : TON;
   in_shut : TON;
   out_open : TON;
   out_shut : TON;
   motor : TON;
 END_VAR
-operator(IN := TRUE, PT := T#1s);  (* as if someone pressed start *)
-operator_start := operator.Q;
 in_open(IN := inlet AND NOT inlet_stuck, PT := stroke);
 in_shut(IN := NOT inlet, PT := stroke);
 out_open(IN := outlet, PT := stroke);

@@ -1004,7 +1004,7 @@
   id: save-scope
   answer: every edited file (built)
 
-- [ ] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
+- [x] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -1026,7 +1026,7 @@
   id: sim-multi-program
   answer: refuse, as built
 
-- [ ] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
+- [x] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -1061,7 +1061,7 @@
   id: trend-pins-persist
   answer: pins in a state-dir file, history in memory (recommended)
 
-- [ ] **Should a machine example start itself on a box?** Each machine's plant model presses Start after power-up so the diagram moves with nothing wired, and its io.map uses the box's own channels. Fine on a box with nothing connected; on a box run with `--gpio-chip` those channels are real pins, and the example drives them on Deploy. Built default: it starts itself, and each io.map says in a comment to check the channels first.
+- [x] **Should a machine example start itself on a box?** Each machine's plant model presses Start after power-up so the diagram moves with nothing wired, and its io.map uses the box's own channels. Fine on a box with nothing connected; on a box run with `--gpio-chip` those channels are real pins, and the example drives them on Deploy. Built default: it starts itself, and each io.map says in a comment to check the channels first.
   needs: your call
   result: keep the default, or the plant model waits for Start on a box
   options: keep; plant waits for Start (the diagram sits still until someone forces start_pb); refuse a starter's io.map on a box with GPIO

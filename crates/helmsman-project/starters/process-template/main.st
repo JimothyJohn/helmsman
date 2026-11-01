@@ -91,7 +91,7 @@ plant(pump_a := pump_a, pump_b := pump_b, speed_pct := speed_pct);  (* PLANT *)
 raw := plant.raw;  (* PLANT: read your analog input here *)
 fb_a := fb_a_in OR plant.fb_a;  (* PLANT: keep the _in input *)
 fb_b := fb_b_in OR plant.fb_b;  (* PLANT: keep the _in input *)
-run := (run OR start_pb OR plant.operator_start) AND NOT stop_pb;  (* PLANT: drop operator_start *)
+run := (run OR start_pb) AND NOT stop_pb;
 
 loop(run := run, ack := ack_pb, raw := raw, fb_a := fb_a, fb_b := fb_b,
      overload_a := overload_a_in, overload_b := overload_b_in);
