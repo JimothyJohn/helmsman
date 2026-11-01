@@ -1,9 +1,8 @@
 # Helmsman Factory Automation
 
-The soft PLC you program by describing the machine. You write the spec; the
-agent writes the control logic in standard IEC 61131-3 Structured Text; you
-validate the result on a live diagram, and an engineer approves it before it
-runs. **Early release.**
+The soft PLC you program by describing the machine. The agent writes
+standard IEC 61131-3 Structured Text from your spec, you check it on a live
+diagram, and an engineer approves it before it runs. **Early release.**
 
 - **Robust:** a minimal set of dependencies; every change passes more than
   1,300 automated tests and interoperability tests in CI.
@@ -18,7 +17,7 @@ A pure soft PLC: field I/O lives in junction boxes and remote I/O modules
 (such as the Moxa ioLogik) on industrial Ethernet. It speaks EtherNet/IP
 (CIP) and Modbus TCP, and imports PLCopen XML.
 
-**Try it in your browser:** <https://jimothyjohn.github.io/helmsman/playground/>
+**Try it in your browser:** <https://helmsman.advin.io/playground/>
 writes and runs Structured Text against a simulated controller, with its
 live diagram; no install.
 

@@ -119,12 +119,12 @@ header.top .gh:hover{color:var(--yellow)}
       <svg class="mk" viewBox="0 0 96 96" width="160" height="160" role="img" aria-label="Helmsman stencil encoder mark" style="color:#141414"><use href="#se"/></svg>
       <h1><span class="wm">HELMSMAN</span><span class="desc">FACTORY AUTOMATION</span></h1>
     </div>
-    <p class="lede">The soft PLC you program by describing the machine. You write the spec; the agent writes the control logic in standard IEC 61131-3 Structured Text; you validate the result on a live diagram before anything runs.</p>
+    <p class="lede">The soft PLC you program by describing the machine. The agent writes standard IEC 61131-3 Structured Text from your spec, and you check it on a live diagram before it runs.</p>
     <div class="cta">
       <a class="btn primary" href="playground/">Try it in your browser</a>
       <a class="btn" href="#agentic">How it works</a>
     </div>
-    <p class="early"><span class="chip pending">Early release</span> Running on the bench today; built in the open.</p>
+    <p class="early"><span class="chip pending">Early release</span> Running on the bench today. The source is open.</p>
   </div>
 </div>
 
@@ -140,8 +140,8 @@ header.top .gh:hover{color:var(--yellow)}
 <section id="agentic">
   <div class="wrap">
     <h2>Agentic programming</h2>
-    <h3>You don't write code. You write specs.</h3>
-    <p>Tell Helmsman what the machine should do, in plain language. Drop in a P&amp;ID, an electrical drawing or a photo of the panel and it reads them. The agent drafts the program; you check the result, not the syntax.</p>
+    <h3>Write specs, not code</h3>
+    <p>Tell Helmsman what the machine should do, in plain language. Drop in a P&amp;ID, an electrical drawing or a photo of the panel and it reads them. The agent drafts the program and you check how it behaves.</p>
     <ol class="rules steps">
       <li><b>Describe</b>State the sequence, the interlocks and the alarms the way you would to a colleague. Attach the drawings.</li>
       <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see exactly what drives it.</li>
@@ -149,8 +149,8 @@ header.top .gh:hover{color:var(--yellow)}
     </ol>
     <div class="two" style="margin-top:40px">
       <div>
-        <h2>No ladder. On purpose.</h2>
-        <p>Ladder logic was built so electricians could read relay circuits. When an agent writes the program, what you need is to see what it does and prove it does it. Helmsman shows every program as a live function-block diagram, values on every wire, so you validate behaviour at a glance, and the source underneath is plain, portable IEC 61131-3 Structured Text you can read, diff and take anywhere.</p>
+        <h2>Why there is no ladder</h2>
+        <p>Ladder was built so electricians could read relay circuits. Here the agent writes the program, so Helmsman shows it as a live function-block diagram with values on the wires. Underneath is standard IEC 61131-3 Structured Text that you can read, compare between versions and move to another controller.</p>
       </div>
 <pre><span class="k">PROGRAM</span> line
 <span class="k">VAR</span>
@@ -170,7 +170,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
   <div class="wrap">
     <h2>Standards and interoperability</h2>
     <h3>A pure soft PLC on your network.</h3>
-    <p>Helmsman is the controller and nothing else. Field I/O lives where it belongs, in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols.</p>
+    <p>Helmsman is only the controller. Field I/O stays in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols.</p>
     <ul class="rules">
       <li><b>IEC 61131-3</b>Structured Text, the proven standard, plus PLCopen XML import from other tools.</li>
       <li><b>EtherNet/IP (CIP)</b>Appears to your existing PLCs as a standard adapter, and reads their tags without ever writing to them.</li>
@@ -183,8 +183,8 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
 <section id="status">
   <div class="wrap">
     <h2>Status</h2>
-    <h3>Verified means a test.</h3>
-    <p>Every interoperability claim is backed by a passing test or a capture. The suite runs on every change against an open-source EtherNet/IP device in a container.</p>
+    <h3>What has been tested</h3>
+    <p>Each result below comes from a passing test or a capture. The suite runs on every change against an open-source EtherNet/IP device in a container.</p>
     <div class="table-scroll">
     <table>
       <thead><tr><th>Device</th><th>Role</th><th>Status</th></tr></thead>
@@ -201,7 +201,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
 
 <div class="brandband">
   <div class="wrap">
-    <p>Write a little Structured Text, flip some inputs, watch the diagram. No install.</p>
+    <p>Run a program in your browser, with nothing to install.</p>
     <a class="btn primary" href="playground/">Try it in your browser</a>
   </div>
 </div>
@@ -210,7 +210,6 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
 <footer>
   <div class="wrap">
     <span>Helmsman Factory Automation · early release · open source (MIT)</span>
-    <a href="brand/">Brand</a>
   </div>
 </footer>
 </body>
