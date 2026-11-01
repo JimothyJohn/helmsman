@@ -1083,6 +1083,16 @@
   id: starter-short-examples-on-box
   answer: leave out
 
+- [ ] **Add a LICENSE file?** `Cargo.toml` declares `license = "MIT"` and CONTRIBUTING.md (docs/contributing PR) tells contributors the crates are MIT with a DCO sign-off, but there is no LICENSE file at the root, so GitHub shows no license and the claim has nothing behind it. A LICENSE is a legal choice (MIT as declared, or something else now that the agent and relay are in scope), so it is yours; the card `open-core-split` may change the answer.
+  needs: your call on the license (and copyright holder line)
+  result: LICENSE at the root, GitHub's license badge, CONTRIBUTING's claim true
+  options: MIT as Cargo.toml says | Apache-2.0 | wait for open-core-split
+  est: 15m
+  difficulty: low
+  id: license-file
+  asked: 2026-11-01
+  by: claude-session
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
