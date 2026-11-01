@@ -521,8 +521,9 @@ impl SimProjects {
     }
 
     /// A file the visitor picked: a `.zip` becomes the project its name
-    /// says (a taken name waits for Replace); `.st` and `PLCopen` `.xml` go
-    /// into the open project; anything else is refused, as the box does.
+    /// says (a taken name waits for Replace); `.st`, `PLCopen` `.xml` and
+    /// Logix `.L5X` (ladder in the converted subset) go into the open
+    /// project; anything else is refused, as the box does.
     pub fn upload(&mut self, file: &str, bytes: &[u8]) {
         let ext = file.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
         match ext.as_deref() {
@@ -534,19 +535,23 @@ impl SimProjects {
                     }
                     if self.saved.contains_key(&name) {
                         self.pending = Some((name.clone(), files));
-                        self.note(format!("A project named {name} is already here. Replace it?"), true);
+                        self.note(
+                            format!("A project named {name} is already here. Replace it?"),
+                            true,
+                        );
                     } else {
                         self.install(&name, files);
                     }
                 }
                 Err(e) => self.note(format!("Upload refused: the archive is refused: {e}"), true),
             },
-            Some("st" | "xml") => self.import(file, bytes),
-            Some("l5x") => self.note(
-                format!("{file} was refused: L5X import is not built yet (a box reads an L5X only as an inventory for the agent)"),
+            Some("st" | "xml" | "l5x") => self.import(file, bytes),
+            _ => self.note(
+                format!(
+                    "{file} was refused: upload takes .zip, .st, .xml (PLCopen TC6) or .L5X (Logix ladder)"
+                ),
                 true,
             ),
-            _ => self.note(format!("{file} was refused: upload takes .zip, .st or .xml (PLCopen TC6)"), true),
         }
     }
 
@@ -571,6 +576,17 @@ impl SimProjects {
                 format!("{file}: not a project file name (NAME.st, NAME 1 to 64 of A-Z a-z 0-9 _ -)"),
                 true,
             );
+            return;
+        }
+        if ext.eq_ignore_ascii_case("l5x") {
+            match l5x(file, bytes) {
+                Ok(st) => {
+                    self.files.insert(target.clone(), st);
+                    self.current.clone_from(&target);
+                    self.note(format!("Imported {file} into {} as {target}.", self.open), false);
+                }
+                Err(e) => self.note(e, true),
+            }
             return;
         }
         let text = match helmsman_project::check_text(bytes) {
@@ -599,6 +615,23 @@ impl SimProjects {
         self.current.clone_from(&target);
         self.note(format!("Imported {file} into {} as {target}.", self.open), false);
     }
+}
+
+/// An L5X export as the box imports it (helmsman-plc's `api/projects.rs`):
+/// ladder in the converted subset becomes Structured Text
+/// ([`helmsman_iec::ladder::convert`]); anything else refuses the whole
+/// file, every problem with its rung (the first 20, then how many more).
+fn l5x(file: &str, bytes: &[u8]) -> Result<String, String> {
+    let text = std::str::from_utf8(bytes).map_err(|_| format!("{file}: not UTF-8"))?;
+    let converted = helmsman_iec::ladder::convert(text).map_err(|r| {
+        let mut lines: Vec<String> = r.problems.iter().take(20).map(ToString::to_string).collect();
+        if r.total > lines.len() {
+            lines.push(format!("and {} more", r.total - lines.len()));
+        }
+        format!("{file} is not converted: {}", lines.join("; "))
+    })?;
+    helmsman_project::check_text(converted.st.as_bytes()).map_err(|e| format!("{file} was refused: {e}"))?;
+    Ok(converted.st)
 }
 
 fn render(saved: &BTreeMap<String, Files>, open: &str) -> String {

@@ -1201,9 +1201,10 @@ and Save keeps a copy under a free name. The build is the box's (one
 `.st` as it is; several in name order under `(* file NAME *)` lines), so
 errors and block clicks map to a file and line. Deploy compiles and runs
 it in the page. Upload and Download use `helmsman-project`'s `.zip`;
-`.st` and `PLCopen` `.xml` import into the open project; L5X is still
-refused there (the converter is wasm-safe; wiring it in is a canvas
-change, card `l5x-import` notes).
+`.st`, `PLCopen` `.xml` and `.L5X` import into the open project. An
+L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
+so it becomes the same `.st` the box makes, or is refused whole with the
+box's list of reasons (`sim_projects_tests.rs`).
 
 **The diagram's arrangement** (`arrangement-persist`; `arrange.rs` in
 the canvas, the file format in `helmsman_project::layout`; contract in
