@@ -1160,6 +1160,26 @@
   by: claude-session
   answer: reserve the keys only
 
+- [ ] **Archive the done cards out of TODO.md?** — TODO.md is 1900 lines, 165 of its cards ticked; the board's open columns are 31 cards. The rest is history git already holds. Moving every `[x]` card into docs/DONE.md (same format, dated, read-only) leaves the board with the live plan, the vision and the roadmap; the done column would then show only what finishes after the move.
+  needs: your call
+  result: TODO.md holds open cards, the vision and the roadmap; docs/DONE.md the ticked ones
+  options: move them to docs/DONE.md | keep them in TODO.md | move them and drop the roadmap sections too
+  est: 30m
+  difficulty: low
+  id: todo-archive
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Which product lines stay in this repo?** — the deep clean found four things built here, all wired into CI or a script: the box (helmsman-plc, deploy/, the Pi scripts), the browser playground (docs/playground, the same canvas built for the web), the scanner command line (helmsman-cli over helmsman-proto: `helmsman discover / get / io`, used by scripts/adapter-smoke.sh and scripts/bench-e1213.sh), and the test adapter (helmsman-adapter, docker/adapter, the interop-adapter CI job, which checks the scanner against our own target). The oracle (docker/rusty) is dev-only. Dropping a line is a code removal, so it waits for you; the branches, the CODESYS plan and the flash script went without asking.
+  needs: your call
+  result: the lines you keep stay wired; the rest leaves in one PR each (crates, scripts, Makefile targets, CI jobs, README rows)
+  options: keep all four | drop the scanner command line | drop the command line and the test adapter | split the scanner into its own repo
+  est: 2h
+  difficulty: low
+  id: product-lines
+  asked: 2026-11-01
+  by: claude-session
+
 ## Tasks
 
 - [ ] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.
@@ -1473,6 +1493,26 @@
   id: pi-projects
   asked: 2026-10-31
   by: claude-agent
+
+- [ ] **Prune the merged branches** — on 2026-11-01 origin carried 13 branches (10 of them merged or closed PRs) and this checkout 200 local ones, 197 merged, gone upstream or orphaned by old isolation worktrees. Deleting refs is refused to an agent, so the script is yours to run; it keeps dev, master, open PR heads and anything a worktree has checked out, fast-forwards local dev and master, and prints what is left.
+  needs: gh logged in; a minute
+  result: origin holds dev, master and open PR heads; local branches match
+  notes: `! ./scripts/prune-branches.sh` (DRY_RUN=1 first to see the list). It keeps worktree-help-site, a wip snapshot superseded by #154: `git branch -D worktree-help-site` after it.
+  est: 5m
+  difficulty: low
+  id: prune-branches
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Remove the dead tcpethernet worktrees** — `git worktree list` still names /Users/nick/github/tcpethernet-pi-demo (a checkout from before the rename whose .git file points at the old /Users/nick/github/tcpethernet path, so git cannot read it; it still holds HOWTO.md and a crates/ tree) and tcpethernet/.claude/worktrees/retro-20261030 (directory gone). Look at pi-demo for anything worth keeping, then remove both.
+  needs: a look at the pi-demo directory
+  result: `git worktree list` shows the main checkout and live worktrees only
+  notes: `ls /Users/nick/github/tcpethernet-pi-demo` then `git worktree remove --force /Users/nick/github/tcpethernet-pi-demo` and `git worktree prune`
+  est: 5m
+  difficulty: low
+  id: dead-worktrees
+  asked: 2026-11-01
+  by: claude-session
 
 ## Product vision (interview 2026-10-29)
 
