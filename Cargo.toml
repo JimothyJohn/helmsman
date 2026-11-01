@@ -5,7 +5,7 @@ members = ["crates/helmsman-proto", "crates/helmsman-agent", "crates/helmsman-ad
 [workspace.package]
 edition = "2024"
 rust-version = "1.88"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/JimothyJohn/helmsman"
 
 [workspace.lints.clippy]
