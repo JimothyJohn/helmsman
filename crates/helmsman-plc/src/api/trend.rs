@@ -20,16 +20,25 @@
 //!   kept), [`MAX_TRACKED`] signals at once (64; one more is refused, not
 //!   swapped for another's). Worst case about 64 × 2400 × 48 bytes, 7 MiB.
 //! - **Who pins.** Signed in, pins are the person's (an account, or a
-//!   role for a role-PIN session), kept by the box in memory: they follow
-//!   the person to any screen, and a restart forgets them. Signed out, the
-//!   browser keeps them. Either way a page asking for a signal's history
-//!   keeps it tracked for [`LEASE`] (a day) after the last ask; a
-//!   person's pins keep theirs as long as they are pinned.
+//!   role for a role-PIN session), kept by the box: they follow the
+//!   person to any screen, and they survive a restart, in the state
+//!   directory's `trend-pins` file ([`Trends::in_file`]; written whole on
+//!   each change, read once at boot). History is memory only: a restart
+//!   starts it over (card `trend-pins-persist`). Signed out, the browser
+//!   keeps them. Either way a page asking for a signal's history keeps it
+//!   tracked for [`LEASE`] (a day) after the last ask; a person's pins
+//!   keep theirs as long as they are pinned, from the first scan after
+//!   boot.
 //! - **Hostile input.** At most [`MAX_PINS`] signals a request (400
 //!   past that); names the box has no signal for are listed `unknown` and
-//!   never tracked; names are matched exactly, never parsed further.
+//!   never tracked; names are matched exactly, never parsed further. The
+//!   pins file is read under the same bounds ([`MAX_PINS_FILE`] bytes,
+//!   [`MAX_OWNERS`] people, [`MAX_PINS`] each, names up to [`MAX_NAME`]):
+//!   anything else in it is dropped, and a file that is not what this box
+//!   writes starts it with no pins.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use helmsman_io::Value;
@@ -50,6 +59,10 @@ pub const MAX_PINS: usize = 16;
 pub const MAX_OWNERS: usize = 256;
 /// How long a page's ask keeps a signal tracked.
 pub const LEASE: Duration = Duration::from_secs(24 * 3600);
+/// The most the pins file is read.
+pub const MAX_PINS_FILE: usize = 64 * 1024;
+/// The longest owner or signal name read back from the pins file.
+pub const MAX_NAME: usize = 256;
 
 /// One signal's history.
 #[derive(Debug, Default)]
@@ -70,6 +83,13 @@ pub struct Trends {
     seq: u64,
     /// Its time.
     now: Duration,
+    /// Where the pins are kept across restarts, if anywhere.
+    file: Option<PathBuf>,
+    /// Pins read from the file wait for the first view to be tracked
+    /// (the box's signals are known then).
+    untracked: bool,
+    /// Why the last write of the pins file failed, if it did.
+    save_error: Option<String>,
 }
 
 /// What [`Trends::want`] made of a list of names.
@@ -87,7 +107,87 @@ fn ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// The pins in `file`, within the bounds, or none.
+fn load_pins(file: &Path) -> Vec<(String, Vec<String>)> {
+    let Ok(bytes) = crate::project::read_file(file, MAX_PINS_FILE) else {
+        return Vec::new();
+    };
+    if bytes.len() > MAX_PINS_FILE {
+        return Vec::new();
+    }
+    let Ok(Json::Object(owners)) = serde_json::from_slice::<Json>(&bytes) else {
+        return Vec::new();
+    };
+    let name_ok = |n: &str| !n.is_empty() && n.len() <= MAX_NAME;
+    let mut pins: Vec<(String, Vec<String>)> = Vec::new();
+    for (owner, names) in owners {
+        if pins.len() >= MAX_OWNERS {
+            break;
+        }
+        let Some(names) = names.as_array() else { continue };
+        if !name_ok(&owner) {
+            continue;
+        }
+        let mut kept: Vec<String> = Vec::new();
+        for n in names.iter().filter_map(Json::as_str) {
+            if kept.len() >= MAX_PINS {
+                break;
+            }
+            if name_ok(n) && !kept.iter().any(|k| k == n) {
+                kept.push(n.to_string());
+            }
+        }
+        if !kept.is_empty() {
+            pins.push((owner, kept));
+        }
+    }
+    pins
+}
+
 impl Trends {
+    /// Trends whose pins are kept in `file` (the box's `trend-pins`):
+    /// the ones there now, tracked from the first view sampled, and
+    /// every change hereafter. History is never written: a restart
+    /// starts it over.
+    #[must_use]
+    pub fn in_file(file: PathBuf) -> Self {
+        let pins = load_pins(&file);
+        Self {
+            untracked: !pins.is_empty(),
+            pins,
+            file: Some(file),
+            ..Self::default()
+        }
+    }
+
+    /// Where the pins are kept, if anywhere.
+    #[must_use]
+    pub fn file(&self) -> Option<&Path> {
+        self.file.as_deref()
+    }
+
+    /// Why the pins last failed to reach the file, if they did (they are
+    /// still held in memory).
+    #[must_use]
+    pub fn save_error(&self) -> Option<&str> {
+        self.save_error.as_deref()
+    }
+
+    /// Writes every owner's pins to the file, whole, if there is one.
+    fn save(&mut self) {
+        let Some(file) = &self.file else { return };
+        let (Some(dir), Some(name)) = (file.parent(), file.file_name().and_then(|n| n.to_str())) else {
+            self.save_error = Some(format!("{}: not a file path", file.display()));
+            return;
+        };
+        let owners: serde_json::Map<String, Json> =
+            self.pins.iter().map(|(o, p)| (o.clone(), json!(p))).collect();
+        let text = serde_json::to_string(&Json::Object(owners)).unwrap_or_default();
+        self.save_error = crate::project::write_atomic(dir, name, text.as_bytes())
+            .err()
+            .map(|e| format!("{}: {e}", file.display()));
+    }
+
     /// The signals tracked now.
     #[must_use]
     pub fn tracked(&self) -> Vec<String> {
@@ -159,6 +259,7 @@ impl Trends {
         while self.pins.len() > MAX_OWNERS {
             self.pins.remove(0);
         }
+        self.save();
         w
     }
 
@@ -170,6 +271,17 @@ impl Trends {
         }
         self.seq = view.seq;
         self.now = view.at;
+        if self.untracked {
+            // Pins read at boot: tracked now that the signals are known.
+            self.untracked = false;
+            let mut want: Vec<String> = Vec::new();
+            for n in self.pins.iter().flat_map(|(_, p)| p.iter()) {
+                if !want.contains(n) {
+                    want.push(n.clone());
+                }
+            }
+            self.want(&want, names);
+        }
         let now = view.at;
         let from = now.saturating_sub(WINDOW);
         for (name, t) in &mut self.tracks {
@@ -353,13 +465,21 @@ pub(super) fn put_pins(req: &Request, ctx: &Ctx) -> Response {
             "trend pins: unknown signals",
         );
     }
-    let w = ctx.trends().set_pins(&owner, &want, &known);
-    let detail = format!("trend pins of {owner}: {} signal(s)", w.kept.len());
+    let (w, not_kept) = {
+        let mut t = ctx.trends();
+        let w = t.set_pins(&owner, &want, &known);
+        (w, t.save_error().map(str::to_string))
+    };
+    let mut detail = format!("trend pins of {owner}: {} signal(s)", w.kept.len());
+    if let Some(e) = &not_kept {
+        detail.push_str("; not kept across a restart: ");
+        detail.push_str(e);
+    }
     audited(
         ctx,
         req,
         200,
-        &json!({ "owner": owner, "pins": w.kept, "refused": w.refused }),
+        &json!({ "owner": owner, "pins": w.kept, "refused": w.refused, "kept": not_kept.is_none() }),
         &super::clean(&detail),
     )
 }
