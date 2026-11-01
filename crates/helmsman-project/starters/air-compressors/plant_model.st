@@ -12,7 +12,6 @@ VAR_OUTPUT
   fb_1 : BOOL;
   fb_2 : BOOL;
   fb_3 : BOOL;
-  operator_start : BOOL;
 END_VAR
 VAR CONSTANT
   each_makes : REAL := 0.01;    (* bar/s from one compressor *)
@@ -23,7 +22,6 @@ VAR CONSTANT
   dt_s : REAL := 0.1;
 END_VAR
 VAR
-  operator : TP;
   motor_1 : TON;
   motor_2 : TON;
   motor_3 : TON;
@@ -33,8 +31,6 @@ VAR
   bar : REAL := 7.0;
   use : REAL;
 END_VAR
-operator(IN := TRUE, PT := T#1s);  (* as if someone pressed start *)
-operator_start := operator.Q;
 motor_1(IN := comp_1, PT := motor_delay);
 motor_2(IN := comp_2, PT := motor_delay);
 motor_3(IN := comp_3, PT := motor_delay);

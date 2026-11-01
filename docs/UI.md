@@ -32,7 +32,7 @@ this; change it here first when a decision changes.
 - **ST on demand:** an "ST" toggle slides the editor open beside the
   diagram; clicking a block jumps the editor to its line.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
-  not show), Trend (pinned signals), Claude. On a Pi the Trend opens with
+  not show), Trend (pinned signals), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box, or the
   browser's when signed out.
@@ -67,9 +67,12 @@ this; change it here first when a decision changes.
   L5X files into the open project (XML and L5X ladder converted to ST).
 - In the browser simulation, projects persist in the browser's storage, with
   the same Upload and Download (the box's `.zip`). The built-in examples are
-  read-only starter projects: Save keeps your own copy. Deploy compiles and
-  runs the project in the page. A browser that keeps nothing (a private
-  window) still works; the projects last until the page closes.
+  read-only starter projects: Save keeps your own copy. Typing only checks:
+  errors are marked after a pause, and what runs is unchanged, as on a box.
+  Deploy compiles and runs the project in the page; one that does not
+  compile is refused and the old program keeps running. A browser that
+  keeps nothing (a private window) still works; the projects last until
+  the page closes.
 - **Machines and templates.** Worked machines (conveyor sorter, pump
   station, batch mixer, pick and place, bottle filler, air compressors,
   air handler) and templates (discrete machine, process loop) are one list,
@@ -79,12 +82,14 @@ this; change it here first when a decision changes.
   until opened; each is a read-only starter that Save copies. On a box,
   "Start from a machine or template" in the sidebar asks an engineer for a
   name and sends the project as its `.zip`; nothing else changes what the
-  box holds, and a first install still seeds `line` alone.
+  box holds, and a first install still seeds `line` alone, undeployed.
 
 ## Monitor (phone to wall TV; replaces Andon)
 
-- **Top:** status tiles: running or faulted, scan time, then one tile per
-  top-level instance with its key outputs, green or red.
+- **Top:** status tiles: running or faulted, then one tile per top-level
+  instance with its key outputs, green or red. The scan period and
+  counts are too low level for the wall: hidden unless an engineer turns
+  "Scan detail" on (card `monitor-scan-time`).
 - **Tap a tile:** the same tiles one level down (that instance's instances
   and outputs). Back and breadcrumbs go up; the full diagram is one tap
   away.
@@ -92,7 +97,9 @@ this; change it here first when a decision changes.
 
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
-period and count), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
+period and count only while an engineer is signed in and this browser's
+"Scan detail" is on, kept with the Editor's layout; nothing is measured
+box-side), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
 and located `%Q` variables), then a tile per user function block
 instance in declaration order (standard blocks such as TON are not
 tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
@@ -109,7 +116,7 @@ one column on a phone, and grow with the screen up to 4K.
 
 - **Proposals** (agent changes approved with a PIN) sit behind the ⋯ menu
   until they get a home.
-- **Claude** on a Pi goes through the relay and proposes; in the simulation
+- **Agent** (the tab) on a Pi goes through the relay and proposes; in the simulation
   it uses the visitor's key, as the playground does today.
 - **Site** (every box on the network) is gone for now; it returns with a
   fleet view.

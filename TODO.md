@@ -971,7 +971,7 @@
   id: monitor-lamp-polarity
   answer: literal TRUE green, FALSE red (built)
 
-- [ ] **Monitor "scan time": the period, or the measured scan?** The box publishes each module's scan period (`scan_ms`) and its counts (scans, overruns, held), not how long a scan took: the runtime has no clock (it also runs in the canvas's wasm build). Built: the status tile shows "scan 2 ms · N scans" (the period). Measuring would time `tick_with` in the box binary's loop (behind `box`) and publish last/max per module in `/api/events`.
+- [x] **Monitor "scan time": the period, or the measured scan?** The box publishes each module's scan period (`scan_ms`) and its counts (scans, overruns, held), not how long a scan took: the runtime has no clock (it also runs in the canvas's wasm build). Built: the status tile shows "scan 2 ms · N scans" (the period). Measuring would time `tick_with` in the box binary's loop (behind `box`) and publish last/max per module in `/api/events`.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -1004,7 +1004,7 @@
   id: save-scope
   answer: every edited file (built)
 
-- [ ] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
+- [x] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -1026,7 +1026,7 @@
   id: sim-multi-program
   answer: refuse, as built
 
-- [ ] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
+- [x] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -1061,7 +1061,7 @@
   id: trend-pins-persist
   answer: pins in a state-dir file, history in memory (recommended)
 
-- [ ] **Should a machine example start itself on a box?** Each machine's plant model presses Start after power-up so the diagram moves with nothing wired, and its io.map uses the box's own channels. Fine on a box with nothing connected; on a box run with `--gpio-chip` those channels are real pins, and the example drives them on Deploy. Built default: it starts itself, and each io.map says in a comment to check the channels first.
+- [x] **Should a machine example start itself on a box?** Each machine's plant model presses Start after power-up so the diagram moves with nothing wired, and its io.map uses the box's own channels. Fine on a box with nothing connected; on a box run with `--gpio-chip` those channels are real pins, and the example drives them on Deploy. Built default: it starts itself, and each io.map says in a comment to check the channels first.
   needs: your call
   result: keep the default, or the plant model waits for Start on a box
   options: keep; plant waits for Start (the diagram sits still until someone forces start_pb); refuse a starter's io.map on a box with GPIO
@@ -1082,6 +1082,16 @@
   by: claude-agent
   id: starter-short-examples-on-box
   answer: leave out
+
+- [ ] **Add a LICENSE file?** `Cargo.toml` declares `license = "MIT"` and CONTRIBUTING.md (docs/contributing PR) tells contributors the crates are MIT with a DCO sign-off, but there is no LICENSE file at the root, so GitHub shows no license and the claim has nothing behind it. A LICENSE is a legal choice (MIT as declared, or something else now that the agent and relay are in scope), so it is yours; the card `open-core-split` may change the answer.
+  needs: your call on the license (and copyright holder line)
+  result: LICENSE at the root, GitHub's license badge, CONTRIBUTING's claim true
+  options: MIT as Cargo.toml says | Apache-2.0 | wait for open-core-split
+  est: 15m
+  difficulty: low
+  id: license-file
+  asked: 2026-11-01
+  by: claude-session
 
 ## Tasks
 
