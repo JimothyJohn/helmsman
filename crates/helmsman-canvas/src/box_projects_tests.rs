@@ -902,9 +902,12 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
             .unwrap()
             .text
             .push_str("(* not mine *)");
-        for k in ["save", "deploy", "new project", "delete project", "new file"] {
+        for k in ["save", "new project", "delete project", "new file"] {
             h.press(k);
         }
+        // Deploy is the File menu's (disabled here; pressing it is nothing).
+        h.press("bar file");
+        h.press("file deploy");
         // Reads (the Trend's pins) go; no write does.
         let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
         assert!(sent.is_empty(), "{sent:?}");
