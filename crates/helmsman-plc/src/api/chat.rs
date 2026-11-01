@@ -41,7 +41,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{self, Write as _};
-use std::net::{SocketAddr, TcpStream};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -53,7 +53,7 @@ use serde_json::{Value as Json, json};
 
 use super::catalog::Catalog;
 use super::dropin::Attachment;
-use super::http::{self, Response};
+use super::http::{self, Conn, Response};
 use super::{pdf, photo};
 use crate::fallback;
 
@@ -600,7 +600,7 @@ impl Chat {
     /// agent's progress, and how it stopped. A client that goes away does
     /// not stop the turn (its history must stay whole); writes to it are
     /// dropped.
-    pub fn serve(&self, stream: &mut TcpStream, taken: Taken, catalog: &Catalog) {
+    pub fn serve(&self, stream: &mut Conn, taken: Taken, catalog: &Catalog) {
         let Taken {
             id,
             mut conv,
@@ -846,7 +846,7 @@ fn show(v: &Json) -> String {
     }
 }
 
-pub(super) fn event(stream: &mut TcpStream, name: &str, data: &Json) -> io::Result<()> {
+pub(super) fn event(stream: &mut Conn, name: &str, data: &Json) -> io::Result<()> {
     let body = serde_json::to_string(data).unwrap_or_default();
     write!(stream, "event: {name}\ndata: {body}\n\n")?;
     stream.flush()

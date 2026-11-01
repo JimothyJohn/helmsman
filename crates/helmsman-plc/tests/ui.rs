@@ -114,10 +114,13 @@ fn spawn(ui: Option<&Path>) -> Plc {
     while addr.is_none() || !canvas {
         let mut line = String::new();
         assert!(stderr.read_line(&mut line).unwrap() > 0, "PLC exited");
-        if let Some(rest) = line.strip_prefix("helmsman-plc: API on http://") {
+        if let Some(rest) = line
+            .strip_prefix("helmsman-plc: API on https://")
+            .or_else(|| line.strip_prefix("helmsman-plc: API on http://"))
+        {
             addr = rest.split('/').next().and_then(|a| a.parse().ok());
         }
-        canvas |= line.starts_with("helmsman-plc: canvas on http://");
+        canvas |= line.starts_with("helmsman-plc: canvas on http");
     }
     // Keep draining stderr so the PLC never blocks on a full pipe.
     std::thread::spawn(move || {

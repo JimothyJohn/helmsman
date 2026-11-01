@@ -901,7 +901,7 @@
   id: license-split
   answer: helmsman MIT, relay source-available (BSL or similar)
 
-- [ ] **HTTPS on the box's own web UI?** The box serves its API and canvas over plain HTTP; sign-in uses an `HttpOnly; SameSite=Strict` session cookie, without the `Secure` flag because the page isn't HTTPS. On a flat plant LAN anyone who can sniff traffic can lift a session (1 h max, 15 min idle). Options: a self-signed certificate made at first boot, with its fingerprint shown on the box's screen for the browser to trust once; a local CA you install on plant PCs; or stay HTTP on the LAN and loopback-only by default (`canvas-lan-default`), which is what's built.
+- [x] **HTTPS on the box's own web UI?** The box serves its API and canvas over plain HTTP; sign-in uses an `HttpOnly; SameSite=Strict` session cookie, without the `Secure` flag because the page isn't HTTPS. On a flat plant LAN anyone who can sniff traffic can lift a session (1 h max, 15 min idle). Options: a self-signed certificate made at first boot, with its fingerprint shown on the box's screen for the browser to trust once; a local CA you install on plant PCs; or stay HTTP on the LAN and loopback-only by default (`canvas-lan-default`), which is what's built.
   asked: 2026-10-31
   by: claude-session
   needs: your call
@@ -945,7 +945,7 @@
   id: deploy-replay
   answer: keep replay, UI does both calls (built)
 
-- [ ] **What should an L5X upload become?** `helmsman_iec::l5x` reads an L5X as an inventory (tags, rungs as text, ST routines as lines); there is no ladder-to-ST translator, so `POST /api/projects/{p}/import?file=X.L5X` is refused (415) for now. Options: translate the common ladder instructions (XIC/XIO/OTE/OTL/OTU/TON/TOF/CTU/MOV/compare) and Logix TIMER/COUNTER semantics into ST, refusing a file with anything else; import only its ST routines plus tags as VARs (rarely compiles); or keep L5X as an agent drop-in and have the agent write the ST.
+- [x] **What should an L5X upload become?** `helmsman_iec::l5x` reads an L5X as an inventory (tags, rungs as text, ST routines as lines); there is no ladder-to-ST translator, so `POST /api/projects/{p}/import?file=X.L5X` is refused (415) for now. Options: translate the common ladder instructions (XIC/XIO/OTE/OTL/OTU/TON/TOF/CTU/MOV/compare) and Logix TIMER/COUNTER semantics into ST, refusing a file with anything else; import only its ST routines plus tags as VARs (rarely compiles); or keep L5X as an agent drop-in and have the agent write the ST.
   asked: 2026-10-31
   by: claude-agent
   needs: your call
@@ -955,6 +955,7 @@
   difficulty: med
   id: l5x-scope
   answer: ladder subset to ST, refuse the rest (recommended)
+  result-note: built as card l5x-import (feat/l5x-ladder): helmsman_iec::ladder, docs/ARCHITECTURE.md "L5X ladder import".
 
 - [ ] **Monitor lamps: is TRUE always green?** docs/UI.md says a tile's outputs are green or red. Built (reversible, one function in `monitor.rs`): a BOOL output TRUE is a green lamp, FALSE a red one, whatever its name, so the line's `alarm` and a motor's `tripped` light green when they are on. Options: keep it literal; invert by name (alarm, fault, trip, jam, error, estop light red when TRUE, off otherwise); or let the source say per output (a `(* monitor: alarm *)` comment on the declaration).
   asked: 2026-10-31
@@ -1025,6 +1026,17 @@
   est: 30m
   difficulty: low
   id: seed-deploys
+
+- [ ] **HTTPS box: plain HTTP from the LAN refused, and a certificate without the box's IP: OK?** `box-https` (built) serves TLS on the API's port. Plain HTTP is served only from the box's own host (loopback or its own address: local scripts, the agent, the deploy script's curl, an SSH tunnel). From the LAN, a GET is redirected to https:// and anything else, `POST /mcp` from an engineer's MCP client included, is 403. The certificate names `localhost`, the host name (and NAME.local), 127.0.0.1 and ::1, not the LAN IP, because a bind of 0.0.0.0 doesn't say which address that is. A browser asks once either way. A strict client reaching the box by IP (an MCP client with the cert in `NODE_EXTRA_CA_CERTS`) fails the name check, and one using the host name passes. Built: as described.
+  asked: 2026-10-31
+  by: claude-agent
+  needs: your call
+  result: whether LAN scripts and MCP clients must use https://<box-name>, or the box bends for them
+  options: as built: HTTPS by name from the LAN, plain HTTP from the box itself (recommended) | a --tls-name NAME/IP flag adding names to the certificate (a new cert, so a new fingerprint) | also serve plain HTTP from the LAN to a bearer-token request (no cookie) for scripts
+  est: 2h
+  difficulty: low
+  depends: box-https
+  id: box-https-lan-clients
 
 ## Tasks
 
@@ -1248,13 +1260,14 @@
   asked: 2026-10-31
   by: claude-agent
 
-- [ ] **L5X to ST import** — `POST /api/projects/{p}/import?file=X.L5X` produces ST that compiles.
+- [x] **L5X to ST import** — `POST /api/projects/{p}/import?file=X.L5X` produces ST that compiles.
   depends: l5x-scope
   est: 3d
   difficulty: high
   id: l5x-import
   asked: 2026-10-31
   by: claude-agent
+  notes: built on feat/l5x-ladder (2026-10-31): `helmsman_iec::ladder` converts the ladder subset (contacts, coils, branches, one-shots, TON/TOF/RTO/CTU/CTD/RES on TIMER/COUNTER structures, compares, math, CPT, MOV/CLR/COP, JSR inlined) to one F.st with a PROGRAM per task, and refuses anything else with its program, routine and rung; semantics from RM003 (docs/SOURCES.md), proven against a reference evaluator over random rungs (tests/ladder_equiv.rs). Left: the browser simulation still refuses L5X (sim_projects.rs; the converter is wasm-safe), and UDTs, indirect subscripts and JSR parameters are refused until a real export shows they matter.
 
 - [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc); a first install seeds project `line` from programs/line.st, deployed (`helmsman-plc project seed`, the unit's ExecStartPre); `PLC_MODE=program` keeps the old one-file mode. Built and tested here; yours to run against the Pi (native terminal or `!`: it needs Docker, trunk, and SSH with sudo on the Pi, and the firewall step is refused from an agent).
   needs: you to run the two commands (the Pi's IP); the Pi on Debian Trixie with key SSH and passwordless sudo (scripts/pi-prep.sh)
@@ -1584,7 +1597,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: low
   depends: dropin-plc
   id: l5x-real-export
-  notes: source (l5x-source, 2026-10-31): Nick exports one from his bench project.
+  notes: source (l5x-source, 2026-10-31): Nick exports one from his bench project. Later 2026-10-31: RM014 is read and cited; the ladder converter (l5x-import) also needs the real export: run `POST .../import?file=X.L5X` on it and check the refusal list (or the ST) against the project, the neutral text of each instruction it uses (JSR's `JSR(Name,0)` form, `?` pseudo-operands, v36 mnemonics such as EQ/MOVE), decorated data of TIMER/COUNTER tags, and rung Type attributes other than N. The fixtures (line3.L5X, ladder.L5X) are hand-written, not exports.
 
 - [x] **Drop-in: whiteboard photo** — vision via the relay turns a sketch of sensors/arrows/lights into a draft module and signal list, then asks.
   notes: built on feat/dropin-photo: `POST /api/dropins` takes PNG/JPEG/WebP known by their bytes and read from headers only (`api/photo.rs`: 512 KiB, 8000 px a side, no trailing bytes, no animation); an attached photo goes to the model as a base64 `image` block plus the box's note; see ARCHITECTURE "Drop-ins". Works with relay protocol v1 as it is (no block-type check); relay caps and prompt in `relay-images`.

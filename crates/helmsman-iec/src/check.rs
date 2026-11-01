@@ -411,6 +411,11 @@ enum Access {
 
 type O<T> = Option<T>;
 
+/// Whether an upper-cased name is a standard function.
+pub(crate) fn is_builtin(upper: &str) -> bool {
+    BUILTINS.iter().any(|(n, _)| *n == upper)
+}
+
 const BUILTINS: &[(&str, Builtin)] = &[
     ("ABS", Builtin::Abs),
     ("SQRT", Builtin::Sqrt),

@@ -409,7 +409,7 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
     let (stem, ext) = lower
         .rsplit_once('.')
         .map(|(s, e)| (&file[..s.len()], e))
-        .ok_or((400, "file needs an extension: .st or .xml".to_string()))?;
+        .ok_or((400, "file needs an extension: .st, .xml or .L5X".to_string()))?;
     let target = format!("{stem}.st");
     if project::file_name(&target) != Some(FileKind::St) {
         return Err((
@@ -426,16 +426,33 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
             let text = std::str::from_utf8(body).map_err(|_| (422, format!("{file}: not UTF-8")))?;
             let lowered = helmsman_iec::plcopen::lower(text).map_err(|diags| {
                 let lines: Vec<String> = diags.iter().take(20).map(ToString::to_string).collect();
-                (422, format!("{file} is not a PLCopen project this box reads: {}", lines.join("; ")))
+                (
+                    422,
+                    format!(
+                        "{file} is not a PLCopen project this box reads: {}",
+                        lines.join("; ")
+                    ),
+                )
             })?;
             Ok((target, lowered.st().to_string()))
         }
-        "l5x" => Err((
+        "l5x" => {
+            // Ladder in the converted subset becomes ST; anything else
+            // refuses the whole file, every problem with its rung.
+            let text = std::str::from_utf8(body).map_err(|_| (422, format!("{file}: not UTF-8")))?;
+            let converted = helmsman_iec::ladder::convert(text).map_err(|r| {
+                let mut lines: Vec<String> = r.problems.iter().take(20).map(ToString::to_string).collect();
+                if r.total > lines.len() {
+                    lines.push(format!("and {} more", r.total - lines.len()));
+                }
+                (422, format!("{file} is not converted: {}", lines.join("; ")))
+            })?;
+            Ok((target, converted.st))
+        }
+        _ => Err((
             415,
-            "L5X import is not built yet: this box reads an L5X only as an inventory for the agent (POST /api/dropins)"
-                .into(),
+            "import takes .st, .xml (PLCopen TC6) or .L5X (Logix ladder)".into(),
         )),
-        _ => Err((415, "import takes .st or .xml (PLCopen TC6)".into())),
     }
 }
 
@@ -450,7 +467,7 @@ fn import(
     let Some(file) = query(req, "file") else {
         return done(
             400,
-            json!({ "error": "import needs ?file=NAME.st or NAME.xml" }),
+            json!({ "error": "import needs ?file=NAME.st, NAME.xml or NAME.L5X" }),
             format!("{what}: import without a file name"),
         );
     };
