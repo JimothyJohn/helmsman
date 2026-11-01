@@ -119,10 +119,11 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
   --ui DIR             serve the canvas (`make canvas-web` builds it) from DIR
                        at / on the API's address: a browser on the LAN is
                        the HMI (read-only, like the API's reads)
-  --state-dir DIR      where the API token, the role PINs and the trusted
-                       bundle publishers (trusted-publishers) live (default
-                       $STATE_DIRECTORY, as systemd's StateDirectory= sets
-                       it, else ./helmsman-state)
+  --state-dir DIR      where the API token, the TLS certificate, the role
+                       PINs, the projects and the trusted bundle publishers
+                       (trusted-publishers) live (default $STATE_DIRECTORY,
+                       as systemd's StateDirectory= sets it, else
+                       helmsman-state in the working directory)
   --policy FILE        approval policy (see helmsman_plc::policy); stricter
                        than the built-in floor or refused. Default: the floor
   --set-pin ROLE       read a PIN for operator, engineer or integrator from
@@ -919,6 +920,12 @@ fn state_dir(o: &Opts) -> PathBuf {
     o.state_dir.clone().unwrap_or_else(default_state_dir)
 }
 
+/// `$STATE_DIRECTORY`, else `helmsman-state` in the working directory. On
+/// purpose: an installed box always has the first (the unit file's
+/// `StateDirectory=`), and a bench run keeps its token and certificate
+/// beside where it was started, in sight, rather than in one per-user
+/// folder every checkout and test run would share. Tests pass
+/// `--state-dir`, or run the binary from a directory of their own.
 fn default_state_dir() -> PathBuf {
     std::env::var_os("STATE_DIRECTORY")
         .filter(|v| !v.is_empty())

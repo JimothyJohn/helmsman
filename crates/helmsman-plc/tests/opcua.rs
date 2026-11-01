@@ -66,10 +66,16 @@ fn snapshot(shape: &Arc<Shape>, seq: u64, level: f64) -> Arc<Snapshot> {
     })
 }
 
+/// A fresh directory of its own: the pid and a counter keep parallel
+/// copies of this suite apart.
 fn tmp(name: &str) -> PathBuf {
-    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("opcua")
-        .join(name);
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let d = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "opcua-{name}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -329,6 +335,7 @@ fn the_box_serves_a_running_modules_output() {
     let map = d.join("map");
     std::fs::write(&map, "in count int module counter unit=parts\n").unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
+        .current_dir(&d)
         .arg(&prog)
         .args(["--io-map".as_ref(), map.as_os_str()])
         .args([
@@ -394,6 +401,7 @@ fn a_taken_port_stops_the_box_with_a_reason() {
     let prog = d.join("p.st");
     std::fs::write(&prog, "PROGRAM p\nVAR x : INT; END_VAR\n x := 1;\nEND_PROGRAM\n").unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
+        .current_dir(&d)
         .arg(&prog)
         .args([
             "--api",

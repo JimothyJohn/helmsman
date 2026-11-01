@@ -794,8 +794,13 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   parser serves it): live values and status, and a module's traces.
 - **Everything else** needs `Authorization: Bearer <token>` (64 hex
   digits, made on first start in `api-token`, mode 0600, under
-  `--state-dir` or systemd's `StateDirectory=`, printed once to the
-  journal), or a login session from `POST /api/login` (below). A token,
+  `--state-dir` or systemd's `StateDirectory=`, else `helmsman-state` in
+  the working directory, printed once to the journal), or a login session
+  from `POST /api/login` (below). The working-directory default is for a
+  bench run: its token and certificate stay beside where it was started,
+  not in one per-user folder every checkout and test copy would share.
+  Tests pass `--state-dir` or run the binary from a directory of their
+  own; `tests/bin.rs` fails if one leaves `helmsman-state` in the crate. A token,
   password, PIN or session in a query string is refused on any request.
   Every authenticated call is appended to the audit log whatever its
   outcome, with the snapshot id it concerns and, for an account's
