@@ -210,6 +210,41 @@ mod polish {
     }
 
     #[test]
+    fn ctrl_shift_d_opens_the_declaration_and_ctrl_shift_x_lights_the_references() {
+        let mut h = Harness::new(App::sim());
+        h.key(Modifiers::ALT, Key::Num1);
+        assert!(!h.app.chrome.st, "ST shut for the test");
+        // The pane's close moves the diagram: let it settle, then pick.
+        h.wait(0.6);
+        let (at, _) = super::node(super::sim_view(&h), super::write_to("LAMP"));
+        h.click(at);
+        h.frame(vec![]);
+        assert_eq!(
+            super::sim_view(&h).picked_var().as_deref(),
+            Some("LAMP"),
+            "the block is picked"
+        );
+        h.app.chrome.line = None;
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::D);
+        assert!(h.app.chrome.st, "the ST opens");
+        let line = h.app.chrome.line.expect("sent to the declaration");
+        let src = h.app.sim.as_ref().unwrap().session.src.clone();
+        let decl = src.lines().nth(line as usize - 1).unwrap_or("");
+        assert!(
+            decl.to_ascii_lowercase().contains("lamp"),
+            "line {line}: {decl:?}"
+        );
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::X);
+        h.frame(vec![]);
+        let v = super::sim_view(&h);
+        assert!(v.highlighted().is_some_and(|d| !d.is_empty()), "references lit");
+        h.press("bar edit");
+        for k in ["edit definition", "edit xref"] {
+            assert!(h.has(k), "no {k}");
+        }
+    }
+
+    #[test]
     fn alt_f8_opens_sign_in_and_ctrl_f8_signs_out_on_a_box() {
         let mut h = Harness::new(App::boxed());
         assert!(!h.app.login);

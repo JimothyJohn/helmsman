@@ -73,11 +73,14 @@ plain sentences, and claim only what is built.
 
 ## Licensing and sign-off
 
-The crates are published under the MIT license (`Cargo.toml`). By opening a
-pull request you certify the [Developer Certificate of Origin](https://developercertificate.org/):
-you wrote the change or have the right to submit it under that license.
-Sign each commit off (`git commit -s`), which adds the `Signed-off-by:`
-line.
+Helmsman is licensed under the Apache License, Version 2.0 (`LICENSE`;
+`Cargo.toml` says the same for every crate). By opening a pull request you
+submit your change under that license, as its section 5 says, and you
+certify the [Developer Certificate of Origin](https://developercertificate.org/):
+you wrote the change or have the right to submit it. Sign each commit off
+(`git commit -s`), which adds the `Signed-off-by:` line. Keep the
+`LICENSE` text and any attribution notices intact in forks and products
+built on Helmsman (section 4).
 
 ## Reporting
 
