@@ -104,6 +104,9 @@ pub struct App {
     routed: bool,
     /// Help › About is open.
     pub about: bool,
+    /// The page fell back to the simulation by itself (no box answered);
+    /// once, so ⋯ › Back to this box is not undone.
+    fell_back: bool,
     /// When the proposal list was last asked for (page time, s).
     listed: Option<f64>,
 }
@@ -151,6 +154,7 @@ impl App {
             monitor: Monitor::default(),
             routed: false,
             about: false,
+            fell_back: false,
             listed: None,
         }
     }
@@ -274,6 +278,25 @@ impl App {
         let engineer = is_engineer(session.as_ref()).is_ok();
         if let Some(b) = &mut self.boxv {
             b.session = session;
+        }
+        // No box ever answered this page: it is the simulation then, by
+        // itself (Nick, 2026-11-01). A box that answered and went away
+        // stays the box: its last diagram is worth more than a demo.
+        if self.source == Source::Box
+            && !self.fell_back
+            && let Some(b) = &self.boxv
+            && matches!(b.state.link(), crate::remote::Link::Unreachable { .. })
+            && !b.state.ever_connected()
+        {
+            self.fell_back = true;
+            self.source = Source::Sim;
+            if self.screen == Screen::Proposals {
+                self.screen = Screen::Editor;
+            }
+            let s = self.sim.get_or_insert_with(PlaygroundView::new);
+            s.notice = Some(
+                "No box answered at this address: simulating in this browser (⋯ › Back to this box).".into(),
+            );
         }
         let header = self.header(ui);
         self.chrome.hits.clear();
