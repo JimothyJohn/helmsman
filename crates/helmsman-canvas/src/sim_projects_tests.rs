@@ -282,7 +282,7 @@ fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     assert!(why.contains("does not keep projects"), "{why}");
     assert!(v.session.running, "the example runs anyway");
     assert!(app.chrome.rect("storage").is_some(), "the page says so");
-    for k in ["mark", "title", "save", "bar file", "menu"] {
+    for k in ["mark", "title", "save", "bar file", "help"] {
         assert!(app.chrome.rect(k).is_some(), "{k} drawn");
     }
     // Projects still work, in memory.
@@ -635,4 +635,45 @@ fn the_log_keeps_refused_deploys_faults_and_state_changes() {
         "{:?}",
         v.log.iter().map(|m| &m.text).collect::<Vec<_>>()
     );
+}
+
+/// Nick, 2026-11-01: "Use this code" makes a new, named file (a new
+/// project for a PROGRAM), opens it, and asks first about unsaved edits.
+#[test]
+fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
+    use crate::playground_view::answer_name;
+    assert_eq!(answer_name("PROGRAM Lamp_Test\nEND_PROGRAM"), "lamp_test");
+    assert_eq!(
+        answer_name("(* x *) FUNCTION_BLOCK Debounce VAR END_VAR END_FUNCTION_BLOCK"),
+        "debounce"
+    );
+    assert_eq!(answer_name("x := 1;"), "agent");
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.open_project("blink");
+    assert!(!v.proj.dirty());
+    let code = "PROGRAM lamp_test\nVAR lamp : BOOL; END_VAR\nlamp := TRUE;\nEND_PROGRAM\n";
+    v.take_code(code.into());
+    assert_eq!(v.proj.open, "lamp_test", "a PROGRAM is a project of its own");
+    assert_eq!(v.proj.current, "lamp_test.st");
+    assert!(v.proj.current_text_mut().unwrap().contains("PROGRAM lamp_test"));
+    assert!(!v.proj.dirty(), "saved");
+    assert!(v.session.diags.is_empty(), "{:?}", v.session.diag_lines());
+    // Again: a second project, not a clobbered first.
+    v.take_code(code.into());
+    assert_eq!(v.proj.open, "lamp_test-2");
+    // A block goes into the open project as a file.
+    let fb = "FUNCTION_BLOCK debounce\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\nq := x;\nEND_FUNCTION_BLOCK\n";
+    v.take_code(fb.into());
+    assert_eq!(v.proj.open, "lamp_test-2");
+    assert_eq!(v.proj.current, "debounce.st");
+    // Unsaved edits ask first; "save, then open" keeps them.
+    v.proj.open_file("lamp_test.st");
+    v.proj.current_text_mut().unwrap().push_str("(* mine *)");
+    assert!(v.proj.dirty());
+    v.take_code(code.into());
+    assert!(
+        matches!(v.files_ui.confirm, Some(Act::UseAnswer { ref name, .. }) if name == "lamp_test"),
+        "asked"
+    );
+    assert_eq!(v.proj.open, "lamp_test-2", "nothing opened yet");
 }

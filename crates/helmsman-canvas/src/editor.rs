@@ -199,7 +199,7 @@ pub fn menu_item_keyed(
     shortcut: &str,
 ) -> bool {
     let b = egui::Button::selectable(on, text.into())
-        .min_size(Vec2::new(ui.available_width().max(220.0), TAP * 0.7));
+        .min_size(Vec2::new(ui.available_width().max(74.0), TAP * 0.7));
     let b = if shortcut.is_empty() {
         b
     } else {
@@ -293,7 +293,7 @@ pub trait Body {
     /// The Trend along the bottom: pins and the plot.
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The Messages tab beside it: the view's log (`messages::Log`).
-    fn messages(&mut self, ui: &mut egui::Ui) -> &crate::messages::Log;
+    fn messages(&mut self) -> &mut crate::messages::Log;
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab);
@@ -357,23 +357,22 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         egui::Panel::left("ed-files-strip")
             .exact_size(STRIP)
             .resizable(false),
-        egui::Panel::left("ed-files").resizable(true).default_size(230.0),
+        egui::Panel::left("ed-files").resizable(true).default_size(115.0),
         |ui, open| {
             let toggle = if open {
                 let mut t = None;
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Files").strong().color(YELLOW));
+                    ui.label(RichText::new("Projects").strong().color(STEEL));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        t = Some(header_toggle(ui, true, "hide the files"));
+                        t = Some(header_toggle(ui, true, "hide the projects"));
                     });
                 });
-                ui.separator();
                 egui::ScrollArea::vertical()
                     .id_salt("ed-files-scroll")
                     .show(ui, |ui| body.files(ui, chrome));
                 t
             } else {
-                Some(strip_toggle(ui, false, "show the files"))
+                Some(strip_toggle(ui, false, "show the projects"))
             };
             if let Some(t) = toggle {
                 hits.push(("left".to_string(), t.rect));
@@ -445,7 +444,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         .default_size(200.0)
         .show_collapsible(ui, &mut trend, |ui| {
             // Tabs: Trend | Messages (errors counted on the tab).
-            let label = body.messages(ui).label();
+            let label = body.messages().label();
             ui.horizontal(|ui| {
                 for (b, text, key) in [
                     (Bottom::Trend, "Trend".to_string(), "bottom trend"),
@@ -464,9 +463,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             ui.separator();
             match chrome.bottom {
                 Bottom::Trend => body.trend(ui, chrome),
-                Bottom::Messages => {
-                    body.messages(ui).ui(ui);
-                }
+                Bottom::Messages => body.messages().ui(ui, chrome),
             }
         });
     chrome.trend = trend;

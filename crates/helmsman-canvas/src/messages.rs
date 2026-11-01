@@ -28,9 +28,28 @@ pub struct Message {
 }
 
 /// The bounded log.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Log {
     items: VecDeque<Message>,
+    /// Which levels the tab shows: info, warning, error (all, to start).
+    pub show: [bool; 3],
+}
+
+impl Default for Log {
+    fn default() -> Self {
+        Self {
+            items: VecDeque::new(),
+            show: [true; 3],
+        }
+    }
+}
+
+const fn slot(level: Level) -> usize {
+    match level {
+        Level::Info => 0,
+        Level::Warning => 1,
+        Level::Error => 2,
+    }
 }
 
 impl Log {
@@ -96,8 +115,38 @@ impl Log {
         }
     }
 
-    /// The list, newest at the bottom and scrolled there.
-    pub fn ui(&self, ui: &mut egui::Ui) {
+    /// The messages the filters let through.
+    pub fn shown(&self) -> impl Iterator<Item = &Message> {
+        self.items.iter().filter(|m| self.show[slot(m.level)])
+    }
+
+    /// How many of each level: info, warning, error.
+    #[must_use]
+    pub fn counts(&self) -> [usize; 3] {
+        let mut n = [0; 3];
+        for m in &self.items {
+            n[slot(m.level)] += 1;
+        }
+        n
+    }
+
+    /// The filter row (Nick, 2026-11-01: see any or all of info, warnings
+    /// and errors) and the list, newest at the bottom and scrolled there.
+    pub fn ui(&mut self, ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome) {
+        let counts = self.counts();
+        ui.horizontal(|ui| {
+            for (k, (name, color)) in [("info", GREEN), ("warnings", WARN), ("errors", RED)]
+                .into_iter()
+                .enumerate()
+            {
+                let text = RichText::new(format!("{name} {}", counts[k])).color(color);
+                let r = ui.add(egui::Button::selectable(self.show[k], text));
+                chrome.hit(format!("messages {name}"), r.rect);
+                if r.clicked() {
+                    self.show[k] = !self.show[k];
+                }
+            }
+        });
         if self.items.is_empty() {
             ui.label(RichText::new("Nothing to report yet.").color(STEEL));
             return;
@@ -106,7 +155,7 @@ impl Log {
             .id_salt("messages")
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                for m in &self.items {
+                for m in self.shown() {
                     let (tag, color) = match m.level {
                         Level::Info => ("info", GREEN),
                         Level::Warning => ("warning", WARN),
@@ -149,5 +198,25 @@ mod tests {
         assert_eq!(l.len(), KEEP, "the oldest go");
         assert_eq!(l.iter().next().unwrap().level, Level::Info);
         assert!(l.iter().next().unwrap().text.starts_with('m'), "b, c, d are gone");
+    }
+
+    /// Nick, 2026-11-01: see any or all of info, warnings and errors.
+    #[test]
+    fn the_filters_pick_levels_and_count_each() {
+        let mut l = Log::default();
+        l.info(1.0, "a");
+        l.warning(2.0, "b");
+        l.error(3.0, "c");
+        l.error(4.0, "d");
+        assert_eq!(l.counts(), [1, 1, 2]);
+        assert_eq!(l.shown().count(), 4, "all to start");
+        l.show = [false, false, true];
+        let shown: Vec<&str> = l.shown().map(|m| m.text.as_str()).collect();
+        assert_eq!(shown, ["c", "d"]);
+        l.show = [true, true, false];
+        let shown: Vec<&str> = l.shown().map(|m| m.text.as_str()).collect();
+        assert_eq!(shown, ["a", "b"]);
+        l.show = [false; 3];
+        assert_eq!(l.shown().count(), 0);
     }
 }
