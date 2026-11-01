@@ -969,6 +969,7 @@
   est: 1h
   difficulty: low
   id: monitor-lamp-polarity
+  answer: literal TRUE green, FALSE red (built)
 
 - [ ] **Monitor "scan time": the period, or the measured scan?** The box publishes each module's scan period (`scan_ms`) and its counts (scans, overruns, held), not how long a scan took: the runtime has no clock (it also runs in the canvas's wasm build). Built: the status tile shows "scan 2 ms · N scans" (the period). Measuring would time `tick_with` in the box binary's loop (behind `box`) and publish last/max per module in `/api/events`.
   asked: 2026-10-31
@@ -979,6 +980,7 @@
   est: 3h
   difficulty: low
   id: monitor-scan-time
+  answer: Those are 2 low level and should be hidden by default, that should be an engineer-mode only thing if they choose to display it. period and counts is fine, though.
 
 - [ ] **What does a click on an input's block force on a box?** The Editor (UI.md step 2) makes an input signal's block a control for an engineer: a BOOL flips (forced to the opposite of what it reads), a number drags (forced on every change). Built (reversible): only inputs that are signals of the map or calendar are clickable, since the diagram's reads are variables; a `%IX` address force has no click and is made through `POST /api/forces` only. A click on a forced BOOL forces it the other way; nothing but the banner releases.
   asked: 2026-10-31
@@ -989,6 +991,7 @@
   est: 1h
   difficulty: low
   id: force-click
+  answer: signals only, click flips, banner releases (built)
 
 - [ ] **Save writes every edited file at once?** A project is several files; the header has one Save. Built (reversible): Save writes every file with unsaved edits (a dot marks each in Files), each with the version it read, and Deploy saves first. A stale file (someone else saved it) is refused alone and offers Reload; the others land.
   asked: 2026-10-31
@@ -999,6 +1002,7 @@
   est: 30m
   difficulty: low
   id: save-scope
+  answer: every edited file (built)
 
 - [ ] **In the simulation, does typing still run the edit, or only Deploy?** The playground has always recompiled after a pause and hot-swapped what runs. With projects (UI.md step 2) the simulation also has Deploy ("compile and run in the page"). Built (reversible): typing still recompiles and runs, as before; Deploy compiles, starts it running and marks the project as the one running. A box never runs an edit until Deploy.
   asked: 2026-10-31
@@ -1009,6 +1013,7 @@
   est: 1h
   difficulty: low
   id: sim-typing-runs
+  answer: typing only checks (errors marked), Deploy runs, like a box
 
 - [ ] **A project with two PROGRAMs in the simulation?** On a box each PROGRAM of a project is a module of its own. The simulation's interpreter runs one program, so a project with two PROGRAMs fails there with "only one PROGRAM is supported". Built: that error, pointing at the second PROGRAM's file and line.
   asked: 2026-10-31
@@ -1019,6 +1024,7 @@
   est: 1d
   difficulty: med
   id: sim-multi-program
+  answer: refuse, as built
 
 - [ ] **The Pi's first install deploys `line` without an approval?** `helmsman-plc project seed` (the unit's `ExecStartPre`) acts only when the box has no project and nothing deployed: it makes `line` from programs/line.st and commits its build as the store's first snapshot (approver `first install`), so a fresh box runs the demo. Nothing ran before and only root on the box runs it, but it is the one store commit that skips the approval policy.
   asked: 2026-10-31
@@ -1029,6 +1035,7 @@
   est: 30m
   difficulty: low
   id: seed-deploys
+  answer: seed the project only, nothing runs until an engineer deploys
 
 - [ ] **HTTPS box: plain HTTP from the LAN refused, and a certificate without the box's IP: OK?** `box-https` (built) serves TLS on the API's port. Plain HTTP is served only from the box's own host (loopback or its own address: local scripts, the agent, the deploy script's curl, an SSH tunnel). From the LAN, a GET is redirected to https:// and anything else, `POST /mcp` from an engineer's MCP client included, is 403. The certificate names `localhost`, the host name (and NAME.local), 127.0.0.1 and ::1, not the LAN IP, because a bind of 0.0.0.0 doesn't say which address that is. A browser asks once either way. A strict client reaching the box by IP (an MCP client with the cert in `NODE_EXTRA_CA_CERTS`) fails the name check, and one using the host name passes. Built: as described.
   asked: 2026-10-31
@@ -1040,6 +1047,7 @@
   difficulty: low
   depends: box-https
   id: box-https-lan-clients
+  answer: as built: HTTPS by name from the LAN, plain HTTP from the box itself (recommended)
 
 - [ ] **Trend pins and history: survive a box restart?** `box-trend-source` (built) keeps each signed-in person's pins and the pinned signals' 10 minutes of history in memory, so a restart (a deploy of the binary, a power cut) forgets both: people pin again, and the history starts over. Built (reversible): memory only. Keeping pins means a small file in the state dir (`trend-pins`, written on each change). Keeping history means writing it out on shutdown, which a power cut skips anyway.
   asked: 2026-10-31
@@ -1051,6 +1059,7 @@
   difficulty: low
   depends: box-trend-source
   id: trend-pins-persist
+  answer: pins in a state-dir file, history in memory (recommended)
 
 - [ ] **Should a machine example start itself on a box?** Each machine's plant model presses Start after power-up so the diagram moves with nothing wired, and its io.map uses the box's own channels. Fine on a box with nothing connected; on a box run with `--gpio-chip` those channels are real pins, and the example drives them on Deploy. Built default: it starts itself, and each io.map says in a comment to check the channels first.
   needs: your call
@@ -1061,6 +1070,7 @@
   asked: 2026-11-01
   by: claude-agent
   id: starter-autostart-on-box
+  answer: plant waits for Start (the diagram sits still until someone forces start_pb)
 
 - [ ] **Offer the five short examples on a box too?** Blink, Latch, Counter, Traffic and Line stay simulation-only: they read `VAR_INPUT`s with no io.map, so a box refuses them at Deploy. Built default: a box offers the seven machines and two templates only. Giving the short ones an io.map would show that file in the first program a visitor opens.
   needs: your call
@@ -1071,6 +1081,7 @@
   asked: 2026-11-01
   by: claude-agent
   id: starter-short-examples-on-box
+  answer: leave out
 
 ## Tasks
 
