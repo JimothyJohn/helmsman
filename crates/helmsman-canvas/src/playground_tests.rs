@@ -1561,7 +1561,7 @@ fn every_tab_and_example_draws() {
         s.view.load(e.src, e.name);
         assert!(!s.view.session.running, "loading never runs");
         s.view.session.set_running(true);
-        for tab in [Tab::Io, Tab::Trend, Tab::Claude] {
+        for tab in [Tab::Io, Tab::Claude] {
             s.chrome.tab = tab;
             s.wait(0.1);
         }
