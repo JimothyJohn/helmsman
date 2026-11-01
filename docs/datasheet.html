@@ -51,9 +51,9 @@ a{color:inherit;text-decoration:none}
 h2{font:700 8.5pt/1 var(--cond);letter-spacing:.32em;text-transform:uppercase;margin:0 0 1.6mm;color:var(--graphite)}
 .col>h2{margin-top:3.4mm}
 .col>h2:first-child{margin-top:0}
-table{border-collapse:collapse;width:100%;font-size:7.9pt;line-height:1.3}
-th,td{text-align:left;vertical-align:top;padding:1.15mm 2mm 1.15mm 0;border-bottom:.25mm solid var(--rule)}
-th{font:700 8.3pt/1.2 var(--cond);letter-spacing:.05em;text-transform:uppercase;white-space:nowrap;width:25mm;padding-right:3mm}
+table{border-collapse:collapse;width:100%;font-size:7.8pt;line-height:1.3}
+th,td{text-align:left;vertical-align:top;padding:1.1mm 2mm 1.1mm 0;border-bottom:.25mm solid var(--rule)}
+th{font:700 8.1pt/1.15 var(--cond);letter-spacing:.05em;text-transform:uppercase;width:21mm;padding-right:2.5mm}
 td code{font-family:var(--mono);font-size:7.2pt;background:#EDEDED;padding:0 .9mm}
 .spec tr:last-child th,.spec tr:last-child td{border-bottom:0}
 .pillars{display:grid;grid-template-columns:1fr 1fr;gap:2.5mm 4mm;margin:0 0 1mm}
@@ -97,16 +97,24 @@ pre .k{color:var(--yellow)}
   <div class="col">
     <h2>Specifications</h2>
     <table class="spec">
-      <tr><th>Programming</th><td>IEC 61131-3 Structured Text: programs, functions and function blocks with instance state, and the standard library of timers, counters, edge detectors, bistables and the numeric, selection and conversion functions. Programs are plain <code>.st</code> files you can read, compare between versions and move to another controller.</td></tr>
-      <tr><th>Imports</th><td>PLCopen XML (TC6) from other tools: ladder, FBD and ST bodies lowered to the same Structured Text. Logix L5X exports: the ladder subset (contacts, coils, branches, one-shots, timers, counters, compares, math, moves, subroutine calls); anything outside it is refused by name.</td></tr>
-      <tr><th>Scan</th><td>Fixed period per program, 1 to 1000 ms. An instruction budget bounds every scan as a watchdog; a fault (division by zero, an index out of range, the budget spent) stops that program alone with its outputs zeroed while the others keep running.</td></tr>
-      <tr><th>Field I/O</th><td>EtherNet/IP (CIP) Class 1 scanner: exclusive-owner connections to remote I/O such as the Moxa ioLogik, from a device profile or its EDS file. Modbus TCP master; Modbus RTU over a serial port. Digital I/O on the controller's own header. One named I/O map binds signals to program variables; a bad point marks itself without taking its device offline.</td></tr>
-      <tr><th>Existing PLCs</th><td>Appears to them as a standard EtherNet/IP adapter (assemblies, Forward_Open, cyclic I/O). Reads Logix tags from a CompactLogix or ControlLogix and never writes to them: the controller build has no write path.</td></tr>
-      <tr><th>Data out</th><td>OPC UA server for the signals you publish. Webhooks on events. Trends kept on the controller; snapshots of state you can roll back to.</td></tr>
-      <tr><th>Engineering</th><td>A browser editor the controller serves itself: the program as a live function-block diagram with values on the wires, "why" tracing from any output, audited forcing of inputs, a trend, a messages log, go to definition and cross references, familiar keyboard shortcuts. Projects with versions, upload and download, and a Monitor screen for a wall display.</td></tr>
-      <tr><th>Agent</th><td>Writes and changes programs from a description. Reads what you drop in: a P&amp;ID, an electrical drawing, a photo of the panel, a PDF. Explains any running program in plain words. Its changes arrive as proposals you review before deploy; it reaches the controller only through the same API and policy as a person.</td></tr>
-      <tr><th>Security</th><td>Local accounts with roles and a PIN; an approval policy per controller decides what deploys at once and what waits for an engineer; every change, force and release in an audit log; HTTPS with a certificate the controller makes at first boot, its fingerprint printed at startup.</td></tr>
-      <tr><th>Deployment</th><td>One compiled service on 64-bit Linux (arm64 or x86-64), headless, with its web screen built in. No cloud needed to run the machine, no database server, nothing on the workstation: a browser is the whole install. Open source under Apache 2.0.</td></tr>
+      <tr><th>Language</th><td>IEC 61131-3 Structured Text · PROGRAM, FUNCTION, FUNCTION_BLOCK · plain <code>.st</code> files</td></tr>
+      <tr><th>Data types</th><td>BOOL · SINT, INT, DINT, LINT and unsigned · BYTE, WORD, DWORD, LWORD · REAL, LREAL · TIME · arrays, structs, enumerations</td></tr>
+      <tr><th>Standard blocks</th><td>TON, TOF, TP · CTU, CTD, CTUD · R_TRIG, F_TRIG · SR, RS · BLINK_PATTERN · numeric, selection, comparison and conversion functions</td></tr>
+      <tr><th>Imports</th><td>PLCopen TC6 XML v2.01 (LD, FBD, ST) · Logix L5X, ladder subset: XIC, XIO, OTE, OTL, OTU, ONS, TON, TOF, RTO, CTU, CTD, RES, compares, math, MOV, CLR, COP, JSR</td></tr>
+      <tr><th>Scan</th><td>Fixed period per program · 1 to 10 000 ms · default 10 ms · hot swap between scans</td></tr>
+      <tr><th>Watchdog</th><td>1 000 000 instructions per scan · a fault stops that program with outputs zeroed; the others keep running</td></tr>
+      <tr><th>EtherNet/IP scanner</th><td>CIP Class 1 exclusive owner and input only · Forward_Open, Large_Forward_Open, Forward_Close · RPI from the device's EDS · ListIdentity, Get_Attribute_Single, Get_Attributes_All, Multiple Service Packet · TCP/UDP 44818, UDP 2222</td></tr>
+      <tr><th>EtherNet/IP adapter</th><td>Identity object · input and output assemblies · Forward_Open · cyclic Class 1 I/O · verified against the OpENer reference stack on every change</td></tr>
+      <tr><th>Logix tags</th><td>Read Tag (0x4C), Read Tag Fragmented (0x52), symbol browse, backplane routing · CompactLogix, ControlLogix · read only: no write service in the controller build</td></tr>
+      <tr><th>Modbus</th><td>TCP master, port 502 · RTU over a serial port · FC 01, 02, 03, 04, 05, 06, 16 · named I/O map, bit and register points, scaling</td></tr>
+      <tr><th>Controller I/O</th><td>Digital inputs and outputs on the header · WebAssembly drivers, sandboxed to their own device's socket</td></tr>
+      <tr><th>OPC UA</th><td>Server · opc.tcp, port 4840 · SecurityPolicy None, anonymous · loopback by default, LAN by choice</td></tr>
+      <tr><th>Webhooks, trends</th><td>HTTP and HTTPS POST, JSON, on events · trends on the controller: 10 min window, 2 400 points per signal · snapshots with rollback</td></tr>
+      <tr><th>API and UI</th><td>HTTP + JSON API, port 8080 · HTTPS, TLS 1.2 and 1.3, certificate made at first boot · browser editor served by the controller (WebAssembly) · MCP for agents</td></tr>
+      <tr><th>Access</th><td>Roles operator, engineer, integrator · PIN · approval policy per controller · audit log of every deploy, force and release · forces end at sign-out</td></tr>
+      <tr><th>Agent</th><td>Programs from a description · proposals reviewed before deploy · drop-ins: P&amp;ID, electrical drawing, panel photo (PNG, JPEG, WebP), PDF · explain mode · reaches the controller only through its API and policy</td></tr>
+      <tr><th>Platform</th><td>64-bit Linux, arm64 and x86-64 · one compiled service, headless · no database server, no cloud, nothing on the workstation</td></tr>
+      <tr><th>Assurance</th><td>1 300+ automated tests · interoperability suite against OpENer in CI · memory-safe implementation · Apache 2.0</td></tr>
     </table>
   </div>
 
