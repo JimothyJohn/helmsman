@@ -26,6 +26,7 @@ use crate::projects::{Group, ProjectRow, file_line, slug};
 
 /// Whether `f` is a program file (`NAME.st`).
 #[must_use]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_st(f: &str) -> bool {
     file_name(f) == Some(FileKind::St)
 }
@@ -346,6 +347,26 @@ impl SimProjects {
 
     /// A free name for a copy of `base` (neither a project here nor an
     /// example): `base`, else `base-2`, `-3`, ...
+    /// A project name not taken yet, from `base` (`base-2`, ... when it is).
+    #[must_use]
+    pub fn free_name(&self, base: &str) -> String {
+        self.free(base)
+    }
+
+    /// A file name not taken in the open project, from `want`
+    /// (`name-2.st`, ... when it is).
+    #[must_use]
+    pub fn free_file(&self, want: &str) -> String {
+        if !self.files.contains_key(want) {
+            return want.to_string();
+        }
+        let (stem, ext) = want.rsplit_once('.').unwrap_or((want, "st"));
+        (2..=400)
+            .map(|k| format!("{stem}-{k}.{ext}"))
+            .find(|n| !self.files.contains_key(n))
+            .unwrap_or_else(|| want.to_string())
+    }
+
     fn free(&self, base: &str) -> String {
         let base: String = base.chars().take(44).collect();
         let taken = |n: &str| self.saved.contains_key(n) || self.examples.contains_key(n);

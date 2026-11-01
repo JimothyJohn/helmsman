@@ -88,8 +88,6 @@ pub struct App {
     pub served_by_box: bool,
     /// The Editor's layout, kept per browser.
     pub chrome: Chrome,
-    /// The ⋯ menu is open.
-    pub menu: bool,
     /// The sign-in panel under the header is open.
     pub login: bool,
     /// The box's Editor, built the first time it is shown.
@@ -146,7 +144,6 @@ impl App {
             source: Source::Sim,
             served_by_box: false,
             chrome,
-            menu: false,
             login: false,
             boxv: None,
             sim: None,
@@ -440,7 +437,6 @@ impl App {
                     w.download();
                 }
             }
-            Action::Help => ctx.open_url(egui::OpenUrl::new_tab(HELP_URL)),
             Action::Files => self.chrome.left = !self.chrome.left,
             Action::St => self.chrome.st = !self.chrome.st,
             Action::Panel => self.chrome.right = !self.chrome.right,
@@ -497,26 +493,25 @@ impl App {
                 // The right-hand group, laid out from the window's edge
                 // leftwards (the order below is right to left).
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = match waiting {
-                        Some(n) if n > 0 => format!("⋯ {n}"),
-                        _ => "⋯".to_string(),
-                    };
-                    let text = RichText::new(label).strong();
-                    let b = if waiting.is_some_and(|n| n > 0) {
-                        egui::Button::new(text.color(BLACK)).fill(YELLOW)
-                    } else {
-                        egui::Button::selectable(self.menu, text)
-                    };
-                    let m = ui
-                        .add(b.min_size(Vec2::new(TAP, 0.0)))
-                        .on_hover_text("more: proposals, where the program runs");
-                    hits.push(("menu".to_string(), m.rect));
+                    // ? keeps the very corner (Nick, 2026-11-01: in place
+                    // of the ⋯, whose items are the View menu's and About's).
+                    let m = glyphs::button(ui, glyphs::Icon::Help, true, false, "Help (opens the site)");
+                    hits.push(("help".to_string(), m.rect));
                     if m.clicked() {
-                        self.menu = !self.menu;
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(HELP_URL));
                     }
-                    // ⋯ keeps the corner whether or not Sign in is shown.
                     self.login_button(ui, &mut hits);
                     self.screen_toggle(ui, &mut hits);
+                    if let Some(n) = waiting.filter(|n| *n > 0) {
+                        let b =
+                            egui::Button::new(RichText::new(format!("{n} waiting")).strong().color(BLACK))
+                                .fill(YELLOW);
+                        let r = ui.add(b).on_hover_text("proposals waiting for an approver");
+                        hits.push(("proposals waiting".to_string(), r.rect));
+                        if r.clicked() {
+                            self.screen = Screen::Proposals;
+                        }
+                    }
                     ui.separator();
                     self.dirty_mark(ui, &mut hits);
                     if self.source == Source::Sim {
@@ -532,9 +527,6 @@ impl App {
         });
         hits.push(("header".to_string(), panel.response.rect));
         let menu_at = panel.inner;
-        if self.menu {
-            self.menu_ui(ui.ctx(), menu_at, waiting, &mut hits);
-        }
         if self.login {
             self.login_ui(ui.ctx(), menu_at, &mut hits);
         }
@@ -577,9 +569,14 @@ impl App {
                 if on { BLACK } else { WHITE },
             );
             hits.push((key.to_string(), r));
+            // A click on either side flips (Nick, 2026-11-01), so from the
+            // active side too; from Proposals either side goes to the Editor.
             if resp.clicked() {
-                self.screen = screen;
-                self.menu = false;
+                self.screen = match self.screen {
+                    Screen::Editor => Screen::Monitor,
+                    Screen::Monitor | Screen::Proposals => Screen::Editor,
+                };
+                let _ = screen;
             }
         }
     }
@@ -677,16 +674,6 @@ impl App {
                                 "Download the project as .zip",
                                 Action::Download,
                             );
-                            ui.separator();
-                            g(
-                                ui,
-                                "help",
-                                glyphs::Icon::Help,
-                                true,
-                                false,
-                                "Help (opens the site)",
-                                Action::Help,
-                            );
                         });
                     });
             });
@@ -715,6 +702,24 @@ impl App {
                     env!("HELMSMAN_GIT_SHA")
                 ));
                 ui.label("Early release. Licensed under the Apache License, Version 2.0.");
+                // The box's HTTPS certificate, to compare with the
+                // browser's and the box's startup line (`box-https`).
+                let policy = self.review.as_ref().and_then(|r| r.state.policy.as_ref());
+                if let Some(fp) = policy.and_then(|p| p["transport"]["fingerprint"].as_str()) {
+                    ui.add_space(6.0);
+                    let (a, b) = fp.split_at(if fp.is_char_boundary(48) { 48 } else { fp.len() });
+                    let l = ui
+                        .label(
+                            RichText::new(format!("HTTPS certificate SHA-256\n{a}\n{b}"))
+                                .small()
+                                .monospace()
+                                .color(STEEL),
+                        )
+                        .on_hover_text(
+                            "the browser shows this page's certificate fingerprint too: they must match",
+                        );
+                    hits.push(("tls fingerprint".to_string(), l.rect));
+                }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if ui.link(SITE_URL).clicked() {
@@ -741,7 +746,6 @@ impl App {
         waiting: Option<usize>,
         hits: &mut Vec<(String, Rect)>,
     ) {
-        let _ = waiting;
         let ctx = ui.ctx().clone();
         let mut chrome = std::mem::take(&mut self.chrome);
         let before = chrome.hits.len();
@@ -852,6 +856,32 @@ impl App {
                 ) {
                     self.screen = Screen::Monitor;
                 }
+                if let Some(n) = waiting {
+                    let text = if n > 0 {
+                        format!("Proposals ({n} waiting)")
+                    } else {
+                        "Proposals".into()
+                    };
+                    if menu_item(
+                        ui,
+                        &mut chrome,
+                        "view proposals",
+                        text,
+                        self.screen == Screen::Proposals,
+                    ) {
+                        self.screen = Screen::Proposals;
+                    }
+                }
+                if self.served_by_box {
+                    let (key, text, to) = match self.source {
+                        Source::Box => ("view sim", "Simulate in this browser", Source::Sim),
+                        Source::Sim => ("view box", "Back to this box", Source::Box),
+                    };
+                    if menu_item(ui, &mut chrome, key, text, false) {
+                        self.source = to;
+                        self.screen = Screen::Editor;
+                    }
+                }
                 ui.separator();
                 let tabs: &[crate::editor::Tab] = match self.source {
                     Source::Box => self.boxv.as_ref().map_or(&[], |b| b.tabs()),
@@ -948,7 +978,6 @@ impl App {
         hits.push(("sign in".to_string(), b.rect));
         if b.clicked() {
             self.login = !self.login;
-            self.menu = false;
         }
     }
 
@@ -973,85 +1002,6 @@ impl App {
         let now = r.state.session.is_some();
         if was != now {
             self.login = false;
-        }
-    }
-
-    fn menu_ui(
-        &mut self,
-        ctx: &egui::Context,
-        at: Rect,
-        waiting: Option<usize>,
-        hits: &mut Vec<(String, Rect)>,
-    ) {
-        let mut close = false;
-        let area = egui::Area::new(egui::Id::unique("header-menu"))
-            .order(egui::Order::Foreground)
-            .pivot(egui::Align2::RIGHT_TOP)
-            .fixed_pos(at.right_bottom() + Vec2::new(0.0, 4.0))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(220.0);
-                    let mut item = |ui: &mut egui::Ui, key: &str, text: String, on: bool| {
-                        let r = ui.add(
-                            egui::Button::selectable(on, text)
-                                .min_size(Vec2::new(ui.available_width(), TAP * 0.8)),
-                        );
-                        hits.push((key.to_string(), r.rect));
-                        r.clicked()
-                    };
-                    if item(ui, "menu editor", "Editor".into(), self.screen == Screen::Editor) {
-                        self.screen = Screen::Editor;
-                        close = true;
-                    }
-                    ui.separator();
-                    if let Some(n) = waiting {
-                        let text = if n > 0 {
-                            format!("Proposals ({n} waiting)")
-                        } else {
-                            "Proposals".into()
-                        };
-                        if item(ui, "menu proposals", text, self.screen == Screen::Proposals) {
-                            self.screen = Screen::Proposals;
-                            close = true;
-                        }
-                    }
-                    if self.served_by_box {
-                        ui.separator();
-                        let (key, text, to) = match self.source {
-                            Source::Box => ("menu sim", "Simulate in this browser", Source::Sim),
-                            Source::Sim => ("menu box", "Back to this box", Source::Box),
-                        };
-                        if item(ui, key, text.into(), false) {
-                            self.source = to;
-                            self.screen = Screen::Editor;
-                            close = true;
-                        }
-                    }
-                    // The box's HTTPS certificate, to compare with the
-                    // browser's and the box's startup line (`box-https`).
-                    let policy = self.review.as_ref().and_then(|r| r.state.policy.as_ref());
-                    if let Some(fp) = policy.and_then(|p| p["transport"]["fingerprint"].as_str()) {
-                        ui.separator();
-                        let (a, b) = fp.split_at(if fp.is_char_boundary(48) { 48 } else { fp.len() });
-                        let l = ui
-                            .label(
-                                RichText::new(format!("HTTPS certificate SHA-256\n{a}\n{b}"))
-                                    .small()
-                                    .monospace()
-                                    .color(STEEL),
-                            )
-                            .on_hover_text(
-                                "the browser shows this page's certificate fingerprint too: they must match",
-                            );
-                        hits.push(("tls fingerprint".to_string(), l.rect));
-                    }
-                });
-            });
-        // A click outside closes it, except on ⋯ itself (which toggles it).
-        let pointer = ctx.input(|i| i.pointer.interact_pos());
-        let on_button = pointer.is_some_and(|p| at.contains(p));
-        if close || (area.response.clicked_elsewhere() && !on_button) {
-            self.menu = false;
         }
     }
 }
