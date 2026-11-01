@@ -2082,7 +2082,7 @@ in `tests/site.rs`, `site_tests.rs`).
 
 The public demo: the canvas's Editor with the simulation as its source
 (the page `scripts/build-playground.sh` builds into `docs/playground/`,
-which GitHub Pages serves from master as /helmsman/playground/; `?playground`
+which GitHub Pages serves from master as /playground/ on helmsman.advin.io; `?playground`
 anywhere). The same screens as on a box (`editor.rs` lays them out for
 both). No box, no server: everything runs in the page (`playground.rs`,
 `playground_view.rs`, `claude.rs` in the canvas; contracts in
