@@ -82,7 +82,7 @@ this; change it here first when a decision changes.
   until opened; each is a read-only starter that Save copies. On a box,
   "Start from a machine or template" in the sidebar asks an engineer for a
   name and sends the project as its `.zip`; nothing else changes what the
-  box holds, and a first install still seeds `line` alone.
+  box holds, and a first install still seeds `line` alone, undeployed.
 
 ## Monitor (phone to wall TV; replaces Andon)
 

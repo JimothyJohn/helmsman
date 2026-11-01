@@ -1249,10 +1249,11 @@ the tweaks; a second step stores the automatic layout as the tweak.
 binary and the canvas and runs `helmsman-plc --projects`
 (`PLC_MODE=program` keeps one program file). Its unit runs `helmsman-plc
 project seed NAME FILE.st` before every start (`project::seed`): only on
-a first install (no project, nothing deployed) it makes the project and
-commits its build as the store's first snapshot (approver `first
-install`), so the box boots running `line`; afterwards it touches
-nothing. `scripts/pi-account.sh` makes the engineer login.
+a first install (no project, nothing deployed) it makes the project, for
+an engineer to open and deploy; the store stays empty and the box boots
+running nothing until that first deploy (card `seed-deploys`: no store
+commit skips the approval path). Afterwards it touches nothing.
+`scripts/pi-account.sh` makes the engineer login.
 
 ### L5X ladder import (`l5x-import`, built)
 
