@@ -1093,6 +1093,66 @@
   asked: 2026-11-01
   by: claude-session
 
+- [ ] **Reserve F9 for a breakpoint on a block?** CODESYS F9 toggles a breakpoint. Here: pick a block or a statement line in the simulation and press F9; the scan pauses before that statement runs, the diagram lit as of that moment, F10 (already Step) runs the rest of the scan. Powerful for "why did this fire": the trace tap already knows which statement is running (`trace-tap` records the innermost statement at a fault). Box side later, read-only (pause a copy, never the real scan).
+  needs: your call; the key is free today (docs/UI.md, Keyboard)
+  result: pause-at-statement in the simulation's interpreter, F9 on the picked block, a marker on the block and the ST line
+  options: build | reserve the key only | drop
+  est: 2d
+  difficulty: med
+  id: hotkey-breakpoint
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Reserve F8 / Shift+F10 for step into and out of an instance?** CODESYS F8 steps into, Shift+F10 steps out. Here: with the simulation stopped, F8 on a picked function-block block opens that instance's diagram (what a double click does) and steps one scan; Shift+F10 goes up a level (Alt+↑ today) and keeps stepping. Pairs with hotkey-breakpoint.
+  needs: your call; the key is free today (docs/UI.md, Keyboard)
+  result: F8 opens the picked instance and steps, Shift+F10 steps out
+  options: build | reserve the key only | drop
+  est: 1d
+  difficulty: low
+  id: hotkey-step-into
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Reserve F7 / Alt+F7 for forcing the picked input from the keyboard?** CODESYS F7 forces the prepared values, Alt+F7 unforces all. Here a force is a click on an input's block. With a block picked, F7 would force it (flip a BOOL, open the number field), Alt+F7 release every force (the banner's button). On a box this is the engineer's force path, so the same session rules; in the simulation it is the switch.
+  needs: your call; the key is free today (docs/UI.md, Keyboard)
+  result: F7 forces the picked input, Alt+F7 releases all, both on the box's audited path
+  options: build | reserve the key only | drop
+  est: 4h
+  difficulty: low
+  id: hotkey-force
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Reserve Ctrl+F / F3 for find in the Structured Text?** CODESYS Ctrl+F finds, F3 next, Shift+F3 previous, Ctrl+H replaces. The ST pane has no find. A find box over the editor (match marked, Enter/F3 next) is the obvious missing editor feature; replace can wait. Ctrl+F is the browser's find today and would have to be taken from it (the page can: `hotkeys::wants`).
+  needs: your call; the key is free today (docs/UI.md, Keyboard)
+  result: a find box in the ST pane on Ctrl+F, F3/Shift+F3 to move, the match marked like a diagnostic
+  options: build | reserve the key only | drop
+  est: 1d
+  difficulty: low
+  id: hotkey-find
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Reserve Ctrl+Shift+D for go to definition, Ctrl+Shift+X for cross references?** CODESYS Ctrl+Shift+D jumps to a variable's declaration, Ctrl+Shift+X lists where it is used. Here: with a block picked (a read, a write, an instance), Ctrl+Shift+D sends the ST pane to its VAR line (we know the line: `Var` in the lowered POU); Ctrl+Shift+X lights every block that reads or writes it, the diagram's own cross reference, which is the `because` path but for a variable rather than an output. Ctrl+Shift+D is Chrome's bookmark-all-tabs; the page would take it.
+  needs: your call; the key is free today (docs/UI.md, Keyboard)
+  result: Ctrl+Shift+D: the declaration line in the ST pane; Ctrl+Shift+X: every read and write of the picked variable lit
+  options: build | reserve the keys only | drop
+  est: 1d
+  difficulty: med
+  id: hotkey-go-to-definition
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Reserve F2 / Shift+F2 for the Agent?** CODESYS F2 is the input assistant (pick a variable, a block, a function from a list), Shift+F2 auto-declares the variable under the caret. Here the assistant is the Agent: F2 would focus the Agent tab's prompt with the picked block or the ST selection as context ("what does this do", "add a timeout here"); Shift+F2 would ask it for the one thing CODESYS does mechanically: declare the undeclared identifier under the caret with a type it infers, as a proposal. The second is small and exact; the first is where the agentic story meets the keyboard.
+  needs: your call; the key is free today (docs/UI.md, Keyboard)
+  result: F2 focuses the Agent prompt with context; Shift+F2 declares the identifier under the caret
+  options: build both | build Shift+F2 only | reserve the keys only | drop
+  est: 2d
+  difficulty: med
+  id: hotkey-agent
+  asked: 2026-11-01
+  by: claude-session
+
 ## Tasks
 
 - [x] **Explicit messaging: RegisterSession, SendRRData, Get_Attribute_Single on Identity** — the next protocol step in the library. Reference: OpENer `encap.c` (register/unregister session, SendRRData CPF with null address + unconnected data item) and `cipmessagerouter.c`.
