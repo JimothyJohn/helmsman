@@ -18,7 +18,7 @@ use crate::st_view::TAP;
 use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
 
 /// The header's height, points: one row, as tall as the two it replaced.
-pub const HEADER_H: f32 = 64.0;
+pub const HEADER_H: f32 = 48.0;
 
 /// Seconds between re-reads of the proposal list for the ⋯ badge.
 const PROPOSALS_EVERY: f64 = 30.0;
@@ -97,6 +97,9 @@ pub struct App {
     pub monitor: Monitor,
     /// The first frame chose the screen (a phone opens the Monitor).
     routed: bool,
+    /// The page fell back to the simulation by itself (no box answered);
+    /// once, so ⋯ › Back to this box is not undone.
+    fell_back: bool,
     /// When the proposal list was last asked for (page time, s).
     listed: Option<f64>,
 }
@@ -143,6 +146,7 @@ impl App {
             review: None,
             monitor: Monitor::default(),
             routed: false,
+            fell_back: false,
             listed: None,
         }
     }
@@ -266,6 +270,25 @@ impl App {
         let engineer = is_engineer(session.as_ref()).is_ok();
         if let Some(b) = &mut self.boxv {
             b.session = session;
+        }
+        // No box ever answered this page: it is the simulation then, by
+        // itself (Nick, 2026-11-01). A box that answered and went away
+        // stays the box: its last diagram is worth more than a demo.
+        if self.source == Source::Box
+            && !self.fell_back
+            && let Some(b) = &self.boxv
+            && matches!(b.state.link(), crate::remote::Link::Unreachable { .. })
+            && !b.state.ever_connected()
+        {
+            self.fell_back = true;
+            self.source = Source::Sim;
+            if self.screen == Screen::Proposals {
+                self.screen = Screen::Editor;
+            }
+            let s = self.sim.get_or_insert_with(PlaygroundView::new);
+            s.notice = Some(
+                "No box answered at this address: simulating in this browser (⋯ › Back to this box).".into(),
+            );
         }
         let header = self.header(ui);
         self.chrome.hits.clear();
