@@ -84,6 +84,12 @@ impl Harness {
         self.click(at);
     }
 
+    /// Opens the View menu and presses `item` in it.
+    fn view_menu(&mut self, item: &str) {
+        self.press("bar view");
+        self.press(item);
+    }
+
     /// The header's controls, all there.
     fn header_is_up(&self) {
         for k in ["mark", "title", "editor", "menu"] {
@@ -128,7 +134,191 @@ fn write_to(path: &str) -> impl Fn(&NodeKind) -> bool + '_ {
 // ---- the header and the Editor's frame ----
 
 mod polish {
+    use eframe::egui::{self, Event, Key, Modifiers};
+
+    use super::{App, Harness, Screen};
+    use crate::app::HEADER_H;
     use crate::editor::{Tab, numbering};
+
+    impl Harness {
+        fn key(&mut self, modifiers: Modifiers, key: Key) {
+            self.frame(vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }]);
+            self.frame(vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers,
+            }]);
+        }
+    }
+
+    /// CODESYS's keys where the browser leaves them alone (docs/UI.md,
+    /// Keyboard): the simulation's run controls, the panes, Save.
+    #[test]
+    fn the_shortcuts_run_step_stop_save_and_toggle_the_panes() {
+        let mut h = Harness::new(App::sim());
+        assert!(
+            h.app.sim.as_ref().unwrap().session.running,
+            "the playground opens running"
+        );
+        h.key(Modifiers::SHIFT, Key::F8);
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "Shift+F8 stops");
+        let scans = h.app.sim.as_ref().unwrap().session.scans;
+        h.key(Modifiers::NONE, Key::F10);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().session.scans,
+            scans + 1,
+            "F10 steps one scan"
+        );
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(h.app.sim.as_ref().unwrap().session.running, "Ctrl+Enter runs");
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "and stops");
+        // The panes.
+        let (st, left, right) = (h.app.chrome.st, h.app.chrome.left, h.app.chrome.right);
+        h.key(Modifiers::ALT, Key::Num1);
+        assert_eq!(h.app.chrome.st, !st, "Alt+1: Structured Text");
+        h.key(Modifiers::ALT, Key::Num0);
+        assert_eq!(h.app.chrome.left, !left, "Alt+0: Files");
+        h.key(Modifiers::ALT, Key::Num3);
+        assert_eq!(h.app.chrome.right, !right, "Alt+3: the side panel");
+        // Save: edit, then Ctrl+S.
+        h.key(Modifiers::ALT, Key::Num1);
+        h.wait(0.2);
+        let editor = h
+            .ctx
+            .read_response(egui::Id::unique("pg-source"))
+            .expect("the editor")
+            .rect;
+        h.click(editor.left_top() + egui::vec2(60.0, 6.0));
+        h.frame(vec![Event::Text("!".into())]);
+        h.wait(0.6);
+        assert!(h.has("dirty"));
+        h.key(Modifiers::COMMAND, Key::S);
+        h.frame(vec![]);
+        assert!(!h.has("dirty"), "Ctrl+S saved");
+        // A box's keys do nothing here.
+        h.key(Modifiers::ALT, Key::F8);
+        assert!(!h.app.login, "no sign-in in the simulation");
+    }
+
+    #[test]
+    fn alt_f8_opens_sign_in_and_ctrl_f8_signs_out_on_a_box() {
+        let mut h = Harness::new(App::boxed());
+        assert!(!h.app.login);
+        h.key(Modifiers::ALT, Key::F8);
+        assert!(h.app.login, "Alt+F8: Login");
+        h.key(Modifiers::CTRL, Key::F8);
+        assert!(!h.app.login, "Ctrl+F8: Logout closes it and ends any session");
+        assert!(h.app.session().is_none());
+        // Run keys do nothing on a box's page.
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(h.app.sim.is_none());
+    }
+
+    /// Nick, 2026-11-01: one tall row, menus left, the project right; the
+    /// bar that held ST, Reset layout and Save as default is gone.
+    #[test]
+    fn the_header_is_one_tall_row_with_file_edit_and_view_menus() {
+        let mut h = Harness::new(App::sim());
+        let header = h.rect("header");
+        assert!(header.height() >= HEADER_H, "{header:?}");
+        for k in [
+            "mark", "bar file", "bar edit", "bar view", "title", "save", "deploy", "editor", "monitor",
+            "menu",
+        ] {
+            assert!(h.has(k), "no {k}");
+        }
+        let (file, view, menu) = (h.rect("bar file"), h.rect("bar view"), h.rect("menu"));
+        assert!(
+            file.left() < view.left() && view.right() < menu.left(),
+            "menus left, ⋯ right"
+        );
+        assert!(menu.right() <= 1400.0, "on screen");
+        assert!(!h.has("st") && !h.has("reset layout"), "no second bar");
+        // The menus are there on the Monitor too.
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Monitor);
+        assert!(h.has("bar view"));
+        h.view_menu("view editor");
+        assert_eq!(h.app.screen, Screen::Editor);
+    }
+
+    #[test]
+    fn the_view_menu_toggles_panels_tabs_layout_and_fit() {
+        let mut h = Harness::new(App::sim());
+        assert!(h.app.chrome.left && h.app.chrome.right);
+        h.view_menu("view files");
+        assert!(!h.app.chrome.left);
+        h.view_menu("view panel");
+        assert!(!h.app.chrome.right);
+        h.view_menu("view tab trend");
+        assert!(
+            h.app.chrome.right && h.app.chrome.tab == Tab::Trend,
+            "a tab opens the panel"
+        );
+        h.press("bar view");
+        for k in ["view fit", "reset layout", "save layout"] {
+            assert!(h.has(k), "no {k}");
+        }
+        assert!(
+            !h.has("view scan"),
+            "scan detail is an engineer's, not the simulation's"
+        );
+        h.press("view fit");
+        h.wait(0.2);
+        assert_eq!(h.app.screen, Screen::Editor);
+    }
+
+    #[test]
+    fn the_file_menu_saves_and_the_edit_menu_undoes_a_typed_character() {
+        let mut h = Harness::new(App::sim());
+        assert!(h.app.chrome.st, "the ST open");
+        let editor = h
+            .ctx
+            .read_response(egui::Id::unique("pg-source"))
+            .expect("the editor")
+            .rect;
+        h.click(editor.left_top() + egui::vec2(60.0, 6.0));
+        h.frame(vec![Event::Text("!".into())]);
+        h.wait(0.6);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            sim.session.src.lines().next().unwrap().contains('!'),
+            "{:?}",
+            sim.session.src
+        );
+        assert!(h.has("dirty"), "edited");
+        h.press("bar edit");
+        h.press("edit undo");
+        h.wait(0.6);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            !sim.session.src.lines().next().unwrap().contains('!'),
+            "undone: {:?}",
+            sim.session.src
+        );
+        h.press("bar edit");
+        h.press("edit redo");
+        h.wait(0.6);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            sim.session.src.lines().next().unwrap().contains('!'),
+            "redone: {:?}",
+            sim.session.src
+        );
+        h.press("bar file");
+        h.press("file save");
+        h.frame(vec![]);
+        assert!(!h.has("dirty"), "saved from the File menu");
+    }
 
     /// The hit stays "tab claude" (the stored key); only the label changed.
     #[test]
@@ -236,8 +426,8 @@ mod chrome {
         h.press("menu");
         assert_eq!(
             h.menu_items(),
-            ["menu box", "menu download", "menu editor", "menu upload"],
-            "no proposals without a box; the simulation's projects upload and download"
+            ["menu box", "menu editor"],
+            "no proposals without a box; upload and download are the File menu's"
         );
         h.press("menu box");
         assert_eq!(h.app.source, Source::Box);
@@ -245,7 +435,15 @@ mod chrome {
         // The public page: no box to go back to, no proposals.
         let mut h = Harness::new(App::sim());
         h.press("menu");
-        assert_eq!(h.menu_items(), ["menu download", "menu editor", "menu upload"]);
+        assert_eq!(h.menu_items(), ["menu editor"]);
+        h.press("menu");
+        // Upload and Download live in the File menu now.
+        h.press("bar file");
+        assert!(
+            h.has("file upload") && h.has("file download"),
+            "{:?}",
+            h.app.chrome.hits
+        );
         h.app.screen = Screen::Proposals;
         h.frame(vec![]);
         assert_eq!(h.app.screen, Screen::Editor, "proposals need a box");
@@ -345,11 +543,11 @@ mod chrome {
         let editor = || egui::Id::unique("pg-source");
         assert!(h.app.chrome.st, "the simulation starts with the ST open");
         assert!(h.ctx.read_response(editor()).is_some());
-        h.press("st");
+        h.view_menu("view st");
         assert!(!h.app.chrome.st);
         h.wait(0.5);
         assert!(h.ctx.read_response(editor()).is_none(), "shut");
-        h.press("st");
+        h.view_menu("view st");
         assert!(h.app.chrome.st);
         h.wait(0.5);
         let r = h.ctx.read_response(editor()).expect("open again");
@@ -381,7 +579,7 @@ mod chrome {
             "the caret at the start of line {line}"
         );
         // Shut, the line is still where it opens.
-        h.press("st");
+        h.view_menu("view st");
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
         h.click(at + Vec2::new(0.0, 0.0));
         assert_eq!(h.app.chrome.line, Some(line));
@@ -529,7 +727,7 @@ mod boxed {
         assert_eq!(h.app.chrome.tab, Tab::Io);
 
         // The ST open beside the diagram, read-only.
-        h.press("st");
+        h.view_menu("view st");
         h.wait(0.4);
         let src = boxed(&h).view.as_ref().unwrap().src.clone();
         let st = h
@@ -867,7 +1065,7 @@ fn the_simulation_survives_a_click_storm_on_every_tab() {
     let mut h = Harness::new(App::sim());
     for tab in ["tab io", "tab trend", "tab claude"] {
         h.press(tab);
-        let below = h.rect("st").bottom() + 4.0;
+        let below = h.rect("header").bottom() + 4.0;
         for x in (0..1400u16).step_by(131) {
             for y in (0..860u16).step_by(97) {
                 h.click(Pos2::new(f32::from(x), f32::from(y).max(below)));

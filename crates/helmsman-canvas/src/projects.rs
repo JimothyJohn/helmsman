@@ -448,6 +448,13 @@ pub trait Workspace {
     fn upload(&mut self, file: &str, bytes: Vec<u8>);
     /// The open project as a `.zip`.
     fn download(&mut self);
+    /// The View menu's layout items (`arrange::menu_items`), acting on
+    /// this view's diagram.
+    fn layout_menu(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// Fits the open diagram to its area again.
+    fn zoom_to_fit(&mut self);
+    /// Undoes (or redoes) the last edit in the ST editor; whether it did.
+    fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool;
 }
 
 /// The file and line a line of a project build is from: the build is every

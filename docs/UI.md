@@ -19,18 +19,30 @@ this; change it here first when a decision changes.
 
 ## Editor (desktop and tablet; a phone opens the Monitor)
 
+- **One header row, as tall as the two it replaced:** on the left the
+  mark and the File / Edit / View menus (File: Save, Deploy, Upload,
+  Download; Edit: Undo, Redo in the ST editor; View: Editor / Monitor,
+  Structured Text, Files, the side panel and its tabs, Zoom to fit, the
+  layout items, and Scan detail for an engineer), then the open view's
+  actions (the simulation's Run, Step, Restart, scan period and a short
+  status; a box's link status), and on the right the project's name, its
+  edited mark, Save, Deploy, the Editor / Monitor switch, ⋯ (proposals,
+  where the program runs) and Sign in. A fault, a deploy under way or a
+  stale file shows on a line under the header only while it lasts.
 - **Left sidebar, collapsible:** the open project's files, with the program
   tree under them (PROGRAM › instance › instance, foldable; a click opens
   that scope's diagram).
 - **Centre: the live diagram.** Pan, zoom, drag blocks to rearrange,
   breadcrumbs with ↑ (Alt+↑), double-click an instance to go into it.
   An engineer saves the arrangement as the project's shared default
-  (Save as default; the project's `diagram.layout`, so it travels in the
-  `.zip`); anyone's further moves are kept in their browser on top of it.
-  Reset layout goes back to the shared default, a second step to the
-  automatic layout. The simulation does the same with its projects.
-- **ST on demand:** an "ST" toggle slides the editor open beside the
-  diagram; clicking a block jumps the editor to its line.
+  (View › Save layout as default; the project's `diagram.layout`, so it
+  travels in the `.zip`); anyone's further moves are kept in their browser
+  on top of it. View › Reset layout goes back to the shared default, a
+  second step to the automatic layout. The simulation does the same with
+  its projects.
+- **ST on demand:** View › Structured Text slides the editor open beside
+  the diagram (220 pt, resizable, lines wrapped); clicking a block jumps
+  the editor to its line.
 - **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
   not show), Trend (pinned signals), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
@@ -41,8 +53,8 @@ this; change it here first when a decision changes.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.
-- **Inputs on the diagram:** in the simulation, an input's block switches,
-  presses or drags it. On a Pi, the same click **forces** the input, for an
+- **Inputs on the diagram:** in the simulation, an input's block switches
+  or presses it, or takes a typed number (written on Enter). On a Pi, the same click **forces** the input, for an
   engineer only: the block shows FORCED in the warning colour, a banner
   lists every force with "release all", and forces end on logout or deploy.
 
@@ -83,6 +95,31 @@ this; change it here first when a decision changes.
   "Start from a machine or template" in the sidebar asks an engineer for a
   name and sends the project as its `.zip`; nothing else changes what the
   box holds, and a first install still seeds `line` alone, undeployed.
+
+## Keyboard
+
+CODESYS's default keys where the browser leaves them alone (its
+"Shortcuts" help page, checked 2026-11-01); nothing on a key the browser
+owns (F5 and Ctrl+R reload, F11 goes full screen, Ctrl+F5 reloads hard).
+The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
+
+| key | does | CODESYS command on that key |
+|---|---|---|
+| Ctrl S | Save | Save Project |
+| Ctrl D | Deploy | (Download has no key) |
+| Ctrl Enter | Run / Stop the simulation | (Start is F5, the browser's) |
+| Shift F8 | Stop the simulation | Stop |
+| F10 | Step one scan (stopped) | Step Over |
+| Alt F8 | Sign in (box) | Login |
+| Ctrl F8 | Sign out (box) | Logout |
+| Ctrl Z, Ctrl Y | Undo, Redo in the ST editor | Undo, Restore |
+| Alt 0 | Files sidebar | Devices view |
+| Alt 1 | Structured Text pane | POUs view |
+| Alt 3 | Side panel | Messages view |
+| Alt ↑ | Up one level in the diagram | |
+
+Each menu item prints its key. Keys reserved for what is not built yet
+are TODO cards (`hotkey-*`).
 
 ## Monitor (phone to wall TV; replaces Andon)
 
