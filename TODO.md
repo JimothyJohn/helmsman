@@ -1072,7 +1072,7 @@
   id: starter-autostart-on-box
   answer: plant waits for Start (the diagram sits still until someone forces start_pb)
 
-- [ ] **Offer the five short examples on a box too?** Blink, Latch, Counter, Traffic and Line stay simulation-only: they read `VAR_INPUT`s with no io.map, so a box refuses them at Deploy. Built default: a box offers the seven machines and two templates only. Giving the short ones an io.map would show that file in the first program a visitor opens.
+- [x] **Offer the five short examples on a box too?** Blink, Latch, Counter, Traffic and Line stay simulation-only: they read `VAR_INPUT`s with no io.map, so a box refuses them at Deploy. Built default: a box offers the seven machines and two templates only. Giving the short ones an io.map would show that file in the first program a visitor opens.
   needs: your call
   result: leave them out, or add io.maps and list them
   options: leave out; add io.maps and list them
