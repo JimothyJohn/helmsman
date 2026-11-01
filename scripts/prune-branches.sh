@@ -61,5 +61,5 @@ done
 git worktree prune
 git fetch -q --prune origin
 
-echo "left on origin: $(git branch -r --format='%(refname:short)' | grep -v '^origin/HEAD$' | sed 's#^origin/##' | tr '\n' ' ')"
+echo "left on origin: $(git branch -r --format='%(refname:short)' | grep '^origin/' | sed 's#^origin/##' | tr '\n' ' ')"
 echo "left locally:   $(git branch --format='%(refname:short)' | tr '\n' ' ')"
