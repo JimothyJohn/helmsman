@@ -392,6 +392,7 @@ impl App {
             Action::Files => self.chrome.left = !self.chrome.left,
             Action::St => self.chrome.st = !self.chrome.st,
             Action::Panel => self.chrome.right = !self.chrome.right,
+            Action::Trend => self.chrome.trend = !self.chrome.trend,
         }
     }
 

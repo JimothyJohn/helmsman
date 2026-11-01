@@ -624,14 +624,17 @@ impl Body for PlaygroundView {
         }
     }
 
+    fn trend(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
+        self.trend_tab(ui);
+    }
+
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Trend, Tab::Claude]
+        &[Tab::Io, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab) {
         match tab {
             Tab::Io => self.io(ui),
-            Tab::Trend => self.trend_tab(ui),
             Tab::Claude => self.claude(ui),
         }
     }
@@ -750,7 +753,7 @@ impl PlaygroundView {
             }
         });
         ui.add_space(6.0);
-        self.trend(ui);
+        self.trend_plot(ui);
     }
 
     fn claude(&mut self, ui: &mut egui::Ui) {
@@ -922,7 +925,7 @@ impl PlaygroundView {
         }
     }
 
-    fn trend(&self, ui: &mut egui::Ui) {
+    fn trend_plot(&self, ui: &mut egui::Ui) {
         let trend = &self.session.trend;
         let rect = ui.available_rect_before_wrap();
         ui.allocate_rect(rect, Sense::hover());
