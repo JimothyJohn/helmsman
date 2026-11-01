@@ -551,6 +551,38 @@ impl Workspace for BoxView {
         self.projects.dirty()
     }
 
+    fn layout_menu(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let can = self.can_save_layout();
+        if arrange::menu_items(ui, chrome, &mut self.layers, self.view.as_mut(), can) {
+            self.save_layout();
+        }
+    }
+
+    fn zoom_to_fit(&mut self) {
+        if let Some(v) = &mut self.view {
+            v.refit();
+        }
+    }
+
+    fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
+        if self.writable().is_err() {
+            return false;
+        }
+        let Some((name, file)) = self
+            .projects
+            .open
+            .as_ref()
+            .and_then(|o| o.current.clone().map(|f| (o.name.clone(), f)))
+        else {
+            return false;
+        };
+        let id = egui::Id::unique(("box-st", &name, &file));
+        let Some(buf) = self.projects.current_mut() else {
+            return false;
+        };
+        editor::undo(ctx, id, &mut buf.text, redo)
+    }
+
     fn writable(&self) -> Result<(), String> {
         is_engineer(self.session.as_ref())?;
         match self.projects.available {
@@ -609,17 +641,23 @@ impl Body for BoxView {
         if let Some(s) = &self.state.scan {
             ui.separator();
             ui.label(
-                RichText::new(format!("scan {} · t={:.1}s", s.scan, s.now_ms as f64 / 1000.0))
+                RichText::new(format!("t={:.1}s", s.now_ms as f64 / 1000.0))
                     .monospace()
                     .color(brand::STEEL),
-            );
-            if let Some(f) = &s.fault {
-                ui.colored_label(RED, format!("fault: {f}"));
-            }
+            )
+            .on_hover_text(format!("scan {}", s.scan));
         }
-        let can = self.can_save_layout();
-        if arrange::buttons(ui, chrome, &mut self.layers, self.view.as_mut(), can) {
-            self.save_layout();
+    }
+
+    fn has_notices(&self) -> bool {
+        self.state.scan.as_ref().is_some_and(|s| s.fault.is_some())
+            || self.projects.deploy != Deploy::Idle
+            || self.projects.notice.is_some()
+    }
+
+    fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {
+            ui.colored_label(RED, format!("fault: {f}"));
         }
         match &self.projects.deploy {
             Deploy::Idle => {}

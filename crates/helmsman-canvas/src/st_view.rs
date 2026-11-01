@@ -296,6 +296,11 @@ impl Viewer {
         }
     }
 
+    /// Fits the open level to its area on the next frame (View menu).
+    pub fn refit(&mut self) {
+        self.cams[self.scope].fitted = false;
+    }
+
     /// Keeps what ran lit for [`HOLD`] after the scan it ran in. The
     /// diagram draws one scan per frame, so a statement that runs for a
     /// single scan (the body of `IF pulse.Q`, a one-shot) would brighten

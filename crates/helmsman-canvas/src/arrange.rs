@@ -19,12 +19,12 @@
 //! POU's diagram is the same in every module that uses it, so one
 //! arrangement per POU serves them all.
 
-use eframe::egui;
+use eframe::egui::{self, Vec2};
 use serde_json::{Value as Json, json};
 
 use crate::editor::Chrome;
 use crate::sim_projects::Storage;
-use crate::st_view::{Arrangement, Viewer};
+use crate::st_view::{Arrangement, TAP, Viewer};
 
 /// The format the tweaks are stored in.
 const FORMAT: &str = "helmsman-arrangements 1";
@@ -226,17 +226,18 @@ impl Layers {
     }
 }
 
-/// The toolbar's layout buttons: Reset layout (in two steps) and, where
+/// The View menu's layout items: Reset layout (in two steps) and, where
 /// the page may (`can`), Save as default. Whether Save was clicked.
-pub fn buttons(
+pub fn menu_items(
     ui: &mut egui::Ui,
     chrome: &mut Chrome,
     layers: &mut Layers,
     view: Option<&mut Viewer>,
     can: Result<(), String>,
 ) -> bool {
+    let wide = Vec2::new(ui.available_width().max(180.0), TAP * 0.7);
     let Some(v) = view else {
-        ui.add_enabled(false, egui::Button::new("Reset layout"));
+        ui.add_enabled(false, egui::Button::new("Reset layout").min_size(wide));
         return false;
     };
     let (label, tip, on) = match (layers.tweaked(), layers.has_default()) {
@@ -257,12 +258,15 @@ pub fn buttons(
             false,
         ),
     };
-    let r = ui.add_enabled(on, egui::Button::new(label)).on_hover_text(tip);
+    let r = ui
+        .add_enabled(on, egui::Button::new(label).min_size(wide))
+        .on_hover_text(tip);
     chrome.hit("reset layout", r.rect);
     if r.clicked() {
         layers.reset(v);
+        ui.close();
     }
-    let b = egui::Button::new("Save as default");
+    let b = egui::Button::new("Save layout as default").min_size(wide);
     let r = match can {
         Ok(()) => ui
             .add_enabled(v.rearranged() || layers.has_default(), b)
@@ -270,5 +274,9 @@ pub fn buttons(
         Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
     };
     chrome.hit("save layout", r.rect);
-    r.clicked()
+    if r.clicked() {
+        ui.close();
+        return true;
+    }
+    false
 }
