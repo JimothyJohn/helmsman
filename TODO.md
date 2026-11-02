@@ -107,7 +107,7 @@
   asked: 2026-10-31
   by: claude-session
 
-- [ ] **Move the site to helmsman.advin.io** — the public page (master's docs/, GitHub Pages) moves to Nick's domain.
+- [x] **Move the site to helmsman.advin.io** — the public page (master's docs/, GitHub Pages) moves to Nick's domain. Done 2026-11-02: master carries docs/CNAME, Pages serves https://helmsman.advin.io/ with HTTPS enforced, the datasheet, Why? and help pages are live.
   needs: a DNS record at advin.io's DNS host: `helmsman` CNAME `jimothyjohn.github.io.`; check with `dig +short helmsman.advin.io` (it should answer jimothyjohn.github.io)
   result: the site and playground at https://helmsman.advin.io/ and /playground/; github.io redirects there
   notes: order matters. DNS first; then the agent adds `docs/CNAME` (helmsman.advin.io) in a PR into dev, and the README link; it goes live at Nick's next dev → master merge. A CNAME before DNS sends visitors to a name that doesn't resolve. After it is live: Pages settings → Enforce HTTPS once GitHub has issued the certificate.

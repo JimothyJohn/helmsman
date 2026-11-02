@@ -18,6 +18,8 @@ use serde_json::{Value as Json, json};
 
 use crate::box_projects::{Answer, PCall, PReq};
 use crate::editor::Chrome;
+use crate::playground::nice_range;
+use crate::playground_view::scale_labels;
 use crate::remote::{BoxState, segment};
 use crate::review::Session;
 use crate::sim_projects::Storage;
@@ -355,10 +357,11 @@ impl BoxTrend {
                 [Pos2::new(rect.left(), top), Pos2::new(rect.right(), top)],
                 Stroke::new(1.0, GRAPHITE),
             );
-            let span = if hi > lo { hi - lo } else { 1.0 };
+            let (lo, hi, step) = nice_range(lo, hi);
+            scale_labels(&painter, rect, top, lane, lo, hi, step);
             let y_of = |v: f64| {
                 #[allow(clippy::cast_possible_truncation)]
-                let f = ((v - lo) / span) as f32;
+                let f = ((v - lo) / (hi - lo)) as f32;
                 top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
             };
             let mut pts: Vec<Pos2> = Vec::new();
