@@ -498,6 +498,51 @@ impl Trend {
     }
 }
 
+/// The axis a trend lane draws `lo..=hi` on: the values rounded out to
+/// a step of 1, 2 or 5 times a power of ten, about four of them to the
+/// lane, so a rising value climbs through a scale that holds still
+/// between steps instead of being pinned to the top of a lane refitted
+/// every frame (Nick, 2026-11-01: a count that grew jumped to the top
+/// and the line beneath it flattened as the window filled). A constant
+/// gets a span above it; nothing finite gets `0..=1`. Returns the
+/// bounds and the step, for the labels.
+#[must_use]
+pub fn nice_range(lo: f64, hi: f64) -> (f64, f64, f64) {
+    if !lo.is_finite() || !hi.is_finite() {
+        return (0.0, 1.0, 0.5);
+    }
+    let (lo, hi) = if lo < hi { (lo, hi) } else { (hi, lo) };
+    let hi = if hi > lo {
+        hi
+    } else {
+        lo + (lo.abs() * 0.1).max(1.0)
+    };
+    let raw = (hi - lo) / 4.0;
+    let mag = 10f64.powf(raw.log10().floor());
+    let unit = raw / mag;
+    let step = if unit <= 1.0 {
+        1.0
+    } else if unit <= 2.0 {
+        2.0
+    } else if unit <= 5.0 {
+        5.0
+    } else {
+        10.0
+    } * mag;
+    let lo = (lo / step).floor() * step;
+    let hi = (hi / step).ceil() * step;
+    (lo, hi, step)
+}
+
+/// A scale label for `v` on an axis of `step`: as many decimals as the
+/// step has, no more.
+#[must_use]
+pub fn tick_label(v: f64, step: f64) -> String {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let decimals = (-step.log10().floor()).max(0.0) as usize;
+    format!("{v:.decimals$}")
+}
+
 /// The whole playground.
 #[derive(Debug)]
 pub struct Session {
