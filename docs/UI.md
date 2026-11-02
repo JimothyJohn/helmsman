@@ -157,7 +157,11 @@ the Agent.
 - **Tap a tile:** the same tiles one level down (that instance's instances
   and outputs). Back and breadcrumbs go up; the full diagram is one tap
   away.
-- **Watch only.** The Monitor never writes.
+- **Watch only.** The Monitor never writes to a box. In the simulation
+  its header carries the transport (run or stop, step, restart) and the
+  same keys as the Editor (Nick, 2026-11-01); a box's Monitor gets the
+  same once the box has an audited stop and start (card
+  `monitor-box-run-stop`).
 
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan

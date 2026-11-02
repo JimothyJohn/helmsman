@@ -9,8 +9,9 @@ page falls back to when no box answers.
 A project opens running. The glyphs over the diagram run or stop it
 (<kbd>Ctrl</kbd> <kbd>Enter</kbd>; <kbd>Shift</kbd> <kbd>F8</kbd> stops),
 step one scan while stopped (<kbd>F10</kbd>), and restart from initial
-values with the clock at zero. The state in the header says which it is;
-the clock beside it is the program's own time.
+values with the clock at zero. The same three buttons and keys are in
+the Monitor's header. The state in the header says which it is; the
+clock beside it is the program's own time.
 
 One program runs in the page at a time. Opening or deploying another
 stops the one before.
