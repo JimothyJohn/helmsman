@@ -16,7 +16,8 @@ use crate::claude::{
 };
 use crate::editor::{Chrome, Tab, highlight};
 use crate::playground::{
-    Dir, EXAMPLES, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget,
+    Dir, EXAMPLES, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget, nice_range,
+    tick_label,
 };
 use crate::playground_view::PlaygroundView;
 use crate::projects::Workspace;
@@ -408,6 +409,41 @@ fn loading_a_program_never_runs_it() {
     s.advance(0.0);
     s.advance(1.0);
     assert_eq!(s.scans, 0);
+}
+
+/// Nick, 2026-11-01: a count that grew was pinned to the top of a lane
+/// refitted every frame. The lane's axis rounds out to a 1-2-5 step,
+/// about four to the lane, and holds between steps.
+#[test]
+fn the_trend_axis_is_a_nice_range_that_holds_between_steps() {
+    assert_eq!(nice_range(0.0, 1.0), (0.0, 1.0, 0.5), "a BOOL lane stays 0..1");
+    assert_eq!(nice_range(0.0, 0.73), (0.0, 0.8, 0.2));
+    assert_eq!(nice_range(-0.2, 17.0), (-5.0, 20.0, 5.0));
+    assert_eq!(nice_range(17.0, -0.2), (-5.0, 20.0, 5.0), "either order");
+    // A count climbing 0, 1, 2, ... sees an axis that moves only at a
+    // step's boundary: 0 to 6 holds for 5 and 6, 0 to 8 for 7 and 8.
+    let axes: Vec<(f64, f64, f64)> = (0..=10).map(|n| nice_range(0.0, f64::from(n))).collect();
+    assert_eq!(axes[1], (0.0, 1.0, 0.5));
+    assert_eq!(axes[3], (0.0, 3.0, 1.0));
+    assert_eq!(axes[4], (0.0, 4.0, 1.0));
+    assert_eq!(axes[5], (0.0, 6.0, 2.0));
+    assert_eq!(axes[6], (0.0, 6.0, 2.0));
+    assert_eq!(axes[7], (0.0, 8.0, 2.0));
+    assert_eq!(axes[8], (0.0, 8.0, 2.0));
+    assert_eq!(axes[9], (0.0, 10.0, 5.0));
+    assert_eq!(axes[10], (0.0, 10.0, 5.0), "{axes:?}");
+    // A constant gets a span above it, and the scale never collapses.
+    assert_eq!(nice_range(3.0, 3.0), (3.0, 4.0, 0.5));
+    assert_eq!(nice_range(0.0, 0.0), (0.0, 1.0, 0.5));
+    let (lo, hi, _) = nice_range(1234.0, 1234.0);
+    assert!(lo <= 1234.0 && hi > 1234.0 + 100.0, "{lo} {hi}");
+    assert_eq!(nice_range(f64::NAN, 1.0), (0.0, 1.0, 0.5), "nothing finite");
+    assert_eq!(nice_range(f64::NEG_INFINITY, f64::INFINITY), (0.0, 1.0, 0.5));
+    // Labels carry the step's decimals, no more.
+    assert_eq!(tick_label(0.8, 0.2), "0.8");
+    assert_eq!(tick_label(20.0, 5.0), "20");
+    assert_eq!(tick_label(0.5, 0.5), "0.5");
+    assert_eq!(tick_label(-5.0, 5.0), "-5");
 }
 
 #[test]
