@@ -342,6 +342,9 @@ impl BoxView {
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
         editor::show(ui, chrome, self);
+        if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
+            self.project_act(a);
+        }
     }
 
     /// Whose personal layout the diagram shows: the running project's, or

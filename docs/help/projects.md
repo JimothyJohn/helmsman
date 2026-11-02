@@ -12,16 +12,19 @@ shows them.
 - **New project** and **Copy project** are in the File menu; a right-click
   on the pane's blank space offers New project too, and a right-click on a
   project offers Copy, Rename and Delete. A copy of an example or a
-  starter is how you begin from one. **Rename** and **Delete** of the
-  open project are also buttons under the list.
-- **New file**, **Rename file**, **Delete file** likewise. A file is
-  Structured Text (`.st`), the I/O map, or one of the editor's own.
+  starter is how you begin from one.
+- **New file** is the button under the files. A file is Structured Text
+  (`.st`), the I/O map, or one of the editor's own. A double click on a
+  file opens it on the Code tab.
 - **Right-click a file** for Copy, Paste, Duplicate, Rename and Delete.
   Copy keeps the file in the editor's own clipboard, and Paste puts it
   into whichever project is open, under the next free name (`main-2.st`
   after `main.st`), so moving a block between projects is a copy, an
   open, and a paste. Right-click the files heading to paste without a
   file under the pointer.
+- **The Delete key** deletes the file or project you clicked last (the
+  open project when none). Every delete asks first, in the middle of the
+  screen; Escape keeps it. The examples cannot be deleted.
 - The tree under the files is the program: the `PROGRAM`, then each
   function block instance it calls, nested. Click one to see its diagram.
 

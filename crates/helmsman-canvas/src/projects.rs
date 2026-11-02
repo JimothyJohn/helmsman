@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use eframe::egui::{self, Color32, RichText, Vec2};
+use eframe::egui::{self, Color32, Key, Modifiers, RichText, Vec2};
 use helmsman_project::starters::{Kind, STARTERS, starter};
 
 use crate::editor::Chrome;
@@ -142,12 +142,24 @@ pub enum Naming {
     RenameFile(String),
 }
 
+/// The row last clicked in the sidebar: what the Delete key is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Picked {
+    Project(String),
+    File(String),
+}
+
 /// The sidebar's own state: a name being typed, a delete being confirmed.
 #[derive(Debug, Default)]
 pub struct FilesUi {
     pub naming: Option<Naming>,
     pub input: String,
+    /// A question with the page's answer pending, asked in the middle of
+    /// the screen ([`Self::confirm_ui`]).
     pub confirm: Option<Act>,
+    /// The project or file last clicked; the Delete key deletes it (or
+    /// the open project when nothing was).
+    pub picked: Option<Picked>,
     /// The long lists opened by hand.
     pub unfolded: HashSet<Group>,
     /// The list of machines and templates to start from is open.
@@ -219,6 +231,9 @@ impl FilesUi {
                 Some(s) => r.on_hover_text(format!("{}: {}", s.title, s.about)),
                 None => r,
             };
+            if r.clicked() {
+                self.picked = Some(Picked::Project(p.name.clone()));
+            }
             if r.clicked() && !open {
                 let a = Act::OpenProject(p.name.clone());
                 if l.dirty {
@@ -229,7 +244,9 @@ impl FilesUi {
                 }
             }
             // Right-click a project: copy it, and for one of your own
-            // rename or delete it (Nick, 2026-11-01).
+            // rename or delete it (Nick, 2026-11-01). Rename and Delete
+            // live only here and on the Delete key, not as buttons
+            // (Nick, 2026-11-02).
             let can_write = l.write.is_ok();
             let mine = !p.example();
             r.context_menu(|ui| {
@@ -260,25 +277,6 @@ impl FilesUi {
         if l.projects.is_empty() {
             ui.label(RichText::new("No projects yet.").color(t.muted));
         }
-        // New project and Copy project are the File menu's (and a
-        // right-click's); Rename and Delete of the open project stay here.
-        ui.horizontal_wrapped(|ui| {
-            if let Some(open) = l.open {
-                let is_example = l.projects.iter().any(|p| p.name == open && p.example());
-                if !is_example {
-                    let r = write_button(ui, &l.write, "Rename", "rename the open project");
-                    chrome.hit("rename project", r.rect);
-                    if r.clicked() {
-                        self.ask(Naming::RenameProject(open.into()), open);
-                    }
-                    let r = write_button(ui, &l.write, "Delete", "delete the open project");
-                    chrome.hit("delete project", r.rect);
-                    if r.clicked() {
-                        self.confirm = Some(Act::DeleteProject(open.into()));
-                    }
-                }
-            }
-        });
         if l.starters {
             self.starters_ui(ui, &l.write, chrome);
         }
@@ -301,8 +299,16 @@ impl FilesUi {
                 let text = format!("{f}{}", if *dirty { " ●" } else { "" });
                 let r = ui.selectable_label(here, RichText::new(text).monospace());
                 chrome.hit(format!("file {f}"), r.rect);
-                if r.clicked() && !here {
-                    act = Some(Act::OpenFile(f.clone()));
+                if r.clicked() {
+                    self.picked = Some(Picked::File(f.clone()));
+                    if !here {
+                        act = Some(Act::OpenFile(f.clone()));
+                    }
+                }
+                // A double click opens the file in the Code tab (Nick,
+                // 2026-11-02).
+                if r.double_clicked() {
+                    chrome.show_code();
                 }
                 // Right-click a file: copy, paste, duplicate, rename, delete
                 // (Nick, 2026-11-01: easy copy and paste of files).
@@ -329,31 +335,18 @@ impl FilesUi {
                 });
             }
             if !is_example {
-                ui.horizontal_wrapped(|ui| {
-                    let r = write_button(ui, &l.write, "New file", "a new .st file in this project");
-                    chrome.hit("new file", r.rect);
-                    if r.clicked() {
-                        self.ask(Naming::NewFile, ".st");
-                    }
-                    if let Some(cur) = l.current {
-                        let r = write_button(ui, &l.write, "Rename", "rename the open file");
-                        chrome.hit("rename file", r.rect);
-                        if r.clicked() {
-                            self.ask(Naming::RenameFile(cur.into()), cur);
-                        }
-                        let r = write_button(ui, &l.write, "Delete", "delete the open file");
-                        chrome.hit("delete file", r.rect);
-                        if r.clicked() {
-                            self.confirm = Some(Act::DeleteFile(cur.into()));
-                        }
-                    }
-                });
+                let r = write_button(ui, &l.write, "New file", "a new .st file in this project");
+                chrome.hit("new file", r.rect);
+                if r.clicked() {
+                    self.ask(Naming::NewFile, ".st");
+                }
             }
         }
-        if let Some(a) = self.naming_ui(ui, chrome) {
-            act = Some(a);
+        if let Some(a) = self.delete_key(ui, l) {
+            self.naming = None;
+            self.confirm = Some(a);
         }
-        if let Some(a) = self.confirm_ui(ui, chrome) {
+        if let Some(a) = self.naming_ui(ui, chrome) {
             act = Some(a);
         }
         if l.write.is_err() {
@@ -363,6 +356,34 @@ impl FilesUi {
             }
         }
         act
+    }
+
+    /// The Delete key (Backspace on a Mac keyboard) with the pane up and
+    /// no text field focused: what to delete, asked first. The file or
+    /// project last clicked; with nothing clicked, the open project. A
+    /// built-in example is never offered (Nick, 2026-11-02).
+    fn delete_key(&mut self, ui: &egui::Ui, l: &Listing<'_>) -> Option<Act> {
+        if l.write.is_err() || self.naming.is_some() || self.confirm.is_some() {
+            return None;
+        }
+        if ui.memory(|m| m.focused().is_some()) {
+            return None;
+        }
+        let pressed = ui.input_mut(|i| {
+            i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)
+        });
+        if !pressed {
+            return None;
+        }
+        let mine = |name: &str| l.projects.iter().any(|p| p.name == name && !p.example());
+        let open_mine = l.open.filter(|o| mine(o));
+        match &self.picked {
+            Some(Picked::File(f)) if open_mine.is_some() && l.files.iter().any(|(n, _)| n == f) => {
+                Some(Act::DeleteFile(f.clone()))
+            }
+            Some(Picked::Project(p)) if mine(p) => Some(Act::DeleteProject(p.clone())),
+            _ => open_mine.map(|o| Act::DeleteProject(o.into())),
+        }
     }
 
     /// Whether `g`'s rows show: the short lists always; a long one once
@@ -529,7 +550,12 @@ impl FilesUi {
         out
     }
 
-    fn confirm_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) -> Option<Act> {
+    /// The pending question ([`Self::confirm`]) as a box in the middle of
+    /// the screen over a dimmed page, whichever tab is up: its buttons,
+    /// Escape or a click outside answer it (Nick, 2026-11-02: every
+    /// confirmation a popup in the centre). The view draws it each frame
+    /// after the Editor; returns what was agreed to.
+    pub fn confirm_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<Act> {
         let a = self.confirm.clone()?;
         let (what, verb, stay) = match &a {
             Act::DeleteProject(p) => (format!("Delete project {p} and all its files?"), "Delete", "Keep"),
@@ -547,32 +573,40 @@ impl FilesUi {
             _ => return None,
         };
         let mut out = None;
-        ui.separator();
-        ui.colored_label(RED, what);
-        ui.horizontal(|ui| {
-            let yes = ui.button(verb);
-            chrome.hit("confirm yes", yes.rect);
-            if let Act::UseAnswer { name, text, .. } = &a {
-                let drop = ui.button("Drop them, then open");
-                chrome.hit("confirm drop", drop.rect);
-                if drop.clicked() {
-                    out = Some(Act::UseAnswer {
-                        name: name.clone(),
-                        text: text.clone(),
-                        save: false,
-                    });
+        let m = egui::Modal::new(egui::Id::unique("files-confirm")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(RichText::new(what).strong().size(16.0));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let yes = ui.add(egui::Button::new(RichText::new(verb).color(RED)).min_size(tall));
+                chrome.hit("confirm yes", yes.rect);
+                if let Act::UseAnswer { name, text, .. } = &a {
+                    let drop = ui.add(egui::Button::new("Drop them, then open").min_size(tall));
+                    chrome.hit("confirm drop", drop.rect);
+                    if drop.clicked() {
+                        out = Some(Act::UseAnswer {
+                            name: name.clone(),
+                            text: text.clone(),
+                            save: false,
+                        });
+                        self.confirm = None;
+                    }
+                }
+                let no = ui.add(egui::Button::new(stay).min_size(tall));
+                chrome.hit("confirm no", no.rect);
+                if yes.clicked() {
+                    out = Some(a.clone());
+                    self.confirm = None;
+                } else if no.clicked() {
                     self.confirm = None;
                 }
-            }
-            let no = ui.button(stay);
-            chrome.hit("confirm no", no.rect);
-            if yes.clicked() {
-                out = Some(a.clone());
-                self.confirm = None;
-            } else if no.clicked() {
-                self.confirm = None;
-            }
+            });
         });
+        chrome.hit("confirm", m.response.rect);
+        if m.should_close() {
+            self.confirm = None;
+        }
         out
     }
 }
