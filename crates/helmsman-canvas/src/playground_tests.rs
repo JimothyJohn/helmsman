@@ -460,14 +460,16 @@ fn the_trend_records_chosen_signals_in_a_bounded_window() {
         s.trend.toggle(n);
     }
     assert_eq!(s.trend.signals.len(), TREND_SIGNALS);
-    // 15 s at 10 ms: the window keeps the last 10 s at most.
+    // 150 s at 10 ms: the history keeps the widest window, 100 s, at most.
     let mut s = Session::new(example("traffic"));
-    scans(&mut s, 1500);
+    scans(&mut s, 15_000);
     let (first, last) = (
         s.trend.samples.front().unwrap().t_ms,
         s.trend.samples.back().unwrap().t_ms,
     );
-    assert!(last - first <= crate::playground::TREND_MS);
+    assert!(last - first <= crate::playground::TREND_KEEP_MS);
+    assert!(last - first > 90_000, "{first}..{last}");
+    assert_eq!(s.trend.window_ms, crate::playground::TREND_MS, "opens on 10 s");
 }
 
 // ---- Claude: the request ----------------------------------------------

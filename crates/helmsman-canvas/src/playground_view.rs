@@ -14,7 +14,7 @@ use crate::arrange::Layers;
 use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{
-    MAX_SOURCE, Point, Session, TREND_MS, TREND_SIGNALS, Widget, nice_range, tick_label,
+    MAX_SOURCE, Point, Session, TREND_SIGNALS, TREND_WINDOWS_MS, Widget, nice_range, tick_label,
 };
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, Storage};
@@ -735,8 +735,8 @@ impl Body for PlaygroundView {
         }
     }
 
-    fn trend(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
-        self.trend_tab(ui);
+    fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        self.trend_tab(ui, chrome);
     }
 
     fn messages(&mut self) -> &mut crate::messages::Log {
@@ -880,7 +880,7 @@ impl PlaygroundView {
     }
 
     /// The signals to trend (outputs, then inputs) and the chart.
-    fn trend_tab(&mut self, ui: &mut egui::Ui) {
+    fn trend_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if self.session.build.is_none() {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
@@ -901,6 +901,9 @@ impl PlaygroundView {
                 }
             }
         });
+        if let Some(w) = window_row(ui, chrome, self.session.trend.window_ms, &TREND_WINDOWS_MS) {
+            self.session.trend.window_ms = w;
+        }
         ui.add_space(6.0);
         self.trend_plot(ui);
     }
@@ -1113,10 +1116,12 @@ impl PlaygroundView {
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / n as f32;
         let end = trend.samples.back().map_or(0, |s| s.t_ms);
-        let start = end.saturating_sub(TREND_MS);
+        let window = trend.window_ms.max(1);
+        let start = end.saturating_sub(window);
+        // Samples older than the window are kept for a wider one: not drawn.
+        let shown = trend.samples.iter().filter(|s| s.t_ms >= start);
         #[allow(clippy::cast_precision_loss)]
-        let x_of =
-            |t: u64| rect.left() + 90.0 + (rect.width() - 96.0) * ((t - start) as f32 / TREND_MS as f32);
+        let x_of = |t: u64| rect.left() + 90.0 + (rect.width() - 96.0) * ((t - start) as f32 / window as f32);
         for (k, name) in trend.signals.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
@@ -1124,9 +1129,8 @@ impl PlaygroundView {
                 5 if !t.dark => t.fg,
                 i => TREND[i],
             };
-            let (lo, hi) = trend
-                .samples
-                .iter()
+            let (lo, hi) = shown
+                .clone()
                 .filter_map(|s| s.values.get(k).copied().filter(|v| v.is_finite()))
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
@@ -1156,7 +1160,7 @@ impl PlaygroundView {
                 top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
             };
             let mut pts: Vec<Pos2> = Vec::new();
-            for s in &trend.samples {
+            for s in shown.clone() {
                 let Some(v) = s.values.get(k).copied().filter(|v| v.is_finite()) else {
                     continue;
                 };
@@ -1172,6 +1176,30 @@ impl PlaygroundView {
             }
         }
     }
+}
+
+/// The window's width as a row of buttons, `1 s`, `10 s`, ... (both
+/// trends): the one picked, if any was. Hits are `trend window <s>`.
+pub fn window_row(ui: &mut egui::Ui, chrome: &mut Chrome, current: u64, options: &[u64]) -> Option<u64> {
+    let mut picked = None;
+    let t = theme(ui);
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new("Window").color(t.muted));
+        for &w in options {
+            let secs = w / 1000;
+            let text = if secs >= 60 {
+                format!("{} min", secs / 60)
+            } else {
+                format!("{secs} s")
+            };
+            let r = ui.selectable_label(w == current, text);
+            chrome.hit(format!("trend window {secs}"), r.rect);
+            if r.clicked() {
+                picked = Some(w);
+            }
+        }
+    });
+    picked
 }
 
 /// The lane's scale: its top and bottom values at the right edge, so a
