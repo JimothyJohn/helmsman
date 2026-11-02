@@ -18,13 +18,15 @@ use crate::playground::{
 };
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, Storage};
-use crate::st_view::brand::{BLACK, GRAPHITE, GREEN, OFF_RED, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
+use crate::theme::{Theme, theme};
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Quiet time after the last keystroke before the editor checks, s.
 const DEBOUNCE: f64 = 0.35;
-/// Trend line colours, in signal order.
+/// Trend line colours, in signal order (the last, white, is the page's ink
+/// in light mode).
 const TREND: [Color32; TREND_SIGNALS] = [
     YELLOW,
     Color32::from_rgb(0x6E, 0xC6, 0xFF),
@@ -599,14 +601,15 @@ impl Body for PlaygroundView {
     }
 
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
         if let Some(f) = &self.session.fault {
             ui.colored_label(RED, format!("Fault: {f}. Run or Step restarts the program."));
         }
         if let Some(n) = &self.notice {
-            ui.label(RichText::new(n).color(STEEL));
+            ui.label(RichText::new(n).color(t.muted));
         }
         if let Some((n, error)) = self.proj.notice.clone() {
-            let r = ui.label(RichText::new(n).color(if error { RED } else { STEEL }));
+            let r = ui.label(RichText::new(n).color(if error { RED } else { t.muted }));
             chrome.hit("notice", r.rect);
             if error && self.proj.pending.is_some() {
                 let r = ui.button("Replace");
@@ -618,23 +621,24 @@ impl Body for PlaygroundView {
             }
         }
         if let Some(why) = &self.proj.storage_problem {
-            let r = ui.label(RichText::new(format!("⚠ {why}")).color(STEEL));
+            let r = ui.label(RichText::new(format!("⚠ {why}")).color(t.muted));
             chrome.hit("storage", r.rect);
         }
     }
 
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let t = ui.ctx().input(|i| i.time);
+        let t = theme(ui);
+        let now = ui.ctx().input(|i| i.time);
         let stale = self.session.stale();
         let errors = self.session.diags.len();
         ui.horizontal(|ui| {
             ui.label(RichText::new("Structured Text").strong());
             if self.pending.is_some() {
-                ui.label(RichText::new("…").color(STEEL));
+                ui.label(RichText::new("…").color(t.muted));
             } else if errors > 0 {
                 ui.label(RichText::new(format!("✖ {errors} error(s)")).color(RED));
             } else {
-                ui.label(RichText::new("✔ compiles").color(STEEL));
+                ui.label(RichText::new("✔ compiles").color(t.muted));
             }
         });
         // An edit is only checked: what runs is the last deploy, as on a box.
@@ -644,7 +648,7 @@ impl Body for PlaygroundView {
             } else {
                 "The program running is unchanged. Deploy runs this version."
             };
-            ui.label(RichText::new(note).small().color(STEEL));
+            ui.label(RichText::new(note).small().color(t.muted));
         }
         let all = self.diags();
         let current = self.proj.current.clone();
@@ -657,7 +661,7 @@ impl Body for PlaygroundView {
         let list_h = if self.session.diags.is_empty() { 0.0 } else { 110.0 };
         let size = Vec2::new(ui.available_width(), (avail - list_h).max(120.0));
         let Some(text) = self.proj.current_text_mut() else {
-            ui.label(RichText::new("No file open: make one in Files.").color(STEEL));
+            ui.label(RichText::new("No file open: make one in Files.").color(t.muted));
             return;
         };
         let r = ui
@@ -673,7 +677,7 @@ impl Body for PlaygroundView {
             })
             .inner;
         if r.changed() {
-            self.edited(t);
+            self.edited(now);
         }
         if !self.session.diags.is_empty() {
             ui.separator();
@@ -692,6 +696,7 @@ impl Body for PlaygroundView {
     /// files, and under them the program's outline: every block instance
     /// it calls, nested; a click shows that one's diagram.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
         let rows = self.proj.rows();
         let files: Vec<(String, bool)> = self
             .proj
@@ -714,13 +719,13 @@ impl Body for PlaygroundView {
             self.act(a);
         }
         ui.separator();
-        ui.label(RichText::new("Program").strong().color(STEEL));
+        ui.label(RichText::new("Program").strong().color(t.muted));
         match &mut self.viewer {
             Some(v) => {
                 ui.indent("pg-tree", |ui| v.tree_ui(ui));
             }
             None => {
-                ui.label(RichText::new("Nothing compiled yet.").color(STEEL));
+                ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             }
         }
         // The blank space under it all: a right-click offers a new project
@@ -750,6 +755,7 @@ impl Body for PlaygroundView {
     }
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
         if let Some(v) = &mut self.viewer {
             v.icons
@@ -775,7 +781,7 @@ impl Body for PlaygroundView {
             return;
         }
         let rect = ui.available_rect_before_wrap();
-        ui.painter().rect_filled(rect, CornerRadius::ZERO, BLACK);
+        ui.painter().rect_filled(rect, CornerRadius::ZERO, t.bg);
         let why = self
             .session
             .build
@@ -787,15 +793,16 @@ impl Body for PlaygroundView {
             egui::Align2::CENTER_CENTER,
             why,
             FontId::proportional(14.0),
-            STEEL,
+            t.muted,
         );
     }
 }
 
 impl PlaygroundView {
     fn io(&mut self, ui: &mut egui::Ui) {
+        let t = theme(ui);
         if self.session.build.is_none() {
-            ui.label(RichText::new("Nothing compiled yet.").color(STEEL));
+            ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             return;
         }
         let inputs: Vec<Point> = self.session.inputs().cloned().collect();
@@ -811,13 +818,13 @@ impl PlaygroundView {
                 ui.label(
                     RichText::new("No VAR_INPUT or %IX bit: add one to get a control.")
                         .small()
-                        .color(STEEL),
+                        .color(t.muted),
                 );
             } else if off_map.len() < inputs.len() {
                 ui.label(
                     RichText::new("Switch, press or drag the inputs on their blocks in the diagram.")
                         .small()
-                        .color(STEEL),
+                        .color(t.muted),
                 );
             }
             // Two columns when the panel is wide enough for them (Nick,
@@ -848,7 +855,7 @@ impl PlaygroundView {
                 ui.label(
                     RichText::new("No VAR_OUTPUT or %QX bit: add one to get a lamp.")
                         .small()
-                        .color(STEEL),
+                        .color(t.muted),
                 );
             }
             let mut picked = None;
@@ -874,11 +881,12 @@ impl PlaygroundView {
 
     /// The signals to trend (outputs, then inputs) and the chart.
     fn trend_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
         if self.session.build.is_none() {
-            ui.label(RichText::new("Nothing compiled yet.").color(STEEL));
+            ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             return;
         }
-        ui.label(RichText::new(format!("Pin up to {TREND_SIGNALS} signals")).color(STEEL));
+        ui.label(RichText::new(format!("Pin up to {TREND_SIGNALS} signals")).color(t.muted));
         let points: Vec<String> = self
             .session
             .outputs()
@@ -901,6 +909,7 @@ impl PlaygroundView {
     }
 
     fn claude(&mut self, ui: &mut egui::Ui) {
+        let t = theme(ui);
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().id_salt("pg-claude").show(ui, |ui| {
             // Room for the scroll bar: a full-width field plus the bar is
@@ -910,16 +919,16 @@ impl PlaygroundView {
                 Proxy::Yes => {
                     ui.label(
                         RichText::new("Using the local proxy: the API key stays on this machine.")
-                            .color(STEEL),
+                            .color(t.muted),
                     );
                 }
                 Proxy::Checking => {
-                    ui.label(RichText::new("Checking for a local proxy…").color(STEEL));
+                    ui.label(RichText::new("Checking for a local proxy…").color(t.muted));
                 }
                 Proxy::No => self.key_ui(ui),
             }
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Model").color(STEEL));
+                ui.label(RichText::new("Model").color(t.muted));
                 // No wider than the panel: a row that overflows a resizable
                 // panel widens it every frame.
                 egui::ComboBox::from_id_salt("pg-model")
@@ -967,6 +976,7 @@ impl PlaygroundView {
     }
 
     fn key_ui(&mut self, ui: &mut egui::Ui) {
+        let t = theme(ui);
         ui.label(RichText::new("Anthropic API key").strong());
         let r = ui.add(
             egui::TextEdit::singleline(self.chat.key_mut())
@@ -982,7 +992,7 @@ impl PlaygroundView {
             ui.label(
                 RichText::new("Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
                     .small()
-                    .color(STEEL),
+                    .color(t.muted),
             );
         }
         if self.chat.has_key() && !self.chat.key_looks_right() {
@@ -1021,37 +1031,38 @@ impl PlaygroundView {
                     "Held in this page only; sent only to api.anthropic.com, billed to your account.",
                 )
                 .small()
-                .color(STEEL),
+                .color(t.muted),
             );
         });
         ui.add_space(6.0);
     }
 
     fn answer_ui(&mut self, ui: &mut egui::Ui) {
+        let t = theme(ui);
         let Some(a) = &self.chat.answer else {
             ui.label(
                 RichText::new(
                     "Ask for a program (\"a conveyor that stops on a jam\"), a fix for the \
                      errors, or what a line does. Claude sees the editor's program.",
                 )
-                .color(STEEL),
+                .color(t.muted),
             );
             return;
         };
         if let Some(m) = &a.model
             && m != self.chat.model.id()
         {
-            ui.label(RichText::new(format!("answered by {m}")).small().color(STEEL));
+            ui.label(RichText::new(format!("answered by {m}")).small().color(t.muted));
         }
         markdown(ui, &a.text);
         if a.cut {
-            ui.label(RichText::new("(answer cut: too long)").small().color(STEEL));
+            ui.label(RichText::new("(answer cut: too long)").small().color(t.muted));
         }
         match &a.phase {
             Phase::Waiting => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(RichText::new("thinking…").color(STEEL));
+                    ui.label(RichText::new("thinking…").color(t.muted));
                 });
             }
             Phase::Streaming => {
@@ -1066,7 +1077,7 @@ impl PlaygroundView {
             ui.label(
                 RichText::new("(the answer hit its length limit)")
                     .small()
-                    .color(STEEL),
+                    .color(t.muted),
             );
         }
         let has_code = a.phase == Phase::Done && a.program().is_some();
@@ -1085,18 +1096,19 @@ impl PlaygroundView {
     }
 
     fn trend_plot(&self, ui: &mut egui::Ui) {
+        let t = theme(ui);
         let trend = &self.session.trend;
         let rect = ui.available_rect_before_wrap();
         ui.allocate_rect(rect, Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::ZERO, BLACK);
+        painter.rect_filled(rect, CornerRadius::ZERO, t.chart);
         if trend.signals.is_empty() {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Pick signals to trend above",
                 FontId::proportional(13.0),
-                STEEL,
+                t.muted,
             );
             return;
         }
@@ -1113,7 +1125,10 @@ impl PlaygroundView {
         for (k, name) in trend.signals.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
-            let color = TREND[k % TREND.len()];
+            let color = match k % TREND.len() {
+                5 if !t.dark => t.fg,
+                i => TREND[i],
+            };
             let (lo, hi) = shown
                 .clone()
                 .filter_map(|s| s.values.get(k).copied().filter(|v| v.is_finite()))
@@ -1135,10 +1150,10 @@ impl PlaygroundView {
             );
             painter.line_segment(
                 [Pos2::new(rect.left(), top), Pos2::new(rect.right(), top)],
-                Stroke::new(1.0, GRAPHITE),
+                Stroke::new(1.0, t.rule),
             );
             let (lo, hi, step) = nice_range(lo, hi);
-            scale_labels(&painter, rect, top, lane, lo, hi, step);
+            scale_labels(&painter, &t, rect, top, lane, (lo, hi, step));
             let y_of = |v: f64| {
                 #[allow(clippy::cast_possible_truncation)]
                 let f = ((v - lo) / (hi - lo)) as f32;
@@ -1167,8 +1182,9 @@ impl PlaygroundView {
 /// trends): the one picked, if any was. Hits are `trend window <s>`.
 pub fn window_row(ui: &mut egui::Ui, chrome: &mut Chrome, current: u64, options: &[u64]) -> Option<u64> {
     let mut picked = None;
+    let t = theme(ui);
     ui.horizontal_wrapped(|ui| {
-        ui.label(RichText::new("Window").color(STEEL));
+        ui.label(RichText::new("Window").color(t.muted));
         for &w in options {
             let secs = w / 1000;
             let text = if secs >= 60 {
@@ -1188,7 +1204,14 @@ pub fn window_row(ui: &mut egui::Ui, chrome: &mut Chrome, current: u64, options:
 
 /// The lane's scale: its top and bottom values at the right edge, so a
 /// line can be read (both trends draw them).
-pub fn scale_labels(painter: &egui::Painter, rect: Rect, top: f32, lane: f32, lo: f64, hi: f64, step: f64) {
+pub fn scale_labels(
+    painter: &egui::Painter,
+    t: &Theme,
+    rect: Rect,
+    top: f32,
+    lane: f32,
+    (lo, hi, step): (f64, f64, f64),
+) {
     let x = rect.right() - 4.0;
     for (v, y, align) in [
         (hi, top + 3.0, egui::Align2::RIGHT_TOP),
@@ -1199,7 +1222,7 @@ pub fn scale_labels(painter: &egui::Painter, rect: Rect, top: f32, lane: f32, lo
             align,
             tick_label(v, step),
             FontId::monospace(9.5),
-            STEEL,
+            t.muted,
         );
     }
 }
@@ -1517,6 +1540,7 @@ fn columns(ui: &egui::Ui) -> (usize, f32) {
 }
 
 fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
+    let t = theme(ui);
     let label = match p.address() {
         Some(a) => format!("{}  {a}", p.name.to_ascii_lowercase()),
         None => p.name.to_ascii_lowercase(),
@@ -1530,9 +1554,9 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             let b = egui::Button::new(
                 RichText::new(&label)
                     .strong()
-                    .color(if on { BLACK } else { WHITE }),
+                    .color(if on { BLACK } else { t.fg }),
             )
-            .fill(if on { YELLOW } else { GRAPHITE })
+            .fill(if on { YELLOW } else { t.rule })
             .sense(Sense::click_and_drag())
             .wrap_mode(egui::TextWrapMode::Truncate)
             .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
@@ -1544,9 +1568,9 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             let b = egui::Button::new(
                 RichText::new(format!("{label}: {}", if on { "ON" } else { "OFF" }))
                     .strong()
-                    .color(if on { BLACK } else { WHITE }),
+                    .color(if on { BLACK } else { t.fg }),
             )
-            .fill(if on { YELLOW } else { GRAPHITE })
+            .fill(if on { YELLOW } else { t.rule })
             .wrap_mode(egui::TextWrapMode::Truncate)
             .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
             if ui.add(b).on_hover_text("switch: click to flip").clicked() {
@@ -1628,6 +1652,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
 
 /// One output: a lamp (BOOL) or a readout. Returns whether it was clicked.
 fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
+    let t = theme(ui);
     let on = p.value == Value::Bool(true);
     let name = match p.address() {
         Some(a) => format!("{}  {a}", p.name.to_ascii_lowercase()),
@@ -1643,7 +1668,7 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
             RichText::new(text)
                 .monospace()
                 .size(15.0)
-                .color(if on { YELLOW } else { WHITE }),
+                .color(if on { t.accent } else { t.fg }),
         )
         .wrap_mode(egui::TextWrapMode::Truncate)
         .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
@@ -1661,12 +1686,13 @@ pub fn show(ty: Ty, v: Value) -> String {
 
 /// Answer text: paragraphs as labels, fenced code in monospace blocks.
 fn markdown(ui: &mut egui::Ui, text: &str) {
+    let t = theme(ui);
     for (k, s) in segments(text).into_iter().enumerate() {
         match s {
             Segment::Prose(p) => {
-                let t = p.trim();
-                if !t.is_empty() {
-                    ui.label(RichText::new(t).color(WHITE));
+                let para = p.trim();
+                if !para.is_empty() {
+                    ui.label(RichText::new(para).color(t.fg));
                 }
             }
             Segment::Code { body, .. } => {
@@ -1675,8 +1701,8 @@ fn markdown(ui: &mut egui::Ui, text: &str) {
                 // 2026-11-01), and wrapping code misreads.
                 let width = ui.available_width();
                 egui::Frame::new()
-                    .fill(BLACK)
-                    .stroke(Stroke::new(1.0, GRAPHITE))
+                    .fill(t.bg)
+                    .stroke(Stroke::new(1.0, t.rule))
                     .inner_margin(6.0)
                     .show(ui, |ui| {
                         ui.set_max_width(width - 12.0);

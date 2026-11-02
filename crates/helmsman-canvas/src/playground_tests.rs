@@ -1451,6 +1451,7 @@ fn typing_in_the_editor_checks_after_a_pause_and_marks_the_error_line() {
         None,
         &egui::FontId::monospace(13.0),
         f32::INFINITY,
+        &crate::theme::Theme::dark(),
     );
     assert!(job.sections.iter().any(|x| x.format.underline.width > 0.0));
     assert_eq!(job.text, s.view.session.src, "the layout keeps the text as is");

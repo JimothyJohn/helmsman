@@ -15,7 +15,7 @@ use helmsman_project::starters::{Kind, STARTERS, starter};
 
 use crate::editor::Chrome;
 use crate::st_view::TAP;
-use crate::st_view::brand::{STEEL, WHITE, YELLOW};
+use crate::theme::theme;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
@@ -196,6 +196,7 @@ fn write_button(ui: &mut egui::Ui, write: &Result<(), String>, text: &str, hint:
 impl FilesUi {
     /// The projects, then the open project's files. Returns what was asked.
     pub fn show(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, chrome: &mut Chrome) -> Option<Act> {
+        let t = theme(ui);
         let mut act = None;
         let mut shown = Group::Mine;
         for p in l.projects {
@@ -211,7 +212,7 @@ impl FilesUi {
             if p.running {
                 text.push_str("  ● running");
             }
-            let color = if p.running { YELLOW } else { WHITE };
+            let color = if p.running { t.accent } else { t.fg };
             let r = ui.selectable_label(open, RichText::new(text).monospace().color(color));
             chrome.hit(format!("project {}", p.name), r.rect);
             let r = match starter(&p.name).filter(|_| p.example()) {
@@ -257,7 +258,7 @@ impl FilesUi {
             });
         }
         if l.projects.is_empty() {
-            ui.label(RichText::new("No projects yet.").color(STEEL));
+            ui.label(RichText::new("No projects yet.").color(t.muted));
         }
         // New project and Copy project are the File menu's (and a
         // right-click's); Rename and Delete of the open project stay here.
@@ -285,7 +286,7 @@ impl FilesUi {
             ui.separator();
             let is_example = l.projects.iter().any(|p| p.name == open && p.example());
             let can_write = l.write.is_ok() && !is_example;
-            let head = ui.label(RichText::new(format!("{open}: files")).strong().color(STEEL));
+            let head = ui.label(RichText::new(format!("{open}: files")).strong().color(t.muted));
             // Right-click the heading: paste into this project.
             head.context_menu(|ui| {
                 let paste = self.clipboard.is_some() && can_write;
@@ -380,11 +381,12 @@ impl FilesUi {
 
     /// A list's heading; a long list's folds on a click.
     fn group_header(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, g: Group, chrome: &mut Chrome) {
+        let t = theme(ui);
         let title = match g {
             Group::Mine => return,
             Group::FirstSteps => {
                 ui.add_space(4.0);
-                ui.label(RichText::new("Examples").strong().color(STEEL));
+                ui.label(RichText::new("Examples").strong().color(t.muted));
                 return;
             }
             Group::Machines => "Machines",
@@ -394,7 +396,7 @@ impl FilesUi {
         let n = l.projects.iter().filter(|p| p.group == g).count();
         let text = format!("{} {title} ({n})", if open { "▾" } else { "▸" });
         ui.add_space(4.0);
-        let r = ui.selectable_label(false, RichText::new(text).strong().color(STEEL));
+        let r = ui.selectable_label(false, RichText::new(text).strong().color(t.muted));
         chrome.hit(format!("group {title}"), r.rect);
         if r.clicked() && !self.unfolded.remove(&g) {
             self.unfolded.insert(g);
@@ -404,10 +406,11 @@ impl FilesUi {
     /// "Start from a machine or template": the same list the simulation
     /// has; a click asks for the new project's name.
     fn starters_ui(&mut self, ui: &mut egui::Ui, write: &Result<(), String>, chrome: &mut Chrome) {
+        let t = theme(ui);
         let arrow = if self.starters_open { "▾" } else { "▸" };
         let r = ui.selectable_label(
             false,
-            RichText::new(format!("{arrow} Start from a machine or template")).color(STEEL),
+            RichText::new(format!("{arrow} Start from a machine or template")).color(t.muted),
         );
         chrome.hit("starters", r.rect);
         if r.clicked() {
@@ -417,7 +420,7 @@ impl FilesUi {
             return;
         }
         for (kind, title) in [(Kind::Machine, "Machines"), (Kind::Template, "Templates")] {
-            ui.label(RichText::new(title).strong().color(STEEL));
+            ui.label(RichText::new(title).strong().color(t.muted));
             for s in STARTERS.iter().filter(|s| s.kind == kind) {
                 let r = write_button(ui, write, s.title, s.about);
                 chrome.hit(format!("starter {}", s.name), r.rect);

@@ -16,7 +16,8 @@ use crate::playground_view::PlaygroundView;
 use crate::projects::Workspace;
 use crate::review_view::ReviewView;
 use crate::st_view::TAP;
-use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, GRAPHITE, YELLOW};
+use crate::theme::{self, theme};
 
 /// The header's height, points: one row, as tall as the two it replaced.
 pub const HEADER_H: f32 = 48.0;
@@ -111,7 +112,6 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
         // A page the box serves watches that box; docs/playground/ (and
         // the old `?playground` and `?demo` links) run the simulation, as
         // does the native window.
@@ -126,6 +126,9 @@ impl App {
         if let Some(saved) = cc.storage.and_then(|s| s.get_string(CHROME_KEY)) {
             app.chrome = Chrome::restored(&saved);
         }
+        // Dark by default; the light mode this browser chose, from the
+        // first frame.
+        theme::apply(&cc.egui_ctx, app.chrome.light);
         #[cfg(target_arch = "wasm32")]
         if crate::web::wants_monitor() {
             app.open_monitor();
@@ -242,6 +245,7 @@ impl App {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
+        theme::apply(&ctx, self.chrome.light);
         if self.source == Source::Sim && self.screen == Screen::Proposals {
             self.screen = Screen::Editor;
         }
@@ -485,10 +489,11 @@ impl App {
         let engineer = is_engineer(self.session().as_ref()).is_ok();
         let panel = egui::Panel::top("header").show(ui, |ui| {
             let size = Vec2::new(ui.available_width(), HEADER_H);
+            let t = theme(ui);
             ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 // The wordmark is the way to the site.
                 let mark = ui
-                    .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(YELLOW)).frame(false))
+                    .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent)).frame(false))
                     .on_hover_text(SITE_URL);
                 hits.push(("mark".to_string(), mark.rect));
                 if mark.clicked() {
@@ -522,10 +527,10 @@ impl App {
                     ui.separator();
                     self.dirty_mark(ui, &mut hits);
                     if self.source == Source::Sim {
-                        ui.label(RichText::new("simulation").color(STEEL));
+                        ui.label(RichText::new("simulation").color(t.muted));
                     }
-                    let t = ui.label(RichText::new(&title).strong().monospace().color(WHITE));
-                    hits.push(("title".to_string(), t.rect));
+                    let r = ui.label(RichText::new(&title).strong().monospace().color(t.fg));
+                    hits.push(("title".to_string(), r.rect));
                     m.rect
                 })
                 .inner
@@ -546,12 +551,13 @@ impl App {
     /// Editor | Monitor as one two-way toggle: the active side filled.
     fn screen_toggle(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
         let half = Vec2::new(TAP * 1.6, TAP * 0.62);
+        let t = theme(ui);
         let (rect, _) = ui.allocate_exact_size(Vec2::new(half.x * 2.0, half.y), egui::Sense::hover());
-        ui.painter().rect_filled(rect, CornerRadius::same(6), GRAPHITE);
+        ui.painter().rect_filled(rect, CornerRadius::same(6), t.rule);
         ui.painter().rect_stroke(
             rect,
             CornerRadius::same(6),
-            egui::Stroke::new(1.0, STEEL.gamma_multiply(0.6)),
+            egui::Stroke::new(1.0, t.muted.gamma_multiply(0.6)),
             egui::StrokeKind::Inside,
         );
         let sides = [
@@ -573,7 +579,7 @@ impl App {
                 egui::Align2::CENTER_CENTER,
                 label,
                 egui::FontId::proportional(14.0),
-                if on { BLACK } else { WHITE },
+                if on { BLACK } else { t.fg },
             );
             hits.push((key.to_string(), r));
             // A click on either side flips (Nick, 2026-11-01), so from the
@@ -614,7 +620,7 @@ impl App {
             .fixed_pos(at)
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()
-                    .fill(BLACK.gamma_multiply(0.75))
+                    .fill(theme(ui).veil)
                     .corner_radius(CornerRadius::same(7))
                     .inner_margin(4.0)
                     .show(ui, |ui| {
@@ -700,8 +706,9 @@ impl App {
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label(RichText::new("HELMSMAN").strong().size(22.0).color(YELLOW));
-                ui.label(RichText::new("FACTORY AUTOMATION").strong().color(STEEL));
+                let t = theme(ui);
+                ui.label(RichText::new("HELMSMAN").strong().size(22.0).color(t.accent));
+                ui.label(RichText::new("FACTORY AUTOMATION").strong().color(t.muted));
                 ui.add_space(8.0);
                 ui.label(format!(
                     "Version {} (build {})",
@@ -720,7 +727,7 @@ impl App {
                             RichText::new(format!("HTTPS certificate SHA-256\n{a}\n{b}"))
                                 .small()
                                 .monospace()
-                                .color(STEEL),
+                                .color(t.muted),
                         )
                         .on_hover_text(
                             "the browser shows this page's certificate fingerprint too: they must match",
@@ -804,7 +811,7 @@ impl App {
                 if let Err(why) = &write
                     && !why.is_empty()
                 {
-                    ui.label(RichText::new(why).small().color(STEEL));
+                    ui.label(RichText::new(why).small().color(theme(ui).muted));
                 }
                 ui.separator();
                 ui.add_enabled_ui(can, |ui| {
@@ -919,12 +926,18 @@ impl App {
                 if let Some(w) = self.workspace() {
                     w.layout_menu(ui, &mut chrome);
                 }
+                ui.separator();
                 if engineer {
-                    ui.separator();
                     let on = chrome.scan;
                     if menu_item(ui, &mut chrome, "view scan", "Scan detail", on) {
                         chrome.scan = !on;
                     }
+                }
+                // Dark by default; the choice is kept per browser with the
+                // layout, and `show` applies it to egui each frame.
+                let light = chrome.light;
+                if menu_item(ui, &mut chrome, "view light", "Light mode", light) {
+                    chrome.light = !light;
                 }
             });
             hits.push(("bar view".to_string(), v.response.rect));
@@ -1014,7 +1027,11 @@ impl App {
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(at.right_bottom() + Vec2::new(0.0, 4.0))
             .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).fill(GRAPHITE).show(ui, |ui| {
+                // Lifted off the dark header on graphite; a white card on
+                // the light page.
+                let t = theme(ui);
+                let fill = if t.dark { GRAPHITE } else { t.panel };
+                egui::Frame::popup(ui.style()).fill(fill).show(ui, |ui| {
                     ui.set_max_width(300.0);
                     r.login_ui(ui);
                 });
@@ -1035,5 +1052,14 @@ impl eframe::App for App {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(CHROME_KEY, self.chrome.saved());
+    }
+
+    /// What shows where nothing is painted (the frameless centre behind
+    /// the diagram's crumbs): the page, in either theme, rather than
+    /// eframe's near-black.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        theme::Theme::for_mode(visuals.dark_mode)
+            .bg
+            .to_normalized_gamma_f32()
     }
 }
