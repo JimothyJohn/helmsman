@@ -11,7 +11,7 @@ use crate::box_view::{BoxView, is_engineer};
 use crate::editor::{Body, CHROME_KEY, Chrome, menu_item, menu_item_keyed};
 use crate::glyphs;
 use crate::hotkeys::{self, Action};
-use crate::monitor::{Monitor, NARROW, Wish};
+use crate::monitor::{Monitor, NARROW, Transport, Wish};
 use crate::playground_view::PlaygroundView;
 use crate::projects::Workspace;
 use crate::review_view::ReviewView;
@@ -327,16 +327,22 @@ impl App {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.state.set_monitor(true);
                 b.tick(&ctx);
-                self.monitor.show(ui, &b.state, &mut self.chrome, engineer);
+                self.monitor.show(ui, &b.state, &mut self.chrome, engineer, None);
             }
             (Screen::Monitor, Source::Sim) => {
                 let s = self.sim.get_or_insert_with(PlaygroundView::new);
                 s.tick(&ctx);
-                self.monitor.show(ui, &*s, &mut self.chrome, engineer);
+                let t = Transport {
+                    built: s.session.build.is_some(),
+                    running: s.session.running,
+                };
+                self.monitor.show(ui, &*s, &mut self.chrome, engineer, Some(t));
             }
         }
-        if let Some(Wish::Diagram { program, prefix }) = self.monitor.wish.take() {
-            self.open_diagram(&program, &prefix);
+        match self.monitor.wish.take() {
+            Some(Wish::Diagram { program, prefix }) => self.open_diagram(&program, &prefix),
+            Some(Wish::Act(a)) => self.act(a, &ctx),
+            None => {}
         }
         self.glyphs(ui);
         self.chrome.hits.extend(header);
@@ -368,7 +374,8 @@ impl App {
                 }
             }
             Action::RunStop | Action::Stop | Action::Step => {
-                if self.source != Source::Sim || self.screen != Screen::Editor {
+                // On the Editor and the Monitor alike (Nick, 2026-11-01).
+                if self.source != Source::Sim || self.screen == Screen::Proposals {
                     return;
                 }
                 let Some(s) = self.sim.as_mut() else { return };

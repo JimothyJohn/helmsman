@@ -27,6 +27,8 @@ use helmsman_iec::Value;
 use helmsman_iec::ast::{self, PouKind, Section, TypeRef};
 
 use crate::editor::Chrome;
+use crate::glyphs;
+use crate::hotkeys::Action;
 use crate::playground_view::PlaygroundView;
 use crate::remote::{BoxState, Link};
 use crate::st_view::TAP;
@@ -359,6 +361,17 @@ pub struct Group {
 pub enum Wish {
     /// The Editor's diagram of `program`, at `prefix`.
     Diagram { program: String, prefix: String },
+    /// A transport button: run or stop, step, restart.
+    Act(Action),
+}
+
+/// The simulation's transport as the Monitor shows it: whether a program
+/// is built, and whether it runs. A box has none (card
+/// monitor-box-run-stop): its Monitor stays watch-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Transport {
+    pub built: bool,
+    pub running: bool,
 }
 
 /// The Monitor's own state: which level is shown. Values are the feed's.
@@ -546,7 +559,16 @@ impl Monitor {
     /// One frame: the crumbs and the tiles, filling `ui`. Draws what was
     /// where into `chrome`'s hits. `engineer`: the page is signed in as
     /// one, so the "Scan detail" toggle is offered and honoured.
-    pub fn show(&mut self, ui: &mut egui::Ui, feed: &dyn Feed, chrome: &mut Chrome, engineer: bool) {
+    /// `transport`: the simulation's run or stop, step and restart, drawn
+    /// in the header (Nick, 2026-11-01: play, start, stop on the Monitor).
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        feed: &dyn Feed,
+        chrome: &mut Chrome,
+        engineer: bool,
+        transport: Option<Transport>,
+    ) {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
         // Ages tick and data goes stale with no event to wake the page.
@@ -557,7 +579,7 @@ impl Monitor {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(BLACK).inner_margin(12.0 * k))
             .show(ui, |ui| {
-                self.top(ui, k, trouble.as_deref(), chrome, engineer);
+                self.top(ui, k, trouble.as_deref(), chrome, engineer, transport);
                 // After the toggle, so a tap shows on the same frame.
                 let groups = self.groups(feed, now, engineer && chrome.scan);
                 ui.add_space(10.0 * k);
@@ -591,9 +613,18 @@ impl Monitor {
             });
     }
 
-    /// Back, the crumbs, "Open diagram", an engineer's "Scan detail"
-    /// toggle, and a red banner when the source cannot be trusted.
-    fn top(&mut self, ui: &mut egui::Ui, k: f32, trouble: Option<&str>, chrome: &mut Chrome, engineer: bool) {
+    /// Back, the crumbs, the simulation's transport, "Open diagram", an
+    /// engineer's "Scan detail" toggle, and a red banner when the source
+    /// cannot be trusted.
+    fn top(
+        &mut self,
+        ui: &mut egui::Ui,
+        k: f32,
+        trouble: Option<&str>,
+        chrome: &mut Chrome,
+        engineer: bool,
+        transport: Option<Transport>,
+    ) {
         let mut go: Option<Option<(String, String)>> = None;
         let crumbs = self.crumbs();
         ui.horizontal_wrapped(|ui| {
@@ -627,6 +658,9 @@ impl Monitor {
                 if r.clicked() && !last {
                     go = Some(to.clone());
                 }
+            }
+            if let Some(t) = transport {
+                self.transport(ui, t, chrome);
             }
             let open = ui
                 .add(
@@ -664,6 +698,41 @@ impl Monitor {
                     .background_color(RED),
             );
             chrome.hit("monitor banner", r.rect);
+        }
+    }
+
+    /// The simulation's transport, the Editor's glyphs under the same keys
+    /// (`run`, `step`, `restart`), so the hotkeys' tests and the page's
+    /// behave alike on either screen.
+    fn transport(&mut self, ui: &mut egui::Ui, t: Transport, chrome: &mut Chrome) {
+        let (icon, tip) = if t.running {
+            (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
+        } else {
+            (glyphs::Icon::Run, "Run (Ctrl+Enter)")
+        };
+        let items = [
+            ("run", icon, t.built, tip, Action::RunStop),
+            (
+                "step",
+                glyphs::Icon::Step,
+                t.built && !t.running,
+                "Step one scan (F10)",
+                Action::Step,
+            ),
+            (
+                "restart",
+                glyphs::Icon::Restart,
+                t.built,
+                "Restart: initial values, clock to zero",
+                Action::Restart,
+            ),
+        ];
+        for (key, icon, enabled, tip, act) in items {
+            let r = glyphs::button(ui, icon, enabled, false, tip);
+            chrome.hit(key, r.rect);
+            if r.clicked() {
+                self.wish = Some(Wish::Act(act));
+            }
         }
     }
 
