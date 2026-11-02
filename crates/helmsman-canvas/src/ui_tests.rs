@@ -168,10 +168,12 @@ mod glyphs_and_help {
         assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "a cold restart");
         h.press("run");
         assert!(h.app.sim.as_ref().unwrap().session.running, "and starts again");
-        // The Monitor has no diagram, so no glyphs.
+        // The Monitor has no diagram, so no file glyphs; the transport is
+        // in its header (Nick, 2026-11-01).
         h.press("monitor");
         assert_eq!(h.app.screen, Screen::Monitor);
-        assert!(!h.has("run") && !h.has("download"));
+        h.frame(vec![]);
+        assert!(h.has("run") && !h.has("download"));
         assert!(h.has("help"), "? stays in the header");
     }
 
@@ -407,6 +409,41 @@ mod polish {
         assert!(h.has("bar view"));
         h.view_menu("view editor");
         assert_eq!(h.app.screen, Screen::Editor);
+    }
+
+    /// Nick, 2026-11-01: the Monitor needs play, start, stop. In the
+    /// simulation its header carries the same run or stop, step and
+    /// restart as the Editor's glyphs, and the keys work there too. A
+    /// box's Monitor stays watch-only (card monitor-box-run-stop).
+    #[test]
+    fn the_monitor_runs_stops_steps_and_restarts_the_simulation() {
+        let mut h = Harness::new(App::sim());
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Monitor);
+        h.frame(vec![]);
+        for k in ["run", "step", "restart"] {
+            assert!(h.has(k), "the Monitor has {k}");
+        }
+        let running = |h: &Harness| h.app.sim.as_ref().unwrap().session.running;
+        let scans = |h: &Harness| h.app.sim.as_ref().unwrap().session.scans;
+        assert!(running(&h), "the example opens running");
+        h.press("run");
+        assert!(!running(&h), "stopped from the Monitor");
+        let n = scans(&h);
+        h.press("step");
+        assert_eq!(scans(&h), n + 1, "one scan");
+        h.press("restart");
+        assert_eq!(scans(&h), 0, "a cold restart");
+        h.press("run");
+        assert!(running(&h), "and running again");
+        // The keys, on the Monitor: Ctrl Enter stops, F10 steps.
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(!running(&h), "Ctrl Enter stops on the Monitor");
+        let n = scans(&h);
+        h.key(Modifiers::NONE, Key::F10);
+        assert_eq!(scans(&h), n + 1, "F10 steps on the Monitor");
+        // Still no Save, Upload or Download there: nothing to edit.
+        assert!(!h.has("save") && !h.has("download"));
     }
 
     #[test]
