@@ -173,7 +173,8 @@ pub fn free_file_name(want: &str, taken: impl Fn(&str) -> bool) -> String {
 
 /// A right-click menu's item: whether it was clicked (the menu closes).
 fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enabled: bool) -> bool {
-    let b = egui::Button::new(text).min_size(Vec2::new(ui.available_width().max(110.0), TAP * 0.6));
+    // A fixed floor, not `available_width()`: see editor::menu_item_keyed.
+    let b = egui::Button::new(text).min_size(Vec2::new(110.0, TAP * 0.6));
     let r = ui.add_enabled(enabled, b);
     chrome.hit(key, r.rect);
     if r.clicked() {
