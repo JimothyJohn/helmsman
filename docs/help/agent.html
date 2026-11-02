@@ -47,6 +47,8 @@ main pre code{background:none;padding:0;color:inherit}
 main table{border-collapse:collapse;margin:12px 0;font-size:15px}
 main th,main td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
 main th{font:600 13px var(--mono);color:var(--muted)}
+main img{display:block;max-width:100%;height:auto;margin:14px 0;border:1px solid var(--rule);border-radius:6px}
+main img.narrow{max-width:420px}
 main kbd{font:13px var(--mono);background:var(--kbd);border:1px solid var(--kbd-edge);border-bottom-width:2px;border-radius:4px;padding:1px 6px}
 main a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
 .note{border-left:4px solid var(--yellow);background:var(--note);padding:10px 14px;margin:14px 0}
@@ -75,6 +77,8 @@ browser only, and the tab says plainly where the key is kept. Running
 the playground from your own machine with a local proxy, or natively
 with the key in the environment, the tab says the key is preloaded so
 you are not left wondering.</p>
+<img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the question and Ask." width="240">
+
 <p>Ask for a program ("a conveyor with a photo eye that stops after
 three parts"), for a change to the open one ("add a two-second delay
 before the belt starts"), or for an explanation ("why does the lamp
@@ -87,7 +91,8 @@ and no browser holds it. What the Agent proposes becomes a
 <strong>proposal</strong> on the box, with a diff and a replay in the
 simulation, that an approver signs off under the box's policy before it
 runs. The Agent tab on a box is still to come; proposals already arrive
-and are reviewed from the ⋯ menu.</p>
+and are reviewed from the Proposals screen (the header's
+<strong>waiting</strong> badge).</p>
 <h2 id="what-it-will-not-do">What it will not do</h2>
 <p>The Agent writes and explains; it never deploys. It cannot force an
 input, change the I/O map on a box, or approve anything. Its code is

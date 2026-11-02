@@ -47,6 +47,8 @@ main pre code{background:none;padding:0;color:inherit}
 main table{border-collapse:collapse;margin:12px 0;font-size:15px}
 main th,main td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
 main th{font:600 13px var(--mono);color:var(--muted)}
+main img{display:block;max-width:100%;height:auto;margin:14px 0;border:1px solid var(--rule);border-radius:6px}
+main img.narrow{max-width:420px}
 main kbd{font:13px var(--mono);background:var(--kbd);border:1px solid var(--kbd-edge);border-bottom-width:2px;border-radius:4px;padding:1px 6px}
 main a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
 .note{border-left:4px solid var(--yellow);background:var(--note);padding:10px 14px;margin:14px 0}
@@ -74,6 +76,8 @@ stops), step one scan while stopped (<kbd>F10</kbd>), and restart from
 initial values with the clock at zero. The same three buttons and keys
 are in the Monitor's header. The state in the header says which it is;
 the clock beside it is the program's own time.</p>
+<img src="img/monitor-stopped.png" alt="The Monitor's header with the program stopped: run, step and restart beside the crumbs." width="700">
+
 <p>One program runs in the page at a time. Opening or deploying another
 stops the one before.</p>
 <h2 id="editing">Editing</h2>
@@ -111,6 +115,8 @@ or slow; history is kept for the widest, so widening shows what already
 ran. The lane's scale is at its right edge: it rounds out to an even
 step and moves only when the values cross one. Pin from the tab's list.
 History restarts when you change the set.</p>
+<p><img src="img/trend.png"
+alt="The Trend tab: three pinned signals, the Window row, a lane each with its scale at the right edge." /></p>
 <h2 id="faults">Faults</h2>
 <p>A program that divides by zero, runs past its watchdog, or writes an
 output out of range <strong>faults</strong>: it stops at the statement

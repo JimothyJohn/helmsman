@@ -47,6 +47,8 @@ main pre code{background:none;padding:0;color:inherit}
 main table{border-collapse:collapse;margin:12px 0;font-size:15px}
 main th,main td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
 main th{font:600 13px var(--mono);color:var(--muted)}
+main img{display:block;max-width:100%;height:auto;margin:14px 0;border:1px solid var(--rule);border-radius:6px}
+main img.narrow{max-width:420px}
 main kbd{font:13px var(--mono);background:var(--kbd);border:1px solid var(--kbd-edge);border-bottom-width:2px;border-radius:4px;padding:1px 6px}
 main a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
 .note{border-left:4px solid var(--yellow);background:var(--note);padding:10px 14px;margin:14px 0}
@@ -78,10 +80,11 @@ sign out, when it has been idle a while, or when it is a day old.</p>
 <p>Deploy on a box goes through its <strong>approval policy</strong>: a
 change the policy calls small lands at once; a larger one, a logic
 change, is held as a proposal until an approver signs it off, with a
-replay in the simulation to look at first. The ⋯ menu lists proposals
-waiting; the header's ⋯ badge counts them. Nothing runs on the box that
-was not approved under the policy, and every change is in the box's
-audit log.</p>
+replay in the simulation to look at first. The header's yellow
+<strong>waiting</strong> badge counts the proposals waiting and opens
+the Proposals screen that lists them. Nothing runs on the box that was
+not approved under the policy, and every change is in the box's audit
+log.</p>
 <p>The first install of a box seeds a project but runs nothing: an
 engineer deploys the first program.</p>
 <h2 id="forcing">Forcing</h2>
@@ -110,10 +113,12 @@ red FALSE, and a tap into each block instance. A phone opens on the
 Monitor. "Open diagram" on a tile goes to that level in the Editor. An
 engineer can turn on <strong>Scan detail</strong> (View) to see each
 program's scan period and counts; they are hidden otherwise.</p>
+<p><img src="img/monitor.png"
+alt="The Monitor: a tile per program with its state, and a tile of its outputs." /></p>
 <h2 id="https">HTTPS</h2>
 <p>A box serves HTTPS with a certificate it made at first boot; the
 browser asks once. The certificate's fingerprint is printed at the box's
-startup and shown in the ⋯ menu, so you can compare the two. From the
+startup and shown in Help › About, so you can compare the two. From the
 box's own host, plain HTTP still works for scripts.</p>
 </main>
 </div>

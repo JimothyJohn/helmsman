@@ -25,6 +25,8 @@ shows them.
 - The tree under the files is the program: the `PROGRAM`, then each
   function block instance it calls, nested. Click one to see its diagram.
 
+<img src="img/context-menu.png" alt="A right-click on a file: Copy, Paste, Duplicate, Rename and Delete." width="360">
+
 ## Save and Deploy
 
 **Save** (<kbd>Ctrl</kbd> <kbd>S</kbd>, File › Save, the glyph) writes
