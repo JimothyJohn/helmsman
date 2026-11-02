@@ -360,3 +360,30 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 15m
   difficulty: low
   id: canvas-try
+
+- [ ] **helmsman-iec no_std + alloc** — a `std` feature (default on): HashMap/HashSet → BTreeMap/BTreeSet, Arc/Duration/Error/fmt from alloc and core, the parsed library passed in instead of a OnceLock, `Program::scan` behind `std`, `State` carrying a Duration instead of an Instant, and the twelve REAL builtins (SQRT, LN, SIN, ..., round/trunc) from `libm` as an optional dep only the no_std build enables (they have no core counterpart on rustc 1.99; checked). No logic moves, only imports.
+  needs: nothing new; docs/EDGE.md "What the runtime needs from std today" is the item list
+  result: G1 — `cargo build -p helmsman-iec --no-default-features --target thumbv7em-none-eabihf` in CI and scripts/lint.sh; every existing test, the ruSTy differential and the property tests green on std; the box build's dependency tree unchanged
+  options: libm optional under not(std) | gate the REAL builtins behind std and refuse them on a node
+  notes: docs/EDGE.md §Phases, Phase 0. Studio baseline 2026-11-01: trace_bench 57.8 µs/scan tracing off (M1 Max, release)
+  est: 1d
+  difficulty: low
+  id: iec-no-std
+
+- [ ] **Scan bench on the ESP32-POE2** — `crates/helmsman-node` (not a default workspace member): supervictor's board/poe2.rs and Ethernet bring-up copied in, Embassy and esp-hal 1.0 as supervictor pins them, trace_bench and the batch-mixer starter (blocks concatenated) embedded and compiled at boot; min/mean/max/p99 per scan and esp-alloc peak after compile and after 10 000 scans over USB serial. On a WROVER repeat with the program heap in PSRAM.
+  needs: the esp toolchain as supervictor pins it (espup, channel esp); the POE2 on USB with ETHERNET UNPLUGGED (no isolation); the module checked first: the two rack POE2s are WROOM per supervictor's inventory, Olimex ships WROVER-E now, and the Studio heap numbers (412 KB resident, 618 KB peak for the starter) say a WROOM cannot hold a realistic program as the crate stands
+  result: G2 (< 5 ms per 4k-statement scan) and G3 (compile peak plus 10 000 scans fit the node's heap layout with ≥ 25 % headroom, SRAM-only figure recorded separately); numbers recorded either way, and a stop if either fails
+  notes: docs/EDGE.md §Numbers, §Extrapolating, Phase 1. Add the counting-allocator heap harness as a second helmsman-iec example while here.
+  est: 1d
+  difficulty: medium
+  depends: iec-no-std
+  id: node-scan-bench
+
+- [ ] **Modbus TCP from the node** — an async twin of helmsman-io's `Transport` over embassy-net's TCP socket behind a feature, `driver::Error` without std::io::Error, DI read and DO write batched to two round trips per scan; 10 ms scan against the E1213 (or the simulator) with DO0-3 looped to DI0-3; comms-loss safe state on yank.
+  needs: flash on USB with Ethernet unplugged, THEN unplug USB, THEN PoE; the E1213's comms-loss safe state configured; a UDP log sink on the laptop
+  result: G4 (overruns < 1 % of scans over 10 min) and G5 (the block goes safe within its timeout on Ethernet loss)
+  notes: docs/EDGE.md §Sync scan, async network, Phase 2
+  est: 1d
+  difficulty: medium
+  depends: node-scan-bench
+  id: node-modbus
