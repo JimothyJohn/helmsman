@@ -19,7 +19,7 @@ use crate::playground::{
     Dir, EXAMPLES, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget, nice_range,
     tick_label,
 };
-use crate::playground_view::PlaygroundView;
+use crate::playground_view::{PlaygroundView, window_label};
 use crate::projects::Workspace;
 
 const KEY: &str = "sk-ant-api03-TESTKEY-not-a-real-key-0123456789";
@@ -470,6 +470,12 @@ fn the_trend_records_chosen_signals_in_a_bounded_window() {
     assert!(last - first <= crate::playground::TREND_KEEP_MS);
     assert!(last - first > 90_000, "{first}..{last}");
     assert_eq!(s.trend.window_ms, crate::playground::TREND_MS, "opens on 10 s");
+    // The buttons read in seconds unless the width is whole minutes
+    // (100 s read as "1 min" on 2026-11-01).
+    assert_eq!(window_label(1_000), "1 s");
+    assert_eq!(window_label(10_000), "10 s");
+    assert_eq!(window_label(100_000), "100 s");
+    assert_eq!(window_label(600_000), "10 min");
 }
 
 // ---- Claude: the request ----------------------------------------------
