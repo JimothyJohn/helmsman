@@ -27,8 +27,9 @@ use crate::projects::{self, Act, FilesUi, Listing, Workspace};
 use crate::remote::{BoxState, Cmd, Link, Msg, SignalRow};
 use crate::review::Session;
 use crate::sim_projects::Storage;
-use crate::st_view::brand::{BLACK, GRAPHITE, WARN};
-use crate::st_view::{Pick, Viewer, brand, show};
+use crate::st_view::brand::{BLACK, WARN};
+use crate::st_view::{Pick, Viewer, show};
+use crate::theme::{Theme, theme};
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Largest file the editor takes (the box's `project::MAX_FILE`).
@@ -416,14 +417,12 @@ impl BoxView {
 
     /// The connection status line.
     #[must_use]
-    pub fn status(&self, now: f64) -> (String, Color32) {
+    pub fn status(&self, now: f64, t: &Theme) -> (String, Color32) {
         let retry = |at: f64| (at - now).max(0.0).ceil();
         match self.state.link() {
-            Link::Connecting => ("● connecting…".into(), brand::STEEL),
-            Link::Connected => ("● connected".into(), brand::YELLOW),
-            Link::Reconnecting { at, .. } => {
-                (format!("● reconnecting (retry in {}s)", retry(at)), brand::WHITE)
-            }
+            Link::Connecting => ("● connecting…".into(), t.muted),
+            Link::Connected => ("● connected".into(), t.accent),
+            Link::Reconnecting { at, .. } => (format!("● reconnecting (retry in {}s)", retry(at)), t.fg),
             Link::Unreachable { at, .. } => (format!("● box unreachable (retry in {}s)", retry(at)), RED),
         }
     }
@@ -572,14 +571,15 @@ impl BoxView {
 /// An input's force control over its block: a BOOL flips, a number drags.
 /// The value to force it to, if one was asked for.
 fn force_ui(ui: &mut egui::Ui, rect: Rect, s: &SignalRow, forced: bool) -> Option<Value> {
+    let t = theme(ui);
     let id = egui::Id::unique(("box-force-number", &s.name));
     let label = s.name.to_ascii_lowercase();
     let size = (rect.height() * 0.35).clamp(7.0, 16.0);
     let tip = "force this input on the box (an engineer only; ends on logout or deploy)";
     match s.value {
         Some(Value::Bool(on)) => {
-            let fill = if forced { WARN } else { GRAPHITE };
-            let ink = if forced { BLACK } else { brand::WHITE };
+            let fill = if forced { WARN } else { t.rule };
+            let ink = if forced { BLACK } else { t.fg };
             let b = egui::Button::new(
                 RichText::new(format!("{label} {}", if on { "TRUE" } else { "FALSE" }))
                     .strong()
@@ -775,8 +775,9 @@ impl Workspace for BoxView {
 
 impl Body for BoxView {
     fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
         let now = ui.ctx().input(|i| i.time);
-        let (text, color) = self.status(now);
+        let (text, color) = self.status(now, &t);
         ui.label(RichText::new(text).monospace().color(color));
         if matches!(self.state.link(), Link::Unreachable { .. }) {
             let r = ui
@@ -792,7 +793,7 @@ impl Body for BoxView {
             ui.label(
                 RichText::new(format!("t={:.1}s", s.now_ms as f64 / 1000.0))
                     .monospace()
-                    .color(brand::STEEL),
+                    .color(t.muted),
             )
             .on_hover_text(format!("scan {}", s.scan));
         }
@@ -805,25 +806,26 @@ impl Body for BoxView {
     }
 
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
         if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {
             ui.colored_label(RED, format!("fault: {f}"));
         }
         match &self.projects.deploy {
             Deploy::Idle => {}
             Deploy::Saving => {
-                ui.label(RichText::new("saving…").color(brand::STEEL));
+                ui.label(RichText::new("saving…").color(t.muted));
             }
             Deploy::Checking => {
-                ui.label(RichText::new("checking…").color(brand::STEEL));
+                ui.label(RichText::new("checking…").color(t.muted));
             }
             Deploy::Replaying => {
-                ui.label(RichText::new("replaying in the sim…").color(brand::STEEL));
+                ui.label(RichText::new("replaying in the sim…").color(t.muted));
             }
             Deploy::Deploying => {
-                ui.label(RichText::new("deploying…").color(brand::STEEL));
+                ui.label(RichText::new("deploying…").color(t.muted));
             }
             Deploy::Done(what) => {
-                let r = ui.label(RichText::new(format!("✔ {what}")).color(brand::YELLOW));
+                let r = ui.label(RichText::new(format!("✔ {what}")).color(t.accent));
                 chrome.hit("deployed", r.rect);
             }
             Deploy::Failed(why) => {
@@ -833,7 +835,7 @@ impl Body for BoxView {
         }
         if let Some((text, error)) = self.projects.notice.clone() {
             ui.separator();
-            let r = ui.label(RichText::new(text).color(if error { RED } else { brand::STEEL }));
+            let r = ui.label(RichText::new(text).color(if error { RED } else { t.muted }));
             chrome.hit("notice", r.rect);
             if self.projects.pending.is_some() && error {
                 let r = ui.button("Replace");
@@ -857,6 +859,7 @@ impl Body for BoxView {
     /// modules that run, each a program, the open one with every block
     /// instance it calls, nested; a click opens any of them.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
         if self.has_projects() {
             let write = self.writable().or_else(|e| {
                 // Opening is a read; only the writes need an engineer.
@@ -884,19 +887,19 @@ impl Body for BoxView {
                 self.project_act(a);
             }
             ui.separator();
-            ui.label(RichText::new("Running").strong().color(brand::STEEL));
+            ui.label(RichText::new("Running").strong().color(t.muted));
         }
         let mut chosen = None;
         let modules = self.state.modules.clone();
         if modules.is_empty() {
-            ui.label(RichText::new(self.waiting()).color(brand::STEEL));
+            ui.label(RichText::new(self.waiting()).color(t.muted));
         }
         for m in &modules {
             let selected = self.state.selected.as_deref() == Some(m.name.as_str());
             let arrow = if selected { "▾" } else { "▸" };
             let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans))
                 .monospace()
-                .color(if m.state == "faulted" { RED } else { brand::WHITE });
+                .color(if m.state == "faulted" { RED } else { t.fg });
             let r = ui.selectable_label(selected, text);
             chrome.hit(format!("module {}", m.name), r.rect);
             let r = match &m.fault {
@@ -925,10 +928,11 @@ impl Body for BoxView {
     }
 
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
         if self.has_projects() {
             let write = self.writable();
             let Some(o) = self.projects.open.clone() else {
-                ui.label(RichText::new("Open a project in Files.").color(brand::STEEL));
+                ui.label(RichText::new("Open a project in Files.").color(t.muted));
                 return;
             };
             ui.horizontal_wrapped(|ui| {
@@ -936,13 +940,13 @@ impl Body for BoxView {
                 match &write {
                     Ok(()) => {}
                     Err(why) => {
-                        let r = ui.label(RichText::new(format!("read-only: {why}")).color(brand::STEEL));
+                        let r = ui.label(RichText::new(format!("read-only: {why}")).color(t.muted));
                         chrome.hit("read-only", r.rect);
                     }
                 }
             });
             let Some(file) = o.current.clone() else {
-                ui.label(RichText::new("No files in this project yet.").color(brand::STEEL));
+                ui.label(RichText::new("No files in this project yet.").color(t.muted));
                 return;
             };
             let diags: Vec<(u32, u32)> = self
@@ -990,7 +994,7 @@ impl Body for BoxView {
         }
         ui.horizontal(|ui| {
             ui.label(RichText::new("Structured Text").strong());
-            ui.label(RichText::new("read-only: changes reach the box as proposals").color(brand::STEEL));
+            ui.label(RichText::new("read-only: changes reach the box as proposals").color(t.muted));
         });
         match &self.view {
             Some(v) => {
@@ -998,7 +1002,7 @@ impl Body for BoxView {
                 editor::st_editor(ui, egui::Id::unique("box-st"), &mut src, &[], usize::MAX, chrome);
             }
             None => {
-                ui.label(RichText::new(self.waiting()).color(brand::STEEL));
+                ui.label(RichText::new(self.waiting()).color(t.muted));
             }
         }
     }
@@ -1017,6 +1021,7 @@ impl Body for BoxView {
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, _tab: Tab) {
+        let t = theme(ui);
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {
             if let Some(v) = &mut self.view {
@@ -1034,8 +1039,8 @@ impl Body for BoxView {
                         let color = match s.quality.as_str() {
                             _ if s.forced => WARN,
                             "missing" => RED,
-                            _ if s.value == Some(helmsman_iec::Value::Bool(true)) => brand::YELLOW,
-                            _ => brand::WHITE,
+                            _ if s.value == Some(helmsman_iec::Value::Bool(true)) => t.accent,
+                            _ => t.fg,
                         };
                         let l = ui.label(RichText::new(text).monospace().color(color));
                         if let Some(e) = &s.point_error {
@@ -1049,6 +1054,7 @@ impl Body for BoxView {
     }
 
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
         self.banner(ui, chrome);
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         let mut jump = None;
@@ -1083,7 +1089,7 @@ impl Body for BoxView {
             }
             _ => {
                 ui.add_space(40.0);
-                ui.vertical_centered(|ui| ui.label(RichText::new(self.waiting()).color(brand::STEEL)));
+                ui.vertical_centered(|ui| ui.label(RichText::new(self.waiting()).color(t.muted)));
             }
         }
         if let Some((at, line)) = jump {

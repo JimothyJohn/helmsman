@@ -14,7 +14,7 @@ use eframe::egui::{
 };
 
 use crate::st_view::TAP;
-use crate::st_view::brand::{GRAPHITE, STEEL, WHITE, YELLOW};
+use crate::theme::{Theme, theme};
 
 /// Where the app keeps [`Chrome`] in the browser's storage.
 pub const CHROME_KEY: &str = "helmsman-canvas/editor";
@@ -120,6 +120,8 @@ pub struct Chrome {
     /// The Monitor's status tiles show the scan period and counts: an
     /// engineer's choice, and only shown while one is signed in.
     pub scan: bool,
+    /// View › Light mode: the light page instead of the dark one.
+    pub light: bool,
     /// The source line a block click sent the ST editor to.
     pub line: Option<u32>,
     /// [`Self::line`] not scrolled to yet.
@@ -141,6 +143,7 @@ impl Default for Chrome {
             bottom: Bottom::Trend,
             tab: Tab::Io,
             scan: false,
+            light: false,
             line: None,
             jump: None,
             hits: Vec::new(),
@@ -154,14 +157,15 @@ impl Chrome {
     #[must_use]
     pub fn saved(&self) -> String {
         format!(
-            "left={} right={} pane={} tab={} scan={} trend={} bottom={}",
+            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={}",
             u8::from(self.left),
             u8::from(self.right),
             self.pane.key(),
             self.tab.key(),
             u8::from(self.scan),
             u8::from(self.trend),
-            self.bottom.key()
+            self.bottom.key(),
+            u8::from(self.light)
         )
     }
 
@@ -179,6 +183,7 @@ impl Chrome {
                 Some(("pane", "files")) => c.pane = Pane::Files,
                 Some(("scan", v)) => c.scan = v == "1",
                 Some(("trend", v)) => c.trend = v == "1",
+                Some(("light", v)) => c.light = v == "1",
                 Some(("bottom", "messages")) => c.bottom = Bottom::Messages,
                 Some(("bottom", "trend")) => c.bottom = Bottom::Trend,
                 Some(("tab", v)) => {
@@ -278,8 +283,11 @@ pub fn menu_item_keyed(
     on: bool,
     shortcut: &str,
 ) -> bool {
-    let b = egui::Button::selectable(on, text.into())
-        .min_size(Vec2::new(ui.available_width().max(74.0), TAP * 0.7));
+    // No `available_width()` here: a menu measures itself against the
+    // style's default area (600 pt) before it knows its size, and an item
+    // that wide would be remembered. The menu's justified layout fills
+    // every item to the widest one instead.
+    let b = egui::Button::selectable(on, text.into()).min_size(Vec2::new(74.0, TAP * 0.7));
     let b = if shortcut.is_empty() {
         b
     } else {
@@ -418,7 +426,8 @@ fn chevron(ui: &egui::Ui, c: Pos2, left: bool, hot: bool) {
     let dir = if left { -1.0 } else { 1.0 };
     let tip = Pos2::new(c.x + dir * s * 0.5, c.y);
     let back = c.x - dir * s * 0.5;
-    let stroke = Stroke::new(2.5, if hot { YELLOW } else { STEEL });
+    let t = theme(ui);
+    let stroke = Stroke::new(2.5, if hot { t.accent } else { t.muted });
     ui.painter().line_segment([Pos2::new(back, c.y - s), tip], stroke);
     ui.painter().line_segment([Pos2::new(back, c.y + s), tip], stroke);
 }
@@ -612,6 +621,7 @@ pub fn st_editor(
         }
     }
     let at = chrome.line;
+    let t = theme(ui);
     scroll
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
@@ -622,7 +632,8 @@ pub fn st_editor(
                 let wrap = (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0);
                 // The rows the text takes at that width: each source line
                 // numbered on its first row, its wrapped rows blank.
-                let galley = ui.fonts_mut(|f| f.layout_job(highlight(text.as_str(), diags, at, &font, wrap)));
+                let galley =
+                    ui.fonts_mut(|f| f.layout_job(highlight(text.as_str(), diags, at, &font, wrap, &t)));
                 let mut gutter = LayoutJob::default();
                 for (n, number) in numbering(galley.rows.iter().map(|r| r.ends_with_newline)) {
                     let bad = diags.iter().any(|(l, _)| *l as usize == n);
@@ -630,9 +641,9 @@ pub fn st_editor(
                     let color = if bad {
                         RED
                     } else if here {
-                        YELLOW
+                        t.accent
                     } else {
-                        STEEL
+                        t.muted
                     };
                     let label = if number {
                         format!("{n:>3}\n")
@@ -644,7 +655,7 @@ pub fn st_editor(
                 gutter.wrap.max_width = f32::INFINITY;
                 ui.label(gutter);
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
-                    let job = highlight(buf.as_str(), diags, at, &font, wrap);
+                    let job = highlight(buf.as_str(), diags, at, &font, wrap, &t);
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
                 ui.add(
@@ -682,21 +693,27 @@ pub fn numbering(rows: impl Iterator<Item = bool>) -> Vec<(usize, bool)> {
 }
 
 /// The ST as a layout wrapped at `wrap` points: a line with a diagnostic
-/// on a dark red ground, its column to the end of the word underlined;
-/// the line `at` (a block click sent the editor there) on a graphite
-/// ground.
+/// on a red ground, its column to the end of the word underlined; the
+/// line `at` (a block click sent the editor there) on a grey ground.
 #[must_use]
-pub fn highlight(text: &str, diags: &[(u32, u32)], at: Option<u32>, font: &FontId, wrap: f32) -> LayoutJob {
+pub fn highlight(
+    text: &str,
+    diags: &[(u32, u32)],
+    at: Option<u32>,
+    font: &FontId,
+    wrap: f32,
+    t: &Theme,
+) -> LayoutJob {
     let mut job = LayoutJob::default();
-    let plain = TextFormat::simple(font.clone(), Color32::from_gray(230));
-    let bad_ground = Color32::from_rgb(0x4A, 0x16, 0x14);
+    let plain = TextFormat::simple(font.clone(), t.code);
+    let bad_ground = t.bad;
     for (k, line) in text.split_inclusive('\n').enumerate() {
         let n = u32::try_from(k + 1).unwrap_or(u32::MAX);
         let Some(&(_, col)) = diags.iter().find(|(l, _)| *l == n) else {
             let format = if at == Some(n) {
                 TextFormat {
-                    background: GRAPHITE,
-                    color: WHITE,
+                    background: t.rule,
+                    color: t.fg,
                     ..plain.clone()
                 }
             } else {
@@ -731,7 +748,7 @@ pub fn highlight(text: &str, diags: &[(u32, u32)], at: Option<u32>, font: &FontI
             0.0,
             TextFormat {
                 underline: Stroke::new(1.5, RED),
-                color: WHITE,
+                color: t.fg,
                 ..ground.clone()
             },
         );

@@ -23,7 +23,7 @@ use crate::playground_view::{scale_labels, window_row};
 use crate::remote::{BoxState, segment};
 use crate::review::Session;
 use crate::sim_projects::Storage;
-use crate::st_view::brand::{BLACK, GRAPHITE, STEEL};
+use crate::theme::theme;
 
 /// Signals one trend draws at most (as in the simulation).
 pub const PINS: usize = crate::playground::TREND_SIGNALS;
@@ -36,7 +36,8 @@ pub const MAX_POINTS: usize = 2400;
 /// Seconds between history asks while the tab is open.
 pub const RENEW_S: f64 = 600.0;
 
-/// Line colours, in pin order.
+/// Line colours, in pin order (the last, near white, is the page's ink
+/// in light mode).
 const LINES: [Color32; 6] = [
     Color32::from_rgb(0xFF, 0xC2, 0x0E),
     Color32::from_rgb(0x4F, 0xC3, 0xF7),
@@ -289,7 +290,8 @@ impl BoxTrend {
     ) {
         let now = ui.ctx().input(|i| i.time);
         let who = owner(session).unwrap_or_else(|| "this browser".into());
-        ui.label(RichText::new(format!("Pin up to {PINS} signals (kept for {who})")).color(STEEL));
+        let t = theme(ui);
+        ui.label(RichText::new(format!("Pin up to {PINS} signals (kept for {who})")).color(t.muted));
         let mut flip = None;
         ui.horizontal_wrapped(|ui| {
             for s in &state.signals {
@@ -304,8 +306,8 @@ impl BoxTrend {
         if let Some(n) = flip {
             self.toggle(&n, session, now);
         }
-        for t in [&self.notice, &self.problem].into_iter().flatten() {
-            ui.label(RichText::new(t).color(STEEL));
+        for text in [&self.notice, &self.problem].into_iter().flatten() {
+            ui.label(RichText::new(text).color(t.muted));
         }
         if let Some(w) = window_row(ui, chrome, self.window_ms, &WINDOWS_MS) {
             self.window_ms = w;
@@ -315,17 +317,18 @@ impl BoxTrend {
     }
 
     fn chart(&self, ui: &mut egui::Ui) {
+        let t = theme(ui);
         let rect = ui.available_rect_before_wrap();
         ui.allocate_rect(rect, Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::ZERO, BLACK);
+        painter.rect_filled(rect, CornerRadius::ZERO, t.chart);
         if self.pins.is_empty() {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Pick signals to trend above",
                 FontId::proportional(13.0),
-                STEEL,
+                t.muted,
             );
             return;
         }
@@ -341,7 +344,10 @@ impl BoxTrend {
         for (k, name) in self.pins.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
-            let color = LINES[k % LINES.len()];
+            let color = match k % LINES.len() {
+                5 if !t.dark => t.fg,
+                i => LINES[i],
+            };
             let line: &[(u64, f64)] = self.series.get(name).map_or(&[], Vec::as_slice);
             // The point before the window holds its value into it; the
             // scale is the window's.
@@ -368,10 +374,10 @@ impl BoxTrend {
             );
             painter.line_segment(
                 [Pos2::new(rect.left(), top), Pos2::new(rect.right(), top)],
-                Stroke::new(1.0, GRAPHITE),
+                Stroke::new(1.0, t.rule),
             );
             let (lo, hi, step) = nice_range(lo, hi);
-            scale_labels(&painter, rect, top, lane, lo, hi, step);
+            scale_labels(&painter, &t, rect, top, lane, (lo, hi, step));
             let y_of = |v: f64| {
                 #[allow(clippy::cast_possible_truncation)]
                 let f = ((v - lo) / (hi - lo)) as f32;

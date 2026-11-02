@@ -244,6 +244,34 @@ mod glyphs_and_help {
         h.press("about close");
         assert!(!h.app.about);
     }
+
+    /// Nick, 2026-11-01: dark by default, View › Light mode flips the
+    /// page, and the choice is kept per browser with the layout.
+    #[test]
+    fn light_mode_is_a_view_item_off_by_default_and_remembered() {
+        use crate::editor::Chrome;
+        let mut h = Harness::new(App::sim());
+        let dark = |h: &Harness| h.ctx.global_style().visuals.dark_mode;
+        assert!(dark(&h), "a fresh app is dark");
+        assert!(!h.app.chrome.light);
+        assert!(h.app.chrome.saved().contains("light=0"));
+        h.view_menu("view light");
+        h.frame(vec![]);
+        assert!(h.app.chrome.light);
+        assert!(!dark(&h), "the item flips egui's visuals");
+        let saved = h.app.chrome.saved();
+        assert!(saved.contains("light=1"), "{saved}");
+        assert!(Chrome::restored(&saved).light, "read back");
+        assert!(!Chrome::restored("left=1").light, "absent: dark");
+        h.view_menu("view light");
+        h.frame(vec![]);
+        assert!(!h.app.chrome.light && dark(&h), "and back");
+        // A browser that chose light opens light on its first frame.
+        let mut app = App::sim();
+        app.chrome = Chrome::restored("light=1");
+        let h = Harness::new(app);
+        assert!(!dark(&h));
+    }
 }
 
 mod polish {
@@ -541,7 +569,7 @@ mod polish {
 }
 
 mod chrome {
-    use eframe::egui::{self, Event, Pos2, Vec2};
+    use eframe::egui::{self, Event, Key, Modifiers, Pos2, Rect, Vec2};
 
     use super::{Harness, node, sim_view, write_to};
     use crate::app::{App, Screen, Source, wants_sim};
@@ -746,6 +774,55 @@ mod chrome {
             Pane::Code,
             "the old key still reads"
         );
+    }
+
+    /// Nick, 2026-11-01: the toolbar's dropdowns and the right-click
+    /// menus were three times wider than their text. A menu is as wide
+    /// as its widest item, every item filling that width.
+    #[test]
+    fn menus_are_as_wide_as_their_widest_item() {
+        let mut h = Harness::new(App::sim());
+        let menu = |h: &mut Harness, open: &str, items: &[&str]| {
+            h.press(open);
+            // The frame the menu opens on is egui's sizing pass, where
+            // nothing is justified; the menu shows at its size the next.
+            h.frame(vec![]);
+            let rects: Vec<Rect> = items.iter().map(|k| h.rect(k)).collect();
+            let widest = rects.iter().map(Rect::width).fold(0.0, f32::max);
+            assert!(widest <= 220.0, "{open}: an item {widest} pt wide");
+            for (k, r) in items.iter().zip(&rects) {
+                assert!(
+                    (r.width() - widest).abs() < 1.0,
+                    "{open}: {k} is {} pt wide against {widest}",
+                    r.width()
+                );
+            }
+            h.key(Modifiers::NONE, Key::Escape);
+            h.frame(vec![]);
+        };
+        menu(&mut h, "bar file", &["file new", "file save", "file download"]);
+        menu(&mut h, "bar edit", &["edit undo", "edit redo"]);
+        menu(&mut h, "bar view", &["view st", "view files", "reset layout"]);
+        h.view_menu("view files");
+        h.frame(vec![]);
+        let at = h.rect("file blink.st").center();
+        h.right_click(at);
+        let items = [
+            "menu copy",
+            "menu paste",
+            "menu duplicate",
+            "menu rename",
+            "menu delete",
+        ];
+        let widest = items.iter().map(|k| h.rect(k).width()).fold(0.0, f32::max);
+        assert!(widest <= 220.0, "right-click: an item {widest} pt wide");
+        for k in items {
+            let w = h.rect(k).width();
+            assert!(
+                (w - widest).abs() < 1.0,
+                "right-click: {k} is {w} pt wide against {widest}"
+            );
+        }
     }
 
     #[test]
@@ -1095,6 +1172,7 @@ mod boxed {
     use crate::box_view::BoxView;
     use crate::editor::Tab;
     use crate::remote::{Link, Msg, Stream};
+    use crate::theme::Theme;
 
     fn boxed(h: &Harness) -> &BoxView {
         h.app.boxv.as_ref().unwrap()
@@ -1115,7 +1193,7 @@ mod boxed {
         let b = boxed(&h);
         let v = b.view.as_ref().expect("the module is drawn");
         assert_eq!(v.because, None, "opens with no path lit");
-        assert_eq!(b.status(h.time).0, "● connected");
+        assert_eq!(b.status(h.time, &Theme::dark()).0, "● connected");
         assert!(
             !h.has("tab trend") && !h.has("tab claude"),
             "I/O alone on a box (the Trend is along the bottom); Claude comes later"
@@ -1155,18 +1233,22 @@ mod boxed {
         let b = h.app.boxv.as_mut().unwrap();
         b.state.apply(Msg::Failed(Stream::Values), t);
         assert!(
-            b.status(t).0.starts_with("● reconnecting (retry in 5s)"),
+            b.status(t, &Theme::dark())
+                .0
+                .starts_with("● reconnecting (retry in 5s)"),
             "{:?}",
-            b.status(t)
+            b.status(t, &Theme::dark())
         );
         for k in 1..3 {
             b.state.apply(Msg::Failed(Stream::Values), t + f64::from(k));
         }
         assert!(matches!(b.state.link(), Link::Unreachable { .. }));
         assert!(
-            b.status(t + 2.0).0.starts_with("● box unreachable"),
+            b.status(t + 2.0, &Theme::dark())
+                .0
+                .starts_with("● box unreachable"),
             "{:?}",
-            b.status(t + 2.0)
+            b.status(t + 2.0, &Theme::dark())
         );
         h.frame(vec![]);
         assert!(boxed(&h).view.is_some(), "the last diagram stays up");

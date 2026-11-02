@@ -6,7 +6,8 @@
 use eframe::egui::{self, Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, Vec2};
 
 use crate::st_view::TAP;
-use crate::st_view::brand::{GREEN, RED, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{GREEN, RED, YELLOW};
+use crate::theme::theme;
 
 /// What a glyph button shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, on: bool, tip: &str)
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, r) = ui.allocate_exact_size(Vec2::splat(SIZE), sense);
     let r = r.on_hover_text(tip);
+    let t = theme(ui);
     let painter = ui.painter();
     let hot = enabled && r.hovered();
     if hot || on {
@@ -48,11 +50,11 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, on: bool, tip: &str)
         painter.rect_filled(rect, CornerRadius::same(5), tint);
     }
     let color = match (enabled, icon) {
-        (false, _) => STEEL.gamma_multiply(0.5),
+        (false, _) => t.muted.gamma_multiply(0.5),
         (true, Icon::Run) => GREEN,
         (true, Icon::Stop) => RED,
-        (true, _) if hot => YELLOW,
-        (true, _) => WHITE,
+        (true, _) if hot => t.accent,
+        (true, _) => t.fg,
     };
     draw(painter, rect.shrink(SIZE * 0.26), icon, color);
     r

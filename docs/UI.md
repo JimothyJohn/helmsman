@@ -24,7 +24,8 @@ this; change it here first when a decision changes.
   Deploy, Upload, Download),
   Edit (Undo, Redo, Go to definition, Cross references), View (Editor /
   Monitor, Structured Text, Files, the side panel and its tabs, Trend,
-  Zoom to fit, the layout items, Scan detail for an engineer) and Help
+  Zoom to fit, the layout items, Scan detail for an engineer, and Light
+  mode: dark by default, the choice kept per browser with the layout) and Help
   (Help and Keyboard shortcuts on the site, About Helmsman: version,
   build, licence, and on a box its certificate fingerprint). After them
   the program's state, green running, red stopped or faulted (a box: its
