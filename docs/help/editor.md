@@ -19,13 +19,18 @@ One row along the top.
   red otherwise, with the program's clock. On a box this is the link to
   the box instead.
 - On the right: the project's name, a mark when it has unsaved edits, the
-  **Editor | Monitor** toggle, the ⋯ menu (proposals, and where the
-  program runs) and, on a box, **Sign in**.
+  **Editor | Monitor** toggle, a yellow **waiting** badge when proposals
+  wait for an approver (it opens the Proposals screen) and, on a box,
+  **Sign in**.
+
+<img src="img/file-menu.png" alt="The File menu open: New project, Copy project, Save, Deploy, Upload and Download, each with its key." width="520">
 
 If something needs saying, a line appears under the header while it is
 true: a fault, a deploy under way or refused, a file someone else saved
 since you opened it (with a Reload). The Messages tab along the bottom
 keeps those lines after they have gone.
+
+![The same screen in light mode, View › Light mode.](img/editor-light.png)
 
 ## The glyphs
 
@@ -34,6 +39,8 @@ simulation: run or stop (<kbd>Ctrl</kbd> <kbd>Enter</kbd>), step one scan
 (<kbd>F10</kbd>, when stopped), and restart from initial values. On both:
 save, upload a file into the project, download the project as a `.zip`,
 and **?** for these pages. Hover one for its name and key.
+
+<img src="img/glyphs.png" alt="The glyph strip: stop, step, restart, then save, upload and download." width="300">
 
 ## The diagram
 
@@ -66,6 +73,8 @@ you cannot draw into it. What you can do:
   arrangement with the project so everyone opens it that way. Pan with a
   drag on empty space, zoom with the wheel; the diagram never leaves the
   view, and a double-click on empty space fits it again.
+
+![The lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims.](img/diagram-why.png)
 
 Values that would clutter the diagram are left off it: a constant shows
 its name alone, a time reads as `T#500ms`. A wire that would cross the
@@ -105,5 +114,9 @@ label is drawn, the icon stands alone at a readable size.
 - **The side panel**, on the right (<kbd>Alt</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
   diagram does not show; and **Agent**, where you describe what you want.
+
+<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
+
+<img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="240">
 
 Each pane remembers whether it was open, per browser.

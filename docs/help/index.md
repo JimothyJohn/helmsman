@@ -15,6 +15,8 @@ a lamp that blinks. The diagram in the middle is the program as it runs,
 live; the Structured Text that makes it is one key away (View › Structured
 Text, or <kbd>Alt</kbd> <kbd>1</kbd>).
 
+![The playground as it opens: the blink example running, its diagram in the middle, the Structured Text on the left, the I/O panel on the right and the trend along the bottom.](img/editor.png)
+
 Things to try, in order:
 
 1. Click the `enable` block on the diagram. It is an input; the click

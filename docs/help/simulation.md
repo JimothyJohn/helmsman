@@ -13,6 +13,8 @@ values with the clock at zero. The same three buttons and keys are in
 the Monitor's header. The state in the header says which it is; the
 clock beside it is the program's own time.
 
+<img src="img/monitor-stopped.png" alt="The Monitor's header with the program stopped: run, step and restart beside the crumbs." width="700">
+
 One program runs in the page at a time. Opening or deploying another
 stops the one before.
 
@@ -55,6 +57,8 @@ or slow; history is kept for the widest, so widening shows what already
 ran. The lane's scale is at its right edge: it rounds out to an even step
 and moves only when the values cross one. Pin from the tab's list.
 History restarts when you change the set.
+
+![The Trend tab: three pinned signals, the Window row, a lane each with its scale at the right edge.](img/trend.png)
 
 ## Faults
 
