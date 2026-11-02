@@ -11,8 +11,9 @@ One row along the top.
 - **File · Edit · View · Help**: the menus. Every item that has a key
   shows it. File holds Save, Deploy, Upload and Download. Edit holds Undo
   and Redo for the Structured Text, Go to definition and Cross references.
-  View switches between the Editor and the Monitor and shows or hides
-  each pane. Help opens these pages, the keyboard table, and About
+  View switches between the Editor and the Monitor, shows or hides
+  each pane, and has Light mode (dark is the default; the browser
+  remembers your choice). Help opens these pages, the keyboard table, and About
   Helmsman (the version and build).
 - **The state**: `running`, `stopped` or `faulted`, green when running,
   red otherwise, with the program's clock. On a box this is the link to

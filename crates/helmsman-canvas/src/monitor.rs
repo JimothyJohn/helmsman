@@ -32,7 +32,8 @@ use crate::hotkeys::Action;
 use crate::playground_view::PlaygroundView;
 use crate::remote::{BoxState, Link};
 use crate::st_view::TAP;
-use crate::st_view::brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{WHITE, YELLOW};
+use crate::theme::theme;
 
 /// Seconds without a new scan after which a program's tiles go grey.
 pub const STALE_AFTER: f64 = 3.0;
@@ -576,8 +577,9 @@ impl Monitor {
         let trouble = feed.trouble(now);
         let area = ctx.content_rect();
         let k = (area.width() / 1100.0).min(area.height() / 650.0).clamp(1.0, 3.5);
+        let t = theme(ui);
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BLACK).inner_margin(12.0 * k))
+            .frame(egui::Frame::new().fill(t.bg).inner_margin(12.0 * k))
             .show(ui, |ui| {
                 self.top(ui, k, trouble.as_deref(), chrome, engineer, transport);
                 // After the toggle, so a tap shows on the same frame.
@@ -593,11 +595,11 @@ impl Monitor {
                                     egui::RichText::new(&g.program)
                                         .font(FontId::proportional(20.0 * k))
                                         .strong()
-                                        .color(YELLOW),
+                                        .color(t.accent),
                                 );
                             }
                             if let Some(n) = &g.note {
-                                ui.label(egui::RichText::new(n).size(14.0 * k).color(STEEL));
+                                ui.label(egui::RichText::new(n).size(14.0 * k).color(t.muted));
                             }
                             self.grid(ui, &g.tiles, k, chrome);
                             ui.add_space(14.0 * k);
@@ -606,7 +608,7 @@ impl Monitor {
                             ui.label(
                                 egui::RichText::new("No program is running.")
                                     .size(18.0 * k)
-                                    .color(STEEL),
+                                    .color(t.muted),
                             );
                         }
                     });
@@ -627,6 +629,7 @@ impl Monitor {
     ) {
         let mut go: Option<Option<(String, String)>> = None;
         let crumbs = self.crumbs();
+        let t = theme(ui);
         ui.horizontal_wrapped(|ui| {
             let size = 16.0 * k;
             let back = ui.add_enabled(
@@ -640,17 +643,17 @@ impl Monitor {
             }
             for (i, (text, to)) in crumbs.iter().enumerate() {
                 if i > 0 {
-                    ui.label(egui::RichText::new("›").size(size).color(STEEL));
+                    ui.label(egui::RichText::new("›").size(size).color(t.muted));
                 }
                 let last = i + 1 == crumbs.len();
-                let t = egui::RichText::new(text).size(size).monospace();
-                let t = if last {
-                    t.strong().color(YELLOW)
+                let rt = egui::RichText::new(text).size(size).monospace();
+                let rt = if last {
+                    rt.strong().color(t.accent)
                 } else {
-                    t.color(WHITE)
+                    rt.color(t.fg)
                 };
                 let r = ui.add(
-                    egui::Button::new(t)
+                    egui::Button::new(rt)
                         .frame(false)
                         .min_size(Vec2::new(0.0, TAP * k)),
                 );
@@ -779,9 +782,15 @@ fn tile_height(t: &Tile, k: f32) -> f32 {
 
 fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
     let p = ui.painter_at(r);
+    let th = theme(ui);
     let stale = t.stale.is_some();
-    let fill = if stale { Color32::from_gray(0x1C) } else { PANEL };
-    let edge = if hot { YELLOW } else { GRAPHITE };
+    // A stale tile sinks halfway back into the page.
+    let fill = if stale {
+        th.panel.gamma_multiply(0.5)
+    } else {
+        th.panel
+    };
+    let edge = if hot { YELLOW } else { th.rule };
     p.rect(
         r,
         CornerRadius::same(8),
@@ -789,7 +798,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
         Stroke::new(1.5 * k, edge),
         StrokeKind::Inside,
     );
-    let ink = if stale { STEEL } else { WHITE };
+    let ink = if stale { th.muted } else { th.fg };
     let pad = 14.0 * k;
     let mut y = r.min.y + pad;
     let title = if t.into.is_some() {
@@ -810,7 +819,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
         egui::Align2::LEFT_TOP,
         &t.sub,
         FontId::monospace(14.0 * k),
-        STEEL,
+        th.muted,
     );
     y += 26.0 * k;
     match &t.kind {
@@ -818,11 +827,11 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
             let (word, color) = match run {
                 Run::Running => ("RUNNING", GREEN),
                 Run::Faulted(_) => ("FAULTED", RED),
-                Run::Held => ("HELD", YELLOW),
-                Run::Stopped => ("STOPPED", STEEL),
-                Run::Starting => ("STARTING", STEEL),
+                Run::Held => ("HELD", th.accent),
+                Run::Stopped => ("STOPPED", th.muted),
+                Run::Starting => ("STARTING", th.muted),
             };
-            let color = if stale { STEEL } else { color };
+            let color = if stale { th.muted } else { color };
             p.text(
                 Pos2::new(r.min.x + pad, y),
                 egui::Align2::LEFT_TOP,
@@ -849,7 +858,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                     egui::Align2::LEFT_TOP,
                     "no outputs",
                     FontId::proportional(16.0 * k),
-                    STEEL,
+                    th.muted,
                 );
                 y += 30.0 * k;
             }
@@ -866,7 +875,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                         p.circle_filled(c, rad, if on { GREEN } else { RED });
                     }
                     Some(_) => {
-                        p.circle_stroke(c, rad, Stroke::new(1.5 * k, STEEL));
+                        p.circle_stroke(c, rad, Stroke::new(1.5 * k, th.muted));
                     }
                     None => {}
                 }
@@ -888,7 +897,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                         egui::Align2::RIGHT_CENTER,
                         v,
                         FontId::monospace(18.0 * k),
-                        if stale { STEEL } else { YELLOW },
+                        if stale { th.muted } else { th.accent },
                     );
                 }
                 y += 30.0 * k;
@@ -901,7 +910,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
             egui::Align2::LEFT_TOP,
             s,
             FontId::proportional(15.0 * k),
-            STEEL,
+            th.muted,
         );
     }
 }
