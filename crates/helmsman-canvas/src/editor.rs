@@ -442,6 +442,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut hits = Vec::new();
     let mut left = chrome.left;
     let mut pane = chrome.pane;
+    let (left0, pane0) = (left, pane);
     let flip = egui::Panel::show_switched(
         ui,
         &mut left,
@@ -495,8 +496,14 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     if flip {
         left = !left;
     }
-    chrome.left = left;
-    chrome.pane = pane;
+    // The body may have moved the pane itself (a double click on a file
+    // opens the Code tab); the tabs' copy wins only when it did not.
+    if chrome.left == left0 {
+        chrome.left = left;
+    }
+    if chrome.pane == pane0 {
+        chrome.pane = pane;
+    }
 
     let tabs = body.tabs();
     if !tabs.contains(&chrome.tab) {

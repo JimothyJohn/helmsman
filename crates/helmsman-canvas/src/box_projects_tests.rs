@@ -574,6 +574,32 @@ impl Harness {
         self.frame(vec![button(false)]);
     }
 
+    /// A right click at `at` (opens a context menu).
+    fn right_click(&mut self, at: Pos2) {
+        let press = |pressed| Event::PointerButton {
+            pos: at,
+            button: PointerButton::Secondary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        self.frame(vec![Event::PointerMoved(at)]);
+        self.frame(vec![press(true)]);
+        self.frame(vec![press(false)]);
+        self.frame(vec![]);
+    }
+
+    fn key(&mut self, key: egui::Key) {
+        for pressed in [true, false] {
+            self.frame(vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }]);
+        }
+    }
+
     fn rect(&self, key: &str) -> Rect {
         self.app.chrome.rect(key).unwrap_or_else(|| {
             let keys: Vec<&String> = self.app.chrome.hits.iter().map(|(k, _)| k).collect();
@@ -902,12 +928,21 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
             .unwrap()
             .text
             .push_str("(* not mine *)");
-        // The sidebar's buttons are on the Files tab.
+        // The sidebar's buttons are on the Files tab; Rename and Delete
+        // are its right-click menu's (disabled here) and the Delete key's
+        // (nothing happens without write access).
         h.app.chrome.show_files();
         h.wait(0.3);
-        for k in ["save", "rename project", "delete project", "new file"] {
+        for k in ["save", "new file"] {
             h.press(k);
         }
+        let row = h.rect("project line").center();
+        h.right_click(row);
+        h.press("menu rename project");
+        h.right_click(row);
+        h.press("menu delete project");
+        h.key(egui::Key::Backspace);
+        assert_eq!(h.bv().files_ui.confirm, None, "no delete asked for");
         // New project is the File menu's (disabled here; pressing it is nothing).
         h.press("bar file");
         h.press("file new");

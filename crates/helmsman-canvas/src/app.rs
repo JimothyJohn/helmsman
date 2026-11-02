@@ -1054,6 +1054,15 @@ impl eframe::App for App {
         storage.set_string(CHROME_KEY, self.chrome.saved());
     }
 
+    /// The layout string above is all that is kept per browser. egui's
+    /// own memory (panel widths among it) is not: a width a pane once
+    /// grew to would come back on every load for good, long after the
+    /// row that pushed it was fixed (Nick, 2026-11-02: the side panes
+    /// still too wide in a browser that had seen the old builds).
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
     /// What shows where nothing is painted (the frameless centre behind
     /// the diagram's crumbs): the page, in either theme, rather than
     /// eframe's near-black.

@@ -49,8 +49,10 @@ this; change it here first when a decision changes.
   Copy, Rename and Delete, on a file Copy, Paste, Duplicate, Rename and
   Delete with an app-wide clipboard so a file pastes into any open
   project, and on the blank space New project and Paste; New project and
-  Copy project are also the File menu's first items) and Code (the
-  Structured Text editor). One width for both tabs; Alt 0 and Alt 1 open the pane on its
+  Copy project are also the File menu's first items; the Delete key
+  deletes the row last clicked, a double click on a file opens the Code
+  tab, and every delete is confirmed in a modal at the screen's centre)
+  and Code (the Structured Text editor). One width for both tabs; Alt 0 and Alt 1 open the pane on its
   tab, or shut it when that tab shows.
 - **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the
   diagram does not show), Agent. On a Pi the Trend opens with

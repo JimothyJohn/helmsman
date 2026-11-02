@@ -574,6 +574,7 @@ mod chrome {
     use super::{Harness, node, sim_view, write_to};
     use crate::app::{App, Screen, Source, wants_sim};
     use crate::editor::{Chrome, Pane, STRIP, Tab};
+    use crate::projects::Act;
 
     #[test]
     fn the_header_is_on_every_screen() {
@@ -823,6 +824,117 @@ mod chrome {
                 "right-click: {k} is {w} pt wide against {widest}"
             );
         }
+    }
+
+    /// Rename and Delete are the right-click menu's and the Delete key's,
+    /// not buttons under the lists; the question is asked in the middle
+    /// of the screen (Nick, 2026-11-02).
+    #[test]
+    fn rename_and_delete_are_the_menus_and_the_delete_key_and_ask_in_the_centre() {
+        let mut h = Harness::new(App::sim());
+        h.press("bar file");
+        h.press("file copy");
+        h.press("name ok");
+        h.wait(0.3);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.open, "blink-copy");
+        for k in ["rename project", "delete project", "rename file", "delete file"] {
+            assert!(!h.has(k), "{k} is a button no more");
+        }
+        assert!(h.has("new file"), "New file stays a button");
+        // Delete from the file's menu: asked in the centre, Keep says no.
+        h.press("new file");
+        // The name field is drawn under the button, so a frame later.
+        h.frame(vec![]);
+        h.press("name");
+        h.key(Modifiers::COMMAND, Key::A);
+        h.frame(vec![Event::Text("two.st".into())]);
+        h.press("name ok");
+        h.wait(0.3);
+        assert!(h.has("file two.st"));
+        h.right_click(h.rect("file two.st").center());
+        h.press("menu delete");
+        h.frame(vec![]);
+        let v = h.app.sim.as_ref().unwrap();
+        assert_eq!(v.files_ui.confirm, Some(Act::DeleteFile("two.st".into())));
+        let c = h.rect("confirm").center();
+        let mid = Pos2::new(h.size.x / 2.0, h.size.y / 2.0);
+        assert!(
+            (c - mid).length() < 40.0,
+            "the question sits in the middle of the screen, not at {c:?}"
+        );
+        h.press("confirm no");
+        h.frame(vec![]);
+        assert!(h.has("file two.st"), "kept");
+        assert_eq!(h.app.sim.as_ref().unwrap().files_ui.confirm, None);
+        // The Delete key on the file last clicked.
+        h.press("file two.st");
+        h.key(Modifiers::NONE, Key::Backspace);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().files_ui.confirm,
+            Some(Act::DeleteFile("two.st".into()))
+        );
+        h.press("confirm yes");
+        h.wait(0.3);
+        assert!(!h.has("file two.st"), "deleted");
+        // Escape answers no.
+        h.press("project blink-copy");
+        h.key(Modifiers::NONE, Key::Delete);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().files_ui.confirm,
+            Some(Act::DeleteProject("blink-copy".into()))
+        );
+        h.key(Modifiers::NONE, Key::Escape);
+        assert_eq!(h.app.sim.as_ref().unwrap().files_ui.confirm, None);
+        assert!(h.has("project blink-copy"));
+        // The Delete key on the project last clicked deletes the project.
+        h.press("project blink-copy");
+        h.key(Modifiers::NONE, Key::Backspace);
+        h.press("confirm yes");
+        h.wait(0.3);
+        assert!(!h.has("project blink-copy"), "the project is gone");
+        // An example is never offered: the key does nothing on blink.
+        h.press("project blink");
+        h.wait(0.2);
+        h.key(Modifiers::NONE, Key::Backspace);
+        assert_eq!(h.app.sim.as_ref().unwrap().files_ui.confirm, None);
+    }
+
+    /// A double click on a file opens it on the Code tab (Nick, 2026-11-02).
+    #[test]
+    fn double_clicking_a_file_opens_the_code_tab() {
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.show_files();
+        h.wait(0.2);
+        let at = h.rect("file blink.st").center();
+        h.click(at);
+        assert!(h.app.chrome.files_open(), "one click stays on Files");
+        h.click(at);
+        h.frame(vec![]);
+        assert!(h.app.chrome.code_open(), "two open the Code tab");
+    }
+
+    /// The question is asked wherever the page is, the Files tab shut or
+    /// not: the Agent's answer with unsaved edits, say.
+    #[test]
+    fn the_question_shows_with_the_files_tab_shut() {
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.left = false;
+        h.wait(0.2);
+        let v = h.app.sim.as_mut().unwrap();
+        v.proj.current_text_mut().unwrap().push_str("(* edit *)");
+        v.take_code("PROGRAM other\nEND_PROGRAM\n".into());
+        h.frame(vec![]);
+        assert!(h.has("confirm yes") && h.has("confirm drop") && h.has("confirm no"));
+        h.press("confirm no");
+        h.frame(vec![]);
+        assert!(!h.has("confirm"));
+    }
+
+    /// Only the layout string is kept per browser; egui's memory (panel
+    /// widths) is not, so a width a pane once grew to does not come back.
+    #[test]
+    fn egui_memory_is_not_kept_across_loads() {
+        assert!(!eframe::App::persist_egui_memory(&App::sim()));
     }
 
     #[test]

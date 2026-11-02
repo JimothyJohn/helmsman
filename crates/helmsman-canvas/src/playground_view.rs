@@ -457,6 +457,9 @@ impl PlaygroundView {
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
         editor::show(ui, chrome, self);
+        if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
+            self.act(a);
+        }
     }
 
     /// Runs the program (and Claude's answer) on with nothing drawn: the
