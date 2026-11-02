@@ -969,6 +969,38 @@ mod simulated {
         h.key(Modifiers::ALT, Key::Num2);
         assert!(!h.app.chrome.trend, "Alt+2 folds it");
     }
+
+    /// A resizable panel grows to any row that overflows it, every frame
+    /// (four such rows were found on 2026-11-01). Every tab of every
+    /// panel, visited; the panels end where they began, at most a scroll
+    /// bar's width wider.
+    #[test]
+    fn every_tab_leaves_the_panels_their_width() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        for key in [
+            "pane files",
+            "pane code",
+            "tab claude",
+            "tab io",
+            "bottom messages",
+            "bottom trend",
+            "pane files",
+            "tab claude",
+        ] {
+            h.press(key);
+            h.wait(0.3);
+            let l = h.rect("left").right() - left.right();
+            let r = right.left() - h.rect("right").left();
+            assert!((0.0..=8.0).contains(&l), "after {key} the left pane grew {l} pt");
+            assert!(
+                (0.0..=8.0).contains(&r),
+                "after {key} the right panel grew {r} pt"
+            );
+        }
+    }
 }
 
 // ---- the Editor on a box ----

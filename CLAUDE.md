@@ -33,6 +33,13 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   .github/workflows/update-branches.yml updates auto-merge PRs when dev
   moves (drafts stay behind until they leave draft).
 - **Protocol claims** get a docs/SOURCES.md entry and a § / page citation.
+- **A resizable egui panel grows to any row that overflows it, every
+  frame.** A label in a plain `horizontal`, a combo box or field at full
+  width beside a scroll bar, a grid cell with a full-width button: each
+  widened the side panel by a third on 2026-11-01. Wrap rows
+  (`horizontal_wrapped`), cap widths to the column, leave 12 pt for the
+  bar, and keep `every_tab_leaves_the_panels_their_width` (ui_tests.rs)
+  green: it visits every tab and asserts the panels stayed put.
 
 ## Voice (anything a user reads: the site, README intro, UI text, release notes)
 
