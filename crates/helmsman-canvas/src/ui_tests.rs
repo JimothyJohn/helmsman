@@ -168,10 +168,12 @@ mod glyphs_and_help {
         assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "a cold restart");
         h.press("run");
         assert!(h.app.sim.as_ref().unwrap().session.running, "and starts again");
-        // The Monitor has no diagram, so no glyphs.
+        // The Monitor has no diagram, so no file glyphs; the transport is
+        // in its header (Nick, 2026-11-01).
         h.press("monitor");
         assert_eq!(h.app.screen, Screen::Monitor);
-        assert!(!h.has("run") && !h.has("download"));
+        h.frame(vec![]);
+        assert!(h.has("run") && !h.has("download"));
         assert!(h.has("help"), "? stays in the header");
     }
 
@@ -407,6 +409,41 @@ mod polish {
         assert!(h.has("bar view"));
         h.view_menu("view editor");
         assert_eq!(h.app.screen, Screen::Editor);
+    }
+
+    /// Nick, 2026-11-01: the Monitor needs play, start, stop. In the
+    /// simulation its header carries the same run or stop, step and
+    /// restart as the Editor's glyphs, and the keys work there too. A
+    /// box's Monitor stays watch-only (card monitor-box-run-stop).
+    #[test]
+    fn the_monitor_runs_stops_steps_and_restarts_the_simulation() {
+        let mut h = Harness::new(App::sim());
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Monitor);
+        h.frame(vec![]);
+        for k in ["run", "step", "restart"] {
+            assert!(h.has(k), "the Monitor has {k}");
+        }
+        let running = |h: &Harness| h.app.sim.as_ref().unwrap().session.running;
+        let scans = |h: &Harness| h.app.sim.as_ref().unwrap().session.scans;
+        assert!(running(&h), "the example opens running");
+        h.press("run");
+        assert!(!running(&h), "stopped from the Monitor");
+        let n = scans(&h);
+        h.press("step");
+        assert_eq!(scans(&h), n + 1, "one scan");
+        h.press("restart");
+        assert_eq!(scans(&h), 0, "a cold restart");
+        h.press("run");
+        assert!(running(&h), "and running again");
+        // The keys, on the Monitor: Ctrl Enter stops, F10 steps.
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(!running(&h), "Ctrl Enter stops on the Monitor");
+        let n = scans(&h);
+        h.key(Modifiers::NONE, Key::F10);
+        assert_eq!(scans(&h), n + 1, "F10 steps on the Monitor");
+        // Still no Save, Upload or Download there: nothing to edit.
+        assert!(!h.has("save") && !h.has("download"));
     }
 
     #[test]
@@ -974,6 +1011,27 @@ mod simulated {
     /// (four such rows were found on 2026-11-01). Every tab of every
     /// panel, visited; the panels end where they began, at most a scroll
     /// bar's width wider.
+    /// Nick, 2026-11-01: the Agent pane widened when an answer held long
+    /// code. A long line scrolls inside its block; the panel keeps the
+    /// width the user gave it.
+    #[test]
+    fn the_agent_tab_keeps_its_width_under_long_code() {
+        use crate::claude::{Answer, Phase};
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        h.press("tab claude");
+        h.wait(0.3);
+        let right = h.rect("right");
+        let long = "x".repeat(400);
+        let mut a = Answer::default();
+        a.text = format!("Here it is:\n```st\nPROGRAM p\n  (* {long} *)\nEND_PROGRAM\n```\n");
+        a.phase = Phase::Done;
+        h.app.sim.as_mut().unwrap().chat.answer = Some(a);
+        h.wait(0.5);
+        let grew = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&grew), "the right panel grew {grew} pt");
+    }
+
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());
