@@ -504,7 +504,7 @@ mod polish {
 }
 
 mod chrome {
-    use eframe::egui::{self, Event, Pos2, Vec2};
+    use eframe::egui::{self, Event, Key, Modifiers, Pos2, Rect, Vec2};
 
     use super::{Harness, node, sim_view, write_to};
     use crate::app::{App, Screen, Source, wants_sim};
@@ -709,6 +709,55 @@ mod chrome {
             Pane::Code,
             "the old key still reads"
         );
+    }
+
+    /// Nick, 2026-11-01: the toolbar's dropdowns and the right-click
+    /// menus were three times wider than their text. A menu is as wide
+    /// as its widest item, every item filling that width.
+    #[test]
+    fn menus_are_as_wide_as_their_widest_item() {
+        let mut h = Harness::new(App::sim());
+        let menu = |h: &mut Harness, open: &str, items: &[&str]| {
+            h.press(open);
+            // The frame the menu opens on is egui's sizing pass, where
+            // nothing is justified; the menu shows at its size the next.
+            h.frame(vec![]);
+            let rects: Vec<Rect> = items.iter().map(|k| h.rect(k)).collect();
+            let widest = rects.iter().map(Rect::width).fold(0.0, f32::max);
+            assert!(widest <= 220.0, "{open}: an item {widest} pt wide");
+            for (k, r) in items.iter().zip(&rects) {
+                assert!(
+                    (r.width() - widest).abs() < 1.0,
+                    "{open}: {k} is {} pt wide against {widest}",
+                    r.width()
+                );
+            }
+            h.key(Modifiers::NONE, Key::Escape);
+            h.frame(vec![]);
+        };
+        menu(&mut h, "bar file", &["file new", "file save", "file download"]);
+        menu(&mut h, "bar edit", &["edit undo", "edit redo"]);
+        menu(&mut h, "bar view", &["view st", "view files", "reset layout"]);
+        h.view_menu("view files");
+        h.frame(vec![]);
+        let at = h.rect("file blink.st").center();
+        h.right_click(at);
+        let items = [
+            "menu copy",
+            "menu paste",
+            "menu duplicate",
+            "menu rename",
+            "menu delete",
+        ];
+        let widest = items.iter().map(|k| h.rect(k).width()).fold(0.0, f32::max);
+        assert!(widest <= 220.0, "right-click: an item {widest} pt wide");
+        for k in items {
+            let w = h.rect(k).width();
+            assert!(
+                (w - widest).abs() < 1.0,
+                "right-click: {k} is {w} pt wide against {widest}"
+            );
+        }
     }
 
     #[test]
