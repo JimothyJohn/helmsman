@@ -1163,6 +1163,18 @@ impl PlaygroundView {
     }
 }
 
+/// A window's width as its button reads: whole minutes as `10 min`,
+/// anything else in seconds (`100 s`, never `1 min`).
+#[must_use]
+pub fn window_label(ms: u64) -> String {
+    let secs = ms / 1000;
+    if secs >= 60 && secs.is_multiple_of(60) {
+        format!("{} min", secs / 60)
+    } else {
+        format!("{secs} s")
+    }
+}
+
 /// The window's width as a row of buttons, `1 s`, `10 s`, ... (both
 /// trends): the one picked, if any was. Hits are `trend window <s>`.
 pub fn window_row(ui: &mut egui::Ui, chrome: &mut Chrome, current: u64, options: &[u64]) -> Option<u64> {
@@ -1170,14 +1182,8 @@ pub fn window_row(ui: &mut egui::Ui, chrome: &mut Chrome, current: u64, options:
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Window").color(STEEL));
         for &w in options {
-            let secs = w / 1000;
-            let text = if secs >= 60 {
-                format!("{} min", secs / 60)
-            } else {
-                format!("{secs} s")
-            };
-            let r = ui.selectable_label(w == current, text);
-            chrome.hit(format!("trend window {secs}"), r.rect);
+            let r = ui.selectable_label(w == current, window_label(w));
+            chrome.hit(format!("trend window {}", w / 1000), r.rect);
             if r.clicked() {
                 picked = Some(w);
             }
