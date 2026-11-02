@@ -40,7 +40,7 @@ roadmap card, by id).
  └──────────┼─────────────────────────────┼──────────────┼────────────────────────┘
             │ EtherNet/IP, box is target  │ box is master│ box GPIO (do:N/di:N)
      a scanner (CODESYS,               remote I/O,      stack light, relays
-     a Logix PLC, our CLI)             drives, sensors
+     a Logix PLC, our tests)           drives, sensors
 
   observed controllers (a CompactLogix): read-only, via helmsman-proto (originator)
   (built: logix-tag driver; no Write Tag, no unrestricted session in the box build)
@@ -63,14 +63,13 @@ Three directions of traffic, three different rules:
 | --- | --- | --- |
 | `helmsman-proto` | CIP originator: encapsulation, CPF, discovery (`ListIdentity`), explicit messaging (`RegisterSession`, `SendRRData`, `Get_Attribute_Single`), Logix tag reads (`logix`: Read Tag, Multiple Service Packet, Read Tag Fragmented, Symbol object browse, backplane routing), Class 1 scanner, the box's one Class 1 I/O endpoint (`endpoint`), EDS reader (`eds`). Byte codecs plus socket-level session, discovery and scanner. Any-service requests sit behind the `unrestricted` feature, the scanner behind `scanner` (which `unrestricted` implies). | built |
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
-| `helmsman-cli` | `helmsman discover / get / io`: the originator from a shell. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
 | `helmsman-agent` | The chat panel's agent loop (`agent-loop`): the relay client (protocol v1, HTTP/1.1 on std plus rustls), a bounded SSE reader, assistant-turn assembly from Claude's stream events, the fixed tool set run against the box API, budgets. No dependency on the runtime: its tools are HTTP calls to the box API. Also the playground's local proxy (`examples/playground_proxy.rs`, a dev tool). | built |
-| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header (the open project, Save, Deploy, Sign in; Proposals, Upload and Download behind its ⋯ menu) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
+| `helmsman-canvas` | The browser app (docs/UI.md), egui, native and wasm: an always-on header row (File / Edit / View menus and the view's actions on the left; the open project, Save, Deploy, the screens, Sign in and the ⋯ menu with proposals and where the program runs on the right) over the Editor (projects, files and program tree, the live diagram with forcing on a box, the ST on demand, I/O / Trend / Claude tabs) or the Monitor (status tiles, phone to wall TV, watch only). Where the program runs is a setting: in a browser the box served, that box's modules over its API; on docs/playground/ (or `?playground`, `?demo`, native) a simulated box in the page, against virtual I/O, with Claude on the visitor's key. | built |
 
 Planned owners, not yet crates: the relay (separate stack, private per
 `relay-repo`, in `../agent-relay`: client-agnostic, helmsman is one client). The WASM module host
@@ -519,7 +518,12 @@ it); the interface is in the module docs of `wasm.rs`.
 
 ## The trace tap (`trace-tap`, built)
 
-What the live canvas draws: one scan of one module, as it ran.
+What the live canvas draws: one scan of one module, as it ran. One
+exception on screen: a statement that ran, and the arm it ran in, stay
+lit for `st_view::HOLD` (300 ms) after the scan they ran in. A frame shows
+one scan, so a statement that runs for a single scan (the body of `IF
+pulse.Q`) would otherwise brighten for one frame on the frames that land
+on it and never on the others: the Blink lamp's flicker.
 
 - **`helmsman_iec::trace`**. `Program::scan_traced` runs a scan and returns
   a `Trace`: per statement (a `StmtId`, with POU, line, column, shape and
@@ -664,7 +668,10 @@ signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
 - **Who pins.** Signed in, the person's pins (an account; a role-PIN
   session pins for its role) are kept by the box: `GET /api/trends/pins`
   and `PUT /api/trends/pins {signals}` (a login session; the box token is
-  no one, 400), at most 16, 256 people, in memory (card
+  no one, 400), at most 16, 256 people, in the state directory's
+  `trend-pins` file (written whole on each change, read at boot under the
+  same bounds; a bad file starts with no pins) so they survive a restart,
+  while history stays in memory and starts over (card
   `trend-pins-persist`). Signed out, the browser keeps them
   (`localStorage`, wrapped). `GET /api/trends?signals=a,b` (open, like
   every read) answers `{now_ms, window_ms, signals: [{name, points: [[t_ms,
@@ -1089,6 +1096,21 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   or after a racing save. A save may name the version (SHA-256) it read
   (`version`, or `null` for "new only"): a stale one is 409, so two
   editors never silently clobber each other.
+- **Starters** (`helmsman_project::starters`): the worked machines and
+  templates, real files under `crates/helmsman-project/starters/`, compiled
+  in with `include_str!` so the browser's simulation and a box offer the
+  same text. A starter is `main.st` (the controls and its PROGRAM, one per
+  project), `plant_model.st` (a simulation of the machine, its calls marked
+  PLANT, deleted when real I/O is wired), `io.map` (every signal, on the
+  box's own channels or `screen`, so it deploys with nothing wired) and the
+  shared blocks it uses (`starters/blocks/`). They are built on what the
+  library has (`BLINK_PATTERN` in `stack_light`); PID is written in ST
+  (`pid_loop.st`). The box has no route for them: the canvas holds them and
+  sends a new project as its `.zip` to `POST /api/projects/{p}/zip`.
+  A project opens on its `main.st` when it has one. Tests:
+  `helmsman-canvas/src/starter_tests.rs` (each machine runs on the simulated
+  scan clock and trips when an input is forced) and
+  `box_projects_tests.rs` (each deploys against the real API).
 - **Build** (`project::build`): each PROGRAM becomes a module named as
   the PROGRAM in lower case. Its `module.st` is every file in name
   order under a `(* file NAME *)` line with every other PROGRAM blanked
@@ -1199,8 +1221,11 @@ keeps them in memory and says so). The built-in examples are read-only
 projects (named after their PROGRAM): they open and edit like any other,
 and Save keeps a copy under a free name. The build is the box's (one
 `.st` as it is; several in name order under `(* file NAME *)` lines), so
-errors and block clicks map to a file and line. Deploy compiles and runs
-it in the page. Upload and Download use `helmsman-project`'s `.zip`;
+errors and block clicks map to a file and line. Typing only checks
+(`Session::check`: errors marked, the program running and its diagram
+untouched); Deploy compiles and runs it in the page (`Session::set_source`),
+and a project that does not compile is refused with the old program still
+running, as on a box. Upload and Download use `helmsman-project`'s `.zip`;
 `.st`, `PLCopen` `.xml` and `.L5X` import into the open project. An
 L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
 so it becomes the same `.st` the box makes, or is refused whole with the
@@ -1231,10 +1256,11 @@ the tweaks; a second step stores the automatic layout as the tweak.
 binary and the canvas and runs `helmsman-plc --projects`
 (`PLC_MODE=program` keeps one program file). Its unit runs `helmsman-plc
 project seed NAME FILE.st` before every start (`project::seed`): only on
-a first install (no project, nothing deployed) it makes the project and
-commits its build as the store's first snapshot (approver `first
-install`), so the box boots running `line`; afterwards it touches
-nothing. `scripts/pi-account.sh` makes the engineer login.
+a first install (no project, nothing deployed) it makes the project, for
+an engineer to open and deploy; the store stays empty and the box boots
+running nothing until that first deploy (card `seed-deploys`: no store
+commit skips the approval path). Afterwards it touches nothing.
+`scripts/pi-account.sh` makes the engineer login.
 
 ### L5X ladder import (`l5x-import`, built)
 
@@ -1344,8 +1370,10 @@ module's unit tests.
   signal and a `forces` list; every trace (`GET .../trace` and its
   stream) carries `forces`, so the diagram marks forced points FORCED.
 - **In the Editor.** For an engineer, an input signal's block on the
-  diagram is a control: a BOOL flips, a number drags, and either forces
-  it. A forced input is marked FORCED in the warning colour over its
+  diagram is a control: a BOOL flips, a number is typed and committed
+  with Enter (or by leaving the field; Escape puts it back; nothing is
+  written while typing, `canvas::commit`), and either forces it. A forced
+  input is marked FORCED in the warning colour over its
   block and in the I/O tab, from the values stream; a banner over the
   diagram lists every force with release and Release all (disabled, with
   why, for anyone else). Address forces (`%IX...`) have no click: the
@@ -2106,12 +2134,14 @@ both). No box, no server: everything runs in the page (`playground.rs`,
 `playground_tests.rs` and `ui_tests.rs`).
 
 - **Editor → program.** A multiline ST editor with line numbers; it
-  compiles 0.35 s after the last keystroke with `helmsman_iec::compile`
-  (image: 8 bytes of `%I` and `%Q`). Diagnostics are drawn on their line
-  (dark red ground, the column's word underlined, the line number red) and
-  listed under the editor. A source that does not compile leaves the last
-  good program running. Four starter examples: blink (TON), start/stop
-  latch (located), counter (CTU), traffic light (CASE + TON).
+  checks the text 0.35 s after the last keystroke with
+  `helmsman_iec::compile` (image: 8 bytes of `%I` and `%Q`). Diagnostics
+  are drawn on their line (dark red ground, the column's word underlined,
+  the line number red) and listed under the editor. A check never changes
+  what runs: the program running is the last one deployed, and Deploy
+  refuses a source that does not compile, leaving it running. Four
+  starter examples: blink (TON), start/stop latch (located), counter
+  (CTU), traffic light (CASE + TON).
 - **Run / Stop / Step**, scan period 1-1000 ms, Restart (cold). The
   program is a `helmsman_iec::Program` scanned directly on the page's
   clock (at most 500 scans a frame); the last scan of each frame is

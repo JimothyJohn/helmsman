@@ -34,8 +34,21 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Largest file the editor takes (the box's `project::MAX_FILE`).
 const MAX_FILE: usize = 256 * 1024;
 
+/// What [`BoxView::watch`] compares against.
+#[derive(Default)]
+struct BoxSeen {
+    link: Option<u8>,
+    deploy: Deploy,
+    fault: Option<String>,
+    notice: Option<String>,
+}
+
 pub struct BoxView {
     pub state: BoxState,
+    /// The Messages tab's log.
+    pub log: crate::messages::Log,
+    /// What the log last saw, to report changes once.
+    seen: BoxSeen,
     /// The box's projects, when it runs with them.
     pub projects: BoxProjects,
     pub files_ui: FilesUi,
@@ -114,6 +127,8 @@ impl BoxView {
     pub fn with_stores(tweaks: Box<dyn Storage>, pins: Box<dyn Storage>) -> Self {
         Self {
             trend: BoxTrend::new(pins),
+            log: crate::messages::Log::default(),
+            seen: BoxSeen::default(),
             state: BoxState::new(),
             projects: BoxProjects::new(),
             files_ui: FilesUi::default(),
@@ -209,7 +224,9 @@ impl BoxView {
             self.open_at = None;
         }
         if let Some(at) = self.state.next_retry() {
-            ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).clamp(0.05, 60.0)));
+            // Every second while waiting, so the status line's countdown
+            // ticks and the page is visibly alive (Nick, 2026-11-01).
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64((at - now).clamp(0.05, 1.0)));
         }
     }
 
@@ -271,6 +288,53 @@ impl BoxView {
         let now = ctx.input(|i| i.time);
         let (msgs, answers) = self.inbox();
         self.step_all(ctx, msgs, answers, now);
+        self.watch(now);
+    }
+
+    /// Reports to the log what changed: the link, a deploy's outcome, a
+    /// fault, a notice.
+    fn watch(&mut self, now: f64) {
+        let link = match self.state.link() {
+            Link::Connecting => 0,
+            Link::Connected => 1,
+            Link::Reconnecting { .. } => 2,
+            Link::Unreachable { .. } => 3,
+        };
+        if Some(link) != self.seen.link {
+            match link {
+                1 => self.log.info(now, "Connected to the box."),
+                2 => self.log.warning(now, "Lost the box: reconnecting."),
+                3 => self.log.error(now, "The box is unreachable."),
+                _ => {}
+            }
+            self.seen.link = Some(link);
+        }
+        if self.projects.deploy != self.seen.deploy {
+            match &self.projects.deploy {
+                Deploy::Done(what) => self.log.info(now, format!("Deployed: {what}")),
+                Deploy::Failed(why) => self.log.error(now, format!("Deploy failed: {why}")),
+                _ => {}
+            }
+            self.seen.deploy = self.projects.deploy.clone();
+        }
+        let fault = self.state.scan.as_ref().and_then(|s| s.fault.clone());
+        if fault != self.seen.fault {
+            if let Some(f) = &fault {
+                self.log.error(now, format!("Fault: {f}"));
+            }
+            self.seen.fault = fault;
+        }
+        let notice = self.projects.notice.as_ref().map(|(n, _)| n.clone());
+        if notice != self.seen.notice {
+            if let Some((n, error)) = &self.projects.notice {
+                if *error {
+                    self.log.error(now, n.clone());
+                } else {
+                    self.log.info(now, n.clone());
+                }
+            }
+            self.seen.notice = notice;
+        }
     }
 
     /// One frame of the Editor.
@@ -403,7 +467,7 @@ impl BoxView {
     fn goto(&mut self, file: &str, line: u32, chrome: &mut Chrome) {
         self.projects.open_file(file);
         if self.projects.current().is_some() {
-            chrome.st = true;
+            chrome.show_code();
             chrome.goto(line);
         }
     }
@@ -508,6 +572,7 @@ impl BoxView {
 /// An input's force control over its block: a BOOL flips, a number drags.
 /// The value to force it to, if one was asked for.
 fn force_ui(ui: &mut egui::Ui, rect: Rect, s: &SignalRow, forced: bool) -> Option<Value> {
+    let id = egui::Id::unique(("box-force-number", &s.name));
     let label = s.name.to_ascii_lowercase();
     let size = (rect.height() * 0.35).clamp(7.0, 16.0);
     let tip = "force this input on the box (an engineer only; ends on logout or deploy)";
@@ -522,6 +587,9 @@ fn force_ui(ui: &mut egui::Ui, rect: Rect, s: &SignalRow, forced: bool) -> Optio
                     .color(ink),
             )
             .fill(fill)
+            // Never wrapped: a narrow block at low zoom would stack the
+            // letters one a row.
+            .wrap_mode(egui::TextWrapMode::Truncate)
             .sense(Sense::click());
             ui.add_sized(rect.size(), b)
                 .on_hover_text(tip)
@@ -529,33 +597,139 @@ fn force_ui(ui: &mut egui::Ui, rect: Rect, s: &SignalRow, forced: bool) -> Optio
                 .then_some(Value::Bool(!on))
         }
         Some(Value::Int(n)) => {
-            let mut v = i64::try_from(n).unwrap_or(0);
-            let before = v;
-            ui.add_sized(
-                rect.size(),
-                egui::DragValue::new(&mut v).prefix(format!("{label} = ")),
-            )
-            .on_hover_text(tip);
-            (v != before).then_some(Value::Int(i128::from(v)))
+            let v = i64::try_from(n).unwrap_or(0);
+            let c = crate::commit::number(ui, id, &v.to_string(), "", rect.size(), tip);
+            crate::commit::int(&c, i64::MIN, i64::MAX)
+                .filter(|x| *x != v)
+                .map(|x| Value::Int(i128::from(x)))
         }
         Some(Value::Real(r)) => {
-            let mut v = r;
-            ui.add_sized(
-                rect.size(),
-                egui::DragValue::new(&mut v)
-                    .speed(0.1)
-                    .prefix(format!("{label} = ")),
-            )
-            .on_hover_text(tip);
-            (v.to_bits() != r.to_bits() && v.is_finite()).then_some(Value::Real(v))
+            let c = crate::commit::number(ui, id, &r.to_string(), "", rect.size(), tip);
+            crate::commit::real(&c)
+                .filter(|x| x.to_bits() != r.to_bits())
+                .map(Value::Real)
         }
         _ => None,
+    }
+}
+
+impl BoxView {
+    /// What the Files tab asked for, done through the project API.
+    fn project_act(&mut self, a: Act) {
+        let open = self.projects.open.clone();
+        match a {
+            Act::OpenProject(p) => self.projects.open_project(&p),
+            Act::OpenFile(f) => self.projects.open_file(&f),
+            Act::NewProject(p) => self.projects.create(&p, None),
+            Act::CopyProject { from, to } => self.projects.create(&to, Some(&from)),
+            Act::FromStarter { from, to } => self.projects.create_from(&to, &from),
+            Act::RenameProject { from, to } => self.projects.rename(&from, &to),
+            Act::DeleteProject(p) => self.projects.delete(&p),
+            Act::NewFile(f) => self.projects.new_file(&f),
+            Act::RenameFile { from, to } => self.projects.rename_file(&from, &to),
+            Act::DeleteFile(f) => self.projects.delete_file(&f),
+            Act::CopyFile(f) => {
+                if let Some(b) = open.as_ref().and_then(|o| o.bufs.get(&f)).filter(|b| b.loaded) {
+                    self.files_ui.clipboard = Some((f, b.text.clone()));
+                }
+            }
+            Act::DuplicateFile(f) => {
+                if let Some(o) = &open
+                    && let Some(b) = o.bufs.get(&f).filter(|b| b.loaded)
+                {
+                    let name = projects::free_file_name(&f, |n| o.bufs.contains_key(n));
+                    self.projects.new_file_with(&name, &b.text);
+                }
+            }
+            Act::PasteFile { name, text } => {
+                if let Some(o) = &open {
+                    let name = projects::free_file_name(&name, |n| o.bufs.contains_key(n));
+                    self.projects.new_file_with(&name, &text);
+                }
+            }
+            // The Agent's answer lands in the simulation's projects.
+            Act::UseAnswer { .. } => {}
+        }
     }
 }
 
 impl Workspace for BoxView {
     fn dirty(&self) -> bool {
         self.projects.dirty()
+    }
+
+    fn new_project(&mut self, chrome: &mut Chrome) {
+        if self.has_projects() {
+            self.files_ui.new_project();
+            chrome.show_files();
+        }
+    }
+
+    fn copy_project(&mut self, chrome: &mut Chrome) {
+        if let Some(o) = &self.projects.open {
+            let name = o.name.clone();
+            self.files_ui.copy_project(&name);
+            chrome.show_files();
+        }
+    }
+
+    fn layout_menu(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let can = self.can_save_layout();
+        if arrange::menu_items(ui, chrome, &mut self.layers, self.view.as_mut(), can) {
+            self.save_layout();
+        }
+    }
+
+    fn zoom_to_fit(&mut self) {
+        if let Some(v) = &mut self.view {
+            v.refit();
+        }
+    }
+
+    fn go_to_definition(&mut self, chrome: &mut Chrome) -> bool {
+        let Some(v) = &self.view else { return false };
+        let Some(line) = v.definition_line() else {
+            return false;
+        };
+        // As a block click: the file and line of the project build when the
+        // project open is the one running; the build's line without projects.
+        match projects::file_line(&v.src, line) {
+            Some((file, l))
+                if self.has_projects()
+                    && self.projects.open.as_ref().map(|o| &o.name) == self.projects.running.as_ref() =>
+            {
+                self.goto(&file, l, chrome);
+            }
+            None if !self.has_projects() => {
+                chrome.show_code();
+                chrome.goto(line);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn cross_references(&mut self) -> bool {
+        self.view.as_mut().is_some_and(Viewer::cross_references)
+    }
+
+    fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
+        if self.writable().is_err() {
+            return false;
+        }
+        let Some((name, file)) = self
+            .projects
+            .open
+            .as_ref()
+            .and_then(|o| o.current.clone().map(|f| (o.name.clone(), f)))
+        else {
+            return false;
+        };
+        let id = egui::Id::unique(("box-st", &name, &file));
+        let Some(buf) = self.projects.current_mut() else {
+            return false;
+        };
+        editor::undo(ctx, id, &mut buf.text, redo)
     }
 
     fn writable(&self) -> Result<(), String> {
@@ -616,17 +790,23 @@ impl Body for BoxView {
         if let Some(s) = &self.state.scan {
             ui.separator();
             ui.label(
-                RichText::new(format!("scan {} · t={:.1}s", s.scan, s.now_ms as f64 / 1000.0))
+                RichText::new(format!("t={:.1}s", s.now_ms as f64 / 1000.0))
                     .monospace()
                     .color(brand::STEEL),
-            );
-            if let Some(f) = &s.fault {
-                ui.colored_label(RED, format!("fault: {f}"));
-            }
+            )
+            .on_hover_text(format!("scan {}", s.scan));
         }
-        let can = self.can_save_layout();
-        if arrange::buttons(ui, chrome, &mut self.layers, self.view.as_mut(), can) {
-            self.save_layout();
+    }
+
+    fn has_notices(&self) -> bool {
+        self.state.scan.as_ref().is_some_and(|s| s.fault.is_some())
+            || self.projects.deploy != Deploy::Idle
+            || self.projects.notice.is_some()
+    }
+
+    fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {
+            ui.colored_label(RED, format!("fault: {f}"));
         }
         match &self.projects.deploy {
             Deploy::Idle => {}
@@ -698,19 +878,10 @@ impl Body for BoxView {
                 current: open.as_ref().and_then(|o| o.current.as_deref()),
                 write,
                 dirty: self.projects.dirty(),
+                starters: true,
             };
-            let act = self.files_ui.show(ui, &listing, chrome);
-            match act {
-                Some(Act::OpenProject(p)) => self.projects.open_project(&p),
-                Some(Act::OpenFile(f)) => self.projects.open_file(&f),
-                Some(Act::NewProject(p)) => self.projects.create(&p, None),
-                Some(Act::CopyProject { from, to }) => self.projects.create(&to, Some(&from)),
-                Some(Act::RenameProject { from, to }) => self.projects.rename(&from, &to),
-                Some(Act::DeleteProject(p)) => self.projects.delete(&p),
-                Some(Act::NewFile(f)) => self.projects.new_file(&f),
-                Some(Act::RenameFile { from, to }) => self.projects.rename_file(&from, &to),
-                Some(Act::DeleteFile(f)) => self.projects.delete_file(&f),
-                None => {}
+            if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
+                self.project_act(a);
             }
             ui.separator();
             ui.label(RichText::new("Running").strong().color(brand::STEEL));
@@ -741,6 +912,15 @@ impl Body for BoxView {
         }
         if let Some(name) = chosen {
             self.state.select(&name);
+        }
+        // The blank space under it all: a right-click offers a new project
+        // (and a paste into the open one).
+        if self.has_projects() {
+            let write = self.writable();
+            let can_paste = self.projects.open.is_some();
+            if let Some(a) = self.files_ui.blank_menu(ui, chrome, &write, can_paste) {
+                self.project_act(a);
+            }
         }
     }
 
@@ -823,17 +1003,20 @@ impl Body for BoxView {
         }
     }
 
-    fn tabs(&self) -> &'static [Tab] {
-        // Claude comes to the box later (docs/UI.md).
-        &[Tab::Io, Tab::Trend]
+    fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        self.trend.ui(ui, chrome, &self.state, self.session.as_ref());
     }
 
-    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab) {
-        if tab == Tab::Trend {
-            let mut chrome = Chrome::default();
-            self.trend.ui(ui, &mut chrome, &self.state, self.session.as_ref());
-            return;
-        }
+    fn messages(&mut self) -> &mut crate::messages::Log {
+        &mut self.log
+    }
+
+    fn tabs(&self) -> &'static [Tab] {
+        // Claude comes to the box later (docs/UI.md).
+        &[Tab::Io]
+    }
+
+    fn tab(&mut self, ui: &mut egui::Ui, _tab: Tab) {
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {
             if let Some(v) = &mut self.view {
@@ -841,21 +1024,27 @@ impl Body for BoxView {
                 ui.separator();
             }
             ui.label(RichText::new("Signals").strong());
-            for s in &self.state.signals {
-                let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
-                let forced = if s.forced { "  FORCED" } else { "" };
-                let text = format!("{} {} = {}{unit}{forced}", s.dir, s.name, show(s.value));
-                let color = match s.quality.as_str() {
-                    _ if s.forced => WARN,
-                    "missing" => RED,
-                    _ if s.value == Some(helmsman_iec::Value::Bool(true)) => brand::YELLOW,
-                    _ => brand::WHITE,
-                };
-                let l = ui.label(RichText::new(text).monospace().color(color));
-                if let Some(e) = &s.point_error {
-                    l.on_hover_text(e);
+            // Two columns (Nick, 2026-11-01: denser).
+            egui::Grid::new("box-io-signals").num_columns(2).show(ui, |ui| {
+                for pair in self.state.signals.chunks(2) {
+                    for s in pair {
+                        let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
+                        let forced = if s.forced { "  FORCED" } else { "" };
+                        let text = format!("{} {} = {}{unit}{forced}", s.dir, s.name, show(s.value));
+                        let color = match s.quality.as_str() {
+                            _ if s.forced => WARN,
+                            "missing" => RED,
+                            _ if s.value == Some(helmsman_iec::Value::Bool(true)) => brand::YELLOW,
+                            _ => brand::WHITE,
+                        };
+                        let l = ui.label(RichText::new(text).monospace().color(color));
+                        if let Some(e) = &s.point_error {
+                            l.on_hover_text(e);
+                        }
+                    }
+                    ui.end_row();
                 }
-            }
+            });
         });
     }
 
@@ -865,8 +1054,16 @@ impl Body for BoxView {
         let mut jump = None;
         let mut reads = Vec::new();
         let mut area = Rect::NOTHING;
+        let icons = self
+            .projects
+            .open
+            .as_ref()
+            .and_then(|o| o.bufs.get(crate::icons::FILE))
+            .filter(|b| b.loaded)
+            .map(|b| b.text.clone());
         match &mut self.view {
             Some(v) if v.drawable() => {
+                v.icons.update(icons.as_deref());
                 let outer = vec![
                     "This box".to_string(),
                     self.state.selected.clone().unwrap_or_default(),

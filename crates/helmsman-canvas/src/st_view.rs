@@ -11,6 +11,7 @@ use eframe::egui::{
     epaint::CubicBezierShape,
 };
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, out_port};
+use helmsman_diagram::lower::Var;
 use helmsman_diagram::{
     Diagram, Drivers, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, drivers,
 };
@@ -28,9 +29,26 @@ pub mod brand {
     pub const PANEL: Color32 = Color32::from_rgb(0x24, 0x24, 0x24);
     /// The warning colour: a forced input, the force banner.
     pub const WARN: Color32 = Color32::from_rgb(0xFF, 0x8A, 0x1E);
+    /// TRUE, running: green.
+    pub const GREEN: Color32 = Color32::from_rgb(0x3C, 0xC8, 0x5C);
+    /// FALSE, stopped: red.
+    pub const RED: Color32 = Color32::from_rgb(0xFF, 0x6E, 0x64);
+    /// A switch that is off: a dark red ground.
+    pub const OFF_RED: Color32 = Color32::from_rgb(0x6A, 0x22, 0x1E);
 }
 
 use brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
+
+/// How much of the diagram a pan must leave in view, points.
+pub const KEEP: f32 = 120.0;
+/// The smallest zoom a fit goes to: a block's label (11.5 units of type)
+/// still reads at about 9 px. A diagram too big to fit at that zoom shows
+/// its left part and you pan, instead of shrinking to an unreadable whole
+/// (Nick, 2026-11-01).
+pub const LEGIBLE: f32 = 0.75;
+/// The band along the diagram's top the glyph buttons sit in, points: a
+/// fit keeps the diagram below it.
+pub const GLYPH_BAND: f32 = 52.0;
 
 /// Pan and zoom: `screen = origin + offset + world * zoom`.
 #[derive(Clone, Copy, Debug)]
@@ -39,6 +57,11 @@ pub struct Cam {
     pub zoom: f32,
     origin: Pos2,
     fitted: bool,
+    /// The operator panned or zoomed since the last fit: a change of the
+    /// view's size then keeps their framing (clamped) instead of refitting.
+    moved: bool,
+    /// The size of the area last drawn in.
+    area: Vec2,
 }
 
 impl Default for Cam {
@@ -48,6 +71,8 @@ impl Default for Cam {
             zoom: 1.0,
             origin: Pos2::ZERO,
             fitted: false,
+            moved: false,
+            area: Vec2::ZERO,
         }
     }
 }
@@ -67,17 +92,32 @@ impl Cam {
     }
 
     fn zoom_at(&mut self, screen: Pos2, factor: f32) {
+        self.moved = true;
         let (wx, wy) = self.to_world(screen);
         self.zoom = (self.zoom * factor).clamp(0.15, 3.0);
         self.offset = screen - self.origin - Vec2::new(wx, wy) * self.zoom;
     }
 
+    /// Keeps the diagram in view: however far a pan or zoom went, at
+    /// least [`KEEP`] points of it stay inside `area` on each side (Nick,
+    /// 2026-11-01: no dragging it off into half a screen of nothing).
+    fn clamp(&mut self, area: Rect, size: (f32, f32)) {
+        let (w, h) = (size.0.max(1.0) * self.zoom, size.1.max(1.0) * self.zoom);
+        let keep = KEEP.min(w / 2.0).min(h / 2.0);
+        let left = self.origin.x + self.offset.x;
+        let top = self.origin.y + self.offset.y;
+        let x = left.clamp(area.left() + keep - w, area.right() - keep);
+        let y = top.clamp(area.top() + keep - h, area.bottom() - keep);
+        self.offset += Vec2::new(x - left, y - top);
+    }
+
     fn fit(&mut self, area: Rect, size: (f32, f32)) {
         let (w, h) = (size.0.max(1.0) + 60.0, size.1.max(1.0) + 60.0);
-        self.zoom = (area.width() / w).min(area.height() / h).clamp(0.2, 1.2);
+        self.zoom = (area.width() / w).min(area.height() / h).clamp(LEGIBLE, 1.2);
         self.origin = area.min;
         self.offset = Vec2::splat(30.0 * self.zoom);
         self.fitted = true;
+        self.moved = false;
     }
 }
 
@@ -116,6 +156,14 @@ pub struct Viewer {
     lit: Option<Drivers>,
     /// What the drag in progress holds.
     grab: Option<Grab>,
+    /// When each node (scope, id) was last seen to run, page time: a
+    /// statement that ran for one scan stays lit for [`HOLD`].
+    ran_at: std::collections::HashMap<(usize, u32), f64>,
+    /// When each region (scope, id) was last seen taken, and how.
+    taken_at: std::collections::HashMap<(usize, u32), (f64, Gate)>,
+    /// The variable (upper-cased head name in this scope) whose reads and
+    /// writes are lit instead of the "because" path: Cross references.
+    xref: Option<String>,
     /// Instances folded in the tree (their prefixes).
     folded: Vec<String>,
     /// How far the operator moved each block from where the layout put it,
@@ -123,6 +171,9 @@ pub struct Viewer {
     moved: Vec<Vec<(NodeId, Vec2)>>,
     /// Counts changes to `moved` (see [`Self::edits`]).
     edits: u64,
+    /// The blocks' one-character icons (the project's `icons.map` over
+    /// the built-in ones).
+    pub icons: crate::icons::Icons,
 }
 
 /// One row of the program tree.
@@ -282,9 +333,109 @@ impl Viewer {
             highlight: Vec::new(),
             lit: None,
             grab: None,
+            ran_at: std::collections::HashMap::new(),
+            taken_at: std::collections::HashMap::new(),
+            xref: None,
             folded: Vec::new(),
             moved,
             edits: 0,
+            icons: crate::icons::Icons::default(),
+        }
+    }
+
+    /// The variable of this scope the picked block is about: the head of
+    /// a read, write or access path (`M` for `M.ON`, `A` for `A[I]`), or
+    /// a block instance's name. Upper-cased, as the POU's `vars` are.
+    #[must_use]
+    pub fn picked_var(&self) -> Option<String> {
+        let Some(Pick::Node(n)) = self.pick else {
+            return None;
+        };
+        let node = self.diagram().nodes.get(n.0 as usize)?;
+        let head = match &node.kind {
+            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => {
+                path.split(['.', '[']).next()?
+            }
+            NodeKind::Fb { instance, .. } => instance.as_str(),
+            _ => return None,
+        };
+        (!head.starts_with('%')).then(|| head.to_ascii_uppercase())
+    }
+
+    /// The source line where the picked block's variable is declared
+    /// (Go to definition).
+    #[must_use]
+    pub fn definition_line(&self) -> Option<u32> {
+        let head = self.picked_var()?;
+        let pou = self.module.pous.get(self.scopes[self.scope].pou)?;
+        pou.vars.get(&head).map(|v| v.line)
+    }
+
+    /// Lights every block that reads or writes the picked block's
+    /// variable, in place of the "because" path, until the next click
+    /// (Cross references). Whether there was a variable to show.
+    pub fn cross_references(&mut self) -> bool {
+        let Some(head) = self.picked_var() else {
+            return false;
+        };
+        self.xref = Some(head);
+        true
+    }
+
+    /// The reads and writes of `head` on this diagram, with the wires
+    /// between them.
+    fn references(&self, head: &str) -> Drivers {
+        let d = self.diagram();
+        let of = |n: &helmsman_diagram::Node| match &n.kind {
+            NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => path
+                .split(['.', '['])
+                .next()
+                .is_some_and(|h| h.eq_ignore_ascii_case(head)),
+            NodeKind::Fb { instance, .. } => instance.eq_ignore_ascii_case(head),
+            _ => false,
+        };
+        let nodes: Vec<bool> = d.nodes.iter().map(of).collect();
+        let wires = d
+            .wires
+            .iter()
+            .map(|w| nodes[w.from.0 as usize] && nodes[w.to.0 as usize])
+            .collect();
+        Drivers {
+            nodes,
+            wires,
+            regions: vec![false; d.regions.len()],
+        }
+    }
+
+    /// Fits the open level to its area on the next frame (View menu).
+    pub fn refit(&mut self) {
+        self.cams[self.scope].fitted = false;
+    }
+
+    /// Keeps what ran lit for [`HOLD`] after the scan it ran in. The
+    /// diagram draws one scan per frame, so a statement that runs for a
+    /// single scan (the body of `IF pulse.Q`, a one-shot) would brighten
+    /// for one frame, only on the frames that happen to land on it: a
+    /// flicker. Held, it reads as a blink of fixed length instead.
+    pub fn hold(&mut self, live: &mut Live, now: f64) {
+        let scope = self.scope;
+        for (i, ran) in live.ran.iter_mut().enumerate() {
+            let key = (scope, u32::try_from(i).unwrap_or(u32::MAX));
+            if *ran {
+                self.ran_at.insert(key, now);
+            } else if self.ran_at.get(&key).is_some_and(|t| now - t < HOLD) {
+                *ran = true;
+            }
+        }
+        for (i, g) in live.gates.iter_mut().enumerate() {
+            let key = (scope, u32::try_from(i).unwrap_or(u32::MAX));
+            if matches!(g, Gate::Open(_)) {
+                self.taken_at.insert(key, (now, *g));
+            } else if let Some((t, held)) = self.taken_at.get(&key)
+                && now - t < HOLD
+            {
+                *g = *held;
+            }
         }
     }
 
@@ -712,8 +863,19 @@ impl Viewer {
         let painter = ui.painter_at(area);
         let size = self.diagram().size;
         let cam = &mut self.cams[self.scope];
+        // The view changed size (a pane opened, the window resized) and
+        // the operator had not panned or zoomed: fit again, or the
+        // diagram's right part slides under a panel.
+        if cam.fitted && !cam.moved && cam.area != area.size() {
+            cam.fitted = false;
+        }
+        cam.area = area.size();
         if !cam.fitted {
-            cam.fit(area, size);
+            // Fit under the glyph strip along the top, so no block opens
+            // under it.
+            let below = Rect::from_min_max(area.min + Vec2::new(0.0, GLYPH_BAND), area.max);
+            cam.fit(below, size);
+            cam.offset.y += GLYPH_BAND;
         }
         cam.origin = area.min;
         let (hover, scroll, zoom) = ui
@@ -726,6 +888,7 @@ impl Viewer {
                 }
             } else if scroll != Vec2::ZERO {
                 cam.offset += scroll;
+                cam.moved = true;
             }
         }
         let double = response.double_clicked();
@@ -752,12 +915,18 @@ impl Viewer {
             match self.grab {
                 Some(Grab::Node(n)) => self.move_node(n, by / cam.zoom),
                 Some(Grab::Region(r)) => self.move_region(r, by / cam.zoom),
-                _ => self.cams[self.scope].offset += by,
+                _ => {
+                    let cam = &mut self.cams[self.scope];
+                    cam.offset += by;
+                    cam.moved = true;
+                }
             }
         }
         if response.drag_stopped() {
             self.grab = None;
         }
+        let size = self.diagram().size;
+        self.cams[self.scope].clamp(area, size);
         let cam = self.cams[self.scope];
         if response.clicked()
             && let Some(p) = response.interact_pointer_pos()
@@ -770,6 +939,8 @@ impl Viewer {
             self.pick = node_near(d, x, y, slop)
                 .map(Pick::Node)
                 .or_else(|| d.region_at(x, y).map(Pick::Region));
+            // A click ends a cross-reference view.
+            self.xref = None;
             match self.pick {
                 // An output, an assignment or a variable's block: its path.
                 Some(Pick::Node(n)) => {
@@ -781,8 +952,17 @@ impl Viewer {
                 _ => self.because = None,
             }
         }
-        let live = self.live(scan);
-        self.lit = self.path(scan);
+        let mut live = self.live(scan);
+        if let Some(l) = &mut live {
+            let now = ui.input(|i| i.time);
+            self.hold(l, now);
+        }
+        self.lit = self
+            .xref
+            .as_ref()
+            .map(|h| self.references(h))
+            .filter(|r| !r.is_empty())
+            .or_else(|| self.path(scan));
         draw(
             &painter,
             area,
@@ -793,6 +973,8 @@ impl Viewer {
                 pick: self.pick,
                 lines: &self.highlight,
                 lit: self.lit.as_ref(),
+                vars: self.module.program().map(|p| &p.vars),
+                icons: &self.icons,
             },
         );
     }
@@ -879,10 +1061,77 @@ struct Marks<'a> {
     lines: &'a [u32],
     /// The "because" path: drawn at full strength, the rest dimmed.
     lit: Option<&'a Drivers>,
+    /// The POU's variables, by upper-cased name: how a value prints
+    /// (`T#500ms` for a TIME) and which are constants (no value shown).
+    vars: Option<&'a std::collections::HashMap<String, Var>>,
+    /// The blocks' icons.
+    icons: &'a crate::icons::Icons,
+}
+
+/// The program variable a node's path starts at (`M.ON` is `M`'s).
+fn var_of<'a>(vars: Option<&'a std::collections::HashMap<String, Var>>, path: &str) -> Option<&'a Var> {
+    let head = path.split(['.', '[']).next().unwrap_or(path).to_ascii_uppercase();
+    vars?.get(&head)
+}
+
+/// What a node's value is, as it should read: a whole TIME variable's
+/// in a time literal's unit, anything else as the value prints. `None`:
+/// the node is a literal or a constant, whose label says it all.
+fn value_text(
+    d: &Diagram,
+    n: NodeId,
+    v: Value,
+    vars: Option<&std::collections::HashMap<String, Var>>,
+) -> Option<String> {
+    let node = d.node(n);
+    let path = match &node.kind {
+        NodeKind::Read { path } | NodeKind::Write { path } | NodeKind::Access { path } => path,
+        NodeKind::Const { .. } => return None,
+        _ => return Some(v.to_string()),
+    };
+    let var = var_of(vars, path);
+    if var.is_some_and(|x| x.constant) {
+        return None;
+    }
+    match v {
+        Value::Int(ns) if !path.contains(['.', '[']) && var.is_some_and(|x| x.ty == "TIME") => {
+            Some(helmsman_diagram::text::time(ns))
+        }
+        v => Some(v.to_string()),
+    }
 }
 
 /// How strongly what is off the "because" path is drawn.
 const DIMMED: f32 = 0.22;
+
+/// A wire between statements longer than this (diagram units) is drawn
+/// as a tunnel: a tagged stub at each end, no lead across the diagram.
+pub const TUNNEL_AT: f32 = 260.0;
+
+/// Whether the wire from `a` to `b`, `len` units long, is a tunnel.
+#[must_use]
+pub fn tunnel(a: &helmsman_diagram::Node, b: &helmsman_diagram::Node, len: f32) -> bool {
+    a.stmt != b.stmt && len > TUNNEL_AT
+}
+
+/// What a tunnel's tags say: the variable the source writes or reads, or
+/// a block's `instance.output`.
+#[must_use]
+pub fn source_name(a: &helmsman_diagram::Node, out: usize) -> String {
+    match &a.kind {
+        NodeKind::Write { path } | NodeKind::Read { path } | NodeKind::Access { path } => {
+            path.to_ascii_lowercase()
+        }
+        NodeKind::Fb { instance, .. } => {
+            let port = a.outs.get(out).map_or("", String::as_str);
+            format!("{}.{}", instance.to_ascii_lowercase(), port.to_ascii_lowercase())
+        }
+        _ => a.label.to_ascii_lowercase(),
+    }
+}
+
+/// How long a statement stays lit after the scan it ran in, seconds.
+pub const HOLD: f64 = 0.3;
 
 /// The FBD negation bubble's radius, in diagram units.
 const BUBBLE: f32 = 4.0;
@@ -900,7 +1149,13 @@ fn bubble(painter: &egui::Painter, p: Pos2, z: f32, seen: Option<Value>, fade: f
 }
 
 fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option<&Live>, marks: Marks<'_>) {
-    let Marks { pick, lines, lit } = marks;
+    let Marks {
+        pick,
+        lines,
+        lit,
+        vars,
+        icons,
+    } = marks;
     let z = cam.zoom;
     let strength = |on: bool| if lit.is_none() || on { 1.0 } else { DIMMED };
     // Pins entered through a bubble: no pin dot over it.
@@ -950,7 +1205,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         // The gate's wire into the region's label, through its bubble.
         if let Some((g, port)) = r.gate {
             let n = d.node(g);
-            let (x, y) = out_port(&n.rect, port);
+            let (x, y) = out_port(n, port);
             let v = live.and_then(|l| l.values[g.0 as usize].get(port).copied().flatten());
             let (c, w) = wire_color(v);
             let end = cam.to_screen(r.rect.x, r.rect.y + LABEL_H / 2.0);
@@ -972,32 +1227,52 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         let w = &d.wires[k];
         let f = strength(lit.is_some_and(|l| l.wire(k)));
         let (a, b) = (d.node(w.from), d.node(w.to));
-        let (ax, ay) = out_port(&a.rect, w.out);
-        let (bx, by) = in_port(&b.rect, w.inp);
+        let (ax, ay) = out_port(a, w.out);
+        let (bx, by) = in_port(b, w.inp);
         let v = live.and_then(|l| l.wire(d, k));
         let (c, width) = wire_color(v);
         let (pa, pb) = (cam.to_screen(ax, ay), cam.to_screen(bx, by));
-        if w.negated {
-            bezier(
-                painter,
-                pa,
-                pb - Vec2::new(2.0 * BUBBLE * z, 0.0),
-                z,
-                c.gamma_multiply(f),
-                width,
-            );
-            bubble(painter, pb, z, live.and_then(|l| l.input(d, k)), f);
+        let end = if w.negated {
+            pb - Vec2::new(2.0 * BUBBLE * z, 0.0)
         } else {
-            bezier(painter, pa, pb, z, c.gamma_multiply(f), width);
+            pb
+        };
+        if tunnel(a, b, (end - pa).length() / z) {
+            // Too far to trace: a tagged stub at each end naming the signal.
+            let name = source_name(a, w.out);
+            let stub = 14.0 * z;
+            let stroke = Stroke::new(width * z.max(0.5), c.gamma_multiply(f));
+            painter.line_segment([pa, pa + Vec2::new(stub, 0.0)], stroke);
+            painter.text(
+                pa + Vec2::new(stub + 3.0 * z, 0.0),
+                Align2::LEFT_CENTER,
+                format!("{name} ▸"),
+                font(9.5 * z),
+                c.gamma_multiply(f),
+            );
+            painter.line_segment([end - Vec2::new(stub, 0.0), end], stroke);
+            painter.text(
+                end - Vec2::new(stub + 3.0 * z, 0.0),
+                Align2::RIGHT_CENTER,
+                format!("▸ {name}"),
+                font(9.5 * z),
+                c.gamma_multiply(f),
+            );
+        } else {
+            bezier(painter, pa, end, z, c.gamma_multiply(f), width);
+        }
+        if w.negated {
+            bubble(painter, pb, z, live.and_then(|l| l.input(d, k)), f);
         }
         if text
             && let Some(v) = v
             && !matches!(v, Value::Bool(_))
+            && let Some(label) = value_text(d, w.from, v, vars)
         {
             painter.text(
                 pa + Vec2::new(4.0, -7.0) * z,
                 Align2::LEFT_CENTER,
-                v.to_string(),
+                label,
                 font(10.0 * z),
                 WHITE.gamma_multiply(f),
             );
@@ -1022,18 +1297,26 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         };
         let fade: f32 = if ran { 1.0 } else { 0.4 } * on_path;
         let radius = CornerRadius::same(4);
-        painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7) * on_path));
         let h = Rect::from_min_size(r.min, Vec2::new(r.width(), HEADER * z));
-        painter.rect_filled(
-            h,
-            CornerRadius {
-                nw: 4,
-                ne: 4,
-                sw: 0,
-                se: 0,
-            },
-            head.gamma_multiply(fade),
-        );
+        // A block that shows a value under its header (a variable) or
+        // keeps its instance's ports apart (a function block) has a body
+        // of its own; an operator, function or literal is one shade.
+        let two_tone = n.kind.headed();
+        if two_tone {
+            painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7) * on_path));
+            painter.rect_filled(
+                h,
+                CornerRadius {
+                    nw: 4,
+                    ne: 4,
+                    sw: 0,
+                    se: 0,
+                },
+                head.gamma_multiply(fade),
+            );
+        } else {
+            painter.rect_filled(r, radius, head.gamma_multiply(fade));
+        }
         if lines.contains(&n.pos.line) {
             // The source line the explanation is about.
             painter.rect_stroke(
@@ -1049,16 +1332,43 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
             Stroke::new(1.0 * z, Color32::from_black_alpha(200))
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
-        if text {
+        // The block's one-character icon: at the header's left edge beside
+        // the label, or alone and large enough to read when the label is
+        // too small to draw (Nick, 2026-11-01).
+        let icon = icons.of(n);
+        if !text && let Some(i) = icon {
             painter.text(
-                h.center(),
+                r.center(),
+                Align2::CENTER_CENTER,
+                i,
+                font((14.0 * z).max(11.0)),
+                ink.gamma_multiply(fade),
+            );
+        }
+        if text {
+            let band = if two_tone { h } else { r };
+            // With an icon the label sits right of it, so the two never
+            // overlap on a block sized to its label alone.
+            let mut centre = band.center();
+            if let Some(i) = icon {
+                painter.text(
+                    Pos2::new(band.left() + 3.0 * z, band.center().y),
+                    Align2::LEFT_CENTER,
+                    i,
+                    font(11.5 * z),
+                    ink.gamma_multiply(fade),
+                );
+                centre.x += 6.0 * z;
+            }
+            painter.text(
+                centre,
                 Align2::CENTER_CENTER,
                 &n.label,
                 font(11.5 * z),
                 ink.gamma_multiply(fade),
             );
             for (k, name) in n.ins.iter().enumerate() {
-                let (x, y) = in_port(&n.rect, k);
+                let (x, y) = in_port(n, k);
                 let p = cam.to_screen(x, y);
                 if !bubbled.contains(&(n.id, k)) {
                     painter.circle_filled(p, 3.0 * z, STEEL.gamma_multiply(on_path));
@@ -1074,7 +1384,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                 }
             }
             for (k, name) in n.outs.iter().enumerate() {
-                let (x, y) = out_port(&n.rect, k);
+                let (x, y) = out_port(n, k);
                 let p = cam.to_screen(x, y);
                 let v = live.and_then(|l| l.values[n.id.0 as usize].get(k).copied().flatten());
                 painter.circle_filled(p, 3.5 * z, wire_color(v).0.gamma_multiply(on_path));
@@ -1088,20 +1398,181 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                     );
                 }
             }
-            // A variable's value in its body.
+            // A variable's value in its body (a constant's is its label).
             if matches!(n.kind, NodeKind::Read { .. } | NodeKind::Write { .. })
                 && let Some(v) = live.and_then(|l| l.values[n.id.0 as usize].first().copied().flatten())
+                && let Some(label) = value_text(d, n.id, v, vars)
             {
-                let on = v == Value::Bool(true);
+                let color = match v {
+                    Value::Bool(true) => brand::GREEN,
+                    Value::Bool(false) => brand::RED,
+                    _ => WHITE,
+                };
                 painter.text(
                     Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0),
                     Align2::CENTER_CENTER,
-                    v.to_string(),
+                    label,
                     font(11.0 * z),
-                    (if on { YELLOW } else { WHITE }).gamma_multiply(on_path),
+                    color.gamma_multiply(on_path),
                 );
             }
         }
+    }
+}
+
+/// A one-scan statement stays lit (the Blink lamp's flicker).
+#[cfg(test)]
+mod hold_tests {
+    use helmsman_diagram::{Gate, Live, NodeKind};
+
+    use super::{HOLD, Viewer};
+    use crate::playground::Session;
+
+    const SRC: &str = "PROGRAM blink
+VAR_INPUT
+  enable : BOOL := TRUE;
+  period : TIME := T#500ms;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+END_VAR
+VAR
+  pulse : TON;
+END_VAR
+pulse(IN := enable AND NOT pulse.Q, PT := period);
+IF pulse.Q THEN
+  lamp := NOT lamp;
+END_IF;
+END_PROGRAM
+";
+
+    #[test]
+    fn a_statement_that_ran_one_scan_stays_lit_for_hold_then_dims() {
+        let session = Session::new(SRC);
+        assert!(session.diags.is_empty(), "{:?}", session.diag_lines());
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        let mut v = Viewer::new(SRC, module);
+        let d = v.diagram().clone();
+        let lamp = d
+            .nodes
+            .iter()
+            .position(|n| n.kind == NodeKind::Write { path: "LAMP".into() })
+            .unwrap();
+        // The program's one region: the IF the lamp's assignment sits in.
+        assert_eq!(d.regions.len(), 1);
+        let region = 0;
+        let fresh = |ran: bool, gate: Gate| Live {
+            values: d.nodes.iter().map(|_| Vec::new()).collect(),
+            ran: d
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, _)| i != lamp || ran)
+                .collect(),
+            gates: d
+                .regions
+                .iter()
+                .enumerate()
+                .map(|(i, _)| if i == region { gate } else { Gate::Closed })
+                .collect(),
+        };
+        // The scan it ran in: lit, the IF taken.
+        let mut l = fresh(true, Gate::Open(1));
+        v.hold(&mut l, 10.0);
+        assert!(l.ran[lamp] && l.gates[region] == Gate::Open(1));
+        // The next frames show scans it did not run in: still lit, within HOLD.
+        let mut l = fresh(false, Gate::Closed);
+        v.hold(&mut l, 10.0 + HOLD / 2.0);
+        assert!(l.ran[lamp], "held");
+        assert_eq!(l.gates[region], Gate::Open(1), "the IF stays taken");
+        // After HOLD: as the scan says.
+        let mut l = fresh(false, Gate::Closed);
+        v.hold(&mut l, 10.0 + HOLD + 0.01);
+        assert!(!l.ran[lamp], "dimmed again");
+        assert_eq!(l.gates[region], Gate::Closed);
+        // Never reached: nothing to hold.
+        let mut l = fresh(false, Gate::NotReached);
+        v.hold(&mut l, 20.0);
+        assert!(!l.ran[lamp]);
+        assert_eq!(l.gates[region], Gate::NotReached);
+    }
+}
+
+/// What a block's value reads as (cards `period` value, node fills).
+#[cfg(test)]
+mod value_tests {
+    use helmsman_diagram::NodeKind;
+    use helmsman_iec::Value;
+
+    use super::{Viewer, value_text};
+    use crate::playground::Session;
+
+    const SRC: &str = "PROGRAM clutter
+VAR_INPUT
+  period : TIME := T#500ms;
+  n : INT := 7;
+END_VAR
+VAR CONSTANT
+  k : INT := 3;
+END_VAR
+VAR
+  pulse : TON;
+  m : INT;
+END_VAR
+pulse(IN := TRUE, PT := period);
+m := n + k + 2;
+END_PROGRAM
+";
+
+    fn viewer() -> Viewer {
+        let session = Session::new(SRC);
+        assert!(session.diags.is_empty(), "{:?}", session.diag_lines());
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        Viewer::new(SRC, module)
+    }
+
+    fn node(v: &Viewer, k: &NodeKind) -> helmsman_diagram::NodeId {
+        v.diagram().nodes.iter().find(|n| n.kind == *k).unwrap().id
+    }
+
+    #[test]
+    fn a_time_reads_as_a_literal_a_constant_shows_nothing_and_an_int_is_itself() {
+        let v = viewer();
+        let d = v.diagram();
+        let vars = v.module.program().map(|p| &p.vars);
+        let read = |p: &str| node(&v, &NodeKind::Read { path: p.into() });
+        assert_eq!(
+            value_text(d, read("PERIOD"), Value::Int(500_000_000), vars).as_deref(),
+            Some("T#500ms"),
+            "a TIME in its unit, not nanoseconds"
+        );
+        assert_eq!(
+            value_text(d, read("N"), Value::Int(7), vars).as_deref(),
+            Some("7")
+        );
+        assert_eq!(
+            value_text(d, read("K"), Value::Int(3), vars),
+            None,
+            "a VAR CONSTANT shows no value"
+        );
+        let lit = node(
+            &v,
+            &NodeKind::Const {
+                value: Some(Value::Int(2)),
+            },
+        );
+        assert_eq!(
+            value_text(d, lit, Value::Int(2), vars),
+            None,
+            "a literal is its label"
+        );
+        let plus = node(&v, &NodeKind::Op { op: "+".into() });
+        assert_eq!(value_text(d, plus, Value::Int(12), vars).as_deref(), Some("12"));
+        assert_eq!(
+            value_text(d, read("N"), Value::Int(7), None).as_deref(),
+            Some("7"),
+            "no declarations known: as the value prints"
+        );
     }
 }
 
@@ -1222,6 +1693,39 @@ END_PROGRAM
         NodeKind::Write { path: path.into() }
     }
 
+    /// Edit › Go to definition and Cross references (hotkey cards,
+    /// 2026-11-01): the picked block's variable, its VAR line, and every
+    /// read and write of it lit until the next click.
+    #[test]
+    fn a_picked_block_knows_its_declaration_and_lights_its_references() {
+        let mut h = Harness::new();
+        assert_eq!(h.sv.view.picked_var(), None, "nothing picked");
+        assert_eq!(h.sv.view.definition_line(), None);
+        assert!(!h.sv.view.cross_references());
+        h.click(h.at(&write("MOTOR")));
+        assert_eq!(h.sv.view.picked_var().as_deref(), Some("MOTOR"));
+        assert_eq!(h.sv.view.definition_line(), Some(5), "motor AT %QX0.0 is line 5");
+        assert!(h.sv.view.cross_references());
+        h.frame(vec![]);
+        let lit = h.lit();
+        assert!(lit.contains(&"MOTOR".to_string()), "the read of motor: {lit:?}");
+        assert!(
+            lit.iter().any(|l| l.starts_with("MOTOR :=")),
+            "its write: {lit:?}"
+        );
+        assert!(
+            !lit.iter().any(|l| l.contains("OTHER")),
+            "not another variable: {lit:?}"
+        );
+        // A click anywhere ends it; the because path is back.
+        h.click(h.at(&write("LAMP")));
+        h.frame(vec![]);
+        assert_eq!(h.sv.view.picked_var().as_deref(), Some("LAMP"));
+        assert_eq!(h.sv.view.definition_line(), Some(7));
+        let lit = h.lit();
+        assert!(!lit.iter().any(|l| l.starts_with("MOTOR :=")), "{lit:?}");
+    }
+
     #[test]
     fn tapping_an_output_dims_all_but_its_path_and_empty_space_clears_it() {
         let mut h = Harness::new();
@@ -1258,10 +1762,17 @@ END_PROGRAM
         assert_eq!(h.sv.view.because.as_deref(), Some("OTHER"));
         assert_eq!(h.lit(), ["OTHER", "OTHER"]);
 
-        // Empty space, far from every block: cleared, nothing dimmed.
-        let v = &h.sv.view;
-        let (w, hgt) = v.diagram().size;
-        let empty = v.cams[v.scope].to_screen(w + 60.0, hgt + 60.0);
+        // Empty space, far from every block (the view's bottom-right
+        // corner: a fit leaves margins there): cleared, nothing dimmed.
+        let empty = Pos2::new(1190.0, 790.0);
+        assert_eq!(
+            h.sv.view.diagram().node_at(
+                h.sv.view.cams[h.sv.view.scope].to_world(empty).0,
+                h.sv.view.cams[h.sv.view.scope].to_world(empty).1
+            ),
+            None,
+            "the corner is empty"
+        );
         h.click(empty);
         assert_eq!(h.sv.view.because, None);
         assert!(h.sv.view.highlighted().is_none());

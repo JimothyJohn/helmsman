@@ -8,10 +8,12 @@ use helmsman_iec::Value;
 
 use crate::app::{App, Screen, Source, wants_monitor, wants_sim};
 use crate::box_tests::{Bench, DEMO};
+use crate::editor::Chrome;
 use crate::monitor::{Feed, Group, NARROW, STALE_AFTER, Shape, Tile, TileKind};
 use crate::playground::EXAMPLES;
 use crate::remote::{Cmd, Fetch, Msg, Stream};
-use crate::review::Method;
+use crate::review::{Method, Session};
+use crate::review_view::ReviewView;
 use crate::st_view::TAP;
 
 /// The box's demo line: two feeders, two stations of two motors each.
@@ -76,6 +78,7 @@ impl Harness {
 
     fn groups(&mut self) -> Vec<Group> {
         let now = self.time;
+        let detail = self.app.scan_detail();
         let App {
             monitor,
             boxv,
@@ -87,8 +90,29 @@ impl Harness {
             Source::Box => &boxv.as_ref().unwrap().state,
             Source::Sim => sim.as_ref().unwrap(),
         };
-        monitor.groups(feed, now)
+        monitor.groups(feed, now, detail)
     }
+
+    /// Signed in on the box as `role` (`None`: signed out), as the
+    /// header's session check would leave it.
+    fn sign_in(&mut self, role: Option<&str>) {
+        self.app.review.get_or_insert_with(ReviewView::new).state.session = role.map(|r| Session {
+            user: None,
+            role: r.into(),
+        });
+        self.frame(vec![]);
+    }
+}
+
+/// The status tile's second line, which carries the scan period and
+/// count only for an engineer who asked.
+fn status_sub(h: &mut Harness, program: &str) -> String {
+    let groups = h.groups();
+    let g = groups
+        .iter()
+        .find(|g| g.program == program)
+        .unwrap_or_else(|| panic!("no {program} in {groups:?}"));
+    tile(g, &format!("status {program}")).sub.clone()
 }
 
 fn keys(g: &Group) -> Vec<&str> {
@@ -374,9 +398,10 @@ fn the_box_line_has_a_group_per_program_with_the_scans_values() {
         tile(g, "status line").kind,
         TileKind::Status(crate::monitor::Run::Running)
     );
-    assert!(
-        tile(g, "status line").sub.contains("scan 2 ms"),
-        "{:?}",
+    assert_eq!(
+        tile(g, "status line").sub,
+        "",
+        "the scan period and count are an engineer's choice: {:?}",
         tile(g, "status line")
     );
     let scan = h.app.boxv.as_ref().unwrap().state.programs["line"]
@@ -393,6 +418,85 @@ fn the_box_line_has_a_group_per_program_with_the_scans_values() {
     assert_eq!(names(tile(g, "tile line/FEED1.")), ["part"]);
     // The cell's motor is a user block too.
     assert_eq!(keys(&groups[0]), ["status cell", "outputs cell/", "tile cell/M."]);
+}
+
+/// Card `monitor-scan-time`: the period and counts are too low level for
+/// the wall. Signed out, nobody sees them or a way to turn them on.
+#[test]
+fn the_status_tile_hides_the_scan_period_and_counts_by_default() {
+    let (_b, mut h, _) = box_line();
+    for program in ["cell", "line"] {
+        assert_eq!(status_sub(&mut h, program), "");
+    }
+    assert!(!h.app.chrome.scan, "off until an engineer turns it on");
+    assert_eq!(
+        h.app.chrome.rect("monitor scan"),
+        None,
+        "no toggle while signed out"
+    );
+    // The simulation's program likewise.
+    let mut s = sim_line();
+    assert_eq!(status_sub(&mut s, "line"), "");
+    assert_eq!(s.app.chrome.rect("monitor scan"), None);
+}
+
+/// An engineer turns "Scan detail" on, sees the period and count as
+/// before, and this browser remembers the choice with the layout.
+#[test]
+fn an_engineer_turns_scan_detail_on_and_the_browser_keeps_it() {
+    let (_b, mut h, _) = box_line();
+    h.sign_in(Some("engineer"));
+    assert_eq!(status_sub(&mut h, "line"), "", "a choice, not a default");
+    h.press("monitor scan");
+    assert!(h.app.chrome.scan);
+    let sub = status_sub(&mut h, "line");
+    assert!(sub.starts_with("scan 2 ms · "), "{sub:?}");
+    assert!(sub.ends_with(" scans"), "{sub:?}");
+    let scans: u64 = h
+        .app
+        .boxv
+        .as_ref()
+        .unwrap()
+        .state
+        .modules
+        .iter()
+        .find(|m| m.name == "line")
+        .unwrap()
+        .scans;
+    assert_eq!(sub, format!("scan 2 ms · {scans} scans"));
+    assert_eq!(
+        h.app.chrome.rect("status line").map(|r| r.height() >= TAP),
+        Some(true)
+    );
+    // Kept per browser, as the Editor's layout is.
+    assert!(Chrome::restored(&h.app.chrome.saved()).scan);
+    assert!(
+        !Chrome::restored("left=1").scan,
+        "the default when nothing was kept"
+    );
+    // An integrator is an engineer too; the toggle turns it off again.
+    h.sign_in(Some("integrator"));
+    assert!(status_sub(&mut h, "line").starts_with("scan 2 ms"));
+    h.press("monitor scan");
+    assert!(!h.app.chrome.scan);
+    assert_eq!(status_sub(&mut h, "line"), "");
+}
+
+/// The choice is an engineer's: an operator, or a signed-out wall TV,
+/// on a browser that kept it still sees nothing but the program's state.
+#[test]
+fn an_operator_with_scan_detail_kept_does_not_see_it() {
+    let (_b, mut h, _) = box_line();
+    h.app.chrome = Chrome::restored("scan=1");
+    assert!(h.app.chrome.scan);
+    for role in [Some("operator"), Some("viewer"), None] {
+        h.sign_in(role);
+        assert_eq!(status_sub(&mut h, "line"), "", "{role:?}");
+        assert_eq!(h.app.chrome.rect("monitor scan"), None, "{role:?}: no toggle");
+    }
+    assert!(h.app.chrome.scan, "the choice waits for an engineer");
+    h.sign_in(Some("engineer"));
+    assert!(status_sub(&mut h, "line").starts_with("scan 2 ms"));
 }
 
 #[test]

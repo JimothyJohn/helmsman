@@ -67,6 +67,20 @@ impl Harness {
         self.frame(vec![Self::button(at, false)]);
     }
 
+    /// A right click at `at` (opens a context menu).
+    fn right_click(&mut self, at: Pos2) {
+        let press = |pressed| Event::PointerButton {
+            pos: at,
+            button: PointerButton::Secondary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        self.frame(vec![Event::PointerMoved(at)]);
+        self.frame(vec![press(true)]);
+        self.frame(vec![press(false)]);
+        self.frame(vec![]);
+    }
+
     /// Where the app drew control `key` last frame.
     fn rect(&self, key: &str) -> Rect {
         self.app.chrome.rect(key).unwrap_or_else(|| {
@@ -84,25 +98,17 @@ impl Harness {
         self.click(at);
     }
 
-    /// The header's controls, all there.
-    fn header_is_up(&self) {
-        for k in ["mark", "title", "editor", "menu"] {
-            assert!(self.has(k), "no {k} in the header");
-        }
+    /// Opens the View menu and presses `item` in it.
+    fn view_menu(&mut self, item: &str) {
+        self.press("bar view");
+        self.press(item);
     }
 
-    /// The menu's items on screen now.
-    fn menu_items(&self) -> Vec<String> {
-        let mut out: Vec<String> = self
-            .app
-            .chrome
-            .hits
-            .iter()
-            .filter(|(k, _)| k.starts_with("menu "))
-            .map(|(k, _)| k.clone())
-            .collect();
-        out.sort();
-        out
+    /// The header's controls, all there.
+    fn header_is_up(&self) {
+        for k in ["mark", "title", "editor", "help"] {
+            assert!(self.has(k), "no {k} in the header");
+        }
     }
 }
 
@@ -127,12 +133,382 @@ fn write_to(path: &str) -> impl Fn(&NodeKind) -> bool + '_ {
 
 // ---- the header and the Editor's frame ----
 
+mod glyphs_and_help {
+    use eframe::egui::Rect;
+
+    use super::{App, Harness, Screen};
+
+    /// Nick, 2026-11-01: run/stop, step and restart as glyphs over the
+    /// diagram's top-right corner, with save, upload, download and help.
+    #[test]
+    fn the_glyphs_sit_on_the_diagram_and_drive_the_simulation() {
+        let mut h = Harness::new(App::sim());
+        let diagram = h.app.chrome.diagram;
+        assert_ne!(diagram, Rect::NOTHING);
+        for k in ["run", "step", "restart", "save", "upload", "download"] {
+            let r = h.rect(k);
+            assert!(
+                diagram.contains(r.center()),
+                "{k} over the diagram: {r:?} in {diagram:?}"
+            );
+            assert!(r.top() < diagram.top() + 40.0, "{k} along the top: {r:?}");
+        }
+        let last = h.rect("download");
+        assert!(
+            last.right() > diagram.right() - 40.0,
+            "the strip ends at the right edge: {last:?}"
+        );
+        assert!(h.app.sim.as_ref().unwrap().session.running);
+        h.press("run");
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "the glyph stops");
+        let scans = h.app.sim.as_ref().unwrap().session.scans;
+        h.press("step");
+        assert_eq!(h.app.sim.as_ref().unwrap().session.scans, scans + 1);
+        h.press("restart");
+        assert_eq!(h.app.sim.as_ref().unwrap().session.scans, 0, "a cold restart");
+        h.press("run");
+        assert!(h.app.sim.as_ref().unwrap().session.running, "and starts again");
+        // The Monitor has no diagram, so no glyphs.
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Monitor);
+        assert!(!h.has("run") && !h.has("download"));
+        assert!(h.has("help"), "? stays in the header");
+    }
+
+    /// Nick, 2026-11-01: the toggle flips on a click on either side; the
+    /// Messages tab filters by level; the Projects pane has no "Files"
+    /// header.
+    #[test]
+    fn the_toggle_flips_from_either_side_and_messages_filter_by_level() {
+        use crate::editor::Bottom;
+        let mut h = Harness::new(App::sim());
+        assert_eq!(h.app.screen, Screen::Editor);
+        h.press("editor");
+        assert_eq!(h.app.screen, Screen::Monitor, "the active side flips too");
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Editor);
+        h.press("bottom messages");
+        h.frame(vec![]);
+        for k in ["messages info", "messages warnings", "messages errors"] {
+            assert!(h.has(k), "no {k}");
+        }
+        h.press("messages info");
+        let log = &h.app.sim.as_ref().unwrap().log;
+        assert_eq!(log.show, [false, true, true], "info filtered out");
+        assert_eq!(h.app.chrome.bottom, Bottom::Messages);
+        assert!(!h.has("st"), "no Files header row either");
+    }
+
+    #[test]
+    fn the_bottom_panel_has_trend_and_messages_tabs() {
+        use crate::editor::Bottom;
+        let mut h = Harness::new(App::sim());
+        assert!(h.app.chrome.trend);
+        assert_eq!(h.app.chrome.bottom, Bottom::Trend);
+        for k in ["bottom trend", "bottom messages"] {
+            assert!(h.has(k), "no {k}");
+        }
+        h.press("bottom messages");
+        assert_eq!(h.app.chrome.bottom, Bottom::Messages);
+        h.frame(vec![]);
+        h.press("bottom trend");
+        assert_eq!(h.app.chrome.bottom, Bottom::Trend);
+        // Kept per browser.
+        h.app.chrome.bottom = Bottom::Messages;
+        let back = crate::editor::Chrome::restored(&h.app.chrome.saved());
+        assert_eq!(back.bottom, Bottom::Messages);
+    }
+
+    #[test]
+    fn editor_and_monitor_are_one_toggle_and_help_has_an_about() {
+        let mut h = Harness::new(App::sim());
+        let (e, m) = (h.rect("editor"), h.rect("monitor"));
+        assert!(
+            (e.right() - m.left()).abs() < 1.0 && (e.top() - m.top()).abs() < 1.0,
+            "one control: {e:?} {m:?}"
+        );
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Monitor);
+        h.press("editor");
+        assert_eq!(h.app.screen, Screen::Editor);
+        h.press("bar help");
+        for k in ["help docs", "help keys", "help about"] {
+            assert!(h.has(k), "no {k}");
+        }
+        h.press("help about");
+        assert!(h.app.about);
+        h.frame(vec![]);
+        assert!(h.has("about close"));
+        h.press("about close");
+        assert!(!h.app.about);
+    }
+}
+
+mod polish {
+    use eframe::egui::{self, Event, Key, Modifiers};
+
+    use super::{App, Harness, Screen};
+    use crate::app::HEADER_H;
+    use crate::editor::{Tab, numbering};
+
+    impl Harness {
+        pub(super) fn key(&mut self, modifiers: Modifiers, key: Key) {
+            self.frame(vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            }]);
+            self.frame(vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers,
+            }]);
+        }
+    }
+
+    /// CODESYS's keys where the browser leaves them alone (docs/UI.md,
+    /// Keyboard): the simulation's run controls, the panes, Save.
+    #[test]
+    fn the_shortcuts_run_step_stop_save_and_toggle_the_panes() {
+        let mut h = Harness::new(App::sim());
+        assert!(
+            h.app.sim.as_ref().unwrap().session.running,
+            "the playground opens running"
+        );
+        h.key(Modifiers::SHIFT, Key::F8);
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "Shift+F8 stops");
+        let scans = h.app.sim.as_ref().unwrap().session.scans;
+        h.key(Modifiers::NONE, Key::F10);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().session.scans,
+            scans + 1,
+            "F10 steps one scan"
+        );
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(h.app.sim.as_ref().unwrap().session.running, "Ctrl+Enter runs");
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(!h.app.sim.as_ref().unwrap().session.running, "and stops");
+        // The panes: the simulation starts on the left pane's Code tab.
+        assert!(h.app.chrome.code_open());
+        let right = h.app.chrome.right;
+        h.key(Modifiers::ALT, Key::Num1);
+        assert!(!h.app.chrome.left, "Alt+1 on the Code tab shuts the pane");
+        h.key(Modifiers::ALT, Key::Num0);
+        assert!(h.app.chrome.files_open(), "Alt+0: the Files tab");
+        h.key(Modifiers::ALT, Key::Num1);
+        assert!(h.app.chrome.code_open(), "Alt+1: the Code tab");
+        h.key(Modifiers::ALT, Key::Num3);
+        assert_eq!(h.app.chrome.right, !right, "Alt+3: the side panel");
+        // Save: edit, then Ctrl+S.
+        h.wait(0.2);
+        let editor = h
+            .ctx
+            .read_response(egui::Id::unique("pg-source"))
+            .expect("the editor")
+            .rect;
+        h.click(editor.left_top() + egui::vec2(60.0, 6.0));
+        h.frame(vec![Event::Text("!".into())]);
+        h.wait(0.6);
+        assert!(h.has("dirty"));
+        h.key(Modifiers::COMMAND, Key::S);
+        h.frame(vec![]);
+        assert!(!h.has("dirty"), "Ctrl+S saved");
+        // A box's keys do nothing here.
+        h.key(Modifiers::ALT, Key::F8);
+        assert!(!h.app.login, "no sign-in in the simulation");
+    }
+
+    #[test]
+    fn ctrl_shift_d_opens_the_declaration_and_ctrl_shift_x_lights_the_references() {
+        let mut h = Harness::new(App::sim());
+        h.key(Modifiers::ALT, Key::Num1);
+        assert!(!h.app.chrome.code_open(), "ST shut for the test");
+        // The pane's close moves the diagram: let it settle, then pick.
+        h.wait(0.6);
+        let (at, _) = super::node(super::sim_view(&h), super::write_to("LAMP"));
+        h.click(at);
+        h.frame(vec![]);
+        assert_eq!(
+            super::sim_view(&h).picked_var().as_deref(),
+            Some("LAMP"),
+            "the block is picked"
+        );
+        h.app.chrome.line = None;
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::D);
+        assert!(h.app.chrome.code_open(), "the ST opens");
+        let line = h.app.chrome.line.expect("sent to the declaration");
+        let src = h.app.sim.as_ref().unwrap().session.src.clone();
+        let decl = src.lines().nth(line as usize - 1).unwrap_or("");
+        assert!(
+            decl.to_ascii_lowercase().contains("lamp"),
+            "line {line}: {decl:?}"
+        );
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::X);
+        h.frame(vec![]);
+        let v = super::sim_view(&h);
+        assert!(v.highlighted().is_some_and(|d| !d.is_empty()), "references lit");
+        h.press("bar edit");
+        for k in ["edit definition", "edit xref"] {
+            assert!(h.has(k), "no {k}");
+        }
+    }
+
+    #[test]
+    fn alt_f8_opens_sign_in_and_ctrl_f8_signs_out_on_a_box() {
+        let mut h = Harness::new(App::boxed());
+        assert!(!h.app.login);
+        h.key(Modifiers::ALT, Key::F8);
+        assert!(h.app.login, "Alt+F8: Login");
+        h.key(Modifiers::CTRL, Key::F8);
+        assert!(!h.app.login, "Ctrl+F8: Logout closes it and ends any session");
+        assert!(h.app.session().is_none());
+        // Run keys do nothing on a box's page.
+        h.key(Modifiers::COMMAND, Key::Enter);
+        assert!(h.app.sim.is_none());
+    }
+
+    /// Nick, 2026-11-01: one tall row, menus left, the project right; the
+    /// bar that held ST, Reset layout and Save as default is gone.
+    #[test]
+    fn the_header_is_one_tall_row_with_file_edit_and_view_menus() {
+        let mut h = Harness::new(App::sim());
+        let header = h.rect("header");
+        assert!(header.height() >= HEADER_H, "{header:?}");
+        for k in [
+            "mark", "bar file", "bar edit", "bar view", "bar help", "title", "editor", "monitor", "help",
+        ] {
+            assert!(h.has(k), "no {k}");
+        }
+        assert!(!h.has("deploy"), "Deploy is the File menu's");
+        assert!(!h.has("menu"), "no ⋯ any more");
+        let (file, view, help, toggle) = (
+            h.rect("bar file"),
+            h.rect("bar view"),
+            h.rect("help"),
+            h.rect("monitor"),
+        );
+        assert!(
+            file.left() < view.left() && view.right() < help.left(),
+            "menus left, ? right"
+        );
+        assert!(
+            help.left() >= toggle.right(),
+            "? right of the Editor | Monitor toggle: {help:?} {toggle:?}"
+        );
+        assert!(help.right() <= 1400.0, "on screen");
+        assert!(!h.has("st") && !h.has("reset layout"), "no second bar");
+        // The menus are there on the Monitor too.
+        h.press("monitor");
+        assert_eq!(h.app.screen, Screen::Monitor);
+        assert!(h.has("bar view"));
+        h.view_menu("view editor");
+        assert_eq!(h.app.screen, Screen::Editor);
+    }
+
+    #[test]
+    fn the_view_menu_toggles_panels_tabs_layout_and_fit() {
+        let mut h = Harness::new(App::sim());
+        assert!(h.app.chrome.left && h.app.chrome.right);
+        h.view_menu("view files");
+        assert!(h.app.chrome.files_open(), "from the Code tab, Files shows");
+        h.view_menu("view files");
+        assert!(!h.app.chrome.left, "again: the pane shuts");
+        h.view_menu("view panel");
+        assert!(!h.app.chrome.right);
+        h.view_menu("view tab claude");
+        assert!(
+            h.app.chrome.right && h.app.chrome.tab == Tab::Claude,
+            "a tab opens the panel"
+        );
+        assert!(h.app.chrome.trend, "the Trend runs along the bottom");
+        h.view_menu("view trend");
+        assert!(!h.app.chrome.trend);
+        h.press("bar view");
+        for k in ["view fit", "reset layout", "save layout"] {
+            assert!(h.has(k), "no {k}");
+        }
+        assert!(
+            !h.has("view scan"),
+            "scan detail is an engineer's, not the simulation's"
+        );
+        h.press("view fit");
+        h.wait(0.2);
+        assert_eq!(h.app.screen, Screen::Editor);
+    }
+
+    #[test]
+    fn the_file_menu_saves_and_the_edit_menu_undoes_a_typed_character() {
+        let mut h = Harness::new(App::sim());
+        assert!(h.app.chrome.code_open(), "the ST open");
+        let editor = h
+            .ctx
+            .read_response(egui::Id::unique("pg-source"))
+            .expect("the editor")
+            .rect;
+        h.click(editor.left_top() + egui::vec2(60.0, 6.0));
+        h.frame(vec![Event::Text("!".into())]);
+        h.wait(0.6);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            sim.session.src.lines().next().unwrap().contains('!'),
+            "{:?}",
+            sim.session.src
+        );
+        assert!(h.has("dirty"), "edited");
+        h.press("bar edit");
+        h.press("edit undo");
+        h.wait(0.6);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            !sim.session.src.lines().next().unwrap().contains('!'),
+            "undone: {:?}",
+            sim.session.src
+        );
+        h.press("bar edit");
+        h.press("edit redo");
+        h.wait(0.6);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            sim.session.src.lines().next().unwrap().contains('!'),
+            "redone: {:?}",
+            sim.session.src
+        );
+        h.press("bar file");
+        h.press("file save");
+        h.frame(vec![]);
+        assert!(!h.has("dirty"), "saved from the File menu");
+    }
+
+    /// The hit stays "tab claude" (the stored key); only the label changed.
+    #[test]
+    fn the_third_tab_reads_agent() {
+        assert_eq!(Tab::Claude.label(), "Agent");
+    }
+
+    #[test]
+    fn a_wrapped_line_is_numbered_once_on_its_first_row() {
+        // Line 1 wraps over three rows, line 2 fits, line 3 is empty.
+        let rows = [false, false, true, true, true];
+        assert_eq!(
+            numbering(rows.into_iter()),
+            [(1, true), (1, false), (1, false), (2, true), (3, true)]
+        );
+        assert_eq!(numbering(std::iter::empty()), []);
+        // A last line without a newline is still numbered.
+        assert_eq!(numbering([true, false].into_iter()), [(1, true), (2, true)]);
+    }
+}
+
 mod chrome {
-    use eframe::egui::{self, Pos2, Vec2};
+    use eframe::egui::{self, Event, Pos2, Vec2};
 
     use super::{Harness, node, sim_view, write_to};
     use crate::app::{App, Screen, Source, wants_sim};
-    use crate::editor::{Chrome, STRIP, Tab};
+    use crate::editor::{Chrome, Pane, STRIP, Tab};
 
     #[test]
     fn the_header_is_on_every_screen() {
@@ -145,84 +521,84 @@ mod chrome {
         h.app.screen = Screen::Proposals;
         h.frame(vec![]);
         h.header_is_up();
-        // The menu open over the screen: still there.
-        h.press("menu");
-        assert!(h.app.menu);
-        h.header_is_up();
     }
 
     #[test]
-    fn the_menu_opens_proposals_and_the_header_leads_back() {
+    fn view_opens_proposals_and_the_toggle_leads_back() {
         let mut h = Harness::new(App::boxed());
-        assert!(!h.app.menu);
-        h.press("menu");
-        assert!(h.app.menu, "⋯ opens the menu");
-        assert_eq!(h.menu_items(), ["menu editor", "menu proposals", "menu sim"]);
-        h.press("menu proposals");
+        h.press("bar view");
+        for k in ["view proposals", "view sim"] {
+            assert!(h.has(k), "no {k} in View on a box");
+        }
+        h.press("view proposals");
         assert_eq!(h.app.screen, Screen::Proposals);
-        assert!(!h.app.menu, "picking closes it");
         assert!(h.app.review.is_some());
-        // Back by the header's Editor...
+        // Back by the toggle (either side leaves Proposals for the Editor).
         h.press("editor");
         assert_eq!(h.app.screen, Screen::Editor);
-        // ...or by the menu's.
-        h.press("menu");
-        h.press("menu proposals");
+        h.press("bar view");
+        h.press("view proposals");
         assert_eq!(h.app.screen, Screen::Proposals);
-        h.press("menu");
-        h.press("menu editor");
-        assert_eq!(h.app.screen, Screen::Editor);
-        // A click elsewhere closes the menu and changes nothing.
-        h.press("menu");
-        assert!(h.app.menu);
+        h.press("monitor");
+        assert_eq!(
+            h.app.screen,
+            Screen::Editor,
+            "from Proposals either side goes to the Editor"
+        );
+        // A click elsewhere with the menu open closes it and changes nothing.
+        h.press("bar view");
         h.click(Pos2::new(700.0, 500.0));
-        assert!(!h.app.menu);
         assert_eq!(h.app.screen, Screen::Editor);
-        // ⋯ again closes it too.
-        h.press("menu");
-        h.press("menu");
-        assert!(!h.app.menu);
     }
 
     #[test]
-    fn the_menu_shows_the_boxs_https_fingerprint_when_it_has_one() {
+    fn about_shows_the_boxs_https_fingerprint_when_it_has_one() {
         let mut h = Harness::new(App::boxed());
-        h.press("menu");
+        h.press("bar help");
+        h.press("help about");
+        h.frame(vec![]);
         assert!(!h.has("tls fingerprint"), "not before the policy says");
         let fp = "AB:".repeat(31) + "AB";
         h.app.review.as_mut().unwrap().state.policy =
             Some(serde_json::json!({ "transport": { "https": true, "fingerprint": fp } }));
         h.frame(vec![]);
         assert!(h.has("tls fingerprint"));
-        assert_eq!(h.menu_items(), ["menu editor", "menu proposals", "menu sim"]);
         // Plain HTTP (--https off): nothing to show.
         h.app.review.as_mut().unwrap().state.policy =
             Some(serde_json::json!({ "transport": { "https": false, "fingerprint": null } }));
         h.frame(vec![]);
         assert!(!h.has("tls fingerprint"));
+        h.press("about close");
     }
 
     #[test]
-    fn the_source_is_a_setting_in_the_menu_on_a_box_and_absent_without_one() {
+    fn the_source_is_a_setting_in_view_on_a_box_and_absent_without_one() {
         let mut h = Harness::new(App::boxed());
-        h.press("menu");
-        h.press("menu sim");
+        h.press("bar view");
+        h.press("view sim");
         assert_eq!(h.app.source, Source::Sim);
         assert!(h.app.sim.is_some(), "the simulation runs");
         h.header_is_up();
-        h.press("menu");
-        assert_eq!(
-            h.menu_items(),
-            ["menu box", "menu download", "menu editor", "menu upload"],
-            "no proposals without a box; the simulation's projects upload and download"
+        h.press("bar view");
+        assert!(
+            h.has("view box") && !h.has("view proposals"),
+            "no proposals without a box"
         );
-        h.press("menu box");
+        h.press("view box");
         assert_eq!(h.app.source, Source::Box);
 
         // The public page: no box to go back to, no proposals.
         let mut h = Harness::new(App::sim());
-        h.press("menu");
-        assert_eq!(h.menu_items(), ["menu download", "menu editor", "menu upload"]);
+        h.press("bar view");
+        assert!(!h.has("view box") && !h.has("view sim") && !h.has("view proposals"));
+        h.press("bar view");
+        // Upload and Download live in the File menu.
+        h.press("bar file");
+        assert!(
+            h.has("file upload") && h.has("file download"),
+            "{:?}",
+            h.app.chrome.hits
+        );
         h.app.screen = Screen::Proposals;
         h.frame(vec![]);
         assert_eq!(h.app.screen, Screen::Editor, "proposals need a box");
@@ -244,7 +620,7 @@ mod chrome {
                 h.app.screen = Screen::Proposals;
             }
             h.frame(vec![]);
-            h.press("menu");
+            h.press("bar view");
             seen.extend(h.app.chrome.hits.iter().map(|(k, _)| k.to_ascii_lowercase()));
         }
         for gone in ["lab", "site", "demo", "andon", "playground"] {
@@ -291,42 +667,164 @@ mod chrome {
         assert!(!h.has("tab io"), "the tabs fold with the panel");
         // Remembered per browser: what the app saves reads back the same.
         let back = Chrome::restored(&h.app.chrome.saved());
-        assert_eq!((back.left, back.right, back.st), (false, false, true));
+        assert_eq!((back.left, back.right, back.pane), (false, false, Pane::Code));
+    }
+
+    #[test]
+    fn the_left_pane_has_files_and_code_tabs_and_one_width() {
+        let mut h = Harness::new(App::sim());
+        assert!(h.app.chrome.code_open(), "the simulation opens on Code");
+        let code = h.rect("pane code");
+        let files = h.rect("pane files");
+        assert!(files.right() <= code.left(), "Files | Code, left to right");
+        let editor = h
+            .ctx
+            .read_response(egui::Id::unique("pg-source"))
+            .expect("the editor")
+            .rect;
+        h.press("pane files");
+        h.wait(0.3);
+        assert!(h.app.chrome.files_open());
+        assert!(h.has("file blink.st"), "the files show");
+        assert!(
+            h.ctx.read_response(egui::Id::unique("pg-source")).is_none(),
+            "the editor is on the other tab"
+        );
+        let code_w = code.right() - files.left();
+        let files_w = h.rect("pane code").right() - h.rect("pane files").left();
+        assert!((code_w - files_w).abs() < 1.0, "one width for both tabs");
+        h.press("pane code");
+        h.wait(0.3);
+        let again = h
+            .ctx
+            .read_response(egui::Id::unique("pg-source"))
+            .expect("the editor")
+            .rect;
+        assert!((again.width() - editor.width()).abs() < 1.0);
+        // Remembered: the tab reads back.
+        let back = Chrome::restored(&h.app.chrome.saved());
+        assert_eq!(back.pane, Pane::Code);
+        assert_eq!(
+            Chrome::restored("st=1").pane,
+            Pane::Code,
+            "the old key still reads"
+        );
+    }
+
+    #[test]
+    fn a_right_click_on_a_file_copies_pastes_and_duplicates_it() {
+        let mut h = Harness::new(App::sim());
+        // An example is read-only: its file menu offers Copy alone. File ›
+        // Copy project first to get a writable one; it lands on the Files
+        // tab asking for the name.
+        h.press("bar file");
+        h.press("file copy");
+        assert!(h.app.chrome.files_open(), "the name is asked on the Files tab");
+        h.press("name ok");
+        h.wait(0.3);
+        assert!(h.has("file blink.st"), "blink-copy open with its file");
+        assert!(
+            !h.has("new project") && !h.has("copy project"),
+            "the buttons are gone"
+        );
+        // A right-click on a project offers its copy, rename and delete.
+        h.right_click(h.rect("project blink").center());
+        assert!(h.has("menu copy project"));
+        assert!(
+            !h.has("menu rename project") || {
+                // Listed but disabled for an example: a press does nothing.
+                h.press("menu rename project");
+                h.app.sim.as_ref().unwrap().files_ui.naming.is_none()
+            }
+        );
+        h.frame(vec![]);
+        let text = h.app.sim.as_ref().unwrap().proj.files["blink.st"].clone();
+        let at = h.rect("file blink.st").center();
+        h.right_click(at);
+        for k in [
+            "menu copy",
+            "menu paste",
+            "menu duplicate",
+            "menu rename",
+            "menu delete",
+        ] {
+            assert!(h.has(k), "the menu has {k}");
+        }
+        h.press("menu duplicate");
+        h.wait(0.3);
+        let files = |h: &Harness| h.app.sim.as_ref().unwrap().proj.files.clone();
+        assert_eq!(files(&h).get("blink-2.st"), Some(&text), "a duplicate beside it");
+        assert!(h.has("file blink-2.st"));
+        h.right_click(h.rect("file blink.st").center());
+        h.press("menu copy");
+        h.wait(0.2);
+        h.right_click(h.rect("file blink-2.st").center());
+        h.press("menu paste");
+        h.wait(0.3);
+        assert_eq!(
+            files(&h).get("blink-3.st"),
+            Some(&text),
+            "pasted under the next free name"
+        );
+        // The clipboard crosses projects: a new, empty one takes the paste.
+        // New project from a right-click on the pane's blank space.
+        h.right_click(h.rect("files blank").center());
+        h.press("menu new project");
+        // The name field is drawn above the blank space, so a frame later.
+        h.frame(vec![]);
+        h.press("name");
+        h.frame(vec![Event::Text("mine".into())]);
+        h.press("name ok");
+        h.wait(0.3);
+        assert_ne!(h.app.sim.as_ref().unwrap().proj.open, "blink-copy");
+        let heading = h.rect("new file").min - Vec2::new(0.0, 22.0);
+        h.right_click(heading);
+        assert!(h.has("menu paste"), "the files heading takes a paste");
+        h.press("menu paste");
+        h.wait(0.3);
+        assert_eq!(files(&h).get("blink.st"), Some(&text), "pasted across projects");
     }
 
     #[test]
     fn the_layout_read_back_from_storage_is_forgiving() {
         let mut c = Chrome::default();
-        c.tab = Tab::Trend;
-        c.st = true;
+        c.tab = Tab::Claude;
+        c.pane = Pane::Code;
+        c.scan = true;
+        c.trend = false;
         let back = Chrome::restored(&c.saved());
         assert_eq!(
-            (back.left, back.right, back.st, back.tab),
-            (true, true, true, Tab::Trend)
+            (back.left, back.right, back.pane, back.tab, back.scan, back.trend),
+            (true, true, Pane::Code, Tab::Claude, true, false)
         );
         // Anything else keeps the defaults; the Why tab is gone.
         for junk in ["", "left", "tab=why", "=== =1"] {
             assert_eq!(Chrome::restored(junk), Chrome::default(), "{junk:?}");
         }
-        let c = Chrome::restored("right=yes left=0 st=1 \u{0}");
-        assert_eq!((c.left, c.right, c.st, c.tab), (false, false, true, Tab::Io));
+        let c = Chrome::restored("right=yes left=0 pane=code scan=yes \u{0}");
+        assert_eq!(
+            (c.left, c.right, c.pane, c.tab, c.scan),
+            (false, false, Pane::Code, Tab::Io, false)
+        );
     }
 
     #[test]
     fn the_st_toggle_opens_and_closes_the_editor_and_a_block_click_sends_it_to_the_line() {
         let mut h = Harness::new(App::sim());
         let editor = || egui::Id::unique("pg-source");
-        assert!(h.app.chrome.st, "the simulation starts with the ST open");
+        assert!(h.app.chrome.code_open(), "the simulation starts with the ST open");
         assert!(h.ctx.read_response(editor()).is_some());
-        h.press("st");
-        assert!(!h.app.chrome.st);
+        h.view_menu("view st");
+        assert!(!h.app.chrome.code_open());
         h.wait(0.5);
         assert!(h.ctx.read_response(editor()).is_none(), "shut");
-        h.press("st");
-        assert!(h.app.chrome.st);
+        h.view_menu("view st");
+        assert!(h.app.chrome.code_open());
         h.wait(0.5);
         let r = h.ctx.read_response(editor()).expect("open again");
-        assert!(r.rect.width() > 200.0, "{:?}", r.rect);
+        // The pane opens at 160 pt; the editor is what is left of it
+        // beside the gutter.
+        assert!((50.0..160.0).contains(&r.rect.width()), "{:?}", r.rect);
 
         // Click the lamp's assignment: the ST goes to its line.
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
@@ -352,7 +850,8 @@ mod chrome {
             "the caret at the start of line {line}"
         );
         // Shut, the line is still where it opens.
-        h.press("st");
+        h.view_menu("view st");
+        h.wait(0.6);
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
         h.click(at + Vec2::new(0.0, 0.0));
         assert_eq!(h.app.chrome.line, Some(line));
@@ -362,7 +861,7 @@ mod chrome {
 // ---- the Editor on the simulation ----
 
 mod simulated {
-    use eframe::egui::{Event, Modifiers, MouseWheelUnit, Pos2, Vec2};
+    use eframe::egui::{Event, Key, Modifiers, MouseWheelUnit, Pos2, Vec2};
 
     use super::{Harness, node, sim_view, write_to};
     use crate::app::App;
@@ -387,7 +886,10 @@ mod simulated {
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
         h.click(at);
         assert!(matches!(sim_view(&h).pick, Some(Pick::Node(_))));
-        // The canvas's bottom right corner, left of the right panel.
+        // The canvas's bottom right corner, left of the right panel and
+        // with the Trend folded away from the bottom.
+        h.app.chrome.trend = false;
+        h.wait(0.5);
         let far = Pos2::new(h.rect("right").left() - 30.0, h.size.y - 6.0);
         h.click(far);
         assert_eq!(sim_view(&h).pick, None);
@@ -440,24 +942,32 @@ mod simulated {
         assert_eq!(sim_view(&h).diagram().pou, "STATION");
     }
 
+    /// Nick, 2026-11-01: the Trend runs along the bottom, where its time
+    /// axis is long, not in the side panel's tabs.
     #[test]
-    fn the_trend_has_its_own_tab() {
+    fn the_trend_runs_along_the_bottom_and_the_tabs_are_io_and_agent() {
         let mut h = Harness::new(App::sim());
         assert_eq!(h.app.chrome.tab, Tab::Io);
-        for (key, tab) in [
-            ("tab trend", Tab::Trend),
-            ("tab claude", Tab::Claude),
-            ("tab io", Tab::Io),
-        ] {
+        h.wait(0.3);
+        let panel = h.rect("right");
+        for (key, tab) in [("tab claude", Tab::Claude), ("tab io", Tab::Io)] {
             h.press(key);
             assert_eq!(h.app.chrome.tab, tab);
         }
-        h.press("tab trend");
+        h.wait(0.3);
+        // The Agent tab's content fits the panel: at most the scroll bar's
+        // width more, never the rows that used to widen it by a third.
+        let grown = panel.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&grown), "the panel grew {grown} pt");
+        assert!(!h.has("tab trend"), "no Trend tab");
+        assert!(h.app.chrome.trend, "open by default");
         let s = &mut h.app.sim.as_mut().unwrap().session;
         s.trend.toggle("LAMP");
         h.wait(0.2);
         let s = &h.app.sim.as_ref().unwrap().session;
         assert!(!s.trend.samples.is_empty(), "it records while shown");
+        h.key(Modifiers::ALT, Key::Num2);
+        assert!(!h.app.chrome.trend, "Alt+2 folds it");
     }
 }
 
@@ -494,13 +1004,13 @@ mod boxed {
         assert_eq!(v.because, None, "opens with no path lit");
         assert_eq!(b.status(h.time).0, "● connected");
         assert!(
-            h.has("tab trend") && !h.has("tab claude"),
-            "I/O and Trend on a box; Claude comes later"
+            !h.has("tab trend") && !h.has("tab claude"),
+            "I/O alone on a box (the Trend is along the bottom); Claude comes later"
         );
         assert_eq!(h.app.chrome.tab, Tab::Io);
 
         // The ST open beside the diagram, read-only.
-        h.press("st");
+        h.view_menu("view st");
         h.wait(0.4);
         let src = boxed(&h).view.as_ref().unwrap().src.clone();
         let st = h
@@ -532,7 +1042,7 @@ mod boxed {
         let b = h.app.boxv.as_mut().unwrap();
         b.state.apply(Msg::Failed(Stream::Values), t);
         assert!(
-            b.status(t).0.starts_with("● reconnecting (retry in 2s)"),
+            b.status(t).0.starts_with("● reconnecting (retry in 5s)"),
             "{:?}",
             b.status(t)
         );
@@ -556,6 +1066,42 @@ mod boxed {
         h.frame(vec![]);
         assert!(h.app.sim.is_some());
         h.header_is_up();
+    }
+}
+
+mod fallback {
+    use super::Harness;
+    use crate::app::{App, Source};
+    use crate::remote::{Link, Msg, Stream};
+
+    /// Nick, 2026-11-01: a page that finds no box runs the simulation
+    /// by itself; a box that answered and went away keeps its view.
+    #[test]
+    fn a_page_no_box_ever_answered_falls_back_to_the_simulation_by_itself() {
+        let mut h = Harness::new(App::boxed());
+        assert_eq!(h.app.source, Source::Box);
+        let t = h.time;
+        let b = h.app.boxv.as_mut().unwrap();
+        assert!(!b.state.ever_connected());
+        for k in 0..3 {
+            b.state.apply(Msg::Failed(Stream::Values), t + f64::from(k));
+        }
+        assert!(matches!(b.state.link(), Link::Unreachable { .. }));
+        h.frame(vec![]);
+        assert_eq!(h.app.source, Source::Sim, "the simulation, unasked");
+        h.frame(vec![]);
+        let s = h.app.sim.as_ref().expect("running");
+        assert!(
+            s.notice.as_deref().is_some_and(|n| n.contains("No box answered")),
+            "{:?}",
+            s.notice
+        );
+        // Back to the box from View stays: the fallback happens once.
+        h.press("bar view");
+        h.press("view box");
+        assert_eq!(h.app.source, Source::Box);
+        h.wait(0.2);
+        assert_eq!(h.app.source, Source::Box, "not yanked back to the simulation");
     }
 }
 
@@ -642,9 +1188,8 @@ mod reviewing {
         pump(&mut h, &b);
         assert_eq!(h.app.waiting(), Some(1), "the draft waits");
         assert_eq!(h.app.screen, Screen::Editor);
-        h.press("menu");
-        assert!(h.menu_items().contains(&"menu proposals".to_string()));
-        h.press("menu proposals");
+        assert!(h.has("proposals waiting"), "the header badges it");
+        h.press("proposals waiting");
         assert_eq!(h.app.screen, Screen::Proposals);
         pump(&mut h, &b);
         assert_eq!(rv(&mut h).state.list.len(), 1);
@@ -836,9 +1381,9 @@ mod reviewing {
 #[test]
 fn the_simulation_survives_a_click_storm_on_every_tab() {
     let mut h = Harness::new(App::sim());
-    for tab in ["tab io", "tab trend", "tab claude"] {
+    for tab in ["tab io", "tab claude"] {
         h.press(tab);
-        let below = h.rect("st").bottom() + 4.0;
+        let below = h.rect("header").bottom() + 4.0;
         for x in (0..1400u16).step_by(131) {
             for y in (0..860u16).step_by(97) {
                 h.click(Pos2::new(f32::from(x), f32::from(y).max(below)));

@@ -5,16 +5,25 @@
 //! (a narrow window) opens on the Monitor, as do `?monitor` and the old
 //! `?andon`.
 
-use eframe::egui::{self, Rect, RichText, Vec2};
+use eframe::egui::{self, CornerRadius, Rect, RichText, Vec2};
 
-use crate::box_view::BoxView;
-use crate::editor::{CHROME_KEY, Chrome};
+use crate::box_view::{BoxView, is_engineer};
+use crate::editor::{Body, CHROME_KEY, Chrome, menu_item, menu_item_keyed};
+use crate::glyphs;
+use crate::hotkeys::{self, Action};
 use crate::monitor::{Monitor, NARROW, Wish};
 use crate::playground_view::PlaygroundView;
 use crate::projects::Workspace;
 use crate::review_view::ReviewView;
 use crate::st_view::TAP;
 use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
+
+/// The header's height, points: one row, as tall as the two it replaced.
+pub const HEADER_H: f32 = 48.0;
+
+/// The product site, and its help page (Help menu, the ? glyph).
+pub const SITE_URL: &str = "https://helmsman.advin.io/";
+pub const HELP_URL: &str = "https://helmsman.advin.io/help/";
 
 /// Seconds between re-reads of the proposal list for the ⋯ badge.
 const PROPOSALS_EVERY: f64 = 30.0;
@@ -79,8 +88,6 @@ pub struct App {
     pub served_by_box: bool,
     /// The Editor's layout, kept per browser.
     pub chrome: Chrome,
-    /// The ⋯ menu is open.
-    pub menu: bool,
     /// The sign-in panel under the header is open.
     pub login: bool,
     /// The box's Editor, built the first time it is shown.
@@ -93,6 +100,11 @@ pub struct App {
     pub monitor: Monitor,
     /// The first frame chose the screen (a phone opens the Monitor).
     routed: bool,
+    /// Help › About is open.
+    pub about: bool,
+    /// The page fell back to the simulation by itself (no box answered);
+    /// once, so ⋯ › Back to this box is not undone.
+    fell_back: bool,
     /// When the proposal list was last asked for (page time, s).
     listed: Option<f64>,
 }
@@ -126,19 +138,20 @@ impl App {
     pub fn sim() -> Self {
         // Writing ST is what a visitor came for: the editor starts open.
         let mut chrome = Chrome::default();
-        chrome.st = true;
+        chrome.show_code();
         Self {
             screen: Screen::Editor,
             source: Source::Sim,
             served_by_box: false,
             chrome,
-            menu: false,
             login: false,
             boxv: None,
             sim: None,
             review: None,
             monitor: Monitor::default(),
             routed: false,
+            about: false,
+            fell_back: false,
             listed: None,
         }
     }
@@ -188,6 +201,14 @@ impl App {
     #[must_use]
     pub fn session(&self) -> Option<crate::review::Session> {
         self.review.as_ref().and_then(|r| r.state.session.clone())
+    }
+
+    /// Whether the Monitor's status tiles carry the scan period and
+    /// count: this browser chose it, and an engineer is signed in.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[must_use]
+    pub fn scan_detail(&self) -> bool {
+        self.chrome.scan && is_engineer(self.session().as_ref()).is_ok()
     }
 
     /// Files the browser's picker read since the last frame, uploaded to
@@ -251,8 +272,28 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         self.uploaded(crate::web::take_picked());
         let session = self.session();
+        let engineer = is_engineer(session.as_ref()).is_ok();
         if let Some(b) = &mut self.boxv {
             b.session = session;
+        }
+        // No box ever answered this page: it is the simulation then, by
+        // itself (Nick, 2026-11-01). A box that answered and went away
+        // stays the box: its last diagram is worth more than a demo.
+        if self.source == Source::Box
+            && !self.fell_back
+            && let Some(b) = &self.boxv
+            && matches!(b.state.link(), crate::remote::Link::Unreachable { .. })
+            && !b.state.ever_connected()
+        {
+            self.fell_back = true;
+            self.source = Source::Sim;
+            if self.screen == Screen::Proposals {
+                self.screen = Screen::Editor;
+            }
+            let s = self.sim.get_or_insert_with(PlaygroundView::new);
+            s.notice = Some(
+                "No box answered at this address: simulating in this browser (⋯ › Back to this box).".into(),
+            );
         }
         let header = self.header(ui);
         self.chrome.hits.clear();
@@ -286,18 +327,121 @@ impl App {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.state.set_monitor(true);
                 b.tick(&ctx);
-                self.monitor.show(ui, &b.state, &mut self.chrome);
+                self.monitor.show(ui, &b.state, &mut self.chrome, engineer);
             }
             (Screen::Monitor, Source::Sim) => {
                 let s = self.sim.get_or_insert_with(PlaygroundView::new);
                 s.tick(&ctx);
-                self.monitor.show(ui, &*s, &mut self.chrome);
+                self.monitor.show(ui, &*s, &mut self.chrome, engineer);
             }
         }
         if let Some(Wish::Diagram { program, prefix }) = self.monitor.wish.take() {
             self.open_diagram(&program, &prefix);
         }
+        self.glyphs(ui);
         self.chrome.hits.extend(header);
+        // Last, so a focused text editor has had its own Ctrl+Z first.
+        for a in hotkeys::pressed(&ctx) {
+            self.act(a, &ctx);
+        }
+    }
+
+    /// Does what a shortcut (or its menu item) asks; nothing where it
+    /// does not apply (Run in a box's page, Sign in in the simulation).
+    pub fn act(&mut self, a: Action, ctx: &egui::Context) {
+        match a {
+            Action::Save => {
+                if let Some(w) = self.workspace()
+                    && w.dirty()
+                    && w.writable().is_ok()
+                    && !w.busy()
+                {
+                    w.save();
+                }
+            }
+            Action::Deploy => {
+                if let Some(w) = self.workspace()
+                    && w.writable().is_ok()
+                    && !w.busy()
+                {
+                    w.deploy();
+                }
+            }
+            Action::RunStop | Action::Stop | Action::Step => {
+                if self.source != Source::Sim || self.screen != Screen::Editor {
+                    return;
+                }
+                let Some(s) = self.sim.as_mut() else { return };
+                if s.session.build.is_none() {
+                    return;
+                }
+                match a {
+                    Action::RunStop => {
+                        let on = !s.session.running;
+                        s.session.set_running(on);
+                    }
+                    Action::Stop => s.session.set_running(false),
+                    _ => {
+                        if !s.session.running {
+                            s.session.step();
+                        }
+                    }
+                }
+            }
+            Action::SignIn => {
+                if self.source == Source::Box {
+                    self.login = true;
+                }
+            }
+            Action::SignOut => {
+                if self.source == Source::Box
+                    && let Some(r) = &mut self.review
+                {
+                    r.state.logout();
+                    self.login = false;
+                }
+            }
+            Action::Undo | Action::Redo => {
+                if let Some(w) = self.workspace() {
+                    w.undo(ctx, a == Action::Redo);
+                }
+            }
+            Action::GoToDefinition => {
+                let mut chrome = std::mem::take(&mut self.chrome);
+                if let Some(w) = self.workspace() {
+                    w.go_to_definition(&mut chrome);
+                }
+                self.chrome = chrome;
+            }
+            Action::CrossReferences => {
+                if let Some(w) = self.workspace() {
+                    w.cross_references();
+                }
+            }
+            Action::Restart => {
+                if self.source == Source::Sim
+                    && let Some(s) = self.sim.as_mut()
+                    && s.session.build.is_some()
+                {
+                    s.session.restart();
+                }
+            }
+            Action::Upload => {
+                if self.workspace().is_some_and(|w| w.writable().is_ok()) {
+                    #[cfg(target_arch = "wasm32")]
+                    crate::web::pick_file(UPLOAD_ACCEPT, ctx);
+                }
+            }
+            Action::Download => {
+                if let Some(w) = self.workspace() {
+                    w.download();
+                }
+            }
+            Action::Files => self.chrome.toggle_files(),
+            Action::St => self.chrome.toggle_code(),
+            Action::Panel => self.chrome.right = !self.chrome.right,
+            Action::Trend => self.chrome.trend = !self.chrome.trend,
+        }
     }
 
     /// The Editor's diagram of `program` (empty: the one open), at the
@@ -323,129 +467,513 @@ impl App {
         }
     }
 
-    /// The header: the mark, what is open, the screens, and the ⋯ menu.
-    /// Returns what it drew where.
+    /// The header, one row as tall as two: the mark and the File / Edit /
+    /// View menus on the left, the open view's actions after them, and on
+    /// the right what is open (its name, Save, Deploy), the screens, the
+    /// ⋯ menu and Sign in. Returns what it drew where.
     fn header(&mut self, ui: &mut egui::Ui) -> Vec<(String, Rect)> {
         let mut hits = Vec::new();
         let waiting = self.waiting();
         let title = self.title();
-        let menu_at = egui::Panel::top("header").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let mark = ui.label(RichText::new("HELMSMAN").strong().color(YELLOW));
+        let engineer = is_engineer(self.session().as_ref()).is_ok();
+        let panel = egui::Panel::top("header").show(ui, |ui| {
+            let size = Vec2::new(ui.available_width(), HEADER_H);
+            ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // The wordmark is the way to the site.
+                let mark = ui
+                    .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(YELLOW)).frame(false))
+                    .on_hover_text(SITE_URL);
                 hits.push(("mark".to_string(), mark.rect));
+                if mark.clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
+                }
+                self.menus(ui, engineer, waiting, &mut hits);
                 ui.separator();
-                let t = ui.label(RichText::new(&title).strong().monospace().color(WHITE));
-                hits.push(("title".to_string(), t.rect));
-                if self.source == Source::Sim {
-                    ui.label(RichText::new("simulation").color(STEEL));
-                }
-                self.project_controls(ui, &mut hits);
-                ui.separator();
-                let e = ui.add(
-                    egui::Button::selectable(self.screen == Screen::Editor, RichText::new("Editor").strong())
-                        .min_size(Vec2::new(TAP * 1.5, 0.0)),
-                );
-                hits.push(("editor".to_string(), e.rect));
-                if e.clicked() {
-                    self.screen = Screen::Editor;
-                    self.menu = false;
-                }
-                let m = ui.add(
-                    egui::Button::selectable(
-                        self.screen == Screen::Monitor,
-                        RichText::new("Monitor").strong(),
-                    )
-                    .min_size(Vec2::new(TAP * 1.5, 0.0)),
-                );
-                hits.push(("monitor".to_string(), m.rect));
-                if m.clicked() {
-                    self.screen = Screen::Monitor;
-                    self.menu = false;
-                }
+                self.actions(ui, &mut hits);
+                // The right-hand group, laid out from the window's edge
+                // leftwards (the order below is right to left).
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let label = match waiting {
-                        Some(n) if n > 0 => format!("⋯ {n}"),
-                        _ => "⋯".to_string(),
-                    };
-                    let text = RichText::new(label).strong();
-                    let b = if waiting.is_some_and(|n| n > 0) {
-                        egui::Button::new(text.color(BLACK)).fill(YELLOW)
-                    } else {
-                        egui::Button::selectable(self.menu, text)
-                    };
-                    let m = ui
-                        .add(b.min_size(Vec2::new(TAP, 0.0)))
-                        .on_hover_text("more: proposals, where the program runs");
-                    hits.push(("menu".to_string(), m.rect));
+                    // ? keeps the very corner (Nick, 2026-11-01: in place
+                    // of the ⋯, whose items are the View menu's and About's).
+                    let m = glyphs::button(ui, glyphs::Icon::Help, true, false, "Help (opens the site)");
+                    hits.push(("help".to_string(), m.rect));
                     if m.clicked() {
-                        self.menu = !self.menu;
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(HELP_URL));
                     }
                     self.login_button(ui, &mut hits);
+                    self.screen_toggle(ui, &mut hits);
+                    if let Some(n) = waiting.filter(|n| *n > 0) {
+                        let b =
+                            egui::Button::new(RichText::new(format!("{n} waiting")).strong().color(BLACK))
+                                .fill(YELLOW);
+                        let r = ui.add(b).on_hover_text("proposals waiting for an approver");
+                        hits.push(("proposals waiting".to_string(), r.rect));
+                        if r.clicked() {
+                            self.screen = Screen::Proposals;
+                        }
+                    }
+                    ui.separator();
+                    self.dirty_mark(ui, &mut hits);
+                    if self.source == Source::Sim {
+                        ui.label(RichText::new("simulation").color(STEEL));
+                    }
+                    let t = ui.label(RichText::new(&title).strong().monospace().color(WHITE));
+                    hits.push(("title".to_string(), t.rect));
                     m.rect
                 })
                 .inner
             })
             .inner
         });
-        hits.push(("header".to_string(), menu_at.response.rect));
-        let menu_at = menu_at.inner;
-        if self.menu {
-            self.menu_ui(ui.ctx(), menu_at, waiting, &mut hits);
-        }
+        hits.push(("header".to_string(), panel.response.rect));
+        let menu_at = panel.inner;
         if self.login {
             self.login_ui(ui.ctx(), menu_at, &mut hits);
+        }
+        if self.about {
+            self.about_ui(ui.ctx(), &mut hits);
         }
         hits
     }
 
-    /// The open project's name with its dirty marker, Save and Deploy;
-    /// disabled, with why on hover, when this page may not write. Not on
-    /// a phone's width.
-    fn project_controls(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
-        // A phone is the Monitor's: no room, and nothing to edit there.
+    /// Editor | Monitor as one two-way toggle: the active side filled.
+    fn screen_toggle(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        let half = Vec2::new(TAP * 1.6, TAP * 0.62);
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(half.x * 2.0, half.y), egui::Sense::hover());
+        ui.painter().rect_filled(rect, CornerRadius::same(6), GRAPHITE);
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(6),
+            egui::Stroke::new(1.0, STEEL.gamma_multiply(0.6)),
+            egui::StrokeKind::Inside,
+        );
+        let sides = [
+            (Screen::Editor, "Editor", "editor"),
+            (Screen::Monitor, "Monitor", "monitor"),
+        ];
+        for (k, (screen, label, key)) in sides.into_iter().enumerate() {
+            #[allow(clippy::cast_precision_loss)]
+            let r = Rect::from_min_size(rect.min + Vec2::new(half.x * k as f32, 0.0), half);
+            let id = ui.scope_id().with(key);
+            let resp = ui.interact(r, id, egui::Sense::click());
+            let on = self.screen == screen;
+            if on {
+                ui.painter()
+                    .rect_filled(r.shrink(2.0), CornerRadius::same(5), YELLOW);
+            }
+            ui.painter().text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(14.0),
+                if on { BLACK } else { WHITE },
+            );
+            hits.push((key.to_string(), r));
+            // A click on either side flips (Nick, 2026-11-01), so from the
+            // active side too; from Proposals either side goes to the Editor.
+            if resp.clicked() {
+                self.screen = match self.screen {
+                    Screen::Editor => Screen::Monitor,
+                    Screen::Monitor | Screen::Proposals => Screen::Editor,
+                };
+                let _ = screen;
+            }
+        }
+    }
+
+    /// The glyph buttons over the diagram's top-right corner: run/stop,
+    /// step and restart in the simulation, then save, upload, download
+    /// and help. Drawn after the screen, so they sit on top.
+    fn glyphs(&mut self, ui: &mut egui::Ui) {
+        if self.screen != Screen::Editor || self.chrome.diagram == Rect::NOTHING {
+            return;
+        }
+        let at = self.chrome.diagram.right_top() + Vec2::new(-8.0, 8.0);
+        let mut hits = Vec::new();
+        let mut act: Vec<Action> = Vec::new();
+        let (dirty, can_write) = self
+            .workspace()
+            .map_or((false, false), |w| (w.dirty(), w.writable().is_ok() && !w.busy()));
+        let has_ws = self.workspace().is_some();
+        let sim = (self.source == Source::Sim).then(|| {
+            self.sim
+                .as_ref()
+                .map(|s| (s.session.build.is_some(), s.session.running))
+                .unwrap_or_default()
+        });
+        egui::Area::new(egui::Id::unique("glyphs"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::RIGHT_TOP)
+            .fixed_pos(at)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::new()
+                    .fill(BLACK.gamma_multiply(0.75))
+                    .corner_radius(CornerRadius::same(7))
+                    .inner_margin(4.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut g =
+                                |ui: &mut egui::Ui, key: &str, icon: glyphs::Icon, enabled, on, tip, a| {
+                                    let r = glyphs::button(ui, icon, enabled, on, tip);
+                                    hits.push((key.to_string(), r.rect));
+                                    if r.clicked() {
+                                        act.push(a);
+                                    }
+                                };
+                            if let Some((built, running)) = sim {
+                                let (icon, tip) = if running {
+                                    (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
+                                } else {
+                                    (glyphs::Icon::Run, "Run (Ctrl+Enter)")
+                                };
+                                g(ui, "run", icon, built, false, tip, Action::RunStop);
+                                g(
+                                    ui,
+                                    "step",
+                                    glyphs::Icon::Step,
+                                    built && !running,
+                                    false,
+                                    "Step one scan (F10)",
+                                    Action::Step,
+                                );
+                                g(
+                                    ui,
+                                    "restart",
+                                    glyphs::Icon::Restart,
+                                    built,
+                                    false,
+                                    "Restart: initial values, clock to zero",
+                                    Action::Restart,
+                                );
+                                ui.separator();
+                            }
+                            g(
+                                ui,
+                                "save",
+                                glyphs::Icon::Save,
+                                can_write && dirty,
+                                false,
+                                "Save (Ctrl+S)",
+                                Action::Save,
+                            );
+                            g(
+                                ui,
+                                "upload",
+                                glyphs::Icon::Upload,
+                                can_write,
+                                false,
+                                "Upload a .zip, .st, .xml or .l5x",
+                                Action::Upload,
+                            );
+                            g(
+                                ui,
+                                "download",
+                                glyphs::Icon::Download,
+                                has_ws,
+                                false,
+                                "Download the project as .zip",
+                                Action::Download,
+                            );
+                        });
+                    });
+            });
+        let ctx = ui.ctx().clone();
+        for a in act {
+            self.act(a, &ctx);
+        }
+        self.chrome.hits.extend(hits);
+    }
+
+    /// Help › About: the product, its version and build, the licence, the site.
+    fn about_ui(&mut self, ctx: &egui::Context, hits: &mut Vec<(String, Rect)>) {
+        let mut open = self.about;
+        egui::Window::new("About Helmsman")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.label(RichText::new("HELMSMAN").strong().size(22.0).color(YELLOW));
+                ui.label(RichText::new("FACTORY AUTOMATION").strong().color(STEEL));
+                ui.add_space(8.0);
+                ui.label(format!(
+                    "Version {} (build {})",
+                    env!("CARGO_PKG_VERSION"),
+                    env!("HELMSMAN_GIT_SHA")
+                ));
+                ui.label("Early release. Licensed under the Apache License, Version 2.0.");
+                // The box's HTTPS certificate, to compare with the
+                // browser's and the box's startup line (`box-https`).
+                let policy = self.review.as_ref().and_then(|r| r.state.policy.as_ref());
+                if let Some(fp) = policy.and_then(|p| p["transport"]["fingerprint"].as_str()) {
+                    ui.add_space(6.0);
+                    let (a, b) = fp.split_at(if fp.is_char_boundary(48) { 48 } else { fp.len() });
+                    let l = ui
+                        .label(
+                            RichText::new(format!("HTTPS certificate SHA-256\n{a}\n{b}"))
+                                .small()
+                                .monospace()
+                                .color(STEEL),
+                        )
+                        .on_hover_text(
+                            "the browser shows this page's certificate fingerprint too: they must match",
+                        );
+                    hits.push(("tls fingerprint".to_string(), l.rect));
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.link(SITE_URL).clicked() {
+                        ctx.open_url(egui::OpenUrl::new_tab(SITE_URL));
+                    }
+                });
+                ui.add_space(6.0);
+                let c = ui.button("Close");
+                hits.push(("about close".to_string(), c.rect));
+                if c.clicked() {
+                    self.about = false;
+                }
+            });
+        if !open {
+            self.about = false;
+        }
+    }
+
+    /// File, Edit and View: what exists today, nothing greyed for later.
+    fn menus(
+        &mut self,
+        ui: &mut egui::Ui,
+        engineer: bool,
+        waiting: Option<usize>,
+        hits: &mut Vec<(String, Rect)>,
+    ) {
+        let ctx = ui.ctx().clone();
+        let mut chrome = std::mem::take(&mut self.chrome);
+        let before = chrome.hits.len();
+        // Plain menu buttons in the row, in a menu bar's frameless style
+        // (a MenuBar itself would take the whole width).
+        ui.scope(|ui| {
+            egui::containers::menu::menu_style(ui.style_mut());
+            let f = ui.menu_button("File", |ui| {
+                let (dirty, write) = self
+                    .workspace()
+                    .map_or((false, Err(String::new())), |w| (w.dirty(), w.writable()));
+                let can = write.is_ok();
+                let k = |a| hotkeys::label(&ctx, a);
+                // New project and Copy project moved here from the Files
+                // tab's buttons (Nick, 2026-11-01).
+                ui.add_enabled_ui(can, |ui| {
+                    if menu_item(ui, &mut chrome, "file new", "New project…", false)
+                        && let Some(w) = self.workspace()
+                    {
+                        w.new_project(&mut chrome);
+                    }
+                    if menu_item(ui, &mut chrome, "file copy", "Copy project…", false)
+                        && let Some(w) = self.workspace()
+                    {
+                        w.copy_project(&mut chrome);
+                    }
+                });
+                ui.separator();
+                ui.add_enabled_ui(can && dirty, |ui| {
+                    if menu_item_keyed(ui, &mut chrome, "file save", "Save", false, &k(Action::Save))
+                        && let Some(w) = self.workspace()
+                    {
+                        w.save();
+                    }
+                });
+                ui.add_enabled_ui(can, |ui| {
+                    if menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "file deploy",
+                        "Deploy",
+                        false,
+                        &k(Action::Deploy),
+                    ) && let Some(w) = self.workspace()
+                    {
+                        w.deploy();
+                    }
+                });
+                if let Err(why) = &write
+                    && !why.is_empty()
+                {
+                    ui.label(RichText::new(why).small().color(STEEL));
+                }
+                ui.separator();
+                ui.add_enabled_ui(can, |ui| {
+                    if menu_item(ui, &mut chrome, "file upload", "Upload…", false) {
+                        #[cfg(target_arch = "wasm32")]
+                        crate::web::pick_file(UPLOAD_ACCEPT, &ctx);
+                    }
+                });
+                ui.add_enabled_ui(self.workspace().is_some(), |ui| {
+                    if menu_item(ui, &mut chrome, "file download", "Download .zip", false)
+                        && let Some(w) = self.workspace()
+                    {
+                        w.download();
+                    }
+                });
+            });
+            hits.push(("bar file".to_string(), f.response.rect));
+            let e = ui.menu_button("Edit", |ui| {
+                let k = |a| hotkeys::label(&ctx, a);
+                if menu_item_keyed(ui, &mut chrome, "edit undo", "Undo", false, &k(Action::Undo))
+                    && let Some(w) = self.workspace()
+                {
+                    w.undo(&ctx, false);
+                }
+                if menu_item_keyed(ui, &mut chrome, "edit redo", "Redo", false, &k(Action::Redo))
+                    && let Some(w) = self.workspace()
+                {
+                    w.undo(&ctx, true);
+                }
+                ui.separator();
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit definition",
+                    "Go to definition",
+                    false,
+                    &k(Action::GoToDefinition),
+                ) && let Some(w) = self.workspace()
+                {
+                    w.go_to_definition(&mut chrome);
+                }
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit xref",
+                    "Cross references",
+                    false,
+                    &k(Action::CrossReferences),
+                ) && let Some(w) = self.workspace()
+                {
+                    w.cross_references();
+                }
+            });
+            hits.push(("bar edit".to_string(), e.response.rect));
+            let v = ui.menu_button("View", |ui| {
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "view editor",
+                    "Editor",
+                    self.screen == Screen::Editor,
+                ) {
+                    self.screen = Screen::Editor;
+                }
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "view monitor",
+                    "Monitor",
+                    self.screen == Screen::Monitor,
+                ) {
+                    self.screen = Screen::Monitor;
+                }
+                if let Some(n) = waiting {
+                    let text = if n > 0 {
+                        format!("Proposals ({n} waiting)")
+                    } else {
+                        "Proposals".into()
+                    };
+                    if menu_item(
+                        ui,
+                        &mut chrome,
+                        "view proposals",
+                        text,
+                        self.screen == Screen::Proposals,
+                    ) {
+                        self.screen = Screen::Proposals;
+                    }
+                }
+                if self.served_by_box {
+                    let (key, text, to) = match self.source {
+                        Source::Box => ("view sim", "Simulate in this browser", Source::Sim),
+                        Source::Sim => ("view box", "Back to this box", Source::Box),
+                    };
+                    if menu_item(ui, &mut chrome, key, text, false) {
+                        self.source = to;
+                        self.screen = Screen::Editor;
+                    }
+                }
+                ui.separator();
+                let tabs: &[crate::editor::Tab] = match self.source {
+                    Source::Box => self.boxv.as_ref().map_or(&[], |b| b.tabs()),
+                    Source::Sim => self.sim.as_ref().map_or(&[], |s| s.tabs()),
+                };
+                crate::editor::view_menu(ui, &mut chrome, tabs);
+                ui.separator();
+                if menu_item(ui, &mut chrome, "view fit", "Zoom to fit", false)
+                    && let Some(w) = self.workspace()
+                {
+                    w.zoom_to_fit();
+                }
+                if let Some(w) = self.workspace() {
+                    w.layout_menu(ui, &mut chrome);
+                }
+                if engineer {
+                    ui.separator();
+                    let on = chrome.scan;
+                    if menu_item(ui, &mut chrome, "view scan", "Scan detail", on) {
+                        chrome.scan = !on;
+                    }
+                }
+            });
+            hits.push(("bar view".to_string(), v.response.rect));
+            let h = ui.menu_button("Help", |ui| {
+                if menu_item(ui, &mut chrome, "help docs", "Help", false) {
+                    ctx.open_url(egui::OpenUrl::new_tab(HELP_URL));
+                }
+                if menu_item(ui, &mut chrome, "help keys", "Keyboard shortcuts", false) {
+                    ctx.open_url(egui::OpenUrl::new_tab(format!("{HELP_URL}#keyboard")));
+                }
+                ui.separator();
+                if menu_item(ui, &mut chrome, "help about", "About Helmsman…", self.about) {
+                    self.about = true;
+                }
+            });
+            hits.push(("bar help".to_string(), h.response.rect));
+        });
+        hits.extend(chrome.hits.drain(before..));
+        self.chrome = chrome;
+    }
+
+    /// The open view's actions in the header: the simulation's run
+    /// controls, scan period and status; a box's status and notices.
+    fn actions(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
+        if self.screen != Screen::Editor {
+            return;
+        }
+        let mut chrome = std::mem::take(&mut self.chrome);
+        let before = chrome.hits.len();
+        ui.horizontal(|ui| match self.source {
+            Source::Box => {
+                if let Some(b) = &mut self.boxv {
+                    Body::toolbar(b, ui, &mut chrome);
+                }
+            }
+            Source::Sim => {
+                if let Some(s) = &mut self.sim {
+                    Body::toolbar(s, ui, &mut chrome);
+                }
+            }
+        });
+        hits.extend(chrome.hits.drain(before..));
+        self.chrome = chrome;
+    }
+
+    /// The edited-not-saved mark (Save and Deploy are the File menu's and
+    /// the glyphs'). Not on a phone's width.
+    fn dirty_mark(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
         if ui.ctx().content_rect().width() < NARROW {
             return;
         }
-        let Some(w) = self.workspace() else { return };
-        let dirty = w.dirty();
-        let write = w.writable();
-        let busy = w.busy();
-        if dirty {
+        if self.workspace().is_some_and(|w| w.dirty()) {
             let d = ui
                 .label(RichText::new("●").strong().color(YELLOW))
                 .on_hover_text("edited, not saved");
             hits.push(("dirty".to_string(), d.rect));
-        }
-        ui.separator();
-        let button = |ui: &mut egui::Ui, text: &str, hint: &str, on: bool| {
-            let b = egui::Button::new(RichText::new(text).strong()).min_size(Vec2::new(TAP * 1.5, 0.0));
-            match &write {
-                Ok(()) => ui.add_enabled(on && !busy, b).on_hover_text(hint),
-                Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
-            }
-        };
-        let save = button(
-            ui,
-            "Save",
-            "write the edited files (a draft: what runs does not change)",
-            dirty,
-        );
-        hits.push(("save".to_string(), save.rect));
-        let deploy = button(
-            ui,
-            "Deploy",
-            "save, compile and run this project (through the box's approval policy)",
-            true,
-        );
-        hits.push(("deploy".to_string(), deploy.rect));
-        let (save, deploy) = (save.clicked(), deploy.clicked());
-        if let Some(w) = self.workspace() {
-            if save {
-                w.save();
-            }
-            if deploy {
-                w.deploy();
-            }
         }
     }
 
@@ -465,7 +993,6 @@ impl App {
         hits.push(("sign in".to_string(), b.rect));
         if b.clicked() {
             self.login = !self.login;
-            self.menu = false;
         }
     }
 
@@ -490,99 +1017,6 @@ impl App {
         let now = r.state.session.is_some();
         if was != now {
             self.login = false;
-        }
-    }
-
-    fn menu_ui(
-        &mut self,
-        ctx: &egui::Context,
-        at: Rect,
-        waiting: Option<usize>,
-        hits: &mut Vec<(String, Rect)>,
-    ) {
-        let mut close = false;
-        let area = egui::Area::new(egui::Id::unique("header-menu"))
-            .order(egui::Order::Foreground)
-            .pivot(egui::Align2::RIGHT_TOP)
-            .fixed_pos(at.right_bottom() + Vec2::new(0.0, 4.0))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.set_min_width(220.0);
-                    let mut item = |ui: &mut egui::Ui, key: &str, text: String, on: bool| {
-                        let r = ui.add(
-                            egui::Button::selectable(on, text)
-                                .min_size(Vec2::new(ui.available_width(), TAP * 0.8)),
-                        );
-                        hits.push((key.to_string(), r.rect));
-                        r.clicked()
-                    };
-                    if item(ui, "menu editor", "Editor".into(), self.screen == Screen::Editor) {
-                        self.screen = Screen::Editor;
-                        close = true;
-                    }
-                    if self.workspace().is_some() {
-                        ui.separator();
-                        if item(ui, "menu upload", "Upload…".into(), false) {
-                            #[cfg(target_arch = "wasm32")]
-                            crate::web::pick_file(UPLOAD_ACCEPT, ctx);
-                            close = true;
-                        }
-                        if item(ui, "menu download", "Download .zip".into(), false) {
-                            if let Some(w) = self.workspace() {
-                                w.download();
-                            }
-                            close = true;
-                        }
-                        ui.separator();
-                    }
-                    if let Some(n) = waiting {
-                        let text = if n > 0 {
-                            format!("Proposals ({n} waiting)")
-                        } else {
-                            "Proposals".into()
-                        };
-                        if item(ui, "menu proposals", text, self.screen == Screen::Proposals) {
-                            self.screen = Screen::Proposals;
-                            close = true;
-                        }
-                    }
-                    if self.served_by_box {
-                        ui.separator();
-                        let (key, text, to) = match self.source {
-                            Source::Box => ("menu sim", "Simulate in this browser", Source::Sim),
-                            Source::Sim => ("menu box", "Back to this box", Source::Box),
-                        };
-                        if item(ui, key, text.into(), false) {
-                            self.source = to;
-                            self.screen = Screen::Editor;
-                            close = true;
-                        }
-                    }
-                    // The box's HTTPS certificate, to compare with the
-                    // browser's and the box's startup line (`box-https`).
-                    let policy = self.review.as_ref().and_then(|r| r.state.policy.as_ref());
-                    if let Some(fp) = policy.and_then(|p| p["transport"]["fingerprint"].as_str()) {
-                        ui.separator();
-                        let (a, b) = fp.split_at(if fp.is_char_boundary(48) { 48 } else { fp.len() });
-                        let l = ui
-                            .label(
-                                RichText::new(format!("HTTPS certificate SHA-256\n{a}\n{b}"))
-                                    .small()
-                                    .monospace()
-                                    .color(STEEL),
-                            )
-                            .on_hover_text(
-                                "the browser shows this page's certificate fingerprint too: they must match",
-                            );
-                        hits.push(("tls fingerprint".to_string(), l.rect));
-                    }
-                });
-            });
-        // A click outside closes it, except on ⋯ itself (which toggles it).
-        let pointer = ctx.input(|i| i.pointer.interact_pos());
-        let on_button = pointer.is_some_and(|p| at.contains(p));
-        if close || (area.response.clicked_elsewhere() && !on_button) {
-            self.menu = false;
         }
     }
 }

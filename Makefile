@@ -2,7 +2,7 @@
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
-.PHONY: help install-dev lint fmt test-unit test-integration test-all test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-serve playground playground-serve
+.PHONY: help install-dev lint fmt test-unit test-integration test-all help-site help-site-check test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-serve playground playground-serve
 
 help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -51,6 +51,15 @@ test-plcopen-corpus:  ## PLCopen import against Beremiz/OpenPLC Editor example p
 	./scripts/plcopen-corpus.sh
 
 # ---- Canvas -----------------------------------------------------------------
+
+help-site:  ## Build docs/help/*.html from docs/help/*.md plus the generated keyboard and starters pages (needs pandoc).
+	./scripts/build-help.sh
+
+help-site-check:  ## Fail if docs/help/ is out of date with the code and the Markdown.
+	./scripts/build-help.sh --check
+
+datasheet:  ## Render docs/datasheet.html to the one-page docs/helmsman-datasheet.pdf (needs Chrome or Chromium).
+	./scripts/build-datasheet.sh
 
 canvas:  ## Run the canvas (the simulation) as a native window.
 	cargo run --release -p helmsman-canvas

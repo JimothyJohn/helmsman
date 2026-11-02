@@ -19,30 +19,62 @@ this; change it here first when a decision changes.
 
 ## Editor (desktop and tablet; a phone opens the Monitor)
 
-- **Left sidebar, collapsible:** the open project's files, with the program
-  tree under them (PROGRAM › instance › instance, foldable; a click opens
-  that scope's diagram).
-- **Centre: the live diagram.** Pan, zoom, drag blocks to rearrange,
-  breadcrumbs with ↑ (Alt+↑), double-click an instance to go into it.
-  An engineer saves the arrangement as the project's shared default
-  (Save as default; the project's `diagram.layout`, so it travels in the
-  `.zip`); anyone's further moves are kept in their browser on top of it.
-  Reset layout goes back to the shared default, a second step to the
-  automatic layout. The simulation does the same with its projects.
-- **ST on demand:** an "ST" toggle slides the editor open beside the
-  diagram; clicking a block jumps the editor to its line.
-- **Right panel, collapsible, tabs:** I/O (values; inputs the diagram does
-  not show), Trend (pinned signals), Claude. On a Pi the Trend opens with
+- **One header row (48 pt):** on the left the HELMSMAN wordmark (a link
+  to the site) and a menu bar: File (New project, Copy project, Save,
+  Deploy, Upload, Download),
+  Edit (Undo, Redo, Go to definition, Cross references), View (Editor /
+  Monitor, Structured Text, Files, the side panel and its tabs, Trend,
+  Zoom to fit, the layout items, Scan detail for an engineer) and Help
+  (Help and Keyboard shortcuts on the site, About Helmsman: version,
+  build, licence, and on a box its certificate fingerprint). After them
+  the program's state, green running, red stopped or faulted (a box: its
+  link). On the right the project's name, its edited mark, a "n waiting"
+  badge when proposals wait, the Editor | Monitor toggle (a click on
+  either side flips it), Sign in on a box, and ? in the very corner (help
+  on the site). Proposals and "Simulate in this browser / Back to this
+  box" are View items. A fault, a deploy under way or a stale file shows
+  on a line under the header only while it lasts.
+- **Glyphs over the diagram's top-right corner:** run/stop, step and
+  restart (the simulation), then save, upload, download. Strokes in the
+  brand colours; each tells its key on hover.
+- **Bottom panel**, under the diagram, collapsible and resizable (View ›
+  Trend, Alt 2), two tabs: Trend (its time axis is the long side) and
+  Messages (the last 200 things the page had to say, filtered by level
+  with the counts on the filters: info, warnings,
+  errors, with the error count on the tab), so a fault or a refused
+  deploy is still there to read after the line under the header has gone.
+- **Left pane, collapsible, tabs (160 pt):** Files (the projects, the
+  open one's files, the program tree; a right-click on a project offers
+  Copy, Rename and Delete, on a file Copy, Paste, Duplicate, Rename and
+  Delete with an app-wide clipboard so a file pastes into any open
+  project, and on the blank space New project and Paste; New project and
+  Copy project are also the File menu's first items) and Code (the
+  Structured Text editor). One width for both tabs; Alt 0 and Alt 1 open the pane on its
+  tab, or shut it when that tab shows.
+- **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the
+  diagram does not show), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
-  streams; pins are the signed-in person's, kept by the box, or the
-  browser's when signed out.
+  streams; pins are the signed-in person's, kept by the box across
+  restarts (history is not), or the browser's when signed out.
 - **NOT is a bubble** on the pin it feeds (or the output it inverts), the
   FBD convention, not a block of its own. Display only.
+- **Icons on blocks:** one character at the header's left, from the
+  project's `icons.map` (`WHAT = ICON` a line: a block type, a name, or a
+  prefix with `*`; the project's rules over the built-in ones for the
+  standard blocks: T for timers, # for counters, ↑ ↓ for the edges, S R
+  for the bistables, ~ for `BLINK_PATTERN`). Zoomed out past where the
+  label is drawn, the icon stands alone at a readable size.
+- **A fit never goes below a legible zoom** (0.75, about 9 px type): a
+  diagram too big for the view at that zoom shows its left part and you
+  pan, instead of shrinking to one-letter labels. Controls on blocks cut
+  their text instead of wrapping it.
+- **The box link's status counts down:** "reconnecting (retry in 5s)",
+  ticking each second; every retry waits 5 s.
 - **Why is the diagram itself:** tapping an output highlights the blocks and
   wires that drive it and dims the rest; tapping empty space clears it. No
   Why tab or panel.
-- **Inputs on the diagram:** in the simulation, an input's block switches,
-  presses or drags it. On a Pi, the same click **forces** the input, for an
+- **Inputs on the diagram:** in the simulation, an input's block switches
+  or presses it, or takes a typed number (written on Enter). On a Pi, the same click **forces** the input, for an
   engineer only: the block shows FORCED in the warning colour, a banner
   lists every force with "release all", and forces end on logout or deploy.
 
@@ -67,14 +99,61 @@ this; change it here first when a decision changes.
   L5X files into the open project (XML and L5X ladder converted to ST).
 - In the browser simulation, projects persist in the browser's storage, with
   the same Upload and Download (the box's `.zip`). The built-in examples are
-  read-only starter projects: Save keeps your own copy. Deploy compiles and
-  runs the project in the page. A browser that keeps nothing (a private
-  window) still works; the projects last until the page closes.
+  read-only starter projects: Save keeps your own copy. Typing only checks:
+  errors are marked after a pause, and what runs is unchanged, as on a box.
+  Deploy compiles and runs the project in the page; one that does not
+  compile is refused and the old program keeps running. A browser that
+  keeps nothing (a private window) still works; the projects last until
+  the page closes.
+- **Machines and templates.** Worked machines (conveyor sorter, pump
+  station, batch mixer, pick and place, bottle filler, air compressors,
+  air handler) and templates (discrete machine, process loop) are one list,
+  kept as files in `crates/helmsman-project/starters/`. In the simulation
+  the Files sidebar shows Examples (the short teaching programs, in view,
+  and the one a first visit opens), then Machines and Templates, folded
+  until opened; each is a read-only starter that Save copies. On a box,
+  "Start from a machine or template" in the sidebar asks an engineer for a
+  name and sends the project as its `.zip`; nothing else changes what the
+  box holds, and a first install still seeds `line` alone, undeployed.
+
+## Keyboard
+
+CODESYS's default keys where the browser leaves them alone (its
+"Shortcuts" help page, checked 2026-11-01); nothing on a key the browser
+owns (F5 and Ctrl+R reload, F11 goes full screen, Ctrl+F5 reloads hard).
+The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
+
+| key | does | CODESYS command on that key |
+|---|---|---|
+| Ctrl S | Save | Save Project |
+| Ctrl D | Deploy | (Download has no key) |
+| Ctrl Enter | Run / Stop the simulation | (Start is F5, the browser's) |
+| Shift F8 | Stop the simulation | Stop |
+| F10 | Step one scan (stopped) | Step Over |
+| Alt F8 | Sign in (box) | Login |
+| Ctrl F8 | Sign out (box) | Logout |
+| Ctrl Z, Ctrl Y | Undo, Redo in the ST editor | Undo, Restore |
+| Alt 0 | The left pane's Files tab | Devices view |
+| Alt 1 | The left pane's Code tab (the Structured Text) | POUs view |
+| Alt 2 | Trend along the bottom | Modules view |
+| Alt 3 | Side panel | Messages view |
+| Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
+| Ctrl Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References |
+| Alt ↑ | Up one level in the diagram | |
+
+Each menu item prints its key. Reserved, not built (TODO cards
+`hotkey-*`), on chords rather than F keys: Ctrl B toggle a breakpoint on
+the picked block, Ctrl ] / Ctrl [ step into / out of an instance,
+Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F
+find in the ST with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2
+the Agent.
 
 ## Monitor (phone to wall TV; replaces Andon)
 
-- **Top:** status tiles: running or faulted, scan time, then one tile per
-  top-level instance with its key outputs, green or red.
+- **Top:** status tiles: running or faulted, then one tile per top-level
+  instance with its key outputs, green or red. The scan period and
+  counts are too low level for the wall: hidden unless an engineer turns
+  "Scan detail" on (card `monitor-scan-time`).
 - **Tap a tile:** the same tiles one level down (that instance's instances
   and outputs). Back and breadcrumbs go up; the full diagram is one tap
   away.
@@ -82,7 +161,9 @@ this; change it here first when a decision changes.
 
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
-period and count), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
+period and count only while an engineer is signed in and this browser's
+"Scan detail" is on, kept with the Editor's layout; nothing is measured
+box-side), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
 and located `%Q` variables), then a tile per user function block
 instance in declaration order (standard blocks such as TON are not
 tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
@@ -99,7 +180,7 @@ one column on a phone, and grow with the screen up to 4K.
 
 - **Proposals** (agent changes approved with a PIN) sit behind the ⋯ menu
   until they get a home.
-- **Claude** on a Pi goes through the relay and proposes; in the simulation
+- **Agent** (the tab) on a Pi goes through the relay and proposes; in the simulation
   it uses the visitor's key, as the playground does today.
 - **Site** (every box on the network) is gone for now; it returns with a
   fleet view.

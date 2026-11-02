@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Helmsman Help · On a box</title>
+<link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
+<style>
+:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;--white:#FFFFFF;
+--stencil:'Saira Stencil One',Impact,sans-serif;
+--mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:var(--white);color:var(--black);font:16px/1.6 var(--sans)}
+.wrap{max-width:1040px;margin:0 auto;padding:0 16px}
+header.top{background:var(--black);color:#fff;border-bottom:4px solid var(--yellow)}
+header.top .wrap{display:flex;align-items:center;gap:16px;min-height:56px}
+header.top .brand{color:#fff;text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em;flex:none}
+header.top .section{color:var(--steel);font:13px var(--mono)}
+header.top .site{margin-left:auto;color:#C8C8C8;text-decoration:none;font:13px var(--mono)}
+header.top .site:hover{color:var(--yellow)}
+.page{display:grid;grid-template-columns:220px 1fr;gap:40px;padding:32px 0 64px}
+nav.help{position:sticky;top:16px;align-self:start;display:flex;flex-direction:column;gap:4px;font:14px var(--mono)}
+nav.help a{color:var(--graphite);text-decoration:none;padding:6px 10px;border-left:3px solid transparent}
+nav.help a:hover{color:var(--black);border-left-color:var(--steel)}
+nav.help a.current{color:var(--black);border-left-color:var(--yellow);font-weight:600}
+main{min-width:0}
+main h1{font-size:32px;line-height:1.15;margin:0 0 16px}
+main h2{font-size:22px;margin:36px 0 10px;padding-top:12px;border-top:1px solid #E6E6E6}
+main h3{font-size:17px;margin:24px 0 6px}
+main p,main li{max-width:72ch}
+main code{font-family:var(--mono);font-size:.92em;background:#F2F2F2;padding:1px 4px;border-radius:3px}
+main pre{background:var(--black);color:#F0F0F0;padding:14px 16px;overflow-x:auto;border-radius:6px;font:14px/1.5 var(--mono)}
+main pre code{background:none;padding:0;color:inherit}
+main table{border-collapse:collapse;margin:12px 0;font-size:15px}
+main th,main td{text-align:left;padding:6px 12px;border-bottom:1px solid #E6E6E6;vertical-align:top}
+main th{font:600 13px var(--mono);color:var(--graphite)}
+main kbd{font:13px var(--mono);background:#F2F2F2;border:1px solid #D8D8D8;border-bottom-width:2px;border-radius:4px;padding:1px 6px}
+main a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
+.note{border-left:4px solid var(--yellow);background:#FFF8E0;padding:10px 14px;margin:14px 0}
+footer{background:var(--graphite);color:#C8C8C8;font:13px var(--mono);padding:18px 0}
+@media (max-width:760px){.page{grid-template-columns:1fr;gap:16px}nav.help{position:static;flex-direction:row;flex-wrap:wrap}}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="../">HELMSMAN</a><span class="section">Help</span>
+  <a class="site" href="../playground/">Playground</a>
+</div></header>
+<div class="wrap page">
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples and starters</a></nav>
+<main>
+<h1 id="on-a-box">On a box</h1>
+<p>A box is a controller on the machine's network. It serves this app
+itself: open its address in a browser and the Editor shows what it is
+running, with the real inputs and outputs.</p>
+<h2 id="signing-in">Signing in</h2>
+<p>Anyone on the network can watch. Editing, saving, deploying and
+forcing need an engineer's sign in: <strong>Sign in</strong> in the
+header, or <kbd>Alt</kbd> <kbd>F8</kbd>; <kbd>Ctrl</kbd> <kbd>F8</kbd>
+signs out. A fresh box with no accounts yet takes a role and its PIN;
+once an account exists, only accounts sign in. A session ends when you
+sign out, when it has been idle a while, or when it is a day old.</p>
+<h2 id="deploying">Deploying</h2>
+<p>Deploy on a box goes through its <strong>approval policy</strong>: a
+change the policy calls small lands at once; a larger one, a logic
+change, is held as a proposal until an approver signs it off, with a
+replay in the simulation to look at first. The ⋯ menu lists proposals
+waiting; the header's ⋯ badge counts them. Nothing runs on the box that
+was not approved under the policy, and every change is in the box's
+audit log.</p>
+<p>The first install of a box seeds a project but runs nothing: an
+engineer deploys the first program.</p>
+<h2 id="forcing">Forcing</h2>
+<p>Signed in as an engineer, an input's block on the diagram is a
+control as in the simulation, but a click <strong>forces</strong> the
+input: the box holds the value you set over what the channel reads. A
+forced input is marked FORCED in the warning colour on its block and in
+the I/O panel, a banner lists every force with a release for each and
+for all, and forces end when you sign out or deploy. Forcing is for
+commissioning and troubleshooting; the audit log records each one.</p>
+<h2 id="the-trend">The trend</h2>
+<p>The Trend tab opens with the box's own history of each pinned signal,
+the last ten minutes, then streams. Pins are yours while you are signed
+in and come back on any screen; the box keeps them across a restart (the
+history starts over).</p>
+<h2 id="lost-the-box">Lost the box</h2>
+<p>If the box stops answering, the state in the header says so and the
+last diagram stays up; the page keeps trying. "Simulate in this browser"
+offers to run the program in the page instead. A page that never reached
+a box at its address goes to the simulation by itself and says so.</p>
+<h2 id="the-monitor">The Monitor</h2>
+<p>The <strong>Monitor</strong> (the Editor | Monitor toggle, or View ›
+Monitor) is the watch-only screen for a phone, a tablet or a wall
+display: one tile per program with its state and its lamps, green TRUE,
+red FALSE, and a tap into each block instance. A phone opens on the
+Monitor. "Open diagram" on a tile goes to that level in the Editor. An
+engineer can turn on <strong>Scan detail</strong> (View) to see each
+program's scan period and counts; they are hidden otherwise.</p>
+<h2 id="https">HTTPS</h2>
+<p>A box serves HTTPS with a certificate it made at first boot; the
+browser asks once. The certificate's fingerprint is printed at the box's
+startup and shown in the ⋯ menu, so you can compare the two. From the
+box's own host, plain HTTP still works for scripts.</p>
+</main>
+</div>
+<footer><div class="wrap">Helmsman Factory Automation · early release · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>
+<script>
+(function(){var c=document.querySelectorAll('nav.help a');for(var i=0;i<c.length;i++){if(c[i].getAttribute('href')==='box.html'){c[i].className='current';}}})();
+</script>
+</body>
+</html>

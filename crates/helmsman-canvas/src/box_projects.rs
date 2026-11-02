@@ -28,7 +28,7 @@ use std::fmt;
 
 use serde_json::{Value as Json, json};
 
-use crate::projects::{Diag, ProjectRow};
+use crate::projects::{Diag, Group, ProjectRow};
 use crate::remote::{ForceRow, segment};
 
 /// What a request is for.
@@ -394,6 +394,18 @@ impl BoxProjects {
         ));
     }
 
+    /// A new project `name` with the files of a built-in machine or
+    /// template, sent as the project's `.zip` so it arrives all at once.
+    pub fn create_from(&mut self, name: &str, from: &str) {
+        let Some(s) = helmsman_project::starters::starter(from) else {
+            return;
+        };
+        match s.project().to_zip() {
+            Ok(zip) => self.upload(&format!("{name}.zip"), zip, false),
+            Err(e) => self.note(format!("{name} was not made: {e}"), true),
+        }
+    }
+
     pub fn rename(&mut self, from: &str, to: &str) {
         self.queue.push(PReq::json(
             PCall::Rename {
@@ -413,6 +425,12 @@ impl BoxProjects {
 
     /// A new, empty `.st` file in the open project.
     pub fn new_file(&mut self, file: &str) {
+        self.new_file_with(file, "");
+    }
+
+    /// A new file in the open project holding `text` (a paste or a
+    /// duplicate), written only if no file of that name exists.
+    pub fn new_file_with(&mut self, file: &str, text: &str) {
         let Some(o) = &self.open else { return };
         let project = o.name.clone();
         self.queue.push(PReq::json(
@@ -422,7 +440,7 @@ impl BoxProjects {
             },
             "PUT",
             file_url(&project, file),
-            &json!({ "text": "", "version": null }),
+            &json!({ "text": text, "version": null }),
         ));
     }
 
@@ -712,7 +730,7 @@ impl BoxProjects {
                                 Some(ProjectRow {
                                     running: self.running.as_deref() == Some(name.as_str()),
                                     name,
-                                    example: false,
+                                    group: Group::Mine,
                                 })
                             })
                             .collect()
@@ -776,11 +794,12 @@ impl BoxProjects {
                     }
                 }
                 if o.current.as_ref().is_none_or(|c| !o.bufs.contains_key(c)) {
-                    // The first program file, else the first file.
+                    // main.st, else the first program file, else the first file.
                     o.current = o
                         .bufs
                         .keys()
-                        .find(|f| has_ext(f, "st"))
+                        .find(|f| *f == "main.st")
+                        .or_else(|| o.bufs.keys().find(|f| has_ext(f, "st")))
                         .or_else(|| o.bufs.keys().next())
                         .cloned();
                 }

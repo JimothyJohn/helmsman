@@ -17,14 +17,16 @@
 
 use std::collections::BTreeMap;
 
+use helmsman_project::starters::{Kind, STARTERS, starter};
 use helmsman_project::{FileKind, Files, file_name, project_name};
 use serde_json::{Value as Json, json};
 
 use crate::playground::EXAMPLES;
-use crate::projects::{ProjectRow, file_line, slug};
+use crate::projects::{Group, ProjectRow, file_line, slug};
 
 /// Whether `f` is a program file (`NAME.st`).
 #[must_use]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_st(f: &str) -> bool {
     file_name(f) == Some(FileKind::St)
 }
@@ -89,7 +91,17 @@ fn examples() -> BTreeMap<String, Files> {
             let (name, file) = example_project(e.src);
             (name, Files(BTreeMap::from([(file, e.src.to_string())])))
         })
+        .chain(STARTERS.iter().map(|s| (s.name.to_string(), s.project())))
         .collect()
+}
+
+/// The list a built-in project is under.
+fn group_of(name: &str) -> Group {
+    match starter(name).map(|s| s.kind) {
+        Some(Kind::Machine) => Group::Machines,
+        Some(Kind::Template) => Group::Templates,
+        None => Group::FirstSteps,
+    }
 }
 
 /// What a new project starts with.
@@ -195,7 +207,7 @@ impl SimProjects {
         let mine = self.saved.keys().map(|n| ProjectRow {
             running: self.running.as_deref() == Some(n.as_str()),
             name: n.clone(),
-            example: false,
+            group: Group::Mine,
         });
         let ex = self
             .examples
@@ -204,9 +216,11 @@ impl SimProjects {
             .map(|n| ProjectRow {
                 running: self.running.as_deref() == Some(n.as_str()),
                 name: n.clone(),
-                example: true,
+                group: group_of(n),
             });
-        mine.chain(ex).collect()
+        let mut rows: Vec<ProjectRow> = mine.chain(ex).collect();
+        rows.sort_by_key(|r| r.group);
+        rows
     }
 
     /// What the open project holds as stored (the example's own text for
@@ -230,7 +244,8 @@ impl SimProjects {
     }
 
     /// Opens `name` (its stored files; unsaved edits elsewhere are
-    /// dropped).
+    /// dropped), showing its `main.st` if it has one, else its first
+    /// program file.
     pub fn open_project(&mut self, name: &str) {
         let Some(files) = self.saved.get(name).or_else(|| self.examples.get(name)).cloned() else {
             return;
@@ -240,18 +255,24 @@ impl SimProjects {
         self.current = self
             .files
             .keys()
-            .find(|f| file_name(f) == Some(FileKind::St))
+            .find(|f| *f == "main.st")
+            .or_else(|| self.files.keys().find(|f| file_name(f) == Some(FileKind::St)))
             .or_else(|| self.files.keys().next())
             .cloned()
             .unwrap_or_default();
         self.pending = None;
-        if self.is_example()
-            && let Some(e) = EXAMPLES.iter().find(|e| example_project(e.src).0 == name)
-        {
-            self.note(
-                format!("{}: a built-in example. Save keeps your own copy.", e.name),
-                false,
-            );
+        if self.is_example() {
+            if let Some(e) = EXAMPLES.iter().find(|e| example_project(e.src).0 == name) {
+                self.note(
+                    format!("{}: a built-in example. Save keeps your own copy.", e.name),
+                    false,
+                );
+            } else if let Some(s) = starter(name) {
+                self.note(
+                    format!("{}: {}. Save keeps your own copy.", s.title, s.about),
+                    false,
+                );
+            }
         }
         self.persist();
     }
@@ -326,6 +347,19 @@ impl SimProjects {
 
     /// A free name for a copy of `base` (neither a project here nor an
     /// example): `base`, else `base-2`, `-3`, ...
+    /// A project name not taken yet, from `base` (`base-2`, ... when it is).
+    #[must_use]
+    pub fn free_name(&self, base: &str) -> String {
+        self.free(base)
+    }
+
+    /// A file name not taken in the open project, from `want`
+    /// (`name-2.st`, ... when it is).
+    #[must_use]
+    pub fn free_file(&self, want: &str) -> String {
+        crate::projects::free_file_name(want, |n| self.files.contains_key(n))
+    }
+
     fn free(&self, base: &str) -> String {
         let base: String = base.chars().take(44).collect();
         let taken = |n: &str| self.saved.contains_key(n) || self.examples.contains_key(n);
@@ -472,6 +506,12 @@ impl SimProjects {
     }
 
     pub fn new_file(&mut self, file: &str) {
+        self.add_file(file, String::new());
+    }
+
+    /// A new file `file` holding `text`, opened; refused with a note when
+    /// the name is not a project file's or is taken.
+    pub fn add_file(&mut self, file: &str, text: String) {
         if file_name(file).is_none() {
             self.note(
                 format!(
@@ -486,7 +526,7 @@ impl SimProjects {
             self.note(format!("{file} already exists."), true);
             return;
         }
-        self.files.insert(file.to_string(), String::new());
+        self.files.insert(file.to_string(), text);
         file.clone_into(&mut self.current);
     }
 

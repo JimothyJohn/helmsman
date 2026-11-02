@@ -1,8 +1,9 @@
 //! The Editor on the simulation in the page (docs/playground/, or any page
-//! no box serves): an ST editor that compiles as you type, the program
-//! running in the page with Run / Stop / Step, a virtual I/O panel built
-//! from the program's ports, a trend, the live diagram, and Claude with
-//! the visitor's own key. No box and no server: the state is
+//! no box serves): an ST editor that checks as you type (errors marked
+//! after a pause; what runs is unchanged until Deploy, as on a box), the
+//! program running in the page with Run / Stop / Step, a virtual I/O
+//! panel built from the program's ports, a trend, the live diagram, and
+//! Claude with the visitor's own key. No box and no server: the state is
 //! [`crate::playground::Session`] and [`crate::claude::Chat`].
 
 use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, RichText, Sense, Stroke, Vec2};
@@ -12,16 +13,14 @@ use helmsman_iec::{Ty, Value};
 use crate::arrange::Layers;
 use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
 use crate::editor::{self, Body, Chrome, Tab};
-use crate::playground::{
-    MAX_PERIOD, MAX_SOURCE, MIN_PERIOD, Point, Session, TREND_MS, TREND_SIGNALS, Widget,
-};
+use crate::playground::{MAX_SOURCE, Point, Session, TREND_MS, TREND_SIGNALS, Widget};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, Storage};
-use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, GRAPHITE, GREEN, OFF_RED, STEEL, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
-/// Quiet time after the last keystroke before the editor compiles, s.
+/// Quiet time after the last keystroke before the editor checks, s.
 const DEBOUNCE: f64 = 0.35;
 /// Trend line colours, in signal order.
 const TREND: [Color32; TREND_SIGNALS] = [
@@ -88,6 +87,10 @@ impl Link {
 
 pub struct PlaygroundView {
     pub session: Session,
+    /// The Messages tab's log.
+    pub log: crate::messages::Log,
+    /// What the log last saw, to report changes once.
+    seen: Seen,
     /// The diagram of the program running, rebuilt when it changes.
     pub viewer: Option<Viewer>,
     /// Its shared default layout (the project's) and this browser's
@@ -96,7 +99,7 @@ pub struct PlaygroundView {
     /// The viewer was just built: lay it out from the layers.
     fresh: bool,
     viewer_of: String,
-    /// When the editor last changed and is not compiled yet.
+    /// When the editor last changed and is not checked yet.
     pending: Option<f64>,
     /// The diagram's pick last frame (a new one sends the ST there).
     last_pick: Option<Pick>,
@@ -156,6 +159,8 @@ impl PlaygroundView {
             chat: Chat::new(store),
             link: Link::default(),
             proxy_asked: false,
+            log: crate::messages::Log::default(),
+            seen: Seen::default(),
             notice: None,
             ask_error: None,
             proj,
@@ -178,15 +183,21 @@ impl PlaygroundView {
         self.sync_viewer();
     }
 
-    /// Opens project `name`, compiled and stopped (Deploy runs it).
+    /// Opens project `name` and runs it if it compiles (Nick, 2026-11-01:
+    /// an example that opens stopped looks dead); an edit still waits for
+    /// Deploy.
     pub fn open_project(&mut self, name: &str) {
         self.proj.open_project(name);
         self.reload();
         self.notice = None;
+        if self.session.build.as_ref().is_some_and(|b| b.module.is_some()) {
+            self.session.set_running(true);
+            self.proj.running = Some(self.proj.open.clone());
+        }
     }
 
     /// The editor's text changed: the session's source follows at once
-    /// and compiles after the pause.
+    /// and is checked after the pause. What runs waits for Deploy.
     fn edited(&mut self, t: f64) {
         self.session.src = self.proj.build_src();
         self.pending = Some(t);
@@ -223,13 +234,42 @@ impl PlaygroundView {
     /// Carries out what the Files sidebar asked.
     fn act(&mut self, a: Act) {
         match a {
+            Act::UseAnswer { name, text, save } => {
+                if save {
+                    self.proj.save();
+                } else {
+                    let open = self.proj.open.clone();
+                    self.proj.open_project(&open);
+                }
+                if text.to_ascii_uppercase().contains("PROGRAM ") {
+                    let project = self.proj.free_name(&name);
+                    self.proj.create(&project, None);
+                    self.proj.open_project(&project);
+                    let file = format!("{name}.st");
+                    self.proj.files.clear();
+                    self.proj.files.insert(file.clone(), text);
+                    self.proj.current = file;
+                } else {
+                    let file = self.proj.free_file(&format!("{name}.st"));
+                    self.proj.new_file(&file);
+                    if let Some(t) = self.proj.current_text_mut() {
+                        *t = text;
+                    }
+                }
+                self.proj.save();
+                self.reload();
+                self.notice = Some(format!(
+                    "{} opened from the Agent's answer; Deploy runs it.",
+                    self.proj.current
+                ));
+            }
             Act::OpenProject(p) => self.open_project(&p),
             Act::OpenFile(f) => self.proj.open_file(&f),
             Act::NewProject(p) => {
                 self.proj.create(&p, None);
                 self.reload();
             }
-            Act::CopyProject { from, to } => {
+            Act::CopyProject { from, to } | Act::FromStarter { from, to } => {
                 self.proj.create(&to, Some(&from));
                 self.reload();
             }
@@ -248,6 +288,23 @@ impl PlaygroundView {
             }
             Act::DeleteFile(f) => {
                 self.proj.delete_file(&f);
+                self.edited(f64::NEG_INFINITY);
+            }
+            Act::CopyFile(f) => {
+                if let Some(text) = self.proj.files.get(&f) {
+                    self.files_ui.clipboard = Some((f, text.clone()));
+                }
+            }
+            Act::DuplicateFile(f) => {
+                if let Some(text) = self.proj.files.get(&f).cloned() {
+                    let name = self.proj.free_file(&f);
+                    self.proj.add_file(&name, text);
+                    self.edited(f64::NEG_INFINITY);
+                }
+            }
+            Act::PasteFile { name, text } => {
+                let name = self.proj.free_file(&name);
+                self.proj.add_file(&name, text);
                 self.edited(f64::NEG_INFINITY);
             }
         }
@@ -279,46 +336,16 @@ impl PlaygroundView {
         });
     }
 
-    /// Loads `src` into the editor (the open file, or the project's first
-    /// program file when a map or settings file is open), compiled and
-    /// stopped.
-    pub fn load(&mut self, src: &str, what: &str) {
-        if crate::sim_projects::is_st(&self.proj.current) {
-            if let Some(t) = self.proj.current_text_mut() {
-                src.clone_into(t);
-            }
-        } else if let Some(f) = self
-            .proj
-            .files
-            .keys()
-            .find(|f| crate::sim_projects::is_st(f))
-            .cloned()
-        {
-            self.proj.files.insert(f.clone(), src.to_string());
-            self.proj.current = f;
-        } else {
-            self.proj.files.insert("main.st".into(), src.to_string());
-            self.proj.current = "main.st".into();
-        }
-        let ok = self.session.load(&self.proj.build_src());
-        self.pending = None;
-        self.sync_viewer();
-        self.notice = Some(if ok {
-            format!("Loaded {what}. Press Run to start it.")
-        } else {
-            format!("Loaded {what}; it does not compile yet (see the errors under the editor).")
-        });
-    }
-
-    /// Compiles the editor if it has been quiet long enough (or `now`).
-    fn compile_due(&mut self, t: f64, now: bool) {
+    /// Checks the editor if it has been quiet long enough (or `now`):
+    /// errors are marked, and the program running (and its diagram) stay
+    /// as deployed.
+    fn check_due(&mut self, t: f64, now: bool) {
         if let Some(at) = self.pending
             && (now || t - at >= DEBOUNCE)
         {
             self.pending = None;
             let src = self.session.src.clone();
-            self.session.set_source(&src);
-            self.sync_viewer();
+            self.session.check(&src);
         }
     }
 
@@ -363,12 +390,63 @@ impl PlaygroundView {
     }
 
     /// Loads the program in Claude's answer (never runs it).
+    /// Loads `src` into the editor (the open file, or the project's first
+    /// program file when a map or settings file is open), compiled and
+    /// stopped.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn load(&mut self, src: &str, what: &str) {
+        if crate::sim_projects::is_st(&self.proj.current) {
+            if let Some(t) = self.proj.current_text_mut() {
+                src.clone_into(t);
+            }
+        } else if let Some(f) = self
+            .proj
+            .files
+            .keys()
+            .find(|f| crate::sim_projects::is_st(f))
+            .cloned()
+        {
+            self.proj.files.insert(f.clone(), src.to_string());
+            self.proj.current = f;
+        } else {
+            self.proj.files.insert("main.st".into(), src.to_string());
+            self.proj.current = "main.st".into();
+        }
+        let ok = self.session.load(&self.proj.build_src());
+        self.pending = None;
+        self.sync_viewer();
+        self.notice = Some(if ok {
+            format!("Loaded {what}. Press Run to start it.")
+        } else {
+            format!("Loaded {what}; it does not compile yet (see the errors under the editor).")
+        });
+    }
+
+    /// Takes the Agent's answer into the project tree (Nick, 2026-11-01):
+    /// a PROGRAM becomes a new project named after it, anything else a new
+    /// file in the open project; it opens, and nothing runs until Deploy.
+    /// Unsaved edits in the open project ask first (save or drop).
     pub fn use_answer(&mut self) -> bool {
         let Some(code) = self.chat.answer.as_ref().and_then(crate::claude::Answer::program) else {
             return false;
         };
-        self.load(&code, "Claude's program");
+        self.take_code(code);
         true
+    }
+
+    /// [`Self::use_answer`] for `code` already in hand.
+    pub fn take_code(&mut self, code: String) {
+        let name = answer_name(&code);
+        let act = Act::UseAnswer {
+            name,
+            text: code,
+            save: true,
+        };
+        if self.proj.dirty() {
+            self.files_ui.confirm = Some(act);
+        } else {
+            self.act(act);
+        }
     }
 
     /// One frame of the Editor.
@@ -388,16 +466,83 @@ impl PlaygroundView {
             self.chat.receive(m);
         }
         let t = ctx.input(|i| i.time);
-        self.compile_due(t, false);
+        self.check_due(t, false);
         self.arrange();
         self.session.advance(t);
+        self.watch(t);
         if self.session.running || self.pending.is_some() || self.chat.busy() {
             ctx.request_repaint();
         }
     }
 }
 
+/// What [`PlaygroundView::watch`] compares against.
+#[derive(Default)]
+struct Seen {
+    fault: Option<String>,
+    diags: Vec<String>,
+    notice: Option<String>,
+    storage: Option<String>,
+    running: Option<bool>,
+}
+
 impl PlaygroundView {
+    /// Reports to the log what changed since the last frame: compile
+    /// errors (as they appear), a fault, a notice, a storage problem,
+    /// the program starting or stopping.
+    fn watch(&mut self, t: f64) {
+        let fault = self.session.fault.as_ref().map(ToString::to_string);
+        if fault != self.seen.fault {
+            if let Some(f) = &fault {
+                self.log
+                    .error(t, format!("Fault: {f}. Run or Step restarts the program."));
+            }
+            self.seen.fault = fault;
+        }
+        let diags = self.session.diag_lines();
+        if diags != self.seen.diags {
+            if !diags.is_empty() {
+                let n = diags.len();
+                self.log
+                    .error(t, format!("{n} problem(s): {}", diags.join(" · ")));
+            } else if !self.seen.diags.is_empty() {
+                self.log.info(t, "Compiles.");
+            }
+            self.seen.diags = diags;
+        }
+        let notice = self.proj.notice.as_ref().map(|(n, _)| n.clone());
+        if notice != self.seen.notice {
+            if let Some((n, error)) = &self.proj.notice {
+                if *error {
+                    self.log.error(t, n.clone());
+                } else {
+                    self.log.info(t, n.clone());
+                }
+            }
+            self.seen.notice = notice;
+        }
+        if self.proj.storage_problem != self.seen.storage {
+            if let Some(w) = &self.proj.storage_problem {
+                self.log.warning(t, w.clone());
+            }
+            self.seen.storage.clone_from(&self.proj.storage_problem);
+        }
+        let running = Some(self.session.running);
+        if running != self.seen.running {
+            if self.seen.running.is_some() {
+                self.log.info(
+                    t,
+                    if self.session.running {
+                        "Running."
+                    } else {
+                        "Stopped."
+                    },
+                );
+            }
+            self.seen.running = running;
+        }
+    }
+
     /// Lays the diagram out from its layers, or keeps a finished move.
     pub fn arrange(&mut self) {
         let fresh = std::mem::take(&mut self.fresh);
@@ -418,69 +563,40 @@ impl PlaygroundView {
 }
 
 impl Body for PlaygroundView {
-    fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        {
-            let can = self.proj.can_save_layout();
-            if crate::arrange::buttons(ui, chrome, &mut self.layers, self.viewer.as_mut(), can) {
-                self.save_layout();
-            }
-            ui.separator();
-            let s = &mut self.session;
-            let (label, fill) = if s.running {
-                ("■ Stop", GRAPHITE)
-            } else {
-                ("▶ Run", YELLOW)
-            };
-            let ink = if s.running { WHITE } else { BLACK };
-            let run = egui::Button::new(RichText::new(label).strong().color(ink))
-                .fill(fill)
-                .min_size(Vec2::new(80.0, 28.0));
-            if ui.add_enabled(s.build.is_some(), run).clicked() {
-                let on = !s.running;
-                s.set_running(on);
-            }
-            if ui
-                .add_enabled(!s.running && s.build.is_some(), egui::Button::new("Step"))
-                .on_hover_text("one scan")
-                .clicked()
-            {
-                s.step();
-            }
-            if ui
-                .add_enabled(s.build.is_some(), egui::Button::new("Restart"))
-                .on_hover_text("cold restart: initial values, clock to zero")
-                .clicked()
-            {
-                s.restart();
-            }
-            ui.label(RichText::new("scan").color(STEEL));
-            let mut p = s.period_ms;
-            if ui
-                .add(
-                    egui::DragValue::new(&mut p)
-                        .range(MIN_PERIOD..=MAX_PERIOD)
-                        .suffix(" ms"),
-                )
-                .changed()
-            {
-                s.set_period(p);
-            }
-            ui.separator();
-            let state = if s.fault.is_some() {
-                "faulted"
-            } else if s.running {
-                "running"
-            } else {
-                "stopped"
-            };
-            #[allow(clippy::cast_precision_loss)]
-            let secs = s.now_ms as f64 / 1000.0;
-            ui.label(
-                RichText::new(format!("{state} · {} scans · t={secs:.1}s", s.scans))
-                    .monospace()
-                    .color(if s.fault.is_some() { RED } else { STEEL }),
-            );
-        }
+    fn toolbar(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
+        // Run, step and restart are glyphs over the diagram (app::glyphs);
+        // here only what state the program is in.
+        let s = &self.session;
+        let state = if s.fault.is_some() {
+            "faulted"
+        } else if s.running {
+            "running"
+        } else {
+            "stopped"
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let secs = s.now_ms as f64 / 1000.0;
+        ui.label(
+            RichText::new(format!("{state} · {secs:.1}s"))
+                .monospace()
+                .strong()
+                .color(if s.running && s.fault.is_none() {
+                    GREEN
+                } else {
+                    RED
+                }),
+        )
+        .on_hover_text(format!("{} scans", s.scans));
+    }
+
+    fn has_notices(&self) -> bool {
+        self.session.fault.is_some()
+            || self.notice.is_some()
+            || self.proj.notice.is_some()
+            || self.proj.storage_problem.is_some()
+    }
+
+    fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         if let Some(f) = &self.session.fault {
             ui.colored_label(RED, format!("Fault: {f}. Run or Step restarts the program."));
         }
@@ -508,22 +624,25 @@ impl Body for PlaygroundView {
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = ui.ctx().input(|i| i.time);
         let stale = self.session.stale();
+        let errors = self.session.diags.len();
         ui.horizontal(|ui| {
             ui.label(RichText::new("Structured Text").strong());
-            if self.session.diags.is_empty() && !stale {
-                ui.label(RichText::new("✔ compiles").color(STEEL));
-            } else if !self.session.diags.is_empty() {
-                ui.label(RichText::new(format!("✖ {} error(s)", self.session.diags.len())).color(RED));
-            } else {
+            if self.pending.is_some() {
                 ui.label(RichText::new("…").color(STEEL));
+            } else if errors > 0 {
+                ui.label(RichText::new(format!("✖ {errors} error(s)")).color(RED));
+            } else {
+                ui.label(RichText::new("✔ compiles").color(STEEL));
             }
         });
-        if stale && self.session.build.is_some() && !self.session.diags.is_empty() {
-            ui.label(
-                RichText::new("Still running the last version that compiled.")
-                    .small()
-                    .color(STEEL),
-            );
+        // An edit is only checked: what runs is the last deploy, as on a box.
+        if stale && self.pending.is_none() && self.session.build.is_some() {
+            let note = if errors > 0 {
+                "The program running is unchanged. Fix the errors, then Deploy."
+            } else {
+                "The program running is unchanged. Deploy runs this version."
+            };
+            ui.label(RichText::new(note).small().color(STEEL));
         }
         let all = self.diags();
         let current = self.proj.current.clone();
@@ -587,6 +706,7 @@ impl Body for PlaygroundView {
             current: Some(&current),
             write: Ok(()),
             dirty: self.proj.dirty(),
+            starters: false,
         };
         if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
             self.act(a);
@@ -601,16 +721,28 @@ impl Body for PlaygroundView {
                 ui.label(RichText::new("Nothing compiled yet.").color(STEEL));
             }
         }
+        // The blank space under it all: a right-click offers a new project
+        // (and a paste into the open one).
+        if let Some(a) = self.files_ui.blank_menu(ui, chrome, &Ok(()), true) {
+            self.act(a);
+        }
+    }
+
+    fn trend(&mut self, ui: &mut egui::Ui, _chrome: &mut Chrome) {
+        self.trend_tab(ui);
+    }
+
+    fn messages(&mut self) -> &mut crate::messages::Log {
+        &mut self.log
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Trend, Tab::Claude]
+        &[Tab::Io, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab) {
         match tab {
             Tab::Io => self.io(ui),
-            Tab::Trend => self.trend_tab(ui),
             Tab::Claude => self.claude(ui),
         }
     }
@@ -618,6 +750,8 @@ impl Body for PlaygroundView {
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let scan = self.session.trace.as_ref().map(|t| t as &dyn Scan);
         if let Some(v) = &mut self.viewer {
+            v.icons
+                .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
             v.crumbs_ui(ui, &[]);
             let area = ui.available_rect_before_wrap();
             v.canvas(ui, scan);
@@ -684,10 +818,26 @@ impl PlaygroundView {
                         .color(STEEL),
                 );
             }
-            for p in off_map {
-                if let Some(v) = input_ui(ui, p) {
-                    self.session.set_input(&p.name, v);
+            // Two columns when the panel is wide enough for them (Nick,
+            // 2026-11-01: denser); each cell capped at its column's width,
+            // or the row overflows and the resizable panel grows to fit.
+            let (cols, col) = columns(ui);
+            let mut set = Vec::new();
+            egui::Grid::new("pg-io-in").num_columns(cols).show(ui, |ui| {
+                for pair in off_map.chunks(cols) {
+                    for p in pair {
+                        ui.scope(|ui| {
+                            ui.set_max_width(col);
+                            if let Some(v) = input_ui(ui, p) {
+                                set.push((p.name.clone(), v));
+                            }
+                        });
+                    }
+                    ui.end_row();
                 }
+            });
+            for (name, v) in set {
+                self.session.set_input(&name, v);
             }
             ui.add_space(8.0);
             ui.label(RichText::new("Outputs").strong())
@@ -699,10 +849,23 @@ impl PlaygroundView {
                         .color(STEEL),
                 );
             }
-            for p in &outputs {
-                if output_ui(ui, p) {
-                    self.pick(&p.name);
+            let mut picked = None;
+            let (cols, col) = columns(ui);
+            egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
+                for pair in outputs.chunks(cols) {
+                    for p in pair {
+                        ui.scope(|ui| {
+                            ui.set_max_width(col);
+                            if output_ui(ui, p) {
+                                picked = Some(p.name.clone());
+                            }
+                        });
+                    }
+                    ui.end_row();
                 }
+            });
+            if let Some(name) = picked {
+                self.pick(&name);
             }
         });
     }
@@ -729,12 +892,15 @@ impl PlaygroundView {
             }
         });
         ui.add_space(6.0);
-        self.trend(ui);
+        self.trend_plot(ui);
     }
 
     fn claude(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().id_salt("pg-claude").show(ui, |ui| {
+            // Room for the scroll bar: a full-width field plus the bar is
+            // wider than the panel, and a resizable panel grows to fit.
+            ui.set_max_width(ui.available_width() - 12.0);
             match self.chat.proxy {
                 Proxy::Yes => {
                     ui.label(
@@ -749,7 +915,10 @@ impl PlaygroundView {
             }
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Model").color(STEEL));
+                // No wider than the panel: a row that overflows a resizable
+                // panel widens it every frame.
                 egui::ComboBox::from_id_salt("pg-model")
+                    .width((ui.available_width() - 40.0).max(60.0))
                     .selected_text(self.chat.model.label())
                     .show_ui(ui, |ui| {
                         for m in Model::ALL {
@@ -804,6 +973,13 @@ impl PlaygroundView {
         if r.changed() {
             self.chat.key_changed();
         }
+        if self.chat.from_env {
+            ui.label(
+                RichText::new("Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
+                    .small()
+                    .color(STEEL),
+            );
+        }
         if self.chat.has_key() && !self.chat.key_looks_right() {
             ui.label(
                 RichText::new("That does not look like an Anthropic key (sk-ant-…).")
@@ -829,7 +1005,9 @@ impl PlaygroundView {
                 .color(RED),
             );
         }
-        ui.horizontal(|ui| {
+        // Wrapped: in a plain row a label extends, and a row wider than a
+        // resizable panel widens it every frame.
+        ui.horizontal_wrapped(|ui| {
             if self.chat.has_key() && ui.button("Forget key").clicked() {
                 self.chat.forget_key();
             }
@@ -893,7 +1071,7 @@ impl PlaygroundView {
                 .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
             if ui
                 .add(b)
-                .on_hover_text("replaces the editor's program; it does not run until you press Run")
+                .on_hover_text("a new project (or file) named after it, opened; Deploy runs it")
                 .clicked()
             {
                 self.use_answer();
@@ -901,7 +1079,7 @@ impl PlaygroundView {
         }
     }
 
-    fn trend(&self, ui: &mut egui::Ui) {
+    fn trend_plot(&self, ui: &mut egui::Ui) {
         let trend = &self.session.trend;
         let rect = ui.available_rect_before_wrap();
         ui.allocate_rect(rect, Sense::hover());
@@ -1027,11 +1205,38 @@ enum MapInput {
     Set(Value),
 }
 
+/// A name for the Agent's answer: the `PROGRAM`, `FUNCTION_BLOCK` or
+/// `FUNCTION` it declares, lower-cased, else `agent`.
+#[must_use]
+pub fn answer_name(code: &str) -> String {
+    let mut words = code.split_whitespace();
+    while let Some(w) = words.next() {
+        if matches!(
+            w.to_ascii_uppercase().as_str(),
+            "PROGRAM" | "FUNCTION_BLOCK" | "FUNCTION"
+        ) && let Some(name) = words.next()
+        {
+            let name: String = name
+                .trim_end_matches(':')
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .take(40)
+                .collect::<String>()
+                .to_ascii_lowercase();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    "agent".into()
+}
+
 /// One input's control filling its block at `rect`.
 fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> MapInput {
     let label = p.name.to_ascii_lowercase();
     let size = (rect.height() * 0.4).clamp(7.0, 18.0);
     let builder = egui::UiBuilder::new().max_rect(rect).id_salt(("pg-map", k));
+    let id = egui::Id::unique(("pg-map-number", k));
     ui.scope_builder(builder, |ui| match p.widget {
         Some(Widget::Push) => {
             let on = p.value == Value::Bool(true);
@@ -1040,7 +1245,10 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
             } else {
                 WHITE
             }))
-            .fill(if on { YELLOW } else { GRAPHITE })
+            .fill(if on { GREEN } else { OFF_RED })
+            // Never wrapped: a narrow block at low zoom would stack the
+            // letters one a row.
+            .wrap_mode(egui::TextWrapMode::Truncate)
             .sense(Sense::click_and_drag());
             let r = ui
                 .add_sized(rect.size(), b)
@@ -1050,12 +1258,13 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
         Some(Widget::Toggle) => {
             let on = p.value == Value::Bool(true);
             let b = egui::Button::new(
-                RichText::new(format!("{label} {}", if on { "ON" } else { "OFF" }))
+                RichText::new(format!("{label} {}", if on { "TRUE" } else { "FALSE" }))
                     .strong()
                     .size(size)
                     .color(if on { BLACK } else { WHITE }),
             )
-            .fill(if on { YELLOW } else { GRAPHITE });
+            .fill(if on { GREEN } else { OFF_RED })
+            .wrap_mode(egui::TextWrapMode::Truncate);
             if ui
                 .add_sized(rect.size(), b)
                 .on_hover_text("switch: click to flip")
@@ -1069,52 +1278,36 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
         Some(Widget::Int { min, max }) => {
             let lo = i64::try_from(min.max(-1_000_000)).unwrap_or(i64::MIN);
             let hi = i64::try_from(max.min(1_000_000)).unwrap_or(i64::MAX);
-            let mut v = match p.value {
+            let v = match p.value {
                 Value::Int(n) => i64::try_from(n).unwrap_or(0),
                 _ => 0,
             };
-            let before = v;
-            let d = egui::DragValue::new(&mut v)
-                .range(lo..=hi)
-                .prefix(format!("{label} = "));
-            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
-            if v == before {
-                MapInput::Nothing
-            } else {
-                MapInput::Set(Value::Int(i128::from(v)))
+            let c = crate::commit::number(ui, id, &v.to_string(), "", rect.size(), TYPE_HINT);
+            match crate::commit::int(&c, lo, hi) {
+                Some(n) if n != v => MapInput::Set(Value::Int(i128::from(n))),
+                _ => MapInput::Nothing,
             }
         }
         Some(Widget::Real) => {
-            let mut v = match p.value {
+            let v = match p.value {
                 Value::Real(r) => r,
                 _ => 0.0,
             };
-            let before = v;
-            let d = egui::DragValue::new(&mut v)
-                .speed(0.1)
-                .prefix(format!("{label} = "));
-            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
-            if v.to_bits() != before.to_bits() && v.is_finite() {
-                MapInput::Set(Value::Real(v))
-            } else {
-                MapInput::Nothing
+            let c = crate::commit::number(ui, id, &v.to_string(), "", rect.size(), TYPE_HINT);
+            match crate::commit::real(&c) {
+                Some(x) if x.to_bits() != v.to_bits() => MapInput::Set(Value::Real(x)),
+                _ => MapInput::Nothing,
             }
         }
         Some(Widget::Time) => {
-            let mut ms = match p.value {
+            let ms = match p.value {
                 Value::Int(ns) => i64::try_from(ns / 1_000_000).unwrap_or(0),
                 _ => 0,
             };
-            let before = ms;
-            let d = egui::DragValue::new(&mut ms)
-                .range(0..=86_400_000)
-                .prefix(format!("{label} = "))
-                .suffix(" ms");
-            ui.add_sized(rect.size(), d).on_hover_text(DRAG_HINT);
-            if ms == before {
-                MapInput::Nothing
-            } else {
-                MapInput::Set(Value::Int(i128::from(ms) * 1_000_000))
+            let c = crate::commit::number(ui, id, &ms.to_string(), "ms", rect.size(), TYPE_HINT);
+            match crate::commit::int(&c, 0, 86_400_000) {
+                Some(n) if n != ms => MapInput::Set(Value::Int(i128::from(n) * 1_000_000)),
+                _ => MapInput::Nothing,
             }
         }
         None => MapInput::Nothing,
@@ -1122,11 +1315,63 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
     .inner
 }
 
-const DRAG_HINT: &str = "drag sideways to change, or click to type";
+const TYPE_HINT: &str = "type a value, then Enter (Esc puts it back)";
 
 impl Workspace for PlaygroundView {
     fn dirty(&self) -> bool {
         self.proj.dirty()
+    }
+
+    fn new_project(&mut self, chrome: &mut Chrome) {
+        self.files_ui.new_project();
+        chrome.show_files();
+    }
+
+    fn copy_project(&mut self, chrome: &mut Chrome) {
+        let open = self.proj.open.clone();
+        self.files_ui.copy_project(&open);
+        chrome.show_files();
+    }
+
+    fn layout_menu(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let can = self.proj.can_save_layout();
+        if crate::arrange::menu_items(ui, chrome, &mut self.layers, self.viewer.as_mut(), can) {
+            self.save_layout();
+        }
+    }
+
+    fn zoom_to_fit(&mut self) {
+        if let Some(v) = &mut self.viewer {
+            v.refit();
+        }
+    }
+
+    fn go_to_definition(&mut self, chrome: &mut Chrome) -> bool {
+        let Some(line) = self.viewer.as_ref().and_then(Viewer::definition_line) else {
+            return false;
+        };
+        match self.proj.locate(line) {
+            Some((file, l)) => self.goto(&file, l, chrome),
+            None => chrome.goto(line),
+        }
+        chrome.show_code();
+        true
+    }
+
+    fn cross_references(&mut self) -> bool {
+        self.viewer.as_mut().is_some_and(Viewer::cross_references)
+    }
+
+    fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
+        let Some(text) = self.proj.current_text_mut() else {
+            return false;
+        };
+        let done = editor::undo(ctx, egui::Id::unique("pg-source"), text, redo);
+        if done {
+            let t = ctx.input(|i| i.time);
+            self.edited(t);
+        }
+        done
     }
 
     fn writable(&self) -> Result<(), String> {
@@ -1137,7 +1382,9 @@ impl Workspace for PlaygroundView {
         self.proj.save();
     }
 
-    /// Compiles the open project and runs it in the page.
+    /// Compiles the open project and runs it in the page: the one place
+    /// an edit reaches the program running. One that does not compile is
+    /// refused, its errors listed, and the program running is unchanged.
     fn deploy(&mut self) {
         let src = self.proj.build_src();
         let ok = self.session.set_source(&src);
@@ -1152,12 +1399,24 @@ impl Workspace for PlaygroundView {
                 .and_then(|v| v.module.program())
                 .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
             self.notice = Some(format!("{} is running in this page{program}.", self.proj.open));
+            self.log.info(
+                self.session.now_ms as f64 / 1000.0,
+                format!("Deployed {}: running in this page{program}.", self.proj.open),
+            );
         } else {
             self.notice = Some(format!(
                 "{} does not compile: {} problem(s), listed under the editor; click one to go there.",
                 self.proj.open,
                 self.session.diags.len()
             ));
+            self.log.error(
+                self.session.now_ms as f64 / 1000.0,
+                format!(
+                    "Deploy of {} refused: {} problem(s).",
+                    self.proj.open,
+                    self.session.diags.len()
+                ),
+            );
         }
     }
 
@@ -1197,13 +1456,27 @@ impl Default for PlaygroundView {
 
 /// One input's control; the value it sets, if it changed (a push button
 /// reports every frame).
+/// How many columns an I/O grid gets in `ui`, and each one's width: two
+/// once the panel is wide enough for two controls, else one.
+fn columns(ui: &egui::Ui) -> (usize, f32) {
+    let avail = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    if avail >= 2.0 * TAP * 3.0 + gap {
+        (2, (avail - gap) / 2.0)
+    } else {
+        (1, avail)
+    }
+}
+
 fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
     let label = match p.address() {
         Some(a) => format!("{}  {a}", p.name.to_ascii_lowercase()),
         None => p.name.to_ascii_lowercase(),
     };
     let mut out = None;
-    ui.horizontal(|ui| match p.widget {
+    // Wrapped, with a slider that fits: a row wider than the panel grows it.
+    ui.spacing_mut().slider_width = (ui.available_width() - 110.0).clamp(40.0, 100.0);
+    ui.horizontal_wrapped(|ui| match p.widget {
         Some(Widget::Push) => {
             let on = p.value == Value::Bool(true);
             let b = egui::Button::new(
@@ -1213,7 +1486,8 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             )
             .fill(if on { YELLOW } else { GRAPHITE })
             .sense(Sense::click_and_drag())
-            .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
+            .wrap_mode(egui::TextWrapMode::Truncate)
+            .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
             let r = ui.add(b).on_hover_text("push button: on while held");
             out = Some(Value::Bool(r.is_pointer_button_down_on()));
         }
@@ -1225,7 +1499,8 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                     .color(if on { BLACK } else { WHITE }),
             )
             .fill(if on { YELLOW } else { GRAPHITE })
-            .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
+            .wrap_mode(egui::TextWrapMode::Truncate)
+            .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
             if ui.add(b).on_hover_text("switch: click to flip").clicked() {
                 out = Some(Value::Bool(!on));
             }
@@ -1241,9 +1516,22 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             };
             let before = v;
             ui.add(egui::Slider::new(&mut v, slo..=shi).show_value(false));
-            ui.add(egui::DragValue::new(&mut v).range(lo..=hi));
             if v != before {
                 out = Some(Value::Int(i128::from(v)));
+            }
+            let id = egui::Id::unique(("io-int", &p.name));
+            let c = crate::commit::number(
+                ui,
+                id,
+                &before.to_string(),
+                "",
+                Vec2::new(84.0, TAP * 0.6),
+                TYPE_HINT,
+            );
+            if let Some(n) = crate::commit::int(&c, lo, hi)
+                && n != before
+            {
+                out = Some(Value::Int(i128::from(n)));
             }
         }
         Some(Widget::Real) => {
@@ -1254,9 +1542,22 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             };
             let before = v;
             ui.add(egui::Slider::new(&mut v, -100.0..=100.0).show_value(false));
-            ui.add(egui::DragValue::new(&mut v).speed(0.1));
             if v.to_bits() != before.to_bits() && v.is_finite() {
                 out = Some(Value::Real(v));
+            }
+            let id = egui::Id::unique(("io-real", &p.name));
+            let c = crate::commit::number(
+                ui,
+                id,
+                &before.to_string(),
+                "",
+                Vec2::new(84.0, TAP * 0.6),
+                TYPE_HINT,
+            );
+            if let Some(x) = crate::commit::real(&c)
+                && x.to_bits() != before.to_bits()
+            {
+                out = Some(Value::Real(x));
             }
         }
         Some(Widget::Time) => {
@@ -1296,6 +1597,7 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
                 .size(15.0)
                 .color(if on { YELLOW } else { WHITE }),
         )
+        .wrap_mode(egui::TextWrapMode::Truncate)
         .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
     ui.add(b).on_hover_text("click: pick it").clicked()
 }

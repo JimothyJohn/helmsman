@@ -12,7 +12,7 @@ use helmsman_project::Files;
 
 use crate::app::App;
 use crate::playground_view::PlaygroundView;
-use crate::projects::{Act, Workspace};
+use crate::projects::{Act, ProjectRow, Workspace};
 use crate::sim_projects::{SimProjects, Storage, example_project};
 
 /// A storage two page loads share (a browser's `localStorage`).
@@ -120,8 +120,11 @@ fn examples_are_read_only_starters_and_saving_one_keeps_a_copy() {
     assert_eq!(v.title(), "blink", "opens the first example");
     assert!(v.session.running, "running, as the playground always opened");
     let rows = v.proj.rows();
-    assert!(rows.iter().all(|r| r.example), "{rows:?}");
-    assert_eq!(rows.len(), crate::playground::EXAMPLES.len());
+    assert!(rows.iter().all(ProjectRow::example), "{rows:?}");
+    assert_eq!(
+        rows.len(),
+        crate::playground::EXAMPLES.len() + helmsman_project::starters::STARTERS.len()
+    );
     assert!(rows.iter().any(|r| r.name == "blink" && r.running));
     // Edited and saved: a copy under a free name, opened; the example
     // itself is unchanged.
@@ -279,7 +282,7 @@ fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
     assert!(why.contains("does not keep projects"), "{why}");
     assert!(v.session.running, "the example runs anyway");
     assert!(app.chrome.rect("storage").is_some(), "the page says so");
-    for k in ["mark", "title", "save", "deploy", "menu"] {
+    for k in ["mark", "title", "save", "bar file", "help"] {
         assert!(app.chrome.rect(k).is_some(), "{k} drawn");
     }
     // Projects still work, in memory.
@@ -315,6 +318,7 @@ fn the_simulation_renders_and_works_when_the_browsers_storage_fails() {
 #[test]
 fn opening_another_project_with_unsaved_edits_asks_first() {
     let mut app = App::sim();
+    app.chrome.show_files();
     app.sim = Some(PlaygroundView::with_storage(Box::new(Shared::default())));
     let ctx = egui::Context::default();
     frame(&ctx, &mut app, 0.0);
@@ -351,7 +355,11 @@ fn opening_another_project_with_unsaved_edits_asks_first() {
     assert_eq!(app.title(), "latch");
     let v = app.sim.as_ref().unwrap();
     assert!(!v.proj.dirty());
-    assert!(!v.session.running, "opened stopped: Deploy runs it");
+    assert!(
+        v.session.running,
+        "opened running (an example that sits still looks dead)"
+    );
+    assert_eq!(v.proj.running.as_deref(), Some("latch"));
     // A fresh page with nothing stored starts clean.
     assert!(!SimProjects::load(Box::new(Shared::default())).dirty());
     assert!(Files(BTreeMap::new()).check().is_ok());
@@ -495,4 +503,179 @@ fn an_l5x_upload_becomes_the_boxs_st_or_is_refused_whole() {
         assert!(msg.contains(&p.to_string()), "{p} missing from {msg}");
     }
     assert_eq!(v.proj.files, before, "nothing imported");
+}
+
+/// The long lists start folded, a heading opens them, and a machine copied
+/// with Save is the visitor's own, with every file.
+#[test]
+fn machines_and_templates_are_folded_groups_and_save_copies_one() {
+    let ctx = egui::Context::default();
+    let mut app = App::sim();
+    app.chrome.show_files();
+    frame(&ctx, &mut app, 0.1);
+    for key in ["project blink", "group Machines", "group Templates"] {
+        assert!(app.chrome.rect(key).is_some(), "{key}");
+    }
+    assert!(
+        app.chrome.rect("project batch-mixer").is_none(),
+        "folded at first"
+    );
+    assert!(
+        app.chrome.rect("project discrete-template").is_none(),
+        "folded at first"
+    );
+
+    let at = app.chrome.rect("group Machines").unwrap().center();
+    click(&ctx, &mut app, at, 0.2);
+    frame(&ctx, &mut app, 0.3);
+    let at = app.chrome.rect("project batch-mixer").expect("unfolded").center();
+    assert!(
+        app.chrome.rect("project discrete-template").is_none(),
+        "its own fold"
+    );
+    click(&ctx, &mut app, at, 0.4);
+    frame(&ctx, &mut app, 0.5);
+    let v = app.sim.as_mut().unwrap();
+    assert_eq!(v.title(), "batch-mixer");
+    assert_eq!(v.proj.current, "main.st", "the controls first");
+    assert!(v.proj.is_example());
+    assert!(v.session.diags.is_empty(), "{:?}", v.session.diag_lines());
+    assert!(v.proj.files.contains_key("plant_model.st") && v.proj.files.contains_key("io.map"));
+    let files = v.proj.files.clone();
+    v.save();
+    assert_eq!(v.title(), "batch-mixer-2");
+    assert!(!v.proj.is_example());
+    assert_eq!(v.proj.saved["batch-mixer-2"].0, files, "the whole project");
+    assert!(helmsman_project::starters::starter("batch-mixer").is_some());
+
+    // The copy opens with the visitor's own projects, above the examples.
+    let rows = v.proj.rows();
+    assert_eq!(rows[0].name, "batch-mixer-2");
+    assert!(!rows[0].example());
+    assert!(
+        rows.iter().any(|r| r.name == "batch-mixer" && r.example()),
+        "still there"
+    );
+}
+
+/// Nick, 2026-11-01: one program runs in the page; opening or deploying
+/// another stops the one before and the running mark moves with it.
+#[test]
+fn opening_or_deploying_another_program_stops_the_one_running() {
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.open_project("blink");
+    assert!(v.session.running);
+    assert_eq!(v.proj.running.as_deref(), Some("blink"));
+    assert!(v.session.src.contains("PROGRAM blink"));
+    v.open_project("latch");
+    assert!(v.session.running, "the new one runs");
+    assert_eq!(v.proj.running.as_deref(), Some("latch"), "and is the one marked");
+    assert!(
+        !v.session.src.contains("PROGRAM blink"),
+        "blink is gone from the page"
+    );
+    let rows = v.proj.rows();
+    assert_eq!(rows.iter().filter(|r| r.running).count(), 1, "{rows:?}");
+    // A deploy that does not compile is refused: what ran keeps running.
+    v.proj.create("broken", None);
+    v.open_project("broken");
+    assert_eq!(
+        v.proj.running.as_deref(),
+        Some("broken"),
+        "a new project compiles and runs"
+    );
+    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\n  x := ;\nEND_PROGRAM\n".into();
+    v.deploy();
+    assert!(v.session.running, "the last good build still runs");
+    assert!(!v.session.diags.is_empty(), "and the error is listed");
+}
+
+/// Nick, 2026-11-01: the Messages tab keeps what the page had to say.
+#[test]
+fn the_log_keeps_refused_deploys_faults_and_state_changes() {
+    use crate::messages::Level;
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.open_project("blink");
+    v.proj.create("broken", None);
+    v.open_project("broken");
+    *v.proj.current_text_mut().unwrap() = "PROGRAM broken\n  x := ;\nEND_PROGRAM\n".into();
+    v.deploy();
+    let errors: Vec<String> = v
+        .log
+        .iter()
+        .filter(|m| m.level == Level::Error)
+        .map(|m| m.text.clone())
+        .collect();
+    assert!(
+        errors.iter().any(|e| e.contains("Deploy of broken refused")),
+        "{errors:?}"
+    );
+    assert!(v.log.label().contains("error"), "{}", v.log.label());
+    let before = v.log.len();
+    let ctx = eframe::egui::Context::default();
+    let input = eframe::egui::RawInput {
+        time: Some(1.0),
+        ..Default::default()
+    };
+    let mut out = ctx.run_ui(input, |ui| v.tick(ui.ctx()));
+    out.textures_delta.clear();
+    assert!(v.log.len() >= before, "watching never loses entries");
+    // Stopping is reported once, not every frame.
+    v.session.set_running(false);
+    for k in 2..6 {
+        let input = eframe::egui::RawInput {
+            time: Some(f64::from(k)),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| v.tick(ui.ctx()));
+        out.textures_delta.clear();
+    }
+    let stops = v.log.iter().filter(|m| m.text == "Stopped.").count();
+    assert_eq!(
+        stops,
+        1,
+        "{:?}",
+        v.log.iter().map(|m| &m.text).collect::<Vec<_>>()
+    );
+}
+
+/// Nick, 2026-11-01: "Use this code" makes a new, named file (a new
+/// project for a PROGRAM), opens it, and asks first about unsaved edits.
+#[test]
+fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
+    use crate::playground_view::answer_name;
+    assert_eq!(answer_name("PROGRAM Lamp_Test\nEND_PROGRAM"), "lamp_test");
+    assert_eq!(
+        answer_name("(* x *) FUNCTION_BLOCK Debounce VAR END_VAR END_FUNCTION_BLOCK"),
+        "debounce"
+    );
+    assert_eq!(answer_name("x := 1;"), "agent");
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.open_project("blink");
+    assert!(!v.proj.dirty());
+    let code = "PROGRAM lamp_test\nVAR lamp : BOOL; END_VAR\nlamp := TRUE;\nEND_PROGRAM\n";
+    v.take_code(code.into());
+    assert_eq!(v.proj.open, "lamp_test", "a PROGRAM is a project of its own");
+    assert_eq!(v.proj.current, "lamp_test.st");
+    assert!(v.proj.current_text_mut().unwrap().contains("PROGRAM lamp_test"));
+    assert!(!v.proj.dirty(), "saved");
+    assert!(v.session.diags.is_empty(), "{:?}", v.session.diag_lines());
+    // Again: a second project, not a clobbered first.
+    v.take_code(code.into());
+    assert_eq!(v.proj.open, "lamp_test-2");
+    // A block goes into the open project as a file.
+    let fb = "FUNCTION_BLOCK debounce\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\nq := x;\nEND_FUNCTION_BLOCK\n";
+    v.take_code(fb.into());
+    assert_eq!(v.proj.open, "lamp_test-2");
+    assert_eq!(v.proj.current, "debounce.st");
+    // Unsaved edits ask first; "save, then open" keeps them.
+    v.proj.open_file("lamp_test.st");
+    v.proj.current_text_mut().unwrap().push_str("(* mine *)");
+    assert!(v.proj.dirty());
+    v.take_code(code.into());
+    assert!(
+        matches!(v.files_ui.confirm, Some(Act::UseAnswer { ref name, .. }) if name == "lamp_test"),
+        "asked"
+    );
+    assert_eq!(v.proj.open, "lamp_test-2", "nothing opened yet");
 }

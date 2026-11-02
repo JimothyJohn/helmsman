@@ -7,7 +7,7 @@
 # editor's projects in /var/lib/helmsman-plc/projects/ and the deployed one
 # booted from its store. On a first install (no project, nothing deployed)
 # it seeds project `line` from crates/helmsman-plc/programs/line.st (or the
-# .st given) and deploys it, so the box runs it from the first boot; a later
+# .st given); nothing runs until an engineer opens it and deploys. A later
 # deploy never touches projects (`helmsman-plc project seed`, run by the
 # unit before every start, only acts on a first install).
 # PLC_MODE=program keeps the old mode: one PROGRAM.st or PROJECT.xml file.
@@ -27,7 +27,8 @@
 # (glibc must match the build image), and trunk here for the canvas
 # (`cargo install trunk --locked`; the wasm is the same on every machine, so
 # it is built here, not in the arm64 image). Runs here: `! scripts/pi-deploy-plc.sh nick@<pi-ip>`.
-# Then smoke it from here: scripts/adapter-smoke.sh <pi-ip> (needs echo.st).
+# Then smoke it from here (needs echo.st on the Pi, UDP 2222 free here):
+#   HELMSMAN_OPENER_ADDR=<pi-ip> HELMSMAN_OPENER_IO=1 scripts/test-interop.sh
 #
 # Usage: scripts/pi-deploy-plc.sh user@host [SEED.st]
 #        PLC_MODE=program scripts/pi-deploy-plc.sh user@host [PROGRAM.st|PROJECT.xml]
@@ -262,15 +263,15 @@ fi
 host="${target#*@}"
 echo
 if [ "$mode" = projects ]; then
-    echo "PLC is up on $host with projects (first install seeds $seed_name), scanning every ${scan_ms} ms"
+    echo "PLC is up on $host with projects (first install seeds $seed_name, undeployed: open it in the editor and Deploy), scanning every ${scan_ms} ms"
     echo "  engineer:   scripts/pi-account.sh $target USER engineer   (once, to edit and deploy)"
 else
     echo "PLC is up on $host running $(basename "$program") every ${scan_ms} ms"
 fi
-echo "  from here:  scripts/adapter-smoke.sh $host"
+echo "  from here:  HELMSMAN_OPENER_ADDR=$host HELMSMAN_OPENER_IO=1 scripts/test-interop.sh"
 case "$api" in
     127.*) echo "  canvas:     ssh -L $api_port:127.0.0.1:$api_port $target, then https://localhost:$api_port/" ;;
-    *) echo "  canvas:     https://$host:$api_port/ from $allow" ;;
+    *) echo "  canvas:     https://$host:$api_port/ from $ui_allow (use the Pi's address on that network)" ;;
 esac
 echo "  HTTPS certificate SHA-256 (self-signed: check the browser shows this, then trust it):"
 echo "              ${fingerprint:-unknown; ssh $target journalctl -u helmsman-plc | grep fingerprint}"

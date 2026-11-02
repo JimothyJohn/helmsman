@@ -443,9 +443,9 @@ fn an_unknown_module_and_a_dead_box_are_told_apart() {
         Msg::Got(Fetch::Module("nope".into()), Err("HTTP 404".into())),
         0.0,
     );
-    assert!(s.poll(1.0).is_empty(), "retried after the backoff, not at once");
+    assert!(s.poll(4.9).is_empty(), "retried after the backoff, not at once");
     assert_eq!(
-        s.poll(2.0),
+        s.poll(5.0),
         [Cmd::Get(
             Fetch::Module("nope".into()),
             crate::remote::module_url("nope")

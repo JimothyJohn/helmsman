@@ -1,0 +1,20 @@
+# Every input and output of this project, on the box's own channels so it
+# runs with nothing wired. To use a remote I/O module, declare it and change
+# the device on each line, for example:
+#   device rio modbus-tcp 192.168.1.50:502 unit=1 timeout_ms=300 poll_ms=20
+#   in  start_pb bool rio di:0
+# Nothing moves until start_pb is pressed or forced. If this box's own
+# channels are wired to anything, these lines drive it: check them first.
+in  start_pb      bool box di:0
+in  stop_pb       bool box di:1
+in  ack_pb        bool box di:2
+in  fb_a_in       bool box di:3
+in  fb_b_in       bool box di:4
+in  overload_a_in bool box di:5
+in  overload_b_in bool box di:6
+out pump_a     bool box do:0 safe=false
+out pump_b     bool box do:1 safe=false
+out lamp_green bool box do:2 safe=false
+out lamp_red   bool box do:3 safe=false
+out speed_pct real screen speed_pct unit=pct
+out pressure  real screen pressure unit=bar

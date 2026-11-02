@@ -1,15 +1,16 @@
 //! The Editor's frame, the same on a box (`box_view`) and in the
-//! simulation (`playground_view`), as docs/UI.md lays it out: a toolbar
-//! under the header, the files and program tree on the left, the live
-//! diagram in the centre, the ST beside it on demand ("ST"), and the right
-//! panel's tabs (I/O, Trend, Claude). Both sidebars collapse to a strip;
+//! simulation (`playground_view`), as docs/UI.md lays it out: under the
+//! header (the app's one row: menus, the view's actions, the project),
+//! the files and program tree on the left, the live diagram in the
+//! centre, the ST beside it on demand (View menu), and the right panel's
+//! tabs (I/O, Trend, Agent). Both sidebars collapse to a strip;
 //! which are open is [`Chrome`], kept per browser by the app.
 //!
 //! What fills each part is the view's ([`Body`]); where it goes is here.
 
 use eframe::egui::{
-    self, Color32, FontId, Rect, RichText, Stroke, TextFormat, Vec2, text::LayoutJob,
-    text_edit::TextEditState,
+    self, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, TextFormat, Vec2,
+    text::LayoutJob, text_edit::TextEditState,
 };
 
 use crate::st_view::TAP;
@@ -28,7 +29,6 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
-    Trend,
     Claude,
 }
 
@@ -37,37 +37,98 @@ impl Tab {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Trend => "Trend",
-            Self::Claude => "Claude",
+            Self::Claude => "Agent",
         }
     }
 
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
-            Self::Trend => "trend",
             Self::Claude => "claude",
         }
     }
 }
 
-/// The Editor's layout (kept per browser) and what was drawn where this
-/// frame (tests click by it).
+/// The bottom panel's tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Bottom {
+    #[default]
+    Trend,
+    Messages,
+}
+
+impl Bottom {
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Trend => "trend",
+            Self::Messages => "messages",
+        }
+    }
+}
+
+/// The left pane's tabs (Nick, 2026-11-01: Code | Files, as the right
+/// panel has I/O | Agent).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Pane {
+    #[default]
+    Files,
+    /// The Structured Text editor.
+    Code,
+}
+
+impl Pane {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Files => "Files",
+            Self::Code => "Code",
+        }
+    }
+
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Files => "files",
+            Self::Code => "code",
+        }
+    }
+}
+
+/// The left pane's width when first opened, points: one width for both
+/// tabs (Nick, 2026-11-01).
+pub const LEFT_W: f32 = 160.0;
+/// The right panel's width when first opened, points.
+pub const RIGHT_W: f32 = 204.0;
+
+/// The Editor's layout and the Monitor's scan detail (kept per browser)
+/// and what was drawn where this frame (tests click by it).
+// Independent toggles a browser keeps, not states of one thing.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Chrome {
-    /// The left sidebar (files and tree) is open.
+    /// The left pane (Files | Code) is open.
     pub left: bool,
     /// The right panel (tabs) is open.
     pub right: bool,
-    /// The ST editor is open beside the diagram.
-    pub st: bool,
+    /// Which of the left pane's tabs shows.
+    pub pane: Pane,
+    /// The Trend runs along the bottom, under the diagram (Nick,
+    /// 2026-11-01: a long time axis beats a tall one).
+    pub trend: bool,
+    /// Which of the bottom panel's tabs shows: the Trend or the Messages.
+    pub bottom: Bottom,
     pub tab: Tab,
+    /// The Monitor's status tiles show the scan period and counts: an
+    /// engineer's choice, and only shown while one is signed in.
+    pub scan: bool,
     /// The source line a block click sent the ST editor to.
     pub line: Option<u32>,
     /// [`Self::line`] not scrolled to yet.
     jump: Option<u32>,
     /// Controls drawn this frame, by name.
     pub hits: Vec<(String, Rect)>,
+    /// Where the diagram was drawn this frame (the glyph buttons sit in
+    /// its top-right corner).
+    pub diagram: Rect,
 }
 
 impl Default for Chrome {
@@ -75,11 +136,15 @@ impl Default for Chrome {
         Self {
             left: true,
             right: true,
-            st: false,
+            pane: Pane::Files,
+            trend: true,
+            bottom: Bottom::Trend,
             tab: Tab::Io,
+            scan: false,
             line: None,
             jump: None,
             hits: Vec::new(),
+            diagram: Rect::NOTHING,
         }
     }
 }
@@ -89,11 +154,14 @@ impl Chrome {
     #[must_use]
     pub fn saved(&self) -> String {
         format!(
-            "left={} right={} st={} tab={}",
+            "left={} right={} pane={} tab={} scan={} trend={} bottom={}",
             u8::from(self.left),
             u8::from(self.right),
-            u8::from(self.st),
-            self.tab.key()
+            self.pane.key(),
+            self.tab.key(),
+            u8::from(self.scan),
+            u8::from(self.trend),
+            self.bottom.key()
         )
     }
 
@@ -105,12 +173,16 @@ impl Chrome {
             match kv.split_once('=') {
                 Some(("left", v)) => c.left = v == "1",
                 Some(("right", v)) => c.right = v == "1",
-                Some(("st", v)) => c.st = v == "1",
+                // `st=1` is from before the tabs, when the ST had a pane of
+                // its own.
+                Some(("pane", "code") | ("st", "1")) => c.pane = Pane::Code,
+                Some(("pane", "files")) => c.pane = Pane::Files,
+                Some(("scan", v)) => c.scan = v == "1",
+                Some(("trend", v)) => c.trend = v == "1",
+                Some(("bottom", "messages")) => c.bottom = Bottom::Messages,
+                Some(("bottom", "trend")) => c.bottom = Bottom::Trend,
                 Some(("tab", v)) => {
-                    if let Some(t) = [Tab::Io, Tab::Trend, Tab::Claude]
-                        .into_iter()
-                        .find(|t| t.key() == v)
-                    {
+                    if let Some(t) = [Tab::Io, Tab::Claude].into_iter().find(|t| t.key() == v) {
                         c.tab = t;
                     }
                 }
@@ -132,6 +204,50 @@ impl Chrome {
         self.hits.iter().rev().find(|(k, _)| k == key).map(|(_, r)| *r)
     }
 
+    /// Whether the Code tab (the ST editor) is on screen.
+    #[must_use]
+    pub fn code_open(&self) -> bool {
+        self.left && self.pane == Pane::Code
+    }
+
+    /// Whether the Files tab is on screen.
+    #[must_use]
+    pub fn files_open(&self) -> bool {
+        self.left && self.pane == Pane::Files
+    }
+
+    /// Opens the left pane on the ST editor.
+    pub fn show_code(&mut self) {
+        self.left = true;
+        self.pane = Pane::Code;
+    }
+
+    /// Opens the left pane on the files.
+    pub fn show_files(&mut self) {
+        self.left = true;
+        self.pane = Pane::Files;
+    }
+
+    /// Alt 1, View › Structured Text: the Code tab, or the pane shut when
+    /// that is what shows.
+    pub fn toggle_code(&mut self) {
+        if self.code_open() {
+            self.left = false;
+        } else {
+            self.show_code();
+        }
+    }
+
+    /// Alt 0, View › Files: the Files tab, or the pane shut when that is
+    /// what shows.
+    pub fn toggle_files(&mut self) {
+        if self.files_open() {
+            self.left = false;
+        } else {
+            self.show_files();
+        }
+    }
+
     /// Sends the ST editor to `line` (it scrolls there when next drawn).
     pub fn goto(&mut self, line: u32) {
         if line > 0 {
@@ -141,14 +257,124 @@ impl Chrome {
     }
 }
 
+/// A menu item: a full-width button that closes its menu when clicked.
+/// Whether it was.
+pub fn menu_item(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    text: impl Into<RichText>,
+    on: bool,
+) -> bool {
+    menu_item_keyed(ui, chrome, key, text, on, "")
+}
+
+/// [`menu_item`] with its keyboard shortcut printed at the right.
+pub fn menu_item_keyed(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    text: impl Into<RichText>,
+    on: bool,
+    shortcut: &str,
+) -> bool {
+    let b = egui::Button::selectable(on, text.into())
+        .min_size(Vec2::new(ui.available_width().max(74.0), TAP * 0.7));
+    let b = if shortcut.is_empty() {
+        b
+    } else {
+        b.shortcut_text(RichText::new(shortcut).weak())
+    };
+    let r = ui.add(b);
+    chrome.hit(key, r.rect);
+    if r.clicked() {
+        ui.close();
+        return true;
+    }
+    false
+}
+
+/// The View menu's part that is the Editor's frame: the left pane's two
+/// tabs, the right panel and its tabs, the bottom panel.
+pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
+    use crate::hotkeys::{Action, label};
+    let (code, files, right) = (chrome.code_open(), chrome.files_open(), chrome.right);
+    let ctx = ui.ctx().clone();
+    let k = |a| label(&ctx, a);
+    if menu_item_keyed(ui, chrome, "view st", "Structured Text", code, &k(Action::St)) {
+        chrome.toggle_code();
+    }
+    if menu_item_keyed(ui, chrome, "view files", "Files", files, &k(Action::Files)) {
+        chrome.toggle_files();
+    }
+    if menu_item_keyed(ui, chrome, "view panel", "Side panel", right, &k(Action::Panel)) {
+        chrome.right = !right;
+    }
+    let trend = chrome.trend;
+    if menu_item_keyed(ui, chrome, "view trend", "Trend", trend, &k(Action::Trend)) {
+        chrome.trend = !trend;
+    }
+    for &t in tabs {
+        let on = chrome.right && chrome.tab == t;
+        if menu_item(
+            ui,
+            chrome,
+            &format!("view tab {}", t.key()),
+            format!("    {}", t.label()),
+            on,
+        ) {
+            chrome.tab = t;
+            chrome.right = true;
+        }
+    }
+}
+
+/// Undoes (or, `redo`, redoes) the last edit of the ST editor `id` on
+/// `text`, through the editor's own undo stack; whether anything changed.
+pub fn undo(ctx: &egui::Context, id: egui::Id, text: &mut String, redo: bool) -> bool {
+    let Some(mut state) = TextEditState::load(ctx, id) else {
+        return false;
+    };
+    let mut undoer = state.undoer();
+    let current = (state.cursor.char_range().unwrap_or_default(), text.clone());
+    let next = if redo {
+        undoer.redo(&current)
+    } else {
+        undoer.undo(&current)
+    }
+    .cloned();
+    let Some((cursor, t)) = next else {
+        return false;
+    };
+    let changed = t != *text;
+    *text = t;
+    state.cursor.set_char_range(Some(cursor));
+    state.set_undoer(undoer);
+    state.store(ctx, id);
+    changed
+}
+
 /// What a view puts in the Editor's frame.
 pub trait Body {
-    /// The toolbar's own part, after the ST toggle.
+    /// The view's actions in the header row, after the menus: run
+    /// controls and a short status in the simulation, the link's status
+    /// on a box. Short: the row is one line with the project on its right.
     fn toolbar(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
-    /// Under "Files": the open program and its tree.
+    /// Whether [`Self::notices`] has anything to say.
+    fn has_notices(&self) -> bool;
+    /// What needs saying now (a fault, a deploy under way or refused, a
+    /// stale file with its Reload): a line under the header, only while
+    /// there is one.
+    fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// The left pane's Files tab: the projects, the open one's files and
+    /// the program tree.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
-    /// The ST editor (read-only on a box).
+    /// The left pane's Code tab: the ST editor (read-only on a box).
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// The Trend along the bottom: pins and the plot.
+    fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// The Messages tab beside it: the view's log (`messages::Log`).
+    fn messages(&mut self) -> &mut crate::messages::Log;
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab);
@@ -157,47 +383,96 @@ pub trait Body {
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
 }
 
+/// A collapsed sidebar's strip as one button: a chevron pointing `left`
+/// or right, the strip's full height, tinted under the pointer.
+fn strip_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
+    let size = Vec2::new(
+        ui.available_width().max(STRIP - 8.0),
+        ui.available_height().max(TAP),
+    );
+    let (rect, r) = ui.allocate_exact_size(size, Sense::click());
+    let r = r.on_hover_text(hover);
+    if r.hovered() {
+        let tint = ui.style().interact(&r).bg_fill;
+        ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
+    }
+    chevron(ui, rect.center(), left, r.hovered());
+    r
+}
+
+/// An open sidebar's hide button, the same chevron in the header row.
+fn header_toggle(ui: &mut egui::Ui, left: bool, hover: &str) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(TAP * 0.75), Sense::click());
+    let r = r.on_hover_text(hover);
+    if r.hovered() {
+        let tint = ui.style().interact(&r).bg_fill;
+        ui.painter().rect_filled(rect, CornerRadius::same(4), tint);
+    }
+    chevron(ui, rect.center(), left, r.hovered());
+    r
+}
+
+/// A 16 pt stroked chevron at `c`.
+fn chevron(ui: &egui::Ui, c: Pos2, left: bool, hot: bool) {
+    let s = 8.0;
+    let dir = if left { -1.0 } else { 1.0 };
+    let tip = Pos2::new(c.x + dir * s * 0.5, c.y);
+    let back = c.x - dir * s * 0.5;
+    let stroke = Stroke::new(2.5, if hot { YELLOW } else { STEEL });
+    ui.painter().line_segment([Pos2::new(back, c.y - s), tip], stroke);
+    ui.painter().line_segment([Pos2::new(back, c.y + s), tip], stroke);
+}
+
 /// One frame of the Editor.
 pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
-    egui::Panel::top("ed-tools").show(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            let st = egui::Button::selectable(chrome.st, RichText::new("ST").strong().monospace())
-                .min_size(Vec2::new(TAP, 0.0));
-            let r = ui.add(st).on_hover_text("the Structured Text beside the diagram");
-            chrome.hit("st", r.rect);
-            if r.clicked() {
-                chrome.st = !chrome.st;
-            }
-            ui.separator();
-            body.toolbar(ui, chrome);
+    if body.has_notices() {
+        egui::Panel::top("ed-notices").show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| body.notices(ui, chrome));
         });
-    });
-
+    }
     let mut hits = Vec::new();
     let mut left = chrome.left;
+    let mut pane = chrome.pane;
     let flip = egui::Panel::show_switched(
         ui,
         &mut left,
         egui::Panel::left("ed-files-strip")
             .exact_size(STRIP)
             .resizable(false),
-        egui::Panel::left("ed-files").resizable(true).default_size(230.0),
+        egui::Panel::left("ed-files")
+            .resizable(true)
+            .default_size(LEFT_W)
+            .min_size(120.0),
         |ui, open| {
             let toggle = if open {
                 let mut t = None;
+                // Tabs: Files | Code, the hide chevron at the right.
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Files").strong().color(YELLOW));
+                    for p in [Pane::Files, Pane::Code] {
+                        let b = egui::Button::selectable(pane == p, RichText::new(p.label()).strong())
+                            .min_size(Vec2::new(48.0, TAP * 0.75));
+                        let r = ui.add(b);
+                        hits.push((format!("pane {}", p.key()), r.rect));
+                        if r.clicked() {
+                            pane = p;
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        t = Some(ui.small_button("◂").on_hover_text("hide the files"));
+                        t = Some(header_toggle(ui, true, "hide the pane"));
                     });
                 });
                 ui.separator();
-                egui::ScrollArea::vertical()
-                    .id_salt("ed-files-scroll")
-                    .show(ui, |ui| body.files(ui, chrome));
+                match pane {
+                    Pane::Files => {
+                        egui::ScrollArea::vertical()
+                            .id_salt("ed-files-scroll")
+                            .show(ui, |ui| body.files(ui, chrome));
+                    }
+                    Pane::Code => body.st(ui, chrome),
+                }
                 t
             } else {
-                Some(ui.small_button("▸").on_hover_text("show the files"))
+                Some(strip_toggle(ui, false, "show the pane"))
             };
             if let Some(t) = toggle {
                 hits.push(("left".to_string(), t.rect));
@@ -212,6 +487,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         left = !left;
     }
     chrome.left = left;
+    chrome.pane = pane;
 
     let tabs = body.tabs();
     if !tabs.contains(&chrome.tab) {
@@ -225,12 +501,14 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         egui::Panel::right("ed-side-strip")
             .exact_size(STRIP)
             .resizable(false),
-        egui::Panel::right("ed-side").resizable(true).default_size(340.0),
+        egui::Panel::right("ed-side")
+            .resizable(true)
+            .default_size(RIGHT_W),
         |ui, open| {
             let toggle = if open {
                 let mut t = None;
                 ui.horizontal(|ui| {
-                    t = Some(ui.small_button("▸").on_hover_text("hide the panel"));
+                    t = Some(header_toggle(ui, false, "hide the panel"));
                     for &k in tabs {
                         let b = egui::Button::selectable(tab == k, RichText::new(k.label()).strong())
                             .min_size(Vec2::new(64.0, TAP * 0.75));
@@ -245,7 +523,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 body.tab(ui, tab);
                 t
             } else {
-                Some(ui.small_button("◂").on_hover_text("show the panel"))
+                Some(strip_toggle(ui, true, "show the panel"))
             };
             if let Some(t) = toggle {
                 hits.push(("right".to_string(), t.rect));
@@ -263,20 +541,47 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     chrome.tab = tab;
     chrome.hits.extend(hits);
 
-    let mut st = chrome.st;
-    egui::Panel::left("ed-st")
+    let mut trend = chrome.trend;
+    egui::Panel::bottom("ed-trend")
         .resizable(true)
-        .default_size(440.0)
-        .show_collapsible(ui, &mut st, |ui| body.st(ui, chrome));
-    chrome.st = st;
+        .default_size(200.0)
+        .show_collapsible(ui, &mut trend, |ui| {
+            // Tabs: Trend | Messages (errors counted on the tab).
+            let label = body.messages().label();
+            ui.horizontal(|ui| {
+                for (b, text, key) in [
+                    (Bottom::Trend, "Trend".to_string(), "bottom trend"),
+                    (Bottom::Messages, label, "bottom messages"),
+                ] {
+                    let r = ui.add(
+                        egui::Button::selectable(chrome.bottom == b, RichText::new(text).strong())
+                            .min_size(Vec2::new(64.0, TAP * 0.6)),
+                    );
+                    chrome.hit(key, r.rect);
+                    if r.clicked() {
+                        chrome.bottom = b;
+                    }
+                }
+            });
+            ui.separator();
+            match chrome.bottom {
+                Bottom::Trend => body.trend(ui, chrome),
+                Bottom::Messages => body.messages().ui(ui, chrome),
+            }
+        });
+    chrome.trend = trend;
 
-    egui::CentralPanel::no_frame().show(ui, |ui| body.diagram(ui, chrome));
+    egui::CentralPanel::no_frame().show(ui, |ui| {
+        chrome.diagram = ui.available_rect_before_wrap();
+        body.diagram(ui, chrome);
+    });
 }
 
 /// The ST, with line numbers, diagnostics marked (`(line, column)`), and
 /// the line [`Chrome::goto`] sent it to scrolled into view and marked. A
 /// `&mut &str` is read-only (on a box); a `String` is edited in place, up
-/// to `limit` characters.
+/// to `limit` characters. Lines wrap at the pane's width; a wrapped line
+/// is numbered once, on its first row.
 pub fn st_editor(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -286,9 +591,8 @@ pub fn st_editor(
     chrome: &mut Chrome,
 ) -> egui::Response {
     let font = FontId::monospace(13.0);
-    let lines = text.as_str().lines().count().max(1) + usize::from(text.as_str().ends_with('\n'));
     let row = ui.fonts_mut(|f| f.row_height(&font));
-    let mut scroll = egui::ScrollArea::both().id_salt(id.with("scroll"));
+    let mut scroll = egui::ScrollArea::vertical().id_salt(id.with("scroll"));
     if let Some(line) = chrome.jump.take() {
         #[allow(clippy::cast_precision_loss)]
         let y = (line.saturating_sub(4)) as f32 * row;
@@ -311,8 +615,16 @@ pub fn st_editor(
     scroll
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
+                let digit = ui.fonts_mut(|f| f.glyph_width(&font, '0'));
+                let gutter_w = digit * 3.0;
+                // Slack for the editor's own margin and the scroll bar: wider
+                // than the pane and a resizable pane grows to fit, every frame.
+                let wrap = (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0);
+                // The rows the text takes at that width: each source line
+                // numbered on its first row, its wrapped rows blank.
+                let galley = ui.fonts_mut(|f| f.layout_job(highlight(text.as_str(), diags, at, &font, wrap)));
                 let mut gutter = LayoutJob::default();
-                for n in 1..=lines {
+                for (n, number) in numbering(galley.rows.iter().map(|r| r.ends_with_newline)) {
                     let bad = diags.iter().any(|(l, _)| *l as usize == n);
                     let here = at.is_some_and(|l| l as usize == n);
                     let color = if bad {
@@ -322,18 +634,24 @@ pub fn st_editor(
                     } else {
                         STEEL
                     };
-                    gutter.append(&format!("{n:>3}\n"), 0.0, TextFormat::simple(font.clone(), color));
+                    let label = if number {
+                        format!("{n:>3}\n")
+                    } else {
+                        "   \n".to_string()
+                    };
+                    gutter.append(&label, 0.0, TextFormat::simple(font.clone(), color));
                 }
+                gutter.wrap.max_width = f32::INFINITY;
                 ui.label(gutter);
-                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
-                    let job = highlight(buf.as_str(), diags, at, &font);
+                let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+                    let job = highlight(buf.as_str(), diags, at, &font, wrap);
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
                 ui.add(
                     egui::TextEdit::multiline(text)
                         .id(id)
                         .code_editor()
-                        .desired_width(f32::INFINITY)
+                        .desired_width(wrap)
                         .char_limit(limit)
                         .desired_rows(24)
                         .lock_focus(true)
@@ -345,11 +663,30 @@ pub fn st_editor(
         .inner
 }
 
-/// The ST as a layout: a line with a diagnostic on a dark red ground, its
-/// column to the end of the word underlined; the line `at` (a block click
-/// sent the editor there) on a graphite ground.
+/// The gutter beside laid-out rows (`ends_with_newline` per row): each
+/// row's source line, and whether the row is that line's first (the one
+/// that shows the number; a wrapped line's other rows stay blank).
 #[must_use]
-pub fn highlight(text: &str, diags: &[(u32, u32)], at: Option<u32>, font: &FontId) -> LayoutJob {
+pub fn numbering(rows: impl Iterator<Item = bool>) -> Vec<(usize, bool)> {
+    let mut n = 1;
+    let mut first = true;
+    rows.map(|ends| {
+        let out = (n, first);
+        first = ends;
+        if ends {
+            n += 1;
+        }
+        out
+    })
+    .collect()
+}
+
+/// The ST as a layout wrapped at `wrap` points: a line with a diagnostic
+/// on a dark red ground, its column to the end of the word underlined;
+/// the line `at` (a block click sent the editor there) on a graphite
+/// ground.
+#[must_use]
+pub fn highlight(text: &str, diags: &[(u32, u32)], at: Option<u32>, font: &FontId, wrap: f32) -> LayoutJob {
     let mut job = LayoutJob::default();
     let plain = TextFormat::simple(font.clone(), Color32::from_gray(230));
     let bad_ground = Color32::from_rgb(0x4A, 0x16, 0x14);
@@ -400,6 +737,6 @@ pub fn highlight(text: &str, diags: &[(u32, u32)], at: Option<u32>, font: &FontI
         );
         job.append(&rest[word..], 0.0, ground);
     }
-    job.wrap.max_width = f32::INFINITY;
+    job.wrap.max_width = wrap;
     job
 }

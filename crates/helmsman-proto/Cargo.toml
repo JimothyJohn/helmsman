@@ -10,7 +10,7 @@ repository.workspace = true
 [features]
 # Any explicit service (`Session::request`, `request_raw`), and the
 # scanner. Off by default so the box build can only read from controllers
-# it observes; the CLI and the tests turn it on.
+# it observes; the tests and the bench examples turn it on.
 unrestricted = ["scanner"]
 # Class 1 I/O connections (`scanner`): Forward_Open / Forward_Close to an
 # Assembly-class path, nothing else. helmsman-io's `enip` (the box's

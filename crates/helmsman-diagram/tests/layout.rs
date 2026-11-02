@@ -177,8 +177,8 @@ fn a_moved_node_stays_inside_its_regions_and_its_ports_follow() {
         d.size
     );
     // Wires are drawn from the node's rect: its ports moved with it.
-    let (x0, y0) = helmsman_diagram::layout::out_port(&before, 0);
-    let (x1, y1) = helmsman_diagram::layout::out_port(&after, 0);
+    let (x0, y0) = helmsman_diagram::layout::out_port_at(&before, true, 0);
+    let (x1, y1) = helmsman_diagram::layout::out_port_at(&after, true, 0);
     assert!((x1 - x0 - 400.0).abs() < 0.01 && (y1 - y0 - 300.0).abs() < 0.01);
 }
 
@@ -205,4 +205,91 @@ fn a_region_carries_exactly_what_is_in_it_and_its_box_follows() {
     helmsman_diagram::layout::refit(&mut d);
     let moved = d.region(outer).rect;
     assert!((moved.x - region.x - 50.0).abs() < 0.01 && (moved.y - region.y - 500.0).abs() < 0.01);
+}
+
+/// Nick, 2026-11-01: an operator is one box with its label in the
+/// middle, as tall as its larger side's ports need; a variable keeps
+/// its header band over a body.
+#[test]
+fn an_operator_is_as_tall_as_its_ports_and_a_variable_keeps_its_header() {
+    use helmsman_diagram::NodeKind;
+    use helmsman_diagram::layout::{HEADER, PORT_ROW, in_port, out_port};
+    let d = diagram("out := go AND stop AND lamp;");
+    let and = d
+        .nodes
+        .iter()
+        .find(|n| matches!(&n.kind, NodeKind::Op { op } if op == "AND"))
+        .expect("an AND");
+    assert!(!and.kind.headed());
+    #[allow(clippy::cast_precision_loss)]
+    let rows = and.ins.len().max(and.outs.len()) as f32;
+    assert!(and.ins.len() >= 2, "{:?}", and.ins);
+    assert!(
+        (and.rect.h - (rows * PORT_ROW + 8.0)).abs() < 0.01,
+        "no header band: {} for {rows} rows",
+        and.rect.h
+    );
+    // Its ports sit in the rows, the first just under the top padding.
+    let (_, y0) = in_port(and, 0);
+    assert!((y0 - (and.rect.y + 4.0 + PORT_ROW / 2.0)).abs() < 0.01);
+    let (_, yo) = out_port(and, 0);
+    assert!(yo > and.rect.y && yo < and.rect.bottom());
+    let go = d
+        .nodes
+        .iter()
+        .find(|n| matches!(&n.kind, NodeKind::Read { path } if path == "GO"))
+        .expect("the read of go");
+    assert!(go.kind.headed());
+    assert!(
+        (go.rect.h - (HEADER + PORT_ROW + 4.0)).abs() < 0.01,
+        "{}",
+        go.rect.h
+    );
+    let (_, y) = out_port(go, 0);
+    assert!(y > go.rect.y + HEADER, "under the header: {y} vs {}", go.rect.y);
+}
+
+/// Nick, 2026-11-01: a program should fill a screen, not a column.
+/// Statements flow in rows and wrap past `WRAP_W`; nothing above a row
+/// moves when a later statement changes.
+#[test]
+fn statements_wrap_into_rows_and_the_diagram_is_not_a_column() {
+    use helmsman_diagram::layout::WRAP_W;
+    let body: String = (0..24)
+        .map(|k| format!("x := x + {k};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let d = diagram(&body);
+    check(&d);
+    assert!(d.size.0 <= WRAP_W + 200.0, "wrapped: {:?}", d.size);
+    assert!(d.size.0 > d.size.1 * 0.5, "not a column: {:?}", d.size);
+    let rows: std::collections::BTreeSet<i64> = d
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, helmsman_diagram::NodeKind::Write { .. }))
+        .map(|n| {
+            #[allow(clippy::cast_possible_truncation)]
+            let band = (n.rect.y * 100.0) as i64;
+            band
+        })
+        .collect();
+    assert!(rows.len() >= 2, "more than one row: {rows:?}");
+    // A row's statements sit side by side, in source order.
+    let writes: Vec<&helmsman_diagram::Node> = d
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.kind, helmsman_diagram::NodeKind::Write { .. }))
+        .collect();
+    assert!(
+        (writes[0].rect.y - writes[1].rect.y).abs() < writes[0].rect.h && writes[0].rect.x < writes[1].rect.x,
+        "{:?} then {:?}",
+        writes[0].rect,
+        writes[1].rect
+    );
+    // Editing the last statement moves nothing before it.
+    let edited = body.replace("x := x + 23;", "x := x + 23 * n - 1;");
+    let e = diagram(&edited);
+    for (a, b) in d.nodes.iter().zip(&e.nodes).take(writes.len() - 1) {
+        assert_eq!(a.rect, b.rect);
+    }
 }
