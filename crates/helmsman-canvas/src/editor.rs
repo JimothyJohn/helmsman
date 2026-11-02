@@ -278,8 +278,11 @@ pub fn menu_item_keyed(
     on: bool,
     shortcut: &str,
 ) -> bool {
-    let b = egui::Button::selectable(on, text.into())
-        .min_size(Vec2::new(ui.available_width().max(74.0), TAP * 0.7));
+    // No `available_width()` here: a menu measures itself against the
+    // style's default area (600 pt) before it knows its size, and an item
+    // that wide would be remembered. The menu's justified layout fills
+    // every item to the widest one instead.
+    let b = egui::Button::selectable(on, text.into()).min_size(Vec2::new(74.0, TAP * 0.7));
     let b = if shortcut.is_empty() {
         b
     } else {
