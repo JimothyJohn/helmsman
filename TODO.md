@@ -163,6 +163,63 @@
   asked: 2026-11-01
   by: claude-session
 
+- [ ] **Requirements become tests: the agent and the engineer agree on a result, and a test keeps it** — Nick 2026-11-01 (NEXTSESH): the killer feature is verification, the way Lean makes you prove the result you asked for. The conversation quantifies each requirement ("the lamp is on within 2 s of start_pb", "the belt never runs with the guard open"), each one becomes a simulation test (a scenario of inputs over time plus assertions on outputs and timing) kept with the project, and every deploy and every "Use this code" replays the whole set and refuses a regression, with the failing requirement named in the engineer's words. The agent proposes the tests from the spec; the engineer edits and approves them like code. Replay exists (`POST /api/projects/{p}/replay`, sim-replay); this is the requirement-to-scenario layer on top and the pane that shows red and green per requirement.
+  needs: a scenario file format in the project (inputs over time, assertions), the sim replay running it, an agent profile that writes scenarios from a requirement
+  result: a Requirements tab: each requirement in plain words with its test, green or red after every deploy; the agent's code cannot land past a red one
+  est: 2w
+  difficulty: high
+  id: spec-tests
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **"Use this code" keeps every iteration under one program, the newest on top** — Nick 2026-11-01 (NEXTSESH): "Use this code" should create a new program in a folder named by the user, where each iteration is the newest file and the earlier ones are hidden away in the Files pane. Today a PROGRAM answer becomes a project named from the PROGRAM (lamp_test, lamp_test-2, ...) and a block becomes a file in the open project. Wanted: the first answer asks for the program's name once; later answers to the same conversation land in that program as iterations (lamp_test/v3.st or a dated name), the pane shows the newest and folds the rest under a "earlier (4)" row, and the running one is marked.
+  needs: nothing beyond the projects store; a naming rule for iterations
+  result: a conversation's answers pile up under one named program, newest first, the pane uncluttered
+  est: 2d
+  difficulty: med
+  depends: agent-pages
+  id: agent-iterations
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **The Agent pane keeps the whole conversation as pages the engineer can curate** — Nick 2026-11-01 (NEXTSESH): every exchange is saved for context, shown as pages with back and forward arrows to switch between iterations; a page can be deleted; every remaining page goes into the context each time, so the engineer shapes what the agent sees to improve the output. Today the history lives in page memory only and "New conversation" clears it.
+  needs: the conversation stored with the project (sim: browser storage; box: the store), a page strip in the tab
+  result: pages with ‹ › arrows and a delete, the kept pages always sent as context, surviving a reload
+  est: 2d
+  difficulty: med
+  id: agent-pages
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Plant-model state variables map to real feedback devices, with suggestions** — Nick 2026-11-01 (NEXTSESH): the state variables a simulation's plant model keeps (the tank level, the belt position, the compressor pressure) should be easily replaceable by feedback devices on the real machine, and the agent should suggest the sensor that would capture each one, so what runs is modelled as closely as possible and the valuable signals are not left unmeasured. Each plant-model variable gets a "measured by" slot in the I/O map; empty slots are listed with a suggested device type (level transmitter, encoder, pressure transducer) and the agent's reasoning.
+  needs: the plant-model blocks declaring their state variables (a convention or a pragma), the I/O map's point for each
+  result: a list per project of plant states, which sensor measures each on the machine, and suggestions for the rest; the simulation reads the sensor when one is mapped
+  est: 1w
+  difficulty: med
+  depends: machine-template
+  id: sim-feedback-devices
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Run, stop and restart a box's program from the Monitor** — Nick 2026-11-01: the Monitor needs play, start, stop. The simulation's transport (run or stop, step, restart) is on the Monitor now; a box has no such endpoint: a module runs from deploy until the next one. This adds `POST /api/modules/{name}/run|stop|restart` behind an engineer session and the approval policy, audited like a force, with HELD shown while stopped (outputs at their safe values), and the Monitor's buttons use it when signed in.
+  needs: a decision that an engineer may stop a running module from the page (the policy says who); the runtime's held state exposed per module
+  result: the same three buttons on a box's Monitor, audited; the module's state shows HELD while stopped
+  est: 2d
+  difficulty: med
+  id: monitor-box-run-stop
+  asked: 2026-11-01
+  by: claude-session
+
+- [ ] **The Agent edits only what is in focus, and every edit is filed, versioned and tested** — Nick 2026-11-01: the agent should only edit what it is focused on, and each of those edits should be file-managed, version-controlled and tested, the way a developer's change goes through a branch, a review and CI. Today "Use this code" replaces or adds a whole file and the answer carries whatever the model chose to rewrite. Wanted: the agent's scope is the file or block the engineer has picked (the ST selection, the picked block, the open file), it proposes a change to that scope alone and says so; each change lands as its own file or iteration (agent-iterations), as a commit in the project's history with the conversation page that produced it (version-control), and only after the project's requirement tests pass (spec-tests). A change outside the scope is refused by the page, not left to the model.
+  needs: agent-iterations, spec-tests, version-control
+  result: an agent change names its scope, lands as one filed and committed iteration, and cannot skip the tests
+  est: 1w
+  difficulty: high
+  depends: agent-iterations, spec-tests
+  id: agent-scoped-edits
+  asked: 2026-11-01
+  by: claude-session
+
 ## Product vision (interview 2026-10-29)
 
 Working title until naming lands. A small, opinionated controller for factory edge boxes (Pi 5 reference, headless, browser UI), for non-mission-critical work: low-frequency detection, shift-aware scheduling of its own outputs, on-floor signalling (stack light, andon, screen). Data is pushed elsewhere (webhooks, OPC UA); the box keeps no historian.
