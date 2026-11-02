@@ -6,14 +6,16 @@
 //! Claude with the visitor's own key. No box and no server: the state is
 //! [`crate::playground::Session`] and [`crate::claude::Chat`].
 
-use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, RichText, Sense, Stroke, Vec2};
+use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Stroke, Vec2};
 use helmsman_diagram::Scan;
 use helmsman_iec::{Ty, Value};
 
 use crate::arrange::Layers;
 use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
 use crate::editor::{self, Body, Chrome, Tab};
-use crate::playground::{MAX_SOURCE, Point, Session, TREND_MS, TREND_SIGNALS, Widget};
+use crate::playground::{
+    MAX_SOURCE, Point, Session, TREND_MS, TREND_SIGNALS, Widget, nice_range, tick_label,
+};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, Storage};
 use crate::st_view::brand::{BLACK, GRAPHITE, GREEN, OFF_RED, STEEL, WHITE, YELLOW};
@@ -1131,10 +1133,11 @@ impl PlaygroundView {
                 [Pos2::new(rect.left(), top), Pos2::new(rect.right(), top)],
                 Stroke::new(1.0, GRAPHITE),
             );
-            let span = if hi > lo { hi - lo } else { 1.0 };
+            let (lo, hi, step) = nice_range(lo, hi);
+            scale_labels(&painter, rect, top, lane, lo, hi, step);
             let y_of = |v: f64| {
                 #[allow(clippy::cast_possible_truncation)]
-                let f = ((v - lo) / span) as f32;
+                let f = ((v - lo) / (hi - lo)) as f32;
                 top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
             };
             let mut pts: Vec<Pos2> = Vec::new();
@@ -1153,6 +1156,24 @@ impl PlaygroundView {
                 painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
             }
         }
+    }
+}
+
+/// The lane's scale: its top and bottom values at the right edge, so a
+/// line can be read (both trends draw them).
+pub fn scale_labels(painter: &egui::Painter, rect: Rect, top: f32, lane: f32, lo: f64, hi: f64, step: f64) {
+    let x = rect.right() - 4.0;
+    for (v, y, align) in [
+        (hi, top + 3.0, egui::Align2::RIGHT_TOP),
+        (lo, top + lane - 3.0, egui::Align2::RIGHT_BOTTOM),
+    ] {
+        painter.text(
+            Pos2::new(x, y),
+            align,
+            tick_label(v, step),
+            FontId::monospace(9.5),
+            STEEL,
+        );
     }
 }
 
