@@ -974,6 +974,29 @@ mod simulated {
     /// (four such rows were found on 2026-11-01). Every tab of every
     /// panel, visited; the panels end where they began, at most a scroll
     /// bar's width wider.
+    /// Nick, 2026-11-01: the trend's window is 1, 10 or 100 s, so the
+    /// line can cross the pane fast or slow; the history is kept for the
+    /// widest, so widening shows what already ran.
+    #[test]
+    fn the_trend_window_is_one_ten_or_a_hundred_seconds() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        for s in [1u64, 10, 100] {
+            assert!(h.has(&format!("trend window {s}")), "no {s} s button");
+        }
+        let window = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.window_ms;
+        assert_eq!(window(&h), 10_000, "opens on 10 s");
+        h.press("trend window 1");
+        assert_eq!(window(&h), 1_000);
+        let kept = h.app.sim.as_ref().unwrap().session.trend.samples.len();
+        h.press("trend window 100");
+        assert_eq!(window(&h), 100_000);
+        assert!(
+            h.app.sim.as_ref().unwrap().session.trend.samples.len() >= kept,
+            "narrowing dropped nothing"
+        );
+    }
+
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());

@@ -48,10 +48,12 @@ Nothing moves until you press `start_pb`.
 ## The trend
 
 The Trend tab along the bottom plots the signals you pin, up to six,
-over the last ten seconds, each in its own lane with its last value. The
-lane's scale is at its right edge: it rounds out to an even step and
-moves only when the values cross one. Pin from the tab's list. History
-restarts when you change the set.
+each in its own lane with its last value. The window is the last 1, 10
+or 100 seconds (the Window buttons), so the line crosses the pane fast
+or slow; history is kept for the widest, so widening shows what already
+ran. The lane's scale is at its right edge: it rounds out to an even step
+and moves only when the values cross one. Pin from the tab's list.
+History restarts when you change the set.
 
 ## Faults
 
