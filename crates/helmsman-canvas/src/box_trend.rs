@@ -19,7 +19,7 @@ use serde_json::{Value as Json, json};
 use crate::box_projects::{Answer, PCall, PReq};
 use crate::editor::Chrome;
 use crate::playground::nice_range;
-use crate::playground_view::scale_labels;
+use crate::playground_view::{scale_labels, window_row};
 use crate::remote::{BoxState, segment};
 use crate::review::Session;
 use crate::sim_projects::Storage;
@@ -29,6 +29,8 @@ use crate::st_view::brand::{BLACK, GRAPHITE, STEEL};
 pub const PINS: usize = crate::playground::TREND_SIGNALS;
 /// History drawn, ms (the box keeps 10 min).
 pub const WINDOW_MS: u64 = 600_000;
+/// The widths the chart can show of it: 10 s, 100 s, the whole 10 min.
+pub const WINDOWS_MS: [u64; 3] = [10_000, 100_000, WINDOW_MS];
 /// Points a signal keeps here.
 pub const MAX_POINTS: usize = 2400;
 /// Seconds between history asks while the tab is open.
@@ -75,6 +77,8 @@ pub struct BoxTrend {
     pub series: BTreeMap<String, Vec<(u64, f64)>>,
     /// The box's clock at the newest point.
     pub now_ms: u64,
+    /// The width of the window drawn, one of [`WINDOWS_MS`].
+    pub window_ms: u64,
     /// What the box said about the last ask or save.
     pub notice: Option<String>,
     /// Why this browser does not keep pins, if it does not.
@@ -104,6 +108,7 @@ impl BoxTrend {
             pins: Vec::new(),
             series: BTreeMap::new(),
             now_ms: 0,
+            window_ms: WINDOW_MS,
             notice: None,
             problem: None,
             store,
@@ -302,6 +307,9 @@ impl BoxTrend {
         for t in [&self.notice, &self.problem].into_iter().flatten() {
             ui.label(RichText::new(t).color(STEEL));
         }
+        if let Some(w) = window_row(ui, chrome, self.window_ms, &WINDOWS_MS) {
+            self.window_ms = w;
+        }
         ui.add_space(6.0);
         self.chart(ui);
     }
@@ -322,21 +330,26 @@ impl BoxTrend {
             return;
         }
         let end = self.now_ms;
-        let start = end.saturating_sub(WINDOW_MS);
+        let window = self.window_ms.max(1);
+        let start = end.saturating_sub(window);
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / self.pins.len() as f32;
         #[allow(clippy::cast_precision_loss)]
         let x_of = |t: u64| {
-            rect.left() + 90.0 + (rect.width() - 96.0) * (t.max(start) - start) as f32 / WINDOW_MS as f32
+            rect.left() + 90.0 + (rect.width() - 96.0) * (t.max(start) - start) as f32 / window as f32
         };
         for (k, name) in self.pins.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
             let color = LINES[k % LINES.len()];
             let line: &[(u64, f64)] = self.series.get(name).map_or(&[], Vec::as_slice);
+            // The point before the window holds its value into it; the
+            // scale is the window's.
             let (lo, hi) = line
                 .iter()
-                .map(|p| p.1)
+                .enumerate()
+                .filter(|(i, p)| p.0 >= start || line.get(i + 1).is_none_or(|n| n.0 >= start))
+                .map(|(_, p)| p.1)
                 .filter(|v| v.is_finite())
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
