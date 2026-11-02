@@ -1613,7 +1613,7 @@ pub fn show(ty: Ty, v: Value) -> String {
 
 /// Answer text: paragraphs as labels, fenced code in monospace blocks.
 fn markdown(ui: &mut egui::Ui, text: &str) {
-    for s in segments(text) {
+    for (k, s) in segments(text).into_iter().enumerate() {
         match s {
             Segment::Prose(p) => {
                 let t = p.trim();
@@ -1622,15 +1622,24 @@ fn markdown(ui: &mut egui::Ui, text: &str) {
                 }
             }
             Segment::Code { body, .. } => {
+                // A long line scrolls inside the block: a label that
+                // extends past the panel widens it every frame (Nick,
+                // 2026-11-01), and wrapping code misreads.
+                let width = ui.available_width();
                 egui::Frame::new()
                     .fill(BLACK)
                     .stroke(Stroke::new(1.0, GRAPHITE))
                     .inner_margin(6.0)
                     .show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(RichText::new(body).monospace().size(12.0))
-                                .wrap_mode(egui::TextWrapMode::Extend),
-                        );
+                        ui.set_max_width(width - 12.0);
+                        egui::ScrollArea::horizontal()
+                            .id_salt(("pg-code", k))
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(RichText::new(body).monospace().size(12.0))
+                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                );
+                            });
                     });
             }
         }

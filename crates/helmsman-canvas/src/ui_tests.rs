@@ -974,6 +974,27 @@ mod simulated {
     /// (four such rows were found on 2026-11-01). Every tab of every
     /// panel, visited; the panels end where they began, at most a scroll
     /// bar's width wider.
+    /// Nick, 2026-11-01: the Agent pane widened when an answer held long
+    /// code. A long line scrolls inside its block; the panel keeps the
+    /// width the user gave it.
+    #[test]
+    fn the_agent_tab_keeps_its_width_under_long_code() {
+        use crate::claude::{Answer, Phase};
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        h.press("tab claude");
+        h.wait(0.3);
+        let right = h.rect("right");
+        let long = "x".repeat(400);
+        let mut a = Answer::default();
+        a.text = format!("Here it is:\n```st\nPROGRAM p\n  (* {long} *)\nEND_PROGRAM\n```\n");
+        a.phase = Phase::Done;
+        h.app.sim.as_mut().unwrap().chat.answer = Some(a);
+        h.wait(0.5);
+        let grew = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&grew), "the right panel grew {grew} pt");
+    }
+
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());
