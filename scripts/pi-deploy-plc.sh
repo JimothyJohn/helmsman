@@ -162,6 +162,8 @@ ssh "$target" "set -e
 cd ~/.helmsman-plc
 sudo install -m 755 helmsman-plc /usr/local/bin/helmsman-plc
 sudo install -d -m 755 /etc/helmsman-plc /etc/helmsman-plc/seed
+# The relay token the unit loads as a credential: kept if present, empty otherwise.
+[ -f /etc/helmsman-plc/relay-token ] || sudo install -m 600 /dev/null /etc/helmsman-plc/relay-token
 sudo rm -f /etc/helmsman-plc/program.st /etc/helmsman-plc/program.xml /etc/helmsman-plc/seed/*.st
 if [ '$mode' = projects ]; then
     sudo install -m 644 program.$ext /etc/helmsman-plc/seed/$seed_file
@@ -175,8 +177,10 @@ sudo install -d -m 755 $ui_dir
 sudo cp -R ui/. $ui_dir/
 sudo chown -R root:root $ui_dir
 sudo chmod -R u=rwX,go=rX $ui_dir
-printf 'PLC_SOURCE=%s\nPLC_SEED=%s\nPLC_SCAN_MS=%s\nPLC_API=%s\nPLC_UI=%s\n' \
-    '$source_arg' '$seed_arg' $scan_ms $api $ui_dir | sudo tee /etc/helmsman-plc/env >/dev/null
+# PLC_RELAY_ARGS survives a redeploy: helmsman-firstboot or a hand edit set it.
+relay_args=\$(sed -n 's/^PLC_RELAY_ARGS=//p' /etc/helmsman-plc/env 2>/dev/null | head -1)
+printf 'PLC_SOURCE=%s\nPLC_SEED=%s\nPLC_SCAN_MS=%s\nPLC_API=%s\nPLC_UI=%s\nPLC_RELAY_ARGS=%s\n' \
+    '$source_arg' '$seed_arg' $scan_ms $api $ui_dir \"\$relay_args\" | sudo tee /etc/helmsman-plc/env >/dev/null
 sudo install -m 644 helmsman-plc.service /etc/systemd/system/helmsman-plc.service
 sudo systemctl daemon-reload
 sudo systemctl enable helmsman-plc >/dev/null 2>&1
