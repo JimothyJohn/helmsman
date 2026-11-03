@@ -1,0 +1,17 @@
+[package]
+name = "helmsman-modbus"
+version = "0.1.0"
+description = "Modbus codec: request PDUs, reply checks and MBAP framing, no_std"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `no_std + alloc`, no dependencies, no features: the bytes of Modbus and
+# nothing that talks to a socket. helmsman-io's TCP and serial transports
+# and the edge node's embassy-net transport (crates/helmsman-node) all
+# build their frames here, so one codec is tested once.
+[dependencies]
+
+[lints]
+workspace = true

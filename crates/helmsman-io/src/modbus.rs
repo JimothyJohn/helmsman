@@ -27,34 +27,14 @@ use crate::model::{Ty, Value};
 
 pub const DRIVER: &str = "modbus-tcp";
 
-/// App §4.1 p.3: the PDU is at most 253 bytes.
-pub const MAX_PDU: usize = 253;
-/// TCP §3.1.3 p.5: transaction id, protocol id, length, unit id.
-pub const MBAP_LEN: usize = 7;
-
-pub const READ_COILS: u8 = 0x01;
-pub const READ_DISCRETE_INPUTS: u8 = 0x02;
-pub const READ_HOLDING_REGISTERS: u8 = 0x03;
-pub const READ_INPUT_REGISTERS: u8 = 0x04;
-pub const WRITE_SINGLE_COIL: u8 = 0x05;
-pub const WRITE_SINGLE_REGISTER: u8 = 0x06;
-pub const WRITE_MULTIPLE_REGISTERS: u8 = 0x10;
-
-/// App §6.1 p.11, §6.2 p.12: 1 to 2000 bits per read.
-pub const MAX_READ_BITS: u16 = 2000;
-/// App §6.3 p.15, §6.4 p.16: 1 to 125 registers per read.
-pub const MAX_READ_REGS: u16 = 125;
-/// App §6.12 p.30: 1 to 123 registers per write.
-pub const MAX_WRITE_REGS: u16 = 123;
-/// App §6.5 p.17: the only two legal coil values.
-pub const COIL_ON: u16 = 0xFF00;
-pub const COIL_OFF: u16 = 0x0000;
-
-/// App §7 p.47 exception codes.
-pub const ILLEGAL_FUNCTION: u8 = 0x01;
-pub const ILLEGAL_DATA_ADDRESS: u8 = 0x02;
-pub const ILLEGAL_DATA_VALUE: u8 = 0x03;
-pub const SERVER_DEVICE_FAILURE: u8 = 0x04;
+// The bytes of Modbus are the codec's (crates/helmsman-modbus), shared with
+// the edge node; the names stay here for every user of this module.
+pub use helmsman_modbus::{
+    COIL_OFF, COIL_ON, ILLEGAL_DATA_ADDRESS, ILLEGAL_DATA_VALUE, ILLEGAL_FUNCTION, MAX_PDU, MAX_READ_BITS,
+    MAX_READ_REGS, MAX_WRITE_COILS, MAX_WRITE_REGS, MBAP_LEN, READ_COILS, READ_DISCRETE_INPUTS,
+    READ_HOLDING_REGISTERS, READ_INPUT_REGISTERS, SERVER_DEVICE_FAILURE, WRITE_MULTIPLE_COILS,
+    WRITE_MULTIPLE_REGISTERS, WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Table {
@@ -202,38 +182,30 @@ impl Point {
     }
 }
 
-/// Request PDUs, App §6.
+/// Request PDUs, App §6: the codec's, with this crate's [`Error`].
 pub mod pdu {
-    use super::{Error, MAX_PDU, MAX_READ_BITS, MAX_READ_REGS, MAX_WRITE_REGS, WRITE_MULTIPLE_REGISTERS};
-
-    fn be(v: u16) -> [u8; 2] {
-        v.to_be_bytes()
-    }
+    use super::Error;
 
     /// FC 0x01-0x04: function, start, quantity.
     ///
     /// # Errors
     /// Quantity outside the spec's range for the function.
     pub fn read(fc: u8, start: u16, qty: u16) -> Result<Vec<u8>, Error> {
-        let max = if fc <= 0x02 { MAX_READ_BITS } else { MAX_READ_REGS };
-        if qty == 0 || qty > max || start.checked_add(qty - 1).is_none() {
-            return Err(Error::Protocol(format!(
-                "read of {qty} from {start} is out of range"
-            )));
-        }
-        let mut p = vec![fc];
-        p.extend(be(start));
-        p.extend(be(qty));
-        Ok(p)
+        Ok(helmsman_modbus::pdu::read(fc, start, qty)?)
     }
 
     /// FC 0x05 / 0x06: function, address, value. The reply echoes it.
     #[must_use]
     pub fn write_single(fc: u8, addr: u16, value: u16) -> Vec<u8> {
-        let mut p = vec![fc];
-        p.extend(be(addr));
-        p.extend(be(value));
-        p
+        helmsman_modbus::pdu::write_single(fc, addr, value)
+    }
+
+    /// FC 0x0F: coils from `start`, LSB-first.
+    ///
+    /// # Errors
+    /// Zero or more than 1968 coils, or running past address 65535.
+    pub fn write_coils(start: u16, values: &[bool]) -> Result<Vec<u8>, Error> {
+        Ok(helmsman_modbus::pdu::write_coils(start, values)?)
     }
 
     /// FC 0x10: function, start, quantity, byte count, values.
@@ -241,101 +213,48 @@ pub mod pdu {
     /// # Errors
     /// Zero or more than 123 registers, or running past address 65535.
     pub fn write_registers(start: u16, values: &[u16]) -> Result<Vec<u8>, Error> {
-        let qty = u16::try_from(values.len()).unwrap_or(u16::MAX);
-        if qty == 0 || qty > MAX_WRITE_REGS || start.checked_add(qty - 1).is_none() {
-            return Err(Error::Protocol(format!(
-                "write of {qty} registers from {start} is out of range"
-            )));
-        }
-        let mut p = vec![WRITE_MULTIPLE_REGISTERS];
-        p.extend(be(start));
-        p.extend(be(qty));
-        p.push(u8::try_from(qty * 2).expect("at most 246"));
-        for v in values {
-            p.extend(be(*v));
-        }
-        debug_assert!(p.len() <= MAX_PDU);
-        Ok(p)
+        Ok(helmsman_modbus::pdu::write_registers(start, values)?)
     }
 }
 
-/// Reply checks, App §6 and §7: anything not exactly what the request asks
-/// for is a protocol error, never a panic or a guess.
+/// Reply checks, App §6 and §7: the codec's, with this crate's [`Error`].
+/// Anything not exactly what the request asks for is a protocol error,
+/// never a panic or a guess.
 pub mod reply {
     use super::Error;
 
-    /// Strips the function code, turning an exception reply (function code +
-    /// 0x80, one exception byte; App §7 p.47) into [`Error::Exception`].
+    /// Strips the function code, turning an exception reply into
+    /// [`Error::Exception`].
     ///
     /// # Errors
     /// Empty reply, exception, or a reply to another function.
     pub fn body(fc: u8, pdu: &[u8]) -> Result<&[u8], Error> {
-        match pdu {
-            [] => Err(Error::Protocol("empty reply".into())),
-            [f, code] if *f == fc | 0x80 => Err(Error::Exception(*code)),
-            [f, ..] if *f == fc | 0x80 => Err(Error::Protocol("malformed exception reply".into())),
-            [f, rest @ ..] if *f == fc => Ok(rest),
-            [f, ..] => Err(Error::Protocol(format!(
-                "reply function {f:#04x} to request {fc:#04x}"
-            ))),
-        }
+        Ok(helmsman_modbus::reply::body(fc, pdu)?)
     }
 
-    /// FC 0x01/0x02: byte count, then bits LSB-first, last byte zero-padded
-    /// (App §6.1 p.11).
+    /// FC 0x01/0x02: byte count, then bits LSB-first.
     ///
     /// # Errors
     /// Byte count or length not matching the quantity asked for.
     pub fn bits(fc: u8, qty: u16, pdu: &[u8]) -> Result<Vec<bool>, Error> {
-        let b = body(fc, pdu)?;
-        let want = usize::from(qty).div_ceil(8);
-        match b {
-            [n, data @ ..] if usize::from(*n) == want && data.len() == want => Ok((0..usize::from(qty))
-                .map(|i| data[i / 8] >> (i % 8) & 1 == 1)
-                .collect()),
-            _ => Err(Error::Protocol(format!("bit reply length for {qty} bits"))),
-        }
+        Ok(helmsman_modbus::reply::bits(fc, qty, pdu)?)
     }
 
-    /// FC 0x03/0x04: byte count (2 per register), then big-endian registers
-    /// (App §6.3 p.15).
+    /// FC 0x03/0x04: byte count, then big-endian registers.
     ///
     /// # Errors
     /// Byte count or length not matching the quantity asked for.
     pub fn registers(fc: u8, qty: u16, pdu: &[u8]) -> Result<Vec<u16>, Error> {
-        let b = body(fc, pdu)?;
-        let want = usize::from(qty) * 2;
-        match b {
-            [n, data @ ..] if usize::from(*n) == want && data.len() == want => Ok(data
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|c| u16::from_be_bytes(*c))
-                .collect()),
-            _ => Err(Error::Protocol(format!(
-                "register reply length for {qty} registers"
-            ))),
-        }
+        Ok(helmsman_modbus::reply::registers(fc, qty, pdu)?)
     }
 
-    /// FC 0x05/0x06 echo the request; FC 0x10 echoes start and quantity
-    /// (App §6.5 p.17, §6.6 p.19, §6.12 p.30).
+    /// FC 0x05/0x06 echo the request; FC 0x0F and 0x10 echo start and
+    /// quantity.
     ///
     /// # Errors
     /// The echo differs from what was sent.
     pub fn echo(request: &[u8], pdu: &[u8]) -> Result<(), Error> {
-        let fc = request[0];
-        let b = body(fc, pdu)?;
-        let want = if fc == super::WRITE_MULTIPLE_REGISTERS {
-            &request[1..5]
-        } else {
-            &request[1..]
-        };
-        if b == want {
-            Ok(())
-        } else {
-            Err(Error::Protocol("write reply does not echo the request".into()))
-        }
+        Ok(helmsman_modbus::reply::echo(request, pdu)?)
     }
 }
 
@@ -402,34 +321,14 @@ impl Client {
     fn exchange(&mut self, pdu: &[u8]) -> Result<Vec<u8>, Error> {
         self.tid = self.tid.wrapping_add(1);
         let (tid, unit) = (self.tid, self.unit);
-        let len = u16::try_from(pdu.len() + 1).map_err(|_| Error::Protocol("request too long".into()))?;
-        let mut frame = Vec::with_capacity(MBAP_LEN + pdu.len());
-        frame.extend(tid.to_be_bytes());
-        frame.extend(0u16.to_be_bytes());
-        frame.extend(len.to_be_bytes());
-        frame.push(unit);
-        frame.extend(pdu);
+        let frame = helmsman_modbus::mbap::frame(tid, unit, pdu)?;
         let s = self.connect()?;
         s.write_all(&frame)?;
         let mut head = [0u8; MBAP_LEN];
         s.read_exact(&mut head)?;
-        let got_tid = u16::from_be_bytes([head[0], head[1]]);
-        let proto = u16::from_be_bytes([head[2], head[3]]);
-        let len = usize::from(u16::from_be_bytes([head[4], head[5]]));
-        if proto != 0 {
-            return Err(Error::Protocol(format!("protocol id {proto}")));
-        }
-        if got_tid != tid {
-            return Err(Error::Protocol(format!("transaction {got_tid}, expected {tid}")));
-        }
-        // Length counts the unit id plus a PDU of 1..=253 bytes.
-        if !(2..=MAX_PDU + 1).contains(&len) {
-            return Err(Error::Protocol(format!("length field {len}")));
-        }
-        if head[6] != unit {
-            return Err(Error::Protocol(format!("unit {}, expected {unit}", head[6])));
-        }
-        let mut body = vec![0u8; len - 1];
+        // A late or foreign reply is never taken for ours.
+        let len = helmsman_modbus::mbap::check_head(&head, tid, unit)?;
+        let mut body = vec![0u8; len];
         s.read_exact(&mut body)?;
         Ok(body)
     }
