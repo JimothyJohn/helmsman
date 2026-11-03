@@ -1879,10 +1879,17 @@ fn devices(d: &Devices) -> Json {
     Json::Array(
         d.list()
             .into_iter()
-            .map(|(name, state)| match state {
-                None => json!({ "name": name, "state": "unknown" }),
-                Some(Ok(())) => json!({ "name": name, "state": "up" }),
-                Some(Err(why)) => json!({ "name": name, "state": "down", "error": why }),
+            .map(|(name, state)| {
+                let mut j = match state {
+                    None => json!({ "name": name, "state": "unknown" }),
+                    Some(Ok(())) => json!({ "name": name, "state": "up" }),
+                    Some(Err(why)) => json!({ "name": name, "state": "down", "error": why }),
+                };
+                // Where the link found its device, once its driver said.
+                if let Some(a) = d.address(&name) {
+                    j["address"] = json!(a);
+                }
+                j
             })
             .collect(),
     )

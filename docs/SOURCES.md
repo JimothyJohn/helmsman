@@ -704,6 +704,20 @@ into the code.
   status words and the counters' byte order are inferred, and say so.
 - **How to cite:** `E1200 manual v15.10 p. X-N`.
 
+### The host's ARP table: `proc(5)` and `arp(8)`
+
+- **What:** where `helmsman_io::resolve` looks a `mac=` endpoint up.
+  Linux: `/proc/net/arp`, a header line then one entry a line (`IP
+  address`, `HW type`, `Flags`, `HW address`, `Mask`, `Device`), flags
+  `0x0` for an incomplete entry (`man 5 proc`, "/proc/net/arp"). macOS and
+  the BSDs: `arp -an`, one line an entry, `? (10.0.0.57) at
+  0:90:e8:7e:af:be on en1 ifscope [ethernet]`, hex bytes without leading
+  zeros, `(incomplete)` for an entry with no address (`man 8 arp`).
+- **Leaned on by:** `resolve::arp_lookup` reads both shapes by looking
+  for an IPv4 token and a MAC token on one line, so the exact columns
+  never matter; incomplete entries have no MAC token and fall through.
+- **How to cite:** `proc(5) /proc/net/arp`, `arp(8)`.
+
 ### The bench E1213 (firmware V3.1 Build19110615), 2026-11-02
 
 - **What:** the unit itself, serial TAIGB1106222, observed over the wire

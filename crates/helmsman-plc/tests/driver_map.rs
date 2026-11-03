@@ -321,9 +321,11 @@ impl Bench {
             Arc::clone(&table),
             Arc::new(helmsman_io::open),
             Arc::new(|| Box::new(Channels::new())),
-            Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
-                dv.set(name, err.map(ToString::to_string));
-            }),
+            Arc::new(
+                move |name: &str, err: Option<&helmsman_io::Error>, address: Option<String>| {
+                    dv.set_with(name, err.map(ToString::to_string), address);
+                },
+            ),
         );
         let plan = set
             .plan_with(layout.map.as_ref().unwrap(), &found.drivers)

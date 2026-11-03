@@ -756,3 +756,60 @@ fn a_taken_io_port_is_a_link_error_that_says_so() {
         "{e}"
     );
 }
+
+/// `device-by-identity`: a `cip=VENDOR:PRODUCT` endpoint is found by one
+/// `ListIdentity` (sent where `sweep=` says: here the simulated E1213's
+/// own address, a broadcast on a box) and the link runs on the address it
+/// answered from; the driver reports that address. A wrong identity is
+/// not found, and says how many devices answered.
+#[test]
+fn a_cip_identity_endpoint_is_found_by_list_identity_and_reports_its_address() {
+    let sim = E1213Sim::start().unwrap();
+    let encap: std::net::SocketAddrV4 = sim.endpoint().parse().unwrap();
+    let resolved = helmsman_io::resolve::resolve(
+        &helmsman_io::resolve::Identity::Cip {
+            vendor: 991,
+            product: 515,
+            serial: None,
+        },
+        encap.port(),
+        &helmsman_io::resolve::Resolver {
+            arp: Box::new(|| Ok(String::new())),
+            sweep: Some(encap),
+            window: Duration::from_millis(300),
+        },
+    )
+    .unwrap();
+    assert_eq!(resolved, encap, "found where the simulator answers");
+    let miss = helmsman_io::resolve::resolve(
+        &helmsman_io::resolve::Identity::Cip {
+            vendor: 991,
+            product: 999,
+            serial: None,
+        },
+        encap.port(),
+        &helmsman_io::resolve::Resolver {
+            arp: Box::new(|| Ok(String::new())),
+            sweep: Some(encap),
+            window: Duration::from_millis(300),
+        },
+    )
+    .unwrap_err();
+    assert!(miss.to_string().contains("no such device among the 1"), "{miss}");
+    // A serial that does not match is a miss too.
+    let miss = helmsman_io::resolve::resolve(
+        &helmsman_io::resolve::Identity::Cip {
+            vendor: 991,
+            product: 515,
+            serial: Some(1),
+        },
+        encap.port(),
+        &helmsman_io::resolve::Resolver {
+            arp: Box::new(|| Ok(String::new())),
+            sweep: Some(encap),
+            window: Duration::from_millis(300),
+        },
+    )
+    .unwrap_err();
+    assert!(miss.to_string().contains("no such device"), "{miss}");
+}

@@ -461,9 +461,14 @@ fn threaded_links_carry_a_scan_to_the_device_and_report_the_drop() {
         .into_iter()
         .map(|l| {
             let ev = Arc::clone(&events);
-            spawn(l, Arc::clone(&table), Arc::clone(&stop), move |name, err| {
-                ev.lock().unwrap().push((name.to_string(), err.is_none()));
-            })
+            spawn(
+                l,
+                Arc::clone(&table),
+                Arc::clone(&stop),
+                move |name, err, _address| {
+                    ev.lock().unwrap().push((name.to_string(), err.is_none()));
+                },
+            )
         })
         .collect();
     sim.state().discrete[1] = true;

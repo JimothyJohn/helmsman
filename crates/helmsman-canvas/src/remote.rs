@@ -391,6 +391,8 @@ pub struct DeviceRow {
     pub state: String,
     /// Why it is down.
     pub error: Option<String>,
+    /// Where the box found it (a `mac=` or `cip=` endpoint resolved).
+    pub address: Option<String>,
 }
 
 impl DeviceRow {
@@ -399,6 +401,7 @@ impl DeviceRow {
             name: j["name"].as_str()?.to_string(),
             state: j["state"].as_str().unwrap_or("unknown").to_string(),
             error: j["error"].as_str().map(str::to_string),
+            address: j["address"].as_str().map(str::to_string),
         })
     }
 }

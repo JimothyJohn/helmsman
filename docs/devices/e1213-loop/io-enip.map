@@ -1,7 +1,7 @@
 # The same loop check over EtherNet/IP: one Class 1 exclusive-owner
 # connection at 100 ms (needs a helmsman-plc built with its enip-io feature).
 # Rename this file io.map to use it in place of the Modbus one.
-device e1213 enip-io 10.0.0.57 profile=moxa-e1213 rpi_ms=100 poll_ms=20
+device e1213 enip-io mac=00-90-e8-7e-af-be profile=moxa-e1213 rpi_ms=100 poll_ms=20
 
 in  di0 bool e1213 di:0
 in  di1 bool e1213 di:1

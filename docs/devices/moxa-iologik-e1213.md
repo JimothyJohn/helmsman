@@ -250,6 +250,12 @@ the facts above were taken over SSH.
   garbage input, target reboots).
 - Stand-alone simulator for other scanners: `helmsman-adapter --profile
   moxa-e1213`.
+- The maps name the unit by its MAC (`mac=00-90-e8-7e-af-be`) rather
+  than its DHCP lease: the box reads its ARP table when it connects
+  (after one ListIdentity broadcast if the unit is not in it yet) and
+  logs `device e1213 up at 10.0.0.57:502`; `cip=991:515` (vendor and
+  product code, optionally `:serial`) finds it by ListIdentity alone.
+  `helmsman_io::resolve`; the Devices tab shows both.
 - The real device: `scripts/bench-e1213.sh IP` (TODO.md `e1213-bench`):
   ListIdentity, the Identity object, then the conformance run over Class 1.
   On a Mac, `scratch/02-allow-firewall.sh` first (above).

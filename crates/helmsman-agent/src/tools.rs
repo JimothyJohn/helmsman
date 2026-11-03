@@ -584,23 +584,23 @@ fn list_devices(api: &dyn Caller) -> Outcome {
         Ok(l) => l,
         Err(o) => return o,
     };
-    let link = |name: &str| -> (Json, Json) {
+    let link = |name: &str| -> (Json, Json, Json) {
         links
             .iter()
             .find(|d| d["name"].as_str() == Some(name))
-            .map_or((json!("unknown"), Json::Null), |d| {
-                (d["state"].clone(), d["error"].clone())
+            .map_or((json!("unknown"), Json::Null, Json::Null), |d| {
+                (d["state"].clone(), d["error"].clone(), d["address"].clone())
             })
     };
     let mut devices: Vec<Json> = map
         .devices
         .iter()
         .map(|d| {
-            let (state, error) = link(&d.name);
+            let (state, error, address) = link(&d.name);
             let params: Map<String, Json> = d.params.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
             json!({
                 "name": d.name, "driver": d.driver, "endpoint": d.endpoint, "params": params,
-                "state": state, "error": error, "points": [],
+                "state": state, "error": error, "address": address, "points": [],
             })
         })
         .collect();
@@ -609,10 +609,10 @@ fn list_devices(api: &dyn Caller) -> Outcome {
             .iter()
             .position(|d| d["name"].as_str() == Some(s.device.as_str()))
             .unwrap_or_else(|| {
-                let (state, error) = link(&s.device);
+                let (state, error, address) = link(&s.device);
                 devices.push(json!({
                     "name": s.device, "driver": Json::Null, "endpoint": Json::Null, "params": {},
-                    "state": state, "error": error, "points": [],
+                    "state": state, "error": error, "address": address, "points": [],
                 }));
                 devices.len() - 1
             });
@@ -639,7 +639,7 @@ fn list_devices(api: &dyn Caller) -> Outcome {
         {
             devices.push(json!({
                 "name": name, "driver": Json::Null, "endpoint": Json::Null, "params": {},
-                "state": l["state"], "error": l["error"], "points": [],
+                "state": l["state"], "error": l["error"], "address": l["address"], "points": [],
             }));
         }
     }

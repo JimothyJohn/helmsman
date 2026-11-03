@@ -27,7 +27,9 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// How the box is doing with a device.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkState {
-    Up,
+    /// Up, and where the box found the device when its driver said (a
+    /// `mac=` or `cip=` endpoint resolved; `device-by-identity`).
+    Up(Option<String>),
     Down(String),
     /// The box has not said yet.
     Unknown,
@@ -127,7 +129,8 @@ pub fn tree(
 
 fn state_text(s: &LinkState) -> String {
     match s {
-        LinkState::Up => "up".into(),
+        LinkState::Up(None) => "up".into(),
+        LinkState::Up(Some(a)) => format!("up at {a}"),
         LinkState::Down(why) => format!("down: {why}"),
         LinkState::Unknown => "not reached yet".into(),
         LinkState::Simulated => "simulated".into(),
@@ -373,13 +376,21 @@ impl DevicesUi {
         for n in nodes {
             let folded = self.folded.contains(&n.name);
             let dot = match &n.state {
-                LinkState::Up => RichText::new("●").color(t.accent),
+                LinkState::Up(_) => RichText::new("●").color(t.accent),
                 LinkState::Down(_) => RichText::new("●").color(RED),
                 LinkState::Unknown => RichText::new("○").color(t.muted),
                 LinkState::Simulated => RichText::new("◌").color(t.muted),
             };
             let arrow = if folded { "▸" } else { "▾" };
-            let head = format!("{arrow} {}  {} {}", n.name, n.driver, n.endpoint);
+            // An identity endpoint reads with where it was found.
+            let found = match (
+                &n.state,
+                n.endpoint.starts_with("mac=") || n.endpoint.starts_with("cip="),
+            ) {
+                (LinkState::Up(Some(a)), true) => format!(" → {a}"),
+                _ => String::new(),
+            };
+            let head = format!("{arrow} {}  {} {}{found}", n.name, n.driver, n.endpoint);
             let r = ui.horizontal(|ui| {
                 ui.label(dot);
                 ui.add(
@@ -623,7 +634,7 @@ mod tests {
             _ => None,
         };
         let state = |name: &str| match name {
-            "e1213" => LinkState::Up,
+            "e1213" => LinkState::Up(None),
             "box" => LinkState::Unknown,
             _ => LinkState::Simulated,
         };
@@ -632,7 +643,7 @@ mod tests {
         assert_eq!(names, ["e1213", "screen", "module", "box", "nowhere"]);
         assert_eq!(nodes[0].points.len(), 2);
         assert_eq!(nodes[0].points[0].value, Some(Value::Bool(true)));
-        assert_eq!(nodes[0].state, LinkState::Up);
+        assert_eq!(nodes[0].state, LinkState::Up(None));
         assert_eq!(nodes[4].driver, "not declared in the map");
         assert!(nodes[3].points[0].forced);
         let text = describe(&nodes);
@@ -644,6 +655,19 @@ mod tests {
         assert!(
             text.contains("module  other modules' outputs  [simulated]\n  in  rate real conveyor unit=m/s\n"),
             "{text}"
+        );
+    }
+
+    /// `device-by-identity`: a device named by its MAC or CIP identity
+    /// lists with the address the box found it at.
+    #[test]
+    fn an_identity_endpoint_reads_with_where_it_was_found() {
+        let m = iomap::skim("device rio enip-io mac=00-90-e8-7e-af-be rpi_ms=100\nin di0 bool rio di:0\n");
+        let nodes = tree(&m, &|_| None, &|_| LinkState::Up(Some("10.0.0.57:44818".into())));
+        assert_eq!(nodes[0].endpoint, "mac=00-90-e8-7e-af-be");
+        assert_eq!(
+            describe(&nodes),
+            "rio  enip-io mac=00-90-e8-7e-af-be rpi_ms=100  [up at 10.0.0.57:44818]\n  in  di0 bool di:0\n"
         );
     }
 

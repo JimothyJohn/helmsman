@@ -167,6 +167,10 @@ pub type Browser = Arc<dyn Fn() -> Result<Vec<BrowsedTag>, String> + Send + Sync
 pub struct Devices {
     links: Mutex<Vec<(String, LinkState)>>,
     browsers: Mutex<BTreeMap<String, Browser>>,
+    /// Where each link found its device, as the driver reported it last
+    /// (`helmsman_io::Driver::address`): the resolved address of a
+    /// `mac=` or `cip=` endpoint, or the host's.
+    addresses: Mutex<BTreeMap<String, String>>,
 }
 
 impl std::fmt::Debug for Devices {
@@ -184,6 +188,7 @@ impl Devices {
         Self {
             links: Mutex::new(names.into_iter().map(|n| (n, None)).collect()),
             browsers: Mutex::new(BTreeMap::new()),
+            addresses: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -214,6 +219,28 @@ impl Devices {
             Some(l) => l.1 = state,
             None => links.push((name.into(), state)),
         }
+    }
+
+    /// [`Devices::set`], with where the device was found when the driver
+    /// knows (kept until the next report that knows).
+    pub fn set_with(&self, name: &str, err: Option<String>, address: Option<String>) {
+        self.set(name, err);
+        if let Some(a) = address {
+            self.addresses
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(name.to_string(), a);
+        }
+    }
+
+    /// Where link `name` last found its device, if its driver said.
+    #[must_use]
+    pub fn address(&self, name: &str) -> Option<String> {
+        self.addresses
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .cloned()
     }
 
     /// A link that a reload started: state unknown until it reports. A
