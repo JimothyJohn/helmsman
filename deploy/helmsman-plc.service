@@ -7,7 +7,12 @@
 # empty) seeds a first install with a deployed project: `project seed`
 # acts only while there is no project and nothing deployed; if it fails
 # (a seed that does not build) the box starts anyway, running nothing, and
-# the journal says why.
+# the journal says why. PLC_RELAY_ARGS is empty, or `--relay URL
+# --relay-token /run/credentials/helmsman-plc.service/relay-token
+# [--box-name NAME]` as helmsman-firstboot writes it (docs/BOX.md): the
+# token file /etc/helmsman-plc/relay-token (root, 0600, empty until
+# paired) reaches the service as a credential, never as an environment
+# variable.
 [Unit]
 Description=Helmsman soft PLC (IEC 61131-3, CIP adapter on 44818/2222)
 After=network-online.target
@@ -16,7 +21,8 @@ Wants=network-online.target
 [Service]
 EnvironmentFile=/etc/helmsman-plc/env
 ExecStartPre=-/usr/local/bin/helmsman-plc project seed --scan-ms ${PLC_SCAN_MS} $PLC_SEED
-ExecStart=/usr/local/bin/helmsman-plc ${PLC_SOURCE} --scan-ms ${PLC_SCAN_MS} --api ${PLC_API} --ui ${PLC_UI}
+ExecStart=/usr/local/bin/helmsman-plc ${PLC_SOURCE} --scan-ms ${PLC_SCAN_MS} --api ${PLC_API} --ui ${PLC_UI} $PLC_RELAY_ARGS
+LoadCredential=relay-token:/etc/helmsman-plc/relay-token
 DynamicUser=yes
 # The box API's token (api-token, 0600) lives here: /var/lib/helmsman-plc,
 # writable under ProtectSystem=strict and passed in as $STATE_DIRECTORY.
