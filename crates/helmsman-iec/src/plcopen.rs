@@ -24,7 +24,10 @@
 
 #![allow(clippy::many_single_char_names)]
 
-use std::collections::{HashMap, HashSet};
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+
+use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::check::Diagnostic;
 use crate::lexer::Pos;
@@ -91,7 +94,7 @@ pub fn lower(src: &str) -> Result<Lowered, Vec<Diagnostic>> {
         .and_then(|t| t.child("pous"))
         .map(|p| p.children_named("pou").collect())
         .unwrap_or_default();
-    let user: HashSet<String> = pous
+    let user: BTreeSet<String> = pous
         .iter()
         .filter_map(|p| p.attr("name"))
         .map(str::to_ascii_uppercase)
@@ -402,12 +405,12 @@ impl Cx {
         Ok(())
     }
 
-    fn pou(&mut self, pou: &Element, user: &HashSet<String>) {
+    fn pou(&mut self, pou: &Element, user: &BTreeSet<String>) {
         let _ = self.pou_inner(pou, user);
     }
 
     #[allow(clippy::too_many_lines)]
-    fn pou_inner(&mut self, pou: &Element, user: &HashSet<String>) -> L<()> {
+    fn pou_inner(&mut self, pou: &Element, user: &BTreeSet<String>) -> L<()> {
         let name = self.name(pou, "name")?;
         let iface = pou.child("interface");
         let (head, end) = match pou.attr("pouType") {
@@ -436,7 +439,7 @@ impl Cx {
 
         // Interface: (position, line) pairs, and the declared names.
         let mut decls: Vec<(Pos, String)> = Vec::new();
-        let mut taken: HashSet<String> = HashSet::new();
+        let mut taken: BTreeSet<String> = BTreeSet::new();
         let mut ok = true;
         for list in iface.into_iter().flat_map(Element::elements) {
             let kw = match list.name.as_str() {
@@ -648,12 +651,12 @@ struct Graph {
     lines: Vec<(Pos, String)>,
     temps: Vec<(String, &'static str)>,
     diags: Vec<Diagnostic>,
-    taken: HashSet<String>,
-    user: HashSet<String>,
-    memo: HashMap<(u64, String), Val>,
-    blocks: HashMap<u64, Done>,
-    busy: HashSet<u64>,
-    failed: HashSet<u64>,
+    taken: BTreeSet<String>,
+    user: BTreeSet<String>,
+    memo: BTreeMap<(u64, String), Val>,
+    blocks: BTreeMap<u64, Done>,
+    busy: BTreeSet<u64>,
+    failed: BTreeSet<u64>,
     counter: u32,
     /// Elements being computed, one inside another: bounded so a hostile
     /// chain cannot exhaust the stack.
@@ -677,17 +680,17 @@ const OBJECTS: &[&str] = &[
 ];
 
 impl Graph {
-    fn new(taken: HashSet<String>, user: &HashSet<String>) -> Self {
+    fn new(taken: BTreeSet<String>, user: &BTreeSet<String>) -> Self {
         Self {
             lines: Vec::new(),
             temps: Vec::new(),
             diags: Vec::new(),
             taken,
             user: user.clone(),
-            memo: HashMap::new(),
-            blocks: HashMap::new(),
-            busy: HashSet::new(),
-            failed: HashSet::new(),
+            memo: BTreeMap::new(),
+            blocks: BTreeMap::new(),
+            busy: BTreeSet::new(),
+            failed: BTreeSet::new(),
             counter: 0,
             depth: 0,
         }
@@ -772,8 +775,8 @@ impl Graph {
     }
 
     fn lower(&mut self, net: &Element) {
-        let mut nodes: HashMap<u64, &Element> = HashMap::new();
-        let mut connectors: HashMap<String, &Element> = HashMap::new();
+        let mut nodes: BTreeMap<u64, &Element> = BTreeMap::new();
+        let mut connectors: BTreeMap<String, &Element> = BTreeMap::new();
         for e in net.elements() {
             if !OBJECTS.contains(&e.name.as_str()) {
                 let what = match e.name.as_str() {
@@ -805,7 +808,7 @@ impl Graph {
         if !self.diags.is_empty() {
             return;
         }
-        let mut readers: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut readers: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
         for (&id, e) in &nodes {
             let mut rs = Vec::new();
             refs(e, &mut rs);
@@ -834,7 +837,7 @@ impl Graph {
             (c("y"), c("x"))
         };
         // Ties (no position, or a shared one) go by localId: the nodes come
-        // out of a HashMap, so without it the order would vary run to run.
+        // out of a BTreeMap, so without it the order would vary run to run.
         let by_xy = |a: &&Element, b: &&Element| {
             let (pa, pb) = (xy(a), xy(b));
             pa.0.total_cmp(&pb.0)
@@ -1304,10 +1307,10 @@ impl Graph {
 }
 
 struct Net<'a> {
-    nodes: HashMap<u64, &'a Element>,
-    connectors: HashMap<String, &'a Element>,
+    nodes: BTreeMap<u64, &'a Element>,
+    connectors: BTreeMap<String, &'a Element>,
     /// For each localId, the elements whose inputs connect to it.
-    readers: HashMap<u64, Vec<u64>>,
+    readers: BTreeMap<u64, Vec<u64>>,
 }
 
 impl Net<'_> {
