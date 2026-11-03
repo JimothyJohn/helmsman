@@ -79,8 +79,25 @@ this; change it here first when a decision changes.
   one, every kept page goes to the model as context each time, and the
   pages live with the project as `agent.md`, so a reload or a download
   keeps them; an earlier page's code has its own Use this code; not on a
-  box yet. Use this code on a PROGRAM asks for the program's name once
-  per conversation; the answers after it land in that project with the
+  box yet. The agent edits only what is in focus (Nick 2026-11-01,
+  interview 2026-11-02, card `agent-scoped-edits`): the open file by
+  default, the lines selected in the Code tab or the block picked in the
+  diagram (its statement, while the diagram is of the editor's text) when
+  there is one; a line above the question says which ("Editing: main.st",
+  "Editing: lines 12–30 of main.st", "Editing: block Motor1") and by which
+  rule, with Whole file to drop the selection or pick. The scope goes to
+  the model in an `<edit_scope>` envelope and back with the page; Use
+  this code takes the answer into that scope only (`scope.rs`,
+  `apply`): another file, lines outside the selection, a block's
+  neighbour, several code blocks, the page's envelope markers or no
+  change at all are refused, saying what it tried to touch, and nothing
+  outside the scope changes, byte for byte. A taken change must keep the
+  requirement tests green; unsaved edits are saved first, then the
+  change is one revision with its page. A whole `main.st` with its
+  PROGRAM lands as an iteration; lines and blocks are edited in place.
+  With a built-in example open (read-only) the scope is a new project:
+  Use this code on a PROGRAM asks for the program's name once per
+  conversation; the answers after it land in that project with the
   newest as `main.st` and the file it replaced kept as the next `vN.st`,
   serially, however many; `vN.st` is never built, and past the project's
   size the oldest go first). On a Pi the Trend opens with
