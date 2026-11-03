@@ -119,6 +119,10 @@ pub struct PlaygroundView {
     /// The question "what is this program called?", asked once per
     /// conversation before its first PROGRAM answer lands.
     pub program_name: Option<ProgramName>,
+    /// The project's requirement tests, as last run in this page
+    /// (`crate::requirements`): after every build change, before Deploy
+    /// and "Use this code".
+    pub tests: crate::requirements::Results,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -173,6 +177,7 @@ impl PlaygroundView {
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
             program_name: None,
+            tests: crate::requirements::Results::default(),
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
@@ -180,6 +185,7 @@ impl PlaygroundView {
         v.proj.running = Some(v.proj.open.clone());
         v.load_pages();
         v.sync_viewer();
+        v.run_tests();
         v
     }
 
@@ -204,6 +210,54 @@ impl PlaygroundView {
         self.proj.set_agent_text(&text);
     }
 
+    /// How this page runs the project's requirement tests: the session's
+    /// scan period, the simulation's image sizes.
+    fn test_settings(&self) -> helmsman_iec::spec::Settings {
+        helmsman_iec::spec::Settings::new(crate::playground::SIZES)
+            .period(std::time::Duration::from_millis(self.session.period_ms.max(1)))
+    }
+
+    /// Runs the open project's requirement tests against its build and
+    /// keeps the results for the Requirements tab.
+    pub fn run_tests(&mut self) {
+        let plan = self.proj.test_plan();
+        let v = helmsman_iec::spec::run_all(&plan, self.test_settings());
+        self.tests = crate::requirements::Results::from_verdicts(&v);
+    }
+
+    /// The gate "Use this code" and Deploy share: why the project (with
+    /// `extra` added or replacing a file, for a candidate) must not land,
+    /// if a requirement test is red. Runs the tests on the candidate and,
+    /// when it is the project as it stands, keeps the results.
+    fn tests_refuse(&mut self, extra: Option<(&str, &str)>) -> Option<String> {
+        let settings = self.test_settings();
+        let results = match extra {
+            None => {
+                self.run_tests();
+                self.tests.clone()
+            }
+            Some((file, text)) => {
+                let mut files: std::collections::BTreeMap<&str, &str> = self
+                    .proj
+                    .files
+                    .iter()
+                    .map(|(n, t)| (n.as_str(), t.as_str()))
+                    .collect();
+                files.insert(file, text);
+                let plan = helmsman_iec::spec::plan(
+                    files
+                        .iter()
+                        .filter(|(n, _)| {
+                            helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St)
+                        })
+                        .map(|(n, t)| (*n, *t)),
+                );
+                crate::requirements::Results::from_verdicts(&helmsman_iec::spec::run_all(&plan, settings))
+            }
+        };
+        results.refusal()
+    }
+
     /// Loads the open project's build into the session, compiled and
     /// stopped.
     fn reload(&mut self) {
@@ -211,6 +265,7 @@ impl PlaygroundView {
         self.session.load(&src);
         self.pending = None;
         self.sync_viewer();
+        self.run_tests();
     }
 
     /// Opens project `name` and runs it if it compiles (Nick, 2026-11-01:
@@ -267,6 +322,20 @@ impl PlaygroundView {
     fn act(&mut self, a: Act) {
         match a {
             Act::UseAnswer { name, text, save } => {
+                // A block answer lands in the open project: the project's
+                // requirement tests must stay green with it in. (A PROGRAM
+                // answer opens a new project, which has no tests yet.)
+                if !text.to_ascii_uppercase().contains("PROGRAM ") {
+                    let file = self.proj.free_file(&format!("{name}.st"));
+                    if let Some(why) = self.tests_refuse(Some((&file, &text))) {
+                        self.notice = Some(why.clone());
+                        self.log.error(
+                            self.session.now_ms as f64 / 1000.0,
+                            format!("Use this code: {why}"),
+                        );
+                        return;
+                    }
+                }
                 if save {
                     self.proj.save();
                 } else {
@@ -378,6 +447,7 @@ impl PlaygroundView {
             self.pending = None;
             let src = self.session.src.clone();
             self.session.check(&src);
+            self.run_tests();
         }
     }
 
@@ -1000,12 +1070,19 @@ impl Body for PlaygroundView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Claude]
+        &[Tab::Io, Tab::Requirements, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         match tab {
             Tab::Io => self.io(ui),
+            Tab::Requirements => {
+                egui::ScrollArea::vertical().id_salt("pg-tests").show(ui, |ui| {
+                    if crate::requirements::ui(ui, chrome, &self.tests, "run in this page", false) {
+                        self.run_tests();
+                    }
+                });
+            }
             Tab::Claude => self.claude(ui, chrome),
         }
     }
@@ -1849,6 +1926,15 @@ impl Workspace for PlaygroundView {
     /// an edit reaches the program running. One that does not compile is
     /// refused, its errors listed, and the program running is unchanged.
     fn deploy(&mut self) {
+        // A red requirement test refuses the deploy, naming it.
+        if let Some(why) = self.tests_refuse(None) {
+            self.notice = Some(why.clone());
+            self.log.error(
+                self.session.now_ms as f64 / 1000.0,
+                format!("Deploy of {} refused. {why}", self.proj.open),
+            );
+            return;
+        }
         let src = self.proj.build_src();
         let ok = self.session.set_source(&src);
         self.pending = None;

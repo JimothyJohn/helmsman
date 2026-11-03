@@ -1093,10 +1093,25 @@ impl Body for BoxView {
 
     fn tabs(&self) -> &'static [Tab] {
         // Claude comes to the box later (docs/UI.md).
-        &[Tab::Io]
+        &[Tab::Io, Tab::Requirements]
     }
 
-    fn tab(&mut self, ui: &mut egui::Ui, _tab: Tab, _chrome: &mut Chrome) {
+    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
+        if tab == Tab::Requirements {
+            // The box ran them (POST /api/projects/{p}/tests) when the
+            // project opened and after each save; Run asks again.
+            let source = match &self.projects.open {
+                Some(o) if self.has_projects() => format!("run on the box for {}", o.name),
+                _ => "open a project to run its requirement tests".to_string(),
+            };
+            let busy = self.projects.testing;
+            egui::ScrollArea::vertical().id_salt("box-tests").show(ui, |ui| {
+                if crate::requirements::ui(ui, chrome, &self.projects.tests, &source, busy) {
+                    self.projects.run_tests();
+                }
+            });
+            return;
+        }
         let t = theme(ui);
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {

@@ -101,6 +101,7 @@ mod lexer;
 mod once;
 mod parser;
 pub mod plcopen;
+pub mod spec;
 mod state;
 pub mod trace;
 mod types;

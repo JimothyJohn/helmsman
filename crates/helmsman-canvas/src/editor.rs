@@ -29,14 +29,20 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
+    /// The project's requirement tests, green or red (`helmsman_iec::spec`).
+    Requirements,
     Claude,
 }
 
 impl Tab {
+    /// Every tab, in the panel's order.
+    pub const ALL: [Self; 3] = [Self::Io, Self::Requirements, Self::Claude];
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
+            Self::Requirements => "Requirements",
             Self::Claude => "Agent",
         }
     }
@@ -44,6 +50,7 @@ impl Tab {
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
+            Self::Requirements => "tests",
             Self::Claude => "claude",
         }
     }
@@ -104,8 +111,10 @@ impl Pane {
 /// tab (Nick, 2026-11-01); 200 since the third tab (three tab buttons and
 /// the hide chevron must fit the row, or the pane grows every frame).
 pub const LEFT_W: f32 = 200.0;
-/// The right panel's width when first opened, points.
-pub const RIGHT_W: f32 = 204.0;
+/// The right panel's width when first opened, points: 236 since the
+/// Requirements tab (three tab buttons and the hide chevron must fit the
+/// row, or the panel grows every frame).
+pub const RIGHT_W: f32 = 236.0;
 
 /// The Editor's layout and the Monitor's scan detail (kept per browser)
 /// and what was drawn where this frame (tests click by it).
@@ -196,7 +205,7 @@ impl Chrome {
                 Some(("bottom", "messages")) => c.bottom = Bottom::Messages,
                 Some(("bottom", "trend")) => c.bottom = Bottom::Trend,
                 Some(("tab", v)) => {
-                    if let Some(t) = [Tab::Io, Tab::Claude].into_iter().find(|t| t.key() == v) {
+                    if let Some(t) = Tab::ALL.into_iter().find(|t| t.key() == v) {
                         c.tab = t;
                     }
                 }
@@ -577,7 +586,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                     t = Some(header_toggle(ui, false, "hide the panel"));
                     for &k in tabs {
                         let b = egui::Button::selectable(tab == k, RichText::new(k.label()).strong())
-                            .min_size(Vec2::new(64.0, TAP * 0.75));
+                            .min_size(Vec2::new(0.0, TAP * 0.75));
                         let r = ui.add(b);
                         hits.push((format!("tab {}", k.key()), r.rect));
                         if r.clicked() {
