@@ -1,6 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/helmsman-proto", "crates/helmsman-agent", "crates/helmsman-adapter", "crates/helmsman-canvas", "crates/helmsman-diagram", "crates/helmsman-iec", "crates/helmsman-io", "crates/helmsman-plc", "crates/helmsman-project"]
+# The edge node's firmware (docs/EDGE.md): the Xtensa target needs the esp
+# toolchain and build-std, so it is its own package with its own lock,
+# built by `make node-build`; the host gate never sees it.
+exclude = ["crates/helmsman-node"]
 
 [workspace.package]
 edition = "2024"

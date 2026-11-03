@@ -352,6 +352,33 @@ max / p99 per-scan time and `esp-alloc` stats after compile and after
 10 000 scans over USB serial. Ethernet unplugged throughout; USB power.
 Repeat with the program heap in PSRAM on a WROVER.
 
+*Built 2026-11-03 (feat/node-scan-bench); numbers pending Nick's flash.*
+`crates/helmsman-node` is excluded from the workspace (own Cargo.lock,
+`rust-toolchain.toml` channel `esp`, `.cargo/config.toml` with the Xtensa
+target and build-std), built by `make node-build` (`scripts/node-build.sh`;
+`make node-clippy` for the lint). The firmware embeds the host bench's
+workload, now the shared file `crates/helmsman-iec/examples/trace_bench.st`,
+and the batch-mixer starter's `main.st` with its six blocks (the plant model
+left out) as the "realistic cell"; compiles each at boot, scans it 10 000
+times at a 10 ms clock, and prints compile time, heap for the program,
+min / mean / max / p99 per scan and heap used and peak (esp-alloc's
+`internal-heap-stats`, which costs a little per allocation and is named in
+the output). The round runs twice: internal SRAM alone (160 kB in the main
+DRAM segment plus 96 kB in `dram2`, supervictor's figures), then with the
+PSRAM added as a second heap region (esp-alloc fills internal RAM first),
+which gives G3 both figures; the interpreter is not told where to put
+what, so "program image in SRAM, scratch in PSRAM" is what the fill order
+makes of it, not a placement. The board, read over USB with `espflash
+board-info` on 2026-11-02: chip esp32 revision v3.0, 40 MHz crystal, 4 MB
+flash, MAC 10:97:bd:e4:1f:40; a WROVER-E module per Nick (board-info does
+not report PSRAM; the firmware prints the heap size after the PSRAM region
+is added, which is the check). Flashing is `scripts/node-flash.sh`, run by
+Nick in his own shell: it prints the unplug rule, asks, builds, flashes
+with espflash and tees the monitor into `scratch/node-bench-<utc>.log`.
+Host baseline for the same workload on the Mac Studio (M-series, release):
+61.8 µs per scan, tracing off (`cargo run --release -p helmsman-iec
+--example trace_bench`, 2026-11-03).
+
 **Phase 2, one real block (G4, G5).** The async `Transport` over
 `embassy-net`, DI read and DO write batched per scan, DO0 to DO3 looped to
 DI0 to DI3 as in the tabletop bench card. Flash over USB with Ethernet
