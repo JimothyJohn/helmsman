@@ -39,6 +39,7 @@ mod commit;
 mod devices;
 mod editor;
 mod glyphs;
+mod history_ui;
 mod hotkeys;
 mod icons;
 mod messages;
@@ -51,6 +52,7 @@ mod playground_tests;
 mod playground_view;
 mod projects;
 mod remote;
+mod requirements;
 mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod review_tests;

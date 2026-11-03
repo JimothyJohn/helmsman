@@ -297,6 +297,7 @@ fn forward(head: &Head, r: &mut impl BufRead, w: &mut impl Write, cfg: &Config) 
         path: &path,
         headers: &headers,
         json: Some(&body),
+        raw: None,
     };
     let t = Timeouts {
         connect: Duration::from_secs(10),

@@ -15,7 +15,7 @@ use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
-use crate::sim_projects::{SimProjects, Storage};
+use crate::sim_projects::{SimProjects, SimRevision, Storage};
 use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 use crate::theme::{Theme, theme};
@@ -116,6 +116,15 @@ pub struct PlaygroundView {
     pub proj: SimProjects,
     pub files_ui: FilesUi,
     pub devices_ui: crate::devices::DevicesUi,
+    /// The question "what is this program called?", asked once per
+    /// conversation before its first PROGRAM answer lands.
+    pub program_name: Option<ProgramName>,
+    /// The revision on view (the History modal).
+    pub revision: Option<crate::history_ui::RevisionView>,
+    /// The project's requirement tests, as last run in this page
+    /// (`crate::requirements`): after every build change, before Deploy
+    /// and "Use this code".
+    pub tests: crate::requirements::Results,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -169,13 +178,87 @@ impl PlaygroundView {
             proj,
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
+            program_name: None,
+            revision: None,
+            tests: crate::requirements::Results::default(),
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
         v.session.set_running(true);
         v.proj.running = Some(v.proj.open.clone());
+        v.load_pages();
         v.sync_viewer();
+        v.run_tests();
         v
+    }
+
+    /// The open project's Agent pages into the chat (a project opened).
+    fn load_pages(&mut self) {
+        let pages = self
+            .proj
+            .agent_text()
+            .map(helmsman_project::agent::parse)
+            .unwrap_or_default();
+        self.chat.load_pages(pages);
+    }
+
+    /// The chat's pages into the open project, when they changed: written
+    /// as they come, so a reload finds them.
+    fn save_pages(&mut self) {
+        if !self.chat.pages_dirty {
+            return;
+        }
+        self.chat.pages_dirty = false;
+        let text = helmsman_project::agent::render(&self.chat.pages());
+        self.proj.set_agent_text(&text);
+    }
+
+    /// How this page runs the project's requirement tests: the session's
+    /// scan period, the simulation's image sizes.
+    fn test_settings(&self) -> helmsman_iec::spec::Settings {
+        helmsman_iec::spec::Settings::new(crate::playground::SIZES)
+            .period(std::time::Duration::from_millis(self.session.period_ms.max(1)))
+    }
+
+    /// Runs the open project's requirement tests against its build and
+    /// keeps the results for the Requirements tab.
+    pub fn run_tests(&mut self) {
+        let plan = self.proj.test_plan();
+        let v = helmsman_iec::spec::run_all(&plan, self.test_settings());
+        self.tests = crate::requirements::Results::from_verdicts(&v);
+    }
+
+    /// The gate "Use this code" and Deploy share: why the project (with
+    /// `extra` added or replacing a file, for a candidate) must not land,
+    /// if a requirement test is red. Runs the tests on the candidate and,
+    /// when it is the project as it stands, keeps the results.
+    fn tests_refuse(&mut self, extra: Option<(&str, &str)>) -> Option<String> {
+        let settings = self.test_settings();
+        let results = match extra {
+            None => {
+                self.run_tests();
+                self.tests.clone()
+            }
+            Some((file, text)) => {
+                let mut files: std::collections::BTreeMap<&str, &str> = self
+                    .proj
+                    .files
+                    .iter()
+                    .map(|(n, t)| (n.as_str(), t.as_str()))
+                    .collect();
+                files.insert(file, text);
+                let plan = helmsman_iec::spec::plan(
+                    files
+                        .iter()
+                        .filter(|(n, _)| {
+                            helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St)
+                        })
+                        .map(|(n, t)| (*n, *t)),
+                );
+                crate::requirements::Results::from_verdicts(&helmsman_iec::spec::run_all(&plan, settings))
+            }
+        };
+        results.refusal()
     }
 
     /// Loads the open project's build into the session, compiled and
@@ -185,13 +268,16 @@ impl PlaygroundView {
         self.session.load(&src);
         self.pending = None;
         self.sync_viewer();
+        self.run_tests();
     }
 
     /// Opens project `name` and runs it if it compiles (Nick, 2026-11-01:
     /// an example that opens stopped looks dead); an edit still waits for
     /// Deploy.
     pub fn open_project(&mut self, name: &str) {
+        self.save_pages();
         self.proj.open_project(name);
+        self.load_pages();
         self.reload();
         self.notice = None;
         if self.session.build.as_ref().is_some_and(|b| b.module.is_some()) {
@@ -239,20 +325,31 @@ impl PlaygroundView {
     fn act(&mut self, a: Act) {
         match a {
             Act::UseAnswer { name, text, save } => {
-                if save {
+                // A block answer lands in the open project: the project's
+                // requirement tests must stay green with it in. (A PROGRAM
+                // answer opens a new project, which has no tests yet.)
+                if !text.to_ascii_uppercase().contains("PROGRAM ") {
+                    let file = self.proj.free_file(&format!("{name}.st"));
+                    if let Some(why) = self.tests_refuse(Some((&file, &text))) {
+                        self.notice = Some(why.clone());
+                        self.log.error(
+                            self.session.now_ms as f64 / 1000.0,
+                            format!("Use this code: {why}"),
+                        );
+                        return;
+                    }
+                }
+                // Unsaved edits first (a save is a revision: none when
+                // there is nothing to save).
+                if save && self.proj.dirty() {
                     self.proj.save();
-                } else {
+                } else if !save {
                     let open = self.proj.open.clone();
                     self.proj.open_project(&open);
                 }
+                let mut dropped = 0;
                 if text.to_ascii_uppercase().contains("PROGRAM ") {
-                    let project = self.proj.free_name(&name);
-                    self.proj.create(&project, None);
-                    self.proj.open_project(&project);
-                    let file = format!("{name}.st");
-                    self.proj.files.clear();
-                    self.proj.files.insert(file.clone(), text);
-                    self.proj.current = file;
+                    dropped = self.land_program(&name, text);
                 } else {
                     let file = self.proj.free_file(&format!("{name}.st"));
                     self.proj.new_file(&file);
@@ -260,15 +357,35 @@ impl PlaygroundView {
                         *t = text;
                     }
                 }
-                self.proj.save();
+                // Recorded with the page that produced it.
+                let page = self
+                    .chat
+                    .history
+                    .last()
+                    .map(|e| format!("{}\n\n{}", e.question, e.answer));
+                let what = format!("took the Agent's answer into {}", self.proj.current);
+                self.proj.save_as(&what, page.as_deref());
                 self.reload();
+                let size = if dropped > 0 {
+                    format!(" {dropped} oldest iteration(s) dropped: the project was past its size.")
+                } else {
+                    String::new()
+                };
                 self.notice = Some(format!(
-                    "{} opened from the Agent's answer; Deploy runs it.",
+                    "{} opened from the Agent's answer; Deploy runs it.{size}",
                     self.proj.current
                 ));
             }
             Act::OpenProject(p) => self.open_project(&p),
             Act::OpenFile(f) => self.proj.open_file(&f),
+            Act::ShowRevision(n) => {
+                self.revision = self
+                    .proj
+                    .revisions()
+                    .iter()
+                    .find(|r| r.n == n)
+                    .map(SimRevision::view);
+            }
             Act::NewProject(p) => {
                 self.proj.create(&p, None);
                 self.reload();
@@ -350,6 +467,7 @@ impl PlaygroundView {
             self.pending = None;
             let src = self.session.src.clone();
             self.session.check(&src);
+            self.run_tests();
         }
     }
 
@@ -471,9 +589,38 @@ impl PlaygroundView {
         true
     }
 
-    /// [`Self::use_answer`] for `code` already in hand.
+    /// [`Self::use_answer`] for `code` already in hand. A PROGRAM goes to
+    /// the conversation's program (Nick, 2026-11-01: named once, asked
+    /// here the first time, see [`ProgramName`]); a block goes into the
+    /// open project as a file.
     pub fn take_code(&mut self, code: String) {
-        let name = answer_name(&code);
+        let is_program = code.to_ascii_uppercase().contains("PROGRAM ");
+        let name = match (&self.chat.program, is_program) {
+            (Some(p), true) => p.clone(),
+            (None, true) => {
+                // The PROGRAM's name to start from; past a built-in example's
+                // name (read-only), the next free one.
+                let want = answer_name(&code);
+                let input = if self.proj.examples.contains_key(&want) {
+                    self.proj.free(&want)
+                } else {
+                    want
+                };
+                self.program_name = Some(ProgramName {
+                    text: code.clone(),
+                    input,
+                    error: None,
+                });
+                return;
+            }
+            (_, false) => answer_name(&code),
+        };
+        self.use_named(name, code);
+    }
+
+    /// The code into project (or file) `name`, after the unsaved-edits
+    /// question when there is one.
+    fn use_named(&mut self, name: String, code: String) {
         let act = Act::UseAnswer {
             name,
             text: code,
@@ -483,6 +630,149 @@ impl PlaygroundView {
             self.files_ui.confirm = Some(act);
         } else {
             self.act(act);
+        }
+    }
+
+    /// The name typed for the conversation's program is taken: the
+    /// pending code lands there (the modal's OK; tests call it).
+    pub fn confirm_program_name(&mut self) {
+        let Some(mut p) = self.program_name.take() else {
+            return;
+        };
+        let name = p.input.trim().to_ascii_lowercase();
+        if !helmsman_project::project_name(&name) {
+            p.error =
+                Some("A program's name is 1 to 48 of a-z 0-9 _ -, starting with a letter or digit.".into());
+            self.program_name = Some(p);
+            return;
+        }
+        if self.proj.examples.contains_key(&name) {
+            p.error = Some(format!(
+                "{name} is a built-in example and read-only: pick another name."
+            ));
+            self.program_name = Some(p);
+            return;
+        }
+        self.chat.program = Some(name.clone());
+        self.use_named(name, p.text);
+    }
+
+    /// A PROGRAM answer into project `project` (made if there is none):
+    /// the newest is always `main.st`; the one it replaced becomes the
+    /// next `vN.st`, kept under "earlier" and never built. When the
+    /// project would outgrow its size, the oldest iterations go first;
+    /// returns how many went.
+    fn land_program(&mut self, project: &str, text: String) -> usize {
+        let fresh = !self.proj.exists(project);
+        if fresh {
+            self.proj.create(project, None);
+            // `create` opens it with the starter program; the answer takes its place.
+            self.proj.files.clear();
+        } else if self.proj.open != project {
+            self.proj.open_project(project);
+        }
+        let main = helmsman_project::MAIN;
+        if let Some(old) = self.proj.files.remove(main) {
+            let n = helmsman_project::Files(self.proj.files.clone()).next_iteration();
+            self.proj.files.insert(helmsman_project::iteration_name(n), old);
+        }
+        self.proj.files.insert(main.to_string(), text);
+        self.proj.current = main.to_string();
+        let mut dropped = 0;
+        while helmsman_project::Files(self.proj.files.clone()).total() > helmsman_project::MAX_TOTAL {
+            let oldest = helmsman_project::Files(self.proj.files.clone())
+                .iterations()
+                .next()
+                .map(|(_, f)| f.to_string());
+            let Some(oldest) = oldest else { break };
+            self.proj.files.remove(&oldest);
+            dropped += 1;
+        }
+        dropped
+    }
+
+    /// The revision on view, in the middle of the screen, until Close or
+    /// Restore (a built-in example is read-only).
+    fn revision_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        let Some(view) = self.revision.clone() else {
+            return;
+        };
+        let current: std::collections::BTreeMap<String, String> = self
+            .proj
+            .files
+            .iter()
+            .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        let write = if self.proj.is_example() {
+            Err("A built-in example is read-only: copy the project first.".into())
+        } else {
+            Ok(())
+        };
+        match crate::history_ui::modal(ctx, chrome, &view, &current, &write) {
+            Some(crate::history_ui::HistoryAct::Close) => self.revision = None,
+            Some(crate::history_ui::HistoryAct::Restore(n)) => {
+                self.revision = None;
+                if self.proj.restore(n) {
+                    self.reload();
+                    self.notice = Some(format!("Revision {n} restored."));
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// The "Name the program" question as a box in the middle of the
+    /// screen (the view draws it each frame after the Editor).
+    fn program_name_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        let Some(mut p) = self.program_name.clone() else {
+            return;
+        };
+        let mut done = false;
+        let mut ok = false;
+        let m = egui::Modal::new(egui::Id::unique("pg-program-name")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(
+                RichText::new("Name this program")
+                    .strong()
+                    .size(16.0),
+            );
+            ui.label("The Agent's answers in this conversation land in a project of this name: the newest as main.st, the earlier ones kept under it.");
+            ui.add_space(8.0);
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut p.input)
+                    .hint_text("a-z 0-9 _ -")
+                    .desired_width(f32::INFINITY),
+            );
+            chrome.hit("program name", field.rect);
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if let Some(e) = &p.error {
+                ui.colored_label(RED, e);
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let yes = ui.add(egui::Button::new(RichText::new("Use this code").strong()).min_size(tall));
+                chrome.hit("program ok", yes.rect);
+                let no = ui.add(egui::Button::new("Cancel").min_size(tall));
+                chrome.hit("program cancel", no.rect);
+                if yes.clicked() || enter {
+                    ok = true;
+                } else if no.clicked() {
+                    done = true;
+                }
+            });
+        });
+        chrome.hit("program form", m.response.rect);
+        // OK first: the click that pressed it also reads as a click on
+        // the modal's backdrop, which would otherwise shut the question.
+        if ok {
+            self.program_name = Some(p);
+            self.confirm_program_name();
+        } else if done || m.should_close() {
+            self.program_name = None;
+        } else {
+            self.program_name = Some(p);
         }
     }
 
@@ -501,6 +791,11 @@ impl PlaygroundView {
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
         }
+        // Drawn after the unsaved-edits question: a modal that appears in
+        // the frame a click is released in reads that release as a click
+        // on its backdrop and shuts itself.
+        self.program_name_ui(&ui.ctx().clone(), chrome);
+        self.revision_ui(&ui.ctx().clone(), chrome);
     }
 
     /// Runs the program (and Claude's answer) on with nothing drawn: the
@@ -513,6 +808,7 @@ impl PlaygroundView {
         for m in self.link.drain() {
             self.chat.receive(m);
         }
+        self.save_pages();
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
         self.arrange();
@@ -746,10 +1042,14 @@ impl Body for PlaygroundView {
             .proj
             .files
             .keys()
+            // The Agent's pages are the Agent tab's, not a file to open.
+            .filter(|f| !helmsman_project::agent::is_agent_file(f))
             .map(|f| (f.clone(), self.proj.file_dirty(f)))
             .collect();
         let open = self.proj.open.clone();
         let current = self.proj.current.clone();
+        let history: Vec<crate::history_ui::RevisionRow> =
+            self.proj.revisions().iter().map(SimRevision::row).collect();
         let listing = Listing {
             projects: &rows,
             open: Some(&open),
@@ -758,6 +1058,8 @@ impl Body for PlaygroundView {
             write: Ok(()),
             dirty: self.proj.dirty(),
             starters: false,
+            running: self.proj.running.as_deref() == Some(open.as_str()),
+            history: &history,
         };
         if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
             self.act(a);
@@ -827,13 +1129,20 @@ impl Body for PlaygroundView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Claude]
+        &[Tab::Io, Tab::Requirements, Tab::Claude]
     }
 
-    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab) {
+    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         match tab {
             Tab::Io => self.io(ui),
-            Tab::Claude => self.claude(ui),
+            Tab::Requirements => {
+                egui::ScrollArea::vertical().id_salt("pg-tests").show(ui, |ui| {
+                    if crate::requirements::ui(ui, chrome, &self.tests, "run in this page", false) {
+                        self.run_tests();
+                    }
+                });
+            }
+            Tab::Claude => self.claude(ui, chrome),
         }
     }
 
@@ -989,7 +1298,7 @@ impl PlaygroundView {
         self.trend_plot(ui);
     }
 
-    fn claude(&mut self, ui: &mut egui::Ui) {
+    fn claude(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().id_salt("pg-claude").show(ui, |ui| {
@@ -1052,8 +1361,77 @@ impl PlaygroundView {
                 ui.colored_label(RED, e);
             }
             ui.separator();
-            self.answer_ui(ui);
+            self.pages_ui(ui, chrome);
+            match self.chat.viewing().cloned() {
+                Some(page) => self.page_ui(ui, &page),
+                None => self.answer_ui(ui),
+            }
         });
+    }
+
+    /// The page strip (Nick, 2026-11-01): ‹ › through the kept pages,
+    /// "page k of n", Delete for the one on view. Every kept page goes to
+    /// the model as context, so deleting one shapes what it sees.
+    fn pages_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
+        let n = self.chat.history.len();
+        if n == 0 {
+            return;
+        }
+        let at = self.chat.page;
+        ui.horizontal_wrapped(|ui| {
+            let prev = ui.add_enabled(at != Some(0), egui::Button::new("‹"));
+            chrome.hit("page prev", prev.rect);
+            if prev.on_hover_text("the page before").clicked() {
+                self.chat.prev_page();
+            }
+            let next = ui.add_enabled(at.is_some(), egui::Button::new("›"));
+            chrome.hit("page next", next.rect);
+            if next
+                .on_hover_text("the page after; past the last, the new answer")
+                .clicked()
+            {
+                self.chat.next_page();
+            }
+            let where_ = match at {
+                Some(k) => format!("page {} of {n}", k + 1),
+                None => format!("{n} page(s) kept"),
+            };
+            let l = ui.label(RichText::new(where_).color(t.muted));
+            chrome.hit("page where", l.rect);
+            if at.is_some() {
+                let del = ui.button("Delete page");
+                chrome.hit("page delete", del.rect);
+                if del
+                    .on_hover_text("drops this page from the conversation and from what the model sees")
+                    .clicked()
+                {
+                    self.chat.delete_page();
+                }
+            }
+        });
+        ui.separator();
+    }
+
+    /// An earlier page: its question, its answer, and Use this code when
+    /// the answer holds a program.
+    fn page_ui(&mut self, ui: &mut egui::Ui, page: &crate::claude::Exchange) {
+        let t = theme(ui);
+        ui.label(RichText::new(page.question.trim()).strong().color(t.fg));
+        ui.add_space(4.0);
+        markdown(ui, &page.answer);
+        if let Some(code) = crate::claude::extract_program(&page.answer) {
+            let b = egui::Button::new(RichText::new("Use this code").strong().color(BLACK))
+                .fill(YELLOW)
+                .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
+            if ui
+                .add(b)
+                .on_hover_text("a new project (or file) named after it, opened; Deploy runs it")
+                .clicked()
+            {
+                self.take_code(code);
+            }
+        }
     }
 
     fn key_ui(&mut self, ui: &mut egui::Ui) {
@@ -1451,6 +1829,15 @@ enum MapInput {
     Set(Value),
 }
 
+/// The "what is this program called?" question: the code waiting to
+/// land, the name typed so far, and why the last one was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramName {
+    pub text: String,
+    pub input: String,
+    pub error: Option<String>,
+}
+
 /// A name for the Agent's answer: the `PROGRAM`, `FUNCTION_BLOCK` or
 /// `FUNCTION` it declares, lower-cased, else `agent`.
 #[must_use]
@@ -1632,6 +2019,15 @@ impl Workspace for PlaygroundView {
     /// an edit reaches the program running. One that does not compile is
     /// refused, its errors listed, and the program running is unchanged.
     fn deploy(&mut self) {
+        // A red requirement test refuses the deploy, naming it.
+        if let Some(why) = self.tests_refuse(None) {
+            self.notice = Some(why.clone());
+            self.log.error(
+                self.session.now_ms as f64 / 1000.0,
+                format!("Deploy of {} refused. {why}", self.proj.open),
+            );
+            return;
+        }
         let src = self.proj.build_src();
         let ok = self.session.set_source(&src);
         self.pending = None;

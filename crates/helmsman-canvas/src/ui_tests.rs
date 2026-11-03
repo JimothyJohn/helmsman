@@ -555,6 +555,52 @@ mod polish {
     }
 
     /// The hit stays "tab claude" (the stored key); only the label changed.
+    /// Nick, 2026-11-01: the conversation is pages with ‹ › and a
+    /// delete, in the Agent tab.
+    #[test]
+    fn the_agent_tab_pages_through_the_conversation() {
+        use crate::claude::Incoming;
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        assert!(!h.has("page prev"), "no pages, no strip");
+        {
+            let chat = &mut h.app.sim.as_mut().unwrap().chat;
+            chat.receive(Incoming::Proxy(true));
+            for q in ["first", "second"] {
+                chat.question = q.into();
+                let (seq, _) = chat.ask("x", &[], "").unwrap();
+                chat.receive(Incoming::Chunk {
+                    seq,
+                    text: crate::playground_tests::STREAM.into(),
+                });
+                chat.receive(Incoming::End { seq });
+            }
+        }
+        h.wait(0.2);
+        assert!(h.has("page prev") && h.has("page next"), "the strip");
+        assert!(!h.has("page delete"), "the live answer is not a page to delete");
+        h.press("page prev");
+        h.wait(0.2);
+        assert_eq!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .chat
+                .viewing()
+                .map(|e| e.question.clone()),
+            Some("second".into())
+        );
+        assert!(h.has("page delete"));
+        h.press("page delete");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().chat.history.len(), 1);
+        h.press("page next");
+        h.wait(0.2);
+        assert!(h.app.sim.as_ref().unwrap().chat.viewing().is_none());
+    }
+
     #[test]
     fn the_third_tab_reads_agent() {
         assert_eq!(Tab::Claude.label(), "Agent");
@@ -1107,6 +1153,170 @@ mod chrome {
         );
     }
 
+    /// The Files tab shows the program's files, marks main.st as the one
+    /// running, and folds the earlier iterations under one row.
+    #[test]
+    fn the_files_tab_folds_the_earlier_iterations() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj
+                .files
+                .insert("v1.st".into(), "PROGRAM old END_PROGRAM".into());
+            sim.proj
+                .files
+                .insert("v2.st".into(), "PROGRAM older END_PROGRAM".into());
+            sim.proj.save();
+            sim.open_project("mine");
+        }
+        h.press("pane files");
+        h.wait(0.3);
+        assert!(h.has("file main.st"));
+        assert!(h.has("earlier"), "the fold row");
+        assert!(!h.has("file v1.st") && !h.has("file v2.st"), "folded by default");
+        h.press("earlier");
+        h.wait(0.2);
+        assert!(h.has("file v2.st") && h.has("file v1.st"));
+        let v2 = h.rect("file v2.st");
+        let v1 = h.rect("file v1.st");
+        assert!(v2.top() < v1.top(), "newest first");
+        h.press("earlier");
+        h.wait(0.2);
+        assert!(!h.has("file v1.st"));
+    }
+
+    /// The Files tab's History row folds the revisions; a revision opens
+    /// in the centre with its diff and Restore, and Close shuts it.
+    #[test]
+    fn the_files_tab_lists_revisions_and_opens_one_in_the_centre() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.open_project("mine");
+            sim.proj.current_text_mut().unwrap().push_str("\n(* one *)");
+            sim.proj.save();
+            sim.proj.current_text_mut().unwrap().push_str("\n(* two *)");
+            sim.proj.save();
+        }
+        h.press("pane files");
+        h.wait(0.3);
+        assert!(h.has("history"), "the fold row");
+        assert!(!h.has("revision 1"), "folded by default");
+        h.press("history");
+        h.wait(0.2);
+        assert!(h.has("revision 1") && h.has("revision 2"));
+        let r2 = h.rect("revision 2");
+        let r1 = h.rect("revision 1");
+        assert!(r2.top() < r1.top(), "newest first");
+        h.press("revision 1");
+        h.wait(0.3);
+        assert!(h.has("revision form") && h.has("revision restore") && h.has("revision close"));
+        assert!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .revision
+                .as_ref()
+                .is_some_and(|v| v.row.n == 1)
+        );
+        h.press("revision restore");
+        h.wait(0.3);
+        assert!(!h.has("revision form"), "restored and shut");
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            sim.proj.files["main.st"].ends_with("(* one *)"),
+            "revision 1's text is back"
+        );
+        assert_eq!(sim.proj.revisions().len(), 3);
+        assert_eq!(sim.proj.revisions()[2].what, "restored revision 1");
+        h.press("revision 2");
+        h.wait(0.3);
+        assert!(h.has("revision form"));
+        h.press("revision close");
+        h.wait(0.2);
+        assert!(!h.has("revision form"));
+    }
+
+    /// Requirement tests in the simulation (TODO.md spec-tests): the
+    /// Requirements tab lists the project's `test_*.st` files green or
+    /// red with why; a red one refuses Deploy and a block answer's "Use
+    /// this code", naming it; a test file never builds into the program;
+    /// fixed, the deploy goes through.
+    #[test]
+    fn requirement_tests_gate_deploy_and_use_this_code_in_the_simulation() {
+        let mut h = Harness::new(App::sim());
+        h.press("tab tests");
+        h.wait(0.3);
+        assert_eq!(h.app.chrome.tab, Tab::Requirements);
+        assert!(h.has("tests run"));
+        assert!(!h.has("test test_lamp"), "the blink example has no tests");
+        let main = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
+        let red = "(* The lamp stays off while start is held. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_stays_off : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_stays_off(COND := NOT lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj.files.insert("main.st".into(), main.into());
+            sim.proj.add_file("test_lamp.st", red.into());
+            sim.proj.save();
+            sim.open_project("mine");
+        }
+        h.wait(0.3);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.tests.ran && sim.tests.rows.len() == 1, "{:?}", sim.tests);
+        assert!(!sim.tests.rows[0].passed);
+        assert_eq!(
+            sim.tests.rows[0].requirement,
+            "The lamp stays off while start is held."
+        );
+        assert!(h.has("test test_lamp"), "the row shows");
+        assert!(
+            !sim.session.src.contains("PROGRAM test_lamp"),
+            "the test is not in the build"
+        );
+        // Deploy: refused, with the test named.
+        h.key(Modifiers::COMMAND, Key::D);
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        let notice = sim.notice.clone().unwrap_or_default();
+        assert!(
+            notice.starts_with("Refused: requirement test test_lamp:"),
+            "{notice}"
+        );
+        // A block answer into this project: refused too; nothing added.
+        let before = sim.proj.files.len();
+        h.app.sim.as_mut().unwrap().take_code(
+            "FUNCTION_BLOCK helper\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT y : BOOL; END_VAR\ny := x;\nEND_FUNCTION_BLOCK\n"
+                .into(),
+        );
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert_eq!(sim.proj.files.len(), before, "{:?}", sim.proj.files.keys());
+        assert!(sim.notice.clone().unwrap_or_default().starts_with("Refused:"));
+        // Fixed: green, Run reruns, Deploy goes through.
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.files.insert(
+                "test_lamp.st".into(),
+                red.replace("stays off", "comes on")
+                    .replace("COND := NOT lamp", "COND := lamp"),
+            );
+        }
+        h.press("tests run");
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.tests.rows[0].passed, "{:?}", sim.tests);
+        h.key(Modifiers::COMMAND, Key::D);
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        let notice = sim.notice.clone().unwrap_or_default();
+        assert!(notice.starts_with("mine is running in this page"), "{notice}");
+        // The tab is remembered.
+        assert_eq!(Chrome::restored(&h.app.chrome.saved()).tab, Tab::Requirements);
+    }
+
     #[test]
     fn double_clicking_a_file_opens_the_code_tab() {
         let mut h = Harness::new(App::sim());
@@ -1130,6 +1340,27 @@ mod chrome {
         let v = h.app.sim.as_mut().unwrap();
         v.proj.current_text_mut().unwrap().push_str("(* edit *)");
         v.take_code("PROGRAM other\nEND_PROGRAM\n".into());
+        // The first PROGRAM answer asks for the program's name first (a
+        // few frames: a new modal settles into the centre on its second).
+        h.wait(0.2);
+        assert!(h.has("program name") && h.has("program ok"));
+        h.press("program ok");
+        {
+            let v = h.app.sim.as_ref().unwrap();
+            assert!(
+                v.program_name.is_none(),
+                "the name was taken: {:?}",
+                v.program_name
+            );
+            assert!(
+                v.files_ui.confirm.is_some(),
+                "the unsaved-edits question is pending: open={} dirty={} program={:?} files={:?}",
+                v.proj.open,
+                v.proj.dirty(),
+                v.chat.program,
+                v.proj.files.keys().collect::<Vec<_>>()
+            );
+        }
         h.frame(vec![]);
         assert!(h.has("confirm yes") && h.has("confirm drop") && h.has("confirm no"));
         h.press("confirm no");
@@ -1955,7 +2186,12 @@ mod reviewing {
 #[test]
 fn the_simulation_survives_a_click_storm_on_every_tab() {
     let mut h = Harness::new(App::sim());
-    for tab in ["tab io", "tab claude"] {
+    for tab in ["tab io", "tab tests", "tab claude"] {
+        // A storm may have hit the panel's hide chevron: open it again.
+        if !h.has(tab) {
+            h.press("right");
+            h.wait(0.3);
+        }
         h.press(tab);
         let below = h.rect("header").bottom() + 4.0;
         for x in (0..1400u16).step_by(131) {

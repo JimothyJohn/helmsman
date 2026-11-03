@@ -65,6 +65,8 @@ Three directions of traffic, three different rules:
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
+| `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10), reply checks (exact lengths, exceptions, echoes), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
+| `helmsman-node` | The edge node's firmware (docs/EDGE.md): `helmsman-iec` without std on an Olimex ESP32-POE2 (esp-hal, the esp toolchain, Xtensa). Not a workspace member (own lock, `make node-build`): the scan bench (Phase 1), then Modbus TCP to a remote block over embassy-net (Phase 2). | built: Phase 1; Phase 2 in progress |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
@@ -594,6 +596,37 @@ unchanged. Such an output is one no device takes: no link polls or writes
 it, a module drives it through a `VAR_OUTPUT` of that name under the
 one-writer rule and safe values, and the Monitor shows it as one of the
 program's outputs. No layout has to fit it any more.
+
+## Requirement tests (`spec-tests`, built; interview 2026-11-02)
+
+A requirement the engineer and the agent agreed on is kept as a test the
+box can run on its own: `test_NAME.st` in the project, a PROGRAM that
+drives the program's inputs, steps the clock and checks its outputs with
+the `ASSERT` standard block (a Helmsman extension in `library.st`:
+`FAILED` latches on the first scan `COND` is FALSE, `FAILED_AT` keeps
+when). The runner is `helmsman_iec::spec`, one code path for the page and
+the box: the test and the program under test are two compiled `Program`s
+scanned in lockstep on one clock at the project's period; each scan the
+test runs first, its `VAR_OUTPUT`s are copied into the program's
+`VAR_INPUT`s of the same name, the program runs, its `VAR_OUTPUT`s are
+copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
+`ASSERT` failed (named as words, with its declaration line's comment, and
+when), either side faulted or does not compile, a shared port's types
+differ, `DONE` never came within the limit (two minutes of simulated
+time), or the test holds no `ASSERT` at all. The test's first comment is
+the requirement in the engineer's words. Deterministic: no wall clock, no
+I/O.
+
+Test files never deploy: the project build (`project::build`) and the
+page's build both skip `spec::is_test` files. The page runs the tests
+after every build change and before Deploy and "Use this code" (a block
+answer is tested with the candidate file in place); a box runs them when a
+project opens, after each save (`POST /api/projects/{p}/tests`, token or
+session, nothing changes) and inside the deploy's approval path, where a
+red test refuses with 409 before anything builds (`projects::red_tests`).
+The Requirements tab of the right panel shows one row per test, green or
+red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
+same gate.
 
 ## Sim replay (`sim-replay`, built)
 
@@ -1394,7 +1427,7 @@ module's unit tests.
 
 ## Agent loop (`agent-loop`, built)
 
-`helmsman-plc --relay URL --relay-token FILE [--relay-agent v3]` turns on
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v6]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
 an Anthropic key, and names no model, prompt or tool schema: the relay
@@ -1591,6 +1624,23 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   object's Get Instance Attribute List only (`LogixDriver::browse`); it
   exists for the `logix-tag` devices in the I/O map. Nothing ever goes
   back into the customer's PLC.
+- **Fetched documentation** (relay agent v6): `fetch_document {url,
+  vendor_id, product_code, query}` is the one tool the relay runs. The
+  box posts the input to the relay's
+  `POST /v1/agents/{version}/tools/fetch_document` with its relay token;
+  the relay answers with the public device library's record (nothing
+  fetched), a document from an allow-listed vendor site (PDF, EDS, text or
+  an HTML page as text, with its kind, name, SHA-256 and source in
+  headers), or a refusal (`404 no_match`, `403 fetch_refused`,
+  `429 rate_limited`, `502 fetch_failed`, each a tool error in words). The
+  box checks the document (the relay's caps, 12 MiB for a PDF and 2 MiB
+  for an EDS or text; the hash; a PDF's magic) and stores it as a
+  drop-in through `POST /api/dropins`, whose own caps (2 MiB PDF, 1 MiB
+  text) still apply and come back as a tool error. The model gets
+  `{dropin_id, name, kind, size, sha256, source}` and
+  reads an EDS or text with `read_dropin`; a PDF is read when attached to
+  a message. A box without a relay answers the tool with an error; the
+  MCP route offers the same tool with the box's relay.
 - **Watch modules.** A conversation that has read a PLC drop-in is
   watch-only from then on (`Drafts::watch_only`): its checks, simulations
   and proposals go to the box with `watch: true`, and it can propose no
@@ -2067,7 +2117,7 @@ path that drives an output).
   even a proposal. One question per conversation, none kept; its own
   budget (6 turns, 32k output tokens, 3 min); the chat's running slots.
   `--relay-explain-agent V` asks the relay for an explain profile
-  (default `explain-v1`: the relay's read-only, floor-language profile;
+  (default `explain-v2`: the relay's read-only, floor-language profile;
   the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.

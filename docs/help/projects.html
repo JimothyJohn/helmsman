@@ -93,6 +93,18 @@ files heading to paste without a file under the pointer.</li>
 clicked last (the open project when none). Every delete asks first, in
 the middle of the screen; Escape keeps it. The examples cannot be
 deleted.</li>
+<li><strong>earlier (n)</strong> folds the program's earlier iterations,
+<code>v1.st</code>, <code>v2.st</code>, ... (what <code>main.st</code>
+was before each answer you took from the Agent). They are kept with the
+project and never built; click the row to see them, newest first.
+<code>main.st</code> is marked when the project runs.</li>
+<li><strong>history (n)</strong> folds the project's revisions: every
+save, upload, import and restore, newest first, with who did it, when
+and what. Click one to see it in the middle of the screen: the Agent
+page it came from, if any, and each file's lines added and removed
+since. <strong>Restore this revision</strong> puts the files back as
+they were (a new revision; an engineer's on a box). The box keeps the
+last two hundred, the simulation the last twenty, in this browser.</li>
 <li>The tree under the files is the program: the <code>PROGRAM</code>,
 then each function block instance it calls, nested. Click one to see its
 diagram.</li>
@@ -109,6 +121,39 @@ simulation, on the box through its approval policy on a box. A project
 that does not compile is refused with its errors by file and line.</p>
 <p>On a box, a file someone else saved since you opened it is refused
 alone and offers Reload; the other files land.</p>
+<h2 id="requirement-tests">Requirement tests</h2>
+<p>A requirement is worth keeping as a test. A file named
+<code>test_NAME.st</code> is one: a PROGRAM that drives the program's
+inputs, lets the clock run and checks the outputs. Its first comment
+states the requirement in your words; the <strong>Requirements</strong>
+tab of the side panel shows one row per test, green or red, and for a
+red one which check failed and when.</p>
+<pre class="st"><code>(* The lamp is on within 2 s of start_pb. *)
+PROGRAM test_lamp
+VAR_INPUT lamp : BOOL; END_VAR            (* the program&#39;s output *)
+VAR_OUTPUT start_pb : BOOL; done : BOOL; END_VAR   (* its input; the end *)
+VAR t : TON; lamp_on_in_time : ASSERT; (* on within 2 s *) END_VAR
+start_pb := TRUE;
+t(IN := TRUE, PT := T#2s);
+IF t.Q THEN
+  lamp_on_in_time(COND := lamp);
+  done := TRUE;
+END_IF;
+END_PROGRAM</code></pre>
+<p>The test's <code>VAR_OUTPUT</code>s drive the program's
+<code>VAR_INPUT</code>s of the same name, and its
+<code>VAR_INPUT</code>s read the program's <code>VAR_OUTPUT</code>s.
+<code>ASSERT</code> latches the first scan its <code>COND</code> is
+FALSE; <code>done</code> ends the test. A test that never sets
+<code>done</code>, holds no <code>ASSERT</code>, or does not compile is
+red. Test files are never part of what runs.</p>
+<p>The page runs the tests whenever the project's build changes; a box
+runs them when a project opens, after each save and before every deploy
+(<code>POST /api/projects/{p}/tests</code> runs them on demand).
+<strong>A red test refuses Deploy and the Agent's "Use this
+code"</strong>, naming the requirement, so a change cannot land past a
+requirement it breaks. Ask the Agent to write the first tests from your
+requirements, then edit them like any file.</p>
 <h2 id="upload-and-download">Upload and download</h2>
 <p><strong>Download</strong> (the glyph, File › Download) gives you the
 project as a <code>.zip</code>. <strong>Upload</strong> takes a

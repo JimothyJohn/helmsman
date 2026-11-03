@@ -19,8 +19,28 @@ not left wondering.
 Ask for a program ("a conveyor with a photo eye that stops after three
 parts"), for a change to the open one ("add a two-second delay before the
 belt starts"), or for an explanation ("why does the lamp blink?"). The
-answer's code goes into the editor with **Use this**; nothing runs until
-you deploy it, and the editor marks any error first.
+answer's code goes into the editor with **Use this code**; nothing runs
+until you deploy it, and the editor marks any error first.
+
+## One program, many iterations
+
+The first time you take a program from a conversation, the Agent asks
+what the program is called; that is the project its answers go to from
+then on. Each answer you take becomes `main.st`, and the one it replaced
+is kept beside it as `v1.st`, `v2.st`, and so on, as many as you like.
+Only `main.st` builds and runs; the earlier ones sit folded under
+**earlier** in the Files tab for you to read or copy. A new conversation
+asks for a name again.
+
+## Pages
+
+Every question and its answer is kept as a page of the conversation,
+with the project: reload the page or download the project and they are
+still there (the file is `agent.md`; the build ignores it). The ‹ and ›
+buttons walk the pages, **Delete page** drops the one you are reading,
+and **New conversation** drops them all. Every page you keep goes back to
+the Agent with your next question, so pruning the pages is how you shape
+what it sees. An earlier page's code has its own **Use this code**.
 
 ## On a box
 

@@ -65,7 +65,21 @@ pub enum PCall {
         file: String,
     },
     Check(String),
+    /// `POST /api/projects/{p}/tests`: its requirement tests, run on the box.
+    Tests(String),
     Replay(String),
+    /// `GET .../history`: the project's revisions.
+    History(String),
+    /// `GET .../history/{n}`: one revision, whole.
+    Revision {
+        project: String,
+        n: u32,
+    },
+    /// `POST .../history/{n}/restore`.
+    Restore {
+        project: String,
+        n: u32,
+    },
     Deploy {
         project: String,
         replay: Option<u64>,
@@ -159,6 +173,17 @@ impl PReq {
             ctype: JSON,
         }
     }
+}
+
+/// A revision as the box lists it.
+fn revision_row(j: &Json) -> Option<crate::history_ui::RevisionRow> {
+    Some(crate::history_ui::RevisionRow {
+        n: u32::try_from(j["n"].as_u64()?).ok()?,
+        at_ms: j["at_ms"].as_u64().unwrap_or(0),
+        by: j["by"].as_str().unwrap_or("?").to_string(),
+        what: j["what"].as_str().unwrap_or("").to_string(),
+        page: j["page"].as_bool() == Some(true) || j["page"].is_string(),
+    })
 }
 
 fn project_url(p: &str) -> String {
@@ -267,6 +292,10 @@ pub struct BoxProjects {
     pub deployed: bool,
     /// Links to hand the browser as downloads.
     pub downloads: Vec<String>,
+    /// The open project's revisions, oldest first, as last read.
+    pub history: Vec<crate::history_ui::RevisionRow>,
+    /// The revision on view (the History modal).
+    pub revision: Option<crate::history_ui::RevisionView>,
     /// The running project's shared diagram layout, once read.
     pub layout: Option<SharedLayout>,
     /// A layout this page saved as the default, for the view to adopt.
@@ -275,6 +304,12 @@ pub struct BoxProjects {
     saving_layout: Option<String>,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
+    /// The open project's requirement tests as the box last ran them
+    /// (`crate::requirements`): asked when the project opens, after each
+    /// save, on Run, and reported by a refused deploy.
+    pub tests: crate::requirements::Results,
+    /// A test run is on its way.
+    pub testing: bool,
     queue: Vec<PReq>,
 }
 
@@ -368,8 +403,44 @@ impl BoxProjects {
         });
         self.diags.clear();
         self.conflict = None;
+        self.history.clear();
+        self.revision = None;
         self.queue
             .push(PReq::get(PCall::Project(name.into()), project_url(name)));
+        self.read_history(name);
+    }
+
+    /// Asks for project `name`'s revisions (the Files tab's History row).
+    pub fn read_history(&mut self, name: &str) {
+        self.queue.push(PReq::get(
+            PCall::History(name.into()),
+            format!("{}/history", project_url(name)),
+        ));
+    }
+
+    /// Asks for revision `n` of project `name`, whole, to show.
+    pub fn read_revision(&mut self, name: &str, n: u32) {
+        self.queue.push(PReq::get(
+            PCall::Revision {
+                project: name.into(),
+                n,
+            },
+            format!("{}/history/{n}", project_url(name)),
+        ));
+    }
+
+    /// The project's files back to revision `n` (an engineer; the box
+    /// records it as a new revision).
+    pub fn restore(&mut self, name: &str, n: u32) {
+        self.queue.push(PReq::json(
+            PCall::Restore {
+                project: name.into(),
+                n,
+            },
+            "POST",
+            format!("{}/history/{n}/restore", project_url(name)),
+            &json!({}),
+        ));
     }
 
     /// Shows `file` of the open project in the ST editor.
@@ -804,6 +875,21 @@ impl BoxProjects {
                         .cloned();
                 }
                 self.queue.extend(reads);
+                self.run_tests();
+            }
+            PCall::Tests(project) => {
+                self.testing = false;
+                if self.open.as_ref().is_none_or(|o| o.name != project) {
+                    return;
+                }
+                if ok {
+                    self.tests = crate::requirements::Results::from_json(&j);
+                } else {
+                    self.note(
+                        format!("The requirement tests did not run: {}", error_of(a)),
+                        true,
+                    );
+                }
             }
             PCall::File { project, file } => {
                 let Some(o) = self.open.as_mut().filter(|o| o.name == project) else {
@@ -853,7 +939,59 @@ impl BoxProjects {
                     self.note(format!("{name} was not deleted: {}", error_of(a)), true);
                 }
             }
-            PCall::Save { project, file } => self.saved(&project, &file, a, &j),
+            PCall::Save { project, file } => {
+                self.saved(&project, &file, a, &j);
+                if ok {
+                    self.read_history(&project);
+                }
+            }
+            PCall::History(project) => {
+                if ok && self.open.as_ref().is_some_and(|o| o.name == project) {
+                    self.history = j["revisions"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(revision_row).collect())
+                        .unwrap_or_default();
+                }
+            }
+            PCall::Revision { project, n } => {
+                if !ok {
+                    self.note(format!("cannot read revision {n}: {}", error_of(a)), true);
+                    return;
+                }
+                if self.open.as_ref().is_none_or(|o| o.name != project) {
+                    return;
+                }
+                let files = j["files"]
+                    .as_object()
+                    .map(|m| {
+                        m.iter()
+                            .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if let Some(row) = revision_row(&j) {
+                    self.revision = Some(crate::history_ui::RevisionView {
+                        row,
+                        files,
+                        page: j["page"].as_str().map(str::to_string),
+                    });
+                }
+            }
+            PCall::Restore { project, n } => {
+                if ok {
+                    self.revision = None;
+                    self.note(
+                        format!("Revision {n} restored (as revision {}).", j["revision"]),
+                        false,
+                    );
+                    if self.open.as_ref().is_some_and(|o| o.name == project) {
+                        // The files changed under the page: read them again.
+                        self.open_project(&project);
+                    }
+                } else {
+                    self.note(format!("revision {n} was not restored: {}", error_of(a)), true);
+                }
+            }
             PCall::NewFile { project, file } => {
                 if ok {
                     if let Some(o) = self.open.as_mut().filter(|o| o.name == project) {
@@ -961,6 +1099,10 @@ impl BoxProjects {
                     self.replay(&project);
                 } else if a.status == 422 {
                     self.diags = diags_of(&j);
+                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
+                } else if a.status == 409 && j["tests"].is_array() {
+                    // A red requirement test: the tab shows which.
+                    self.tests = crate::requirements::Results::from_json(&j);
                     self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
                 } else {
                     self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
@@ -1103,10 +1245,29 @@ impl BoxProjects {
         if still {
             return;
         }
+        // Saved: the requirement tests run against what is on the box now.
+        self.run_tests();
         if self.deploy == Deploy::Saving {
             self.check();
         } else if !matches!(&self.notice, Some((_, true))) {
             self.note(format!("Saved {project}."), false);
         }
+    }
+
+    /// Asks the box to run the open project's requirement tests
+    /// (`POST /api/projects/{p}/tests`); the Requirements tab shows them.
+    pub fn run_tests(&mut self) {
+        let Some(o) = &self.open else { return };
+        if self.testing {
+            return;
+        }
+        let name = o.name.clone();
+        self.testing = true;
+        self.queue.push(PReq::json(
+            PCall::Tests(name.clone()),
+            "POST",
+            format!("{}/tests", project_url(&name)),
+            &json!({}),
+        ));
     }
 }
