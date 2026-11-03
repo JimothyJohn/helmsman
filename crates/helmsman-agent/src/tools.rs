@@ -733,7 +733,6 @@ fn list_devices(api: &dyn Caller) -> Outcome {
             }));
         }
     }
-    let n = devices.len();
     let (network, unavailable) = match api.post("/api/devices/discover", &json!({})) {
         Ok((200, j)) => (j["devices"].as_array().cloned().unwrap_or_default(), Json::Null),
         Ok((s, b)) => (
@@ -745,19 +744,105 @@ fn list_devices(api: &dyn Caller) -> Outcome {
         ),
         Err(e) => (Vec::new(), json!(e)),
     };
-    let unmapped = network.iter().filter(|d| d["mapped"].is_null()).count();
-    let summary = format!(
-        "{n} device(s) in the map, {} up; {} on the network, {unmapped} not in the map",
-        devices.iter().filter(|d| d["state"] == "up").count(),
-        network.len()
-    );
+    let plant = plant_states(api, &map, &signals);
+    let summary = devices_summary(&devices, &network, &plant);
     ok(
         json!({
             "devices": devices, "map_lines_skipped": map.odd,
             "on_the_network": network, "network_unavailable": unavailable,
+            "plant_states": plant,
         }),
         summary,
     )
+}
+
+/// `list_devices`'s one-line summary.
+fn devices_summary(devices: &[Json], network: &[Json], plant: &[Json]) -> String {
+    let up = devices.iter().filter(|d| d["state"] == "up").count();
+    let unmapped = network.iter().filter(|d| d["mapped"].is_null()).count();
+    let unmeasured = plant.iter().filter(|s| s["measured_by"].is_null()).count();
+    format!(
+        "{} device(s) in the map, {up} up; {} on the network, {unmapped} not in the map; {} plant state(s), {unmeasured} unmeasured",
+        devices.len(),
+        network.len(),
+        plant.len()
+    )
+}
+
+/// Most project files `plant_states` reads.
+const MAX_PLANT_FILES: usize = 32;
+
+/// A Structured Text file of a project, by extension (any case).
+fn is_st_file(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("st"))
+}
+
+/// The running project's plant-model states (`{state}` declarations in
+/// its `.st` files, `helmsman_project::plant`): name, type, unit, the POU
+/// and file, the map `in` signal that measures each (with its live value)
+/// or the sensor kind that would. Each is `simulated_only`: the list is
+/// read from the files, no plant model value comes from a box. Empty when
+/// the box runs no project or its projects cannot be read.
+fn plant_states(api: &dyn Caller, map: &helmsman_project::iomap::MapText, signals: &[Json]) -> Vec<Json> {
+    use helmsman_project::plant;
+    let Ok((200, running)) = api.get("/api/running") else {
+        return Vec::new();
+    };
+    let Some(project) = running["project"].as_str() else {
+        return Vec::new();
+    };
+    let Ok((200, listing)) = api.get(&format!("/api/projects/{}", http::segment(project))) else {
+        return Vec::new();
+    };
+    let names: Vec<String> = listing["files"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| f["name"].as_str())
+                .filter(|n| is_st_file(n))
+                .take(MAX_PLANT_FILES)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for file in names {
+        let Ok((200, f)) = api.get(&format!(
+            "/api/projects/{}/files/{}",
+            http::segment(project),
+            http::segment(&file)
+        )) else {
+            continue;
+        };
+        let Some(text) = f["text"].as_str() else { continue };
+        for v in plant::skim(text) {
+            let measured = plant::measurement_names(&v).iter().find_map(|want| {
+                map.signals
+                    .iter()
+                    .find(|s| s.dir == "in" && s.name.eq_ignore_ascii_case(want))
+                    .map(|s| {
+                        let live = signals.iter().find(|x| {
+                            x["name"]
+                                .as_str()
+                                .is_some_and(|n| n.eq_ignore_ascii_case(&s.name))
+                        });
+                        json!({
+                            "signal": s.name, "device": s.device, "point": s.point,
+                            "value": live.map_or(Json::Null, |l| l["value"].clone()),
+                        })
+                    })
+            });
+            out.push(json!({
+                "name": v.name, "type": v.ty, "unit": v.unit, "pou": v.pou,
+                "file": file, "line": v.line, "simulated_only": true,
+                "measured_by": measured.unwrap_or(Json::Null),
+                "suggested_sensor": plant::suggest(&v),
+            }));
+        }
+    }
+    out
 }
 
 /// A drop-in name the box accepts, from what the relay said the document
@@ -1529,5 +1614,158 @@ fn propose_io_map(api: &dyn Caller, drafts: &mut Drafts, i: &ProposeIoMap) -> Ou
         }
         Ok((s, b)) => unexpected("proposing the I/O map", s, &b),
         Err(e) => fail(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A box that answers fixed routes; anything else is a 404.
+    struct Routes(Vec<(String, u16, Json)>);
+
+    impl Caller for Routes {
+        fn call(&self, method: &str, path: &str, _: Option<&Json>) -> Result<(u16, Json), String> {
+            let key = format!("{method} {path}");
+            Ok(self
+                .0
+                .iter()
+                .find(|(k, _, _)| *k == key)
+                .map_or((404, json!({"error": "no such resource"})), |(_, s, b)| {
+                    (*s, b.clone())
+                }))
+        }
+    }
+
+    const MODEL: &str = "FUNCTION_BLOCK plant_model
+VAR
+  level_m : REAL := 1.5;  {state unit=m}
+  temp_c : REAL;  {state unit=degC}
+  note : STRING := '{state}';
+END_VAR
+END_FUNCTION_BLOCK
+";
+
+    fn routes(extra: Vec<(&str, u16, Json)>) -> Routes {
+        let mut r: Vec<(String, u16, Json)> = vec![
+            ("GET /api/devices", 200, json!([{"name": "box", "state": "up"}])),
+            (
+                "GET /api/io_map",
+                200,
+                json!({"text": "in  level_m real box ai:0 unit=m\nin level_in real box ai:1\n"}),
+            ),
+            (
+                "GET /api/signals",
+                200,
+                json!([{"name": "LEVEL_M", "value": 2.25}]),
+            ),
+            ("POST /api/devices/discover", 200, json!({"devices": []})),
+        ]
+        .into_iter()
+        .map(|(k, s, b)| (k.to_string(), s, b))
+        .collect();
+        r.extend(extra.into_iter().map(|(k, s, b)| (k.to_string(), s, b)));
+        Routes(r)
+    }
+
+    #[test]
+    fn list_devices_carries_the_running_projects_plant_states() {
+        let api = routes(vec![
+            ("GET /api/running", 200, json!({"project": "well"})),
+            (
+                "GET /api/projects/well",
+                200,
+                json!({"files": [
+                    {"name": "plant_model.ST"}, {"name": "io.map"}, {"name": "main.st"},
+                ]}),
+            ),
+            (
+                "GET /api/projects/well/files/plant_model%2EST",
+                200,
+                json!({"text": MODEL}),
+            ),
+            (
+                "GET /api/projects/well/files/main%2Est",
+                500,
+                json!({"error": "disk"}),
+            ),
+        ]);
+        let o = list_devices(&api);
+        assert!(o.ok, "{}", o.data);
+        let plant = o.data["plant_states"].as_array().expect("a list");
+        assert_eq!(plant.len(), 2, "{}", o.data);
+        let level = &plant[0];
+        assert_eq!(level["name"], "level_m");
+        assert_eq!(level["unit"], "m");
+        assert_eq!(level["file"], "plant_model.ST");
+        assert_eq!(level["simulated_only"], true);
+        assert_eq!(level["measured_by"]["signal"], "level_m");
+        assert_eq!(level["measured_by"]["value"], 2.25, "the live signal");
+        assert_eq!(plant[1]["name"], "temp_c");
+        assert!(plant[1]["measured_by"].is_null(), "{}", o.data);
+        assert_eq!(plant[1]["suggested_sensor"], "RTD or thermocouple");
+        assert!(
+            o.summary.ends_with("; 2 plant state(s), 1 unmeasured"),
+            "{}",
+            o.summary
+        );
+    }
+
+    #[test]
+    fn a_box_without_a_project_or_with_hostile_names_lists_no_states_and_reads_nothing_else() {
+        // No projects on the box: the rest of the listing stands.
+        let o = list_devices(&routes(vec![]));
+        assert!(o.ok, "{}", o.data);
+        assert_eq!(o.data["plant_states"], json!([]));
+        assert!(
+            o.summary.ends_with("; 0 plant state(s), 0 unmeasured"),
+            "{}",
+            o.summary
+        );
+        // A project and file named to escape their path are sent encoded,
+        // so they reach no other route.
+        let api = routes(vec![
+            ("GET /api/running", 200, json!({"project": "../etc"})),
+            (
+                "GET /api/projects/%2E%2E%2Fetc",
+                200,
+                json!({"files": [{"name": "../../passwd.st"}, {"name": 7}, {}]}),
+            ),
+            (
+                "GET /api/projects/%2E%2E%2Fetc/files/%2E%2E%2F%2E%2E%2Fpasswd%2Est",
+                200,
+                json!({"text": MODEL}),
+            ),
+        ]);
+        let o = list_devices(&api);
+        assert_eq!(
+            o.data["plant_states"].as_array().map(Vec::len),
+            Some(2),
+            "{}",
+            o.data
+        );
+        assert_eq!(o.data["plant_states"][0]["file"], "../../passwd.st");
+        // A listing of many files reads at most MAX_PLANT_FILES of them.
+        let files: Vec<Json> = (0..100).map(|k| json!({"name": format!("f{k}.st")})).collect();
+        let mut extra = vec![
+            ("GET /api/running".to_string(), 200, json!({"project": "big"})),
+            ("GET /api/projects/big".to_string(), 200, json!({"files": files})),
+        ];
+        for k in 0..100 {
+            extra.push((
+                format!("GET /api/projects/big/files/f{k}%2Est"),
+                200,
+                json!({"text": MODEL}),
+            ));
+        }
+        let mut api = routes(vec![]);
+        api.0.extend(extra);
+        let o = list_devices(&api);
+        assert_eq!(
+            o.data["plant_states"].as_array().map(Vec::len),
+            Some(2 * MAX_PLANT_FILES),
+            "{}",
+            o.summary
+        );
     }
 }

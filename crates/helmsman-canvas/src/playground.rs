@@ -582,6 +582,11 @@ pub struct Session {
     /// The last traced scan, for the diagram.
     pub trace: Option<Trace>,
     pub trend: Trend,
+    /// Measured plant states (`crate::plant::substitutions`): the model's
+    /// variable path and the input point that stands in for it. Before each
+    /// scan the variable takes the point's value, so the model runs from
+    /// the sensor instead of its own state.
+    pub sensors: Vec<(String, String)>,
     /// Page time the clock last caught up to, s.
     last: Option<f64>,
     acc_ms: f64,
@@ -602,6 +607,7 @@ impl Session {
             fault: None,
             trace: None,
             trend: Trend::default(),
+            sensors: Vec::new(),
             last: None,
             acc_ms: 0.0,
         };
@@ -820,6 +826,22 @@ impl Session {
                     };
                 }
             }
+        }
+        for (path, signal) in &self.sensors {
+            let Some(p) = b
+                .points
+                .iter()
+                .find(|p| p.dir == Dir::In && p.name.eq_ignore_ascii_case(signal))
+            else {
+                continue;
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let v = match (p.value, b.program.ty(path)) {
+                (Value::Int(n), Some(t)) if t.is_real() => Value::Real(n as f64),
+                (v, _) => v,
+            };
+            // A kind or range the variable cannot hold leaves the model's own.
+            let _ = b.program.set(path, v);
         }
         let now = Duration::from_millis(self.now_ms);
         let r = if traced {

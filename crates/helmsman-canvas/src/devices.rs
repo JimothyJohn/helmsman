@@ -558,6 +558,9 @@ pub struct DevicesUi {
     pub scan: Scan,
     /// Why the box had no library, when it said.
     pub library_note: Option<String>,
+    /// The plant model's states (`crate::plant`): the view fills it in
+    /// each frame, the section draws under the network.
+    pub plant: crate::plant::PlantUi,
 }
 
 impl DevicesUi {
@@ -822,6 +825,8 @@ impl DevicesUi {
         if add.is_some() {
             self.adding = add;
         }
+        // The plant model's states, each with its sensor or the one it wants.
+        self.plant.show(ui, chrome, write);
         // The blank space under it all: a right-click offers a new device.
         let left = (ui.clip_rect().bottom() - ui.cursor().top()).max(TAP);
         let size = Vec2::new(ui.available_width(), left);

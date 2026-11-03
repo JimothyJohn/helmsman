@@ -23,6 +23,7 @@ pub mod agent;
 pub mod devlib;
 pub mod iomap;
 pub mod layout;
+pub mod plant;
 pub mod starters;
 pub mod zip;
 

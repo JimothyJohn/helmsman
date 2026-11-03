@@ -1248,6 +1248,96 @@ mod chrome {
         );
     }
 
+    /// Nick, 2026-11-02 (sim-feedback-devices): a plant model's `{state}`
+    /// variables are listed in the Devices tab with the simulation's value,
+    /// the map signal that measures each on the real machine, or the sensor
+    /// that would; "Add a sensor…" writes that signal's `in` line onto
+    /// io.map, and the agent's context carries the same list.
+    #[test]
+    fn plant_states_list_the_models_quantities_and_add_a_sensor_line() {
+        let mut h = Harness::new(App::sim());
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(!h.has("plant states"), "the blink example keeps no plant model");
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("well", Some("pump-station"));
+            let src = sim.proj.build_src();
+            assert!(sim.session.load(&src), "the pump station compiles");
+            // Loading stops the simulation, as a deploy would; run it so the
+            // plant model scans and the trace has its values.
+            sim.session.set_running(true);
+        }
+        h.wait(0.5);
+        assert!(
+            h.has("plant states"),
+            "the starter's plant model marks its well level"
+        );
+        assert!(h.has("state level_m"));
+        let states = {
+            let sim = h.app.sim.as_ref().unwrap();
+            let map = helmsman_project::iomap::skim(sim.proj.files.get("io.map").map_or("", String::as_str));
+            sim.plant_states(&map)
+        };
+        assert_eq!(states.len(), 1, "{states:?}");
+        // The well fills from 1.5 m while it runs: a live value, not the initial one.
+        match states[0].value {
+            Some(helmsman_iec::Value::Real(x)) if (1.4..2.0).contains(&x) => {}
+            other => panic!("the model's value from the trace: {other:?}"),
+        }
+        assert_eq!(states[0].unit.as_deref(), Some("m"));
+        assert_eq!(states[0].measured_by, None);
+        assert_eq!(states[0].suggestion, "level transmitter");
+        let text = h.app.sim.as_ref().unwrap().devices_text();
+        assert!(text.contains("plant states"), "{text}");
+        assert!(text.contains("level_m REAL unit=m = 1.5"), "{text}");
+        assert!(text.contains("  in plant_model (plant_model.st:"), "{text}");
+        assert!(text.contains("not measured; level transmitter would"), "{text}");
+        // Add a sensor: the form, filled in for the state, writes one in line.
+        h.right_click(h.rect("state level_m").center());
+        assert!(h.has("menu add sensor"));
+        h.press("menu add sensor");
+        h.wait(0.2);
+        assert!(h.has("sensor form"), "the form in the centre");
+        assert!(
+            h.has("sensor device box"),
+            "no device in the map: the box's channels"
+        );
+        h.press("sensor ok");
+        h.wait(0.3);
+        assert!(!h.has("sensor form"), "added: the form is gone");
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(
+            map.ends_with("in  level_m real box i2c:1:0x48:0:i16 unit=m\n"),
+            "{map}"
+        );
+        h.wait(0.3);
+        let states = {
+            let sim = h.app.sim.as_ref().unwrap();
+            let map = helmsman_project::iomap::skim(&sim.proj.files["io.map"]);
+            sim.plant_states(&map)
+        };
+        let m = states[0].measured_by.as_ref().expect("now measured");
+        assert_eq!((m.signal.as_str(), m.device.as_str()), ("level_m", "box"));
+        let text = h.app.sim.as_ref().unwrap().devices_text();
+        assert!(
+            text.contains("measured by level_m (box i2c:1:0x48:0:i16)"),
+            "{text}"
+        );
+        // Measured: the menu item is disabled, so pressing it opens nothing.
+        h.right_click(h.rect("state level_m").center());
+        h.press("menu add sensor");
+        h.wait(0.2);
+        assert!(!h.has("sensor form"), "a measured state offers no second sensor");
+        h.frame(vec![Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+    }
+
     /// The Files tab shows the program's files, marks main.st as the one
     /// running, and folds the earlier iterations under one row.
     #[test]

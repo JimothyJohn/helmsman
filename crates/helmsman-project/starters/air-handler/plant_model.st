@@ -33,9 +33,9 @@ VAR
   motor : TON;
   moving : TON;
   clock : TON;
-  supply_c : REAL := 5.0;
+  supply_c : REAL := 5.0;  {state unit=degC}
   aim_c : REAL;
-  dirt_pa : REAL := 120.0;
+  dirt_pa : REAL := 120.0;  {state unit=Pa}
 END_VAR
 opening(IN := damper, PT := stroke);
 closing(IN := NOT damper, PT := stroke);

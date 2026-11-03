@@ -121,6 +121,9 @@ pub struct PlaygroundView {
     pub proj: SimProjects,
     pub files_ui: FilesUi,
     pub devices_ui: crate::devices::DevicesUi,
+    /// What `session.sensors` was bound from: the program running and the
+    /// project's files, so a frame rebinds only after a change.
+    sensors_from: Option<(String, Vec<(String, String)>)>,
     /// The question "what is this program called?", asked once per
     /// conversation before its first PROGRAM answer lands.
     pub program_name: Option<ProgramName>,
@@ -190,6 +193,7 @@ impl PlaygroundView {
             proj,
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
+            sensors_from: None,
             program_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
@@ -539,7 +543,71 @@ impl PlaygroundView {
             crate::devices::LinkState::Simulated
         }));
         text.push_str(&crate::devices::describe_found(&self.devices_ui.found));
+        text.push_str(&crate::plant::describe(&self.plant_states(&map)));
         text
+    }
+
+    /// The project's plant-model states (`{state}` declarations), each
+    /// with the simulation's value and the map signal that measures it.
+    #[must_use]
+    pub fn plant_states(&self, map: &helmsman_project::iomap::MapText) -> Vec<crate::plant::PlantState> {
+        let files: Vec<(&str, &str)> = self
+            .proj
+            .files
+            .iter()
+            .map(|(n, t)| (n.as_str(), t.as_str()))
+            .collect();
+        let value = |name: &str| {
+            self.session
+                .trace
+                .as_ref()
+                .and_then(|t| crate::plant::value_in_trace(t, name))
+        };
+        let live = |name: &str| self.session.value(name);
+        let mut states = crate::plant::states(&files, map, &value, &live);
+        for s in &mut states {
+            s.from_sensor = s.measured_by.as_ref().is_some_and(|m| {
+                self.session
+                    .sensors
+                    .iter()
+                    .any(|(_, signal)| signal.eq_ignore_ascii_case(&m.signal))
+            });
+        }
+        states
+    }
+
+    /// Points the simulation's measured plant states at their sensors
+    /// (`Session::sensors`): a state whose map `in` signal is one of the
+    /// program's inputs runs from that input instead of the model.
+    pub fn bind_sensors(&mut self) {
+        let src = self.session.build.as_ref().map_or("", |b| b.src.as_str());
+        if self.sensors_from.as_ref().is_some_and(|(s, f)| {
+            s == src
+                && f.len() == self.proj.files.len()
+                && f.iter()
+                    .zip(&self.proj.files)
+                    .all(|((a, x), (b, y))| a == b && x == y)
+        }) {
+            return;
+        }
+        let src = src.to_string();
+        let files: Vec<(String, String)> = self
+            .proj
+            .files
+            .iter()
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        let map = helmsman_project::iomap::skim(
+            self.proj
+                .files
+                .get(helmsman_project::IO_MAP)
+                .map_or("", String::as_str),
+        );
+        let states = self.plant_states(&map);
+        let mut sensors = crate::plant::substitutions(&states, &src);
+        sensors.retain(|(_, signal)| self.session.inputs().any(|p| p.name.eq_ignore_ascii_case(signal)));
+        self.session.sensors = sensors;
+        self.sensors_from = Some((src, files));
     }
 
     /// Sends the typed question about the editor's program.
@@ -988,6 +1056,9 @@ impl PlaygroundView {
         {
             self.add_device_line(&line);
         }
+        if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
+            self.add_device_line(&line);
+        }
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
         }
@@ -1022,6 +1093,7 @@ impl PlaygroundView {
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
         self.arrange();
+        self.bind_sensors();
         self.session.advance(t);
         self.watch(t);
         if self.session.running || self.pending.is_some() || self.chat.busy() {
@@ -1332,6 +1404,9 @@ impl Body for PlaygroundView {
         } else {
             Ok(())
         };
+        self.devices_ui.plant.states = self.plant_states(&map);
+        self.devices_ui.plant.devices = crate::plant::device_choices(&map);
+        self.devices_ui.plant.simulated = true;
         if self.devices_ui.show(ui, &nodes, &source, chrome, &write) == Some(crate::devices::DeviceAct::Scan)
         {
             self.devices_ui.simulated_scan(&map);
