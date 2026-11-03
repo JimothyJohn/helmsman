@@ -33,4 +33,5 @@ A skeleton to begin a program of that shape from.
 | project | | what it shows |
 |---|---|---|
 | `discrete-template` | **Discrete machine** | A motor, a cylinder and a step sequence, ready to rename and extend |
+| `counters` | **Production counters** | Parts made, running or idle or down, shift totals and uptime, from one sensor and a run signal |
 | `process-template` | **Process loop** | A scaled measurement, a PID loop and two pumps sharing the duty |

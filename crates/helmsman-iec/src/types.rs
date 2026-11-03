@@ -1,7 +1,7 @@
 //! Elementary data types, their value ranges and the implicit (widening)
 //! conversions between them.
 
-use std::fmt;
+use core::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Ty {

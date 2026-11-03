@@ -7,7 +7,20 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+# `std` (default): wall-clock scans (`Program::scan`), `std::error::Error`,
+# the once-cells from std. Without it the crate is `no_std + alloc`: the
+# clock comes in through `scan_at`, and the float functions ST needs
+# (SQRT, LN, LOG, EXP, EXPT, the trigonometry) come from `libm`, which is
+# why a no_std build is `--no-default-features --features libm`
+# (docs/EDGE.md §Phase 0).
+default = ["std"]
+std = []
+
 [dependencies]
+# Only for `no_std` builds: pure-Rust ports of the C math functions core
+# lacks. The std build has no dependencies.
+libm = { version = "0.2", optional = true }
 
 [dev-dependencies]
 proptest = "1.12"

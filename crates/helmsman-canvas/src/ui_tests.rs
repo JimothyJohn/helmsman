@@ -1444,25 +1444,38 @@ mod simulated {
 
     /// Nick, 2026-11-01: the trend's window is 1, 10 or 100 s, so the
     /// line can cross the pane fast or slow; the history is kept for the
-    /// widest, so widening shows what already ran.
+    /// widest, so widening shows what already ran. Nick, 2026-11-02: one
+    /// logarithmic slider from 100 ms to 10 min instead of three buttons,
+    /// the plot following as it moves.
     #[test]
-    fn the_trend_window_is_one_ten_or_a_hundred_seconds() {
+    fn the_trend_window_is_a_log_slider_from_100_ms_to_10_min() {
+        use crate::playground_view::{WINDOW_MAX_MS, WINDOW_MIN_MS, window_label};
         let mut h = Harness::new(App::sim());
         h.wait(0.3);
-        for s in [1u64, 10, 100] {
-            assert!(h.has(&format!("trend window {s}")), "no {s} s button");
-        }
+        assert!(h.has("trend window"), "the slider");
+        assert!(!h.has("trend window 10"), "the buttons are gone");
         let window = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.window_ms;
         assert_eq!(window(&h), 10_000, "opens on 10 s");
-        h.press("trend window 1");
-        assert_eq!(window(&h), 1_000);
+        let slider = h.rect("trend window");
+        h.click(Pos2::new(slider.left() + 1.0, slider.center().y));
+        assert_eq!(window(&h), WINDOW_MIN_MS, "the left end is 100 ms");
         let kept = h.app.sim.as_ref().unwrap().session.trend.samples.len();
-        h.press("trend window 100");
-        assert_eq!(window(&h), 100_000);
+        h.click(Pos2::new(slider.right() - 1.0, slider.center().y));
+        assert_eq!(window(&h), WINDOW_MAX_MS, "the right end is 10 min");
         assert!(
             h.app.sim.as_ref().unwrap().session.trend.samples.len() >= kept,
             "narrowing dropped nothing"
         );
+        // Logarithmic: the middle of the track is near the geometric mean
+        // (~7.7 s), not the arithmetic one (5 min).
+        h.click(Pos2::new(slider.center().x, slider.center().y));
+        let mid = window(&h);
+        assert!((3_000..=20_000).contains(&mid), "mid-track window {mid} ms");
+        assert_eq!(window_label(100), "100 ms");
+        assert_eq!(window_label(2_500), "2.5 s");
+        assert_eq!(window_label(10_000), "10 s");
+        assert_eq!(window_label(60_000), "1 min");
+        assert_eq!(window_label(600_000), "10 min");
     }
 
     /// Nick, 2026-11-01: the Agent pane widened when an answer held long

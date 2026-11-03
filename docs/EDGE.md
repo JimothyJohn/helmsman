@@ -330,12 +330,54 @@ thumbv7em-none-eabihf` (a `rustup target add` in the workflow) next to the
 existing checks; `scripts/lint.sh` gets the same line. Nothing else in the
 workspace changes, and no test changes.
 
+*Done 2026-11-02 (feat/iec-no-std).* As planned, with three differences.
+The `no_std` build is `--no-default-features --features libm`: cargo cannot
+turn a dependency on when a feature is *absent*, so `libm` is an optional
+dependency the node's build names; the std build still has none. The
+wall-clock start (`started: Option<Instant>` on `Program` and `State`) is
+behind `std` rather than turned into a `Duration`: it only serves
+`Program::scan`, which a node never calls, and `scan_at`'s clock already
+comes from the caller. `OnceLock` (the parsed standard library, a
+program's trace map) is a small `Once<T>` of the crate's own: std's
+`OnceLock` under `std`, a lock-free leak-once `AtomicPtr` cell without.
+`HashMap`/`HashSet` became `BTreeMap`/`BTreeSet` throughout (no hashbrown),
+which also makes every iteration order deterministic. `scripts/lint.sh`
+runs clippy on the thumbv7em build; the CI step is a separate draft PR
+(workflow edits go through a draft, per the cloud-security rules).
+
 **Phase 1, the board, no network (G2, G3).** `crates/helmsman-node`, not a
 default member. Embed the `trace_bench` source and the batch-mixer starter
 (blocks concatenated), compile at boot, scan in a loop, print min / mean /
 max / p99 per-scan time and `esp-alloc` stats after compile and after
 10 000 scans over USB serial. Ethernet unplugged throughout; USB power.
 Repeat with the program heap in PSRAM on a WROVER.
+
+*Built 2026-11-03 (feat/node-scan-bench); numbers pending Nick's flash.*
+`crates/helmsman-node` is excluded from the workspace (own Cargo.lock,
+`rust-toolchain.toml` channel `esp`, `.cargo/config.toml` with the Xtensa
+target and build-std), built by `make node-build` (`scripts/node-build.sh`;
+`make node-clippy` for the lint). The firmware embeds the host bench's
+workload, now the shared file `crates/helmsman-iec/examples/trace_bench.st`,
+and the batch-mixer starter's `main.st` with its six blocks (the plant model
+left out) as the "realistic cell"; compiles each at boot, scans it 10 000
+times at a 10 ms clock, and prints compile time, heap for the program,
+min / mean / max / p99 per scan and heap used and peak (esp-alloc's
+`internal-heap-stats`, which costs a little per allocation and is named in
+the output). The round runs twice: internal SRAM alone (160 kB in the main
+DRAM segment plus 96 kB in `dram2`, supervictor's figures), then with the
+PSRAM added as a second heap region (esp-alloc fills internal RAM first),
+which gives G3 both figures; the interpreter is not told where to put
+what, so "program image in SRAM, scratch in PSRAM" is what the fill order
+makes of it, not a placement. The board, read over USB with `espflash
+board-info` on 2026-11-02: chip esp32 revision v3.0, 40 MHz crystal, 4 MB
+flash, MAC 10:97:bd:e4:1f:40; a WROVER-E module per Nick (board-info does
+not report PSRAM; the firmware prints the heap size after the PSRAM region
+is added, which is the check). Flashing is `scripts/node-flash.sh`, run by
+Nick in his own shell: it prints the unplug rule, asks, builds, flashes
+with espflash and tees the monitor into `scratch/node-bench-<utc>.log`.
+Host baseline for the same workload on the Mac Studio (M-series, release):
+61.8 µs per scan, tracing off (`cargo run --release -p helmsman-iec
+--example trace_bench`, 2026-11-03).
 
 **Phase 2, one real block (G4, G5).** The async `Transport` over
 `embassy-net`, DI read and DO write batched per scan, DO0 to DO3 looped to
