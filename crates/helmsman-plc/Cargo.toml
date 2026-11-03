@@ -64,11 +64,12 @@ workspace = true
 # compiled in). On by default so the Pi can post to a cloud receiver;
 # `--no-default-features --features box` builds an http-only box.
 # `enip-io`: EtherNet/IP adapters the box masters (helmsman-io's enip-io
-# driver: the Class 1 scanner, never `unrestricted`). Out of the box build
-# until the E1213 bench passes (TODO.md `enip-in-box`); a box map that
-# names `enip-io` without it is refused as "not in this build".
-# scripts/lint.sh keeps it compiling.
-default = ["box", "https"]
+# driver: the Class 1 scanner, never `unrestricted`). In the default build
+# since the E1213 bench passed (2026-11-02, TODO.md `e1213-bench`); a box
+# built without it (`--no-default-features --features box,https`, which
+# scripts/lint.sh keeps compiling) refuses a map naming `enip-io` as "not
+# in this build".
+default = ["box", "https", "enip-io"]
 box = ["dep:rusqlite", "dep:ring", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
 enip-io = ["box", "helmsman-io/enip"]
 # `wasm`: modules compiled to WebAssembly (`module.wasm`) beside ST ones,

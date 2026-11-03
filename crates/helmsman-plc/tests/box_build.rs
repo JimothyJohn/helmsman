@@ -1,8 +1,9 @@
 //! The box build (`cargo build -p helmsman-plc`, what `pi-deploy-plc.sh`
-//! ships) must not enable `helmsman-proto`'s `unrestricted` feature, nor
-//! for now its Class 1 `scanner`: without
-//! it the only requests the box can send to a controller it observes are
-//! reads (`docs/ARCHITECTURE.md`, trust boundary "box ↔ observed PLCs").
+//! ships) must not enable `helmsman-proto`'s `unrestricted` feature:
+//! without it the only requests the box can send to a controller it
+//! observes are reads (`docs/ARCHITECTURE.md`, trust boundary "box ↔
+//! observed PLCs"). Its Class 1 `scanner` (the `enip-io` driver) is in,
+//! and brings nothing wider.
 //! Feature unification is a property of the whole dependency graph, so this
 //! asks cargo for the resolved features rather than trusting one manifest.
 
@@ -39,16 +40,16 @@ fn box_build_cannot_send_arbitrary_services() {
         !tree.contains("\"unrestricted\""),
         "the box build enables helmsman-proto/unrestricted:\n{tree}"
     );
-    // The Class 1 scanner (helmsman-io's enip-io) stays out of the box
-    // until the E1213 bench passes (TODO.md `enip-in-box`).
+    // The Class 1 scanner (helmsman-io's enip-io) is in the box since the
+    // E1213 bench passed (TODO.md `e1213-bench`).
     assert!(
-        !tree.contains("\"scanner\""),
-        "the box build enables helmsman-proto/scanner (enip-io):\n{tree}"
+        tree.contains("\"scanner\""),
+        "the box build lacks helmsman-proto/scanner (enip-io):\n{tree}"
     );
 }
 
-/// What the assertion above looks for is there when the scanner is: the
-/// `enip-io` feature brings in `scanner`, and still not `unrestricted`.
+/// The `enip-io` feature on its own brings in `scanner`, and still not
+/// `unrestricted`.
 #[test]
 fn the_enip_io_feature_brings_the_scanner_and_nothing_wider() {
     let out = Command::new(env!("CARGO"))
