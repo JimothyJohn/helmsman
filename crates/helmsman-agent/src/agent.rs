@@ -429,7 +429,7 @@ impl Agent {
                 on,
             );
         }
-        let out = tools::run(&self.api, &mut conv.drafts, &call.name, input);
+        let out = tools::run_with(&self.api, Some(&self.relay), &mut conv.drafts, &call.name, input);
         if !out.proposals.is_empty() {
             proposals.extend(&out.proposals);
             let summary = input["summary"].as_str().unwrap_or_default().to_string();
