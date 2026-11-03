@@ -167,6 +167,7 @@ impl BoxView {
         for (call, a) in answers {
             match call {
                 PCall::TrendPins | PCall::SavePins | PCall::Trend => self.trend.answer(&call, &a, now),
+                PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
                 call => self.projects.answer(call, &a),
             }
         }
@@ -1076,7 +1077,11 @@ impl Body for BoxView {
         } else {
             Err("This box runs without projects: its map is a file on the box.".into())
         };
-        self.devices_ui.show(ui, &nodes, &source, chrome, &write);
+        if self.devices_ui.show(ui, &nodes, &source, chrome, &write) == Some(crate::devices::DeviceAct::Scan)
+        {
+            self.devices_ui.scan = crate::devices::Scan::Running;
+            self.projects.discover();
+        }
     }
 
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {

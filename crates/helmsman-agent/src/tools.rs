@@ -652,7 +652,11 @@ fn read_signals(api: &dyn Caller, i: &ReadSignals) -> Outcome {
 /// points (the signals bound to it, with live values): what the canvas's
 /// Devices tab shows. Signals on an id no `device` line declares (`box`,
 /// `screen`, `module`) are listed under that id too. Without a running
-/// map (a box on module files) the devices come with no points.
+/// map (a box on module files) the devices come with no points. Then
+/// `on_the_network`: what one `ListIdentity` sweep found (`POST
+/// /api/devices/discover`, read-only), each with whether the map binds it
+/// and the device library's match, so the agent sees unmapped devices;
+/// a box that does not scan says so in `network_unavailable`.
 fn list_devices(api: &dyn Caller) -> Outcome {
     use helmsman_project::iomap;
     let links = match api.get("/api/devices") {
@@ -730,12 +734,28 @@ fn list_devices(api: &dyn Caller) -> Outcome {
         }
     }
     let n = devices.len();
+    let (network, unavailable) = match api.post("/api/devices/discover", &json!({})) {
+        Ok((200, j)) => (j["devices"].as_array().cloned().unwrap_or_default(), Json::Null),
+        Ok((s, b)) => (
+            Vec::new(),
+            json!(format!(
+                "{s}: {}",
+                b["error"].as_str().unwrap_or("no reason given")
+            )),
+        ),
+        Err(e) => (Vec::new(), json!(e)),
+    };
+    let unmapped = network.iter().filter(|d| d["mapped"].is_null()).count();
     let summary = format!(
-        "{n} device(s), {} up",
-        devices.iter().filter(|d| d["state"] == "up").count()
+        "{n} device(s) in the map, {} up; {} on the network, {unmapped} not in the map",
+        devices.iter().filter(|d| d["state"] == "up").count(),
+        network.len()
     );
     ok(
-        json!({ "devices": devices, "map_lines_skipped": map.odd }),
+        json!({
+            "devices": devices, "map_lines_skipped": map.odd,
+            "on_the_network": network, "network_unavailable": unavailable,
+        }),
         summary,
     )
 }

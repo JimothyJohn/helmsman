@@ -109,8 +109,14 @@ label is drawn, the icon stands alone at a readable size.
   values, and whether the link is up; a right-click on the blank space
   adds a device (name, protocol, address, settings) as a line of the
   map; Import device… takes the vendor's EDS file, keeps it in the
-  project and fills the form in from it. One map may mix Modbus TCP and
-  EtherNet/IP devices. The agent reads the same listing. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
+  project and fills the form in from it. Under the map's devices, **On
+  the network**: Scan lists every EtherNet/IP device that answers on the
+  LAN, says whether the map already has it, and shows what the public
+  device library knows of it; right-click one that is not in the map and
+  Add to the map… opens the form filled in, the device named by its
+  identity so a changed address never loses it. One map may mix Modbus
+  TCP and EtherNet/IP devices. The agent reads the same listing, network
+  included. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
   Structured Text editor. Errors are marked on the line as you type; the
   program running does not change until you deploy. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.

@@ -102,6 +102,9 @@ pub enum PCall {
     Layout(String),
     /// ... and saved.
     SaveLayout(String),
+    /// `POST /api/devices/discover`: the Devices tab's Scan (answered by
+    /// the view, not here).
+    Discover,
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -365,6 +368,16 @@ impl BoxProjects {
     /// What to send now.
     pub fn poll(&mut self) -> Vec<PReq> {
         std::mem::take(&mut self.queue)
+    }
+
+    /// Asks the box for a fresh network scan (the Devices tab's Scan).
+    pub fn discover(&mut self) {
+        self.queue.push(PReq::json(
+            PCall::Discover,
+            "POST",
+            "/api/devices/discover?fresh=1".into(),
+            &json!({}),
+        ));
     }
 
     fn relist(&mut self) {
@@ -1160,8 +1173,9 @@ impl BoxProjects {
                 }
                 self.queue.push(PReq::get(PCall::Forces, "/api/forces".into()));
             }
-            // The Trend tab's (`box_trend.rs`).
-            PCall::TrendPins | PCall::SavePins | PCall::Trend => {}
+            // The Trend tab's (`box_trend.rs`) and the Devices tab's scan
+            // (`box_view.rs`).
+            PCall::TrendPins | PCall::SavePins | PCall::Trend | PCall::Discover => {}
             PCall::Layout(p) => {
                 if self.running.as_deref() != Some(p.as_str()) {
                     return;

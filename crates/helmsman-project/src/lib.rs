@@ -20,6 +20,7 @@
 //!   [`LAYOUT`] file must also read as one ([`layout::parse`]).
 
 pub mod agent;
+pub mod devlib;
 pub mod iomap;
 pub mod layout;
 pub mod starters;
