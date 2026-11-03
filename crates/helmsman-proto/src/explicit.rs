@@ -125,6 +125,23 @@ pub fn send_rr_data_with_items(
 /// `Invalid` if the frame is the wrong command, reports an encapsulation
 /// error, or carries no unconnected data item; `Truncated` on short data.
 pub fn decode_send_rr_data(frame: &Frame<'_>) -> Result<cip::Response, DecodeError> {
+    decode_send_rr_data_with_items(frame).map(|(r, _)| r)
+}
+
+/// A CPF item of a reply, owned: its type and its bytes.
+pub type OwnedItem = (u16, Vec<u8>);
+
+/// [`decode_send_rr_data`] keeping the reply's other CPF items too, in
+/// order and without the null address and unconnected data items: a
+/// `Forward_Open` reply may carry socket-address items (an O->T one tells
+/// the originator where the target consumes; the ioLogik E1213 names UDP
+/// 5222).
+///
+/// # Errors
+/// As [`decode_send_rr_data`].
+pub fn decode_send_rr_data_with_items(
+    frame: &Frame<'_>,
+) -> Result<(cip::Response, Vec<OwnedItem>), DecodeError> {
     if frame.header.command != Command::SendRrData as u16 {
         return Err(DecodeError::Invalid("not a SendRRData reply"));
     }
@@ -140,7 +157,13 @@ pub fn decode_send_rr_data(frame: &Frame<'_>) -> Result<cip::Response, DecodeErr
     let data = cpf::find(&items, cpf::item::UNCONNECTED_DATA).ok_or(DecodeError::Invalid(
         "SendRRData reply has no unconnected data item",
     ))?;
-    cip::Response::decode(data.data)
+    let response = cip::Response::decode(data.data)?;
+    let extra = items
+        .iter()
+        .filter(|i| i.type_id != cpf::item::NULL_ADDRESS && i.type_id != cpf::item::UNCONNECTED_DATA)
+        .map(|i| (i.type_id, i.data.to_vec()))
+        .collect();
+    Ok((response, extra))
 }
 
 /// Split a `SendRRData` *request* into its Message Router request. Used by
@@ -175,10 +198,23 @@ pub fn encode_send_rr_data_reply(
     sender_context: [u8; 8],
     response: &cip::Response,
 ) -> Vec<u8> {
+    encode_send_rr_data_reply_with_items(session_handle, sender_context, response, &[])
+}
+
+/// [`encode_send_rr_data_reply`] with `extra` CPF items after the
+/// unconnected data item (a target's socket-address items on a
+/// `Forward_Open` reply).
+#[must_use]
+pub fn encode_send_rr_data_reply_with_items(
+    session_handle: u32,
+    sender_context: [u8; 8],
+    response: &cip::Response,
+    extra: &[Item<'_>],
+) -> Vec<u8> {
     let mut mr = Writer::default();
     response.encode(&mut mr);
     let mr = mr.into_inner();
-    let items = [
+    let mut items = vec![
         Item {
             type_id: cpf::item::NULL_ADDRESS,
             data: &[],
@@ -188,6 +224,7 @@ pub fn encode_send_rr_data_reply(
             data: &mr,
         },
     ];
+    items.extend_from_slice(extra);
     let mut w = Writer::default();
     w.u32_le(0).u16_le(0);
     cpf::encode(&items, &mut w);

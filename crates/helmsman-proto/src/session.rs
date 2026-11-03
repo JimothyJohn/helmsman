@@ -172,6 +172,16 @@ impl Session {
         mr: &[u8],
         extra: &[crate::cpf::Item<'_>],
     ) -> Result<cip::Response, Error> {
+        self.exchange_with_items(mr, extra).map(|(r, _)| r)
+    }
+
+    /// [`Self::exchange_with`] keeping the reply's own extra CPF items
+    /// (a target's socket-address items on a `Forward_Open` reply).
+    pub(crate) fn exchange_with_items(
+        &mut self,
+        mr: &[u8],
+        extra: &[crate::cpf::Item<'_>],
+    ) -> Result<(cip::Response, Vec<explicit::OwnedItem>), Error> {
         let ctx = self.context();
         self.stream
             .write_all(&explicit::send_rr_data_with_items(self.handle, ctx, 0, mr, extra))?;
@@ -183,7 +193,7 @@ impl Session {
         if frame.header.status != 0 {
             return Err(Error::Encapsulation(frame.header.status));
         }
-        Ok(explicit::decode_send_rr_data(&frame)?)
+        Ok(explicit::decode_send_rr_data_with_items(&frame)?)
     }
 
     /// Send one unconnected request; a non-zero general status is an error.

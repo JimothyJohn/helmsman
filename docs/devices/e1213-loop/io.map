@@ -1,0 +1,18 @@
+# The E1213 on the bench over Modbus/TCP (docs/devices/moxa-iologik-e1213.md):
+# DI-00..02 as discrete inputs 0..2, DO-00..02 as coils 0..2. The unit is on
+# the office LAN by DHCP; change the address if it moves.
+device e1213 modbus-tcp 10.0.0.57:502 unit=1 timeout_ms=300 poll_ms=20
+
+in  di0 bool e1213 di:0
+in  di1 bool e1213 di:1
+in  di2 bool e1213 di:2
+
+out do0 bool e1213 coil:0 safe=false
+out do1 bool e1213 coil:1 safe=false
+out do2 bool e1213 coil:2 safe=false
+
+# The check's results, shown on the screen only
+out step   int  screen step
+out cycles int  screen cycles
+out faults int  screen faults
+out ok     bool screen ok
