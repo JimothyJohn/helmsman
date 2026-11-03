@@ -63,15 +63,12 @@ fn blanked(text: &str) -> String {
         } else {
             None
         };
-        match end {
-            Some(e) => {
-                blank(&mut out, &rest[..e]);
-                k += e;
-            }
-            None => {
-                out.push(rest[0]);
-                k += 1;
-            }
+        if let Some(e) = end {
+            blank(&mut out, &rest[..e]);
+            k += e;
+        } else {
+            out.push(rest[0]);
+            k += 1;
         }
     }
     String::from_utf8(out).unwrap_or_default()
@@ -299,11 +296,12 @@ END_PROGRAM
 
     #[test]
     fn comments_strings_and_other_pragmas_are_not_states() {
-        assert!(skim("VAR\n  a : INT; (* {state} *)\nEND_VAR\n").is_empty());
-        assert!(skim("VAR\n  a : INT; {attribute 'x'}\nEND_VAR\n").is_empty());
-        assert!(skim("VAR\n  s : STRING := '{state}';\nEND_VAR\n").is_empty());
-        assert!(
-            skim("VAR\n  a AT %IX0.0 : BOOL; {state}\nEND_VAR\n").is_empty(),
+        assert_eq!(skim("VAR\n  a : INT; (* {state} *)\nEND_VAR\n"), []);
+        assert_eq!(skim("VAR\n  a : INT; {attribute 'x'}\nEND_VAR\n"), []);
+        assert_eq!(skim("VAR\n  s : STRING := '{state}';\nEND_VAR\n"), []);
+        assert_eq!(
+            skim("VAR\n  a AT %IX0.0 : BOOL; {state}\nEND_VAR\n"),
+            [],
             "located, not a state"
         );
         // A pragma on its own line marks only the very next declaration.

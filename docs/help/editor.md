@@ -116,7 +116,14 @@ label is drawn, the icon stands alone at a readable size.
   Add to the map… opens the form filled in, the device named by its
   identity so a changed address never loses it. One map may mix Modbus
   TCP and EtherNet/IP devices. The agent reads the same listing, network
-  included. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
+  included. Under that, **Plant states**: the quantities a project's
+  plant model keeps for the machine it stands in for (mark a variable
+  with `{state unit=m}` on its line), each with the simulation's value
+  and the sensor that measures it on the real machine, or the kind of
+  sensor that would; right-click one and Add a sensor… writes that
+  signal into the map. When that signal is one of the program's inputs,
+  in the same unit, the simulation runs the model from it: set it in
+  the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
   Structured Text editor. Errors are marked on the line as you type; the
   program running does not change until you deploy. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.

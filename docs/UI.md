@@ -73,7 +73,24 @@ this; change it here first when a decision changes.
   the form filled in by identity (`cip=V:P:S`) with the library's name
   and profile (2026-11-02, `devices-repo`); the same listing, network
   included, is the context the agent gets, in the page and as the box's
-  `list_devices` tool) and Code (the Structured Text editor). One width
+  `list_devices` tool; under that, "Plant states" (2026-11-02,
+  `sim-feedback-devices`): the quantities the project's plant model
+  keeps, marked `{state [unit=U] [measured_by=NAME]}` on their VAR line
+  (the IEC pragma the compiler skips), each with the simulation's value,
+  the map `in` signal that measures it on the real machine (found by
+  name: the state's, `NAME_in`, `NAME_raw`, the name without its unit
+  suffix, or the attribute) or, unmeasured, the sensor kind that would
+  (level transmitter, pressure transducer, RTD, encoder, flow meter,
+  load cell, counter input, a switch); a right-click on an unmeasured
+  state offers Add a sensor…, a form in the centre (signal name, the
+  map's device, point, unit) that appends the `in` line; a measuring
+  signal that is one of the program's inputs, in the state's unit and
+  not a `_raw` count, stands in for the model's variable in the
+  simulation (it is written into each instance before every scan, so
+  the model runs from the sensor, set in the I/O tab); the agent's
+  context carries the same list, so it can suggest and reason about
+  what the machine does not measure yet) and Code (the Structured Text
+  editor). One width
   for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
   pane on its tab, or shut it when that tab shows.
 - **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the

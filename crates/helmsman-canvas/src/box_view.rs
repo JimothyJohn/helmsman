@@ -353,6 +353,9 @@ impl BoxView {
         {
             self.add_device_line(&line);
         }
+        if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
+            self.add_device_line(&line);
+        }
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.project_act(a);
         }
@@ -1030,6 +1033,22 @@ impl Body for BoxView {
         } else {
             Err("This box runs without projects: its map is a file on the box.".into())
         };
+        // The open project's plant model, read as text: no plant model
+        // runs on a box, so no value; the measuring signals are live.
+        let files: Vec<(String, String)> = open
+            .map(|o| {
+                o.bufs
+                    .iter()
+                    .filter(|(_, b)| b.loaded)
+                    .map(|(n, b)| (n.clone(), b.text.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let refs: Vec<(&str, &str)> = files.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+        let signal_value = |name: &str| live(name).and_then(|l| l.value);
+        self.devices_ui.plant.states = crate::plant::states(&refs, &map, &|_| None, &signal_value);
+        self.devices_ui.plant.devices = crate::plant::device_choices(&map);
+        self.devices_ui.plant.simulated = false;
         if self.devices_ui.show(ui, &nodes, &source, chrome, &write) == Some(crate::devices::DeviceAct::Scan)
         {
             self.devices_ui.scan = crate::devices::Scan::Running;

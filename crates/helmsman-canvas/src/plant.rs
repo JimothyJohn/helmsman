@@ -7,6 +7,8 @@
 //! unmeasured state adds that sensor as an `in` line of the map, the way
 //! the tab adds a device. The same list, as text, is the agent's context.
 
+use std::fmt::Write as _;
+
 use eframe::egui::{self, Color32, RichText, Sense, Vec2};
 use helmsman_iec::Value;
 use helmsman_project::iomap::MapText;
@@ -24,6 +26,8 @@ pub struct Measurement {
     pub signal: String,
     pub device: String,
     pub point: String,
+    /// The signal's `unit=`, if the map gives one.
+    pub unit: Option<String>,
     /// What the signal reads now, when known.
     pub value: Option<Value>,
 }
@@ -44,6 +48,9 @@ pub struct PlantState {
     pub measured_by: Option<Measurement>,
     /// The sensor kind that would measure it, from `plant::suggest`.
     pub suggestion: &'static str,
+    /// Whether the simulation runs this state from its measuring signal
+    /// instead of the model (`Session::sensors`); the view sets it.
+    pub from_sensor: bool,
 }
 
 /// Every `{state}` of `files` (name, text), with its measurement from
@@ -58,7 +65,10 @@ pub fn states(
 ) -> Vec<PlantState> {
     let mut out = Vec::new();
     for (file, text) in files {
-        if !file.ends_with(".st") {
+        if !std::path::Path::new(file)
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("st"))
+        {
             continue;
         }
         for v in plant::skim(text) {
@@ -70,6 +80,7 @@ pub fn states(
                         signal: s.name.clone(),
                         device: s.device.clone(),
                         point: s.point.clone(),
+                        unit: s.unit.clone(),
                         value: live(&s.name),
                     })
             });
@@ -77,6 +88,7 @@ pub fn states(
                 value: value(&v.name),
                 measured_by,
                 suggestion: plant::suggest(&v),
+                from_sensor: false,
                 name: v.name,
                 ty: v.ty,
                 unit: v.unit,
@@ -84,6 +96,89 @@ pub fn states(
                 file: (*file).to_string(),
                 line: v.line,
             });
+        }
+    }
+    out
+}
+
+/// Whether a state's measuring signal can stand in for it as it reads:
+/// the same unit (or neither has one), and not a raw count (`NAME_raw`),
+/// which needs the program's scaling first.
+#[must_use]
+pub fn stands_in(s: &PlantState) -> bool {
+    s.measured_by.as_ref().is_some_and(|m| {
+        !m.signal.to_ascii_lowercase().ends_with("_raw")
+            && match (&s.unit, &m.unit) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                _ => false,
+            }
+    })
+}
+
+/// Deepest function block nesting [`substitutions`] follows.
+const MAX_NESTING: usize = 8;
+
+/// Every path from the program to `var` of the POU `pou`: the variable
+/// itself when `pou` is the program, else through each instance of the
+/// function block `pou` (`PLANT.LEVEL_M`, `CELL.PLANT.LEVEL_M`), upper
+/// case as the trace names them.
+fn instance_paths(unit: &helmsman_iec::ast::Unit, pou: &str, var: &str) -> Vec<String> {
+    use helmsman_iec::ast::{PouKind, TypeRef};
+    fn walk(
+        unit: &helmsman_iec::ast::Unit,
+        at: &helmsman_iec::ast::Pou,
+        prefix: &str,
+        pou: &str,
+        var: &str,
+        depth: usize,
+        out: &mut Vec<String>,
+    ) {
+        for v in &at.vars {
+            let TypeRef::Named(ty, _) = &v.ty else { continue };
+            let Some(fb) = unit
+                .pous
+                .iter()
+                .find(|p| p.kind == PouKind::FunctionBlock && p.name.eq_ignore_ascii_case(ty))
+            else {
+                continue;
+            };
+            let path = format!("{prefix}{}", v.name);
+            if fb.name.eq_ignore_ascii_case(pou) {
+                out.push(format!("{path}.{var}").to_ascii_uppercase());
+            } else if depth < MAX_NESTING {
+                walk(unit, fb, &format!("{path}."), pou, var, depth + 1, out);
+            }
+        }
+    }
+    let Some(program) = unit.pous.iter().find(|p| p.kind == PouKind::Program) else {
+        return Vec::new();
+    };
+    if program.name.eq_ignore_ascii_case(pou) {
+        return vec![var.to_ascii_uppercase()];
+    }
+    let mut out = Vec::new();
+    walk(unit, program, "", pou, var, 0, &mut out);
+    out
+}
+
+/// The simulation's stand-ins for `src` (the program running): each
+/// measured state that [`stands_in`], as (the model variable's path, the
+/// measuring signal), for `Session::sensors`.
+#[must_use]
+pub fn substitutions(states: &[PlantState], src: &str) -> Vec<(String, String)> {
+    let measured: Vec<&PlantState> = states.iter().filter(|s| stands_in(s)).collect();
+    if measured.is_empty() {
+        return Vec::new();
+    }
+    let Ok(unit) = helmsman_iec::ast::parse(src) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for s in measured {
+        let Some(m) = &s.measured_by else { continue };
+        for path in instance_paths(&unit, &s.pou, &s.name) {
+            out.push((path, m.signal.clone()));
         }
     }
     out
@@ -112,7 +207,6 @@ fn with_unit(v: Option<Value>, unit: Option<&str>) -> String {
 /// The list as text, the agent's context.
 #[must_use]
 pub fn describe(states: &[PlantState]) -> String {
-    use std::fmt::Write as _;
     if states.is_empty() {
         return String::new();
     }
@@ -136,6 +230,9 @@ pub fn describe(states: &[PlantState]) -> String {
                     m.point,
                     with_unit(m.value, None)
                 );
+                if s.from_sensor {
+                    out.push_str("; the simulation runs from this signal in place of the model");
+                }
             }
             None => {
                 let _ = write!(out, "  not measured; {} would", s.suggestion);
@@ -153,6 +250,18 @@ pub struct DeviceChoice {
     pub driver: String,
 }
 
+/// The map's declared devices as the sensor form offers them.
+#[must_use]
+pub fn device_choices(map: &MapText) -> Vec<DeviceChoice> {
+    map.devices
+        .iter()
+        .map(|d| DeviceChoice {
+            name: d.name.clone(),
+            driver: d.driver.clone(),
+        })
+        .collect()
+}
+
 /// The map's type for a declared ST type.
 fn map_type(ty: &str) -> &'static str {
     match ty {
@@ -164,12 +273,12 @@ fn map_type(ty: &str) -> &'static str {
 
 /// A point to start from, in the device's own syntax.
 fn point_hint(driver: &str, ty: &str) -> &'static str {
+    if ty == "bool" {
+        return "di:0";
+    }
     match (driver, ty) {
-        ("box", "bool") => "di:0",
         ("box", _) => "i2c:1:0x48:0:i16",
-        ("enip-io", "bool") => "di:0",
         ("enip-io", _) => "in:2:u32",
-        (_, "bool") => "di:0",
         (_, "real") => "ir:0:f32",
         _ => "ir:0:i16",
     }
@@ -251,7 +360,7 @@ impl NewSignal {
         }
         let mut line = format!("in  {name} {} {} {point}", self.ty, self.device);
         if !unit.is_empty() {
-            line.push_str(&format!(" unit={unit}"));
+            let _ = write!(line, " unit={unit}");
         }
         line.push('\n');
         Ok(line)
@@ -355,17 +464,26 @@ impl PlantUi {
             chrome.hit(format!("state {}", s.name), r.rect);
             let mut hover = format!("{} in {} ({}:{})", s.ty, s.pou, s.file, s.line);
             if let Some(u) = &s.unit {
-                hover.push_str(&format!(", in {u}"));
+                let _ = write!(hover, ", in {u}");
             }
             match &s.measured_by {
-                Some(m) => hover.push_str(&format!(
-                    "\nmeasured by the signal {} on {} {}",
-                    m.signal, m.device, m.point
-                )),
-                None => hover.push_str(&format!(
-                    "\nnot measured on the machine yet: {} would. Right-click to add one.",
-                    s.suggestion
-                )),
+                Some(m) => {
+                    let _ = write!(
+                        hover,
+                        "\nmeasured by the signal {} on {} {}",
+                        m.signal, m.device, m.point
+                    );
+                    if s.from_sensor {
+                        hover.push_str("\nthe simulation runs from this signal: set it in the I/O tab");
+                    }
+                }
+                None => {
+                    let _ = write!(
+                        hover,
+                        "\nnot measured on the machine yet: {} would. Right-click to add one.",
+                        s.suggestion
+                    );
+                }
             }
             if !self.simulated {
                 hover.push_str("\nsimulated only: no plant model runs on a box");
@@ -413,7 +531,7 @@ impl PlantUi {
                     let r = ui.add(egui::Button::selectable(f.device == d.name, &d.name));
                     chrome.hit(format!("sensor device {}", d.name), r.rect);
                     if r.clicked() && f.device != d.name {
-                        f.device = d.name.clone();
+                        f.device.clone_from(&d.name);
                         f.point = point_hint(&d.driver, &f.ty).to_string();
                     }
                 }
@@ -558,9 +676,167 @@ END_FUNCTION_BLOCK
                 value: None,
                 measured_by: None,
                 suggestion: "a switch",
+                from_sensor: false,
             },
             &[],
         );
         assert_eq!(b.line().unwrap(), "in  door bool box di:0\n");
+    }
+
+    /// A model whose well level a real transmitter can stand in for.
+    const WELL: &str = "
+FUNCTION_BLOCK plant_model
+VAR_OUTPUT seen : REAL; END_VAR
+VAR
+  level_m : REAL := 1.5;  {state unit=m}
+  level_raw_m : REAL;  {state unit=m}
+  parts : INT;  {state}
+END_VAR
+level_m := level_m + 0.25;
+parts := parts + 1;
+seen := level_m;
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK cell
+VAR_OUTPUT seen : REAL; END_VAR
+VAR inner : plant_model; END_VAR
+inner();
+seen := inner.seen;
+END_FUNCTION_BLOCK
+PROGRAM main
+VAR_INPUT level_m_in : REAL; parts_in : INT; END_VAR
+VAR_OUTPUT level : REAL; nested : REAL; END_VAR
+VAR plant : plant_model; line2 : cell; END_VAR
+plant();
+line2();
+level := plant.seen;
+nested := line2.seen;
+END_PROGRAM
+";
+
+    fn measured(name: &str, unit: Option<&str>, signal: &str, signal_unit: Option<&str>) -> PlantState {
+        PlantState {
+            name: name.into(),
+            ty: "REAL".into(),
+            unit: unit.map(str::to_string),
+            pou: "plant_model".into(),
+            file: "plant_model.st".into(),
+            line: 1,
+            value: None,
+            measured_by: Some(Measurement {
+                signal: signal.into(),
+                device: "box".into(),
+                point: "i2c:1:0x48:0:i16".into(),
+                unit: signal_unit.map(str::to_string),
+                value: None,
+            }),
+            suggestion: "level transmitter",
+            from_sensor: false,
+        }
+    }
+
+    #[test]
+    fn a_signal_stands_in_only_in_the_states_unit_and_never_as_raw_counts() {
+        assert!(stands_in(&measured(
+            "level_m",
+            Some("m"),
+            "level_m_in",
+            Some("M")
+        )));
+        assert!(stands_in(&measured("parts", None, "parts_in", None)));
+        assert!(!stands_in(&measured(
+            "level_m",
+            Some("m"),
+            "level_m_in",
+            Some("mm")
+        )));
+        assert!(!stands_in(&measured("level_m", Some("m"), "level_m_in", None)));
+        assert!(!stands_in(&measured("parts", None, "parts_in", Some("count"))));
+        assert!(!stands_in(&measured(
+            "level_m",
+            Some("m"),
+            "LEVEL_RAW",
+            Some("m")
+        )));
+        let mut unmeasured = measured("level_m", Some("m"), "x", None);
+        unmeasured.measured_by = None;
+        assert!(!stands_in(&unmeasured));
+    }
+
+    #[test]
+    fn substitutions_reach_every_instance_of_the_model_and_nothing_else() {
+        let map = iomap::skim(
+            "in  level_m_in real box i2c:1:0x48:0:i16 unit=m\n\
+             in  parts_in int box di:0\n\
+             out level_raw_m real box do:0 unit=m\n",
+        );
+        let s = states(&[("plant_model.st", WELL)], &map, &|_| None, &|_| None);
+        assert_eq!(s.len(), 3, "{s:?}");
+        assert_eq!(s[1].measured_by, None, "an out line measures nothing");
+        let mut subs = substitutions(&s, WELL);
+        subs.sort();
+        let want: Vec<(String, String)> = [
+            ("LINE2.INNER.LEVEL_M", "level_m_in"),
+            ("LINE2.INNER.PARTS", "parts_in"),
+            ("PLANT.LEVEL_M", "level_m_in"),
+            ("PLANT.PARTS", "parts_in"),
+        ]
+        .iter()
+        .map(|(a, b)| ((*a).to_string(), (*b).to_string()))
+        .collect();
+        assert_eq!(subs, want);
+        assert_eq!(
+            substitutions(&s, "not structured text {"),
+            [],
+            "a source that does not parse"
+        );
+        assert_eq!(substitutions(&[], WELL), []);
+        // The state of the program itself is its own variable.
+        let mut own = measured("level_m", Some("m"), "level_m_in", Some("m"));
+        own.pou = "MAIN".into();
+        assert_eq!(
+            substitutions(&[own], WELL),
+            [("LEVEL_M".to_string(), "level_m_in".to_string())]
+        );
+        // A block that holds itself (no such program compiles) still ends.
+        let selfish = "FUNCTION_BLOCK a\nVAR x : a; END_VAR\nEND_FUNCTION_BLOCK\n\
+                       PROGRAM main\nVAR y : a; END_VAR\nEND_PROGRAM\n";
+        let mut st = measured("level_m", Some("m"), "level_m_in", Some("m"));
+        st.pou = "b".into();
+        assert_eq!(substitutions(&[st], selfish), []);
+    }
+
+    #[test]
+    fn the_simulation_runs_a_measured_state_from_its_signal() {
+        let map = iomap::skim("in  level_m_in real box i2c:1:0x48:0:i16 unit=m\n");
+        let s = states(&[("plant_model.st", WELL)], &map, &|_| None, &|_| None);
+        let mut session = crate::playground::Session::new(WELL);
+        assert!(session.build.is_some(), "{:?}", session.diags);
+        session.step();
+        assert_eq!(session.value("level"), Some(Value::Real(1.75)), "the model alone");
+        session.sensors = substitutions(&s, WELL);
+        assert!(session.set_input("level_m_in", Value::Real(3.0)));
+        session.step();
+        assert_eq!(
+            session.value("level"),
+            Some(Value::Real(3.25)),
+            "the scan ran from the transmitter, not the model's 1.75"
+        );
+        assert_eq!(session.value("nested"), Some(Value::Real(3.25)));
+        // An integer signal stands in for a REAL; a missing one changes nothing.
+        session.sensors = vec![
+            ("plant.level_m".into(), "parts_in".into()),
+            ("plant.level_m".into(), "nowhere".into()),
+            ("plant.nope".into(), "level_m_in".into()),
+        ];
+        assert!(session.set_input("parts_in", Value::Int(2)));
+        session.step();
+        assert_eq!(session.value("level"), Some(Value::Real(2.25)));
+        session.sensors.clear();
+        session.step();
+        assert_eq!(
+            session.value("level"),
+            Some(Value::Real(2.5)),
+            "back to the model"
+        );
     }
 }
