@@ -1419,7 +1419,7 @@ module's unit tests.
 
 ## Agent loop (`agent-loop`, built)
 
-`helmsman-plc --relay URL --relay-token FILE [--relay-agent v3]` turns on
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v5]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
 an Anthropic key, and names no model, prompt or tool schema: the relay
@@ -2092,7 +2092,7 @@ path that drives an output).
   even a proposal. One question per conversation, none kept; its own
   budget (6 turns, 32k output tokens, 3 min); the chat's running slots.
   `--relay-explain-agent V` asks the relay for an explain profile
-  (default `explain-v1`: the relay's read-only, floor-language profile;
+  (default `explain-v2`: the relay's read-only, floor-language profile;
   the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.
