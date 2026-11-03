@@ -39,7 +39,9 @@
 //! other.
 
 pub mod cli;
+pub mod index;
 pub mod manifest;
+pub mod market;
 pub mod sign;
 
 use std::collections::{BTreeMap, BTreeSet};
