@@ -62,8 +62,17 @@ this; change it here first when a decision changes.
   and settings, written as one `device` line of `io.map`; Import device…
   takes a vendor's EDS, which joins the project as `NAME.eds` and fills
   the form in (EtherNet/IP, `eds=NAME.eds`); the box reads the file from
-  the project when the map loads (2026-11-02, `device-import`); the same
-  listing is the context the agent gets, in the page and as the box's
+  the project when the map loads (2026-11-02, `device-import`); under the
+  map's devices, "On the network": Scan asks the box for one ListIdentity
+  sweep (`POST /api/devices/discover`; the simulation answers with its
+  simulated E1213) and lists every device that answered, with whether a
+  map device binds it and what the public device library knows of it
+  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
+  then by vendor and model text; `--devices-index` points a box at
+  another); a right-click on one not in the map offers Add to the map…,
+  the form filled in by identity (`cip=V:P:S`) with the library's name
+  and profile (2026-11-02, `devices-repo`); the same listing, network
+  included, is the context the agent gets, in the page and as the box's
   `list_devices` tool) and Code (the Structured Text editor). One width
   for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
   pane on its tab, or shut it when that tab shows.

@@ -11,7 +11,9 @@
 //! GET  /api/modules/{name}/trace/events   event stream of traced scans
 //! GET  /api/traces/events                 event stream of every module's traced scans (the Monitor's one stream)
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
-//! GET  /api/devices                       device links: up, down (why), unknown
+//! GET  /api/devices                       device links: up, down (why), unknown, address
+//! POST /api/devices/discover              token or session: one ListIdentity sweep; every EtherNet/IP device on the LAN, mapped or not, with the library's match (see [`discover`])
+//! GET  /api/devices/library?vendor=&product=|q=   the device library's matches with their map lines
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
 //! POST /api/proposals                     token: a module draft, a param change, or a new io_map / calendar file, checked, stored as a draft
@@ -99,6 +101,7 @@ pub mod approve;
 pub mod bundle;
 pub mod catalog;
 pub mod chat;
+pub mod discover;
 pub mod drivers;
 pub mod dropin;
 pub mod explain;
@@ -237,6 +240,10 @@ pub struct More {
     /// (`<state-dir>/trend-pins`, [`trend::Trends::in_file`]). `None`:
     /// memory only.
     pub trend_pins: Option<std::path::PathBuf>,
+    /// How the box scans its network for devices and where its device
+    /// library is (see [`discover`]). The default sweeps the LAN's
+    /// broadcast and reads the public library.
+    pub discovery: discover::Discovery,
 }
 
 /// The box's HTTPS: what it serves with, and the certificate's
@@ -311,6 +318,8 @@ struct Ctx {
     dropins: Mutex<dropin::Store>,
     /// Held while a device browse runs (one at a time).
     browsing: Mutex<()>,
+    /// The network scan and the device library (see [`discover`]).
+    discovery: discover::State,
     /// The site this box announces itself in (`--site`), and what it heard.
     site: Option<crate::site::Handle>,
     /// The MCP route's drafts (see [`mcp`]).
@@ -574,6 +583,7 @@ impl Api {
             drivers: driver_dir,
             running_drivers,
             trend_pins,
+            discovery,
         } = more;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
@@ -604,6 +614,7 @@ impl Api {
             trust,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
+            discovery: discover::State::new(discovery),
             site,
             mcp: Mutex::new(mcp::Workspace::default()),
             projects,
@@ -1235,6 +1246,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
         ("POST", ["api", "dropins"]) => return dropin::post(req, ctx),
+        ("POST", ["api", "devices", "discover"]) => return discover::post(req, ctx),
         ("POST", ["api", "devices", name, "browse"]) => return dropin::browse(req, ctx, name),
         ("POST", ["api", "proposals", "check"]) => return check_only(req, ctx),
         ("POST", ["api", "proposals", "replay"]) => return replay_draft(req, ctx),
@@ -1286,8 +1298,10 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
         | ["api", "chat" | "explain" | "bundles" | "login" | "logout"]
+        | ["api", "devices", "discover"]
         | ["api", "devices", _, "browse"] => Some("POST"),
         ["api"]
+        | ["api", "devices", "library"]
         | [
             "api",
             "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
@@ -1606,6 +1620,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         },
         ["api", "outputs"] => Response::json(200, &render::outputs(c, &view)),
         ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices)),
+        ["api", "devices", "library"] => discover::library(req, ctx),
         ["api", "io_map"] => io_map(ctx),
         ["api", "proposals"] => Response::json(
             200,

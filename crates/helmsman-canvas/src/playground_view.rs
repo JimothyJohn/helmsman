@@ -108,6 +108,9 @@ pub struct PlaygroundView {
     pub chat: Chat,
     pub link: Link,
     proxy_asked: bool,
+    /// The device library's index, fetched when the Devices tab scans.
+    #[cfg(target_arch = "wasm32")]
+    library: crate::web::TextFetch,
     /// A one-line note under the top bar (loaded an example, …).
     pub notice: Option<String>,
     /// Why the last "Ask" could not be sent.
@@ -162,6 +165,8 @@ impl PlaygroundView {
             chat: Chat::new(store),
             link: Link::default(),
             proxy_asked: false,
+            #[cfg(target_arch = "wasm32")]
+            library: crate::web::TextFetch::default(),
             log: crate::messages::Log::default(),
             seen: Seen::default(),
             notice: None,
@@ -403,9 +408,11 @@ impl PlaygroundView {
                     forced: false,
                 })
         };
-        crate::devices::describe(&crate::devices::tree(&map, &live, &|_| {
+        let mut text = crate::devices::describe(&crate::devices::tree(&map, &live, &|_| {
             crate::devices::LinkState::Simulated
-        }))
+        }));
+        text.push_str(&crate::devices::describe_found(&self.devices_ui.found));
+        text
     }
 
     /// Sends the typed question about the editor's program.
@@ -509,6 +516,16 @@ impl PlaygroundView {
         if !self.proxy_asked {
             self.proxy_asked = true;
             self.link.check_proxy(ctx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if let Some(r) = self.library.take() {
+            match r.and_then(|t| helmsman_project::devlib::Index::parse(&t)) {
+                Ok(index) => self.devices_ui.attach_library(&index),
+                Err(why) => {
+                    self.devices_ui.library_note =
+                        Some(format!("the device library could not be read: {why}"))
+                }
+            }
         }
         for m in self.link.drain() {
             self.chat.receive(m);
@@ -815,7 +832,13 @@ impl Body for PlaygroundView {
         } else {
             Ok(())
         };
-        self.devices_ui.show(ui, &nodes, &source, chrome, &write);
+        if self.devices_ui.show(ui, &nodes, &source, chrome, &write) == Some(crate::devices::DeviceAct::Scan)
+        {
+            self.devices_ui.simulated_scan(&map);
+            #[cfg(target_arch = "wasm32")]
+            self.library
+                .fetch(helmsman_project::devlib::DEFAULT_URL, &ui.ctx().clone());
+        }
     }
 
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {

@@ -108,6 +108,9 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        the agent version POST /api/explain asks for (an
                        explain profile; default explain-v1). The box runs
                        only read-only tools for it either way.
+  --devices-index URL  the device library's index the Devices tab and the
+                       agent look a found device up in (default the public
+                       library's, see docs/devices/; `off` for none)
   --site NAME          announce this box on the LAN as part of site NAME
                        (a UDP multicast beacon to 239.255.72.77:41910, TTL
                        1, every 5 s) and list the boxes of that site it
@@ -174,6 +177,8 @@ struct Opts {
     relay_explain_agent: Option<String>,
     ui: Option<PathBuf>,
     site: Option<String>,
+    /// `--devices-index`: `None` is the default library, `Some("off")` none.
+    devices_index: Option<String>,
     box_name: Option<String>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
@@ -230,6 +235,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_explain_agent: None,
         ui: None,
         site: None,
+        devices_index: None,
         box_name: None,
         policy: None,
         set_pin: None,
@@ -325,6 +331,10 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     "--screen is retired: the Monitor (/?monitor) builds its tiles from the program".into(),
                 );
             }
+            "--devices-index" if v == "off" || v.starts_with("https://") || v.starts_with("http://") => {
+                o.devices_index = Some(v.clone());
+            }
+            "--devices-index" => return Err(format!("--devices-index: a http(s):// URL or off, got {v:?}")),
             "--site" if site::valid_token(v) => o.site = Some(v.clone()),
             "--site" => return Err(format!("--site: 1 to 32 of A-Z a-z 0-9 . _ -, got {v:?}")),
             "--box-name" if site::valid_name(v) => o.box_name = Some(v.clone()),
@@ -1077,6 +1087,11 @@ fn start_api(
         drivers: Some(helmsman_plc::driver_dir::DriverDir::in_state_dir(&dir)),
         running_drivers,
         trend_pins: Some(dir.join("trend-pins")),
+        discovery: api::discover::Discovery::lan(match o.devices_index.as_deref() {
+            Some("off") => None,
+            Some(url) => Some(url.to_string()),
+            None => Some(helmsman_project::devlib::DEFAULT_URL.to_string()),
+        }),
     };
     let server = Api::start_secure(cfg, shared, extras, site.as_ref().map(Site::handle), more, tls)
         .map_err(|e| format!("--api {bind}: {e}"))?;

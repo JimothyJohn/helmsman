@@ -19,6 +19,7 @@
 //!   [`MAX_FILES`] `.st` files and [`MAX_TOTAL`] bytes a project. A
 //!   [`LAYOUT`] file must also read as one ([`layout::parse`]).
 
+pub mod devlib;
 pub mod iomap;
 pub mod layout;
 pub mod starters;

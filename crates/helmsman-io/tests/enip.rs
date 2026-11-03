@@ -813,3 +813,38 @@ fn a_cip_identity_endpoint_is_found_by_list_identity_and_reports_its_address() {
     .unwrap_err();
     assert!(miss.to_string().contains("no such device"), "{miss}");
 }
+
+/// `devices-repo`: a scan (one `ListIdentity`, here to the simulator's own
+/// address) lists the simulated E1213 once, by identity, with the MAC the
+/// ARP table gives for its address and the product name as text.
+#[test]
+fn a_scan_lists_the_simulated_e1213_once_with_its_identity() {
+    let sim = E1213Sim::start().unwrap();
+    let encap: std::net::SocketAddrV4 = sim.endpoint().parse().unwrap();
+    let table = format!(
+        "? ({}) at 0:90:e8:7e:af:be on lo0 ifscope [ethernet]\n",
+        encap.ip()
+    );
+    let seen = helmsman_io::resolve::discover(&helmsman_io::resolve::Resolver {
+        arp: Box::new(move || Ok(table.clone())),
+        sweep: Some(encap),
+        window: Duration::from_millis(300),
+    })
+    .unwrap();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let s = &seen[0];
+    assert_eq!(s.address, *encap.ip());
+    assert_eq!((s.vendor_id, s.product_code, s.device_type), (991, 515, 12));
+    assert_eq!(s.product_name, "E1213");
+    assert_eq!(s.mac, Some([0x00, 0x90, 0xe8, 0x7e, 0xaf, 0xbe]));
+    assert_eq!(s.cip(), "cip=991:515:0x00e12130");
+    // No ARP entry: the device is still listed, without a MAC.
+    let seen = helmsman_io::resolve::discover(&helmsman_io::resolve::Resolver {
+        arp: Box::new(|| Err(std::io::Error::other("no arp here"))),
+        sweep: Some(encap),
+        window: Duration::from_millis(300),
+    })
+    .unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].mac, None);
+}

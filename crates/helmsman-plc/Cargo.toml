@@ -141,6 +141,10 @@ name = "dropins"
 required-features = ["box"]
 
 [[test]]
+name = "discover"
+required-features = ["box"]
+
+[[test]]
 name = "site"
 required-features = ["box"]
 

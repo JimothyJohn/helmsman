@@ -211,6 +211,106 @@ pub fn arp_lookup(table: &str, mac: [u8; 6]) -> Option<Ipv4Addr> {
     None
 }
 
+/// The MAC `table` (either format) lists for `ip`, if any; an all-zero
+/// MAC (Linux's incomplete entry) is no device.
+#[must_use]
+pub fn arp_mac_of(table: &str, ip: Ipv4Addr) -> Option<[u8; 6]> {
+    for line in table.lines() {
+        let mut here = false;
+        let mut mac = None;
+        for tok in line.split_whitespace() {
+            let t = tok.trim_matches(|c| c == '(' || c == ')');
+            if t.parse::<Ipv4Addr>() == Ok(ip) {
+                here = true;
+            } else if let Some(m) = parse_mac(t)
+                && m != [0; 6]
+            {
+                mac.get_or_insert(m);
+            }
+        }
+        if here && let Some(m) = mac {
+            return Some(m);
+        }
+    }
+    None
+}
+
+/// A device that answered a `ListIdentity` sweep (`POST /api/devices/discover`,
+/// the Devices tab's "On the network"): what the wire gives, plus its MAC
+/// when the host's ARP table has it (answering put it there).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Seen {
+    pub address: Ipv4Addr,
+    pub mac: Option<[u8; 6]>,
+    pub vendor_id: u16,
+    pub product_code: u16,
+    pub device_type: u16,
+    pub revision: (u8, u8),
+    pub serial: u32,
+    /// The product name as text (lossy; a device's bytes need not be UTF-8).
+    pub product_name: String,
+}
+
+impl Seen {
+    /// The `cip=V:P:S` identity a map may name this device by.
+    #[must_use]
+    pub fn cip(&self) -> String {
+        format!(
+            "cip={}:{}:{:#010x}",
+            self.vendor_id, self.product_code, self.serial
+        )
+    }
+
+    /// The `mac=` identity, when the MAC is known.
+    #[must_use]
+    pub fn mac_text(&self) -> Option<String> {
+        self.mac.map(|m| Identity::Mac(m).to_string())
+    }
+}
+
+/// One `ListIdentity` sweep with `r`'s target and window: every
+/// EtherNet/IP device that answered, in address order, each at most once
+/// (the first reply wins), with its MAC from the ARP table read after the
+/// sweep. Read-only on the network: nothing is sent but the one request.
+///
+/// # Errors
+/// No sweep target, or a socket error.
+pub fn discover(r: &Resolver) -> io::Result<Vec<Seen>> {
+    let Some(target) = r.sweep else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no ListIdentity sweep target",
+        ));
+    };
+    let found = sweep(target, r.window)?;
+    let table = (r.arp)().unwrap_or_default();
+    let mut out: Vec<Seen> = Vec::new();
+    for f in found.found {
+        let SocketAddr::V4(from) = f.from else { continue };
+        if out.iter().any(|s| s.address == *from.ip()) {
+            continue;
+        }
+        let id = f.identity;
+        let name: String = String::from_utf8_lossy(&id.product_name)
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(64)
+            .collect();
+        out.push(Seen {
+            address: *from.ip(),
+            mac: arp_mac_of(&table, *from.ip()),
+            vendor_id: id.vendor_id,
+            product_code: id.product_code,
+            device_type: id.device_type,
+            revision: (id.revision_major, id.revision_minor),
+            serial: id.serial_number,
+            product_name: name,
+        });
+    }
+    out.sort_by_key(|s| s.address);
+    Ok(out)
+}
+
 /// One `ListIdentity` to `target`, the replies gathered for `window`.
 fn sweep(target: SocketAddrV4, window: Duration) -> io::Result<helmsman_proto::discover::Sweep> {
     let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
@@ -440,5 +540,55 @@ mod tests {
             window: Duration::from_millis(10),
         };
         assert!(socket_addr("mac=00-90-e8-7e-af-be", 502, &failing).is_err());
+    }
+}
+
+#[cfg(test)]
+mod discover_tests {
+    use super::*;
+
+    const LINUX: &str = "IP address       HW type     Flags       HW address            Mask     Device\n\
+10.0.0.57        0x1         0x2         00:90:e8:7e:af:be     *        eth0\n\
+10.0.0.99        0x1         0x0         00:00:00:00:00:00     *        eth0\n";
+    const MACOS: &str = "? (10.0.0.57) at 0:90:e8:7e:af:be on en1 ifscope [ethernet]\n\
+? (10.0.0.60) at (incomplete) on en1 ifscope [ethernet]\n";
+    const E1213: [u8; 6] = [0x00, 0x90, 0xe8, 0x7e, 0xaf, 0xbe];
+
+    #[test]
+    fn the_mac_of_an_address_reads_from_either_table() {
+        assert_eq!(arp_mac_of(LINUX, Ipv4Addr::new(10, 0, 0, 57)), Some(E1213));
+        assert_eq!(arp_mac_of(MACOS, Ipv4Addr::new(10, 0, 0, 57)), Some(E1213));
+        assert_eq!(arp_mac_of(LINUX, Ipv4Addr::new(10, 0, 0, 99)), None, "incomplete");
+        assert_eq!(arp_mac_of(MACOS, Ipv4Addr::new(10, 0, 0, 60)), None, "incomplete");
+        assert_eq!(arp_mac_of(MACOS, Ipv4Addr::new(10, 0, 0, 1)), None);
+        assert_eq!(arp_mac_of("", Ipv4Addr::new(10, 0, 0, 57)), None);
+        assert_eq!(
+            arp_mac_of("garbage \u{0} ( ) 10.0.0.57", Ipv4Addr::new(10, 0, 0, 57)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_seen_device_names_itself_by_identity() {
+        let s = Seen {
+            address: Ipv4Addr::new(10, 0, 0, 57),
+            mac: Some(E1213),
+            vendor_id: 991,
+            product_code: 515,
+            device_type: 12,
+            revision: (3, 1),
+            serial: 0x2A62_9EAE,
+            product_name: "ioLogik E1213".into(),
+        };
+        assert_eq!(s.cip(), "cip=991:515:0x2a629eae");
+        assert_eq!(s.mac_text().as_deref(), Some("mac=00-90-e8-7e-af-be"));
+        assert!(
+            discover(&Resolver {
+                arp: Box::new(|| Ok(String::new())),
+                sweep: None,
+                window: Duration::from_millis(10),
+            })
+            .is_err()
+        );
     }
 }

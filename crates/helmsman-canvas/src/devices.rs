@@ -10,13 +10,24 @@
 //! opens filled in with `eds=NAME.eds` (the box reads it when the map
 //! loads; `device-import`). One map mixes protocols (`modbus-tcp`,
 //! `enip-io`, `logix-tag`); the box runs every link at once.
+//!
+//! Under the map's devices, "On the network" (`devices-repo`): Scan asks
+//! the box for one `ListIdentity` sweep (`POST /api/devices/discover`; the
+//! simulation answers with its simulated E1213) and lists every device
+//! that answered, with whether a map device already binds it and what the
+//! public device library knows of it (identity first, then vendor and
+//! model text; `helmsman_project::devlib`). A right-click on one not in
+//! the map offers "Add to the map…": the New device form opens filled in
+//! from the library's match, the device named by its identity.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use eframe::egui::{self, Color32, RichText, Sense, Vec2};
 use helmsman_iec::Value;
+use helmsman_project::devlib::Index;
 use helmsman_project::iomap::{self, MapText};
+use serde_json::Value as Json;
 
 use crate::editor::Chrome;
 use crate::st_view::{TAP, show};
@@ -312,16 +323,282 @@ pub fn slug(s: &str) -> String {
 pub enum DeviceAct {
     /// Append this `device` line to the map (`io.map`, made if missing).
     Add(String),
+    /// Scan the network (the box: one `ListIdentity` sweep; the
+    /// simulation: its simulated E1213).
+    Scan,
+}
+
+/// What the device library knows of a device found on the network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LibraryHit {
+    pub folder: String,
+    pub vendor: String,
+    pub model: String,
+    pub driver: Option<String>,
+    pub profile: Option<String>,
+}
+
+impl LibraryHit {
+    /// The library's entry as the row shows it (the browser fetches the
+    /// index itself; a box answers with the hit already made).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    #[must_use]
+    pub fn of(e: &helmsman_project::devlib::Entry) -> Self {
+        let p = e.protocol("enip-io").or_else(|| e.protocols.first());
+        Self {
+            folder: e.folder.clone(),
+            vendor: e.vendor.clone(),
+            model: e.model.clone(),
+            driver: p.map(|p| p.driver.clone()),
+            profile: p.and_then(|p| p.profile.clone()),
+        }
+    }
+}
+
+/// A device that answered a scan: what the wire gave, whether the map
+/// has it, what the library knows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub address: String,
+    pub mac: Option<String>,
+    pub vendor_id: u16,
+    pub product_code: u16,
+    pub revision: String,
+    pub serial: String,
+    pub product_name: String,
+    /// `cip=V:P:S`: the identity a map may name it by.
+    pub cip: String,
+    /// The map device that binds it, if one does.
+    pub mapped: Option<String>,
+    pub library: Option<LibraryHit>,
+}
+
+impl Found {
+    /// The simulation's E1213 (`helmsman_adapter::DeviceConfig::moxa_e1213`'s
+    /// identity, at Moxa's factory address), `mapped` against `map`.
+    #[must_use]
+    pub fn simulated_e1213(map: &MapText) -> Self {
+        let mut f = Self {
+            address: "192.168.127.254".into(),
+            mac: None,
+            vendor_id: 991,
+            product_code: 515,
+            revision: "4.1".into(),
+            serial: "0x00e12130".into(),
+            product_name: "E1213".into(),
+            cip: "cip=991:515:0x00e12130".into(),
+            mapped: None,
+            library: None,
+        };
+        f.mapped = mapped_in(map, &f);
+        f
+    }
+
+    /// Reads a `POST /api/devices/discover` body; `None` if it is not one.
+    /// Returns the devices and, when the box had no library, why.
+    #[must_use]
+    pub fn parse_discovery(j: &Json) -> Option<(Vec<Self>, Option<String>)> {
+        let list = j.get("devices")?.as_array()?;
+        let text = |v: &Json| {
+            v.as_str().map(|s| {
+                s.chars()
+                    .filter(|c| !c.is_control())
+                    .take(120)
+                    .collect::<String>()
+            })
+        };
+        let mut out = Vec::new();
+        for d in list.iter().take(256) {
+            let num = |k: &str| {
+                d.get(k)
+                    .and_then(Json::as_u64)
+                    .and_then(|n| u16::try_from(n).ok())
+            };
+            let (Some(address), Some(vendor_id), Some(product_code)) = (
+                d.get("address").and_then(text),
+                num("vendor_id"),
+                num("product_code"),
+            ) else {
+                continue;
+            };
+            let library = d.get("library").filter(|l| l.is_object()).map(|l| LibraryHit {
+                folder: l.get("folder").and_then(text).unwrap_or_default(),
+                vendor: l.get("vendor").and_then(text).unwrap_or_default(),
+                model: l.get("model").and_then(text).unwrap_or_default(),
+                driver: l.get("driver").and_then(text),
+                profile: l.get("profile").and_then(text),
+            });
+            out.push(Self {
+                address,
+                mac: d.get("mac").and_then(text),
+                vendor_id,
+                product_code,
+                revision: d.get("revision").and_then(text).unwrap_or_default(),
+                serial: d.get("serial").and_then(text).unwrap_or_default(),
+                product_name: d.get("product_name").and_then(text).unwrap_or_default(),
+                cip: d
+                    .get("cip")
+                    .and_then(text)
+                    .unwrap_or_else(|| format!("cip={vendor_id}:{product_code}")),
+                mapped: d.get("mapped").and_then(text),
+                library,
+            });
+        }
+        let note = j.get("library").and_then(|l| l.get("unavailable")).and_then(text);
+        Some((out, note))
+    }
+}
+
+/// The map device that binds the device at `f`, by host, `mac=` or `cip=`.
+#[must_use]
+pub fn mapped_in(map: &MapText, f: &Found) -> Option<String> {
+    map.devices
+        .iter()
+        .find(|d| {
+            let e = d.endpoint.as_str();
+            if let Some(m) = e.strip_prefix("mac=") {
+                return f
+                    .mac
+                    .as_deref()
+                    .is_some_and(|fm| fm.replace(':', "-").eq_ignore_ascii_case(&m.replace(':', "-")));
+            }
+            if let Some(c) = e.strip_prefix("cip=") {
+                let mut it = c.split(':');
+                let v = it.next().and_then(|x| x.parse::<u16>().ok());
+                let p = it.next().and_then(|x| x.parse::<u16>().ok());
+                let s = it.next();
+                return v == Some(f.vendor_id)
+                    && p == Some(f.product_code)
+                    && s.is_none_or(|s| s.eq_ignore_ascii_case(f.cip.rsplit(':').next().unwrap_or("")));
+            }
+            e.rsplit_once(':')
+                .map_or(e, |(h, p)| if p.parse::<u16>().is_ok() { h } else { e })
+                == f.address
+        })
+        .map(|d| d.name.clone())
+}
+
+impl NewDevice {
+    /// The form for a device found on the network: EtherNet/IP, named by
+    /// its identity (`cip=V:P:S`, so a lease change never loses it), the
+    /// name and profile from the library's match when there is one.
+    #[must_use]
+    pub fn from_found(f: &Found) -> Self {
+        let model = f
+            .library
+            .as_ref()
+            .map(|l| l.model.as_str())
+            .filter(|m| !m.is_empty())
+            .unwrap_or(f.product_name.as_str());
+        let name = Some(slug(model))
+            .filter(|s| iomap::device_name_ok(s))
+            .unwrap_or_else(|| format!("device_{}_{}", f.vendor_id, f.product_code));
+        let params = match f.library.as_ref().and_then(|l| l.profile.as_deref()) {
+            Some(p) => format!("profile={p} rpi_ms=100 poll_ms=20"),
+            None => "rpi_ms=100 poll_ms=20".to_string(),
+        };
+        Self {
+            name,
+            protocol: 1,
+            endpoint: f.cip.clone(),
+            params,
+            error: None,
+            eds: None,
+        }
+    }
+}
+
+/// The scan's state.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Scan {
+    #[default]
+    Idle,
+    Running,
+    Done,
+    Failed(String),
+}
+
+/// The found devices as text, for the agent: one a line.
+#[must_use]
+pub fn describe_found(found: &[Found]) -> String {
+    let mut out = String::new();
+    if found.is_empty() {
+        return out;
+    }
+    out.push_str("On the network (ListIdentity):\n");
+    for f in found {
+        let _ = write!(
+            out,
+            "  {} {} vendor {} product {} rev {} serial {}",
+            f.product_name, f.address, f.vendor_id, f.product_code, f.revision, f.serial
+        );
+        match &f.mapped {
+            Some(n) => {
+                let _ = write!(out, "  in the map as {n}");
+            }
+            None => out.push_str("  not in the map"),
+        }
+        if let Some(l) = &f.library {
+            let _ = write!(out, "  library: {} {} ({})", l.vendor, l.model, l.folder);
+        }
+        out.push('\n');
+    }
+    out
 }
 
 /// The tab's state: which devices are folded, the form if one is open,
-/// an import asked for.
+/// an import asked for, the last scan.
 #[derive(Debug, Default)]
 pub struct DevicesUi {
     folded: BTreeSet<String>,
     pub adding: Option<NewDevice>,
     /// "Import device…" was pressed: the view opens the file picker.
     pub import: bool,
+    pub found: Vec<Found>,
+    pub scan: Scan,
+    /// Why the box had no library, when it said.
+    pub library_note: Option<String>,
+}
+
+impl DevicesUi {
+    /// Takes in the box's answer to `POST /api/devices/discover`.
+    pub fn discovered(&mut self, status: u16, body: &str) {
+        let j: Json = serde_json::from_str(body).unwrap_or(Json::Null);
+        match (status, Found::parse_discovery(&j)) {
+            (200..=299, Some((found, note))) => {
+                self.found = found;
+                self.library_note = note;
+                self.scan = Scan::Done;
+            }
+            (409, _) => self.scan = Scan::Failed("a scan is already running; try again shortly".into()),
+            (501, _) => self.scan = Scan::Failed("this box does not scan its network".into()),
+            (s, _) => {
+                let why = j["error"].as_str().unwrap_or("no answer").to_string();
+                self.scan = Scan::Failed(if s == 0 { why } else { format!("{s}: {why}") });
+            }
+        }
+    }
+
+    /// The simulation's scan: its one simulated E1213.
+    pub fn simulated_scan(&mut self, map: &MapText) {
+        self.found = vec![Found::simulated_e1213(map)];
+        self.scan = Scan::Done;
+    }
+
+    /// Fills in the library's matches from `index` for the found devices
+    /// that lack one (the simulation fetches the index itself, in a
+    /// browser; natively the tests call this).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn attach_library(&mut self, index: &Index) {
+        for f in &mut self.found {
+            if f.library.is_none()
+                && let Some(e) = index.lookup(f.vendor_id, f.product_code, &f.product_name)
+            {
+                f.library = Some(LibraryHit::of(e));
+            }
+        }
+        self.library_note = None;
+    }
 }
 
 fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enabled: bool) -> bool {
@@ -357,8 +634,9 @@ impl DevicesUi {
         source: &str,
         chrome: &mut Chrome,
         write: &Result<(), String>,
-    ) {
+    ) -> Option<DeviceAct> {
         let t = theme(ui);
+        let mut act = None;
         ui.set_max_width(ui.available_width());
         if !source.is_empty() {
             ui.add(egui::Label::new(RichText::new(source).small().color(t.muted)).truncate());
@@ -447,6 +725,103 @@ impl DevicesUi {
         {
             self.folded.insert(name);
         }
+        // On the network: a scan, then every device that answered.
+        ui.add_space(6.0);
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("On the network").strong().color(t.muted));
+            let busy = self.scan == Scan::Running;
+            let b = ui.add_enabled(!busy, egui::Button::new(if busy { "Scanning…" } else { "Scan" }));
+            chrome.hit("devices scan", b.rect);
+            if b.on_hover_text("One ListIdentity on the LAN: every EtherNet/IP device answers")
+                .clicked()
+            {
+                act = Some(DeviceAct::Scan);
+            }
+        });
+        match &self.scan {
+            Scan::Idle => {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Scan to list the devices that answer.")
+                            .small()
+                            .color(t.muted),
+                    )
+                    .wrap(),
+                );
+            }
+            Scan::Done if self.found.is_empty() => {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("No EtherNet/IP device answered.")
+                            .small()
+                            .color(t.muted),
+                    )
+                    .wrap(),
+                );
+            }
+            Scan::Running | Scan::Done => {}
+            Scan::Failed(why) => {
+                ui.add(egui::Label::new(RichText::new(why).small().color(RED)).wrap());
+            }
+        }
+        let mut add = None;
+        for f in &self.found {
+            let dot = if f.mapped.is_some() {
+                RichText::new("●").color(t.accent)
+            } else {
+                RichText::new("○").color(t.muted)
+            };
+            let where_ = match &f.mapped {
+                Some(n) => format!("in the map as {n}"),
+                None => "not in the map".to_string(),
+            };
+            let text = format!(
+                "{}  {}  {}:{}  {where_}",
+                f.product_name, f.address, f.vendor_id, f.product_code
+            );
+            let r = ui.horizontal(|ui| {
+                ui.label(dot);
+                ui.add(
+                    egui::Label::new(RichText::new(text).monospace())
+                        .truncate()
+                        .sense(Sense::click()),
+                )
+            });
+            let r = r.inner;
+            chrome.hit(format!("network {}", f.address), r.rect);
+            let mut hover = format!("revision {}  serial {}", f.revision, f.serial);
+            if let Some(m) = &f.mac {
+                let _ = write!(hover, "\nMAC {m}");
+            }
+            match &f.library {
+                Some(l) => {
+                    let _ = write!(hover, "\nlibrary: {} {} ({})", l.vendor, l.model, l.folder);
+                }
+                None => hover.push_str("\nnot in the device library"),
+            }
+            if let Some(n) = &self.library_note {
+                let _ = write!(hover, "\n{n}");
+            }
+            let can_add = write.is_ok() && f.mapped.is_none();
+            r.on_hover_text(hover).context_menu(|ui| {
+                if menu_item(ui, chrome, "menu add network", "Add to the map…", can_add) {
+                    add = Some(NewDevice::from_found(f));
+                }
+                if let Some(n) = &f.mapped {
+                    ui.label(
+                        RichText::new(format!("already in the map as {n}"))
+                            .small()
+                            .color(t.muted),
+                    );
+                } else if let Err(why) = write {
+                    ui.label(RichText::new(why).small().color(t.muted));
+                }
+            });
+        }
+        if add.is_some() {
+            self.adding = add;
+        }
         // The blank space under it all: a right-click offers a new device.
         let left = (ui.clip_rect().bottom() - ui.cursor().top()).max(TAP);
         let size = Vec2::new(ui.available_width(), left);
@@ -463,6 +838,7 @@ impl DevicesUi {
                 ui.label(RichText::new(why).small().color(t.muted));
             }
         });
+        act
     }
 
     /// Takes the pending "Import device…" request, once.

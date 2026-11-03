@@ -463,6 +463,53 @@ impl ProjHttp {
     }
 }
 
+/// One cross-origin `GET` of a public text file (the device library's
+/// index on raw.githubusercontent.com): no credentials, CORS, the
+/// browser's cache as it likes. Nothing from it is run; the caller parses
+/// it with the same bounded parser the box uses.
+#[derive(Default)]
+pub struct TextFetch {
+    inbox: Rc<RefCell<Option<Result<String, String>>>>,
+}
+
+impl TextFetch {
+    /// The last fetch's result, once.
+    pub fn take(&mut self) -> Option<Result<String, String>> {
+        self.inbox.borrow_mut().take()
+    }
+
+    pub fn fetch(&mut self, url: &str, ctx: &egui::Context) {
+        let (inbox, ctx, url) = (Rc::clone(&self.inbox), ctx.clone(), url.to_string());
+        wasm_bindgen_futures::spawn_local(async move {
+            let r = fetch_public(&url).await;
+            *inbox.borrow_mut() = Some(r);
+            ctx.request_repaint();
+        });
+    }
+}
+
+async fn fetch_public(url: &str) -> Result<String, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let init = web_sys::RequestInit::new();
+    init.set_method("GET");
+    init.set_mode(web_sys::RequestMode::Cors);
+    init.set_credentials(web_sys::RequestCredentials::Omit);
+    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(|e| text(&e))?;
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| text(&e))?
+        .dyn_into()
+        .map_err(|e| text(&e))?;
+    if resp.status() != 200 {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    JsFuture::from(resp.text().map_err(|e| text(&e))?)
+        .await
+        .map_err(|e| text(&e))?
+        .as_string()
+        .ok_or_else(|| "not text".to_string())
+}
+
 thread_local! {
     /// Files the user picked, read, and not taken yet.
     static PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };

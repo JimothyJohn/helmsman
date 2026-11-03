@@ -1107,6 +1107,101 @@ mod chrome {
         );
     }
 
+    /// `devices-repo`: Scan in the Devices tab lists what answers on the
+    /// network (the simulation: its E1213), says whether the map binds it,
+    /// and "Add to the map…" opens the form filled in by identity; once
+    /// the map names it the row says so and the item is disabled.
+    #[test]
+    fn scan_lists_the_network_and_adds_a_found_device_by_identity() {
+        use crate::devices::Scan;
+        let mut h = Harness::new(App::sim());
+        h.app.sim.as_mut().unwrap().proj.create("mine", None);
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(h.has("devices scan"), "the Scan button");
+        assert!(!h.has("network 192.168.127.254"));
+        h.press("devices scan");
+        h.wait(0.3);
+        assert_eq!(h.app.sim.as_ref().unwrap().devices_ui.scan, Scan::Done);
+        assert!(h.has("network 192.168.127.254"), "the simulated E1213 answered");
+        let f = &h.app.sim.as_ref().unwrap().devices_ui.found[0];
+        assert_eq!((f.vendor_id, f.product_code), (991, 515));
+        assert_eq!(f.mapped, None, "a fresh project maps nothing");
+        // The agent's context lists it too.
+        let text = h.app.sim.as_ref().unwrap().devices_text();
+        assert!(
+            text.contains("On the network (ListIdentity):\n  E1213 192.168.127.254 vendor 991 product 515"),
+            "{text}"
+        );
+        assert!(text.contains("not in the map"), "{text}");
+        // Add to the map: the form, filled in by identity.
+        h.right_click(h.rect("network 192.168.127.254").center());
+        assert!(h.has("menu add network"));
+        h.press("menu add network");
+        h.wait(0.2);
+        assert!(h.has("device form"));
+        let d = h
+            .app
+            .sim
+            .as_ref()
+            .unwrap()
+            .devices_ui
+            .adding
+            .clone()
+            .expect("the form");
+        assert_eq!(d.name, "e1213");
+        assert_eq!(d.endpoint, "cip=991:515:0x00e12130");
+        assert_eq!(d.protocol, 1, "EtherNet/IP");
+        h.press("device ok");
+        h.wait(0.3);
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(
+            map.contains("device e1213 enip-io cip=991:515:0x00e12130 rpi_ms=100 poll_ms=20\n"),
+            "{map}"
+        );
+        // Scan again: now the map binds it.
+        h.press("devices scan");
+        h.wait(0.3);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
+            Some("e1213")
+        );
+        h.right_click(h.rect("network 192.168.127.254").center());
+        h.press("menu add network");
+        h.wait(0.2);
+        assert!(!h.has("device form"), "already in the map: nothing to add");
+    }
+
+    /// The library's match fills the form's name and profile in.
+    #[test]
+    fn a_library_match_names_the_device_and_its_profile() {
+        use crate::devices::{Found, NewDevice};
+        use helmsman_project::devlib::Index;
+        let index = Index::parse(r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "kind": "remote-io", "identity": { "enip": { "vendor_id": 991, "product_code": 515 } }, "protocols": { "enip": { "driver": "enip-io", "map": "enip.map", "profile": "moxa-e1213" } } } ] }"#).unwrap();
+        let mut h = Harness::new(App::sim());
+        h.app.sim.as_mut().unwrap().proj.create("mine", None);
+        h.press("pane devices");
+        h.press("devices scan");
+        h.wait(0.2);
+        h.app.sim.as_mut().unwrap().devices_ui.attach_library(&index);
+        let f: Found = h.app.sim.as_ref().unwrap().devices_ui.found[0].clone();
+        assert_eq!(
+            f.library.as_ref().map(|l| l.model.as_str()),
+            Some("ioLogik E1213")
+        );
+        let d = NewDevice::from_found(&f);
+        assert_eq!(d.name, "iologik_e1213");
+        assert_eq!(d.params, "profile=moxa-e1213 rpi_ms=100 poll_ms=20");
+        assert!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .devices_text()
+                .contains("library: Moxa ioLogik E1213")
+        );
+    }
+
     #[test]
     fn double_clicking_a_file_opens_the_code_tab() {
         let mut h = Harness::new(App::sim());
@@ -1555,6 +1650,101 @@ mod boxed {
             !h.has("device form"),
             "no project open, nobody signed in: nothing to add to"
         );
+    }
+
+    /// On a box, Scan posts to `/api/devices/discover` and the answer's
+    /// devices show with what the box said: mapped or not, the library's
+    /// match; a refusal shows as text, and a hostile body lists nothing.
+    #[test]
+    fn scan_on_a_box_posts_and_lists_the_answer() {
+        use crate::box_projects::PCall;
+        use crate::devices::Scan;
+        use crate::review::Answer;
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.press("pane devices");
+        h.wait(0.2);
+        h.press("devices scan");
+        h.frame(vec![]);
+        let sent = std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent);
+        let scan = sent
+            .iter()
+            .find(|r| r.call == PCall::Discover)
+            .expect("the scan was sent");
+        assert_eq!(
+            (scan.method, scan.url.as_str()),
+            ("POST", "/api/devices/discover?fresh=1")
+        );
+        assert_eq!(h.app.boxv.as_ref().unwrap().devices_ui.scan, Scan::Running);
+        let body = r#"{ "devices": [ { "address": "10.0.0.57", "mac": "00-90-e8-7e-af-be", "vendor_id": 991, "product_code": 515,
+            "revision": "3.1", "serial": "0x2a629eae", "product_name": "ioLogik E1213", "cip": "cip=991:515:0x2a629eae",
+            "mapped": "e1213", "library": { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "driver": "enip-io", "profile": "moxa-e1213" } },
+            { "address": "10.0.0.9", "vendor_id": 1, "product_code": 2, "product_name": "../etc/passwd\u0007", "mapped": null, "library": null } ],
+            "age_ms": 3, "library": { "devices": 1 } }"#;
+        let ctx = h.ctx.clone();
+        h.app.boxv.as_mut().unwrap().step_all(
+            &ctx,
+            Vec::new(),
+            vec![(
+                PCall::Discover,
+                Answer {
+                    status: 200,
+                    retry_after: None,
+                    body: body.into(),
+                },
+            )],
+            h.time,
+        );
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let ui = &h.app.boxv.as_ref().unwrap().devices_ui;
+        assert_eq!(ui.scan, Scan::Done);
+        assert_eq!(ui.found.len(), 2);
+        assert_eq!(ui.found[0].mapped.as_deref(), Some("e1213"));
+        assert_eq!(
+            ui.found[1].product_name, "../etc/passwd",
+            "control characters dropped"
+        );
+        assert!(h.has("network 10.0.0.57") && h.has("network 10.0.0.9"));
+        // A refusal.
+        h.app.boxv.as_mut().unwrap().step_all(
+            &ctx,
+            Vec::new(),
+            vec![(
+                PCall::Discover,
+                Answer {
+                    status: 409,
+                    retry_after: None,
+                    body: r#"{"error":"busy"}"#.into(),
+                },
+            )],
+            h.time,
+        );
+        assert!(matches!(
+            h.app.boxv.as_ref().unwrap().devices_ui.scan,
+            Scan::Failed(_)
+        ));
+        // Garbage lists nothing and fails softly.
+        h.app.boxv.as_mut().unwrap().step_all(
+            &ctx,
+            Vec::new(),
+            vec![(
+                PCall::Discover,
+                Answer {
+                    status: 200,
+                    retry_after: None,
+                    body: "[[[".into(),
+                },
+            )],
+            h.time,
+        );
+        assert!(matches!(
+            h.app.boxv.as_ref().unwrap().devices_ui.scan,
+            Scan::Failed(_)
+        ));
     }
 
     #[test]
