@@ -19,7 +19,7 @@ use serde_json::{Value as Json, json};
 use crate::box_projects::{Answer, PCall, PReq};
 use crate::editor::Chrome;
 use crate::playground::nice_range;
-use crate::playground_view::{scale_labels, window_row};
+use crate::playground_view::{scale_labels, window_slider};
 use crate::remote::{BoxState, segment};
 use crate::review::Session;
 use crate::sim_projects::Storage;
@@ -30,7 +30,6 @@ pub const PINS: usize = crate::playground::TREND_SIGNALS;
 /// History drawn, ms (the box keeps 10 min).
 pub const WINDOW_MS: u64 = 600_000;
 /// The widths the chart can show of it: 10 s, 100 s, the whole 10 min.
-pub const WINDOWS_MS: [u64; 3] = [10_000, 100_000, WINDOW_MS];
 /// Points a signal keeps here.
 pub const MAX_POINTS: usize = 2400;
 /// Seconds between history asks while the tab is open.
@@ -78,7 +77,7 @@ pub struct BoxTrend {
     pub series: BTreeMap<String, Vec<(u64, f64)>>,
     /// The box's clock at the newest point.
     pub now_ms: u64,
-    /// The width of the window drawn, one of [`WINDOWS_MS`].
+    /// The width of the window drawn, ms (the slider's range).
     pub window_ms: u64,
     /// What the box said about the last ask or save.
     pub notice: Option<String>,
@@ -309,9 +308,7 @@ impl BoxTrend {
         for text in [&self.notice, &self.problem].into_iter().flatten() {
             ui.label(RichText::new(text).color(t.muted));
         }
-        if let Some(w) = window_row(ui, chrome, self.window_ms, &WINDOWS_MS) {
-            self.window_ms = w;
-        }
+        window_slider(ui, chrome, &mut self.window_ms);
         ui.add_space(6.0);
         self.chart(ui);
     }
