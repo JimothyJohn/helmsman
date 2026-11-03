@@ -126,6 +126,55 @@ fn every_starter_sits_still_until_start_is_pressed() {
     }
 }
 
+/// The counters template (card stock-counters): parts from the plant's
+/// sensor count once each, the state follows running and faults, a shift
+/// change restarts the shift's totals and leaves the rest, reset clears
+/// all, and uptime is a percentage of the time accounted for.
+#[test]
+fn counters_count_parts_track_state_and_reset_per_shift() {
+    let mut s = rig("counters");
+    run(&mut s, 5_000);
+    assert_eq!(int(&s, "CYCLES"), 0, "nothing counts before Start");
+    assert_eq!(int(&s, "STATE"), 0, "down while stopped");
+    press(&mut s, "START_PB");
+    assert!(
+        run_until(&mut s, 30_000, |s| int(s, "CYCLES") >= 3),
+        "the plant's parts are counted"
+    );
+    assert_eq!(int(&s, "STATE"), 2, "running while parts come");
+    assert!(on(&s, "RUN_LAMP") && !on(&s, "IDLE_LAMP") && !on(&s, "DOWN_LAMP"));
+    let pct = real(&s, "UPTIME_PCT");
+    assert!(pct > 50.0 && pct <= 100.0, "uptime {pct}% after a running start");
+    let before = int(&s, "CYCLES");
+    // A fault: down, counted as such, the lamp red.
+    set(&mut s, "FAULT_IN", true);
+    run(&mut s, 3_000);
+    assert_eq!(int(&s, "STATE"), 0);
+    assert!(on(&s, "DOWN_LAMP") && !on(&s, "RUN_LAMP"));
+    assert!(real(&s, "UPTIME_PCT") < pct, "down time lowers the uptime");
+    set(&mut s, "FAULT_IN", false);
+    run(&mut s, 1_000);
+    // A new shift: the shift's count restarts, the grand total does not.
+    assert!(int(&s, "SHIFT_CYCLES") >= 3);
+    press(&mut s, "NEW_SHIFT_IN");
+    assert!(
+        int(&s, "SHIFT_CYCLES") < 3,
+        "shift total restarted: {}",
+        int(&s, "SHIFT_CYCLES")
+    );
+    assert!(int(&s, "CYCLES") >= before, "the grand total kept counting");
+    // Idle: the plant pauses after its batch of twenty.
+    assert!(
+        run_until(&mut s, 90_000, |s| int(s, "STATE") == 1),
+        "a pause in parts shows as idle"
+    );
+    assert!(on(&s, "IDLE_LAMP") && !on(&s, "RUN_LAMP"));
+    // Reset clears every total.
+    press(&mut s, "RESET_PB");
+    assert!(int(&s, "CYCLES") <= 1, "reset: {}", int(&s, "CYCLES"));
+    assert_eq!(int(&s, "SHIFT_CYCLES"), int(&s, "CYCLES"));
+}
+
 #[test]
 fn batch_mixer_runs_batches_and_trips_on_overtemp_and_a_stuck_valve() {
     let mut s = started("batch-mixer");
