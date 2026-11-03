@@ -53,6 +53,7 @@ pub struct BoxView {
     /// The box's projects, when it runs with them.
     pub projects: BoxProjects,
     pub files_ui: FilesUi,
+    pub devices_ui: crate::devices::DevicesUi,
     /// Who the page is signed in as: the header's session, set by the app
     /// before every frame.
     pub session: Option<Session>,
@@ -133,6 +134,7 @@ impl BoxView {
             state: BoxState::new(),
             projects: BoxProjects::new(),
             files_ui: FilesUi::default(),
+            devices_ui: crate::devices::DevicesUi::default(),
             session: None,
             view: None,
             layers: Layers::load(tweaks),
@@ -342,6 +344,10 @@ impl BoxView {
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
         editor::show(ui, chrome, self);
+        if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
+        {
+            self.add_device_line(&line);
+        }
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.project_act(a);
         }
@@ -383,6 +389,17 @@ impl BoxView {
     }
 
     /// The box runs with projects.
+    /// The Devices tab's Add: one `device` line onto the open project's
+    /// `io.map`, made if the project has none (a draft; Save writes it).
+    fn add_device_line(&mut self, line: &str) {
+        let Some(o) = &mut self.projects.open else { return };
+        match o.bufs.get_mut(helmsman_project::IO_MAP) {
+            Some(b) if b.loaded => b.text = crate::devices::appended(&b.text, line),
+            Some(_) => {}
+            None => self.projects.new_file_with(helmsman_project::IO_MAP, line),
+        }
+    }
+
     #[must_use]
     pub fn has_projects(&self) -> bool {
         self.projects.available == Some(true)
@@ -928,6 +945,52 @@ impl Body for BoxView {
                 self.project_act(a);
             }
         }
+    }
+
+    fn devices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        use crate::devices::{LinkState, Live, tree};
+        // The open project's own map when it has one (what Add edits),
+        // else the map the box runs.
+        let open = self.projects.open.as_ref();
+        let draft = open
+            .and_then(|o| o.bufs.get(helmsman_project::IO_MAP))
+            .filter(|b| b.loaded)
+            .map(|b| b.text.clone());
+        let (text, source) = match (draft, &self.state.io_map) {
+            (Some(t), _) => (t, format!("io.map of {}", open.map_or("", |o| o.name.as_str()))),
+            (None, Some(t)) => (t.clone(), "the map this box runs".to_string()),
+            (None, None) => (String::new(), String::new()),
+        };
+        let map = helmsman_project::iomap::skim(&text);
+        let signals = &self.state.signals;
+        let live = |name: &str| {
+            signals
+                .iter()
+                .find(|s| s.name.eq_ignore_ascii_case(name))
+                .map(|s| Live {
+                    value: s.value,
+                    quality: Some(s.quality.clone()),
+                    forced: s.forced,
+                })
+        };
+        let devices = &self.state.devices;
+        let state = |name: &str| {
+            devices
+                .iter()
+                .find(|d| d.name == name)
+                .map_or(LinkState::Unknown, |d| match d.state.as_str() {
+                    "up" => LinkState::Up,
+                    "down" => LinkState::Down(d.error.clone().unwrap_or_default()),
+                    _ => LinkState::Unknown,
+                })
+        };
+        let nodes = tree(&map, &live, &state);
+        let write = if self.has_projects() {
+            self.writable()
+        } else {
+            Err("This box runs without projects: its map is a file on the box.".into())
+        };
+        self.devices_ui.show(ui, &nodes, &source, chrome, &write);
     }
 
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {

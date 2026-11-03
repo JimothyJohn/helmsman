@@ -132,6 +132,10 @@ pub struct Context<'a> {
     pub source: &'a str,
     /// The compiler's messages for `source`, `line:col: message`.
     pub diagnostics: &'a [String],
+    /// The I/O map's devices and their points, as the Devices tab lists
+    /// them (`crate::devices::describe`); empty when the project has no
+    /// map.
+    pub devices: &'a str,
 }
 
 /// An HTTP request ready for `fetch`. `Debug` hides the key.
@@ -193,6 +197,11 @@ pub fn user_message(ctx: &Context<'_>) -> String {
             m.push('\n');
         }
         m.push_str("</compile_errors>");
+    }
+    if !ctx.devices.trim().is_empty() {
+        m.push_str("\n<io_devices>\n");
+        m.push_str(&neutralize(ctx.devices, "io_devices"));
+        m.push_str("\n</io_devices>");
     }
     m
 }
@@ -926,7 +935,12 @@ impl Chat {
     ///
     /// # Errors
     /// No question, no key, or one still running.
-    pub fn ask(&mut self, source: &str, diagnostics: &[String]) -> Result<(u64, Request), String> {
+    pub fn ask(
+        &mut self,
+        source: &str,
+        diagnostics: &[String],
+        devices: &str,
+    ) -> Result<(u64, Request), String> {
         if self.busy() {
             return Err("Wait for the answer, or stop it.".into());
         }
@@ -939,6 +953,7 @@ impl Chat {
             question: &question,
             source,
             diagnostics,
+            devices,
         };
         let req = request(&route, self.model, &self.history, &ctx);
         self.asked = user_message(&ctx);

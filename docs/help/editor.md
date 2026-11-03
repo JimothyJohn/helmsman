@@ -100,14 +100,19 @@ label is drawn, the icon stands alone at a readable size.
 
 ## The panes
 
-- **The left pane** has two tabs. **Files** (<kbd>Alt</kbd> <kbd>0</kbd>):
+- **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>0</kbd>):
   the project's files, the examples and starters, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
-  next. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the Structured Text
-  editor. Errors are marked on the line as you type; the program running
-  does not change until you deploy. The key for a tab opens the pane on
-  it, or shuts the pane when that tab already shows.
+  next. **Devices** (<kbd>Alt</kbd> <kbd>4</kbd>): the devices the
+  project's I/O map names, each with its points under it, their live
+  values, and whether the link is up; a right-click on the blank space
+  adds a device (name, protocol, address, settings) as a line of the
+  map, and one map may mix Modbus TCP and EtherNet/IP devices. The agent
+  reads the same listing. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
+  Structured Text editor. Errors are marked on the line as you type; the
+  program running does not change until you deploy. The key for a tab
+  opens the pane on it, or shuts the pane when that tab already shows.
 - **The bottom panel** (<kbd>Alt</kbd> <kbd>2</kbd>): the **Trend** of the
   signals you pin, with a long time axis, and **Messages**, the last two
   hundred things the page had to say, with the error count on the tab.

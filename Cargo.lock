@@ -1533,6 +1533,7 @@ dependencies = [
 name = "helmsman-agent"
 version = "0.1.0"
 dependencies = [
+ "helmsman-project",
  "proptest",
  "rustls",
  "serde",

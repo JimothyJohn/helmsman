@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The map skimmer `list_devices` groups signals by device with (a crate of
+# this workspace, pure Rust, already in the box and the canvas).
+helmsman-project = { path = "../helmsman-project" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # Same crates and versions helmsman-plc's https sinks already use: no new

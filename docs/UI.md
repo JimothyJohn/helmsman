@@ -44,16 +44,24 @@ this; change it here first when a decision changes.
   with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
   deploy is still there to read after the line under the header has gone.
-- **Left pane, collapsible, tabs (160 pt):** Files (the projects, the
+- **Left pane, collapsible, tabs (200 pt):** Files (the projects, the
   open one's files, the program tree; a right-click on a project offers
   Copy, Rename and Delete, on a file Copy, Paste, Duplicate, Rename and
   Delete with an app-wide clipboard so a file pastes into any open
   project, and on the blank space New project and Paste; New project and
   Copy project are also the File menu's first items; the Delete key
   deletes the row last clicked, a double click on a file opens the Code
-  tab, and every delete is confirmed in a modal at the screen's centre)
-  and Code (the Structured Text editor). One width for both tabs; Alt 0 and Alt 1 open the pane on its
-  tab, or shut it when that tab shows.
+  tab, and every delete is confirmed in a modal at the screen's centre),
+  Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
+  system's, each with its points under it, live values and the link's
+  state; on a box the open project's `io.map`, else the map the box runs;
+  a right-click on the blank space adds a device as a file is added: a
+  form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
+  and settings, written as one `device` line of `io.map`; the same
+  listing is the context the agent gets, in the page and as the box's
+  `list_devices` tool) and Code (the Structured Text editor). One width
+  for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
+  pane on its tab, or shut it when that tab shows.
 - **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the
   diagram does not show), Agent. On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
@@ -140,6 +148,7 @@ The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
 | Alt 1 | The left pane's Code tab (the Structured Text) | POUs view |
 | Alt 2 | Trend along the bottom | Modules view |
 | Alt 3 | Side panel | Messages view |
+| Alt 4 | The left pane's Devices tab | |
 | Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
 | Ctrl Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References |
 | Alt ↑ | Up one level in the diagram | |
