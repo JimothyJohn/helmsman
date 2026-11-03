@@ -161,6 +161,7 @@ fn fetch_text(url: &str, cap: usize) -> Result<String, String> {
         path: &path,
         headers: &[("Accept", "application/json, text/plain")],
         json: None,
+        raw: None,
     };
     let t = Timeouts {
         connect: Duration::from_secs(5),
