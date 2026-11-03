@@ -1469,6 +1469,66 @@ fn a_deploy_racing_saves_runs_one_whole_version() {
     assert!(ids.contains(&b.head()));
 }
 
+/// `device-import`: an uploaded EDS is kept as the project's `NAME.eds`
+/// (its stem as a slug), checked to read as an EDS; the map may then name
+/// it with `eds=NAME.eds`.
+#[test]
+fn an_eds_imports_into_a_project_as_a_device_file() {
+    const FACTS: &str = include_str!("../../helmsman-proto/tests/fixtures/e1213-facts.eds");
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(&s, "dev", &[]);
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/dev/import?file=Moxa%20E1213%20(v2.0).EDS",
+        Some(&s),
+        "application/octet-stream",
+        FACTS.as_bytes(),
+    );
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(r.json()["name"], "moxa-e1213-v2-0.eds");
+    let kept = file(b.addr, "dev", "moxa-e1213-v2-0.eds").json()["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(kept, FACTS, "byte for byte");
+    // Garbage is not an EDS; binary is not text.
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/dev/import?file=junk.eds",
+        Some(&s),
+        "application/octet-stream",
+        b"[Device]\n  this is not = an EDS ; ; ;\n[[[",
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/dev/import?file=bin.eds",
+        Some(&s),
+        "application/octet-stream",
+        &[0xff, 0xfe, 0x00, 0x01],
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    // A name nothing survives of.
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/dev/import?file=---.eds",
+        Some(&s),
+        "application/octet-stream",
+        FACTS.as_bytes(),
+    );
+    assert_eq!(r.status, 400, "{r:?}");
+    // The file is a project file like any other: it is in the zip.
+    let zip = send(b.addr, "GET", "/api/projects/dev/zip", Some(&s), "", &[]);
+    assert_eq!(zip.status, 200, "{zip:?}");
+    let files = helmsman_project::read_zip(&zip.body).unwrap();
+    assert_eq!(files.get("moxa-e1213-v2-0.eds"), Some(FACTS));
+}
+
 #[test]
 fn plcopen_and_st_files_import_into_a_project_and_build() {
     let b = Bench::new();

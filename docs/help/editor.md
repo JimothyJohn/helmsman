@@ -108,8 +108,9 @@ label is drawn, the icon stands alone at a readable size.
   project's I/O map names, each with its points under it, their live
   values, and whether the link is up; a right-click on the blank space
   adds a device (name, protocol, address, settings) as a line of the
-  map, and one map may mix Modbus TCP and EtherNet/IP devices. The agent
-  reads the same listing. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
+  map; Import device… takes the vendor's EDS file, keeps it in the
+  project and fills the form in from it. One map may mix Modbus TCP and
+  EtherNet/IP devices. The agent reads the same listing. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
   Structured Text editor. Errors are marked on the line as you type; the
   program running does not change until you deploy. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.

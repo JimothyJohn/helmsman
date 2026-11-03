@@ -9,9 +9,10 @@
 //!   letter or digit ([`project_name`]): one path segment, lower case so
 //!   two projects never differ by case alone (a case-folding file system
 //!   would merge them). A file is `NAME.st` with `NAME` 1..=64 of `A-Z a-z
-//!   0-9 _ -` starting with a letter or digit, or one of [`IO_MAP`],
-//!   [`SETTINGS`] and [`LAYOUT`] ([`file_name`]); two files that differ
-//!   only by case are refused.
+//!   0-9 _ -` starting with a letter or digit, one of [`IO_MAP`],
+//!   [`SETTINGS`] and [`LAYOUT`], or a device's EDS `NAME.eds` (`NAME` a
+//!   slug as a driver's; [`file_name`]); two files that differ only by
+//!   case are refused.
 //! - **Contents.** UTF-8 without NUL, other control characters (tab, CR
 //!   and LF aside) or bidirectional overrides (no "Trojan Source" in a
 //!   program an engineer reviews); at most [`MAX_FILE`] bytes a file,
@@ -36,8 +37,10 @@ pub const LAYOUT: &str = "diagram.layout";
 /// ICON` (the canvas reads it; the build ignores it).
 pub const ICONS: &str = "icons.map";
 /// What a project file may be named, for messages.
-pub const FILE_NAMES: &str =
-    "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings, diagram.layout or icons.map";
+pub const FILE_NAMES: &str = "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings, diagram.layout, icons.map or NAME.eds (a device's EDS, NAME 1 to 48 of a-z 0-9 _ -)";
+/// A device file's extension: a vendor's EDS, carried by the project and
+/// named by its map (`eds=NAME.eds`), so a device goes with the project.
+pub const EDS_EXT: &str = ".eds";
 /// Largest file, bytes.
 pub const MAX_FILE: usize = 256 * 1024;
 /// Most `.st` files in a project.
@@ -67,6 +70,9 @@ pub enum FileKind {
     Settings,
     Layout,
     Icons,
+    /// A device's EDS (`NAME.eds`): text the box's `enip-io` driver
+    /// reads; the build ignores it.
+    Eds,
 }
 
 /// What `s` names in a project, if it names anything.
@@ -79,6 +85,9 @@ pub fn file_name(s: &str) -> Option<FileKind> {
         ICONS => return Some(FileKind::Icons),
         _ => {}
     }
+    if let Some(stem) = s.strip_suffix(EDS_EXT) {
+        return driver_name(stem).then_some(FileKind::Eds);
+    }
     let stem = s.strip_suffix(".st")?;
     let b = stem.as_bytes();
     ((1..=STEM_LEN).contains(&b.len())
@@ -86,6 +95,27 @@ pub fn file_name(s: &str) -> Option<FileKind> {
         && b.iter()
             .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-'))
     .then_some(FileKind::St)
+}
+
+/// The project file an uploaded EDS becomes: its stem as a slug (lower
+/// case, `a-z 0-9 _ -`, runs of anything else one `-`, at most
+/// [`NAME_LEN`]) plus [`EDS_EXT`]; `None` when nothing of the stem
+/// survives. The canvas and the box's import agree on it.
+#[must_use]
+pub fn eds_file_name(upload: &str) -> Option<String> {
+    let stem = upload.rsplit_once('.').map_or(upload, |(s, _)| s);
+    let mut out = String::new();
+    for c in stem.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.truncate(NAME_LEN);
+    let out = out.trim_end_matches('-').to_string();
+    driver_name(&out).then(|| format!("{out}{EDS_EXT}"))
 }
 
 /// Why a file's bytes are refused, if they are.
@@ -353,8 +383,44 @@ mod tests {
         assert_eq!(file_name("io.map"), Some(FileKind::IoMap));
         assert_eq!(file_name("project.settings"), Some(FileKind::Settings));
         assert_eq!(file_name("icons.map"), Some(FileKind::Icons));
+        assert_eq!(file_name("e1213.eds"), Some(FileKind::Eds));
+        assert_eq!(file_name("moxa-e1213_v2.eds"), Some(FileKind::Eds));
         for bad in ["../a.st", ".st", "a.ST", "a b.st", "a/b.st", "C:a.st", "a.st\0"] {
             assert_eq!(file_name(bad), None, "{bad:?}");
+        }
+        for bad in [
+            "E1213.eds",
+            "a.b.eds",
+            "../x.eds",
+            ".eds",
+            "a/b.eds",
+            "x.EDS",
+            &format!("{}.eds", "a".repeat(49)),
+        ] {
+            assert_eq!(file_name(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_uploaded_eds_gets_a_slug_name_both_sides_agree_on() {
+        assert_eq!(eds_file_name("E1213.eds").as_deref(), Some("e1213.eds"));
+        assert_eq!(
+            eds_file_name("moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds").as_deref(),
+            Some("moxa-iologik-e1213-e1213-t-eds-file-software-pac.eds")
+        );
+        assert_eq!(
+            eds_file_name("../../etc/passwd.eds").as_deref(),
+            Some("etc-passwd.eds")
+        );
+        assert_eq!(
+            eds_file_name("My Device (v2).EDS").as_deref(),
+            Some("my-device-v2.eds")
+        );
+        assert_eq!(eds_file_name("---.eds"), None);
+        assert_eq!(eds_file_name(".eds"), None);
+        assert_eq!(eds_file_name("ñ.eds"), None);
+        for n in ["e1213.eds", "my-device-v2.eds", "etc-passwd.eds"] {
+            assert_eq!(file_name(n), Some(FileKind::Eds), "{n}");
         }
     }
 

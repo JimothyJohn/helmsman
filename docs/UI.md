@@ -59,7 +59,10 @@ this; change it here first when a decision changes.
   state; on a box the open project's `io.map`, else the map the box runs;
   a right-click on the blank space adds a device as a file is added: a
   form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
-  and settings, written as one `device` line of `io.map`; the same
+  and settings, written as one `device` line of `io.map`; Import device…
+  takes a vendor's EDS, which joins the project as `NAME.eds` and fills
+  the form in (EtherNet/IP, `eds=NAME.eds`); the box reads the file from
+  the project when the map loads (2026-11-02, `device-import`); the same
   listing is the context the agent gets, in the page and as the box's
   `list_devices` tool) and Code (the Structured Text editor). One width
   for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the

@@ -87,6 +87,17 @@ pub const DEFAULT_PORT: u16 = 44818;
 /// Where targets send T->O data, and take O->T.
 pub const IO_PORT: u16 = 2222;
 
+/// Whether `text` reads as an EDS (`helmsman_proto::eds::Eds::parse`):
+/// what a box checks before it keeps an uploaded device file.
+///
+/// # Errors
+/// The parser's line and reason.
+pub fn check_eds(text: &str) -> Result<(), String> {
+    helmsman_proto::eds::Eds::parse(text)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Little-endian numeric formats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {

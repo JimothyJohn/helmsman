@@ -179,7 +179,8 @@ The same signals over either transport; both files are checked by
 
 - [`moxa-iologik-e1213-enip.map`](moxa-iologik-e1213-enip.map): `enip-io`,
   `profile=moxa-e1213` (the facts above, built in), or `eds=PATH` to read
-  the vendor's file at start.
+  the vendor's file at start; in a project, Import device… on the Devices
+  tab keeps the EDS as `NAME.eds` and writes `eds=NAME.eds`.
 - [`moxa-iologik-e1213-modbus.map`](moxa-iologik-e1213-modbus.map):
   `modbus-tcp`.
 
