@@ -589,6 +589,37 @@ it, a module drives it through a `VAR_OUTPUT` of that name under the
 one-writer rule and safe values, and the Monitor shows it as one of the
 program's outputs. No layout has to fit it any more.
 
+## Requirement tests (`spec-tests`, built; interview 2026-11-02)
+
+A requirement the engineer and the agent agreed on is kept as a test the
+box can run on its own: `test_NAME.st` in the project, a PROGRAM that
+drives the program's inputs, steps the clock and checks its outputs with
+the `ASSERT` standard block (a Helmsman extension in `library.st`:
+`FAILED` latches on the first scan `COND` is FALSE, `FAILED_AT` keeps
+when). The runner is `helmsman_iec::spec`, one code path for the page and
+the box: the test and the program under test are two compiled `Program`s
+scanned in lockstep on one clock at the project's period; each scan the
+test runs first, its `VAR_OUTPUT`s are copied into the program's
+`VAR_INPUT`s of the same name, the program runs, its `VAR_OUTPUT`s are
+copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
+`ASSERT` failed (named as words, with its declaration line's comment, and
+when), either side faulted or does not compile, a shared port's types
+differ, `DONE` never came within the limit (two minutes of simulated
+time), or the test holds no `ASSERT` at all. The test's first comment is
+the requirement in the engineer's words. Deterministic: no wall clock, no
+I/O.
+
+Test files never deploy: the project build (`project::build`) and the
+page's build both skip `spec::is_test` files. The page runs the tests
+after every build change and before Deploy and "Use this code" (a block
+answer is tested with the candidate file in place); a box runs them when a
+project opens, after each save (`POST /api/projects/{p}/tests`, token or
+session, nothing changes) and inside the deploy's approval path, where a
+red test refuses with 409 before anything builds (`projects::red_tests`).
+The Requirements tab of the right panel shows one row per test, green or
+red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
+same gate.
+
 ## Sim replay (`sim-replay`, built)
 
 The evidence an engineer approves an output change on: what a proposed
