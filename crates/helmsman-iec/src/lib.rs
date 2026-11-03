@@ -2,7 +2,7 @@
 //! a time against a process image.
 //!
 //! ```
-//! use std::time::Duration;
+//! use core::time::Duration;
 //! use helmsman_iec::{Image, ImageSizes, Value, compile};
 //!
 //! let src = "
@@ -42,6 +42,26 @@
 //! Ladder (LD) and function block diagrams (FBD) drawn in an editor such
 //! as Beremiz or the `OpenPLC` Editor come in as `PLCopen` TC6 XML through
 //! [`compile_plcopen`].
+//!
+//! The crate is `no_std + alloc` without its `std` feature (on by default):
+//! the same compiler and interpreter on an edge node (docs/EDGE.md), with
+//! the clock coming in through [`Program::scan_at`] and the float functions
+//! from `libm` (`--no-default-features --features libm`). Only
+//! [`Program::scan`], the wall-clock scan, needs std.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+/// What the std prelude gives and `no_std` modules import instead.
+#[cfg(not(feature = "std"))]
+mod prelude {
+    pub use alloc::borrow::ToOwned;
+    pub use alloc::boxed::Box;
+    pub use alloc::string::{String, ToString};
+    pub use alloc::vec::Vec;
+    pub use alloc::{format, vec};
+}
 
 /// The syntax tree of a compilation unit, read-only, for views built from
 /// the source (the ST diagram, `helmsman-diagram`). Statement positions are
@@ -73,10 +93,12 @@ pub mod ast {
 }
 
 mod check;
+mod fmath;
 mod interp;
 pub mod l5x;
 pub mod ladder;
 mod lexer;
+mod once;
 mod parser;
 pub mod plcopen;
 mod state;
@@ -84,8 +106,14 @@ pub mod trace;
 mod types;
 mod xml;
 
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+use alloc::sync::Arc;
+use core::time::Duration;
+#[cfg(feature = "std")]
+use std::time::Instant;
+
+use once::Once;
 
 pub use check::{Area, Diagnostic, ImageSizes};
 pub use interp::{BadParam, Fault, FaultKind, Image};
@@ -105,7 +133,7 @@ pub const DEFAULT_BUDGET: u64 = 1_000_000;
 pub const LIBRARY: &str = include_str!("library.st");
 
 fn library() -> &'static parser::Unit {
-    static LIB: OnceLock<parser::Unit> = OnceLock::new();
+    static LIB: Once<parser::Unit> = Once::new();
     LIB.get_or_init(|| {
         parser::parse(LIBRARY, true).unwrap_or_else(|e| panic!("library.st {}: {}", e.pos, e.msg))
     })
@@ -130,13 +158,16 @@ pub struct Program {
     code: Checked,
     mem: Vec<Value>,
     budget: u64,
+    /// When the first wall-clock scan ran ([`Program::scan`]; std only:
+    /// without std the clock comes in through [`Program::scan_at`]).
+    #[cfg(feature = "std")]
     started: Option<Instant>,
     /// Located initial values are still to be written (a cold start).
     cold: bool,
     /// Trace counters per scan (see [`trace`]).
     counters: u32,
     /// Built on the first traced scan; shared by its clones.
-    map: OnceLock<Arc<TraceMap>>,
+    map: Once<Arc<TraceMap>>,
 }
 
 /// Compiles a unit holding one `PROGRAM` (plus any FUNCTIONs,
@@ -158,10 +189,11 @@ pub fn compile(src: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>>
         mem: code.mem_init.clone(),
         code,
         budget: DEFAULT_BUDGET,
+        #[cfg(feature = "std")]
         started: None,
         cold: true,
         counters,
-        map: OnceLock::new(),
+        map: Once::new(),
     })
 }
 
@@ -199,10 +231,12 @@ impl Program {
         self.budget = budget;
     }
 
-    /// Runs one scan; the clock is wall time since the first scan.
+    /// Runs one scan; the clock is wall time since the first scan (std
+    /// only; a node drives [`Program::scan_at`] from its own clock).
     ///
     /// # Errors
     /// A [`Fault`]; see [`Program::scan_at`].
+    #[cfg(feature = "std")]
     pub fn scan(&mut self, image: &mut Image) -> Result<(), Fault> {
         let now = self.started.get_or_insert_with(Instant::now).elapsed();
         self.scan_at(image, now)
@@ -269,7 +303,10 @@ impl Program {
     /// next scan rewrites located initial values into the image.
     pub fn reset(&mut self) {
         self.mem.clone_from(&self.code.mem_init);
-        self.started = None;
+        #[cfg(feature = "std")]
+        {
+            self.started = None;
+        }
         self.cold = true;
     }
 
@@ -447,8 +484,8 @@ pub enum SetError {
     Range(Ty),
 }
 
-impl std::fmt::Display for SetError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for SetError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::NoSuchInput => f.write_str("no such VAR_INPUT"),
             Self::Kind(t) => write!(f, "wrong kind of value for {t}"),
@@ -457,7 +494,7 @@ impl std::fmt::Display for SetError {
     }
 }
 
-impl std::error::Error for SetError {}
+impl core::error::Error for SetError {}
 
 /// `name[1,2]` -> ("NAME", Some([1, 2])); `name` -> ("NAME", None).
 fn split_index(seg: &str) -> Option<(&str, Option<Vec<i128>>)> {

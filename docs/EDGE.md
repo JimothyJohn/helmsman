@@ -330,6 +330,21 @@ thumbv7em-none-eabihf` (a `rustup target add` in the workflow) next to the
 existing checks; `scripts/lint.sh` gets the same line. Nothing else in the
 workspace changes, and no test changes.
 
+*Done 2026-11-02 (feat/iec-no-std).* As planned, with three differences.
+The `no_std` build is `--no-default-features --features libm`: cargo cannot
+turn a dependency on when a feature is *absent*, so `libm` is an optional
+dependency the node's build names; the std build still has none. The
+wall-clock start (`started: Option<Instant>` on `Program` and `State`) is
+behind `std` rather than turned into a `Duration`: it only serves
+`Program::scan`, which a node never calls, and `scan_at`'s clock already
+comes from the caller. `OnceLock` (the parsed standard library, a
+program's trace map) is a small `Once<T>` of the crate's own: std's
+`OnceLock` under `std`, a lock-free leak-once `AtomicPtr` cell without.
+`HashMap`/`HashSet` became `BTreeMap`/`BTreeSet` throughout (no hashbrown),
+which also makes every iteration order deterministic. `scripts/lint.sh`
+runs clippy on the thumbv7em build; the CI step is a separate draft PR
+(workflow edits go through a draft, per the cloud-security rules).
+
 **Phase 1, the board, no network (G2, G3).** `crates/helmsman-node`, not a
 default member. Embed the `trace_bench` source and the batch-mixer starter
 (blocks concatenated), compile at boot, scan in a loop, print min / mean /
