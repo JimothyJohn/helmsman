@@ -17,9 +17,10 @@ use std::time::{Duration, Instant};
 
 use helmsman_iec::{ImageSizes, compile};
 use helmsman_plc::api::{
-    Api, Approval, Catalog, Config, Devices, Limits, Live, MemAudit, MemProposals, ModuleInfo, Plant, Shared,
-    swap,
+    Api, Approval, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, ModuleInfo, Plant,
+    Shared, swap,
 };
+use helmsman_plc::bundle::index::{self, Index};
 use helmsman_plc::bundle::sign::{TRUST_FILE, write_private};
 use helmsman_plc::bundle::{
     self, Bundle, BundleManifest, Capabilities, Error, MAGIC, MAX_BUNDLE, SigningKey, Trust, TrustStore,
@@ -799,6 +800,12 @@ struct Bench {
 }
 
 fn bench(trust: Option<TrustStore>) -> Bench {
+    bench_local(trust, true)
+}
+
+/// As [`bench`]; `market_local`: whether the marketplace routes may fetch
+/// from this test's loopback server (a box says no by default).
+fn bench_local(trust: Option<TrustStore>, market_local: bool) -> Bench {
     let dd = d();
     let md = ModuleDir::from_text(
         Path::new("conveyor"),
@@ -878,7 +885,16 @@ fn bench(trust: Option<TrustStore>) -> Bench {
         approval: Some(approval),
         chat: None,
     };
-    let api = Api::start_with_trust(cfg, shared, None, trust).unwrap();
+    let api = Api::start_with(
+        cfg,
+        shared,
+        Extras {
+            ui: None,
+            trust,
+            market_local,
+        },
+    )
+    .unwrap();
     Bench {
         addr: api.addr(),
         _api: api,
@@ -1660,4 +1676,367 @@ fn an_older_builds_bundle_carrying_a_driver_is_refused_and_says_why() {
             r => panic!("{why}: {r:?}"),
         }
     }
+}
+
+// ---- the marketplace index --------------------------------------------------
+
+/// A static site on loopback: the files by name, served to any GET until
+/// the test ends (the thread is left to die with the process).
+fn static_site(files: Vec<(String, Vec<u8>)>) -> SocketAddr {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let files = Arc::new(files);
+    std::thread::spawn(move || {
+        for s in listener.incoming() {
+            let Ok(mut s) = s else { break };
+            let files = Arc::clone(&files);
+            std::thread::spawn(move || {
+                s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                let mut buf = Vec::new();
+                let mut b = [0u8; 1024];
+                while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    match s.read(&mut b) {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) => buf.extend_from_slice(&b[..n]),
+                    }
+                }
+                let head = String::from_utf8_lossy(&buf).into_owned();
+                let target = head.split_whitespace().nth(1).unwrap_or("/").to_string();
+                let name = target.rsplit('/').next().unwrap_or("").to_string();
+                let reply = match files.iter().find(|(n, _)| *n == name) {
+                    Some((_, body)) => {
+                        let mut r = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .into_bytes();
+                        r.extend_from_slice(body);
+                        r
+                    }
+                    None => {
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+                    }
+                };
+                let _ = s.write_all(&reply);
+            });
+        }
+    });
+    addr
+}
+
+/// `horn-kit` at another version, signed by the publisher.
+fn signed_version(version: &str) -> Vec<u8> {
+    let cs = horner_content();
+    let mut m = manifest_for(&cs);
+    m.version = version.into();
+    let mut b = Bundle::new(m, cs);
+    b.sign(&publisher());
+    b.encode()
+}
+
+/// An index of `bundles` by acme, signed with `key`, and the files a site
+/// serves for it (the index at `index.json`).
+fn site_files(bundles: &[(&str, Vec<u8>)], key: &SigningKey) -> Vec<(String, Vec<u8>)> {
+    let files: Vec<(String, Vec<u8>)> = bundles
+        .iter()
+        .map(|(n, b)| ((*n).to_string(), b.clone()))
+        .collect();
+    let idx = Index::build("acme", &files).unwrap();
+    let text = idx.encode();
+    let sig = index::sign(text.as_bytes(), key);
+    let mut out = files;
+    out.push(("index.json".into(), text.into_bytes()));
+    out.push(("index.json.sig".into(), sig.into_bytes()));
+    out
+}
+
+fn market(b: &Bench, path: &str, body: &Json) -> Resp {
+    request(
+        b.addr,
+        "POST",
+        path,
+        true,
+        "application/json",
+        body.to_string().as_bytes(),
+    )
+}
+
+#[test]
+fn an_index_is_built_from_signed_bundles_and_reads_back() {
+    let files = vec![
+        ("horn-kit-1.0.0.hbundle".to_string(), bytes()),
+        ("horn-kit-1.1.0.hbundle".to_string(), signed_version("1.1.0")),
+    ];
+    let idx = Index::build("acme", &files).unwrap();
+    assert_eq!(idx.bundles.len(), 2);
+    assert_eq!(idx.bundles[0].version, "1.0.0");
+    assert_eq!(idx.bundles[1].file, "horn-kit-1.1.0.hbundle");
+    assert_eq!(idx.bundles[1].size, files[1].1.len() as u64);
+    assert_eq!(
+        idx.bundles[1].signed_by,
+        vec![bundle::sign::hex_key(&publisher().public())]
+    );
+    assert_eq!(
+        idx.find("horn-kit", None).unwrap().version,
+        "1.1.0",
+        "newest without a version"
+    );
+    assert_eq!(idx.find("horn-kit", Some("1.0.0")).unwrap().version, "1.0.0");
+    assert!(idx.find("nope", None).is_none());
+    let text = idx.encode();
+    assert_eq!(Index::decode(text.as_bytes()).unwrap(), idx);
+    // An unsigned bundle, a tampered one, a repeated version, a bad name: refused.
+    let unsigned = Bundle::new(manifest_for(&horner_content()), horner_content()).encode();
+    assert!(Index::build("acme", &[("u-1.hbundle".into(), unsigned)]).is_err());
+    let mut tampered = bytes();
+    let at = find(&tampered, b"horn := start");
+    tampered[at] ^= 1;
+    assert!(Index::build("acme", &[("t-1.hbundle".into(), tampered)]).is_err());
+    assert!(
+        Index::build(
+            "acme",
+            &[("a.hbundle".into(), bytes()), ("b.hbundle".into(), bytes())]
+        )
+        .is_err()
+    );
+    assert!(Index::build("acme", &[("../x.hbundle".into(), bytes())]).is_err());
+}
+
+#[test]
+fn the_cli_writes_a_signed_index_and_fetches_a_bundle_from_it() {
+    let dir = tmp("index-dir");
+    std::fs::write(dir.join("horn-kit-1.0.0.hbundle"), bytes()).unwrap();
+    std::fs::write(dir.join("notes.txt"), b"ignored").unwrap();
+    let work = tmp("index-cli");
+    let key_path = work.join("key.pk8");
+    let (_, der) = SigningKey::generate().unwrap();
+    write_private(&key_path, &der, true).unwrap();
+    let key = SigningKey::load(&key_path).unwrap();
+    let out = work.join("index.json");
+    let said = bundle::cli::run(&[
+        "index".into(),
+        "--key".into(),
+        key_path.display().to_string(),
+        "--publisher".into(),
+        "acme".into(),
+        dir.display().to_string(),
+        out.display().to_string(),
+    ])
+    .unwrap();
+    assert!(said.contains("horn-kit 1.0.0"), "{said}");
+    let text = std::fs::read(&out).unwrap();
+    let sig = std::fs::read_to_string(format!("{}.sig", out.display())).unwrap();
+    let mut t = TrustStore::default();
+    t.add("acme", key.public()).unwrap();
+    assert_eq!(index::verify_signature(&text, &sig, &t).unwrap(), "acme");
+    assert_eq!(Index::decode(&text).unwrap().bundles.len(), 1);
+
+    // Fetch it back over HTTP with the trust store as a file.
+    let addr = static_site(vec![
+        ("index.json".into(), text),
+        ("index.json.sig".into(), sig.into_bytes()),
+        ("horn-kit-1.0.0.hbundle".into(), bytes()),
+    ]);
+    let trust_file = work.join("trust");
+    std::fs::write(&trust_file, t.render()).unwrap();
+    let fetched = work.join("fetched.hbundle");
+    let said = bundle::cli::run(&[
+        "fetch".into(),
+        "--trust".into(),
+        trust_file.display().to_string(),
+        "--allow-local".into(),
+        format!("http://{addr}/market/index.json"),
+        "horn-kit".into(),
+        fetched.display().to_string(),
+    ])
+    .unwrap();
+    assert!(said.contains("horn-kit 1.0.0"), "{said}");
+    assert_eq!(std::fs::read(&fetched).unwrap(), bytes());
+    // Without --allow-local a loopback site is refused.
+    let e = bundle::cli::run(&[
+        "fetch".into(),
+        "--trust".into(),
+        trust_file.display().to_string(),
+        format!("http://{addr}/market/index.json"),
+        "horn-kit".into(),
+        fetched.display().to_string(),
+    ])
+    .unwrap_err();
+    assert!(e.contains("local address"), "{e}");
+}
+
+#[test]
+fn a_box_lists_a_signed_index_and_installs_from_it_as_a_proposal() {
+    let files = site_files(
+        &[
+            ("horn-kit-1.0.0.hbundle", bytes()),
+            ("horn-kit-1.1.0.hbundle", signed_version("1.1.0")),
+        ],
+        &publisher(),
+    );
+    let addr = static_site(files);
+    let url = format!("http://{addr}/market/index.json");
+    let b = bench(Some(trust()));
+
+    let r = market(&b, "/api/market/list", &json!({ "index": url }));
+    assert_eq!(r.status, 200, "{r:?}");
+    let j = r.json();
+    assert_eq!(j["publisher"], "acme");
+    assert_eq!(j["bundles"].as_array().unwrap().len(), 2);
+    assert_eq!(j["bundles"][1]["version"], "1.1.0");
+
+    let r = market(
+        &b,
+        "/api/market/install",
+        &json!({ "index": url, "name": "horn-kit" }),
+    );
+    assert_eq!(r.status, 201, "{r:?}");
+    let p = r.json();
+    assert_eq!(p["kind"], "bundle");
+    assert_eq!(
+        p["bundle"]["version"], "1.1.0",
+        "the newest without a version: {p}"
+    );
+    let note = p["note"].as_str().unwrap();
+    assert!(
+        note.contains("via market") && note.contains("horn-kit-1.1.0.hbundle"),
+        "{note}"
+    );
+
+    let r = market(
+        &b,
+        "/api/market/install",
+        &json!({ "index": url, "name": "horn-kit", "version": "1.0.0" }),
+    );
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(r.json()["bundle"]["version"], "1.0.0");
+
+    let r = market(
+        &b,
+        "/api/market/install",
+        &json!({ "index": url, "name": "nope" }),
+    );
+    assert_eq!(r.status, 404, "{r:?}");
+    let r = market(
+        &b,
+        "/api/market/install",
+        &json!({ "index": url, "name": "horn-kit", "x": 1 }),
+    );
+    assert_eq!(r.status, 400, "{r:?}");
+    let r = request(
+        b.addr,
+        "POST",
+        "/api/market/list",
+        false,
+        "application/json",
+        br#"{"index":"x"}"#,
+    );
+    assert_eq!(r.status, 401, "the token is required: {r:?}");
+
+    let log = audit(&b);
+    assert!(
+        log.iter().any(|e| e["path"] == "/api/market/install"
+            && e["detail"].as_str().unwrap_or("").contains("via market")),
+        "{log:?}"
+    );
+}
+
+#[test]
+fn an_index_that_is_tampered_untrusted_or_lying_is_refused_before_anything_imports() {
+    let good = site_files(&[("horn-kit-1.0.0.hbundle", bytes())], &publisher());
+    let b = bench(Some(trust()));
+    let proposals_before = request(b.addr, "GET", "/api/proposals", false, "application/json", b"")
+        .json()
+        .as_array()
+        .map_or(0, Vec::len);
+
+    // Signed by a stranger.
+    let addr = static_site(site_files(&[("horn-kit-1.0.0.hbundle", bytes())], &stranger()));
+    let r = market(
+        &b,
+        "/api/market/list",
+        &json!({ "index": format!("http://{addr}/index.json") }),
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    assert!(
+        r.json()["error"].as_str().unwrap().contains("does not trust"),
+        "{r:?}"
+    );
+
+    // The index changed after signing.
+    let mut edited = good.clone();
+    let k = edited.iter().position(|(n, _)| n == "index.json").unwrap();
+    edited[k].1 = String::from_utf8(edited[k].1.clone())
+        .unwrap()
+        .replace("1.0.0", "9.9.9")
+        .into_bytes();
+    let addr = static_site(edited);
+    let r = market(
+        &b,
+        "/api/market/list",
+        &json!({ "index": format!("http://{addr}/index.json") }),
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    assert!(
+        r.json()["error"].as_str().unwrap().contains("does not verify"),
+        "{r:?}"
+    );
+
+    // The index is honest; the file on the site is not what it names.
+    let mut swapped = good.clone();
+    let k = swapped
+        .iter()
+        .position(|(n, _)| n == "horn-kit-1.0.0.hbundle")
+        .unwrap();
+    let at = find(&swapped[k].1, b"horn := start");
+    swapped[k].1[at] ^= 1;
+    let addr = static_site(swapped);
+    let r = market(
+        &b,
+        "/api/market/install",
+        &json!({ "index": format!("http://{addr}/index.json"), "name": "horn-kit" }),
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    assert!(r.json()["error"].as_str().unwrap().contains("SHA-256"), "{r:?}");
+
+    // The file is missing from the site.
+    let mut missing = good.clone();
+    missing.retain(|(n, _)| n != "horn-kit-1.0.0.hbundle");
+    let addr = static_site(missing);
+    let r = market(
+        &b,
+        "/api/market/install",
+        &json!({ "index": format!("http://{addr}/index.json"), "name": "horn-kit" }),
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+
+    let proposals_after = request(b.addr, "GET", "/api/proposals", false, "application/json", b"")
+        .json()
+        .as_array()
+        .map_or(0, Vec::len);
+    assert_eq!(proposals_after, proposals_before, "nothing imported");
+}
+
+#[test]
+fn a_box_refuses_a_local_marketplace_unless_told_otherwise_and_a_box_without_trust_says_so() {
+    let addr = static_site(site_files(&[("horn-kit-1.0.0.hbundle", bytes())], &publisher()));
+    let url = format!("http://{addr}/index.json");
+    let strict = bench_local(Some(trust()), false);
+    let r = market(&strict, "/api/market/list", &json!({ "index": url }));
+    assert_eq!(r.status, 422, "{r:?}");
+    assert!(
+        r.json()["error"].as_str().unwrap().contains("local address"),
+        "{r:?}"
+    );
+    for bad in [
+        "http://169.254.169.254/latest/index.json",
+        "file:///etc/passwd",
+        "http://10.0.0.1/index.json",
+    ] {
+        let r = market(&strict, "/api/market/list", &json!({ "index": bad }));
+        assert_eq!(r.status, 422, "{bad}: {r:?}");
+    }
+    let no_trust = bench(None);
+    let r = market(&no_trust, "/api/market/list", &json!({ "index": url }));
+    assert_eq!(r.status, 501, "{r:?}");
 }

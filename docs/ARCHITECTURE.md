@@ -591,6 +591,37 @@ it, a module drives it through a `VAR_OUTPUT` of that name under the
 one-writer rule and safe values, and the Monitor shows it as one of the
 program's outputs. No layout has to fit it any more.
 
+## Requirement tests (`spec-tests`, built; interview 2026-11-02)
+
+A requirement the engineer and the agent agreed on is kept as a test the
+box can run on its own: `test_NAME.st` in the project, a PROGRAM that
+drives the program's inputs, steps the clock and checks its outputs with
+the `ASSERT` standard block (a Helmsman extension in `library.st`:
+`FAILED` latches on the first scan `COND` is FALSE, `FAILED_AT` keeps
+when). The runner is `helmsman_iec::spec`, one code path for the page and
+the box: the test and the program under test are two compiled `Program`s
+scanned in lockstep on one clock at the project's period; each scan the
+test runs first, its `VAR_OUTPUT`s are copied into the program's
+`VAR_INPUT`s of the same name, the program runs, its `VAR_OUTPUT`s are
+copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
+`ASSERT` failed (named as words, with its declaration line's comment, and
+when), either side faulted or does not compile, a shared port's types
+differ, `DONE` never came within the limit (two minutes of simulated
+time), or the test holds no `ASSERT` at all. The test's first comment is
+the requirement in the engineer's words. Deterministic: no wall clock, no
+I/O.
+
+Test files never deploy: the project build (`project::build`) and the
+page's build both skip `spec::is_test` files. The page runs the tests
+after every build change and before Deploy and "Use this code" (a block
+answer is tested with the candidate file in place); a box runs them when a
+project opens, after each save (`POST /api/projects/{p}/tests`, token or
+session, nothing changes) and inside the deploy's approval path, where a
+red test refuses with 409 before anything builds (`projects::red_tests`).
+The Requirements tab of the right panel shows one row per test, green or
+red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
+same gate.
+
 ## Sim replay (`sim-replay`, built)
 
 The evidence an engineer approves an output change on: what a proposed
@@ -1390,7 +1421,7 @@ module's unit tests.
 
 ## Agent loop (`agent-loop`, built)
 
-`helmsman-plc --relay URL --relay-token FILE [--relay-agent v3]` turns on
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v5]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
 an Anthropic key, and names no model, prompt or tool schema: the relay
@@ -1743,6 +1774,51 @@ host-enforced checks; an AI review (`marketplace`) can only refuse on top.
   anything is output-affecting (engineer PIN + replay). Every import,
   refused or not, is audited.
 
+## Marketplace index (`marketplace`, the skeleton, built)
+
+`helmsman_plc::bundle::index` and `bundle::market`, the CLI's `bundle
+index` and `bundle fetch`, and `api/market.rs`; contract in
+`tests/bundle.rs` (the index tests). What a box needs to *use* a
+marketplace, under this repository's licence; the server side (accounts,
+review, payments) is private and does not exist yet (LICENSING.md).
+
+- **A marketplace is a static site**: `index.json`, `index.json.sig` and
+  the bundle files beside them, published from a repository or any web
+  server. No API, no accounts. `helmsman-plc bundle index --key KEY
+  --publisher NAME DIR OUT` builds the index from every `.hbundle` in a
+  folder (each decoded, its signatures checked) and signs it.
+- **The index** (`helmsman-index 1`, canonical JSON): the publisher's name
+  and one entry per bundle: name, version, author, description, the bundle
+  id, the file's SHA-256 and size, the file name (plain: letters, digits,
+  `. _ -`, ending `.hbundle`), the keys it is signed with. Refused before
+  it costs anything: over 1 MiB, over 256 entries, unknown fields, a hash
+  that is not 64 hex digits, a size over a bundle's, control or invisible
+  characters in a text field.
+- **The signature** (`helmsman-index-signature 1`): Ed25519 over the
+  domain string and the SHA-256 of the index bytes, by a key the box's
+  trust store names (the same store as bundle import). The index can
+  point at a bundle; it cannot vouch for one: the bundle fetched must
+  still pass `bundle::verify` on the box, signatures and content.
+- **Fetching** (`bundle::market`, over `helmsman_agent::http`): the index,
+  then its `.sig`, then one bundle file, each body capped before it is
+  read, each step checked before the next (signature, publisher name
+  matching the key's, the file's size and hash against the entry). The
+  box fetches a URL a client gave it, so the host must resolve to public
+  addresses: loopback, private, link-local, shared (100.64/10), multicast
+  and unspecified are refused unless the box runs with
+  `--market-allow-local on` (a bench, a LAN mirror). The check is on the
+  resolved addresses at fetch time, which is why the flag is off by
+  default (DNS rebinding is not caught).
+- **On the box**: `POST /api/market/list {index}` and `POST
+  /api/market/install {index, name, version?}` (token; never a read,
+  since both make the box fetch). Install hands the checked bytes to the
+  same import as `POST /api/bundles`: verified, bound by name, a proposal
+  the policy classifies; the audit line and the proposal's note say which
+  index and file it came from. `helmsman-plc bundle fetch` does the same
+  on a laptop and writes the bundle file.
+- **Not in the skeleton**: publisher accounts, uploads, the AI review on
+  install, payments, mirrors. A third party can run its own index today.
+
 ## Webhook sinks (`sink-webhook`, built)
 
 `helmsman-plc --sinks FILE --sink-dir DIR` publishes signal events over
@@ -2018,7 +2094,7 @@ path that drives an output).
   even a proposal. One question per conversation, none kept; its own
   budget (6 turns, 32k output tokens, 3 min); the chat's running slots.
   `--relay-explain-agent V` asks the relay for an explain profile
-  (default `explain-v1`: the relay's read-only, floor-language profile;
+  (default `explain-v2`: the relay's read-only, floor-language profile;
   the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.

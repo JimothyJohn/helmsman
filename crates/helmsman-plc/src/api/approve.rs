@@ -261,19 +261,23 @@ fn prelude<'c>(
                 ));
             }
         },
-        Target::Project(name) => match super::projects::built(ctx, name) {
-            Ok(b) => (Some(b.change), None),
-            Err((status, body, why)) => {
-                return Err(refuse(
-                    ctx,
-                    req,
-                    status,
-                    &body,
-                    &format!("{label}: {why}"),
-                    Note::default(),
-                ));
+        // A red requirement test refuses the deploy before anything builds
+        // (`helmsman_iec::spec`; TODO.md spec-tests).
+        Target::Project(name) => {
+            match super::projects::red_tests(ctx, name).and_then(|()| super::projects::built(ctx, name)) {
+                Ok(b) => (Some(b.change), None),
+                Err((status, body, why)) => {
+                    return Err(refuse(
+                        ctx,
+                        req,
+                        status,
+                        &body,
+                        &format!("{label}: {why}"),
+                        Note::default(),
+                    ));
+                }
             }
-        },
+        }
     };
     let note = cs
         .as_ref()
