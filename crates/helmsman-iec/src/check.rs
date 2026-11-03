@@ -11,7 +11,10 @@
 // checkers, and clearer here than longer names.
 #![allow(clippy::many_single_char_names)]
 
-use std::collections::{HashMap, HashSet};
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+
+use alloc::collections::{BTreeMap, BTreeSet};
 
 use crate::interp;
 use crate::lexer::Pos;
@@ -28,8 +31,8 @@ pub struct Diagnostic {
     pub msg: String,
 }
 
-impl std::fmt::Display for Diagnostic {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}: {}", self.pos, self.msg)
     }
 }
@@ -462,22 +465,22 @@ struct Ck<'a> {
     sizes: ImageSizes,
     srcs: Vec<PouSrc<'a>>,
     pous: Vec<PouCode>,
-    pou_index: HashMap<String, usize>,
+    pou_index: BTreeMap<String, usize>,
     aggs: Vec<AggInfo>,
     /// Struct declarations by agg id.
-    struct_src: HashMap<usize, &'a [parser::Field]>,
+    struct_src: BTreeMap<usize, &'a [parser::Field]>,
     enums: Vec<EnumInfo>,
-    named: HashMap<String, Named>,
+    named: BTreeMap<String, Named>,
     aliases: Vec<(&'a parser::TypeDecl, Option<Type>, bool)>,
     /// 0 = not laid out, 1 = in progress, 2 = done (by agg id).
     agg_state: Vec<u8>,
     /// Same for POU frames.
     pou_state: Vec<u8>,
     /// Calls made by each POU (functions and FB types), for the recursion check.
-    calls: Vec<HashSet<usize>>,
+    calls: Vec<BTreeSet<usize>>,
     /// Variables whose declaration failed, by POU: already reported, so
     /// their uses are not reported again.
-    dropped: HashMap<usize, HashSet<String>>,
+    dropped: BTreeMap<usize, BTreeSet<String>>,
     /// Initial values of located variables: (where, type, value).
     loc_init: Vec<(Loc, Ty, Value)>,
     diags: Vec<Diagnostic>,
@@ -486,7 +489,7 @@ struct Ck<'a> {
 /// Per-body context.
 struct Scope {
     pou: usize,
-    vars: HashMap<String, usize>,
+    vars: BTreeMap<String, usize>,
     loops: usize,
 }
 
@@ -1002,7 +1005,7 @@ impl<'a> Ck<'a> {
                 loc: None,
             });
         }
-        let dropped: HashSet<String> = src
+        let dropped: BTreeSet<String> = src
             .vars
             .iter()
             .filter(|d| !vars.iter().any(|v| v.name == d.name))
@@ -1027,7 +1030,7 @@ impl<'a> Ck<'a> {
             (Init::Expr(e), Type::Elem(_) | Type::Enum(_)) => {
                 let empty = Scope {
                     pou: usize::MAX,
-                    vars: HashMap::new(),
+                    vars: BTreeMap::new(),
                     loops: 0,
                 };
                 let sc = scope.unwrap_or(&empty);
@@ -2089,7 +2092,7 @@ impl<'a> Ck<'a> {
             .collect();
         let mut moves = Vec::new();
         let mut outs = Vec::new();
-        let mut seen = HashSet::new();
+        let mut seen = BTreeSet::new();
         let mut ok = true;
         let mut named_seen = false;
         for (k, a) in args.iter().enumerate() {
@@ -2505,16 +2508,16 @@ pub fn check(
         sizes,
         srcs: Vec::new(),
         pous: Vec::new(),
-        pou_index: HashMap::new(),
+        pou_index: BTreeMap::new(),
         aggs: Vec::new(),
-        struct_src: HashMap::new(),
+        struct_src: BTreeMap::new(),
         enums: Vec::new(),
-        named: HashMap::new(),
+        named: BTreeMap::new(),
         aliases: Vec::new(),
         agg_state: Vec::new(),
         pou_state: Vec::new(),
         calls: Vec::new(),
-        dropped: HashMap::new(),
+        dropped: BTreeMap::new(),
         loc_init: Vec::new(),
         diags: Vec::new(),
     };
@@ -2555,7 +2558,7 @@ pub fn check(
                 result: None,
             });
             ck.pou_state.push(0);
-            ck.calls.push(HashSet::new());
+            ck.calls.push(BTreeSet::new());
             if kind == PouType::FunctionBlock {
                 let agg = ck.aggs.len();
                 ck.aggs.push(AggInfo {

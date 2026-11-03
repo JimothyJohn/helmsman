@@ -6,6 +6,8 @@
 //! are dropped.
 
 use crate::lexer::Pos;
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
 
 /// Deepest element nesting accepted.
 pub const MAX_DEPTH: usize = 256;
