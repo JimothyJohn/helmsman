@@ -892,7 +892,14 @@ impl Body for BoxView {
             let open = self.projects.open.clone();
             let files: Vec<(String, bool)> = open
                 .as_ref()
-                .map(|o| o.bufs.iter().map(|(n, b)| (n.clone(), b.dirty())).collect())
+                .map(|o| {
+                    o.bufs
+                        .iter()
+                        // The Agent's pages are the Agent tab's, not a file to open.
+                        .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+                        .map(|(n, b)| (n.clone(), b.dirty()))
+                        .collect()
+                })
                 .unwrap_or_default();
             let listing = Listing {
                 projects: &self.projects.projects,
