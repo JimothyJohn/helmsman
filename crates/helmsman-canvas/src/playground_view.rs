@@ -13,9 +13,7 @@ use helmsman_iec::{Ty, Value};
 use crate::arrange::Layers;
 use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
 use crate::editor::{self, Body, Chrome, Tab};
-use crate::playground::{
-    MAX_SOURCE, Point, Session, TREND_SIGNALS, TREND_WINDOWS_MS, Widget, nice_range, tick_label,
-};
+use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, Storage};
 use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WHITE, YELLOW};
@@ -982,9 +980,7 @@ impl PlaygroundView {
                 }
             }
         });
-        if let Some(w) = window_row(ui, chrome, self.session.trend.window_ms, &TREND_WINDOWS_MS) {
-            self.session.trend.window_ms = w;
-        }
+        window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
         self.trend_plot(ui);
     }
@@ -1259,11 +1255,23 @@ impl PlaygroundView {
     }
 }
 
-/// A window's width as its button reads: whole minutes as `10 min`,
-/// anything else in seconds (`100 s`, never `1 min`).
+/// The narrowest trend window, ms (Nick, 2026-11-02: down to 100 ms).
+pub const WINDOW_MIN_MS: u64 = 100;
+/// The widest, ms: the box's whole history (`box_trend::WINDOW_MS`).
+pub const WINDOW_MAX_MS: u64 = 600_000;
+
+/// A window's width as the slider reads it: `100 ms`, `2.5 s`, `100 s`,
+/// whole minutes as `1 min`, `10 min`.
 #[must_use]
 pub fn window_label(ms: u64) -> String {
+    if ms < 1000 {
+        return format!("{ms} ms");
+    }
     let secs = ms / 1000;
+    if ms < 10_000 && !ms.is_multiple_of(1000) {
+        #[allow(clippy::cast_precision_loss)]
+        return format!("{:.1} s", ms as f64 / 1000.0);
+    }
     if secs >= 60 && secs.is_multiple_of(60) {
         format!("{} min", secs / 60)
     } else {
@@ -1271,22 +1279,55 @@ pub fn window_label(ms: u64) -> String {
     }
 }
 
-/// The window's width as a row of buttons, `1 s`, `10 s`, ... (both
-/// trends): the one picked, if any was. Hits are `trend window <s>`.
-pub fn window_row(ui: &mut egui::Ui, chrome: &mut Chrome, current: u64, options: &[u64]) -> Option<u64> {
-    let mut picked = None;
+/// The window's width as one slider, logarithmic from [`WINDOW_MIN_MS`]
+/// to [`WINDOW_MAX_MS`], its value beside it (both trends; Nick,
+/// 2026-11-02: a slider instead of buttons, exponential, changing the
+/// plot as it moves). The hit is `trend window`. Returns whether it moved.
+pub fn window_slider(ui: &mut egui::Ui, chrome: &mut Chrome, window_ms: &mut u64) -> bool {
     let t = theme(ui);
-    ui.horizontal_wrapped(|ui| {
+    let before = *window_ms;
+    #[allow(clippy::cast_precision_loss)]
+    let mut v = (*window_ms).clamp(WINDOW_MIN_MS, WINDOW_MAX_MS) as f64;
+    ui.horizontal(|ui| {
         ui.label(RichText::new("Window").color(t.muted));
-        for &w in options {
-            let r = ui.selectable_label(w == current, window_label(w));
-            chrome.hit(format!("trend window {}", w / 1000), r.rect);
-            if r.clicked() {
-                picked = Some(w);
-            }
-        }
+        // The value label at the right needs ~52 pt; the slider takes the
+        // rest, so the row never widens the panel.
+        let label_w = 56.0;
+        let w = (ui.available_width() - label_w - 12.0).max(40.0);
+        ui.spacing_mut().slider_width = w;
+        #[allow(clippy::cast_precision_loss)]
+        let r = ui.add(
+            egui::Slider::new(&mut v, WINDOW_MIN_MS as f64..=WINDOW_MAX_MS as f64)
+                .logarithmic(true)
+                .show_value(false),
+        );
+        chrome.hit("trend window", r.rect);
+        ui.add(
+            egui::Label::new(
+                RichText::new(window_label(round_window(v)))
+                    .monospace()
+                    .color(t.muted),
+            )
+            .truncate(),
+        );
     });
-    picked
+    *window_ms = round_window(v);
+    *window_ms != before
+}
+
+/// A slider position as a window: two significant digits, so the label
+/// reads `2.5 s`, `25 s`, `250 s` rather than `2.473 s`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss
+)]
+fn round_window(v: f64) -> u64 {
+    let v = v.clamp(WINDOW_MIN_MS as f64, WINDOW_MAX_MS as f64);
+    let mag = 10f64.powf(v.log10().floor() - 1.0);
+    ((v / mag).round() * mag)
+        .round()
+        .clamp(WINDOW_MIN_MS as f64, WINDOW_MAX_MS as f64) as u64
 }
 
 /// The lane's scale: its top and bottom values at the right edge, so a
