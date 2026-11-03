@@ -113,6 +113,8 @@ pub enum Act {
         text: String,
         save: bool,
     },
+    /// Show revision n of the open project (the History row).
+    ShowRevision(u32),
 }
 
 /// What the sidebar shows.
@@ -129,6 +131,10 @@ pub struct Listing<'a> {
     /// Offer the built-in machines and templates to start a project from
     /// (a box; the simulation lists them as projects).
     pub starters: bool,
+    /// The open project is the one running: its `main.st` is marked.
+    pub running: bool,
+    /// The open project's revisions, oldest first (the History row).
+    pub history: &'a [crate::history_ui::RevisionRow],
 }
 
 /// Which name the sidebar's text field is for.
@@ -164,6 +170,10 @@ pub struct FilesUi {
     pub unfolded: HashSet<Group>,
     /// The list of machines and templates to start from is open.
     pub starters_open: bool,
+    /// The earlier iterations (`vN.st`) are unfolded.
+    pub earlier_open: bool,
+    /// The History row is unfolded.
+    pub history_open: bool,
     /// The file last copied (name, text): the app's own, not the
     /// system's, so a paste works in any open project here.
     pub clipboard: Option<(String, String)>,
@@ -294,9 +304,43 @@ impl FilesUi {
                     act = Some(Act::PasteFile { name, text });
                 }
             });
-            for (f, dirty) in &l.files {
+            // The program's files, then the earlier iterations folded under
+            // one row, newest first (Nick, 2026-11-01).
+            let mut earlier: Vec<&(String, bool)> = l
+                .files
+                .iter()
+                .filter(|(f, _)| helmsman_project::iteration_number(f).is_some())
+                .collect();
+            earlier.sort_by_key(|(f, _)| std::cmp::Reverse(helmsman_project::iteration_number(f)));
+            let mut rows: Vec<&(String, bool)> = l
+                .files
+                .iter()
+                .filter(|(f, _)| helmsman_project::iteration_number(f).is_none())
+                .collect();
+            if !earlier.is_empty() {
+                let arrow = if self.earlier_open { "▾" } else { "▸" };
+                let r = ui.selectable_label(
+                    false,
+                    RichText::new(format!("{arrow} earlier ({})", earlier.len()))
+                        .monospace()
+                        .color(t.muted),
+                );
+                chrome.hit("earlier", r.rect);
+                if r.clicked() {
+                    self.earlier_open = !self.earlier_open;
+                }
+                if self.earlier_open {
+                    rows.extend(earlier);
+                }
+            }
+            for (f, dirty) in rows {
                 let here = l.current == Some(f.as_str());
-                let text = format!("{f}{}", if *dirty { " ●" } else { "" });
+                let runs = l.running && f == helmsman_project::MAIN && !l.files.is_empty();
+                let text = format!(
+                    "{f}{}{}",
+                    if *dirty { " ●" } else { "" },
+                    if runs { "  · runs" } else { "" }
+                );
                 let r = ui.selectable_label(here, RichText::new(text).monospace());
                 chrome.hit(format!("file {f}"), r.rect);
                 if r.clicked() {
@@ -341,6 +385,11 @@ impl FilesUi {
                     self.ask(Naming::NewFile, ".st");
                 }
             }
+        }
+        if l.open.is_some()
+            && let Some(n) = crate::history_ui::rows_ui(ui, chrome, l.history, &mut self.history_open)
+        {
+            act = Some(Act::ShowRevision(n));
         }
         if let Some(a) = self.delete_key(ui, l) {
             self.naming = None;

@@ -2145,3 +2145,132 @@ fn a_first_install_seeds_a_project_without_deploying_it_and_never_again() {
     let (ok, out) = seed(&bad, &["broken", src.to_str().unwrap()]);
     assert!(!ok && out.contains("broken.st:2"), "{out}");
 }
+
+/// Nick 2026-11-01 (project-history; interview 2026-11-02: revisions on
+/// the box, not git): every save is a revision with who, when and what,
+/// an Agent page rides along when the save came from one, a revision is
+/// read whole and restored as a new revision by an engineer only, and a
+/// renamed or deleted project takes its history with it.
+#[test]
+fn every_save_is_a_revision_an_engineer_can_read_and_restore() {
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(&s, "line3", &[("main.st", MAIN)]);
+    let r = put_file(b.addr, &s, "line3", "main.st", "PROGRAM x END_PROGRAM", None);
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["revision"], 2, "the project's making was revision 1");
+    // A save from the Agent tab carries its page.
+    let r = send(
+        b.addr,
+        "PUT",
+        "/api/projects/line3/files/main.st",
+        Some(&s),
+        "application/json",
+        json!({ "text": "PROGRAM y END_PROGRAM", "page": "Make it blink\n\n<!-- page -->\nanswer" })
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    let h = get(b.addr, "/api/projects/line3/history").json();
+    let revs = h["revisions"].as_array().unwrap();
+    assert_eq!(revs.len(), 3, "{h}");
+    assert_eq!(revs[1]["n"], 2);
+    assert_eq!(revs[1]["by"], "alice (engineer)");
+    assert_eq!(revs[1]["what"], "saved main.st");
+    assert_eq!(revs[1]["page"], false);
+    assert_eq!(revs[2]["what"], "took the Agent's answer into main.st");
+    assert_eq!(revs[2]["page"], true);
+    assert!(revs[2]["at_ms"].as_u64().unwrap() >= revs[1]["at_ms"].as_u64().unwrap());
+    assert_eq!(revs[2]["files"], json!(["main.st"]));
+    let two = get(b.addr, "/api/projects/line3/history/2").json();
+    assert_eq!(two["files"]["main.st"], "PROGRAM x END_PROGRAM");
+    assert_eq!(two["page"], Json::Null);
+    let three = get(b.addr, "/api/projects/line3/history/3").json();
+    assert_eq!(three["page"], "Make it blink\n\n<!-- page -->\nanswer");
+    assert_eq!(get(b.addr, "/api/projects/line3/history/9").status, 404);
+    assert_eq!(get(b.addr, "/api/projects/line3/history/x").status, 404);
+    assert_eq!(get(b.addr, "/api/projects/nope/history").status, 404);
+    // Restore: an engineer's; the operator and the bare token are refused.
+    let bob = b.login("bob", BOB);
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/history/2/restore",
+        Some(&bob),
+        &json!({}),
+    );
+    assert_eq!(r.status, 403, "{r:?}");
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/history/2/restore",
+        Some(TOKEN),
+        &json!({}),
+    );
+    assert_eq!(r.status, 403, "{r:?}");
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/history/2/restore",
+        Some(&s),
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["restored"], 2);
+    assert_eq!(r.json()["revision"], 4);
+    assert_eq!(
+        file(b.addr, "line3", "main.st").json()["text"],
+        "PROGRAM x END_PROGRAM"
+    );
+    let h = get(b.addr, "/api/projects/line3/history").json();
+    assert_eq!(h["revisions"][3]["what"], "restored revision 2");
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/history/99/restore",
+        Some(&s),
+        &json!({}),
+    );
+    assert_eq!(r.status, 404, "{r:?}");
+    // Rename takes the history along; delete takes it away.
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/rename",
+        Some(&s),
+        &json!({ "to": "line4" }),
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        get(b.addr, "/api/projects/line3/history").status,
+        404,
+        "gone with the name"
+    );
+    assert_eq!(
+        get(b.addr, "/api/projects/line4/history").json()["revisions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    let r = send(
+        b.addr,
+        "DELETE",
+        "/api/projects/line4",
+        Some(&s),
+        "application/json",
+        b"",
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        get(b.addr, "/api/projects/line4/history").status,
+        404,
+        "gone with the project"
+    );
+    assert!(!b.state.join("projects-history").join("line4").exists());
+    // A malformed save key is still refused.
+    let r = send(
+        b.addr,
+        "PUT",
+        "/api/projects/line3/files/main.st",
+        Some(&s),
+        "application/json",
+        json!({ "text": "x", "pages": "no" }).to_string().as_bytes(),
+    );
+    assert_eq!(r.status, 400, "{r:?}");
+}

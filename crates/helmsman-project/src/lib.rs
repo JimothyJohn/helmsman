@@ -39,6 +39,10 @@ pub const ICONS: &str = "icons.map";
 /// The Agent tab's conversation in a project ([`agent`]): pages the
 /// engineer curates and the model gets as context; the build ignores it.
 pub const AGENT: &str = "agent.md";
+/// The program file the Agent's answers land in ([`FileKind::Iteration`]).
+pub const MAIN: &str = "main.st";
+/// Most earlier iterations (`vN.st`) a project keeps.
+pub const MAX_ITERATIONS: usize = 1000;
 /// What a project file may be named, for messages.
 pub const FILE_NAMES: &str = "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings, diagram.layout, icons.map or agent.md";
 /// Largest file, bytes.
@@ -72,6 +76,26 @@ pub enum FileKind {
     Icons,
     /// The Agent tab's pages (`agent.md`, [`agent`]).
     Agent,
+    /// An earlier iteration of the program, `vN.st` (N from 1): what
+    /// `main.st` was before the Agent's next answer replaced it (Nick,
+    /// 2026-11-01). Kept, listed under "earlier", never built.
+    Iteration,
+}
+
+/// The N of an iteration file `vN.st` (N from 1, no leading zero).
+#[must_use]
+pub fn iteration_number(s: &str) -> Option<u32> {
+    let n = s.strip_prefix('v')?.strip_suffix(".st")?;
+    let b = n.as_bytes();
+    ((1..=6).contains(&b.len()) && b[0] != b'0' && b.iter().all(u8::is_ascii_digit))
+        .then(|| n.parse().ok())
+        .flatten()
+}
+
+/// The iteration file for `n`.
+#[must_use]
+pub fn iteration_name(n: u32) -> String {
+    format!("v{n}.st")
 }
 
 /// What `s` names in a project, if it names anything.
@@ -84,6 +108,9 @@ pub fn file_name(s: &str) -> Option<FileKind> {
         ICONS => return Some(FileKind::Icons),
         AGENT => return Some(FileKind::Agent),
         _ => {}
+    }
+    if iteration_number(s).is_some() {
+        return Some(FileKind::Iteration);
     }
     let stem = s.strip_suffix(".st")?;
     let b = stem.as_bytes();
@@ -189,6 +216,23 @@ impl Files {
             .map(|(n, t)| (n.as_str(), t.as_str()))
     }
 
+    /// The earlier iterations (`vN.st`), by N.
+    pub fn iterations(&self) -> impl Iterator<Item = (u32, &str)> {
+        let mut v: Vec<(u32, &str)> = self
+            .0
+            .keys()
+            .filter_map(|n| iteration_number(n).map(|k| (k, n.as_str())))
+            .collect();
+        v.sort_unstable();
+        v.into_iter()
+    }
+
+    /// The N the next iteration takes: one past the highest kept.
+    #[must_use]
+    pub fn next_iteration(&self) -> u32 {
+        self.iterations().map(|(k, _)| k).max().unwrap_or(0) + 1
+    }
+
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&str> {
         self.0.get(name).map(String::as_str)
@@ -223,6 +267,12 @@ impl Files {
         let st = self.st().count();
         if st > MAX_FILES {
             errs.push(format!("{st} .st files; a project holds at most {MAX_FILES}"));
+        }
+        let it = self.iterations().count();
+        if it > MAX_ITERATIONS {
+            errs.push(format!(
+                "{it} earlier iterations; a project keeps at most {MAX_ITERATIONS}"
+            ));
         }
         if self.total() > MAX_TOTAL {
             errs.push(format!(
@@ -360,6 +410,43 @@ mod tests {
         assert_eq!(file_name("project.settings"), Some(FileKind::Settings));
         assert_eq!(file_name("icons.map"), Some(FileKind::Icons));
         assert_eq!(file_name("agent.md"), Some(FileKind::Agent));
+        assert_eq!(file_name("v1.st"), Some(FileKind::Iteration));
+        assert_eq!(file_name("v120.st"), Some(FileKind::Iteration));
+        assert_eq!(file_name("v0.st"), Some(FileKind::St), "no iteration 0");
+        assert_eq!(file_name("v01.st"), Some(FileKind::St), "no leading zero");
+        assert_eq!(file_name("V1.st"), Some(FileKind::St));
+        assert_eq!(file_name("v1234567.st"), Some(FileKind::St), "too long to be one");
+        assert_eq!(iteration_number("v7.st"), Some(7));
+        assert_eq!(iteration_name(7), "v7.st");
+        let f = Files(BTreeMap::from([
+            ("main.st".to_string(), "x".to_string()),
+            ("v2.st".to_string(), "x".to_string()),
+            ("v10.st".to_string(), "x".to_string()),
+            ("blocks.st".to_string(), "x".to_string()),
+        ]));
+        assert_eq!(
+            f.st().map(|(n, _)| n).collect::<Vec<_>>(),
+            ["blocks.st", "main.st"],
+            "iterations are not built"
+        );
+        assert_eq!(
+            f.iterations().map(|(k, _)| k).collect::<Vec<_>>(),
+            [2, 10],
+            "by number, not by name"
+        );
+        assert_eq!(f.next_iteration(), 11);
+        assert_eq!(Files::default().next_iteration(), 1);
+        let many = Files(
+            (1..=u32::try_from(MAX_ITERATIONS).unwrap() + 1)
+                .map(|k| (iteration_name(k), "x".to_string()))
+                .collect(),
+        );
+        assert!(
+            many.check()
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("earlier iterations"))
+        );
         assert_eq!(file_name("Agent.md"), None);
         assert_eq!(file_name("notes.md"), None);
         for bad in ["../a.st", ".st", "a.ST", "a b.st", "a/b.st", "C:a.st", "a.st\0"] {
