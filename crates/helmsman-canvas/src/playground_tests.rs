@@ -518,6 +518,7 @@ fn ctx<'a>(source: &'a str, diags: &'a [String]) -> Context<'a> {
         source,
         diagnostics: diags,
         devices: "",
+        scope: "",
     }
 }
 
