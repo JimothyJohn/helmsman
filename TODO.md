@@ -15,6 +15,16 @@
   notes: 2026-10-31: the local repo is now ../agent-relay (renamed, client-agnostic, profiles namespaced helmsman/<name> with the old bare names as aliases). Tick once the GitHub repo exists: run its scripts/create-github-repo.sh.
   answer: private repo JimothyJohn/agent-relay (recommended), an agnostic endpoint that happens to work with helmsman
 
+- [ ] **Give the E1213 a fixed address?** It is on the office LAN by DHCP at 10.0.0.57 (lease from 10.0.0.1), so the address in docs/devices/e1213-loop/io.map and the enip map can change under us. Options: a DHCP reservation for 00-90-e8-7e-af-be on the router (nothing to change on the unit), a static address on the unit outside the router's pool (I don't know the pool), or move it to the 192.168.3.x device link where the maps used to point (192.168.3.60). The maps say 10.0.0.57 until you choose.
+  asked: 2026-11-02
+  by: claude-session
+  needs: your call (and the router's DHCP pool, or a reservation you set)
+  result: a stable address in every map and script
+  options: DHCP reservation on the router (recommended) | static on the unit, you name the address | move to 192.168.3.x
+  est: 10m
+  difficulty: low
+  id: e1213-address
+
 ## Tasks
 
 - [ ] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.
@@ -284,6 +294,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   needs: the E1213 on the Studio link with its IP; EtherNet/IP enabled on its web console and activated for this unit (manual pp. 3-26, 5-1); DO-00..03 wired to DI-00..03 with field power (or `LOOPS="do:0=di:4 ..."`); UDP 2222 free on the Studio; the Moxa EDS at the repo root to check it too (optional)
   result: the enip-io driver passes on the real device; the device doc's "inferred" lines confirmed or corrected
   notes: `scripts/bench-e1213.sh <E1213-IP>`; the first run in the native terminal (the conformance binary is unsigned and the firewall asks once to accept incoming UDP; over SSH every read times out), later runs as `! scripts/bench-e1213.sh <IP>` here
+  notes: 2026-11-02: the unit is on the office LAN at 10.0.0.57 (DHCP), EtherNet/IP already activated and enabled, EXT power wired, DO-00..02 looped to DI-00..02. Taken with a Python scanner (Apple's python3 passes the firewall): the E1213 names UDP 5222 for O->T in its Forward_Open reply and ignores O->T on 2222; the scanner and the simulator now honour that (feat/e1213-real-device); bit order and byte 50 confirmed; everything is in docs/devices/moxa-iologik-e1213.md "On the bench". Left: `! ./scratch/02-allow-firewall.sh` (sudo: lets the cargo binaries receive UDP), then `! scripts/bench-e1213.sh 10.0.0.57`, then tick this and start `enip-in-box-again`. Over Modbus the loop check (docs/devices/e1213-loop) already runs: 11 cycles, 0 faults.
   est: 30m
   difficulty: low
   depends: io-bench
@@ -298,6 +309,14 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: enip-in-box-again
 
 ## Roadmap M2: floor-ready core
+
+- [ ] **A library of known devices, and their points as tags in ST** — Nick, 2026-11-02 (while the E1213 came up): build a library of devices and the drivers for them (where it lives is open: docs/devices/ holds the E1213's doc, maps and the enip profile today; a `devices/` crate or a per-device folder with EDS, manual citations, profile, default map and a loop-check program are the candidates). Locally, pick inputs and outputs from the wired, known devices and have them come into a program as tags, as other PLC IDEs do, instead of hand-writing `in di0 bool e1213 di:0` lines; an I/O-like tab is where the user chooses them, and the same list is the context the agent gets when it writes the program. Nick wants to play with the interface against the live E1213 before fixing the shape.
+  needs: the E1213 bench green (`e1213-bench`), then Nick's hands-on notes on how choosing a device's points should feel
+  result: a second device is a folder in the library, not a driver project; a program names tags the device list offers; the agent sees the same list
+  est: 1w
+  difficulty: med
+  depends: e1213-bench
+  id: device-library
 
 - [ ] **Stock module: counters and uptime** — cycle counts, run/idle/down state, shift totals; the first shipped module, written in ST like everything else, so it doubles as the agent's few-shot example.
   est: 2d
