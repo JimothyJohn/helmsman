@@ -37,7 +37,15 @@ usage: helmsman-plc bundle COMMAND ...
         checks the file, every signature and the content; with --trust (a
         box's trusted-publishers file) also whether a box would take it
   trust [--state-dir DIR] list | add NAME KEY | dev-bundles allow|refuse
-        the box's trust store (DIR/trusted-publishers, mode 0600)";
+        the box's trust store (DIR/trusted-publishers, mode 0600)
+  index --key KEYFILE --publisher NAME DIR OUT
+        a marketplace index of every *.hbundle in DIR (each decoded and its
+        signatures checked), written to OUT (JSON) and signed into OUT.sig
+  fetch [--trust FILE] [--version V] [--allow-local] INDEX_URL NAME OUT
+        reads the signed index at INDEX_URL (its .sig beside it) against a
+        trust store (default: the box's in --state-dir), downloads bundle
+        NAME (the newest version, or V) and checks its hash; OUT is then a
+        bundle file to verify or import";
 
 /// The `%M` size and the rest when a module does not say (as the binary's
 /// defaults).
@@ -151,6 +159,8 @@ pub fn run(a: &[String]) -> Result<String, String> {
         "sign" => sign_cmd(rest),
         "verify" => verify_cmd(rest),
         "trust" => trust(rest),
+        "index" => index_cmd(rest),
+        "fetch" => fetch_cmd(rest),
         "help" | "--help" | "-h" => Ok(format!("{USAGE}\n")),
         other => Err(format!("unknown bundle command {other:?}\n\n{USAGE}")),
     }
@@ -296,6 +306,96 @@ fn state_dir(a: &Args) -> PathBuf {
         },
         PathBuf::from,
     )
+}
+
+fn index_cmd(a: &[String]) -> Result<String, String> {
+    let a = args(a, &["--key", "--publisher"], "")?;
+    let [dir, out] = a.positional::<2>("DIR OUT")?;
+    let key = SigningKey::load(Path::new(a.need("--key")?))?;
+    let publisher = a.need("--publisher")?;
+    let mut files = Vec::new();
+    let entries = fs::read_dir(dir).map_err(|e| format!("{dir}: {e}"))?;
+    for e in entries {
+        let e = e.map_err(|e| format!("{dir}: {e}"))?;
+        let name = e.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(&format!(".{EXTENSION}")) {
+            continue;
+        }
+        if !super::index::file_name_ok(&name) {
+            return Err(format!(
+                "{name}: a bundle file name is letters, numbers, . _ - ending in .{EXTENSION}"
+            ));
+        }
+        files.push((name, read_bundle(&e.path())?));
+    }
+    if files.is_empty() {
+        return Err(format!("{dir}: no .{EXTENSION} files"));
+    }
+    let idx = super::index::Index::build(publisher, &files).map_err(|e| e.0)?;
+    let text = idx.encode();
+    let sig = super::index::sign(text.as_bytes(), &key);
+    fs::write(out, &text).map_err(|e| format!("{out}: {e}"))?;
+    let sig_path = format!("{out}.sig");
+    fs::write(&sig_path, sig).map_err(|e| format!("{sig_path}: {e}"))?;
+    let mut said = format!(
+        "wrote {out} and {sig_path}: {} bundle(s) by {publisher}\n",
+        idx.bundles.len()
+    );
+    for b in &idx.bundles {
+        let _ = writeln!(said, "  {} {} ({}, {} bytes)", b.name, b.version, b.file, b.size);
+    }
+    Ok(said)
+}
+
+fn fetch_cmd(a: &[String]) -> Result<String, String> {
+    let mut rest = Vec::new();
+    let mut allow_local = false;
+    for w in a {
+        if w == "--allow-local" {
+            allow_local = true;
+        } else {
+            rest.push(w.clone());
+        }
+    }
+    let a = args(&rest, &["--trust", "--version", "--state-dir"], "")?;
+    let [url, name, out] = a.positional::<3>("INDEX_URL NAME OUT")?;
+    let trust = match a.get("--trust") {
+        Some(f) => {
+            let text = fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?;
+            TrustStore::parse(&text).map_err(|errs| {
+                errs.iter()
+                    .map(|(l, m)| format!("{f}:{l}: {m}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })?
+        }
+        None => TrustStore::load(&state_dir(&a))?,
+    };
+    let listing = super::market::list(url, &trust, allow_local)?;
+    let entry = listing.index.find(name, a.get("--version")).ok_or_else(|| {
+        let have: Vec<String> = listing
+            .index
+            .bundles
+            .iter()
+            .map(|b| format!("{} {}", b.name, b.version))
+            .collect();
+        format!(
+            "{name}: not in {}'s index; it has: {}",
+            listing.publisher,
+            have.join(", ")
+        )
+    })?;
+    let bytes = super::market::fetch(&listing, entry, allow_local)?;
+    fs::write(out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+    Ok(format!(
+        "wrote {out}: {} {} by {} from {} ({} bytes, index signed by {}); next: helmsman-plc bundle verify {out}\n",
+        entry.name,
+        entry.version,
+        entry.author,
+        listing.url,
+        bytes.len(),
+        listing.publisher
+    ))
 }
 
 fn trust(a: &[String]) -> Result<String, String> {

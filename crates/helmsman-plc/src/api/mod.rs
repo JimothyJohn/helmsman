@@ -30,6 +30,8 @@
 //! GET  /api/snapshots/{a}/diff/{b}
 //! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
 //! POST /api/bundles                       token: a bundle file, verified, bound by name, stored as a draft
+//! POST /api/market/list                   token: {index}: the signed index at that URL, verified, its bundles (see [`market`])
+//! POST /api/market/install                token: {index, name, version?}: that bundle fetched, checked against the index, imported as POST /api/bundles
 //! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
 //! POST /api/snapshots/{id}/rollback       as apply: roll back through the approval policy
 //! GET  /api/replays/{n}                   a replay kept as evidence
@@ -106,6 +108,7 @@ pub mod forces;
 pub mod http;
 pub mod live;
 pub mod login;
+pub mod market;
 pub mod mcp;
 pub mod pdf;
 pub mod photo;
@@ -213,6 +216,10 @@ pub struct Extras {
     /// Publishers whose bundles import (`POST /api/bundles`); `None`:
     /// import answers 501.
     pub trust: Option<TrustStore>,
+    /// The marketplace routes may fetch from local addresses (loopback,
+    /// private ranges): a bench or a LAN mirror. Off on a box
+    /// (`--market-allow-local` turns it on).
+    pub market_local: bool,
 }
 
 /// What a box running the editor serves besides [`Extras`] (a struct of
@@ -307,6 +314,8 @@ struct Ctx {
     ui: Option<ui::Ui>,
     /// Publishers whose bundles import; `None`: import answers 501.
     trust: Option<TrustStore>,
+    /// The marketplace routes may fetch from local addresses.
+    market_local: bool,
     /// Drop-in documents (see [`dropin`]).
     dropins: Mutex<dropin::Store>,
     /// Held while a device browse runs (one at a time).
@@ -510,7 +519,15 @@ impl Api {
         ui: Option<ui::Ui>,
         trust: Option<TrustStore>,
     ) -> io::Result<Self> {
-        Self::start_with(cfg, shared, Extras { ui, trust })
+        Self::start_with(
+            cfg,
+            shared,
+            Extras {
+                ui,
+                trust,
+                ..Extras::default()
+            },
+        )
     }
 
     /// [`Api::start`], with what a box may serve besides its state.
@@ -567,7 +584,11 @@ impl Api {
         more: More,
         tls: Option<Tls>,
     ) -> io::Result<Self> {
-        let Extras { ui, trust } = extras;
+        let Extras {
+            ui,
+            trust,
+            market_local,
+        } = extras;
         let More {
             projects,
             forces,
@@ -602,6 +623,7 @@ impl Api {
             streams: AtomicUsize::new(0),
             ui,
             trust,
+            market_local,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
             site,
@@ -1234,6 +1256,8 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
+        ("POST", ["api", "market", "list"]) => return market::list(req, ctx),
+        ("POST", ["api", "market", "install"]) => return market::install(req, ctx),
         ("POST", ["api", "dropins"]) => return dropin::post(req, ctx),
         ("POST", ["api", "devices", name, "browse"]) => return dropin::browse(req, ctx, name),
         ("POST", ["api", "proposals", "check"]) => return check_only(req, ctx),
@@ -1286,6 +1310,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
         | ["api", "chat" | "explain" | "bundles" | "login" | "logout"]
+        | ["api", "market", "list" | "install"]
         | ["api", "devices", _, "browse"] => Some("POST"),
         ["api"]
         | [
@@ -1755,6 +1780,8 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
             e("GET", "/api/snapshots/{id}/bundle", false, "that snapshot as an unsigned bundle file (sign it off the box)"),
             e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
+            e("POST", "/api/market/list", true, "{index}: the signed marketplace index at that URL, verified against the trusted publishers, and its bundles"),
+            e("POST", "/api/market/install", true, "{index, name, version?}: that bundle fetched from the index's site, checked against the index, then imported as POST /api/bundles"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: as apply, checked against the policy"),
             e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
