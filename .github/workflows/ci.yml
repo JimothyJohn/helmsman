@@ -32,7 +32,7 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown, thumbv7em-none-eabihf
       - name: Format check
         run: cargo fmt --all --check
       - name: Clippy (deny warnings)
@@ -44,6 +44,11 @@ jobs:
         run: cargo check -p helmsman-plc --no-default-features --all-targets
       - name: Canvas for wasm32
         run: cargo check --target wasm32-unknown-unknown -p helmsman-canvas
+      # helmsman-iec without std, as the edge node builds it (docs/EDGE.md
+      # Phase 0, G1): a cheap upstream target proves no_std without the
+      # Xtensa toolchain. Same as scripts/lint.sh.
+      - name: helmsman-iec without std
+        run: cargo clippy -p helmsman-iec --no-default-features --features libm --target thumbv7em-none-eabihf -- -D warnings
       - name: Test workspace
         run: cargo test --workspace --locked
 
