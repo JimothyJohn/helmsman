@@ -101,6 +101,9 @@ mod lexer;
 mod once;
 mod parser;
 pub mod plcopen;
+/// Requirement tests (`test_*.st`), run by the page and the box; the
+/// node never runs them, and the runner uses the wall clock and `format!`.
+#[cfg(feature = "std")]
 pub mod spec;
 mod state;
 pub mod trace;
