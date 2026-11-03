@@ -992,6 +992,83 @@ mod chrome {
         assert_eq!(Chrome::restored(&h.app.chrome.saved()).pane, Pane::Devices);
     }
 
+    /// Requirement tests in the simulation (TODO.md spec-tests): the
+    /// Requirements tab lists the project's `test_*.st` files green or
+    /// red with why; a red one refuses Deploy and a block answer's "Use
+    /// this code", naming it; a test file never builds into the program;
+    /// fixed, the deploy goes through.
+    #[test]
+    fn requirement_tests_gate_deploy_and_use_this_code_in_the_simulation() {
+        let mut h = Harness::new(App::sim());
+        h.press("tab tests");
+        h.wait(0.3);
+        assert_eq!(h.app.chrome.tab, Tab::Requirements);
+        assert!(h.has("tests run"));
+        assert!(!h.has("test test_lamp"), "the blink example has no tests");
+        let main = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
+        let red = "(* The lamp stays off while start is held. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_stays_off : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_stays_off(COND := NOT lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj.files.insert("main.st".into(), main.into());
+            sim.proj.add_file("test_lamp.st", red.into());
+            sim.proj.save();
+            sim.open_project("mine");
+        }
+        h.wait(0.3);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.tests.ran && sim.tests.rows.len() == 1, "{:?}", sim.tests);
+        assert!(!sim.tests.rows[0].passed);
+        assert_eq!(
+            sim.tests.rows[0].requirement,
+            "The lamp stays off while start is held."
+        );
+        assert!(h.has("test test_lamp"), "the row shows");
+        assert!(
+            !sim.session.src.contains("PROGRAM test_lamp"),
+            "the test is not in the build"
+        );
+        // Deploy: refused, with the test named.
+        h.key(Modifiers::COMMAND, Key::D);
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        let notice = sim.notice.clone().unwrap_or_default();
+        assert!(
+            notice.starts_with("Refused: requirement test test_lamp:"),
+            "{notice}"
+        );
+        // A block answer into this project: refused too; nothing added.
+        let before = sim.proj.files.len();
+        h.app.sim.as_mut().unwrap().take_code(
+            "FUNCTION_BLOCK helper\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT y : BOOL; END_VAR\ny := x;\nEND_FUNCTION_BLOCK\n"
+                .into(),
+        );
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert_eq!(sim.proj.files.len(), before, "{:?}", sim.proj.files.keys());
+        assert!(sim.notice.clone().unwrap_or_default().starts_with("Refused:"));
+        // Fixed: green, Run reruns, Deploy goes through.
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.files.insert(
+                "test_lamp.st".into(),
+                red.replace("stays off", "comes on")
+                    .replace("COND := NOT lamp", "COND := lamp"),
+            );
+        }
+        h.press("tests run");
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.tests.rows[0].passed, "{:?}", sim.tests);
+        h.key(Modifiers::COMMAND, Key::D);
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        let notice = sim.notice.clone().unwrap_or_default();
+        assert!(notice.starts_with("mine is running in this page"), "{notice}");
+        // The tab is remembered.
+        assert_eq!(Chrome::restored(&h.app.chrome.saved()).tab, Tab::Requirements);
+    }
+
     #[test]
     fn double_clicking_a_file_opens_the_code_tab() {
         let mut h = Harness::new(App::sim());
@@ -1838,7 +1915,12 @@ mod reviewing {
 #[test]
 fn the_simulation_survives_a_click_storm_on_every_tab() {
     let mut h = Harness::new(App::sim());
-    for tab in ["tab io", "tab claude"] {
+    for tab in ["tab io", "tab tests", "tab claude"] {
+        // A storm may have hit the panel's hide chevron: open it again.
+        if !h.has(tab) {
+            h.press("right");
+            h.wait(0.3);
+        }
         h.press(tab);
         let below = h.rect("header").bottom() + 4.0;
         for x in (0..1400u16).step_by(131) {
