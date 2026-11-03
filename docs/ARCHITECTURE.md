@@ -1743,6 +1743,51 @@ host-enforced checks; an AI review (`marketplace`) can only refuse on top.
   anything is output-affecting (engineer PIN + replay). Every import,
   refused or not, is audited.
 
+## Marketplace index (`marketplace`, the skeleton, built)
+
+`helmsman_plc::bundle::index` and `bundle::market`, the CLI's `bundle
+index` and `bundle fetch`, and `api/market.rs`; contract in
+`tests/bundle.rs` (the index tests). What a box needs to *use* a
+marketplace, under this repository's licence; the server side (accounts,
+review, payments) is private and does not exist yet (LICENSING.md).
+
+- **A marketplace is a static site**: `index.json`, `index.json.sig` and
+  the bundle files beside them, published from a repository or any web
+  server. No API, no accounts. `helmsman-plc bundle index --key KEY
+  --publisher NAME DIR OUT` builds the index from every `.hbundle` in a
+  folder (each decoded, its signatures checked) and signs it.
+- **The index** (`helmsman-index 1`, canonical JSON): the publisher's name
+  and one entry per bundle: name, version, author, description, the bundle
+  id, the file's SHA-256 and size, the file name (plain: letters, digits,
+  `. _ -`, ending `.hbundle`), the keys it is signed with. Refused before
+  it costs anything: over 1 MiB, over 256 entries, unknown fields, a hash
+  that is not 64 hex digits, a size over a bundle's, control or invisible
+  characters in a text field.
+- **The signature** (`helmsman-index-signature 1`): Ed25519 over the
+  domain string and the SHA-256 of the index bytes, by a key the box's
+  trust store names (the same store as bundle import). The index can
+  point at a bundle; it cannot vouch for one: the bundle fetched must
+  still pass `bundle::verify` on the box, signatures and content.
+- **Fetching** (`bundle::market`, over `helmsman_agent::http`): the index,
+  then its `.sig`, then one bundle file, each body capped before it is
+  read, each step checked before the next (signature, publisher name
+  matching the key's, the file's size and hash against the entry). The
+  box fetches a URL a client gave it, so the host must resolve to public
+  addresses: loopback, private, link-local, shared (100.64/10), multicast
+  and unspecified are refused unless the box runs with
+  `--market-allow-local on` (a bench, a LAN mirror). The check is on the
+  resolved addresses at fetch time, which is why the flag is off by
+  default (DNS rebinding is not caught).
+- **On the box**: `POST /api/market/list {index}` and `POST
+  /api/market/install {index, name, version?}` (token; never a read,
+  since both make the box fetch). Install hands the checked bytes to the
+  same import as `POST /api/bundles`: verified, bound by name, a proposal
+  the policy classifies; the audit line and the proposal's note say which
+  index and file it came from. `helmsman-plc bundle fetch` does the same
+  on a laptop and writes the bundle file.
+- **Not in the skeleton**: publisher accounts, uploads, the AI review on
+  install, payments, mirrors. A third party can run its own index today.
+
 ## Webhook sinks (`sink-webhook`, built)
 
 `helmsman-plc --sinks FILE --sink-dir DIR` publishes signal events over
