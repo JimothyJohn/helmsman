@@ -70,6 +70,15 @@ impl Error {
 
 impl std::error::Error for Error {}
 
+impl From<helmsman_modbus::Error> for Error {
+    fn from(e: helmsman_modbus::Error) -> Self {
+        match e {
+            helmsman_modbus::Error::Protocol(s) => Self::Protocol(s),
+            helmsman_modbus::Error::Exception(c) => Self::Exception(c),
+        }
+    }
+}
+
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Self::Io(e)

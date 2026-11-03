@@ -1346,8 +1346,8 @@ fn the_retired_screen_flag_is_refused_with_the_reason() {
 fn the_default_agent_versions_are_the_ones_the_relay_serves() {
     let out = plc().arg("--help").output().unwrap();
     let usage = String::from_utf8_lossy(&out.stdout);
-    assert!(usage.contains("(default v3)"), "{usage}");
-    assert!(usage.contains("default explain-v1"), "{usage}");
+    assert!(usage.contains("(default v5)"), "{usage}");
+    assert!(usage.contains("default explain-v2"), "{usage}");
 }
 
 /// A map naming `wasm:NAME` boots on `<state-dir>/drivers/NAME.wasm`, with

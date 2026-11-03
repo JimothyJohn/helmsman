@@ -289,15 +289,20 @@ impl SimProjects {
         self.files.get_mut(&self.current)
     }
 
-    /// The open project's build: its `.st` files, one as it is, several
-    /// each under a `(* file NAME *)` line.
+    /// The open project's `.st` files that build: every one but the
+    /// requirement tests (`test_NAME.st`, `helmsman_iec::spec`), in name
+    /// order.
+    fn built_files(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.files
+            .iter()
+            .filter(|(n, _)| file_name(n) == Some(FileKind::St) && !helmsman_iec::spec::is_test(n))
+    }
+
+    /// The open project's build: its `.st` files (tests aside), one as it
+    /// is, several each under a `(* file NAME *)` line.
     #[must_use]
     pub fn build_src(&self) -> String {
-        let st: Vec<(&String, &String)> = self
-            .files
-            .iter()
-            .filter(|(n, _)| file_name(n) == Some(FileKind::St))
-            .collect();
+        let st: Vec<(&String, &String)> = self.built_files().collect();
         if let [(_, text)] = st.as_slice() {
             return (*text).clone();
         }
@@ -314,14 +319,22 @@ impl SimProjects {
         out
     }
 
+    /// The open project's requirement tests, planned against its build
+    /// (`helmsman_iec::spec::plan`): what the Requirements tab runs.
+    #[must_use]
+    pub fn test_plan(&self) -> helmsman_iec::spec::Plan {
+        helmsman_iec::spec::plan(
+            self.files
+                .iter()
+                .filter(|(n, _)| file_name(n) == Some(FileKind::St))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        )
+    }
+
     /// The file and line a line of the build is.
     #[must_use]
     pub fn locate(&self, line: u32) -> Option<(String, u32)> {
-        let st: Vec<&String> = self
-            .files
-            .keys()
-            .filter(|n| file_name(n) == Some(FileKind::St))
-            .collect();
+        let st: Vec<&String> = self.built_files().map(|(n, _)| n).collect();
         match st.as_slice() {
             [one] => Some(((*one).clone(), line)),
             _ => file_line(&self.build_src(), line),

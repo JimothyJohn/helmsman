@@ -661,6 +661,26 @@ into the code.
 
 ## Device sources
 
+### supervictor (Nick's ESP32-POE-ISO fleet firmware) and ph-esp32-mac
+
+- **What:** the Ethernet bring-up the edge node copies (crates/helmsman-node:
+  `board.rs`, `ethernet.rs`, 2026-11-03): `supervictor/edge/src/board/poe_iso.rs`
+  (the APLL at 50 MHz, mirroring ESP-IDF `rtc_clk_apll_enable` /
+  `rtc_clk_apll_coeff_set`) and `board/poe2.rs` (the clock out of GPIO0 via
+  clock-output channel 1, as Olimex's `LAN8720-POE2` Arduino example and
+  ESP-IDF `esp_clock_output_start(CLKOUT_SIG_APLL, 0)` do), and
+  `network/ethernet.rs` (EMAC init, PHY init, DHCP after link-up with
+  promiscuous mode held until a lease), which follows `ph-esp32-mac`'s
+  hardware-verified embassy-net example. `HARDWARE.md` §4.2 there: the POE2
+  has no galvanic isolation, never USB and PoE together.
+- **Where:** `/Users/nick/github/supervictor` (private); `ph-esp32-mac` at
+  `photon-circus/ph-esp32-mac` commit `b05d53ade4224361175283ac1b65c7504a029301`
+  (the upstream merge of the MDIO fix; crates.io 0.1.1 cannot read the PHY),
+  as supervictor pins it. esp-hal 1.0.0, esp-alloc 0.9.0, esp-rtos 0.2,
+  embassy-net 0.9.1 at supervictor's versions.
+- **Leaned on by:** docs/EDGE.md Phases 1 and 2, crates/helmsman-node.
+- **How to cite:** `supervictor edge <file>` / `ph-esp32-mac b05d53a <file>`.
+
 ### Moxa ioLogik E1213 EDS, v2.0 (EtherNet/IP Electronic Data Sheet)
 
 - **What:** `moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`,

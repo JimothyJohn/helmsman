@@ -65,6 +65,8 @@ pub enum PCall {
         file: String,
     },
     Check(String),
+    /// `POST /api/projects/{p}/tests`: its requirement tests, run on the box.
+    Tests(String),
     Replay(String),
     Deploy {
         project: String,
@@ -275,6 +277,12 @@ pub struct BoxProjects {
     saving_layout: Option<String>,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
+    /// The open project's requirement tests as the box last ran them
+    /// (`crate::requirements`): asked when the project opens, after each
+    /// save, on Run, and reported by a refused deploy.
+    pub tests: crate::requirements::Results,
+    /// A test run is on its way.
+    pub testing: bool,
     queue: Vec<PReq>,
 }
 
@@ -804,6 +812,21 @@ impl BoxProjects {
                         .cloned();
                 }
                 self.queue.extend(reads);
+                self.run_tests();
+            }
+            PCall::Tests(project) => {
+                self.testing = false;
+                if self.open.as_ref().is_none_or(|o| o.name != project) {
+                    return;
+                }
+                if ok {
+                    self.tests = crate::requirements::Results::from_json(&j);
+                } else {
+                    self.note(
+                        format!("The requirement tests did not run: {}", error_of(a)),
+                        true,
+                    );
+                }
             }
             PCall::File { project, file } => {
                 let Some(o) = self.open.as_mut().filter(|o| o.name == project) else {
@@ -962,6 +985,10 @@ impl BoxProjects {
                 } else if a.status == 422 {
                     self.diags = diags_of(&j);
                     self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
+                } else if a.status == 409 && j["tests"].is_array() {
+                    // A red requirement test: the tab shows which.
+                    self.tests = crate::requirements::Results::from_json(&j);
+                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
                 } else {
                     self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
                 }
@@ -1103,10 +1130,29 @@ impl BoxProjects {
         if still {
             return;
         }
+        // Saved: the requirement tests run against what is on the box now.
+        self.run_tests();
         if self.deploy == Deploy::Saving {
             self.check();
         } else if !matches!(&self.notice, Some((_, true))) {
             self.note(format!("Saved {project}."), false);
         }
+    }
+
+    /// Asks the box to run the open project's requirement tests
+    /// (`POST /api/projects/{p}/tests`); the Requirements tab shows them.
+    pub fn run_tests(&mut self) {
+        let Some(o) = &self.open else { return };
+        if self.testing {
+            return;
+        }
+        let name = o.name.clone();
+        self.testing = true;
+        self.queue.push(PReq::json(
+            PCall::Tests(name.clone()),
+            "POST",
+            format!("{}/tests", project_url(&name)),
+            &json!({}),
+        ));
     }
 }

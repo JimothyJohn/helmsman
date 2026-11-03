@@ -2006,6 +2006,137 @@ fn seed(state: &Path, args: &[&str]) -> (bool, String) {
     (out.status.success(), text)
 }
 
+/// A requirement test checks the lamp follows start within a few scans
+/// (`helmsman_iec::spec`): green against MAIN.
+const TEST_GREEN: &str = "\
+(* The lamp is on within 50 ms of start. *)
+PROGRAM test_lamp
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
+VAR t : TON; lamp_follows_start : ASSERT; (* on within 50 ms *) END_VAR
+  start := TRUE;
+  t(IN := TRUE, PT := T#50ms);
+  IF t.Q THEN
+    lamp_follows_start(COND := lamp);
+    done := TRUE;
+  END_IF;
+END_PROGRAM
+";
+
+/// The same test demanding the opposite: red against MAIN.
+const TEST_RED: &str = "\
+(* The lamp stays off while start is held. *)
+PROGRAM test_lamp
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
+VAR t : TON; lamp_stays_off : ASSERT; END_VAR
+  start := TRUE;
+  t(IN := TRUE, PT := T#50ms);
+  IF t.Q THEN
+    lamp_stays_off(COND := NOT lamp);
+    done := TRUE;
+  END_IF;
+END_PROGRAM
+";
+
+/// Requirement tests (TODO.md spec-tests): `test_*.st` files run on the
+/// box through `POST /api/projects/{p}/tests` (token or session, nothing
+/// changes), never build into a module, and a red one refuses the deploy
+/// with 409 naming the requirement, nothing changed; green, it deploys.
+#[test]
+fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(
+        &s,
+        "line3",
+        &[
+            ("main.st", MAIN),
+            ("blocks.st", BLOCKS),
+            ("io.map", MAP),
+            ("test_lamp.st", TEST_RED),
+        ],
+    );
+    let before = b.head();
+    // The test file is no module.
+    let check = post_json(b.addr, "/api/projects/line3/check", Some(&s), &json!({})).json();
+    assert_eq!(check["ok"], true, "{check}");
+    let mods: Vec<&str> = check["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(mods, ["conveyor"], "{check}");
+    // The tests run with the token too (a read).
+    let r = post_json(b.addr, "/api/projects/line3/tests", Some(TOKEN), &json!({}));
+    assert_eq!(r.status, 200, "{r:?}");
+    let j = r.json();
+    assert_eq!(j["ok"], false, "{j}");
+    assert_eq!(j["tests"].as_array().unwrap().len(), 1, "{j}");
+    assert_eq!(j["tests"][0]["file"], "test_lamp.st", "{j}");
+    assert_eq!(
+        j["tests"][0]["requirement"], "The lamp stays off while start is held.",
+        "{j}"
+    );
+    assert_eq!(j["tests"][0]["passed"], false, "{j}");
+    assert!(
+        j["tests"][0]["why"]
+            .as_str()
+            .unwrap()
+            .starts_with("lamp stays off failed at "),
+        "{j}"
+    );
+    assert_eq!(j["red"].as_array().unwrap().len(), 1, "{j}");
+    assert_eq!(
+        post_json(b.addr, "/api/projects/nope/tests", Some(TOKEN), &json!({})).status,
+        404
+    );
+    assert_eq!(
+        post_json(b.addr, "/api/projects/line3/tests", None, &json!({})).status,
+        401,
+        "no credential, no run"
+    );
+    // The deploy is refused before anything builds or runs.
+    let r = b.deploy(&s, "line3");
+    assert_eq!(r.status, 409, "{r:?}");
+    let j = r.json();
+    assert!(j["error"].as_str().unwrap().contains("requirement test"), "{j}");
+    assert!(j["error"].as_str().unwrap().contains("test_lamp"), "{j}");
+    assert_eq!(j["changed"], false, "{j}");
+    assert_eq!(j["tests"][0]["passed"], false, "{j}");
+    assert_eq!(b.head(), before, "nothing committed");
+    // Fixed: green, and the deploy goes through.
+    let r = put_file(b.addr, &s, "line3", "test_lamp.st", TEST_GREEN, None);
+    assert_eq!(r.status, 200, "{r:?}");
+    let j = post_json(b.addr, "/api/projects/line3/tests", Some(&s), &json!({})).json();
+    assert_eq!(j["ok"], true, "{j}");
+    assert_eq!(j["tests"][0]["passed"], true, "{j}");
+    assert_eq!(j["tests"][0]["why"], "", "{j}");
+    let r = b.deploy(&s, "line3");
+    assert_eq!(r.status, 200, "{r:?}");
+    wait("the module running", || b.modules() == ["conveyor"]);
+    // The refusal and the runs are audited.
+    let audit = get(b.addr, "/api/audit?limit=1000").json();
+    let detail: Vec<String> = audit["entries"]
+        .as_array()
+        .or_else(|| audit.as_array())
+        .map(|a| {
+            a.iter()
+                .map(|e| e["detail"].as_str().unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        detail.iter().any(|d| d.contains("1 test(s), 1 red")),
+        "the red run is audited: {detail:?}"
+    );
+    assert!(
+        detail.iter().any(|d| d.contains("requirement test(s) red")),
+        "the refusal is audited: {detail:?}"
+    );
+}
+
 /// Card seed-deploys: a first install makes the project and nothing
 /// else. The store stays empty and the box boots running nothing, until
 /// an engineer deploys through the approval path (covered by
