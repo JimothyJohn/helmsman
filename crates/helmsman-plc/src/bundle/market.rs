@@ -92,6 +92,7 @@ fn get(url: &Url, cap: usize, what: &str) -> Result<Vec<u8>, String> {
         path: if url.prefix.is_empty() { "/" } else { &url.prefix },
         headers: &[("Accept", "*/*")],
         json: None,
+        raw: None,
     };
     let r = http::send(url, &req, TIMEOUTS).map_err(|e| format!("{what}: {url}: {e:?}"))?;
     if r.status != 200 {

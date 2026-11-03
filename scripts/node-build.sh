@@ -29,8 +29,8 @@ case "${2:-${1:-}}" in
   net) features=(--features net) ;;
 esac
 case "$mode" in
-  build|net) cargo build --release "${features[@]}" ;;
-  clippy) cargo clippy --release "${features[@]}" -- -D warnings ;;
+  build|net) cargo build --release ${features[@]+"${features[@]}"} ;;
+  clippy) cargo clippy --release ${features[@]+"${features[@]}"} -- -D warnings ;;
   *) echo "usage: $0 [build|net|clippy [net]]" >&2; exit 2 ;;
 esac
 echo "built: crates/helmsman-node/target/xtensa-esp32-none-elf/release/{bench$( [ ${#features[@]} -gt 0 ] && echo ,modbus )}"
