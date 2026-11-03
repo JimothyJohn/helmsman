@@ -179,6 +179,7 @@ impl Bench {
         let extras = Extras {
             ui: None,
             trust: None,
+            market_local: false,
         };
         let api = Api::start_with(cfg, shared, extras).unwrap();
         let addr = api.addr();
