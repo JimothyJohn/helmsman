@@ -344,6 +344,10 @@ impl BoxView {
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
         editor::show(ui, chrome, self);
+        if self.devices_ui.take_import() {
+            #[cfg(target_arch = "wasm32")]
+            crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
+        }
         if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
         {
             self.add_device_line(&line);
@@ -390,6 +394,37 @@ impl BoxView {
     }
 
     /// The box runs with projects.
+    /// Import device…: a vendor's EDS joins the open project as
+    /// `NAME.eds` (a new file on the box, or the draft of one that exists)
+    /// and the New device form opens filled in from it.
+    fn import_eds(&mut self, file: &str, bytes: &[u8]) {
+        let Some(o) = &mut self.projects.open else {
+            self.projects
+                .note(format!("Open a project to import {file} into it."), true);
+            return;
+        };
+        let text = match helmsman_project::check_text(bytes) {
+            Ok(t) => t.to_string(),
+            Err(e) => {
+                self.projects.note(format!("{file} was refused: {e}"), true);
+                return;
+            }
+        };
+        let Some(target) = helmsman_project::eds_file_name(file) else {
+            self.projects.note(
+                format!("{file}: nothing of the name survives as a file name (a-z 0-9 _ -)"),
+                true,
+            );
+            return;
+        };
+        match o.bufs.get_mut(&target) {
+            Some(b) if b.loaded => b.text.clone_from(&text),
+            Some(_) => {}
+            None => self.projects.new_file_with(&target, &text),
+        }
+        self.devices_ui.adding = Some(crate::devices::NewDevice::from_eds(&target, &text));
+    }
+
     /// The Devices tab's Add: one `device` line onto the open project's
     /// `io.map`, made if the project has none (a draft; Save writes it).
     fn add_device_line(&mut self, line: &str) {
@@ -820,7 +855,11 @@ impl Workspace for BoxView {
 
     fn upload(&mut self, file: &str, bytes: Vec<u8>) {
         if is_engineer(self.session.as_ref()).is_ok() && self.has_projects() {
-            self.projects.upload(file, bytes, false);
+            if crate::devices::is_eds(file) {
+                self.import_eds(file, &bytes);
+            } else {
+                self.projects.upload(file, bytes, false);
+            }
         }
     }
 

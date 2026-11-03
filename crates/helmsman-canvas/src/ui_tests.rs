@@ -1038,6 +1038,121 @@ mod chrome {
         assert_eq!(Chrome::restored(&h.app.chrome.saved()).pane, Pane::Devices);
     }
 
+    /// `device-import`: Import device… takes a vendor's EDS; the file joins
+    /// the project as `NAME.eds` and the New device form opens filled in
+    /// (EtherNet/IP, named after the EDS's product, `eds=NAME.eds`); the
+    /// address typed, Add writes the line. Examples are read-only; junk
+    /// is refused with a note.
+    #[test]
+    fn importing_an_eds_keeps_the_file_and_fills_the_device_form() {
+        use crate::projects::Workspace;
+        const FACTS: &str = include_str!("../../helmsman-proto/tests/fixtures/e1213-facts.eds");
+        let mut h = Harness::new(App::sim());
+        // An example is read-only: refused with a note, nothing kept.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("E1213.eds", FACTS.as_bytes().to_vec());
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert!(!sim.proj.files.contains_key("e1213.eds"));
+            assert!(
+                sim.proj
+                    .notice
+                    .as_ref()
+                    .is_some_and(|(t, err)| *err && t.contains("read-only")),
+                "{:?}",
+                sim.proj.notice
+            );
+            assert!(sim.devices_ui.adding.is_none());
+        }
+        h.app.sim.as_mut().unwrap().proj.create("mine", None);
+        h.wait(0.2);
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("Moxa E1213 (v2.0).EDS", FACTS.as_bytes().to_vec());
+        h.press("pane devices");
+        h.wait(0.3);
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert_eq!(
+                sim.proj.files.get("moxa-e1213-v2-0.eds").map(String::as_str),
+                Some(FACTS)
+            );
+            let d = sim.devices_ui.adding.as_ref().expect("the form opened");
+            assert_eq!(d.name, "e1213", "named after the EDS's product");
+            assert_eq!(crate::devices::PROTOCOLS[d.protocol].0, "enip-io");
+            assert_eq!(d.params, "eds=moxa-e1213-v2-0.eds rpi_ms=100 poll_ms=20");
+        }
+        assert!(h.has("device form"));
+        h.press("device endpoint");
+        h.frame(vec![Event::Text("10.0.0.57".into())]);
+        h.press("device ok");
+        h.wait(0.3);
+        assert!(!h.has("device form"));
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(
+            map.ends_with("device e1213 enip-io 10.0.0.57 eds=moxa-e1213-v2-0.eds rpi_ms=100 poll_ms=20\n"),
+            "{map}"
+        );
+        assert!(h.has("device e1213"), "listed in the tree");
+        // Again: the file is replaced, not duplicated.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("Moxa E1213 (v2.0).EDS", FACTS.as_bytes().to_vec());
+        assert_eq!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .proj
+                .files
+                .keys()
+                .filter(|k| crate::devices::is_eds(k))
+                .count(),
+            1
+        );
+        h.app.sim.as_mut().unwrap().devices_ui.adding = None;
+        // Junk: not text, refused with a note; a nameless file, refused.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("bin.eds", vec![0xff, 0xfe, 0, 1]);
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert!(
+                sim.proj
+                    .notice
+                    .as_ref()
+                    .is_some_and(|(t, err)| *err && t.contains("refused")),
+                "{:?}",
+                sim.proj.notice
+            );
+            assert!(sim.devices_ui.adding.is_none());
+        }
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("---.eds", FACTS.as_bytes().to_vec());
+        assert!(h.app.sim.as_ref().unwrap().devices_ui.adding.is_none());
+        // The right-click menu offers the import.
+        h.right_click(h.rect("devices blank").center());
+        assert!(h.has("menu import device"));
+        h.press("menu import device");
+        h.wait(0.2);
+        assert!(
+            !h.has("device form"),
+            "the picker is the browser's; no form until a file comes back"
+        );
+    }
+
     /// The Files tab shows the program's files, marks main.st as the one
     /// running, and folds the earlier iterations under one row.
     #[test]

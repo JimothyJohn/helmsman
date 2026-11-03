@@ -780,6 +780,10 @@ impl PlaygroundView {
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
         editor::show(ui, chrome, self);
+        if self.devices_ui.take_import() {
+            #[cfg(target_arch = "wasm32")]
+            crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
+        }
         if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
         {
             self.add_device_line(&line);
@@ -1767,6 +1771,40 @@ impl PlaygroundView {
         }
     }
 
+    /// Import device…: a vendor's EDS joins the project as `NAME.eds`
+    /// (replacing one of that name) and the New device form opens filled
+    /// in from it; the address is what is left to type.
+    fn import_eds(&mut self, file: &str, bytes: &[u8]) {
+        if self.proj.is_example() {
+            self.proj.note(
+                "The examples are read-only: copy the project first (File › Copy project).",
+                true,
+            );
+            return;
+        }
+        let text = match helmsman_project::check_text(bytes) {
+            Ok(t) => t.to_string(),
+            Err(e) => {
+                self.proj.note(format!("{file} was refused: {e}"), true);
+                return;
+            }
+        };
+        let Some(target) = helmsman_project::eds_file_name(file) else {
+            self.proj.note(
+                format!("{file}: nothing of the name survives as a file name (a-z 0-9 _ -)"),
+                true,
+            );
+            return;
+        };
+        match self.proj.files.get_mut(&target) {
+            Some(old) => old.clone_from(&text),
+            None => self.proj.add_file(&target, text.clone()),
+        }
+        self.proj
+            .note(format!("{file} is in {} as {target}.", self.proj.open), false);
+        self.devices_ui.adding = Some(crate::devices::NewDevice::from_eds(&target, &text));
+    }
+
     /// The Devices tab's Add: one `device` line onto the project's
     /// `io.map`, made if it has none.
     fn add_device_line(&mut self, line: &str) {
@@ -2029,6 +2067,10 @@ impl Workspace for PlaygroundView {
     }
 
     fn upload(&mut self, file: &str, bytes: Vec<u8>) {
+        if crate::devices::is_eds(file) {
+            self.import_eds(file, &bytes);
+            return;
+        }
         let before = (self.proj.open.clone(), self.proj.build_src());
         self.proj.upload(file, &bytes);
         if before.0 != self.proj.open {

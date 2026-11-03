@@ -183,7 +183,10 @@ scan; the scheduler bounds how often.
 - **`enip`**: `enip-io`, an EtherNet/IP adapter (remote I/O) the box
   masters over one Class 1 connection, from a built-in profile
   (`profile=moxa-e1213`), the vendor's EDS (`eds=PATH`, read by
-  `helmsman_proto::eds`) or explicit points and sizes. Points are bits and
+  `helmsman_proto::eds`; `eds=NAME.eds` names the project's own device
+  file, a project file kind the Devices tab's Import device… adds and
+  `helmsman_plc::driver_dir` resolves to its path when the map loads) or
+  explicit points and sizes. Points are bits and
   little-endian words of the input and output assemblies (`di:N`, `do:N`,
   `in:BYTE.BIT`, `out:OFFSET:FMT`, ...); reads answer from the latest T->O
   packet, writes change the O->T image. No T->O data within the
