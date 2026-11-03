@@ -63,7 +63,11 @@ this; change it here first when a decision changes.
   for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
   pane on its tab, or shut it when that tab shows.
 - **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the
-  diagram does not show), Agent. On a Pi the Trend opens with
+  diagram does not show), Agent (Nick, 2026-11-01: the conversation is
+  pages, ‹ › walk them, Delete drops one, every kept page goes to the
+  model as context each time, and the pages live with the project as
+  `agent.md`, so a reload or a download keeps them; an earlier page's
+  code has its own Use this code). On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.

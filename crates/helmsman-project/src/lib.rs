@@ -18,6 +18,7 @@
 //!   [`MAX_FILES`] `.st` files and [`MAX_TOTAL`] bytes a project. A
 //!   [`LAYOUT`] file must also read as one ([`layout::parse`]).
 
+pub mod agent;
 pub mod iomap;
 pub mod layout;
 pub mod starters;
@@ -35,9 +36,11 @@ pub const LAYOUT: &str = "diagram.layout";
 /// The block icons' file name in a project: one rule a line, `WHAT =
 /// ICON` (the canvas reads it; the build ignores it).
 pub const ICONS: &str = "icons.map";
+/// The Agent tab's conversation in a project ([`agent`]): pages the
+/// engineer curates and the model gets as context; the build ignores it.
+pub const AGENT: &str = "agent.md";
 /// What a project file may be named, for messages.
-pub const FILE_NAMES: &str =
-    "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings, diagram.layout or icons.map";
+pub const FILE_NAMES: &str = "NAME.st (NAME 1 to 64 of A-Z a-z 0-9 _ -), io.map, project.settings, diagram.layout, icons.map or agent.md";
 /// Largest file, bytes.
 pub const MAX_FILE: usize = 256 * 1024;
 /// Most `.st` files in a project.
@@ -67,6 +70,8 @@ pub enum FileKind {
     Settings,
     Layout,
     Icons,
+    /// The Agent tab's pages (`agent.md`, [`agent`]).
+    Agent,
 }
 
 /// What `s` names in a project, if it names anything.
@@ -77,6 +82,7 @@ pub fn file_name(s: &str) -> Option<FileKind> {
         SETTINGS => return Some(FileKind::Settings),
         LAYOUT => return Some(FileKind::Layout),
         ICONS => return Some(FileKind::Icons),
+        AGENT => return Some(FileKind::Agent),
         _ => {}
     }
     let stem = s.strip_suffix(".st")?;
@@ -353,6 +359,9 @@ mod tests {
         assert_eq!(file_name("io.map"), Some(FileKind::IoMap));
         assert_eq!(file_name("project.settings"), Some(FileKind::Settings));
         assert_eq!(file_name("icons.map"), Some(FileKind::Icons));
+        assert_eq!(file_name("agent.md"), Some(FileKind::Agent));
+        assert_eq!(file_name("Agent.md"), None);
+        assert_eq!(file_name("notes.md"), None);
         for bad in ["../a.st", ".st", "a.ST", "a b.st", "a/b.st", "C:a.st", "a.st\0"] {
             assert_eq!(file_name(bad), None, "{bad:?}");
         }

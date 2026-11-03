@@ -892,7 +892,14 @@ impl Body for BoxView {
             let open = self.projects.open.clone();
             let files: Vec<(String, bool)> = open
                 .as_ref()
-                .map(|o| o.bufs.iter().map(|(n, b)| (n.clone(), b.dirty())).collect())
+                .map(|o| {
+                    o.bufs
+                        .iter()
+                        // The Agent's pages are the Agent tab's, not a file to open.
+                        .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+                        .map(|(n, b)| (n.clone(), b.dirty()))
+                        .collect()
+                })
                 .unwrap_or_default();
             let listing = Listing {
                 projects: &self.projects.projects,
@@ -1086,7 +1093,7 @@ impl Body for BoxView {
         &[Tab::Io]
     }
 
-    fn tab(&mut self, ui: &mut egui::Ui, _tab: Tab) {
+    fn tab(&mut self, ui: &mut egui::Ui, _tab: Tab, _chrome: &mut Chrome) {
         let t = theme(ui);
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {

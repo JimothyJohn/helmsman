@@ -430,7 +430,7 @@ pub trait Body {
     fn messages(&mut self) -> &mut crate::messages::Log;
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
-    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab);
+    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome);
     /// The diagram with its breadcrumbs; a block click calls
     /// [`Chrome::goto`].
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
@@ -586,7 +586,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                     }
                 });
                 ui.separator();
-                body.tab(ui, tab);
+                body.tab(ui, tab, chrome);
                 t
             } else {
                 Some(strip_toggle(ui, true, "show the panel"))
