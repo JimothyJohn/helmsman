@@ -386,6 +386,41 @@ unplugged, unplug USB, plug PoE, read the log over UDP to the laptop. G4
 over 10 minutes; then set the block's comms-loss safe state, yank the
 node's cable, and time the outputs going safe.
 
+*Built 2026-11-03 (feat/node-modbus); numbers pending Nick's flash.* The
+shared part is the codec: `crates/helmsman-modbus` (`no_std`, no deps; PR
+#197) holds the PDUs, reply checks and MBAP framing that helmsman-io's
+client and the node's client both use, since helmsman-io itself cannot
+build without std (helmsman-proto's sockets). The node's client
+(`crates/helmsman-node/src/modbus.rs`) is the async twin of helmsman-io's
+`Transport`: one embassy-net TCP socket reused across reconnects, a
+200 ms timeout on every step, any error dropping the connection so a late
+reply is never taken for a newer request's answer. The `modbus` binary
+(`net` feature; `make node-build net`, `scripts/node-build.sh clippy net`)
+brings the POE2 up on Ethernet with supervictor's recipe copied in
+(`board.rs`: the APLL at 50 MHz routed out of GPIO0 through clock-output
+channel 1, PHY power on GPIO12; `ethernet.rs`: ph-esp32-mac's EMAC +
+LAN8720A over RMII, DHCP after link-up), waits for a lease, then scans
+every 10 ms: DI-00..07 in one FC 2 round trip, an embedded ST program (a
+one-of-three chase on DO-00..02 every 500 ms, `seen` true when the three
+DIs match the three DOs), DO-00..03 in one FC 15 round trip (0x0F is new
+in the codec for exactly this). Counted and reported every 10 s over
+serial and as a UDP line to the Studio (`scripts/node-log-sink.py`, port
+9514; run it with Apple's python so the firewall lets it receive): scans,
+late scans (started more than a period after their deadline: G4's
+number), scans whose own work overran the period, cycle mean and max,
+reads, writes, link errors and the last one, reconnects, matched and
+mismatched scans, heap used and peak. `E1213_ADDR` and `LOG_SINK` at build
+time change the defaults (10.0.0.57:502, 10.0.0.41:9514).
+
+Run order (`scripts/node-flash.sh modbus` prints it): flash over USB with
+Ethernet unplugged, Ctrl-C the monitor, unplug USB, start the sink, plug
+PoE. G5 is the block's own comms-loss setting: set the E1213's Modbus
+watchdog and DO safe mode on its console (manual pp. 3-4, 3-11, 3-21),
+then pull the node's cable and watch the outputs go safe within the
+timeout; the node cannot do that part without power or network, so the
+test proves the block does it.
+
+
 ## Out of scope for the spike
 
 Deploy endpoint, signed images, A/B program slots and the power-cut-during-
