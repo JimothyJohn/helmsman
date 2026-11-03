@@ -234,13 +234,53 @@ impl SimProjects {
     /// Whether file `f` has edits not saved.
     #[must_use]
     pub fn file_dirty(&self, f: &str) -> bool {
-        self.base().and_then(|b| b.get(f)) != self.files.get(f).map(String::as_str)
+        !helmsman_project::agent::is_agent_file(f)
+            && self.base().and_then(|b| b.get(f)) != self.files.get(f).map(String::as_str)
     }
 
-    /// The open project has edits not saved.
+    /// The open project has edits not saved. The Agent's pages
+    /// (`agent.md`) are written as they come and never count.
     #[must_use]
     pub fn dirty(&self) -> bool {
-        self.base().is_none_or(|b| b.0 != self.files)
+        self.base().is_none_or(|b| {
+            let mine = self
+                .files
+                .iter()
+                .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n));
+            let theirs =
+                b.0.iter()
+                    .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n));
+            !mine.eq(theirs)
+        })
+    }
+
+    /// The open project's Agent pages file, if it has one.
+    #[must_use]
+    pub fn agent_text(&self) -> Option<&str> {
+        self.files.get(helmsman_project::AGENT).map(String::as_str)
+    }
+
+    /// Writes the Agent's pages (`agent.md`) into the open project: into
+    /// what is stored too, unless the project is a built-in example (then
+    /// they live until the page closes, and go with a Save of a copy).
+    /// An empty text removes the file.
+    pub fn set_agent_text(&mut self, text: &str) {
+        let name = helmsman_project::AGENT;
+        if text.is_empty() {
+            self.files.remove(name);
+        } else {
+            self.files.insert(name.to_string(), text.to_string());
+        }
+        if !self.is_example()
+            && let Some(saved) = self.saved.get_mut(&self.open)
+        {
+            if text.is_empty() {
+                saved.0.remove(name);
+            } else {
+                saved.0.insert(name.to_string(), text.to_string());
+            }
+            self.persist();
+        }
     }
 
     /// Opens `name` (its stored files; unsaved edits elsewhere are

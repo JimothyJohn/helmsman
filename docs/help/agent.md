@@ -19,8 +19,18 @@ not left wondering.
 Ask for a program ("a conveyor with a photo eye that stops after three
 parts"), for a change to the open one ("add a two-second delay before the
 belt starts"), or for an explanation ("why does the lamp blink?"). The
-answer's code goes into the editor with **Use this**; nothing runs until
-you deploy it, and the editor marks any error first.
+answer's code goes into the editor with **Use this code**; nothing runs
+until you deploy it, and the editor marks any error first.
+
+## Pages
+
+Every question and its answer is kept as a page of the conversation,
+with the project: reload the page or download the project and they are
+still there (the file is `agent.md`; the build ignores it). The ‹ and ›
+buttons walk the pages, **Delete page** drops the one you are reading,
+and **New conversation** drops them all. Every page you keep goes back to
+the Agent with your next question, so pruning the pages is how you shape
+what it sees. An earlier page's code has its own **Use this code**.
 
 ## On a box
 

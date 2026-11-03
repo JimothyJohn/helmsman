@@ -82,9 +82,18 @@ you are not left wondering.</p>
 <p>Ask for a program ("a conveyor with a photo eye that stops after
 three parts"), for a change to the open one ("add a two-second delay
 before the belt starts"), or for an explanation ("why does the lamp
-blink?"). The answer's code goes into the editor with <strong>Use
-this</strong>; nothing runs until you deploy it, and the editor marks
+blink?"). The answer's code goes into the editor with <strong>Use this
+code</strong>; nothing runs until you deploy it, and the editor marks
 any error first.</p>
+<h2 id="pages">Pages</h2>
+<p>Every question and its answer is kept as a page of the conversation,
+with the project: reload the page or download the project and they are
+still there (the file is <code>agent.md</code>; the build ignores it).
+The ‹ and › buttons walk the pages, <strong>Delete page</strong> drops
+the one you are reading, and <strong>New conversation</strong> drops
+them all. Every page you keep goes back to the Agent with your next
+question, so pruning the pages is how you shape what it sees. An earlier
+page's code has its own <strong>Use this code</strong>.</p>
 <h2 id="on-a-box">On a box</h2>
 <p>On a box the Agent goes through a relay that holds the key, so no box
 and no browser holds it. What the Agent proposes becomes a

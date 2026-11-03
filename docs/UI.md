@@ -75,8 +75,12 @@ this; change it here first when a decision changes.
   the file's first comment and, red, why in words and when; a Run button;
   the page runs them after every build change and before Deploy and "Use
   this code", a box runs them when a project opens, after each save and
-  before a deploy; a red one refuses both, naming the test), Agent (not on
-  a box yet). On a Pi the Trend opens with
+  before a deploy; a red one refuses both, naming the test), Agent (Nick,
+  2026-11-01: the conversation is pages, ‹ › walk them, Delete drops
+  one, every kept page goes to the model as context each time, and the
+  pages live with the project as `agent.md`, so a reload or a download
+  keeps them; an earlier page's code has its own Use this code; not on a
+  box yet). On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.

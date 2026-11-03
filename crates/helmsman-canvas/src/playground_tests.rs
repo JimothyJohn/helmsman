@@ -11,8 +11,8 @@ use helmsman_iec::{Ty, Value};
 use crate::app::{App, Source};
 use crate::claude::{
     self, ANTHROPIC_URL, API_VERSION, Answer, ApiKey, Chat, Context, Event as SseEvent, Exchange,
-    FALLBACK_BETA, HISTORY, Incoming, KeyStore, MAX_ANSWER, MAX_PROGRAM, Model, PROXY_URL, Phase, Proxy,
-    Route, Segment, Sse, extract_program, request, segments,
+    FALLBACK_BETA, Incoming, KeyStore, MAX_ANSWER, MAX_PROGRAM, Model, PROXY_URL, Phase, Proxy, Route,
+    Segment, Sse, extract_program, request, segments,
 };
 use crate::editor::{Chrome, Tab, highlight};
 use crate::playground::{
@@ -21,6 +21,7 @@ use crate::playground::{
 };
 use crate::playground_view::{PlaygroundView, window_label};
 use crate::projects::Workspace;
+use crate::sim_projects::Storage;
 
 const KEY: &str = "sk-ant-api03-TESTKEY-not-a-real-key-0123456789";
 
@@ -612,10 +613,13 @@ fn haiku_has_no_fallback_and_the_proxy_route_has_no_key() {
     assert!(opus.body.contains("\"claude-opus-5-5\""));
 }
 
+/// Every kept page goes back as context (Nick, 2026-11-01), oldest
+/// first; only past `MAX_CONTEXT` bytes do the oldest drop off.
 #[test]
-fn history_is_sent_back_capped() {
+fn every_kept_page_is_sent_back_until_the_byte_cap() {
     let history: Vec<Exchange> = (0..10)
         .map(|k| Exchange {
+            question: format!("q{k}"),
             asked: format!("q{k}"),
             answer: format!("a{k}"),
         })
@@ -623,9 +627,144 @@ fn history_is_sent_back_capped() {
     let r = request(&Route::Proxy, Model::default(), &history, &ctx("x", &[]));
     let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
     let msgs = body["messages"].as_array().unwrap();
-    assert_eq!(msgs.len(), HISTORY * 2 + 1);
-    assert_eq!(msgs[0]["content"], format!("q{}", 10 - HISTORY));
+    assert_eq!(msgs.len(), 10 * 2 + 1);
+    assert_eq!(msgs[0]["content"], "q0");
     assert_eq!(msgs[1]["role"], "assistant");
+    let big: Vec<Exchange> = (0..8)
+        .map(|k| Exchange {
+            question: format!("q{k}"),
+            asked: "x".repeat(100 * 1024),
+            answer: format!("a{k}"),
+        })
+        .collect();
+    let sent = claude::context_pages(&big);
+    assert_eq!(sent.len(), 5, "five of 100 kB fit the 512 kB cap");
+    assert_eq!(sent[0].question, "q3", "the newest stay");
+    assert_eq!(claude::context_pages(&[]), &[]);
+}
+
+/// Pages are the conversation: ‹ › walk them, Delete drops one from the
+/// context, New conversation drops them all, and the newest past
+/// `MAX_PAGES` goes first.
+#[test]
+fn pages_are_walked_deleted_and_bounded() {
+    let mut chat = Chat::new(Box::new(claude::NoStore));
+    chat.receive(Incoming::Proxy(true));
+    for k in 0..3 {
+        chat.question = format!("q{k}");
+        let (seq, _) = chat.ask("x", &[], "").unwrap();
+        chat.receive(Incoming::Chunk {
+            seq,
+            text: STREAM.into(),
+        });
+        chat.receive(Incoming::End { seq });
+    }
+    assert_eq!(chat.history.len(), 3);
+    assert_eq!(chat.history[2].question, "q2");
+    assert!(chat.pages_dirty, "to be written to the project");
+    assert!(chat.viewing().is_none(), "the live answer shows");
+    chat.prev_page();
+    assert_eq!(chat.viewing().map(|e| e.question.as_str()), Some("q2"));
+    chat.prev_page();
+    chat.prev_page();
+    chat.prev_page();
+    assert_eq!(
+        chat.viewing().map(|e| e.question.as_str()),
+        Some("q0"),
+        "stops at the first"
+    );
+    chat.next_page();
+    assert_eq!(chat.viewing().map(|e| e.question.as_str()), Some("q1"));
+    chat.pages_dirty = false;
+    chat.delete_page();
+    assert_eq!(chat.history.len(), 2);
+    assert_eq!(
+        chat.viewing().map(|e| e.question.as_str()),
+        Some("q2"),
+        "the next page takes its place"
+    );
+    assert!(chat.pages_dirty);
+    chat.delete_page();
+    assert!(chat.viewing().is_none(), "past the last: the live answer");
+    chat.next_page();
+    assert!(chat.viewing().is_none());
+    chat.delete_page();
+    assert_eq!(chat.history.len(), 1, "nothing on view, nothing deleted");
+    let pages = chat.pages();
+    assert_eq!(pages[0].question, "q0");
+    chat.load_pages(
+        (0..claude::MAX_PAGES + 3)
+            .map(|k| helmsman_project::agent::Page {
+                question: format!("p{k}"),
+                asked: "a".into(),
+                answer: "b".into(),
+            })
+            .collect(),
+    );
+    assert!(!chat.pages_dirty, "loading is not a change");
+    chat.question = "one more".into();
+    let (seq, _) = chat.ask("x", &[], "").unwrap();
+    chat.receive(Incoming::Chunk {
+        seq,
+        text: STREAM.into(),
+    });
+    chat.receive(Incoming::End { seq });
+    assert_eq!(chat.history.len(), claude::MAX_PAGES, "bounded");
+    assert_eq!(chat.history.last().unwrap().question, "one more");
+    chat.clear();
+    assert!(chat.history.is_empty() && chat.pages_dirty);
+}
+
+/// The pages live with the project: written to agent.md as they come,
+/// read back when the project opens again, kept out of the Files tab's
+/// list and out of the project's dirty mark.
+#[test]
+fn pages_survive_a_reload_with_the_project() {
+    let store = SharedStorage::default();
+    let mut v = PlaygroundView::with_storage(Box::new(store.clone()));
+    v.proj.create("mine", None);
+    v.open_project("mine");
+    v.chat.receive(Incoming::Proxy(true));
+    v.chat.question = "make it blink".into();
+    let (seq, _) = v.chat.ask("x", &[], "").unwrap();
+    v.chat.receive(Incoming::Chunk {
+        seq,
+        text: STREAM.into(),
+    });
+    v.chat.receive(Incoming::End { seq });
+    assert!(v.chat.pages_dirty);
+    let ctx = eframe::egui::Context::default();
+    v.tick(&ctx);
+    assert!(!v.chat.pages_dirty, "written on the next frame");
+    assert!(v.proj.agent_text().is_some_and(|t| t.contains("make it blink")));
+    assert!(!v.proj.dirty(), "pages never dirty the project");
+    assert!(!v.proj.file_dirty("agent.md"));
+    drop(v);
+    let again = PlaygroundView::with_storage(Box::new(store.clone()));
+    assert_eq!(again.proj.open, "mine");
+    assert_eq!(again.chat.history.len(), 1, "the page came back with the project");
+    assert_eq!(again.chat.history[0].question, "make it blink");
+    // An example is read-only: its pages last until the page closes, and
+    // a Save of a copy keeps them.
+    let mut ex = PlaygroundView::with_storage(Box::new(SharedStorage::default()));
+    assert!(ex.proj.is_example());
+    ex.chat.receive(Incoming::Proxy(true));
+    ex.chat.question = "why".into();
+    let (seq, _) = ex.chat.ask("x", &[], "").unwrap();
+    ex.chat.receive(Incoming::Chunk {
+        seq,
+        text: STREAM.into(),
+    });
+    ex.chat.receive(Incoming::End { seq });
+    ex.tick(&ctx);
+    assert!(ex.proj.agent_text().is_some());
+    assert!(!ex.proj.dirty(), "an example with pages is not dirty");
+    ex.proj.save();
+    assert!(!ex.proj.is_example());
+    assert!(
+        ex.proj.saved[&ex.proj.open].0.contains_key("agent.md"),
+        "the copy keeps them"
+    );
 }
 
 #[test]
@@ -669,11 +808,26 @@ fn keys_are_trimmed_and_refused_when_they_could_not_be_a_header() {
     assert!(!ApiKey::new("hunter2").unwrap().looks_right());
 }
 
+/// A project store two views can share: what one saves, the next loads.
+#[derive(Clone, Default)]
+struct SharedStorage(Rc<RefCell<Option<String>>>);
+
+impl Storage for SharedStorage {
+    fn load(&self) -> Result<Option<String>, String> {
+        Ok(self.0.borrow().clone())
+    }
+
+    fn save(&mut self, text: &str) -> Result<(), String> {
+        *self.0.borrow_mut() = Some(text.to_string());
+        Ok(())
+    }
+}
+
 // ---- Claude: the stream ------------------------------------------------
 
 /// A stream as the API sends it (recorded shape, 2026-10-31), with a
 /// thinking block before the text.
-const STREAM: &str = concat!(
+pub(crate) const STREAM: &str = concat!(
     "event: message_start\n",
     "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":36,\"output_tokens\":4}}      }\n\n",
     "event: content_block_start\n",
