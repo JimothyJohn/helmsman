@@ -37,4 +37,7 @@ archive), `helmsman-plc` (the runtime), `helmsman-diagram` (ST as a live
 diagram), `helmsman-agent` (the chat panel's agent loop), `helmsman-canvas`
 (the browser app). `make help` lists the dev targets. `docs/SOURCES.md`
 reviews the reference stacks and ODVA documents this project draws on.
+Licensed under the Apache License 2.0 (`LICENSE`, `NOTICE`); `LICENSING.md`
+says which parts of the wider project (the relay, the marketplace, the
+device library) are under other terms.
 

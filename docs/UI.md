@@ -39,7 +39,9 @@ this; change it here first when a decision changes.
   restart (the simulation), then save, upload, download. Strokes in the
   brand colours; each tells its key on hover.
 - **Bottom panel**, under the diagram, collapsible and resizable (View ›
-  Trend, Alt 2), two tabs: Trend (its time axis is the long side) and
+  Trend, Alt 2), two tabs: Trend (its time axis is the long side; one
+  Window slider, logarithmic from 100 ms to 10 min, the plot following
+  as it moves; Nick, 2026-11-02) and
   Messages (the last 200 things the page had to say, filtered by level
   with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
