@@ -366,7 +366,7 @@ pub fn spawn(
     mut link: Link,
     table: Arc<Mutex<SignalTable>>,
     stop: Arc<AtomicBool>,
-    report: impl Fn(&str, Option<&Error>) + Send + 'static,
+    report: impl Fn(&str, Option<&Error>, Option<String>) + Send + 'static,
 ) -> JoinHandle<Link> {
     thread::spawn(move || {
         let mut was_up = None;
@@ -375,7 +375,7 @@ pub fn spawn(
         while !stop.load(Ordering::Acquire) {
             let r = link.cycle_at(&table, start.elapsed());
             if was_up != Some(r.is_ok()) {
-                report(&link.name, r.as_ref().err());
+                report(&link.name, r.as_ref().err(), link.driver.address());
                 was_up = Some(r.is_ok());
             }
             next += link.poll;
@@ -393,8 +393,10 @@ pub fn spawn(
 pub type Opener = Arc<dyn Fn(&Device) -> Result<Box<dyn Driver + Send>, Error> + Send + Sync>;
 /// A new driver for the box's own channels.
 pub type Channels = Arc<dyn Fn() -> Box<dyn Driver + Send> + Send + Sync>;
-/// Where links say they went up (`None`) or down (the error).
-pub type Report = Arc<dyn Fn(&str, Option<&Error>) + Send + Sync>;
+/// Where links say they went up (`None`) or down (the error), and the
+/// address the device was found at, when the driver knows one
+/// (`helmsman_io::Driver::address`).
+pub type Report = Arc<dyn Fn(&str, Option<&Error>, Option<String>) + Send + Sync>;
 
 /// What a link is, to tell whether a new map changes it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -695,9 +697,14 @@ impl LinkSet {
     fn run(&mut self, group: Group, link: Link) {
         let stop = Arc::new(AtomicBool::new(false));
         let report = Arc::clone(&self.report);
-        let handle = spawn(link, Arc::clone(&self.table), Arc::clone(&stop), move |n, e| {
-            report(n, e);
-        });
+        let handle = spawn(
+            link,
+            Arc::clone(&self.table),
+            Arc::clone(&stop),
+            move |n, e, a| {
+                report(n, e, a);
+            },
+        );
         self.running.push(Running { group, stop, handle });
     }
 

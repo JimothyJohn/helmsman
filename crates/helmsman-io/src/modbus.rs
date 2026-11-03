@@ -19,7 +19,7 @@
 //!   for devices that put the low word first.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use std::time::Duration;
 
 use crate::driver::{Driver, Error, PointInfo};
@@ -267,7 +267,13 @@ pub struct Client {
     timeout: Duration,
     stream: Option<TcpStream>,
     tid: u16,
+    /// The address the endpoint resolved to at the last connection
+    /// (`crate::resolve`: a `mac=` endpoint is looked up again each time).
+    resolved: Option<std::net::SocketAddrV4>,
 }
+
+/// Modbus/TCP's port, when an endpoint names none.
+pub const DEFAULT_PORT: u16 = 502;
 
 impl Client {
     #[must_use]
@@ -278,29 +284,29 @@ impl Client {
             timeout,
             stream: None,
             tid: 0,
+            resolved: None,
         }
+    }
+
+    /// Where the unit was found at the last connection.
+    #[must_use]
+    pub fn resolved(&self) -> Option<std::net::SocketAddrV4> {
+        self.resolved
     }
 
     fn connect(&mut self) -> Result<&mut TcpStream, Error> {
         if self.stream.is_none() {
-            let mut last = None;
-            for addr in self.endpoint.to_socket_addrs()? {
-                match TcpStream::connect_timeout(&addr, self.timeout) {
-                    Ok(s) => {
-                        s.set_read_timeout(Some(self.timeout))?;
-                        s.set_write_timeout(Some(self.timeout))?;
-                        s.set_nodelay(true)?;
-                        self.stream = Some(s);
-                        break;
-                    }
-                    Err(e) => last = Some(e),
-                }
-            }
-            if self.stream.is_none() {
-                return Err(Error::Io(
-                    last.unwrap_or_else(|| std::io::Error::other("no address")),
-                ));
-            }
+            let addr = crate::resolve::socket_addr(
+                &self.endpoint,
+                DEFAULT_PORT,
+                &crate::resolve::Resolver::default(),
+            )?;
+            let s = TcpStream::connect_timeout(&std::net::SocketAddr::V4(addr), self.timeout)?;
+            s.set_read_timeout(Some(self.timeout))?;
+            s.set_write_timeout(Some(self.timeout))?;
+            s.set_nodelay(true)?;
+            self.stream = Some(s);
+            self.resolved = Some(addr);
         }
         Ok(self.stream.as_mut().expect("set above"))
     }
@@ -361,6 +367,10 @@ impl Client {
 }
 
 impl Transport for Client {
+    fn address(&self) -> Option<String> {
+        self.resolved.map(|a| a.to_string())
+    }
+
     fn request(&mut self, pdu: &[u8]) -> Result<Option<Vec<u8>>, Error> {
         self.transact(pdu).map(Some)
     }
@@ -377,6 +387,12 @@ pub trait Transport {
     /// Link trouble ([`Error::is_link`]), or a request the transport
     /// refuses to send.
     fn request(&mut self, pdu: &[u8]) -> Result<Option<Vec<u8>>, Error>;
+
+    /// Where the unit was found, once connected (a network transport;
+    /// see [`crate::Driver::address`]).
+    fn address(&self) -> Option<String> {
+        None
+    }
 }
 
 /// The application layer over any [`Transport`]: build the request PDU,
@@ -475,6 +491,10 @@ impl ModbusDriver<Client> {
 }
 
 impl<T: Transport> Driver for ModbusDriver<T> {
+    fn address(&self) -> Option<String> {
+        self.client.address()
+    }
+
     fn parse(&self, addr: &str) -> Result<PointInfo, Error> {
         Point::parse(addr).map(Point::info)
     }

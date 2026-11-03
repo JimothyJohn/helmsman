@@ -220,9 +220,11 @@ impl Bench {
                 Arc::clone(&table),
                 Arc::new(helmsman_io::open),
                 Arc::new(|| Box::new(Channels::new())),
-                Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
-                    dv.set(name, err.map(ToString::to_string));
-                }),
+                Arc::new(
+                    move |name: &str, err: Option<&helmsman_io::Error>, _address: Option<String>| {
+                        dv.set(name, err.map(ToString::to_string));
+                    },
+                ),
             );
             set.start(&parsed.map).unwrap();
             handle.with_links(Arc::new(Mutex::new(set)))

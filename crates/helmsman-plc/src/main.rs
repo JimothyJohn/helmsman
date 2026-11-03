@@ -912,13 +912,16 @@ fn plan_io(
         Arc::clone(table),
         Arc::new(move |d: &helmsman_io::Device| helmsman_io::open_on(d, Some(&io))),
         channels,
-        Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
-            match err {
-                None => eprintln!("helmsman-plc: device {name} up"),
-                Some(e) => eprintln!("helmsman-plc: device {name} down: {e}"),
-            }
-            devices.set(name, err.map(ToString::to_string));
-        }),
+        Arc::new(
+            move |name: &str, err: Option<&helmsman_io::Error>, address: Option<String>| {
+                match (err, &address) {
+                    (None, Some(a)) => eprintln!("helmsman-plc: device {name} up at {a}"),
+                    (None, None) => eprintln!("helmsman-plc: device {name} up"),
+                    (Some(e), _) => eprintln!("helmsman-plc: device {name} down: {e}"),
+                }
+                devices.set_with(name, err.map(ToString::to_string), address);
+            },
+        ),
     );
     let plan = set.plan_with(&map.cloned().unwrap_or_default(), drivers)?;
     Ok((set, plan))

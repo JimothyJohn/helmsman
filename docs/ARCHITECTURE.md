@@ -130,8 +130,11 @@ scan; the scheduler bounds how often.
 ## The I/O layer, as built (`helmsman-io`)
 
 - **`Device`**: an endpoint the box is master of: `id`, `driver` name
-  (`modbus-tcp`, `modbus-rtu`, `enip-io`, `logix-tag`), `endpoint` (`host:port`, or a
-  serial port's path for `modbus-rtu`), driver params (`unit`,
+  (`modbus-tcp`, `modbus-rtu`, `enip-io`, `logix-tag`), `endpoint` (`host:port`, a
+  serial port's path for `modbus-rtu`, or an identity the box resolves
+  when it connects: `mac=00-90-e8-7e-af-be` through its ARP table,
+  `cip=VENDOR:PRODUCT[:SERIAL]` through one `ListIdentity` broadcast;
+  `helmsman_io::resolve`, `device-by-identity`), driver params (`unit`,
   `timeout_ms`, and the serial settings).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
   `Real`), a direction (`In`, `Out`), an optional engineering `unit`

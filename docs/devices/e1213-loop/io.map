@@ -1,7 +1,8 @@
 # The E1213 on the bench over Modbus/TCP (docs/devices/moxa-iologik-e1213.md):
 # DI-00..02 as discrete inputs 0..2, DO-00..02 as coils 0..2. The unit is on
-# the office LAN by DHCP; change the address if it moves.
-device e1213 modbus-tcp 10.0.0.57:502 unit=1 timeout_ms=300 poll_ms=20
+# the office LAN by DHCP, so it is named by its MAC (the box looks the
+# address up in its ARP table when it connects; port 502 is the default).
+device e1213 modbus-tcp mac=00-90-e8-7e-af-be unit=1 timeout_ms=300 poll_ms=20
 
 in  di0 bool e1213 di:0
 in  di1 bool e1213 di:1

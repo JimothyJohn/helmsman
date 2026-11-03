@@ -1817,11 +1817,13 @@ mod boxed {
                 name: "box".into(),
                 state: "up".into(),
                 error: None,
+                address: None,
             },
             DeviceRow {
                 name: "rio".into(),
                 state: "down".into(),
                 error: Some("connection refused".into()),
+                address: None,
             },
         ];
         let mut h = Harness::new(App::boxed());

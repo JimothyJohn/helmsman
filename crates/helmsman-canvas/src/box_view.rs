@@ -1065,7 +1065,7 @@ impl Body for BoxView {
                 .iter()
                 .find(|d| d.name == name)
                 .map_or(LinkState::Unknown, |d| match d.state.as_str() {
-                    "up" => LinkState::Up,
+                    "up" => LinkState::Up(d.address.clone()),
                     "down" => LinkState::Down(d.error.clone().unwrap_or_default()),
                     _ => LinkState::Unknown,
                 })
