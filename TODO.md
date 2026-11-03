@@ -290,7 +290,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: driver-agent
   needs: I put this is in tcpethernet: moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds
 
-- [ ] **Bench: the Moxa ioLogik E1213 over EtherNet/IP** — `scripts/bench-e1213.sh` against the real E1213: ListIdentity (vendor 991, product 515), the Identity object, then the conformance harness over a Class 1 exclusive-owner connection at 100 ms (DI reads, DI-00's counter, the DO status byte, the four DO->DI loops, a point past the 51-byte input assembly). Turns the inferred parts of docs/devices/moxa-iologik-e1213.md into facts (bit order, counter byte order, DIO numbering): note what the run shows there.
+- [x] **Bench: the Moxa ioLogik E1213 over EtherNet/IP** — `scripts/bench-e1213.sh` against the real E1213: ListIdentity (vendor 991, product 515), the Identity object, then the conformance harness over a Class 1 exclusive-owner connection at 100 ms (DI reads, DI-00's counter, the DO status byte, the four DO->DI loops, a point past the 51-byte input assembly). Turns the inferred parts of docs/devices/moxa-iologik-e1213.md into facts (bit order, counter byte order, DIO numbering): note what the run shows there.
   needs: the E1213 on the Studio link with its IP; EtherNet/IP enabled on its web console and activated for this unit (manual pp. 3-26, 5-1); DO-00..03 wired to DI-00..03 with field power (or `LOOPS="do:0=di:4 ..."`); UDP 2222 free on the Studio; the Moxa EDS at the repo root to check it too (optional)
   result: the enip-io driver passes on the real device; the device doc's "inferred" lines confirmed or corrected
   notes: `scripts/bench-e1213.sh <E1213-IP>`; the first run in the native terminal (the conformance binary is unsigned and the firewall asks once to accept incoming UDP; over SSH every read times out), later runs as `! scripts/bench-e1213.sh <IP>` here
@@ -298,14 +298,16 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 30m
   difficulty: low
   depends: io-bench
+  notes: done 2026-11-02 (after `scratch/02-allow-firewall.sh`): `scripts/bench-e1213.sh 10.0.0.57` → ListIdentity rev=3.1, 8 PASS over Class 1 (di:0, in:2:u32, in:50.0, do:0, the three wired loops, absent in:51.0). The loop check runs over EtherNet/IP in the canvas: 11 cycles, 0 faults.
   id: e1213-bench
 
-- [ ] **Put `enip-io` back in the box build** — `enip-in-box` took the EtherNet/IP Class 1 scanner out of the box until the bench passes: helmsman-plc's `box` no longer turns on helmsman-io's `enip` (so no helmsman-proto `scanner`), a box map naming `enip-io` is refused as "not in this build" (`helmsman_plc::drivers::not_in_build`), and the E1213 runs over Modbus/TCP (`docs/devices/moxa-iologik-e1213-modbus.map`). The code stays behind helmsman-plc's `enip-io` feature, which `scripts/lint.sh` lints. Once `e1213-bench` passes: add `enip-io` to `box` (or `default`), flip the `scanner` assertion in `tests/box_build.rs` back, drop the `cfg(not(feature = "enip-io"))` refusal tests in `tests/bin.rs` and `tests/driver_map.rs` (the shared-port test in `tests/bin.rs` then runs again), and restore docs/ARCHITECTURE.md's trust-boundary row.
+- [x] **Put `enip-io` back in the box build** — `enip-in-box` took the EtherNet/IP Class 1 scanner out of the box until the bench passes: helmsman-plc's `box` no longer turns on helmsman-io's `enip` (so no helmsman-proto `scanner`), a box map naming `enip-io` is refused as "not in this build" (`helmsman_plc::drivers::not_in_build`), and the E1213 runs over Modbus/TCP (`docs/devices/moxa-iologik-e1213-modbus.map`). The code stays behind helmsman-plc's `enip-io` feature, which `scripts/lint.sh` lints. Once `e1213-bench` passes: add `enip-io` to `box` (or `default`), flip the `scanner` assertion in `tests/box_build.rs` back, drop the `cfg(not(feature = "enip-io"))` refusal tests in `tests/bin.rs` and `tests/driver_map.rs` (the shared-port test in `tests/bin.rs` then runs again), and restore docs/ARCHITECTURE.md's trust-boundary row.
   needs: `e1213-bench` green on the real E1213
   result: a box masters EtherNet/IP remote I/O again, from the default build
   est: 1h
   difficulty: low
   depends: e1213-bench
+  notes: done 2026-11-02 (feat/enip-in-box): `enip-io` in `default`; box_build.rs asserts `scanner` present, `unrestricted` absent; the two not-in-this-build tests gone (the guard stays for a build without the feature, which lint.sh now lints as `--no-default-features --features box,https`); ARCHITECTURE row restored.
   id: enip-in-box-again
 
 ## Roadmap M2: floor-ready core

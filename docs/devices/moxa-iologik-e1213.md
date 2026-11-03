@@ -4,9 +4,9 @@ Remote Ethernet I/O: 8 DI, 4 DO and 4 DIO (source type), two switched
 Ethernet ports, EtherNet/IP adapter and Modbus/TCP server (manual pp. 1-2,
 2-4). The bench device for the box as an EtherNet/IP *scanner*: helmsman's
 `enip-io` driver masters it over one Class 1 connection, and
-`helmsman-adapter --profile moxa-e1213` simulates it. Until the bench
-passes (`e1213-bench`) the box build leaves `enip-io` out (helmsman-plc's
-`enip-io` feature) and a box runs the E1213 over Modbus/TCP
+`helmsman-adapter --profile moxa-e1213` simulates it. The bench passed on
+2026-11-02 ("On the bench", below), so `enip-io` is in the default box
+build; the same I/O also runs over Modbus/TCP
 ([`moxa-iologik-e1213-modbus.map`](moxa-iologik-e1213-modbus.map)).
 
 ## Sources
