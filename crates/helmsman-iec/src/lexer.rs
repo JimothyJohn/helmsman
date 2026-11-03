@@ -2,7 +2,9 @@
 //! (identifiers are folded to upper case here); comments are `(* *)`,
 //! `/* */` and `//`; pragmas `{ }` are skipped.
 
-use std::fmt;
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+use core::fmt;
 
 /// 1-based source position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]

@@ -17,6 +17,9 @@
 //! of range never lands in memory. Constants inside a carried function
 //! block keep the new program's values.
 
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+#[cfg(feature = "std")]
 use std::time::Instant;
 
 use crate::Program;
@@ -29,6 +32,7 @@ use crate::types::{Ty, Value, round_real};
 #[derive(Debug, Clone)]
 pub struct State {
     vars: Vec<Var>,
+    #[cfg(feature = "std")]
     started: Option<Instant>,
     /// The program had scanned: its image is live, so a program restored
     /// from it does not write located initial values again.
@@ -209,6 +213,7 @@ impl Program {
             .collect();
         State {
             vars,
+            #[cfg(feature = "std")]
             started: self.started,
             warm: !self.cold,
         }
@@ -245,6 +250,7 @@ impl Program {
             .filter(|v| !mine.iter().any(|(n, _, _)| n == &v.name))
             .map(|v| v.name.clone())
             .collect();
+        #[cfg(feature = "std")]
         if state.started.is_some() {
             self.started = state.started;
         }

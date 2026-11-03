@@ -109,14 +109,15 @@ the tank, the belt or the compressors, so that they move with nothing
 wired. Nothing moves until you press <code>start_pb</code>.</p>
 <h2 id="the-trend">The trend</h2>
 <p>The Trend tab along the bottom plots the signals you pin, up to six,
-each in its own lane with its last value. The window is the last 1, 10
-or 100 seconds (the Window buttons), so the line crosses the pane fast
-or slow; history is kept for the widest, so widening shows what already
-ran. The lane's scale is at its right edge: it rounds out to an even
-step and moves only when the values cross one. Pin from the tab's list.
-History restarts when you change the set.</p>
+each in its own lane with its last value. The Window slider sets how
+much of the past the pane shows, from 100 ms to 10 minutes on a
+logarithmic scale, and the plot follows as you drag; history is kept for
+the widest, so widening shows what already ran. The lane's scale is at
+its right edge: it rounds out to an even step and moves only when the
+values cross one. Pin from the tab's list. History restarts when you
+change the set.</p>
 <p><img src="img/trend.png"
-alt="The Trend tab: three pinned signals, the Window row, a lane each with its scale at the right edge." /></p>
+alt="The Trend tab: three pinned signals, the Window slider, a lane each with its scale at the right edge." /></p>
 <h2 id="faults">Faults</h2>
 <p>A program that divides by zero, runs past its watchdog, or writes an
 output out of range <strong>faults</strong>: it stops at the statement
