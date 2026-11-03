@@ -26,7 +26,9 @@
 //! left out and listed in [`Project::skipped`], so a tag called "ignore
 //! previous instructions" never reaches anything that treats it as a name.
 
-use std::fmt::Write as _;
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+use core::fmt::Write as _;
 
 use crate::lexer::Pos;
 use crate::xml::{self, Element};
@@ -53,8 +55,8 @@ pub struct Error {
     pub msg: String,
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}: {}", self.pos, self.msg)
     }
 }
