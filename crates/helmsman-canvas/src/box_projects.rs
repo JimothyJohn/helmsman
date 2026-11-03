@@ -371,7 +371,7 @@ impl BoxProjects {
         self.queue.push(PReq::get(PCall::List, "/api/projects".into()));
     }
 
-    fn note(&mut self, text: impl Into<String>, error: bool) {
+    pub(crate) fn note(&mut self, text: impl Into<String>, error: bool) {
         self.notice = Some((text.into(), error));
     }
 

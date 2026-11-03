@@ -16,7 +16,7 @@
 //! POST   /api/projects/{p}/deploy             engineer: {replay?}: tests, build, apply through the approval policy, commit, hot-swap; a red test refuses (409)
 //! GET    /api/projects/{p}/zip                the project as a .zip
 //! POST   /api/projects/{p}/zip[?replace=true] engineer: a .zip as project p (new, or in place of it)
-//! POST   /api/projects/{p}/import?file=F[&replace=true]
+//! POST   /api/projects/{p}/import?file=F[&replace=true]   (.st, .xml, .L5X as ST; .eds kept as NAME.eds)
 //!                                             engineer: one file into p: F.st as it is, F.xml (PLCopen) lowered to F.st
 //! GET    /api/projects/{p}/history            its revisions, oldest first: n, at_ms, by, what, page, files
 //! GET    /api/projects/{p}/history/{n}        one revision: the files' text, and the Agent page if one
@@ -483,7 +483,22 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
     let (stem, ext) = lower
         .rsplit_once('.')
         .map(|(s, e)| (&file[..s.len()], e))
-        .ok_or((400, "file needs an extension: .st, .xml or .L5X".to_string()))?;
+        .ok_or((
+            400,
+            "file needs an extension: .st, .xml, .L5X or .eds".to_string(),
+        ))?;
+    if ext == "eds" {
+        // A device's EDS: kept as the project's `NAME.eds` (its stem as a
+        // slug) for the map's `eds=NAME.eds`; it must read as an EDS.
+        let target = project::eds_file_name(file).ok_or((
+            400,
+            format!("{file}: nothing of the name survives as a slug (a-z 0-9 _ -)"),
+        ))?;
+        let text = project::check_text(body).map_err(|e| (422, format!("{file}: {e}")))?;
+        #[cfg(feature = "enip-io")]
+        helmsman_io::enip::check_eds(text).map_err(|e| (422, format!("{file} is not an EDS: {e}")))?;
+        return Ok((target, text.to_string()));
+    }
     let target = format!("{stem}.st");
     if project::file_name(&target) != Some(FileKind::St) {
         return Err((
@@ -525,7 +540,7 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
         }
         _ => Err((
             415,
-            "import takes .st, .xml (PLCopen TC6) or .L5X (Logix ladder)".into(),
+            "import takes .st, .xml (PLCopen TC6), .L5X (Logix ladder) or .eds (a device's EDS)".into(),
         )),
     }
 }
@@ -541,7 +556,7 @@ fn import(
     let Some(file) = query(req, "file") else {
         return done(
             400,
-            json!({ "error": "import needs ?file=NAME.st, NAME.xml or NAME.L5X" }),
+            json!({ "error": "import needs ?file=NAME.st, NAME.xml, NAME.L5X or NAME.eds" }),
             format!("{what}: import without a file name"),
         );
     };

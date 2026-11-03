@@ -31,7 +31,10 @@ const PROPOSALS_EVERY: f64 = 30.0;
 
 /// What Upload's file picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub const UPLOAD_ACCEPT: &str = ".zip,.st,.xml,.l5x";
+pub const UPLOAD_ACCEPT: &str = ".zip,.st,.xml,.l5x,.eds";
+/// What the Devices tab's "Import device…" picker offers.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub const DEVICE_ACCEPT: &str = ".eds";
 
 /// What the program runs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

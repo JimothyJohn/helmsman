@@ -5,8 +5,11 @@
 //! as text, is what the agent reads ([`describe`]; the box's `list_devices`
 //! tool renders the same from the API). A right-click on the blank space
 //! adds a device the way a file is added: a form in the middle of the
-//! screen, then one `device` line in the map. One map mixes protocols
-//! (`modbus-tcp`, `enip-io`, `logix-tag`); the box runs every link at once.
+//! screen, then one `device` line in the map. "Import device…" takes a
+//! vendor's EDS: the file joins the project as `NAME.eds` and the form
+//! opens filled in with `eds=NAME.eds` (the box reads it when the map
+//! loads; `device-import`). One map mixes protocols (`modbus-tcp`,
+//! `enip-io`, `logix-tag`); the box runs every link at once.
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -196,6 +199,8 @@ pub struct NewDevice {
     pub params: String,
     /// Why the last Add was refused.
     pub error: Option<String>,
+    /// The project's EDS file this device comes from (Import device…).
+    pub eds: Option<String>,
 }
 
 impl Default for NewDevice {
@@ -206,11 +211,66 @@ impl Default for NewDevice {
             endpoint: String::new(),
             params: PROTOCOLS[0].3.to_string(),
             error: None,
+            eds: None,
         }
     }
 }
 
+/// Whether an uploaded file is an EDS, by its extension.
+#[must_use]
+pub fn is_eds(file: &str) -> bool {
+    file.rsplit_once('.')
+        .is_some_and(|(_, e)| e.eq_ignore_ascii_case("eds"))
+}
+
+/// The `ProdName` of an EDS's `[Device]` section, as the file has it:
+/// `ProdName = "E1213";` with the generator's quoting and `$` comments.
+/// A skim, not a parse: the box parses the file when the map loads.
+#[must_use]
+pub fn eds_product(text: &str) -> Option<String> {
+    let mut in_device = false;
+    for line in text.lines().take(4000) {
+        let line = line.split('$').next().unwrap_or("").trim();
+        if line.starts_with('[') {
+            in_device = line.eq_ignore_ascii_case("[Device]");
+            continue;
+        }
+        if !in_device {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() != "ProdName" {
+            continue;
+        }
+        let v = value.trim().trim_end_matches(';').trim().trim_matches('"').trim();
+        return (!v.is_empty() && v.len() <= 80).then(|| v.to_string());
+    }
+    None
+}
+
 impl NewDevice {
+    /// The form for a device read from the project's EDS `file`
+    /// (`NAME.eds`): EtherNet/IP, named after the EDS's product (else the
+    /// file), `eds=` set; the address is what is left to type.
+    #[must_use]
+    pub fn from_eds(file: &str, text: &str) -> Self {
+        let stem = file.strip_suffix(".eds").unwrap_or(file);
+        let name = eds_product(text)
+            .map(|p| slug(&p))
+            .filter(|s| iomap::device_name_ok(s))
+            .unwrap_or_else(|| slug(stem));
+        Self {
+            name,
+            protocol: 1,
+            endpoint: String::new(),
+            params: format!("eds={file} rpi_ms=100 poll_ms=20"),
+            error: None,
+            eds: Some(file.to_string()),
+        }
+    }
+
     /// The `device` line, or why not.
     ///
     /// # Errors
@@ -221,6 +281,29 @@ impl NewDevice {
     }
 }
 
+/// A product name as a device id: lower case, `a-z 0-9 _`, runs of
+/// anything else one `_`, starting with a letter (`E1213` → `e1213`,
+/// `ioLogik E1213-T` → `iologik_e1213_t`).
+#[must_use]
+pub fn slug(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        let c = c.to_ascii_lowercase();
+        if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    let out = out.trim_end_matches('_').to_string();
+    let out = if out.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        format!("d{out}")
+    } else {
+        out
+    };
+    out.chars().take(48).collect()
+}
+
 /// What the tab asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceAct {
@@ -228,11 +311,14 @@ pub enum DeviceAct {
     Add(String),
 }
 
-/// The tab's state: which devices are folded, the form if one is open.
+/// The tab's state: which devices are folded, the form if one is open,
+/// an import asked for.
 #[derive(Debug, Default)]
 pub struct DevicesUi {
     folded: BTreeSet<String>,
     pub adding: Option<NewDevice>,
+    /// "Import device…" was pressed: the view opens the file picker.
+    pub import: bool,
 }
 
 fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enabled: bool) -> bool {
@@ -359,10 +445,18 @@ impl DevicesUi {
             if menu_item(ui, chrome, "menu new device", "New device…", write.is_ok()) {
                 self.adding = Some(NewDevice::default());
             }
+            if menu_item(ui, chrome, "menu import device", "Import device…", write.is_ok()) {
+                self.import = true;
+            }
             if let Err(why) = write {
                 ui.label(RichText::new(why).small().color(t.muted));
             }
         });
+    }
+
+    /// Takes the pending "Import device…" request, once.
+    pub fn take_import(&mut self) -> bool {
+        std::mem::take(&mut self.import)
     }
 
     /// The "New device" form as a box in the middle of the screen,
@@ -375,7 +469,11 @@ impl DevicesUi {
         let mut done = false;
         let m = egui::Modal::new(egui::Id::unique("device-new")).show(ctx, |ui| {
             ui.set_max_width(420.0);
-            ui.label(RichText::new("New device").strong().size(16.0));
+            let title = match &d.eds {
+                Some(f) => format!("New device from {f}"),
+                None => "New device".to_string(),
+            };
+            ui.label(RichText::new(title).strong().size(16.0));
             ui.add_space(8.0);
             ui.label("Name (what the program's I/O map calls it)");
             let n = ui.add(
@@ -458,6 +556,44 @@ pub fn appended(map: &str, line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const EDS: &str = "$ a test EDS\r\n[File]\r\n    DescText = \"x\";\r\n[Device]\r\n    VendCode = 991;   $ Moxa\r\n    ProdName = \"E1213\";\r\n[Params]\r\n";
+
+    #[test]
+    fn an_eds_fills_the_form_from_its_product_name() {
+        assert_eq!(eds_product(EDS).as_deref(), Some("E1213"));
+        assert_eq!(
+            eds_product("[Device]\nProdName = \"ioLogik E1213-T\";"),
+            Some("ioLogik E1213-T".into())
+        );
+        assert_eq!(eds_product("[Params]\nProdName = \"not here\";"), None);
+        assert_eq!(eds_product(""), None);
+        assert_eq!(
+            eds_product(&"ProdName = \"x\";\n".repeat(10_000)),
+            None,
+            "never in a section"
+        );
+        assert_eq!(eds_product("[Device]\nProdName = \"\";"), None);
+        let d = NewDevice::from_eds("moxa.eds", EDS);
+        assert_eq!(d.name, "e1213");
+        assert_eq!(PROTOCOLS[d.protocol].0, "enip-io");
+        assert_eq!(d.params, "eds=moxa.eds rpi_ms=100 poll_ms=20");
+        assert_eq!(d.eds.as_deref(), Some("moxa.eds"));
+        let mut d = d;
+        d.endpoint = "10.0.0.57".into();
+        assert_eq!(
+            d.line().unwrap(),
+            "device e1213 enip-io 10.0.0.57 eds=moxa.eds rpi_ms=100 poll_ms=20\n"
+        );
+        // No product name: the file's stem names the device.
+        let d = NewDevice::from_eds("my-block.eds", "[File]\n");
+        assert_eq!(d.name, "my_block");
+        // A hostile product name becomes a plain id.
+        let d = NewDevice::from_eds("x.eds", "[Device]\nProdName = \"../../etc; rm -rf\";");
+        assert_eq!(d.name, "etc_rm_rf");
+        assert_eq!(slug("1213"), "d1213");
+        assert_eq!(slug(""), "");
+    }
 
     fn map() -> MapText {
         iomap::skim(

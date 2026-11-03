@@ -7,6 +7,8 @@
 //!     main.st              free-form ST: any PROGRAMs, FUNCTION_BLOCKs,
 //!     blocks.st            FUNCTIONs and TYPEs, compiled together
 //!     io.map               optional: the I/O map it runs with (helmsman_io::text)
+//!     e1213.eds            optional: a device's EDS the map names (`eds=e1213.eds`;
+//!                          `crate::driver_dir` finds it when the map loads)
 //!     project.settings     optional: per-PROGRAM schedule, windows, params
 //!     drivers/NAME.wasm    optional: WASM drivers its map names (`wasm:NAME`),
 //!                          found before the box's (`crate::driver_dir`)
@@ -43,9 +45,9 @@ pub mod history;
 pub mod settings;
 
 pub use helmsman_project::{
-    DRIVER_EXT, DRIVERS, Drivers, FILE_NAMES, FileKind, Files, IO_MAP, LAYOUT, MAX_DRIVER, MAX_DRIVERS,
-    MAX_FILE, MAX_FILES, MAX_TOTAL, NAME_LEN, SETTINGS, STEM_LEN, check_file, check_text, driver_name,
-    file_name, from_zip, from_zip_with_drivers, layout, project_name, zip,
+    DRIVER_EXT, DRIVERS, Drivers, EDS_EXT, FILE_NAMES, FileKind, Files, IO_MAP, LAYOUT, MAX_DRIVER,
+    MAX_DRIVERS, MAX_FILE, MAX_FILES, MAX_TOTAL, NAME_LEN, SETTINGS, STEM_LEN, check_file, check_text,
+    driver_name, eds_file_name, file_name, from_zip, from_zip_with_drivers, layout, project_name, zip,
 };
 
 use std::collections::BTreeMap;
