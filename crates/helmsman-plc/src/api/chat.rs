@@ -155,6 +155,15 @@ pub struct Chat {
     link: Arc<Mutex<Link>>,
 }
 
+impl Chat {
+    /// The relay this box talks to, for the one tool the relay runs
+    /// (`fetch_document`, from an MCP client).
+    #[must_use]
+    pub fn relay(&self) -> &relay::Config {
+        &self.setup.relay
+    }
+}
+
 impl std::fmt::Debug for Chat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Chat")

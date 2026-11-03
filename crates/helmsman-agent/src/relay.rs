@@ -191,6 +191,7 @@ pub fn probe(cfg: &Config) -> Result<(), Error> {
         path: &path,
         headers: &[("Authorization", &auth)],
         json: None,
+        raw: None,
     };
     let t = Timeouts {
         connect: cfg.timeouts.connect.min(PROBE_TIMEOUT),
@@ -260,6 +261,7 @@ pub fn turn(cfg: &Config, messages: &[Json], on: &mut dyn FnMut(Delta<'_>)) -> R
         path: &path,
         headers: &[("Authorization", &auth), ("Accept", "text/event-stream")],
         json: Some(&body),
+        raw: None,
     };
     let resp = http::send(&cfg.url, &req, cfg.timeouts).map_err(from_http)?;
     if resp.status != 200 {
