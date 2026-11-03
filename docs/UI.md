@@ -51,7 +51,9 @@ this; change it here first when a decision changes.
   project, and on the blank space New project and Paste; New project and
   Copy project are also the File menu's first items; the Delete key
   deletes the row last clicked, a double click on a file opens the Code
-  tab, and every delete is confirmed in a modal at the screen's centre),
+  tab, every delete is confirmed in a modal at the screen's centre, and
+  the earlier iterations of the program, `vN.st`, fold under one
+  "earlier (n)" row with `main.st` marked as the one running),
   Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
   system's, each with its points under it, live values and the link's
   state; on a box the open project's `io.map`, else the map the box runs;
@@ -67,7 +69,11 @@ this; change it here first when a decision changes.
   pages, ‹ › walk them, Delete drops one, every kept page goes to the
   model as context each time, and the pages live with the project as
   `agent.md`, so a reload or a download keeps them; an earlier page's
-  code has its own Use this code). On a Pi the Trend opens with
+  code has its own Use this code. Use this code on a PROGRAM asks for
+  the program's name once per conversation; the answers after it land
+  in that project with the newest as `main.st` and the file it replaced
+  kept as the next `vN.st`, serially, however many; `vN.st` is never
+  built, and past the project's size the oldest go first). On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.

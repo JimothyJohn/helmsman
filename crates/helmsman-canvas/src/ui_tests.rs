@@ -1038,6 +1038,39 @@ mod chrome {
         assert_eq!(Chrome::restored(&h.app.chrome.saved()).pane, Pane::Devices);
     }
 
+    /// The Files tab shows the program's files, marks main.st as the one
+    /// running, and folds the earlier iterations under one row.
+    #[test]
+    fn the_files_tab_folds_the_earlier_iterations() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj
+                .files
+                .insert("v1.st".into(), "PROGRAM old END_PROGRAM".into());
+            sim.proj
+                .files
+                .insert("v2.st".into(), "PROGRAM older END_PROGRAM".into());
+            sim.proj.save();
+            sim.open_project("mine");
+        }
+        h.press("pane files");
+        h.wait(0.3);
+        assert!(h.has("file main.st"));
+        assert!(h.has("earlier"), "the fold row");
+        assert!(!h.has("file v1.st") && !h.has("file v2.st"), "folded by default");
+        h.press("earlier");
+        h.wait(0.2);
+        assert!(h.has("file v2.st") && h.has("file v1.st"));
+        let v2 = h.rect("file v2.st");
+        let v1 = h.rect("file v1.st");
+        assert!(v2.top() < v1.top(), "newest first");
+        h.press("earlier");
+        h.wait(0.2);
+        assert!(!h.has("file v1.st"));
+    }
+
     #[test]
     fn double_clicking_a_file_opens_the_code_tab() {
         let mut h = Harness::new(App::sim());
@@ -1061,6 +1094,27 @@ mod chrome {
         let v = h.app.sim.as_mut().unwrap();
         v.proj.current_text_mut().unwrap().push_str("(* edit *)");
         v.take_code("PROGRAM other\nEND_PROGRAM\n".into());
+        // The first PROGRAM answer asks for the program's name first (a
+        // few frames: a new modal settles into the centre on its second).
+        h.wait(0.2);
+        assert!(h.has("program name") && h.has("program ok"));
+        h.press("program ok");
+        {
+            let v = h.app.sim.as_ref().unwrap();
+            assert!(
+                v.program_name.is_none(),
+                "the name was taken: {:?}",
+                v.program_name
+            );
+            assert!(
+                v.files_ui.confirm.is_some(),
+                "the unsaved-edits question is pending: open={} dirty={} program={:?} files={:?}",
+                v.proj.open,
+                v.proj.dirty(),
+                v.chat.program,
+                v.proj.files.keys().collect::<Vec<_>>()
+            );
+        }
         h.frame(vec![]);
         assert!(h.has("confirm yes") && h.has("confirm drop") && h.has("confirm no"));
         h.press("confirm no");

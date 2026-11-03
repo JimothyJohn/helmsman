@@ -129,6 +129,8 @@ pub struct Listing<'a> {
     /// Offer the built-in machines and templates to start a project from
     /// (a box; the simulation lists them as projects).
     pub starters: bool,
+    /// The open project is the one running: its `main.st` is marked.
+    pub running: bool,
 }
 
 /// Which name the sidebar's text field is for.
@@ -164,6 +166,8 @@ pub struct FilesUi {
     pub unfolded: HashSet<Group>,
     /// The list of machines and templates to start from is open.
     pub starters_open: bool,
+    /// The earlier iterations (`vN.st`) are unfolded.
+    pub earlier_open: bool,
     /// The file last copied (name, text): the app's own, not the
     /// system's, so a paste works in any open project here.
     pub clipboard: Option<(String, String)>,
@@ -294,9 +298,43 @@ impl FilesUi {
                     act = Some(Act::PasteFile { name, text });
                 }
             });
-            for (f, dirty) in &l.files {
+            // The program's files, then the earlier iterations folded under
+            // one row, newest first (Nick, 2026-11-01).
+            let mut earlier: Vec<&(String, bool)> = l
+                .files
+                .iter()
+                .filter(|(f, _)| helmsman_project::iteration_number(f).is_some())
+                .collect();
+            earlier.sort_by_key(|(f, _)| std::cmp::Reverse(helmsman_project::iteration_number(f)));
+            let mut rows: Vec<&(String, bool)> = l
+                .files
+                .iter()
+                .filter(|(f, _)| helmsman_project::iteration_number(f).is_none())
+                .collect();
+            if !earlier.is_empty() {
+                let arrow = if self.earlier_open { "▾" } else { "▸" };
+                let r = ui.selectable_label(
+                    false,
+                    RichText::new(format!("{arrow} earlier ({})", earlier.len()))
+                        .monospace()
+                        .color(t.muted),
+                );
+                chrome.hit("earlier", r.rect);
+                if r.clicked() {
+                    self.earlier_open = !self.earlier_open;
+                }
+                if self.earlier_open {
+                    rows.extend(earlier);
+                }
+            }
+            for (f, dirty) in rows {
                 let here = l.current == Some(f.as_str());
-                let text = format!("{f}{}", if *dirty { " ●" } else { "" });
+                let runs = l.running && f == helmsman_project::MAIN && !l.files.is_empty();
+                let text = format!(
+                    "{f}{}{}",
+                    if *dirty { " ●" } else { "" },
+                    if runs { "  · runs" } else { "" }
+                );
                 let r = ui.selectable_label(here, RichText::new(text).monospace());
                 chrome.hit(format!("file {f}"), r.rect);
                 if r.clicked() {

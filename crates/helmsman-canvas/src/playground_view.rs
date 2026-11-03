@@ -118,6 +118,9 @@ pub struct PlaygroundView {
     pub proj: SimProjects,
     pub files_ui: FilesUi,
     pub devices_ui: crate::devices::DevicesUi,
+    /// The question "what is this program called?", asked once per
+    /// conversation before its first PROGRAM answer lands.
+    pub program_name: Option<ProgramName>,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -171,6 +174,7 @@ impl PlaygroundView {
             proj,
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
+            program_name: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
@@ -271,14 +275,9 @@ impl PlaygroundView {
                     let open = self.proj.open.clone();
                     self.proj.open_project(&open);
                 }
+                let mut dropped = 0;
                 if text.to_ascii_uppercase().contains("PROGRAM ") {
-                    let project = self.proj.free_name(&name);
-                    self.proj.create(&project, None);
-                    self.proj.open_project(&project);
-                    let file = format!("{name}.st");
-                    self.proj.files.clear();
-                    self.proj.files.insert(file.clone(), text);
-                    self.proj.current = file;
+                    dropped = self.land_program(&name, text);
                 } else {
                     let file = self.proj.free_file(&format!("{name}.st"));
                     self.proj.new_file(&file);
@@ -288,8 +287,13 @@ impl PlaygroundView {
                 }
                 self.proj.save();
                 self.reload();
+                let size = if dropped > 0 {
+                    format!(" {dropped} oldest iteration(s) dropped: the project was past its size.")
+                } else {
+                    String::new()
+                };
                 self.notice = Some(format!(
-                    "{} opened from the Agent's answer; Deploy runs it.",
+                    "{} opened from the Agent's answer; Deploy runs it.{size}",
                     self.proj.current
                 ));
             }
@@ -497,9 +501,38 @@ impl PlaygroundView {
         true
     }
 
-    /// [`Self::use_answer`] for `code` already in hand.
+    /// [`Self::use_answer`] for `code` already in hand. A PROGRAM goes to
+    /// the conversation's program (Nick, 2026-11-01: named once, asked
+    /// here the first time, see [`ProgramName`]); a block goes into the
+    /// open project as a file.
     pub fn take_code(&mut self, code: String) {
-        let name = answer_name(&code);
+        let is_program = code.to_ascii_uppercase().contains("PROGRAM ");
+        let name = match (&self.chat.program, is_program) {
+            (Some(p), true) => p.clone(),
+            (None, true) => {
+                // The PROGRAM's name to start from; past a built-in example's
+                // name (read-only), the next free one.
+                let want = answer_name(&code);
+                let input = if self.proj.examples.contains_key(&want) {
+                    self.proj.free(&want)
+                } else {
+                    want
+                };
+                self.program_name = Some(ProgramName {
+                    text: code.clone(),
+                    input,
+                    error: None,
+                });
+                return;
+            }
+            (_, false) => answer_name(&code),
+        };
+        self.use_named(name, code);
+    }
+
+    /// The code into project (or file) `name`, after the unsaved-edits
+    /// question when there is one.
+    fn use_named(&mut self, name: String, code: String) {
         let act = Act::UseAnswer {
             name,
             text: code,
@@ -509,6 +542,118 @@ impl PlaygroundView {
             self.files_ui.confirm = Some(act);
         } else {
             self.act(act);
+        }
+    }
+
+    /// The name typed for the conversation's program is taken: the
+    /// pending code lands there (the modal's OK; tests call it).
+    pub fn confirm_program_name(&mut self) {
+        let Some(mut p) = self.program_name.take() else {
+            return;
+        };
+        let name = p.input.trim().to_ascii_lowercase();
+        if !helmsman_project::project_name(&name) {
+            p.error =
+                Some("A program's name is 1 to 48 of a-z 0-9 _ -, starting with a letter or digit.".into());
+            self.program_name = Some(p);
+            return;
+        }
+        if self.proj.examples.contains_key(&name) {
+            p.error = Some(format!(
+                "{name} is a built-in example and read-only: pick another name."
+            ));
+            self.program_name = Some(p);
+            return;
+        }
+        self.chat.program = Some(name.clone());
+        self.use_named(name, p.text);
+    }
+
+    /// A PROGRAM answer into project `project` (made if there is none):
+    /// the newest is always `main.st`; the one it replaced becomes the
+    /// next `vN.st`, kept under "earlier" and never built. When the
+    /// project would outgrow its size, the oldest iterations go first;
+    /// returns how many went.
+    fn land_program(&mut self, project: &str, text: String) -> usize {
+        let fresh = !self.proj.exists(project);
+        if fresh {
+            self.proj.create(project, None);
+            // `create` opens it with the starter program; the answer takes its place.
+            self.proj.files.clear();
+        } else if self.proj.open != project {
+            self.proj.open_project(project);
+        }
+        let main = helmsman_project::MAIN;
+        if let Some(old) = self.proj.files.remove(main) {
+            let n = helmsman_project::Files(self.proj.files.clone()).next_iteration();
+            self.proj.files.insert(helmsman_project::iteration_name(n), old);
+        }
+        self.proj.files.insert(main.to_string(), text);
+        self.proj.current = main.to_string();
+        let mut dropped = 0;
+        while helmsman_project::Files(self.proj.files.clone()).total() > helmsman_project::MAX_TOTAL {
+            let oldest = helmsman_project::Files(self.proj.files.clone())
+                .iterations()
+                .next()
+                .map(|(_, f)| f.to_string());
+            let Some(oldest) = oldest else { break };
+            self.proj.files.remove(&oldest);
+            dropped += 1;
+        }
+        dropped
+    }
+
+    /// The "Name the program" question as a box in the middle of the
+    /// screen (the view draws it each frame after the Editor).
+    fn program_name_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        let Some(mut p) = self.program_name.clone() else {
+            return;
+        };
+        let mut done = false;
+        let mut ok = false;
+        let m = egui::Modal::new(egui::Id::unique("pg-program-name")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(
+                RichText::new("Name this program")
+                    .strong()
+                    .size(16.0),
+            );
+            ui.label("The Agent's answers in this conversation land in a project of this name: the newest as main.st, the earlier ones kept under it.");
+            ui.add_space(8.0);
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut p.input)
+                    .hint_text("a-z 0-9 _ -")
+                    .desired_width(f32::INFINITY),
+            );
+            chrome.hit("program name", field.rect);
+            let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if let Some(e) = &p.error {
+                ui.colored_label(RED, e);
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let yes = ui.add(egui::Button::new(RichText::new("Use this code").strong()).min_size(tall));
+                chrome.hit("program ok", yes.rect);
+                let no = ui.add(egui::Button::new("Cancel").min_size(tall));
+                chrome.hit("program cancel", no.rect);
+                if yes.clicked() || enter {
+                    ok = true;
+                } else if no.clicked() {
+                    done = true;
+                }
+            });
+        });
+        chrome.hit("program form", m.response.rect);
+        // OK first: the click that pressed it also reads as a click on
+        // the modal's backdrop, which would otherwise shut the question.
+        if ok {
+            self.program_name = Some(p);
+            self.confirm_program_name();
+        } else if done || m.should_close() {
+            self.program_name = None;
+        } else {
+            self.program_name = Some(p);
         }
     }
 
@@ -523,6 +668,10 @@ impl PlaygroundView {
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
         }
+        // Drawn after the unsaved-edits question: a modal that appears in
+        // the frame a click is released in reads that release as a click
+        // on its backdrop and shuts itself.
+        self.program_name_ui(&ui.ctx().clone(), chrome);
     }
 
     /// Runs the program (and Claude's answer) on with nothing drawn: the
@@ -783,6 +932,7 @@ impl Body for PlaygroundView {
             write: Ok(()),
             dirty: self.proj.dirty(),
             starters: false,
+            running: self.proj.running.as_deref() == Some(open.as_str()),
         };
         if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
             self.act(a);
@@ -1466,6 +1616,15 @@ enum MapInput {
     /// A push button: whether it is held.
     Held(bool),
     Set(Value),
+}
+
+/// The "what is this program called?" question: the code waiting to
+/// land, the name typed so far, and why the last one was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramName {
+    pub text: String,
+    pub input: String,
+    pub error: Option<String>,
 }
 
 /// A name for the Agent's answer: the `PROGRAM`, `FUNCTION_BLOCK` or

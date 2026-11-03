@@ -715,6 +715,117 @@ fn pages_are_walked_deleted_and_bounded() {
     assert!(chat.history.is_empty() && chat.pages_dirty);
 }
 
+/// Nick 2026-11-01 (agent-iterations): the first PROGRAM answer of a
+/// conversation asks for the program's name once; the answers after it
+/// land in that project with the newest as main.st and the one replaced
+/// kept as the next vN.st, which the build skips; past the project's
+/// size the oldest iterations go; New conversation asks again.
+#[test]
+fn a_conversations_programs_pile_up_under_one_name_newest_as_main() {
+    let mut v = PlaygroundView::with_storage(Box::new(SharedStorage::default()));
+    let prog = |k: u32| format!("PROGRAM lamp_test\nVAR x{k} : BOOL; END_VAR\nx{k} := TRUE;\nEND_PROGRAM\n");
+    assert!(v.chat.program.is_none());
+    v.take_code(prog(1));
+    let q = v.program_name.clone().expect("asked for a name");
+    assert_eq!(q.input, "lamp_test", "the PROGRAM's name to start from");
+    assert_eq!(q.text, prog(1));
+    assert!(!v.proj.exists("lamp_test"), "nothing lands before the name");
+    // A bad name is refused and the question stays.
+    v.program_name.as_mut().unwrap().input = "Bad Name!".into();
+    v.confirm_program_name();
+    assert!(v.program_name.as_ref().is_some_and(|p| p.error.is_some()));
+    v.program_name.as_mut().unwrap().input = "Line3".into();
+    v.confirm_program_name();
+    assert!(v.program_name.is_none());
+    assert_eq!(
+        v.chat.program.as_deref(),
+        Some("line3"),
+        "lower-cased, the project's rule"
+    );
+    assert_eq!(v.proj.open, "line3");
+    assert_eq!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(prog(1).as_str())
+    );
+    assert_eq!(
+        v.proj.files.len(),
+        1,
+        "the starter's main.st did not become an iteration"
+    );
+    // The next answers land without a question, the newest as main.st.
+    v.take_code(prog(2));
+    assert!(v.program_name.is_none());
+    assert_eq!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(prog(2).as_str())
+    );
+    assert_eq!(
+        v.proj.files.get("v1.st").map(String::as_str),
+        Some(prog(1).as_str())
+    );
+    v.take_code(prog(3));
+    assert_eq!(
+        v.proj.files.get("v2.st").map(String::as_str),
+        Some(prog(2).as_str())
+    );
+    assert_eq!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(prog(3).as_str())
+    );
+    assert_eq!(v.proj.current, "main.st");
+    let build = v.proj.build_src();
+    assert!(
+        build.contains("x3 := TRUE") && !build.contains("x1 := TRUE"),
+        "only main.st builds: {build}"
+    );
+    assert_eq!(v.session.src, build);
+    assert!(
+        v.proj.saved["line3"].0.contains_key("v2.st"),
+        "saved with the project"
+    );
+    // A block answer is a file in the open project, as before.
+    v.take_code("FUNCTION_BLOCK Helper\nEND_FUNCTION_BLOCK\n".into());
+    assert!(v.program_name.is_none());
+    assert!(v.proj.files.contains_key("helper.st"));
+    // New conversation: the name is asked again.
+    v.chat.clear();
+    assert!(v.chat.program.is_none());
+    v.take_code(prog(4));
+    assert!(v.program_name.is_some());
+    // Naming an existing project lands in it, iterating what it has.
+    v.program_name.as_mut().unwrap().input = "line3".into();
+    v.confirm_program_name();
+    assert_eq!(
+        v.proj.files.get("v3.st").map(String::as_str),
+        Some(prog(3).as_str())
+    );
+    assert_eq!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(prog(4).as_str())
+    );
+    // Past the project's size, the oldest iterations go first.
+    let big = |k: u32| {
+        format!(
+            "PROGRAM lamp_test\n(* {} *)\nEND_PROGRAM\n",
+            "b".repeat(200 * 1024) + &k.to_string()
+        )
+    };
+    for k in 5..10 {
+        v.take_code(big(k));
+    }
+    let total = helmsman_project::Files(v.proj.files.clone()).total();
+    assert!(total <= helmsman_project::MAX_TOTAL, "{total}");
+    assert!(!v.proj.files.contains_key("v1.st"), "the oldest went");
+    assert!(v.proj.files.contains_key("main.st"));
+    assert!(
+        v.notice
+            .as_deref()
+            .is_some_and(|n| n.contains("oldest iteration")),
+        "{:?}",
+        v.notice
+    );
+}
+
 /// The pages live with the project: written to agent.md as they come,
 /// read back when the project opens again, kept out of the Files tab's
 /// list and out of the project's dirty mark.
@@ -1822,6 +1933,17 @@ fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
     assert_eq!(s.view.chat.answer.as_ref().unwrap().phase, Phase::Done);
     assert!(s.view.session.running, "the example was running");
     assert!(s.view.use_answer());
+    assert!(
+        s.view.program_name.is_some(),
+        "the first PROGRAM answer asks for a name"
+    );
+    assert_eq!(
+        s.view.program_name.as_ref().unwrap().input,
+        "latch-2",
+        "the PROGRAM's, past the built-in example of that name"
+    );
+    s.view.confirm_program_name();
+    assert_eq!(s.view.chat.program.as_deref(), Some("latch-2"));
     assert_eq!(s.view.session.src, example("latch"));
     assert!(!s.view.session.running, "Claude's code never runs by itself");
     assert!(

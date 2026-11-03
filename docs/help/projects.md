@@ -25,6 +25,10 @@ shows them.
 - **The Delete key** deletes the file or project you clicked last (the
   open project when none). Every delete asks first, in the middle of the
   screen; Escape keeps it. The examples cannot be deleted.
+- **earlier (n)** folds the program's earlier iterations, `v1.st`,
+  `v2.st`, ... (what `main.st` was before each answer you took from the
+  Agent). They are kept with the project and never built; click the row
+  to see them, newest first. `main.st` is marked when the project runs.
 - The tree under the files is the program: the `PROGRAM`, then each
   function block instance it calls, nested. Click one to see its diagram.
 

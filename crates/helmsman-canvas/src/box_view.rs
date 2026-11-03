@@ -909,6 +909,9 @@ impl Body for BoxView {
                 write,
                 dirty: self.projects.dirty(),
                 starters: true,
+                running: open
+                    .as_ref()
+                    .is_some_and(|o| self.projects.running.as_deref() == Some(o.name.as_str())),
             };
             if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
                 self.project_act(a);

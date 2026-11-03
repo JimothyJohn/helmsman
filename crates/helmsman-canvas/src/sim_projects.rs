@@ -191,7 +191,7 @@ impl SimProjects {
         s
     }
 
-    fn exists(&self, name: &str) -> bool {
+    pub(crate) fn exists(&self, name: &str) -> bool {
         self.saved.contains_key(name) || self.examples.contains_key(name)
     }
 
@@ -385,14 +385,6 @@ impl SimProjects {
         }
     }
 
-    /// A free name for a copy of `base` (neither a project here nor an
-    /// example): `base`, else `base-2`, `-3`, ...
-    /// A project name not taken yet, from `base` (`base-2`, ... when it is).
-    #[must_use]
-    pub fn free_name(&self, base: &str) -> String {
-        self.free(base)
-    }
-
     /// A file name not taken in the open project, from `want`
     /// (`name-2.st`, ... when it is).
     #[must_use]
@@ -400,7 +392,7 @@ impl SimProjects {
         crate::projects::free_file_name(want, |n| self.files.contains_key(n))
     }
 
-    fn free(&self, base: &str) -> String {
+    pub(crate) fn free(&self, base: &str) -> String {
         let base: String = base.chars().take(44).collect();
         let taken = |n: &str| self.saved.contains_key(n) || self.examples.contains_key(n);
         if !taken(&base) {
