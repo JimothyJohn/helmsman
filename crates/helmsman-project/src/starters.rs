@@ -190,6 +190,17 @@ pub const STARTERS: &[Starter] = &[
         ],
     },
     Starter {
+        name: "counters",
+        title: "Production counters",
+        about: "Parts made, running or idle or down, shift totals and uptime, from one sensor and a run signal",
+        kind: Kind::Template,
+        files: &[
+            own!("counters", "main.st"),
+            own!("counters", "plant_model.st"),
+            own!("counters", "io.map"),
+        ],
+    },
+    Starter {
         name: "process-template",
         title: "Process loop",
         about: "A scaled measurement, a PID loop and two pumps sharing the duty",
