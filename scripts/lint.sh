@@ -18,3 +18,4 @@ cargo check -q --target wasm32-unknown-unknown -p helmsman-canvas
 # helmsman-iec without std (the edge node's build, docs/EDGE.md Phase 0):
 # clippy, so a std-only call fails here and not on the Xtensa toolchain.
 cargo clippy -q -p helmsman-iec --no-default-features --features libm --target thumbv7em-none-eabihf -- -D warnings
+cargo clippy -q -p helmsman-modbus --target thumbv7em-none-eabihf -- -D warnings
