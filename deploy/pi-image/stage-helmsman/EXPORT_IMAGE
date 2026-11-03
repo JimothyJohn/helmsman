@@ -1,0 +1,4 @@
+IMG_SUFFIX="-helmsman"
+if [ "${USE_QCOW2}" = "1" ]; then
+	export IMG_SUFFIX
+fi
