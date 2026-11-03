@@ -1,0 +1,20 @@
+# Build from this folder (`make node-build` at the root does): the target
+# and build-std below apply to cargo invoked here, not to the workspace.
+[build]
+target = "xtensa-esp32-none-elf"
+rustflags = [
+  # esp-backtrace walks frame pointers.
+  "-C", "force-frame-pointers",
+]
+
+# The esp toolchain ships prebuilt std only for the host; the Xtensa
+# target's core and alloc are built from the bundled rust-src ([unstable]
+# works because the esp channel's cargo is nightly-enabled).
+[unstable]
+build-std = ["alloc", "core"]
+
+[target.xtensa-esp32-none-elf]
+# `cargo run --release` flashes and attaches the monitor. Flashing is
+# Nick's step (scripts/node-flash.sh prints the unplug rule and runs this);
+# never run it from an agent session.
+runner = "espflash flash --monitor"

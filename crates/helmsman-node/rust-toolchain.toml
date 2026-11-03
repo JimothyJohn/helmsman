@@ -1,0 +1,7 @@
+[toolchain]
+# Xtensa (the classic ESP32) is not an upstream rustc target: the esp-rs
+# fork toolchain from `espup install` builds it (the `esp` channel ships
+# rust-src, rustfmt and clippy; rustup ignores component and target
+# requests for a custom toolchain, so none are listed). Same pin as
+# supervictor's edge crate.
+channel = "esp"
