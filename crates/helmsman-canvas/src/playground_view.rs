@@ -179,9 +179,31 @@ impl PlaygroundView {
         };
         v.session.set_running(true);
         v.proj.running = Some(v.proj.open.clone());
+        v.load_pages();
         v.sync_viewer();
         v.run_tests();
         v
+    }
+
+    /// The open project's Agent pages into the chat (a project opened).
+    fn load_pages(&mut self) {
+        let pages = self
+            .proj
+            .agent_text()
+            .map(helmsman_project::agent::parse)
+            .unwrap_or_default();
+        self.chat.load_pages(pages);
+    }
+
+    /// The chat's pages into the open project, when they changed: written
+    /// as they come, so a reload finds them.
+    fn save_pages(&mut self) {
+        if !self.chat.pages_dirty {
+            return;
+        }
+        self.chat.pages_dirty = false;
+        let text = helmsman_project::agent::render(&self.chat.pages());
+        self.proj.set_agent_text(&text);
     }
 
     /// How this page runs the project's requirement tests: the session's
@@ -246,7 +268,9 @@ impl PlaygroundView {
     /// an example that opens stopped looks dead); an edit still waits for
     /// Deploy.
     pub fn open_project(&mut self, name: &str) {
+        self.save_pages();
         self.proj.open_project(name);
+        self.load_pages();
         self.reload();
         self.notice = None;
         if self.session.build.as_ref().is_some_and(|b| b.module.is_some()) {
@@ -579,6 +603,7 @@ impl PlaygroundView {
         for m in self.link.drain() {
             self.chat.receive(m);
         }
+        self.save_pages();
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
         self.arrange();
@@ -812,6 +837,8 @@ impl Body for PlaygroundView {
             .proj
             .files
             .keys()
+            // The Agent's pages are the Agent tab's, not a file to open.
+            .filter(|f| !helmsman_project::agent::is_agent_file(f))
             .map(|f| (f.clone(), self.proj.file_dirty(f)))
             .collect();
         let open = self.proj.open.clone();
@@ -906,7 +933,7 @@ impl Body for PlaygroundView {
                     }
                 });
             }
-            Tab::Claude => self.claude(ui),
+            Tab::Claude => self.claude(ui, chrome),
         }
     }
 
@@ -1062,7 +1089,7 @@ impl PlaygroundView {
         self.trend_plot(ui);
     }
 
-    fn claude(&mut self, ui: &mut egui::Ui) {
+    fn claude(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         let ctx = ui.ctx().clone();
         egui::ScrollArea::vertical().id_salt("pg-claude").show(ui, |ui| {
@@ -1125,8 +1152,77 @@ impl PlaygroundView {
                 ui.colored_label(RED, e);
             }
             ui.separator();
-            self.answer_ui(ui);
+            self.pages_ui(ui, chrome);
+            match self.chat.viewing().cloned() {
+                Some(page) => self.page_ui(ui, &page),
+                None => self.answer_ui(ui),
+            }
         });
+    }
+
+    /// The page strip (Nick, 2026-11-01): ‹ › through the kept pages,
+    /// "page k of n", Delete for the one on view. Every kept page goes to
+    /// the model as context, so deleting one shapes what it sees.
+    fn pages_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        let t = theme(ui);
+        let n = self.chat.history.len();
+        if n == 0 {
+            return;
+        }
+        let at = self.chat.page;
+        ui.horizontal_wrapped(|ui| {
+            let prev = ui.add_enabled(at != Some(0), egui::Button::new("‹"));
+            chrome.hit("page prev", prev.rect);
+            if prev.on_hover_text("the page before").clicked() {
+                self.chat.prev_page();
+            }
+            let next = ui.add_enabled(at.is_some(), egui::Button::new("›"));
+            chrome.hit("page next", next.rect);
+            if next
+                .on_hover_text("the page after; past the last, the new answer")
+                .clicked()
+            {
+                self.chat.next_page();
+            }
+            let where_ = match at {
+                Some(k) => format!("page {} of {n}", k + 1),
+                None => format!("{n} page(s) kept"),
+            };
+            let l = ui.label(RichText::new(where_).color(t.muted));
+            chrome.hit("page where", l.rect);
+            if at.is_some() {
+                let del = ui.button("Delete page");
+                chrome.hit("page delete", del.rect);
+                if del
+                    .on_hover_text("drops this page from the conversation and from what the model sees")
+                    .clicked()
+                {
+                    self.chat.delete_page();
+                }
+            }
+        });
+        ui.separator();
+    }
+
+    /// An earlier page: its question, its answer, and Use this code when
+    /// the answer holds a program.
+    fn page_ui(&mut self, ui: &mut egui::Ui, page: &crate::claude::Exchange) {
+        let t = theme(ui);
+        ui.label(RichText::new(page.question.trim()).strong().color(t.fg));
+        ui.add_space(4.0);
+        markdown(ui, &page.answer);
+        if let Some(code) = crate::claude::extract_program(&page.answer) {
+            let b = egui::Button::new(RichText::new("Use this code").strong().color(BLACK))
+                .fill(YELLOW)
+                .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
+            if ui
+                .add(b)
+                .on_hover_text("a new project (or file) named after it, opened; Deploy runs it")
+                .clicked()
+            {
+                self.take_code(code);
+            }
+        }
     }
 
     fn key_ui(&mut self, ui: &mut egui::Ui) {

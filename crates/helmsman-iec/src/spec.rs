@@ -44,10 +44,9 @@
 use core::fmt::Write as _;
 use core::time::Duration;
 
+use crate::ast::{self, PouKind, Section, TypeRef};
 #[cfg(not(feature = "std"))]
 use crate::prelude::*;
-
-use crate::ast::{self, PouKind, Section, TypeRef};
 use crate::{Diagnostic, Image, ImageSizes, PortDir, Value, compile};
 
 /// The file name prefix that makes a `.st` file a test: `test_NAME.st`.
