@@ -62,6 +62,14 @@ if ! echo "$found" | grep -q "vendor=991 .*code=515"; then
   exit 1
 fi
 
+# The conformance binary binds UDP 2222 itself; a running box (its own
+# adapter) or another scanner holds it and every read would fail the same way.
+if holder="$(lsof -nP -iUDP:2222 -t 2>/dev/null)" && [ -n "$holder" ]; then
+  echo "FAIL: UDP 2222 is held by pid(s) $holder: $(ps -o command= -p "$holder" | head -1)" >&2
+  echo "      stop it first (a demo box: ./scratch/03-run-e1213-box.sh stop)" >&2
+  exit 1
+fi
+
 echo "==> class 1 conformance (exclusive owner, RPI 100 ms)"
 args=(--enip "$host" --param profile=moxa-e1213 --param rpi_ms=100 --settle-ms 1000)
 for l in $loops; do
