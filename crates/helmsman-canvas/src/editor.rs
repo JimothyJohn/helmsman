@@ -67,20 +67,26 @@ impl Bottom {
 }
 
 /// The left pane's tabs (Nick, 2026-11-01: Code | Files, as the right
-/// panel has I/O | Agent).
+/// panel has I/O | Agent; 2026-11-02: Devices between them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Pane {
     #[default]
     Files,
+    /// The I/O map's devices and their points (`crate::devices`).
+    Devices,
     /// The Structured Text editor.
     Code,
 }
 
 impl Pane {
+    /// Every tab, left to right.
+    pub const ALL: [Self; 3] = [Self::Files, Self::Devices, Self::Code];
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Files => "Files",
+            Self::Devices => "Devices",
             Self::Code => "Code",
         }
     }
@@ -88,14 +94,16 @@ impl Pane {
     const fn key(self) -> &'static str {
         match self {
             Self::Files => "files",
+            Self::Devices => "devices",
             Self::Code => "code",
         }
     }
 }
 
-/// The left pane's width when first opened, points: one width for both
-/// tabs (Nick, 2026-11-01).
-pub const LEFT_W: f32 = 160.0;
+/// The left pane's width when first opened, points: one width for every
+/// tab (Nick, 2026-11-01); 200 since the third tab (three tab buttons and
+/// the hide chevron must fit the row, or the pane grows every frame).
+pub const LEFT_W: f32 = 200.0;
 /// The right panel's width when first opened, points.
 pub const RIGHT_W: f32 = 204.0;
 
@@ -181,6 +189,7 @@ impl Chrome {
                 // its own.
                 Some(("pane", "code") | ("st", "1")) => c.pane = Pane::Code,
                 Some(("pane", "files")) => c.pane = Pane::Files,
+                Some(("pane", "devices")) => c.pane = Pane::Devices,
                 Some(("scan", v)) => c.scan = v == "1",
                 Some(("trend", v)) => c.trend = v == "1",
                 Some(("light", v)) => c.light = v == "1",
@@ -231,6 +240,28 @@ impl Chrome {
     pub fn show_files(&mut self) {
         self.left = true;
         self.pane = Pane::Files;
+    }
+
+    /// Whether the Devices tab is on screen.
+    #[must_use]
+    pub fn devices_open(&self) -> bool {
+        self.left && self.pane == Pane::Devices
+    }
+
+    /// Opens the left pane on the devices.
+    pub fn show_devices(&mut self) {
+        self.left = true;
+        self.pane = Pane::Devices;
+    }
+
+    /// Alt 4, View › Devices: the Devices tab, or the pane shut when that
+    /// is what shows.
+    pub fn toggle_devices(&mut self) {
+        if self.devices_open() {
+            self.left = false;
+        } else {
+            self.show_devices();
+        }
     }
 
     /// Alt 1, View › Structured Text: the Code tab, or the pane shut when
@@ -315,6 +346,17 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
     if menu_item_keyed(ui, chrome, "view files", "Files", files, &k(Action::Files)) {
         chrome.toggle_files();
     }
+    let devices = chrome.devices_open();
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view devices",
+        "Devices",
+        devices,
+        &k(Action::Devices),
+    ) {
+        chrome.toggle_devices();
+    }
     if menu_item_keyed(ui, chrome, "view panel", "Side panel", right, &k(Action::Panel)) {
         chrome.right = !right;
     }
@@ -377,6 +419,9 @@ pub trait Body {
     /// The left pane's Files tab: the projects, the open one's files and
     /// the program tree.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// The left pane's Devices tab: the I/O map's devices and their
+    /// points, live (`crate::devices`).
+    fn devices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The left pane's Code tab: the ST editor (read-only on a box).
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The Trend along the bottom: pins and the plot.
@@ -456,11 +501,11 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         |ui, open| {
             let toggle = if open {
                 let mut t = None;
-                // Tabs: Files | Code, the hide chevron at the right.
+                // Tabs: Files | Devices | Code, the hide chevron at the right.
                 ui.horizontal(|ui| {
-                    for p in [Pane::Files, Pane::Code] {
+                    for p in Pane::ALL {
                         let b = egui::Button::selectable(pane == p, RichText::new(p.label()).strong())
-                            .min_size(Vec2::new(48.0, TAP * 0.75));
+                            .min_size(Vec2::new(0.0, TAP * 0.75));
                         let r = ui.add(b);
                         hits.push((format!("pane {}", p.key()), r.rect));
                         if r.clicked() {
@@ -477,6 +522,11 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                         egui::ScrollArea::vertical()
                             .id_salt("ed-files-scroll")
                             .show(ui, |ui| body.files(ui, chrome));
+                    }
+                    Pane::Devices => {
+                        egui::ScrollArea::vertical()
+                            .id_salt("ed-devices-scroll")
+                            .show(ui, |ui| body.devices(ui, chrome));
                     }
                     Pane::Code => body.st(ui, chrome),
                 }

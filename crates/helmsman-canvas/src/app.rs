@@ -449,6 +449,7 @@ impl App {
                 }
             }
             Action::Files => self.chrome.toggle_files(),
+            Action::Devices => self.chrome.toggle_devices(),
             Action::St => self.chrome.toggle_code(),
             Action::Panel => self.chrome.right = !self.chrome.right,
             Action::Trend => self.chrome.trend = !self.chrome.trend,

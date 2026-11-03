@@ -50,9 +50,10 @@ use serde_json::{Map, Value as Json, json};
 use crate::http::{self, Timeouts, Url};
 
 /// The tools the box runs, as named in the relay's `tools.json`.
-pub const NAMES: [&str; 13] = [
+pub const NAMES: [&str; 14] = [
     "list_signals",
     "read_signals",
+    "list_devices",
     "list_modules",
     "read_module",
     "draft_module",
@@ -69,7 +70,13 @@ pub const NAMES: [&str; 13] = [
 /// The tools explain mode runs: reads only. Nothing in it drafts,
 /// checks, simulates or proposes, so an explanation can change nothing
 /// on the box, not even the proposal list.
-pub const READ_ONLY: [&str; 4] = ["list_signals", "read_signals", "list_modules", "read_module"];
+pub const READ_ONLY: [&str; 5] = [
+    "list_signals",
+    "read_signals",
+    "list_modules",
+    "read_module",
+    "list_devices",
+];
 
 /// Most names one `compare_plc_tags` result lists per difference.
 pub const MAX_LISTED: usize = 200;
@@ -362,7 +369,7 @@ pub fn validate(name: &str, input: &Json) -> Result<(), String> {
     match name {
         "list_signals" => parse::<ListSignals>(input).map(drop),
         "read_signals" => parse::<ReadSignals>(input).map(drop),
-        "list_modules" | "read_io_map" => parse::<Empty>(input).map(drop),
+        "list_modules" | "read_io_map" | "list_devices" => parse::<Empty>(input).map(drop),
         "read_module" => parse::<ReadModule>(input).map(drop),
         "draft_module" => parse::<DraftModule>(input).map(drop),
         "check_module" => parse::<DraftRef>(input).map(drop),
@@ -479,6 +486,7 @@ pub fn run(api: &dyn Caller, drafts: &mut Drafts, name: &str, input: &Json) -> O
         "list_signals" => parse(input).map(|i| list_signals(api, &i)),
         "read_signals" => parse(input).map(|i| read_signals(api, &i)),
         "list_modules" => parse::<Empty>(input).map(|_| list_modules(api)),
+        "list_devices" => parse::<Empty>(input).map(|_| list_devices(api)),
         "read_module" => parse(input).map(|i| read_module(api, &i)),
         "draft_module" => parse(input).map(|i| draft_module(drafts, i)),
         "check_module" => parse(input).map(|i| check_module(api, drafts, &i)),
@@ -552,6 +560,98 @@ fn read_signals(api: &dyn Caller, i: &ReadSignals) -> Outcome {
     }
     let summary = format!("{} value(s), {} unknown", values.len(), unknown.len());
     ok(json!({ "values": values, "unknown": unknown }), summary)
+}
+
+/// The devices the running map names, each with its link state and its
+/// points (the signals bound to it, with live values): what the canvas's
+/// Devices tab shows. Signals on an id no `device` line declares (`box`,
+/// `screen`, `module`) are listed under that id too. Without a running
+/// map (a box on module files) the devices come with no points.
+fn list_devices(api: &dyn Caller) -> Outcome {
+    use helmsman_project::iomap;
+    let links = match api.get("/api/devices") {
+        Ok((200, Json::Array(list))) => list,
+        Ok((s, b)) => return unexpected("reading devices", s, &b),
+        Err(e) => return fail(e),
+    };
+    let map = match api.get("/api/io_map") {
+        Ok((200, j)) => iomap::skim(j["text"].as_str().unwrap_or("")),
+        Ok((404, _)) => iomap::MapText::default(),
+        Ok((s, b)) => return unexpected("reading the I/O map", s, &b),
+        Err(e) => return fail(e),
+    };
+    let signals = match signals(api) {
+        Ok(l) => l,
+        Err(o) => return o,
+    };
+    let link = |name: &str| -> (Json, Json) {
+        links
+            .iter()
+            .find(|d| d["name"].as_str() == Some(name))
+            .map_or((json!("unknown"), Json::Null), |d| {
+                (d["state"].clone(), d["error"].clone())
+            })
+    };
+    let mut devices: Vec<Json> = map
+        .devices
+        .iter()
+        .map(|d| {
+            let (state, error) = link(&d.name);
+            let params: Map<String, Json> = d.params.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
+            json!({
+                "name": d.name, "driver": d.driver, "endpoint": d.endpoint, "params": params,
+                "state": state, "error": error, "points": [],
+            })
+        })
+        .collect();
+    for s in &map.signals {
+        let at = devices
+            .iter()
+            .position(|d| d["name"].as_str() == Some(s.device.as_str()))
+            .unwrap_or_else(|| {
+                let (state, error) = link(&s.device);
+                devices.push(json!({
+                    "name": s.device, "driver": Json::Null, "endpoint": Json::Null, "params": {},
+                    "state": state, "error": error, "points": [],
+                }));
+                devices.len() - 1
+            });
+        let live = signals.iter().find(|x| {
+            x["name"]
+                .as_str()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&s.name))
+        });
+        let point = json!({
+            "signal": s.name, "dir": s.dir, "type": s.ty, "point": s.point, "unit": s.unit,
+            "value": live.map_or(Json::Null, |l| l["value"].clone()),
+            "quality": live.map_or(Json::Null, |l| l["quality"].clone()),
+            "writer": live.map_or(Json::Null, |l| l["writer"].clone()),
+        });
+        if let Some(points) = devices[at]["points"].as_array_mut() {
+            points.push(point);
+        }
+    }
+    // A link the map does not name (the box's own channels on a box
+    // without a map) is still a device.
+    for l in &links {
+        if let Some(name) = l["name"].as_str()
+            && !devices.iter().any(|d| d["name"].as_str() == Some(name))
+        {
+            devices.push(json!({
+                "name": name, "driver": Json::Null, "endpoint": Json::Null, "params": {},
+                "state": l["state"], "error": l["error"], "points": [],
+            }));
+        }
+    }
+    let n = devices.len();
+    let summary = format!(
+        "{n} device(s), {} up",
+        devices.iter().filter(|d| d["state"] == "up").count()
+    );
+    ok(
+        json!({ "devices": devices, "map_lines_skipped": map.odd }),
+        summary,
+    )
 }
 
 fn list_modules(api: &dyn Caller) -> Outcome {

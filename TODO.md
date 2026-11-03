@@ -319,6 +319,16 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   depends: e1213-bench
   id: device-library
+  notes: 2026-11-02 (feat/devices-pane): the Devices tab exists: the map's devices as a tree with their points and live values, New device… as a form writing a `device` line, the listing as the agent's context (`<io_devices>` in the page, `list_devices` on the box). Next is `device-import`.
+
+- [ ] **Import a device from its file: an EDS, or a manual the agent reads** — Nick, 2026-11-02: in the Devices tab, "Import device…" takes a file. A known kind (an EDS, EtherNet/IP) becomes a device line the box can run (`enip-io ... eds=PATH`: the box keeps the file, `helmsman_proto::eds` reads it at start, the points come from its assemblies); anything else (a Modbus register map in a PDF manual, a datasheet) goes to the agent as a drop-in (POST /api/dropins already takes PDFs and documents) with "add this device", and the agent proposes the map lines (`propose_io_map`) for the engineer to approve. Needs a place for device files on the box (not a project file kind today: `<state-dir>/devices/NAME.eds` and an API route, or a new project file kind so the file travels with the project zip) and the Agent tab on a box (`claude-on-box`). Test subject: `devices/moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds` (untracked), against the bench E1213 at 10.0.0.57.
+  needs: a decision on where device files live (box state dir vs project file kind); the Agent tab on a box for the manual path
+  result: a device goes from a vendor file to points in the tree without hand-written map lines; an unknown file still gets there through the agent, with approval
+  options: box state dir + API route (EDS stays out of the project zip) | a project file kind (travels with the project; the zip grows) | both: project first, box dir later
+  est: 2d
+  difficulty: med
+  depends: device-library
+  id: device-import
 
 - [ ] **Stock module: counters and uptime** — cycle counts, run/idle/down state, shift totals; the first shipped module, written in ST like everything else, so it doubles as the agent's few-shot example.
   est: 2d

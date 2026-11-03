@@ -37,7 +37,10 @@ host="${1:?usage: $0 IP (the E1213; 10.0.0.57 on the bench)}"
 loops="${LOOPS:-do:0=di:0 do:1=di:1 do:2=di:2}"
 cd "$(dirname "$0")/.."
 
+# Nick keeps the vendor's EDS (untracked: *.eds is ignored, see TODO.md
+# e1213-eds-license) in devices/, or at the repo root.
 eds=moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds
+[ -f "$eds" ] || eds="devices/$eds"
 if [ -f "${E1213_EDS:-$eds}" ]; then
   echo "==> EDS"
   E1213_EDS="${E1213_EDS:-$PWD/$eds}" scripts/eds-corpus.sh >/dev/null

@@ -2,3 +2,4 @@ scratch/
 .claude/handoff.md
 target/
 helmsman-state/
+*.eds

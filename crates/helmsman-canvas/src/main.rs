@@ -36,6 +36,7 @@ mod box_trend;
 mod box_view;
 mod claude;
 mod commit;
+mod devices;
 mod editor;
 mod glyphs;
 mod hotkeys;

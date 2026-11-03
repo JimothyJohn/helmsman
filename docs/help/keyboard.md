@@ -20,6 +20,7 @@ CODESYS's default keys where the browser leaves them alone, nothing on a key the
 | Alt 1 | The left pane's Code tab (the Structured Text) | POUs |
 | Alt 2 | The bottom panel (Trend, Messages) | Modules |
 | Alt 3 | The side panel (I/O, Agent) | Messages |
+| Alt 4 | The left pane's Devices tab (the I/O map's devices and points) |  |
 | Alt ↑ | Up one level in the diagram | |
 
 Reserved, not built yet, on chords rather than function keys: Ctrl B toggle a breakpoint on the picked block, Ctrl ] / Ctrl [ step into / out of an instance, Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F find in the Structured Text with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2 the Agent.

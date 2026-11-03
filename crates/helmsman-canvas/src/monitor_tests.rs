@@ -568,8 +568,13 @@ fn the_monitor_never_writes() {
     assert_ne!(sent.len(), 0);
     for c in &sent {
         assert!(
-            matches!(c, Cmd::Get(Fetch::Modules | Fetch::Source(_) | Fetch::Module(_), u) if u.starts_with("/api/"))
-                || matches!(c, Cmd::Listen(..) | Cmd::Close(_)),
+            matches!(
+                c,
+                Cmd::Get(
+                    Fetch::Modules | Fetch::Source(_) | Fetch::Module(_) | Fetch::Devices | Fetch::IoMap,
+                    u
+                ) if u.starts_with("/api/")
+            ) || matches!(c, Cmd::Listen(..) | Cmd::Close(_)),
             "a write from the Monitor: {c:?}"
         );
     }

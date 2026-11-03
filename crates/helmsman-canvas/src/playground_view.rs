@@ -117,6 +117,7 @@ pub struct PlaygroundView {
     /// The projects, kept in the browser's storage.
     pub proj: SimProjects,
     pub files_ui: FilesUi,
+    pub devices_ui: crate::devices::DevicesUi,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -169,6 +170,7 @@ impl PlaygroundView {
             ask_error: None,
             proj,
             files_ui: FilesUi::default(),
+            devices_ui: crate::devices::DevicesUi::default(),
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
@@ -376,10 +378,43 @@ impl PlaygroundView {
             .map_or_else(|| self.title(), |p| p.name.to_ascii_lowercase())
     }
 
+    /// The project's devices and points as text, the agent's context
+    /// (what the Devices tab shows, values included).
+    #[must_use]
+    pub fn devices_text(&self) -> String {
+        let text = self
+            .proj
+            .files
+            .get(helmsman_project::IO_MAP)
+            .cloned()
+            .unwrap_or_default();
+        let map = helmsman_project::iomap::skim(&text);
+        let points: Vec<(String, Value)> = self
+            .session
+            .inputs()
+            .chain(self.session.outputs())
+            .map(|p| (p.name.clone(), p.value))
+            .collect();
+        let live = |name: &str| {
+            points
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| crate::devices::Live {
+                    value: Some(*v),
+                    quality: None,
+                    forced: false,
+                })
+        };
+        crate::devices::describe(&crate::devices::tree(&map, &live, &|_| {
+            crate::devices::LinkState::Simulated
+        }))
+    }
+
     /// Sends the typed question about the editor's program.
     pub fn ask(&mut self, ctx: &egui::Context) {
         let diags = self.session.diag_lines();
-        match self.chat.ask(&self.session.src, &diags) {
+        let devices = self.devices_text();
+        match self.chat.ask(&self.session.src, &diags, &devices) {
             Ok((seq, req)) => {
                 self.ask_error = None;
                 self.link.send(seq, req, ctx);
@@ -457,6 +492,10 @@ impl PlaygroundView {
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
         editor::show(ui, chrome, self);
+        if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
+        {
+            self.add_device_line(&line);
+        }
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
         }
@@ -736,6 +775,45 @@ impl Body for PlaygroundView {
         if let Some(a) = self.files_ui.blank_menu(ui, chrome, &Ok(()), true) {
             self.act(a);
         }
+    }
+
+    fn devices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        use crate::devices::{LinkState, Live, tree};
+        let text = self
+            .proj
+            .files
+            .get(helmsman_project::IO_MAP)
+            .cloned()
+            .unwrap_or_default();
+        let map = helmsman_project::iomap::skim(&text);
+        let points: Vec<(String, Value)> = self
+            .session
+            .inputs()
+            .chain(self.session.outputs())
+            .map(|p| (p.name.clone(), p.value))
+            .collect();
+        let live = |name: &str| {
+            points
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| Live {
+                    value: Some(*v),
+                    quality: None,
+                    forced: false,
+                })
+        };
+        let nodes = tree(&map, &live, &|_| LinkState::Simulated);
+        let source = if text.is_empty() {
+            String::new()
+        } else {
+            format!("io.map of {}", self.proj.open)
+        };
+        let write = if self.proj.is_example() {
+            Err("The examples are read-only: copy the project first (File › Copy project).".into())
+        } else {
+            Ok(())
+        };
+        self.devices_ui.show(ui, &nodes, &source, chrome, &write);
     }
 
     fn trend(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -1267,6 +1345,15 @@ impl PlaygroundView {
         }
         for (name, v) in set {
             self.session.set_input(&name, v);
+        }
+    }
+
+    /// The Devices tab's Add: one `device` line onto the project's
+    /// `io.map`, made if it has none.
+    fn add_device_line(&mut self, line: &str) {
+        match self.proj.files.get_mut(helmsman_project::IO_MAP) {
+            Some(text) => *text = crate::devices::appended(text, line),
+            None => self.proj.add_file(helmsman_project::IO_MAP, line.to_string()),
         }
     }
 

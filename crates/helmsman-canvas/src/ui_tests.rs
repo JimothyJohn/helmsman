@@ -331,6 +331,12 @@ mod polish {
         assert!(h.app.chrome.files_open(), "Alt+0: the Files tab");
         h.key(Modifiers::ALT, Key::Num1);
         assert!(h.app.chrome.code_open(), "Alt+1: the Code tab");
+        h.key(Modifiers::ALT, Key::Num4);
+        assert!(h.app.chrome.devices_open(), "Alt+4: the Devices tab");
+        h.key(Modifiers::ALT, Key::Num4);
+        assert!(!h.app.chrome.left, "Alt+4 on the Devices tab shuts the pane");
+        h.key(Modifiers::ALT, Key::Num1);
+        assert!(h.app.chrome.code_open());
         h.key(Modifiers::ALT, Key::Num3);
         assert_eq!(h.app.chrome.right, !right, "Alt+3: the side panel");
         // Save: edit, then Ctrl+S.
@@ -742,7 +748,11 @@ mod chrome {
         assert!(h.app.chrome.code_open(), "the simulation opens on Code");
         let code = h.rect("pane code");
         let files = h.rect("pane files");
-        assert!(files.right() <= code.left(), "Files | Code, left to right");
+        let devices = h.rect("pane devices");
+        assert!(
+            files.right() <= devices.left() && devices.right() <= code.left(),
+            "Files | Devices | Code, left to right"
+        );
         let editor = h
             .ctx
             .read_response(egui::Id::unique("pg-source"))
@@ -900,6 +910,88 @@ mod chrome {
     }
 
     /// A double click on a file opens it on the Code tab (Nick, 2026-11-02).
+    /// Nick, 2026-11-02: the Devices tab lists the map's devices with
+    /// their points under them, and adds a device the way a file is
+    /// added: a right-click on the blank space, a form in the centre, one
+    /// `device` line in io.map (made when the project has none). A
+    /// built-in example is read-only, so its menu item is disabled.
+    #[test]
+    fn the_devices_tab_lists_the_map_and_adds_a_device_as_a_line_of_it() {
+        let mut h = Harness::new(App::sim());
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(h.app.chrome.devices_open());
+        assert!(h.has("devices blank"), "the blank space is there to right-click");
+        // The blink example has no map: nothing listed, and read-only.
+        assert!(!h.has("device box"));
+        h.right_click(h.rect("devices blank").center());
+        assert!(h.has("menu new device"));
+        h.press("menu new device");
+        h.wait(0.2);
+        assert!(!h.has("device form"), "an example is read-only: no form");
+        h.frame(vec![Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+        // A project of one's own, with a map: the tree.
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj.add_file(
+                "io.map",
+                "device e1213 modbus-tcp 10.0.0.57:502 unit=1\nin di0 bool e1213 di:0\nout do0 bool e1213 coil:0\nout lamp bool box do:0\n"
+                    .into(),
+            );
+        }
+        h.wait(0.3);
+        assert!(h.has("device e1213"), "the declared device");
+        assert!(h.has("point di0") && h.has("point do0"), "its points under it");
+        assert!(h.has("device box"), "the box's own channels, implied by a signal");
+        assert!(h.has("point lamp"));
+        // Folding a device hides its points.
+        h.press("device e1213");
+        h.wait(0.2);
+        assert!(!h.has("point di0") && h.has("point lamp"));
+        h.press("device e1213");
+        h.wait(0.2);
+        assert!(h.has("point di0"));
+        // Add one: the form, filled in, writes a line onto io.map.
+        h.right_click(h.rect("devices blank").center());
+        h.press("menu new device");
+        h.wait(0.2);
+        assert!(h.has("device form"), "the form in the centre");
+        h.press("device ok");
+        h.wait(0.2);
+        assert!(h.has("device form"), "an empty name is refused, the form stays");
+        h.press("device name");
+        h.frame(vec![Event::Text("rio".into())]);
+        h.press("device enip-io");
+        h.press("device endpoint");
+        h.frame(vec![Event::Text("10.0.0.60".into())]);
+        h.press("device ok");
+        h.wait(0.3);
+        assert!(!h.has("device form"), "added: the form is gone");
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(
+            map.ends_with("device rio enip-io 10.0.0.60 profile=moxa-e1213 rpi_ms=100 poll_ms=20\n"),
+            "{map}"
+        );
+        assert!(h.has("device rio"), "and listed");
+        assert!(h.has("device e1213"), "beside the Modbus one: protocols mix");
+        // The agent gets the same listing.
+        let text = h.app.sim.as_ref().unwrap().devices_text();
+        assert!(
+            text.contains("e1213  modbus-tcp 10.0.0.57:502 unit=1  [simulated]\n  in  di0 bool di:0"),
+            "{text}"
+        );
+        assert!(text.contains("rio  enip-io 10.0.0.60"), "{text}");
+        // Remembered: the tab reads back.
+        assert_eq!(Chrome::restored(&h.app.chrome.saved()).pane, Pane::Devices);
+    }
+
     #[test]
     fn double_clicking_a_file_opens_the_code_tab() {
         let mut h = Harness::new(App::sim());
@@ -1252,6 +1344,7 @@ mod simulated {
         let right = h.rect("right");
         for key in [
             "pane files",
+            "pane devices",
             "pane code",
             "tab claude",
             "tab io",
@@ -1288,6 +1381,50 @@ mod boxed {
 
     fn boxed(h: &Harness) -> &BoxView {
         h.app.boxv.as_ref().unwrap()
+    }
+
+    /// The Devices tab on a box: the map the box runs, each device with
+    /// the link state the box reports and its points' live values; adding
+    /// a device needs a project open and an engineer, so here the menu
+    /// item is disabled.
+    #[test]
+    fn the_devices_tab_on_a_box_shows_the_running_map_with_link_states() {
+        use crate::remote::DeviceRow;
+        let bench = Bench::new();
+        let (mut state, _) = watch(&bench);
+        state.io_map = Some(
+            "device rio modbus-tcp 10.0.0.57:502 unit=1\nin ready bool box di:0\nin part bool rio di:4\n"
+                .into(),
+        );
+        state.devices = vec![
+            DeviceRow {
+                name: "box".into(),
+                state: "up".into(),
+                error: None,
+            },
+            DeviceRow {
+                name: "rio".into(),
+                state: "down".into(),
+                error: Some("connection refused".into()),
+            },
+        ];
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(h.app.chrome.devices_open());
+        assert!(h.has("device rio") && h.has("device box"), "both devices");
+        assert!(h.has("point part") && h.has("point ready"), "their points");
+        h.right_click(h.rect("devices blank").center());
+        assert!(h.has("menu new device"));
+        h.press("menu new device");
+        h.wait(0.2);
+        assert!(
+            !h.has("device form"),
+            "no project open, nobody signed in: nothing to add to"
+        );
     }
 
     #[test]

@@ -18,6 +18,7 @@
 //! | Structured Text | Alt 1 | POUs view |
 //! | Trend along the bottom | Alt 2 | Modules view |
 //! | Side panel | Alt 3 | Messages view |
+//! | Devices tab | Alt 4 | (a key of our own) |
 //! | Go to definition (picked block's variable) | Ctrl/⌘ Shift D | Go to Definition |
 //! | Cross references (its reads and writes lit) | Ctrl/⌘ Shift X | Display Cross References |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
@@ -42,6 +43,7 @@ pub enum Action {
     Undo,
     Redo,
     Files,
+    Devices,
     St,
     Panel,
     Trend,
@@ -106,6 +108,7 @@ pub const TABLE: &[Hotkey] = &[
     key(Action::St, Modifiers::ALT, Key::Num1, "POUs"),
     key(Action::Trend, Modifiers::ALT, Key::Num2, "Modules"),
     key(Action::Panel, Modifiers::ALT, Key::Num3, "Messages"),
+    key(Action::Devices, Modifiers::ALT, Key::Num4, ""),
 ];
 
 /// What each action does, for the help page.
@@ -122,6 +125,7 @@ const fn does(action: Action) -> &'static str {
         Action::Undo => "Undo in the Structured Text",
         Action::Redo => "Redo in the Structured Text",
         Action::Files => "The left pane's Files tab",
+        Action::Devices => "The left pane's Devices tab (the I/O map's devices and points)",
         Action::St => "The left pane's Code tab (the Structured Text)",
         Action::Trend => "The bottom panel (Trend, Messages)",
         Action::Panel => "The side panel (I/O, Agent)",
