@@ -24,16 +24,15 @@ pub const MIN_PERIOD: u64 = 1;
 pub const MAX_PERIOD: u64 = 1000;
 /// At most this many scans per frame (a slow tab catches up gradually).
 pub const MAX_CATCH_UP: u64 = 500;
-/// The widths the trend's window can be, ms of program time: 1, 10 or
-/// 100 s (Nick, 2026-11-01: how fast the line crosses the pane).
-pub const TREND_WINDOWS_MS: [u64; 3] = [1_000, 10_000, 100_000];
-/// The window a project opens with.
+/// The window a project opens with, ms of program time (the slider goes
+/// from `playground_view::WINDOW_MIN_MS` to `WINDOW_MAX_MS`; Nick,
+/// 2026-11-01: how fast the line crosses the pane).
 pub const TREND_MS: u64 = 10_000;
 /// The trend keeps this much history, ms of program time: the widest
-/// window, so widening it shows what already ran.
-pub const TREND_KEEP_MS: u64 = 100_000;
-/// And at most this many samples (100 s at the 10 ms scan, a little over).
-pub const TREND_CAP: usize = 12_000;
+/// window (10 min), so widening it shows what already ran.
+pub const TREND_KEEP_MS: u64 = 600_000;
+/// And at most this many samples (10 min at the 10 ms scan).
+pub const TREND_CAP: usize = 60_000;
 /// Signals the trend draws at most.
 pub const TREND_SIGNALS: usize = 6;
 /// The editor refuses text past this.
@@ -469,7 +468,7 @@ pub struct Sample {
 pub struct Trend {
     pub signals: Vec<String>,
     pub samples: VecDeque<Sample>,
-    /// The width of the window drawn, one of [`TREND_WINDOWS_MS`].
+    /// The width of the window drawn, ms (`WINDOW_MIN_MS..=WINDOW_MAX_MS`).
     pub window_ms: u64,
 }
 
