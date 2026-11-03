@@ -29,6 +29,13 @@ shows them.
   `v2.st`, ... (what `main.st` was before each answer you took from the
   Agent). They are kept with the project and never built; click the row
   to see them, newest first. `main.st` is marked when the project runs.
+- **history (n)** folds the project's revisions: every save, upload,
+  import and restore, newest first, with who did it, when and what. Click
+  one to see it in the middle of the screen: the Agent page it came from,
+  if any, and each file's lines added and removed since. **Restore this
+  revision** puts the files back as they were (a new revision; an
+  engineer's on a box). The box keeps the last two hundred, the
+  simulation the last twenty, in this browser.
 - The tree under the files is the program: the `PROGRAM`, then each
   function block instance it calls, nested. Click one to see its diagram.
 

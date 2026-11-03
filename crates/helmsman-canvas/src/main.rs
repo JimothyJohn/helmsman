@@ -39,6 +39,7 @@ mod commit;
 mod devices;
 mod editor;
 mod glyphs;
+mod history_ui;
 mod hotkeys;
 mod icons;
 mod messages;

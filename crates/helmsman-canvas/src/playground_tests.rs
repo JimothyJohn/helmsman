@@ -826,6 +826,98 @@ fn a_conversations_programs_pile_up_under_one_name_newest_as_main() {
     );
 }
 
+/// Nick 2026-11-01 (project-history): every save and every answer taken
+/// is a revision kept with the project here too (the newest twenty, in
+/// the browser's storage): who, when, what, the Agent page, the files;
+/// a revision restores as a new revision; a built-in example records
+/// nothing; a reload finds them.
+#[test]
+fn revisions_are_kept_with_the_project_restored_and_bounded() {
+    let store = SharedStorage::default();
+    let mut v = PlaygroundView::with_storage(Box::new(store.clone()));
+    assert!(v.proj.is_example());
+    v.proj.save();
+    assert!(!v.proj.is_example(), "a copy");
+    let copy = v.proj.open.clone();
+    assert_eq!(v.proj.revisions().len(), 1, "the copy's first save");
+    v.proj.create("mine", None);
+    v.open_project("mine");
+    assert!(v.proj.revisions().is_empty(), "nothing saved yet");
+    v.proj.current_text_mut().unwrap().push_str("(* one *)");
+    v.proj.save();
+    let revs = v.proj.revisions();
+    assert_eq!(revs.len(), 1);
+    assert_eq!(
+        (revs[0].n, revs[0].by.as_str(), revs[0].what.as_str()),
+        (1, "you", "saved")
+    );
+    assert!(
+        revs[0].at_ms > 1_700_000_000_000,
+        "a real clock: {}",
+        revs[0].at_ms
+    );
+    assert!(revs[0].files["main.st"].ends_with("(* one *)"));
+    assert_eq!(revs[0].page, None);
+    // An answer taken records the page it came from.
+    v.chat.receive(Incoming::Proxy(true));
+    v.chat.question = "make it blink".into();
+    let (seq, _) = v.chat.ask("x", &[], "").unwrap();
+    v.chat.receive(Incoming::Chunk {
+        seq,
+        text: STREAM.into(),
+    });
+    v.chat.receive(Incoming::End { seq });
+    v.chat.program = Some("mine".into());
+    v.take_code("PROGRAM p\nEND_PROGRAM\n".into());
+    let revs = v.proj.revisions();
+    assert_eq!(revs.len(), 2);
+    assert_eq!(revs[1].what, "took the Agent's answer into main.st");
+    assert!(
+        revs[1]
+            .page
+            .as_deref()
+            .is_some_and(|p| p.starts_with("make it blink")),
+        "{:?}",
+        revs[1].page
+    );
+    assert!(revs[1].files.contains_key("v1.st"));
+    assert!(
+        !revs[1].files.contains_key("agent.md"),
+        "the pages file is not a revision's business"
+    );
+    // Restore: the files back, as a new revision.
+    assert!(v.proj.restore(1));
+    assert!(v.proj.files["main.st"].ends_with("(* one *)"));
+    assert!(!v.proj.files.contains_key("v1.st"));
+    let revs = v.proj.revisions();
+    assert_eq!(revs.len(), 3);
+    assert_eq!(revs[2].what, "restored revision 1");
+    assert!(!v.proj.restore(99));
+    // Bounded, newest kept.
+    for k in 0..30 {
+        let mark = format!("(* {k} *)");
+        v.proj.current_text_mut().unwrap().push_str(&mark);
+        v.proj.save();
+    }
+    let revs = v.proj.revisions();
+    assert_eq!(revs.len(), crate::sim_projects::MAX_SIM_REVISIONS);
+    assert_eq!(revs.last().unwrap().n, 33);
+    // A reload finds them, per project.
+    drop(v);
+    let again = PlaygroundView::with_storage(Box::new(store.clone()));
+    assert_eq!(again.proj.open, "mine");
+    assert_eq!(
+        again.proj.revisions().len(),
+        crate::sim_projects::MAX_SIM_REVISIONS
+    );
+    assert_eq!(again.proj.history[&copy].len(), 1);
+    // The History row's rows and a revision's view.
+    let row = again.proj.revisions()[0].row();
+    assert_eq!(row.by, "you");
+    let view = again.proj.revisions()[0].view();
+    assert!(view.files.contains_key("main.st"));
+}
+
 /// The pages live with the project: written to agent.md as they come,
 /// read back when the project opens again, kept out of the Files tab's
 /// list and out of the project's dirty mark.

@@ -17,8 +17,17 @@
 //! POST   /api/projects/{p}/zip[?replace=true] engineer: a .zip as project p (new, or in place of it)
 //! POST   /api/projects/{p}/import?file=F[&replace=true]
 //!                                             engineer: one file into p: F.st as it is, F.xml (PLCopen) lowered to F.st
+//! GET    /api/projects/{p}/history            its revisions, oldest first: n, at_ms, by, what, page, files
+//! GET    /api/projects/{p}/history/{n}        one revision: the files' text, and the Agent page if one
+//! POST   /api/projects/{p}/history/{n}/restore engineer: the project's files back to revision n (a new revision)
 //! GET    /api/running                         which project was deployed last, and whether it is what runs
 //! ```
+//!
+//! **History.** Every save (`PUT .../files/{f}`, which may carry `page`,
+//! the Agent page the change came from), upload, import and restore
+//! writes a revision ([`crate::project::history`]): the files as they are
+//! after it, who (the session's label), when, what. Deploys keep
+//! snapshotting into the store as before.
 //!
 //! **The engineer gate.** Every route that writes (create, copy, rename,
 //! delete, save, upload, import, replay, deploy) needs a login session
@@ -109,6 +118,30 @@ pub(super) fn get(ctx: &Ctx, rest: &[&str]) -> Response {
             ),
             Err(r) => refusal(&r),
         },
+        // A project that is not there has no history to list (404), while
+        // one that is has an empty one.
+        ["projects", name, "history"] if p.folder(name).is_none() => Response::error(404, "no such project"),
+        ["projects", name, "history"] => match p.history().list(name) {
+            Ok(list) => Response::json(
+                200,
+                &json!({ "revisions": list.iter().map(project::history::Revision::json).collect::<Vec<_>>() }),
+            ),
+            Err(r) => refusal(&r),
+        },
+        ["projects", name, "history", _] if p.folder(name).is_none() => {
+            Response::error(404, "no such project")
+        }
+        ["projects", name, "history", n] => match n.parse::<u32>().ok().map(|n| p.history().read(name, n)) {
+            Some(Ok(r)) => Response::json(
+                200,
+                &json!({
+                    "n": r.revision.n, "at_ms": r.revision.at_ms, "by": r.revision.by, "what": r.revision.what,
+                    "page": r.page, "files": r.files.0,
+                }),
+            ),
+            Some(Err(r)) => refusal(&r),
+            None => Response::error(404, "no such revision"),
+        },
         ["projects", name, "zip"] => match p.zip(name) {
             Ok(bytes) => Response {
                 status: 200,
@@ -136,8 +169,11 @@ pub(super) fn allowed(path: &[&str]) -> Option<&'static str> {
             "projects",
             _,
             "rename" | "check" | "replay" | "deploy" | "import",
-        ] => Some("POST"),
-        ["api", "running"] => Some("GET"),
+        ]
+        | ["api", "projects", _, "history", _, "restore"] => Some("POST"),
+        ["api", "running"] | ["api", "projects", _, "history"] | ["api", "projects", _, "history", _] => {
+            Some("GET")
+        }
         _ => None,
     }
 }
@@ -281,6 +317,21 @@ pub(super) fn mutate(req: &Request, ctx: &Ctx, rest: &[&str]) -> Response {
             }
         }
         ("PUT", ["projects", name, "files", file]) => save(req, p, name, file, &done, &failed, &what),
+        ("POST", ["projects", name, "history", n, "restore"]) => match n.parse::<u32>() {
+            Ok(n) => match p.restore(name, n, &by(req)) {
+                Ok(m) => done(
+                    200,
+                    json!({ "restored": n, "revision": m }),
+                    format!("{what}: restored revision {n} (as revision {m})"),
+                ),
+                Err(r) => failed(r, &format!("revision {n} not restored")),
+            },
+            Err(_) => done(
+                404,
+                json!({ "error": "no such revision" }),
+                format!("{what}: no such revision"),
+            ),
+        },
         ("DELETE", ["projects", name, "files", file]) => match p.remove(name, file) {
             Ok(()) => done(
                 200,
@@ -326,9 +377,10 @@ fn save(
         Ok(m) => m,
         Err(e) => return done(400, json!({ "error": e }), format!("{what}: malformed save")),
     };
-    if let Err(e) = keys(&m, &["text", "version"]) {
+    if let Err(e) = keys(&m, &["text", "version", "page"]) {
         return done(400, json!({ "error": e }), format!("{what}: malformed save"));
     }
+    let page = m.get("page").and_then(Json::as_str);
     let Some(text) = m.get("text").and_then(Json::as_str) else {
         return done(
             400,
@@ -338,11 +390,18 @@ fn save(
     };
     let if_match = m.get("version").map(Json::as_str);
     match p.save(name, file, text.as_bytes(), if_match) {
-        Ok(version) => done(
-            200,
-            json!({ "name": file, "version": version, "bytes": text.len() }),
-            format!("{what}: file {} saved ({} bytes)", clean(file), text.len()),
-        ),
+        Ok(version) => {
+            let event = match page {
+                Some(_) => format!("took the Agent's answer into {file}"),
+                None => format!("saved {file}"),
+            };
+            let revision = p.record_revision(name, &by(req), &event, page).ok();
+            done(
+                200,
+                json!({ "name": file, "version": version, "bytes": text.len(), "revision": revision }),
+                format!("{what}: file {} saved ({} bytes)", clean(file), text.len()),
+            )
+        }
         Err(r) => failed(r, &format!("file {} not saved", clean(file))),
     }
 }
@@ -382,25 +441,35 @@ fn upload(
         }
     };
     match p.install_with(name, &files, &drivers, replace) {
-        Ok(()) => done(
-            if replace { 200 } else { 201 },
-            json!({
-                "name": name,
-                "files": files.0.keys().collect::<Vec<_>>(),
-                "drivers": drivers.keys().collect::<Vec<_>>(),
-            }),
-            format!(
-                "{what}: uploaded ({} files, {} drivers)",
-                files.0.len(),
-                drivers.len()
-            ),
-        ),
+        Ok(()) => {
+            let _ = p.record_revision(name, &by(req), "uploaded a zip", None);
+            done(
+                if replace { 200 } else { 201 },
+                json!({
+                    "name": name,
+                    "files": files.0.keys().collect::<Vec<_>>(),
+                    "drivers": drivers.keys().collect::<Vec<_>>(),
+                }),
+                format!(
+                    "{what}: uploaded ({} files, {} drivers)",
+                    files.0.len(),
+                    drivers.len()
+                ),
+            )
+        }
         Err(r) => done(
             r.status,
             json!({ "error": r.why }),
             format!("{what}: upload not installed: {}", r.why),
         ),
     }
+}
+
+/// Who a change is recorded as: the session's label, else the box.
+fn by(req: &Request) -> String {
+    req.session
+        .as_ref()
+        .map_or_else(|| "box".to_string(), crate::policy::account::Principal::label)
 }
 
 /// The ST a single uploaded file becomes, and the file it goes in.
@@ -483,11 +552,19 @@ fn import(
     };
     let if_match = if replace { None } else { Some(None) };
     match p.save(name, &target, text.as_bytes(), if_match) {
-        Ok(version) => done(
-            201,
-            json!({ "name": target, "version": version, "bytes": text.len() }),
-            format!("{what}: imported {} as {target}", clean(file)),
-        ),
+        Ok(version) => {
+            let _ = p.record_revision(
+                name,
+                &by(req),
+                &format!("imported {} as {target}", clean(file)),
+                None,
+            );
+            done(
+                201,
+                json!({ "name": target, "version": version, "bytes": text.len() }),
+                format!("{what}: imported {} as {target}", clean(file)),
+            )
+        }
         Err(r) => failed(r, "import not saved"),
     }
 }

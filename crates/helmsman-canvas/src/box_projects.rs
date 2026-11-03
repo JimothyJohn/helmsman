@@ -66,6 +66,18 @@ pub enum PCall {
     },
     Check(String),
     Replay(String),
+    /// `GET .../history`: the project's revisions.
+    History(String),
+    /// `GET .../history/{n}`: one revision, whole.
+    Revision {
+        project: String,
+        n: u32,
+    },
+    /// `POST .../history/{n}/restore`.
+    Restore {
+        project: String,
+        n: u32,
+    },
     Deploy {
         project: String,
         replay: Option<u64>,
@@ -159,6 +171,17 @@ impl PReq {
             ctype: JSON,
         }
     }
+}
+
+/// A revision as the box lists it.
+fn revision_row(j: &Json) -> Option<crate::history_ui::RevisionRow> {
+    Some(crate::history_ui::RevisionRow {
+        n: u32::try_from(j["n"].as_u64()?).ok()?,
+        at_ms: j["at_ms"].as_u64().unwrap_or(0),
+        by: j["by"].as_str().unwrap_or("?").to_string(),
+        what: j["what"].as_str().unwrap_or("").to_string(),
+        page: j["page"].as_bool() == Some(true) || j["page"].is_string(),
+    })
 }
 
 fn project_url(p: &str) -> String {
@@ -267,6 +290,10 @@ pub struct BoxProjects {
     pub deployed: bool,
     /// Links to hand the browser as downloads.
     pub downloads: Vec<String>,
+    /// The open project's revisions, oldest first, as last read.
+    pub history: Vec<crate::history_ui::RevisionRow>,
+    /// The revision on view (the History modal).
+    pub revision: Option<crate::history_ui::RevisionView>,
     /// The running project's shared diagram layout, once read.
     pub layout: Option<SharedLayout>,
     /// A layout this page saved as the default, for the view to adopt.
@@ -368,8 +395,44 @@ impl BoxProjects {
         });
         self.diags.clear();
         self.conflict = None;
+        self.history.clear();
+        self.revision = None;
         self.queue
             .push(PReq::get(PCall::Project(name.into()), project_url(name)));
+        self.read_history(name);
+    }
+
+    /// Asks for project `name`'s revisions (the Files tab's History row).
+    pub fn read_history(&mut self, name: &str) {
+        self.queue.push(PReq::get(
+            PCall::History(name.into()),
+            format!("{}/history", project_url(name)),
+        ));
+    }
+
+    /// Asks for revision `n` of project `name`, whole, to show.
+    pub fn read_revision(&mut self, name: &str, n: u32) {
+        self.queue.push(PReq::get(
+            PCall::Revision {
+                project: name.into(),
+                n,
+            },
+            format!("{}/history/{n}", project_url(name)),
+        ));
+    }
+
+    /// The project's files back to revision `n` (an engineer; the box
+    /// records it as a new revision).
+    pub fn restore(&mut self, name: &str, n: u32) {
+        self.queue.push(PReq::json(
+            PCall::Restore {
+                project: name.into(),
+                n,
+            },
+            "POST",
+            format!("{}/history/{n}/restore", project_url(name)),
+            &json!({}),
+        ));
     }
 
     /// Shows `file` of the open project in the ST editor.
@@ -853,7 +916,59 @@ impl BoxProjects {
                     self.note(format!("{name} was not deleted: {}", error_of(a)), true);
                 }
             }
-            PCall::Save { project, file } => self.saved(&project, &file, a, &j),
+            PCall::Save { project, file } => {
+                self.saved(&project, &file, a, &j);
+                if ok {
+                    self.read_history(&project);
+                }
+            }
+            PCall::History(project) => {
+                if ok && self.open.as_ref().is_some_and(|o| o.name == project) {
+                    self.history = j["revisions"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(revision_row).collect())
+                        .unwrap_or_default();
+                }
+            }
+            PCall::Revision { project, n } => {
+                if !ok {
+                    self.note(format!("cannot read revision {n}: {}", error_of(a)), true);
+                    return;
+                }
+                if self.open.as_ref().is_none_or(|o| o.name != project) {
+                    return;
+                }
+                let files = j["files"]
+                    .as_object()
+                    .map(|m| {
+                        m.iter()
+                            .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if let Some(row) = revision_row(&j) {
+                    self.revision = Some(crate::history_ui::RevisionView {
+                        row,
+                        files,
+                        page: j["page"].as_str().map(str::to_string),
+                    });
+                }
+            }
+            PCall::Restore { project, n } => {
+                if ok {
+                    self.revision = None;
+                    self.note(
+                        format!("Revision {n} restored (as revision {}).", j["revision"]),
+                        false,
+                    );
+                    if self.open.as_ref().is_some_and(|o| o.name == project) {
+                        // The files changed under the page: read them again.
+                        self.open_project(&project);
+                    }
+                } else {
+                    self.note(format!("revision {n} was not restored: {}", error_of(a)), true);
+                }
+            }
             PCall::NewFile { project, file } => {
                 if ok {
                     if let Some(o) = self.open.as_mut().filter(|o| o.name == project) {

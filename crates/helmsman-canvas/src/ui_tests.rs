@@ -1071,6 +1071,60 @@ mod chrome {
         assert!(!h.has("file v1.st"));
     }
 
+    /// The Files tab's History row folds the revisions; a revision opens
+    /// in the centre with its diff and Restore, and Close shuts it.
+    #[test]
+    fn the_files_tab_lists_revisions_and_opens_one_in_the_centre() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.open_project("mine");
+            sim.proj.current_text_mut().unwrap().push_str("\n(* one *)");
+            sim.proj.save();
+            sim.proj.current_text_mut().unwrap().push_str("\n(* two *)");
+            sim.proj.save();
+        }
+        h.press("pane files");
+        h.wait(0.3);
+        assert!(h.has("history"), "the fold row");
+        assert!(!h.has("revision 1"), "folded by default");
+        h.press("history");
+        h.wait(0.2);
+        assert!(h.has("revision 1") && h.has("revision 2"));
+        let r2 = h.rect("revision 2");
+        let r1 = h.rect("revision 1");
+        assert!(r2.top() < r1.top(), "newest first");
+        h.press("revision 1");
+        h.wait(0.3);
+        assert!(h.has("revision form") && h.has("revision restore") && h.has("revision close"));
+        assert!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .revision
+                .as_ref()
+                .is_some_and(|v| v.row.n == 1)
+        );
+        h.press("revision restore");
+        h.wait(0.3);
+        assert!(!h.has("revision form"), "restored and shut");
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            sim.proj.files["main.st"].ends_with("(* one *)"),
+            "revision 1's text is back"
+        );
+        assert_eq!(sim.proj.revisions().len(), 3);
+        assert_eq!(sim.proj.revisions()[2].what, "restored revision 1");
+        h.press("revision 2");
+        h.wait(0.3);
+        assert!(h.has("revision form"));
+        h.press("revision close");
+        h.wait(0.2);
+        assert!(!h.has("revision form"));
+    }
+
     #[test]
     fn double_clicking_a_file_opens_the_code_tab() {
         let mut h = Harness::new(App::sim());

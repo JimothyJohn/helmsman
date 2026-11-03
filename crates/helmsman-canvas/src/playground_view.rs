@@ -17,7 +17,7 @@ use crate::playground::{
     MAX_SOURCE, Point, Session, TREND_SIGNALS, TREND_WINDOWS_MS, Widget, nice_range, tick_label,
 };
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
-use crate::sim_projects::{SimProjects, Storage};
+use crate::sim_projects::{SimProjects, SimRevision, Storage};
 use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 use crate::theme::{Theme, theme};
@@ -121,6 +121,8 @@ pub struct PlaygroundView {
     /// The question "what is this program called?", asked once per
     /// conversation before its first PROGRAM answer lands.
     pub program_name: Option<ProgramName>,
+    /// The revision on view (the History modal).
+    pub revision: Option<crate::history_ui::RevisionView>,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -175,6 +177,7 @@ impl PlaygroundView {
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
             program_name: None,
+            revision: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
@@ -269,9 +272,11 @@ impl PlaygroundView {
     fn act(&mut self, a: Act) {
         match a {
             Act::UseAnswer { name, text, save } => {
-                if save {
+                // Unsaved edits first (a save is a revision: none when
+                // there is nothing to save).
+                if save && self.proj.dirty() {
                     self.proj.save();
-                } else {
+                } else if !save {
                     let open = self.proj.open.clone();
                     self.proj.open_project(&open);
                 }
@@ -285,7 +290,14 @@ impl PlaygroundView {
                         *t = text;
                     }
                 }
-                self.proj.save();
+                // Recorded with the page that produced it.
+                let page = self
+                    .chat
+                    .history
+                    .last()
+                    .map(|e| format!("{}\n\n{}", e.question, e.answer));
+                let what = format!("took the Agent's answer into {}", self.proj.current);
+                self.proj.save_as(&what, page.as_deref());
                 self.reload();
                 let size = if dropped > 0 {
                     format!(" {dropped} oldest iteration(s) dropped: the project was past its size.")
@@ -299,6 +311,14 @@ impl PlaygroundView {
             }
             Act::OpenProject(p) => self.open_project(&p),
             Act::OpenFile(f) => self.proj.open_file(&f),
+            Act::ShowRevision(n) => {
+                self.revision = self
+                    .proj
+                    .revisions()
+                    .iter()
+                    .find(|r| r.n == n)
+                    .map(SimRevision::view);
+            }
             Act::NewProject(p) => {
                 self.proj.create(&p, None);
                 self.reload();
@@ -603,6 +623,37 @@ impl PlaygroundView {
         dropped
     }
 
+    /// The revision on view, in the middle of the screen, until Close or
+    /// Restore (a built-in example is read-only).
+    fn revision_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        let Some(view) = self.revision.clone() else {
+            return;
+        };
+        let current: std::collections::BTreeMap<String, String> = self
+            .proj
+            .files
+            .iter()
+            .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        let write = if self.proj.is_example() {
+            Err("A built-in example is read-only: copy the project first.".into())
+        } else {
+            Ok(())
+        };
+        match crate::history_ui::modal(ctx, chrome, &view, &current, &write) {
+            Some(crate::history_ui::HistoryAct::Close) => self.revision = None,
+            Some(crate::history_ui::HistoryAct::Restore(n)) => {
+                self.revision = None;
+                if self.proj.restore(n) {
+                    self.reload();
+                    self.notice = Some(format!("Revision {n} restored."));
+                }
+            }
+            None => {}
+        }
+    }
+
     /// The "Name the program" question as a box in the middle of the
     /// screen (the view draws it each frame after the Editor).
     fn program_name_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
@@ -672,6 +723,7 @@ impl PlaygroundView {
         // the frame a click is released in reads that release as a click
         // on its backdrop and shuts itself.
         self.program_name_ui(&ui.ctx().clone(), chrome);
+        self.revision_ui(&ui.ctx().clone(), chrome);
     }
 
     /// Runs the program (and Claude's answer) on with nothing drawn: the
@@ -924,6 +976,8 @@ impl Body for PlaygroundView {
             .collect();
         let open = self.proj.open.clone();
         let current = self.proj.current.clone();
+        let history: Vec<crate::history_ui::RevisionRow> =
+            self.proj.revisions().iter().map(SimRevision::row).collect();
         let listing = Listing {
             projects: &rows,
             open: Some(&open),
@@ -933,6 +987,7 @@ impl Body for PlaygroundView {
             dirty: self.proj.dirty(),
             starters: false,
             running: self.proj.running.as_deref() == Some(open.as_str()),
+            history: &history,
         };
         if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
             self.act(a);

@@ -633,6 +633,60 @@ impl Harness {
 
 // ---- the tests ----
 
+/// Nick 2026-11-01 (project-history): the page lists the box's revisions
+/// after each save, reads one whole, and restores it as an engineer.
+#[test]
+fn the_page_lists_reads_and_restores_the_boxs_revisions() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    settle(&b, &jar, p);
+    let base = p.history.len();
+    assert!(base >= 1, "{:?}", p.history);
+    assert_eq!(p.history[0].what, "saved main.st");
+    assert_eq!(p.history[0].by, "alice (engineer)");
+    p.open_file("main.st");
+    let edited = MAIN.replace("reset := FALSE", "reset := NOT start");
+    p.current_mut().unwrap().text.clone_from(&edited);
+    p.save();
+    settle(&b, &jar, p);
+    assert_eq!(p.history.len(), base + 1, "a save is a revision");
+    // The last revision `make` wrote holds MAIN (its first is the empty file).
+    let last = u32::try_from(base).unwrap();
+    p.read_revision("line", last);
+    settle(&b, &jar, p);
+    let view = p.revision.clone().expect("the revision on view");
+    assert_eq!(view.row.n, last);
+    assert_eq!(view.files["main.st"], MAIN);
+    assert_eq!(view.page, None);
+    p.restore("line", last);
+    settle(&b, &jar, p);
+    assert!(p.revision.is_none(), "shut after the restore");
+    assert_eq!(p.current().unwrap().text, MAIN, "the file came back");
+    assert_eq!(p.history.len(), base + 2);
+    assert_eq!(p.history[base + 1].what, format!("restored revision {last}"));
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], MAIN);
+    // An operator sees the history and cannot restore.
+    let jar2 = Jar::default();
+    let mut w = page(&b, &jar2, Some(("bob", BOB)));
+    let q = &mut w.projects;
+    q.open_project("line");
+    settle(&b, &jar2, q);
+    assert_eq!(q.history.len(), base + 2);
+    q.restore("line", 2);
+    settle(&b, &jar2, q);
+    assert_eq!(q.history.len(), base + 2, "nothing restored");
+    assert!(
+        q.notice
+            .as_ref()
+            .is_some_and(|(n, err)| *err && n.contains("not restored")),
+        "{:?}",
+        q.notice
+    );
+}
+
 #[test]
 fn an_engineer_lists_opens_edits_saves_and_deploys_a_project_on_the_box() {
     let b = Bench::new();

@@ -11,6 +11,7 @@
 //!     drivers/NAME.wasm    optional: WASM drivers its map names (`wasm:NAME`),
 //!                          found before the box's (`crate::driver_dir`)
 //! <state-dir>/running-project   which project was last deployed, and as what
+//! <state-dir>/projects-history/  each project's revisions ([`history`])
 //! ```
 //!
 //! - **Names.** A project is 1..=48 of `a-z 0-9 _ -`, starting with a
@@ -38,6 +39,7 @@
 //!   later apply or rollback moves it.
 
 pub mod build;
+pub mod history;
 pub mod settings;
 
 pub use helmsman_project::{
@@ -121,6 +123,8 @@ pub struct Running {
 pub struct Projects {
     root: PathBuf,
     running: PathBuf,
+    /// Every project's revisions, beside the projects folder.
+    history: history::History,
     /// Held by every write, and by reads that must see a whole project
     /// at one moment (deploy, download).
     lock: Mutex<()>,
@@ -209,11 +213,47 @@ impl Projects {
                 "the projects folder is not a directory",
             ));
         }
+        let beside = root
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let stem = root.file_name().and_then(|n| n.to_str()).unwrap_or("projects");
+        let history = history::History::open(beside.join(format!("{stem}-history")))?;
         Ok(Self {
             root,
             running,
+            history,
             lock: Mutex::new(()),
         })
+    }
+
+    /// The projects' revisions ([`history`]).
+    #[must_use]
+    pub const fn history(&self) -> &history::History {
+        &self.history
+    }
+
+    /// Writes project `name`'s files as they are now as its next
+    /// revision, by `by`, for `what`, with the Agent `page` that produced
+    /// the change when there was one.
+    ///
+    /// # Errors
+    /// No such project (404), or the history cannot be written.
+    pub fn record_revision(&self, name: &str, by: &str, what: &str, page: Option<&str>) -> R<u32> {
+        let files = self.read(name)?;
+        self.history.record(name, &files, by, what, page)
+    }
+
+    /// Project `name`'s files replaced by revision `n`'s (its drivers
+    /// kept), recorded as a new revision.
+    ///
+    /// # Errors
+    /// No such project or revision (404), or as [`Projects::install_with`].
+    pub fn restore(&self, name: &str, n: u32, by: &str) -> R<u32> {
+        let rev = self.history.read(name, n)?;
+        let drivers = self.drivers(name)?;
+        self.install_with(name, &rev.files, &drivers, true)?;
+        self.history
+            .record(name, &rev.files, by, &format!("restored revision {n}"), None)
     }
 
     /// `<state>/projects`, recording the running project in
@@ -460,6 +500,7 @@ impl Projects {
             return Err(Refusal::new(409, "a project of that name exists"));
         }
         fs::rename(&src, &dest).map_err(|e| Refusal::io(&e))?;
+        self.history.rename(from, to)?;
         if let Some(r) = self.running()
             && r.name == from
         {
@@ -487,7 +528,8 @@ impl Projects {
         }
         let gone = self.root.join(tmp_name("gone"));
         fs::rename(&dir, &gone).map_err(|e| Refusal::io(&e))?;
-        fs::remove_dir_all(&gone).map_err(|e| Refusal::io(&e))
+        fs::remove_dir_all(&gone).map_err(|e| Refusal::io(&e))?;
+        self.history.delete(name)
     }
 
     /// Saves one file (a draft). With `if_match`, only if the file is still

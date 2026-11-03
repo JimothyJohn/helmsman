@@ -107,7 +107,15 @@ this; change it here first when a decision changes.
   running. Opening or editing another project never disturbs the running
   one.
 - **Save** writes the edited files (a draft; a file someone else saved
-  since it was read is refused, and the page offers to reload it).
+  since it was read is refused, and the page offers to reload it). Every
+  save, upload, import and restore is a **revision** of the project on
+  the box (Nick 2026-11-01, project-history; interview 2026-11-02:
+  revisions, not git): the files as they were, who, when, what, and the
+  Agent page the change came from when there was one. The Files tab's
+  History row lists them; a revision opens in the centre with a line
+  diff against the project as it is and Restore (an engineer's, a new
+  revision). The simulation keeps the newest twenty in the browser's
+  storage the same way. Deploy snapshots in the store are untouched.
   **Deploy** saves first, compiles the open project, records a snapshot in
   the store (history and rollback keep working) and hot-swaps it in
   between scans; compile errors list file and line, and a click goes

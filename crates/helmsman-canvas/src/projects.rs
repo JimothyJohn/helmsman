@@ -113,6 +113,8 @@ pub enum Act {
         text: String,
         save: bool,
     },
+    /// Show revision n of the open project (the History row).
+    ShowRevision(u32),
 }
 
 /// What the sidebar shows.
@@ -131,6 +133,8 @@ pub struct Listing<'a> {
     pub starters: bool,
     /// The open project is the one running: its `main.st` is marked.
     pub running: bool,
+    /// The open project's revisions, oldest first (the History row).
+    pub history: &'a [crate::history_ui::RevisionRow],
 }
 
 /// Which name the sidebar's text field is for.
@@ -168,6 +172,8 @@ pub struct FilesUi {
     pub starters_open: bool,
     /// The earlier iterations (`vN.st`) are unfolded.
     pub earlier_open: bool,
+    /// The History row is unfolded.
+    pub history_open: bool,
     /// The file last copied (name, text): the app's own, not the
     /// system's, so a paste works in any open project here.
     pub clipboard: Option<(String, String)>,
@@ -379,6 +385,11 @@ impl FilesUi {
                     self.ask(Naming::NewFile, ".st");
                 }
             }
+        }
+        if l.open.is_some()
+            && let Some(n) = crate::history_ui::rows_ui(ui, chrome, l.history, &mut self.history_open)
+        {
+            act = Some(Act::ShowRevision(n));
         }
         if let Some(a) = self.delete_key(ui, l) {
             self.naming = None;

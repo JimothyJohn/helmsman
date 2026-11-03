@@ -348,6 +348,7 @@ impl BoxView {
         {
             self.add_device_line(&line);
         }
+        self.revision_ui(&ui.ctx().clone(), chrome);
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.project_act(a);
         }
@@ -669,6 +670,41 @@ impl BoxView {
             }
             // The Agent's answer lands in the simulation's projects.
             Act::UseAnswer { .. } => {}
+            Act::ShowRevision(n) => {
+                if let Some(o) = &open {
+                    self.projects.read_revision(&o.name, n);
+                }
+            }
+        }
+    }
+
+    /// The revision on view, in the middle of the screen, until Close or
+    /// Restore (an engineer's; the box records the restore).
+    fn revision_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        let Some(view) = self.projects.revision.clone() else {
+            return;
+        };
+        let current: std::collections::BTreeMap<String, String> = self
+            .projects
+            .open
+            .as_ref()
+            .map(|o| {
+                o.bufs
+                    .iter()
+                    .filter(|(n, b)| b.loaded && !helmsman_project::agent::is_agent_file(n))
+                    .map(|(n, b)| (n.clone(), b.text.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let write = self.writable();
+        match crate::history_ui::modal(ctx, chrome, &view, &current, &write) {
+            Some(crate::history_ui::HistoryAct::Close) => self.projects.revision = None,
+            Some(crate::history_ui::HistoryAct::Restore(n)) => {
+                if let Some(name) = self.projects.open.as_ref().map(|o| o.name.clone()) {
+                    self.projects.restore(&name, n);
+                }
+            }
+            None => {}
         }
     }
 }
@@ -912,6 +948,7 @@ impl Body for BoxView {
                 running: open
                     .as_ref()
                     .is_some_and(|o| self.projects.running.as_deref() == Some(o.name.as_str())),
+                history: &self.projects.history,
             };
             if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
                 self.project_act(a);
