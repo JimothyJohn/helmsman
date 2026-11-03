@@ -22,6 +22,10 @@
 //!   calendar is not part of a project: a deploy carries the running one
 //!   over. Its WASM drivers (`drivers/NAME.wasm`) are files the deploy
 //!   loads the map with (`crate::driver_dir`), not part of the snapshot.
+//! - **Requirement tests never deploy.** A `test_NAME.st` file
+//!   (`helmsman_iec::spec::is_test`) is left out of every module: the
+//!   tests run in the simulation ([`crate::api::projects`]' `tests` route,
+//!   and before a deploy, which a red test refuses).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -187,10 +191,17 @@ fn locate(segments: &[Segment], line: u32) -> Option<(&str, u32)> {
         .map(|s| (s.file.as_str(), line - s.start + 1))
 }
 
+/// The project's `.st` files that build: every one but the requirement
+/// tests (`test_NAME.st`, `helmsman_iec::spec`), which run in the
+/// simulation and never deploy.
+fn built_files(files: &Files) -> impl Iterator<Item = (&str, &str)> {
+    files.st().filter(|(n, _)| !helmsman_iec::spec::is_test(n))
+}
+
 /// Parses every file and finds its PROGRAMs.
 fn programs(files: &Files, diags: &mut Vec<Diag>) -> Vec<Found> {
     let mut found: Vec<Found> = Vec::new();
-    for (file, text) in files.st() {
+    for (file, text) in built_files(files) {
         let unit = match ast::parse(text) {
             Ok(u) => u,
             Err(d) => {
@@ -247,7 +258,7 @@ fn source_for(project: &str, files: &Files, all: &[Found], program: &Found) -> (
         program.name
     );
     let mut line = 2u32;
-    for (file, text) in files.st() {
+    for (file, text) in built_files(files) {
         let _ = writeln!(src, "(* file {file} *)");
         line += 1;
         let blank: Vec<(usize, usize)> = all

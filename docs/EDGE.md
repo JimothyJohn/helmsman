@@ -330,6 +330,21 @@ thumbv7em-none-eabihf` (a `rustup target add` in the workflow) next to the
 existing checks; `scripts/lint.sh` gets the same line. Nothing else in the
 workspace changes, and no test changes.
 
+*Done 2026-11-02 (feat/iec-no-std).* As planned, with three differences.
+The `no_std` build is `--no-default-features --features libm`: cargo cannot
+turn a dependency on when a feature is *absent*, so `libm` is an optional
+dependency the node's build names; the std build still has none. The
+wall-clock start (`started: Option<Instant>` on `Program` and `State`) is
+behind `std` rather than turned into a `Duration`: it only serves
+`Program::scan`, which a node never calls, and `scan_at`'s clock already
+comes from the caller. `OnceLock` (the parsed standard library, a
+program's trace map) is a small `Once<T>` of the crate's own: std's
+`OnceLock` under `std`, a lock-free leak-once `AtomicPtr` cell without.
+`HashMap`/`HashSet` became `BTreeMap`/`BTreeSet` throughout (no hashbrown),
+which also makes every iteration order deterministic. `scripts/lint.sh`
+runs clippy on the thumbv7em build; the CI step is a separate draft PR
+(workflow edits go through a draft, per the cloud-security rules).
+
 **Phase 1, the board, no network (G2, G3).** `crates/helmsman-node`, not a
 default member. Embed the `trace_bench` source and the batch-mixer starter
 (blocks concatenated), compile at boot, scan in a loop, print min / mean /
@@ -337,12 +352,74 @@ max / p99 per-scan time and `esp-alloc` stats after compile and after
 10 000 scans over USB serial. Ethernet unplugged throughout; USB power.
 Repeat with the program heap in PSRAM on a WROVER.
 
+*Built 2026-11-03 (feat/node-scan-bench); numbers pending Nick's flash.*
+`crates/helmsman-node` is excluded from the workspace (own Cargo.lock,
+`rust-toolchain.toml` channel `esp`, `.cargo/config.toml` with the Xtensa
+target and build-std), built by `make node-build` (`scripts/node-build.sh`;
+`make node-clippy` for the lint). The firmware embeds the host bench's
+workload, now the shared file `crates/helmsman-iec/examples/trace_bench.st`,
+and the batch-mixer starter's `main.st` with its six blocks (the plant model
+left out) as the "realistic cell"; compiles each at boot, scans it 10 000
+times at a 10 ms clock, and prints compile time, heap for the program,
+min / mean / max / p99 per scan and heap used and peak (esp-alloc's
+`internal-heap-stats`, which costs a little per allocation and is named in
+the output). The round runs twice: internal SRAM alone (160 kB in the main
+DRAM segment plus 96 kB in `dram2`, supervictor's figures), then with the
+PSRAM added as a second heap region (esp-alloc fills internal RAM first),
+which gives G3 both figures; the interpreter is not told where to put
+what, so "program image in SRAM, scratch in PSRAM" is what the fill order
+makes of it, not a placement. The board, read over USB with `espflash
+board-info` on 2026-11-02: chip esp32 revision v3.0, 40 MHz crystal, 4 MB
+flash, MAC 10:97:bd:e4:1f:40; a WROVER-E module per Nick (board-info does
+not report PSRAM; the firmware prints the heap size after the PSRAM region
+is added, which is the check). Flashing is `scripts/node-flash.sh`, run by
+Nick in his own shell: it prints the unplug rule, asks, builds, flashes
+with espflash and tees the monitor into `scratch/node-bench-<utc>.log`.
+Host baseline for the same workload on the Mac Studio (M-series, release):
+61.8 µs per scan, tracing off (`cargo run --release -p helmsman-iec
+--example trace_bench`, 2026-11-03).
+
 **Phase 2, one real block (G4, G5).** The async `Transport` over
 `embassy-net`, DI read and DO write batched per scan, DO0 to DO3 looped to
 DI0 to DI3 as in the tabletop bench card. Flash over USB with Ethernet
 unplugged, unplug USB, plug PoE, read the log over UDP to the laptop. G4
 over 10 minutes; then set the block's comms-loss safe state, yank the
 node's cable, and time the outputs going safe.
+
+*Built 2026-11-03 (feat/node-modbus); numbers pending Nick's flash.* The
+shared part is the codec: `crates/helmsman-modbus` (`no_std`, no deps; PR
+#197) holds the PDUs, reply checks and MBAP framing that helmsman-io's
+client and the node's client both use, since helmsman-io itself cannot
+build without std (helmsman-proto's sockets). The node's client
+(`crates/helmsman-node/src/modbus.rs`) is the async twin of helmsman-io's
+`Transport`: one embassy-net TCP socket reused across reconnects, a
+200 ms timeout on every step, any error dropping the connection so a late
+reply is never taken for a newer request's answer. The `modbus` binary
+(`net` feature; `make node-build net`, `scripts/node-build.sh clippy net`)
+brings the POE2 up on Ethernet with supervictor's recipe copied in
+(`board.rs`: the APLL at 50 MHz routed out of GPIO0 through clock-output
+channel 1, PHY power on GPIO12; `ethernet.rs`: ph-esp32-mac's EMAC +
+LAN8720A over RMII, DHCP after link-up), waits for a lease, then scans
+every 10 ms: DI-00..07 in one FC 2 round trip, an embedded ST program (a
+one-of-three chase on DO-00..02 every 500 ms, `seen` true when the three
+DIs match the three DOs), DO-00..03 in one FC 15 round trip (0x0F is new
+in the codec for exactly this). Counted and reported every 10 s over
+serial and as a UDP line to the Studio (`scripts/node-log-sink.py`, port
+9514; run it with Apple's python so the firewall lets it receive): scans,
+late scans (started more than a period after their deadline: G4's
+number), scans whose own work overran the period, cycle mean and max,
+reads, writes, link errors and the last one, reconnects, matched and
+mismatched scans, heap used and peak. `E1213_ADDR` and `LOG_SINK` at build
+time change the defaults (10.0.0.57:502, 10.0.0.41:9514).
+
+Run order (`scripts/node-flash.sh modbus` prints it): flash over USB with
+Ethernet unplugged, Ctrl-C the monitor, unplug USB, start the sink, plug
+PoE. G5 is the block's own comms-loss setting: set the E1213's Modbus
+watchdog and DO safe mode on its console (manual pp. 3-4, 3-11, 3-21),
+then pull the node's cable and watch the outputs go safe within the
+timeout; the node cannot do that part without power or network, so the
+test proves the block does it.
+
 
 ## Out of scope for the spike
 

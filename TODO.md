@@ -15,7 +15,7 @@
   notes: 2026-10-31: the local repo is now ../agent-relay (renamed, client-agnostic, profiles namespaced helmsman/<name> with the old bare names as aliases). Tick once the GitHub repo exists: run its scripts/create-github-repo.sh.
   answer: private repo JimothyJohn/agent-relay (recommended), an agnostic endpoint that happens to work with helmsman
 
-- [ ] **Give the E1213 a fixed address?** It is on the office LAN by DHCP at 10.0.0.57 (lease from 10.0.0.1), so the address in docs/devices/e1213-loop/io.map and the enip map can change under us. Options: a DHCP reservation for 00-90-e8-7e-af-be on the router (nothing to change on the unit), a static address on the unit outside the router's pool (I don't know the pool), or move it to the 192.168.3.x device link where the maps used to point (192.168.3.60). The maps say 10.0.0.57 until you choose.
+- [x] **Give the E1213 a fixed address?** It is on the office LAN by DHCP at 10.0.0.57 (lease from 10.0.0.1), so the address in docs/devices/e1213-loop/io.map and the enip map can change under us. Options: a DHCP reservation for 00-90-e8-7e-af-be on the router (nothing to change on the unit), a static address on the unit outside the router's pool (I don't know the pool), or move it to the 192.168.3.x device link where the maps used to point (192.168.3.60). The maps say 10.0.0.57 until you choose.
   asked: 2026-11-02
   by: claude-session
   needs: your call (and the router's DHCP pool, or a reservation you set)
@@ -24,6 +24,8 @@
   est: 10m
   difficulty: low
   id: e1213-address
+  answer: DHCP reservation on the router (recommended)
+  notes: interview 2026-11-02: Nick changed to "find it by identity instead, skip the reservation": card `device-by-identity`; the maps keep 10.0.0.57 until that lands.
 
 ## Tasks
 
@@ -173,21 +175,27 @@
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **Requirements become tests: the agent and the engineer agree on a result, and a test keeps it** — Nick 2026-11-01 (NEXTSESH): the killer feature is verification, the way Lean makes you prove the result you asked for. The conversation quantifies each requirement ("the lamp is on within 2 s of start_pb", "the belt never runs with the guard open"), each one becomes a simulation test (a scenario of inputs over time plus assertions on outputs and timing) kept with the project, and every deploy and every "Use this code" replays the whole set and refuses a regression, with the failing requirement named in the engineer's words. The agent proposes the tests from the spec; the engineer edits and approves them like code. Replay exists (`POST /api/projects/{p}/replay`, sim-replay); this is the requirement-to-scenario layer on top and the pane that shows red and green per requirement.
-  needs: a scenario file format in the project (inputs over time, assertions), the sim replay running it, an agent profile that writes scenarios from a requirement
+- [x] **Requirements become tests: the agent and the engineer agree on a result, and a test keeps it** — Nick 2026-11-01 (NEXTSESH): the killer feature is verification, the way Lean makes you prove the result you asked for. The conversation quantifies each requirement ("the lamp is on within 2 s of start_pb", "the belt never runs with the guard open"), each one becomes a simulation test (a scenario of inputs over time plus assertions on outputs and timing) kept with the project, and every deploy and every "Use this code" replays the whole set and refuses a regression, with the failing requirement named in the engineer's words. The agent proposes the tests from the spec; the engineer edits and approves them like code. Replay exists (`POST /api/projects/{p}/replay`, sim-replay); this is the requirement-to-scenario layer on top and the pane that shows red and green per requirement.
+  needs: a small standard FB (ASSERT) and a test runner in the simulator and on the box; an agent profile that writes tests from a requirement
+  notes: interview 2026-11-02: requirement tests are ST test programs in the project (`test_NAME.st`: script inputs, step the simulation N scans, ASSERT outputs and timing), deterministic, written and read by the agent in the same language, run in the page and on the box; a scenario table or agent-judged acceptance were declined. First cut (1w): the FB, the runner, red/green per test in a Requirements tab, and "Use this code" plus Deploy refusing a red one; the plain-words requirement is the test file's header comment.
   result: a Requirements tab: each requirement in plain words with its test, green or red after every deploy; the agent's code cannot land past a red one
-  est: 2w
+  est: 1w
   difficulty: high
+  status: ready
+  notes: done 2026-11-02 night, PR #194: helmsman_iec::spec runner (two programs in lockstep), ASSERT FB (FAILED, FAILED_AT), test_*.st skipped by the build, POST /api/projects/{p}/tests, Requirements tab (right panel), Deploy 409 and Use this code refused on red. Left: nested ASSERT instances, located %IX inputs, the relay profile that writes tests from a requirement, a help picture.
   id: spec-tests
   asked: 2026-11-01
   by: claude-session
 
 - [ ] **"Use this code" keeps every iteration under one program, the newest on top** — Nick 2026-11-01 (NEXTSESH): "Use this code" should create a new program in a folder named by the user, where each iteration is the newest file and the earlier ones are hidden away in the Files pane. Today a PROGRAM answer becomes a project named from the PROGRAM (lamp_test, lamp_test-2, ...) and a block becomes a file in the open project. Wanted: the first answer asks for the program's name once; later answers to the same conversation land in that program as iterations (lamp_test/v3.st or a dated name), the pane shows the newest and folds the rest under a "earlier (4)" row, and the running one is marked.
-  needs: nothing beyond the projects store; a naming rule for iterations
+  needs: nothing beyond the projects store
+  notes: Nick 2026-11-02 (board): "just do serially for now. It will be wildly long, likely hundreds if not thousands but fuck it." Interview 2026-11-02: the newest is always `main.st`; the one it replaced is renamed `vN.st` (N counting up) and folded under "earlier (n)" in the Files tab; the build takes `main.st`, older ones are kept out of the build; the running one is marked. The first answer asks for the program's name once.
   result: a conversation's answers pile up under one named program, newest first, the pane uncluttered
   est: 2d
   difficulty: med
   depends: agent-pages
+  status: ready
+  notes: done 2026-11-02 night, PR #192 (merge queue, stacked on #187): FileKind::Iteration vN.st excluded from both builds, Name this program modal once per conversation, main.st newest, 'earlier (n)' fold, '· runs' mark. The name lives in page memory (asks again after a reload).
   id: agent-iterations
   asked: 2026-11-01
   by: claude-session
@@ -197,16 +205,20 @@
   result: pages with ‹ › arrows and a delete, the kept pages always sent as context, surviving a reload
   est: 2d
   difficulty: med
+  notes: done 2026-11-02 night, PR #187 (merge queue): agent.md project file kind, page strip ‹ ›, delete, kept pages as context ≤512 kB, hidden from Files.
   id: agent-pages
   asked: 2026-11-01
   by: claude-session
 
 - [ ] **Plant-model state variables map to real feedback devices, with suggestions** — Nick 2026-11-01 (NEXTSESH): the state variables a simulation's plant model keeps (the tank level, the belt position, the compressor pressure) should be easily replaceable by feedback devices on the real machine, and the agent should suggest the sensor that would capture each one, so what runs is modelled as closely as possible and the valuable signals are not left unmeasured. Each plant-model variable gets a "measured by" slot in the I/O map; empty slots are listed with a suggested device type (level transmitter, encoder, pressure transducer) and the agent's reasoning.
   needs: the plant-model blocks declaring their state variables (a convention or a pragma), the I/O map's point for each
+  notes: Nick 2026-11-02 (board): do it now with my own judgement. Judgement: a `(* state *)` pragma on a plant_model.st VAR marks a state variable; the Devices tab lists them under a "plant states" row with a `measured by` slot that is a map `in` line of the same name; the agent's suggestions (sensor type and reasoning) come from a tool reading the list; the simulation reads the mapped signal when one exists. Starts after `agent-scoped-edits`.
   result: a list per project of plant states, which sensor measures each on the machine, and suggestions for the rest; the simulation reads the sensor when one is mapped
-  est: 1w
+  est: 4d
   difficulty: med
   depends: machine-template
+  status: ready
+  notes: 2026-11-02 night: worker in progress (feat/plant-states) once #202 is in.
   id: sim-feedback-devices
   asked: 2026-11-01
   by: claude-session
@@ -221,13 +233,58 @@
   by: claude-session
 
 - [ ] **The Agent edits only what is in focus, and every edit is filed, versioned and tested** — Nick 2026-11-01: the agent should only edit what it is focused on, and each of those edits should be file-managed, version-controlled and tested, the way a developer's change goes through a branch, a review and CI. Today "Use this code" replaces or adds a whole file and the answer carries whatever the model chose to rewrite. Wanted: the agent's scope is the file or block the engineer has picked (the ST selection, the picked block, the open file), it proposes a change to that scope alone and says so; each change lands as its own file or iteration (agent-iterations), as a commit in the project's history with the conversation page that produced it (version-control), and only after the project's requirement tests pass (spec-tests). A change outside the scope is refused by the page, not left to the model.
-  needs: agent-iterations, spec-tests, version-control
+  needs: agent-iterations, spec-tests, project-history
+  notes: Nick 2026-11-02 (board): do it now with my own judgement. Interview 2026-11-02: the focus is the open file by default, the selected lines or the picked block when there is one, and the page says which rule applied; a change outside it is refused by the page (a byte-for-byte check against the rest of the project). History is `project-history` (revisions on the box), not git.
   result: an agent change names its scope, lands as one filed and committed iteration, and cannot skip the tests
   est: 1w
   difficulty: high
-  depends: agent-iterations, spec-tests
+  depends: agent-iterations, spec-tests, project-history
+  status: ready
+  notes: 2026-11-02 night: worker in progress (feat/agent-scoped-edits) once #187 #192 #194 #201 are in: scope module (file, selection or picked block), <edit_scope> envelope, byte-for-byte refusal outside the scope.
   id: agent-scoped-edits
   asked: 2026-11-01
+  by: claude-session
+
+- [ ] **Per-project history on the box: every save and every agent answer is a revision** — interview 2026-11-02 (the version-control card's first phase, chosen over git): each save and each "Use this code" writes a numbered revision into the project's folder on the box (the files plus the conversation page that produced it as a `.md`), listable in the Files tab (who, when, what), diffable as Structured Text, restorable as a new revision; deploys keep snapshotting into the store. Works from a browser; no git binary. `version-control` keeps the git export and remotes for later.
+  needs: nothing new (the projects store and the agent pages)
+  result: a History row per project: revisions with their conversation, diff and restore; the agent's edits are never lost or anonymous
+  est: 3d
+  difficulty: med
+  depends: agent-pages
+  status: ready
+  notes: done 2026-11-02 night, PR #201 (merge queue, stacked on #192): <state>/projects-history/NAME/NNNNNN with the page, GET …/history, GET …/history/{n}, POST …/history/{n}/restore (engineer), History row, LCS diff, restore; sim keeps 20 in browser storage.
+  id: project-history
+  asked: 2026-11-02
+  by: claude-session
+
+- [x] **Trend window: an exponential slider from 100 ms to 10 min, live** — Nick 2026-11-02 (NEXT.md): the window should go down to 1 s and 100 ms, and instead of the three buttons a slider, exponential, that changes the drawn window on the fly. The choppy line seen from localhost is a known quirk he has seen before and expects to vanish on a box; verify once, do not chase it.
+  needs: nothing
+  result: one slider under the Trend (log scale, 100 ms ..= 10 min, the value shown), the plot following as it moves; the three buttons gone; the choice kept per browser as before
+  est: 4h
+  difficulty: low
+  notes: done 2026-11-02 night, PR #185: one log slider in both trends, 100 ms..10 min, value beside it; choppiness not reproducible headless, left alone.
+  id: trend-window-slider
+  asked: 2026-11-02
+  by: claude-session
+
+- [ ] **Modbus identification probe (FC 43/14) for discovery and identity** — left out by the device-by-identity and discovery workers (2026-11-02 night): `cip=` identities and the ListIdentity sweep cover EtherNet/IP; a Modbus-only device is found today only by `mac=` once the host has seen it. Add Read Device Identification (FC 43, MEI type 14: VendorName, ProductCode, MajorMinorRevision) to helmsman-io's modbus driver, a bounded probe of the ARP table's hosts on 502 in `POST /api/devices/discover` when asked (`?modbus=1`), a `modbus=VENDOR:PRODUCT` identity endpoint resolved by that probe, and the library lookup by it (`identity.modbus` in device.toml exists). Cite the Modbus Application Protocol spec section in docs/SOURCES.md.
+  needs: a Modbus device that answers FC 43/14 to test on (does the E1213? check on the bench; the simulator answers it either way)
+  result: a Modbus-only block is found and matched like an EtherNet/IP one
+  est: 1d
+  difficulty: med
+  depends: device-by-identity
+  id: modbus-identification
+  asked: 2026-11-02
+  by: claude-session
+
+- [ ] **A device named by its identity, not its address** — interview 2026-11-02 (the E1213 is a DHCP lease; Nick chose this over a router reservation): a map's `device` line may give `mac=00-90-e8-7e-af-be`, or `vendor=991 product=515 serial=0x2A629EAE`, in place of a host; at start and after a link loss the box resolves the address (ListIdentity broadcast for EtherNet/IP, ARP or a Modbus identification scan for Modbus TCP) and logs what it found; the Devices tab shows both the identity and the address resolved. The E1213 maps move to `mac=` once this lands.
+  needs: nothing new (ListIdentity discovery exists; ARP reading is per platform)
+  result: a DHCP device keeps working when its lease moves; a map travels between networks
+  est: 1d
+  difficulty: med
+  notes: done 2026-11-02 night, PR #195 (merge queue): helmsman_io::resolve, `mac=` and `cip=V:P[:S]` endpoints, ListIdentity sweep, ARP table, /api/devices address; E1213 maps use mac=. No Modbus FC 43/14 probe (card modbus-identification).
+  id: device-by-identity
+  asked: 2026-11-02
   by: claude-session
 
 ## Product vision (interview 2026-10-29)
@@ -287,8 +344,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: high
   depends: wasm-driver, io-bench, agent-loop
   notes: EDS part started (feat/moxa-e1213): `helmsman_proto::eds` reads a vendor EDS and resolves its Class 1 connections, `enip-io` takes `eds=PATH`, so for an EtherNet/IP device the agent's job is choosing points, not writing a driver. Still to do here: the agent reading a manual's data map (Appendix B for the E1213) into points, and iterating on harness output.
+  notes: 2026-11-02 night: the EDS half is PR #191 (device-import; in the merge queue); the manual half is the relay's helmsman/v5 profile (../agent-relay feat/driver-agent-profile): look up, EDS over hand-written points, manual table → cited map lines, inferred marked, propose and stop. Tick when #191 lands and the relay is deployed with v5.
   id: driver-agent
-  needs: I put this is in tcpethernet: moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds
+  needs: the EDS (devices/moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds, untracked) first, then the manual's Appendix B
+  notes: Nick 2026-11-02 (board): "JUST USE THE EDS FILE FIRST TO MAKE SURE IT'S LEGIT". Order: the EDS path end to end through `device-import`, then the manual-to-points part.
+  status: ready
 
 - [x] **Bench: the Moxa ioLogik E1213 over EtherNet/IP** — `scripts/bench-e1213.sh` against the real E1213: ListIdentity (vendor 991, product 515), the Identity object, then the conformance harness over a Class 1 exclusive-owner connection at 100 ms (DI reads, DI-00's counter, the DO status byte, the four DO->DI loops, a point past the 51-byte input assembly). Turns the inferred parts of docs/devices/moxa-iologik-e1213.md into facts (bit order, counter byte order, DIO numbering): note what the run shows there.
   needs: the E1213 on the Studio link with its IP; EtherNet/IP enabled on its web console and activated for this unit (manual pp. 3-26, 5-1); DO-00..03 wired to DI-00..03 with field power (or `LOOPS="do:0=di:4 ..."`); UDP 2222 free on the Studio; the Moxa EDS at the repo root to check it too (optional)
@@ -328,13 +388,20 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 2d
   difficulty: med
   depends: device-library
+  status: ready
+  notes: done 2026-11-02 night, PR #191 (merge queue): flat NAME.eds project file kind, Import device… in the Devices tab, eds=NAME.eds resolved from the project folder; the E1213 EDS checked as fixture by hash, never committed.
   id: device-import
+  answer: Start with the EDS to ensure it works.
+  notes: interview 2026-11-02: device files are a project file kind (`devices/NAME.eds`, like `drivers/NAME.wasm`; travels with the zip); the Devices tab gets "Import device…"; an EDS becomes `device NAME enip-io ADDR eds=devices/NAME.eds` and the box reads it at start. Every imported device is also offered to the public library (`devices-repo`) so nobody maps it twice.
 
-- [ ] **Stock module: counters and uptime** — cycle counts, run/idle/down state, shift totals; the first shipped module, written in ST like everything else, so it doubles as the agent's few-shot example.
+- [x] **Stock module: counters and uptime** — cycle counts, run/idle/down state, shift totals; the first shipped module, written in ST like everything else, so it doubles as the agent's few-shot example.
   est: 2d
   difficulty: low
   depends: m1-demo
+  status: ready
+  notes: done 2026-11-02 night, PR #190: starters/counters (Template): debounce + production_counters blocks, run/idle/down, shift totals on shift_id, uptime %, plant model, io.map on box channels.
   id: stock-counters
+  notes: Nick 2026-11-02 (board): do it now with my own judgement. Judgement: a starter under Templates (`counters`): cycle count from a part-present input with debounce, run/idle/down from a running input and a timeout, shift totals reset by the calendar's `shift_id`, uptime as a REAL percentage; its own `test_counters.st` once `spec-tests` exists, else a plant_model.st exercising it.
 
 - [ ] **Check the L5X reader against RM014 and a real export** — `helmsman_iec::l5x` reads the export shape from the `l5x` Python package and memory (docs/SOURCES.md); run it on a Studio 5000 export of a bench project (controller, program, routine and rung exports) and the manual, and fix what differs.
   needs: the RM014 PDF (403 from the agent) and a Logix Designer export
@@ -372,12 +439,26 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 
 - [ ] **The agent finds a device's documentation on its own** — from the Why? interview 2026-11-01 ("where it goes"): given a device on the network (ListIdentity's vendor and product code, a Modbus unit's identification, a nameplate photo), the agent fetches the manual and the EDS through the relay, reads the data map into points and proposes the I/O map lines; the engineer approves the map before any output is bound. Builds on driver-agent (the manual to points part) and the EDS reader.
   needs: driver-agent; a relay tool that fetches documents from an allow-listed set of vendor sites
+  notes: Nick 2026-11-02 (board): do it now with my own judgement. Judgement: look the device up in `devices-repo` first (identity, then vendor/model text); only a miss goes to the relay's fetch tool; the result is offered back to the repo. After `device-import` and `devices-repo`.
+  status: ready
   result: a new device on the bench is mapped from its own documentation, with the source cited in the proposal
   est: 1w
   difficulty: high
   depends: driver-agent, relay-v0
+  notes: 2026-11-02 night: relay half done on ../agent-relay feat/doc-fetch (fetch_document run by the relay: allow-list moxa.com first, SSRF rules, 12 MiB/2 MiB caps, 40 fetches + 100 MiB a day per box in the ledger, library-first, profile helmsman/v6); box half in progress (tool → relay route → drop-in; default agent v6).
   id: device-docs-lookup
   asked: 2026-11-01
+  by: claude-session
+
+- [ ] **A public device library: map a device once, for everyone** — interview 2026-11-02: a public repository (JimothyJohn/helmsman-devices) with one folder per device: the EDS or the Modbus map, the `enip-io` profile or map lines, a doc with the manual's citations, the identity (vendor, product code, model text). The box and the agent look a device up before generating anything: by identity first (ListIdentity's vendor and product code, a Modbus unit's identification), then by vendor/model text; semantic search via the relay only once there are enough entries to need it. An import in the Devices tab offers to publish the result (a PR to the repo from the relay, the engineer confirming).
+  needs: Nick creates the public repo (a scratch script); the licence line per vendor file (the Moxa EDS carries no terms: a pointer and a hash, not the file, until Moxa answers)
+  result: the second user of an E1213 gets its points from the library in one click; the agent's mapping work is never repeated
+  est: 2d
+  difficulty: med
+  depends: device-import
+  notes: 2026-11-02 night: github.com/JimothyJohn/helmsman-devices public (main + dev; Nick ran the script), E1213 first entry; PR #1 there adds index.json + scripts/build-index.py (dev → main is Nick's). Lookup in helmsman: PR #202 (merge queue): POST /api/devices/discover, GET /api/devices/library, On the network + Add to the map…, --devices-index. Identity first, text second; semantic later.
+  id: devices-repo
+  asked: 2026-11-02
   by: claude-session
 
 - [ ] **Map the network from the electrical drawings and the bill of materials** — "where it goes": the drawings drop-in (dropin-pid) reads one sheet into points today; this reads a whole drawing set plus the BOM into the devices, their addresses and the wiring between them, and proposes the complete I/O map and the device list, cross-checked against what ListIdentity and the Modbus scan actually find. Differences become questions to the engineer.
@@ -414,7 +495,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 3w
   difficulty: high
   depends: relay-v0, bundle-format
+  notes: 2026-11-02 night: the node half moved: helmsman-node runs the scan bench and Modbus (PRs #193, #199); its own API + site beacon and the Site view across nodes are what this card is now.
   id: fleet-console
+  needs: a decision taken (interview 2026-11-02): no console host at all; see notes
+  notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (signed, A/B slots) once the node runs; depends on the edge spike (`node-modbus`) for the node half.
+  status: ready
 
 - [ ] **Vision sources** — deferred per interview; card kept so the signal model leaves room for camera-derived signals.
   est: 2w
@@ -426,20 +511,43 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
 - [ ] **Community marketplace** — publish/browse/install bundles; floor per market-floor, then an AI review on install that explains risk in plain words and can only refuse.
   est: 3w
   difficulty: high
-  depends: bundle-format, market-floor, fleet-console
+  depends: bundle-format, market-floor
+  notes: walking skeleton done 2026-11-02 night, PR #196: bundle::index (signed canonical JSON), bundle::market fetch (public hosts only), CLI bundle index/fetch, POST /api/market/list and /api/market/install through the bundle import and approval policy, --market-allow-local. Card stays open for accounts, payments, the AI review.
   id: marketplace
+  needs: the walking skeleton only, for now
+  notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a static, signed index of bundles (a JSON file and the bundles in a public repo, signed by trusted publishers), a box lists it and installs from it through the existing bundle path and approval policy; no accounts, no payments, no AI review yet. Est for the skeleton: 2d.
+  status: ready
 
 - [ ] **Box SKU** — reproducible Pi image, first-boot pairing with the relay, provisioning script, enclosure/BOM for the preloaded kit.
   est: 2w
   difficulty: high
-  depends: fleet-console
+  depends: relay-v0
+  notes: walking skeleton done 2026-11-02 night, PR #198: scripts/pi-image.sh (pi-gen in Docker, pinned ref), helmsman-firstboot pairing files → LoadCredential, docs/BOX.md; not booted. Pairing by code needs a relay endpoint (relay card). Card stays open for enclosure/BOM and a booted image.
   id: box-sku
+  needs: the walking skeleton only, for now
+  notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a reproducible Pi image build script (pi-gen or rpi-image-gen, the box binary and the canvas preinstalled, the systemd unit, first boot pairs with the relay from a one-time code) checked by booting it in QEMU in CI; no enclosure or BOM yet. Est for the skeleton: 2d.
+  status: ready
 
-- [ ] **Open-core split** — decide which crates stay MIT and where relay/fleet/verified-market code lives (private repo), before any paid code lands here.
+- [x] **Open-core split** — decide which crates stay MIT and where relay/fleet/verified-market code lives (private repo), before any paid code lands here.
   est: 2h
   difficulty: low
   depends: relay-v0
+  notes: done 2026-11-02 night, PR #186: LICENSING.md + NOTICE. This repo STAYS Apache-2.0 (commit 1f7a4de, 2026-11-01); relay MIT (on its feat/usage-metering branch), device library MIT, marketplace server side private. Flip this repo to MIT only if Nick says so (one Cargo line + LICENSE).
   id: open-core-split
+  needs: nothing: decided
+  notes: Nick 2026-11-02 (board): "relay can be MIT. Fleet is Apache, marketplace should be private. Add Stripe integration to possible charge upon uplink of datapoint and reading of data and ingestion by users or agents on a usage rate tied as close as possible to energy usage (that last part may be too abstract and separated from cost though)". Interview: meter now, charge later (`usage-metering`). To do here: LICENSE files (this repo and the relay MIT, the fleet/site code Apache-2.0 with a NOTICE, the marketplace private), a LICENSING.md naming which is which.
+  status: ready
+
+- [x] **Usage metering in the relay: a ledger now, Stripe later** — interview 2026-11-02 (open-core-split's billing half): the relay records usage events per box (datapoints uplinked, reads served, agent tokens in and out) in a durable ledger with a daily roll-up per box and per account; Stripe test-mode meters are wired to the roll-up behind a flag, no live charging and no prices set. Rates can be set later, energy-linked or not; the ledger is what any rate multiplies.
+  needs: the relay deployed (`relay-deploy`); a Stripe test-mode account (Nick's step)
+  result: every box's usage is counted and visible per day; turning billing on is a flag and a price, not a build
+  est: 2d
+  difficulty: med
+  depends: relay-v0
+  notes: done 2026-11-02 night on ../agent-relay feat/usage-metering (merges feat/images-metering): per-account roll-ups, datapoints/reads counters, Stripe test meters behind RELAY_STRIPE_METERS, key from Secrets Manager, no prices. Live only after relay-deploy; Nick: repo creation, deploy, Stripe test key, Docker integration run.
+  id: usage-metering
+  asked: 2026-11-02
+  by: claude-session
 
 - [ ] **Try the node canvas** — ComfyUI/Node-RED style editor in Rust (egui, wasm): nested function blocks, live scan sim, not wired to the PLC. Kept as a lab tool (2026-10-29); per canvas-edit-scope the operator canvas is the read-only ST view (st-graph-view), which reuses tcpethernet-graph and this renderer. Serve it: `make canvas-web`, then `python3 -m http.server 8790 --bind 0.0.0.0 --directory target/canvas-dist` and open http://10.0.0.41:8790/ from the Air (stop: `kill $(lsof -tiTCP:8790 -sTCP:LISTEN)`). In it: hold a start button, double-click a motor to go inside, select nodes + Cmd+G to make a block, `?` lists the controls.
   needs: your eyes on the UI
@@ -449,29 +557,36 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: low
   id: canvas-try
 
-- [ ] **helmsman-iec no_std + alloc** — a `std` feature (default on): HashMap/HashSet → BTreeMap/BTreeSet, Arc/Duration/Error/fmt from alloc and core, the parsed library passed in instead of a OnceLock, `Program::scan` behind `std`, `State` carrying a Duration instead of an Instant, and the twelve REAL builtins (SQRT, LN, SIN, ..., round/trunc) from `libm` as an optional dep only the no_std build enables (they have no core counterpart on rustc 1.99; checked). No logic moves, only imports.
+- [x] **helmsman-iec no_std + alloc** — a `std` feature (default on): HashMap/HashSet → BTreeMap/BTreeSet, Arc/Duration/Error/fmt from alloc and core, the parsed library passed in instead of a OnceLock, `Program::scan` behind `std`, `State` carrying a Duration instead of an Instant, and the twelve REAL builtins (SQRT, LN, SIN, ..., round/trunc) from `libm` as an optional dep only the no_std build enables (they have no core counterpart on rustc 1.99; checked). No logic moves, only imports.
   needs: nothing new; docs/EDGE.md "What the runtime needs from std today" is the item list
   result: G1 — `cargo build -p helmsman-iec --no-default-features --target thumbv7em-none-eabihf` in CI and scripts/lint.sh; every existing test, the ruSTy differential and the property tests green on std; the box build's dependency tree unchanged
   options: libm optional under not(std) | gate the REAL builtins behind std and refuse them on a node
   notes: docs/EDGE.md §Phases, Phase 0. Studio baseline 2026-11-01: trace_bench 57.8 µs/scan tracing off (M1 Max, release)
   est: 1d
   difficulty: low
+  notes: done 2026-11-02 night, PR #188 (G1): std feature default on, BTreeMap, libm optional for no_std only, thumbv7em build in lint.sh and install-dev.sh. PR #189 (CI step) is a DRAFT for Nick: workflow edit.
   id: iec-no-std
 
 - [ ] **Scan bench on the ESP32-POE2** — `crates/helmsman-node` (not a default workspace member): supervictor's board/poe2.rs and Ethernet bring-up copied in, Embassy and esp-hal 1.0 as supervictor pins them, trace_bench and the batch-mixer starter (blocks concatenated) embedded and compiled at boot; min/mean/max/p99 per scan and esp-alloc peak after compile and after 10 000 scans over USB serial. On a WROVER repeat with the program heap in PSRAM.
-  needs: the esp toolchain as supervictor pins it (espup, channel esp); the POE2 on USB with ETHERNET UNPLUGGED (no isolation); the module checked first: the two rack POE2s are WROOM per supervictor's inventory, Olimex ships WROVER-E now, and the Studio heap numbers (412 KB resident, 618 KB peak for the starter) say a WROOM cannot hold a realistic program as the crate stands
+  needs: the esp toolchain as supervictor pins it (espup, channel esp: on the Studio already); the POE2 on USB with ETHERNET UNPLUGGED (no isolation)
+  notes: Nick 2026-11-02 (board): "Uh oh I think I triggered this already...anyway there's a PoE2 you can try out that could be programmed via the laptop-installed editor interface that I can test on." Interview 2026-11-02: the POE2 is on the Studio's USB (/dev/cu.usbserial-11220), Ethernet unplugged, and it is a WROVER (8 MB PSRAM), so G3 gets PSRAM as a second esp-alloc region for compile scratch. Flashing stays a hand-off (a scratch script Nick runs).
+  status: ready
   result: G2 (< 5 ms per 4k-statement scan) and G3 (compile peak plus 10 000 scans fit the node's heap layout with ≥ 25 % headroom, SRAM-only figure recorded separately); numbers recorded either way, and a stop if either fails
   notes: docs/EDGE.md §Numbers, §Extrapolating, Phase 1. Add the counting-allocator heap harness as a second helmsman-iec example while here.
   est: 1d
-  difficulty: medium
+  difficulty: med
   depends: iec-no-std
+  notes: firmware done 2026-11-02 night, PR #193: crates/helmsman-node (outside the workspace, esp toolchain, make node-build), bench binary, PSRAM second round. NUMBERS PENDING Nick's flash: `scripts/node-flash.sh` (Ethernet unplugged, USB), paste the `--- round` lines into docs/EDGE.md Phase 1 and tick.
   id: node-scan-bench
 
 - [ ] **Modbus TCP from the node** — an async twin of helmsman-io's `Transport` over embassy-net's TCP socket behind a feature, `driver::Error` without std::io::Error, DI read and DO write batched to two round trips per scan; 10 ms scan against the E1213 (or the simulator) with DO0-3 looped to DI0-3; comms-loss safe state on yank.
-  needs: flash on USB with Ethernet unplugged, THEN unplug USB, THEN PoE; the E1213's comms-loss safe state configured; a UDP log sink on the laptop
+  needs: flash on USB with Ethernet unplugged, THEN unplug USB, THEN PoE; the E1213's comms-loss safe state configured; a UDP log sink on the Studio
+  notes: Nick 2026-11-02 (board): do it now with my own judgement. After `node-scan-bench`; then the node's own API and site beacon (`fleet-console`'s node half).
+  status: ready
   result: G4 (overruns < 1 % of scans over 10 min) and G5 (the block goes safe within its timeout on Ethernet loss)
   notes: docs/EDGE.md §Sync scan, async network, Phase 2
   est: 1d
-  difficulty: medium
+  difficulty: med
   depends: node-scan-bench
+  notes: firmware done 2026-11-02 night, PRs #197 (helmsman-modbus no_std codec; helmsman-io frames through it) and #199: 10 ms scan, FC2 read + FC15 write, chase program, UDP report. NUMBERS PENDING Nick's run: `scripts/node-flash.sh modbus`, unplug USB, `/usr/bin/python3 -I scripts/node-log-sink.py`, plug PoE; G5 needs the E1213's Modbus watchdog safe mode set first.
   id: node-modbus

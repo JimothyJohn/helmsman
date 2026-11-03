@@ -1,0 +1,19 @@
+# helmsman-firstboot: pairs a freshly flashed box with the relay from the
+# files under helmsman/ on the boot partition (relay-url, relay-token,
+# box-name; docs/BOX.md), then gets out of the way. Runs before the PLC
+# service at every boot and does nothing when there is nothing to do, so
+# the files can be added later and the step re-run by hand:
+#   sudo systemctl start helmsman-firstboot
+[Unit]
+Description=Helmsman first boot: relay pairing from the boot partition
+Before=helmsman-plc.service
+After=local-fs.target
+ConditionPathIsDirectory=/boot/firmware/helmsman
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/helmsman-firstboot
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

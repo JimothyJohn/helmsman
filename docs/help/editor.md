@@ -132,7 +132,9 @@ label is drawn, the icon stands alone at a readable size.
   hundred things the page had to say, with the error count on the tab.
 - **The side panel**, on the right (<kbd>Alt</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
-  diagram does not show; and **Agent**, where you describe what you want.
+  diagram does not show; **Requirements**, the project's requirement tests,
+  one row each, green or red with why (see [Requirement tests](projects.html#requirement-tests));
+  and **Agent**, where you describe what you want.
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
 

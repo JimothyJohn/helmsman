@@ -94,6 +94,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        canvas's ⋯ menu. Plain HTTP on the same port is
                        served only from this host (loopback, an SSH
                        tunnel); from the LAN it is redirected to https://
+  --market-allow-local on|off
+                       let POST /api/market/* fetch a marketplace index from a
+                       local address (loopback, a private range): a bench or a
+                       LAN mirror. Default off: a marketplace is a public site
   --opcua ADDR        read-only OPC UA server (see helmsman_plc::opcua) on
                        ADDR (default 127.0.0.1:4840: loopback only), or `off`.
                        Anonymous, SecurityPolicy None: nothing is signed or
@@ -103,10 +107,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        it the agent is offline and /api/chat answers 503
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
                        The box never holds an Anthropic key.
-  --relay-agent V      the agent version to ask the relay for (default v3)
+  --relay-agent V      the agent version to ask the relay for (default v6)
   --relay-explain-agent V
                        the agent version POST /api/explain asks for (an
-                       explain profile; default explain-v1). The box runs
+                       explain profile; default explain-v2). The box runs
                        only read-only tools for it either way.
   --devices-index URL  the device library's index the Devices tab and the
                        agent look a found device up in (default the public
@@ -153,6 +157,15 @@ const INPUTS: u16 = 150;
 /// Assembly the program writes as `%Q` and the scanner reads (T->O).
 const OUTPUTS: u16 = 100;
 
+/// Which hosts `POST /api/market/*` may fetch from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarketHosts {
+    /// Public addresses only (a box's default).
+    Public,
+    /// Local addresses too (`--market-allow-local on`: a bench, a LAN mirror).
+    Local,
+}
+
 struct Opts {
     programs: Vec<PathBuf>,
     modules: Vec<String>,
@@ -169,6 +182,8 @@ struct Opts {
     /// Serve the API over HTTPS (`--https`, on by default in a build with
     /// the `https` feature).
     https: bool,
+    /// Where the marketplace routes may fetch from (`--market-allow-local`).
+    market: MarketHosts,
     opcua: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
     relay: Option<String>,
@@ -227,11 +242,12 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         https: cfg!(feature = "https"),
+        market: MarketHosts::Public,
         opcua: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 4840))),
         state_dir: None,
         relay: None,
         relay_token: None,
-        relay_agent: "v3".into(),
+        relay_agent: "v6".into(),
         relay_explain_agent: None,
         ui: None,
         site: None,
@@ -292,6 +308,13 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     "on" => return Err("--https on: this build has no TLS (the `https` feature)".into()),
                     "off" => false,
                     _ => return Err(format!("--https: expected on or off, got {v:?}")),
+                };
+            }
+            "--market-allow-local" => {
+                o.market = match v.as_str() {
+                    "on" => MarketHosts::Local,
+                    "off" => MarketHosts::Public,
+                    _ => return Err(format!("--market-allow-local: expected on or off, got {v:?}")),
                 };
             }
             "--opcua" if v == "off" => o.opcua = None,
@@ -1073,6 +1096,7 @@ fn start_api(
     let extras = api::Extras {
         ui,
         trust: Some(trust),
+        market_local: o.market == MarketHosts::Local,
     };
     let site = o
         .site
@@ -1231,7 +1255,7 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
     setup.explain_agent = Some(
         o.relay_explain_agent
             .clone()
-            .unwrap_or_else(|| "explain-v1".into()),
+            .unwrap_or_else(|| "explain-v2".into()),
     );
     Ok(Some(setup))
 }

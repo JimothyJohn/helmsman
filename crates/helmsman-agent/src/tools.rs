@@ -32,6 +32,14 @@
 //! and only a person with a role PIN applies it (always
 //! output-affecting). A watch-only conversation proposes no map.
 //!
+//! **The relay runs one tool** (relay agent v6): `fetch_document`. The box
+//! posts the model's input to the relay's
+//! `POST /v1/agents/{version}/tools/fetch_document` and stores what comes
+//! back as a drop-in (`POST /api/dropins`): the relay has the internet and
+//! the vendor allow-list, the box may have neither. The box still checks
+//! the document (kind, size cap, the SHA-256 the relay named) before
+//! storing it, and a box without a relay answers the tool with an error.
+//!
 //! **Data, not instructions.** Everything a tool returns comes from the
 //! plant: tag names, units, ST source and its comments, manifests and
 //! their prompt lines, diagnostics quoting them. It goes back to the model
@@ -46,11 +54,13 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Map, Value as Json, json};
+use sha2::{Digest, Sha256};
 
 use crate::http::{self, Timeouts, Url};
+use crate::relay;
 
 /// The tools the box runs, as named in the relay's `tools.json`.
-pub const NAMES: [&str; 14] = [
+pub const NAMES: [&str; 15] = [
     "list_signals",
     "read_signals",
     "list_devices",
@@ -63,9 +73,28 @@ pub const NAMES: [&str; 14] = [
     "read_dropin",
     "read_plc_program",
     "compare_plc_tags",
+    "fetch_document",
     "read_io_map",
     "propose_io_map",
 ];
+
+/// The one tool the relay runs (`fetch_document`, relay agent v6): the
+/// box posts the model's input to the relay and stores what comes back as
+/// a drop-in. Needs a relay; without one the tool answers with an error.
+pub const RELAY_RUN: [&str; 1] = ["fetch_document"];
+
+/// The largest PDF the relay fetches (relay-protocol.md, "Relay-run
+/// tools"): a bigger body breaks the contract and is refused here, before
+/// anything is stored. The box's own drop-in cap (2 MiB, the size a chat
+/// can attach) is smaller and is the box's answer to keep.
+pub const FETCH_PDF_MAX: usize = 12 * 1024 * 1024;
+/// The largest EDS or text the relay fetches; the box's text drop-in cap
+/// (1 MiB) is again its own answer.
+pub const FETCH_TEXT_MAX: usize = 2 * 1024 * 1024;
+/// Longest `url` or `query` the relay takes.
+pub const FETCH_FIELD_MAX: usize = 2048;
+/// Largest JSON answer read from the relay's fetch route.
+const FETCH_JSON_MAX: usize = 256 * 1024;
 
 /// The tools explain mode runs: reads only. Nothing in it drafts,
 /// checks, simulates or proposes, so an explanation can change nothing
@@ -140,6 +169,7 @@ impl BoxApi {
             path,
             headers,
             json: bytes.as_deref(),
+            raw: None,
         };
         let resp = http::send(&self.url, &req, self.timeouts).map_err(|e| format!("box API: {e}"))?;
         let status = resp.status;
@@ -154,6 +184,21 @@ impl BoxApi {
     /// The box API could not be reached or did not answer.
     pub fn post(&self, path: &str, body: &Json) -> Result<(u16, Json), String> {
         self.call("POST", path, Some(body))
+    }
+
+    fn post_raw(&self, path: &str, content_type: &str, bytes: &[u8]) -> Result<(u16, Json), String> {
+        let auth = format!("Bearer {}", self.token);
+        let req = http::Request {
+            method: "POST",
+            path,
+            headers: &[("Authorization", &auth)],
+            json: None,
+            raw: Some((content_type, bytes)),
+        };
+        let resp = http::send(&self.url, &req, self.timeouts).map_err(|e| format!("box API: {e}"))?;
+        let status = resp.status;
+        let body = resp.read_body(MAX_BODY).map_err(|e| format!("box API: {e}"))?;
+        Ok((status, serde_json::from_slice(&body).unwrap_or(Json::Null)))
     }
 }
 
@@ -183,11 +228,25 @@ pub trait Caller {
     fn post(&self, path: &str, body: &Json) -> Result<(u16, Json), String> {
         self.call("POST", path, Some(body))
     }
+
+    /// `POST path` with the token and `bytes` as the body under
+    /// `content_type` (a fetched document into `/api/dropins`).
+    ///
+    /// # Errors
+    /// See [`Caller::call`]; a caller that cannot carry bytes says so.
+    fn post_bytes(&self, path: &str, content_type: &str, bytes: &[u8]) -> Result<(u16, Json), String> {
+        let _ = (path, content_type, bytes);
+        Err("this caller cannot post a document".into())
+    }
 }
 
 impl Caller for BoxApi {
     fn call(&self, method: &str, path: &str, body: Option<&Json>) -> Result<(u16, Json), String> {
         Self::call(self, method, path, body)
+    }
+
+    fn post_bytes(&self, path: &str, content_type: &str, bytes: &[u8]) -> Result<(u16, Json), String> {
+        self.post_raw(path, content_type, bytes)
     }
 }
 
@@ -370,6 +429,7 @@ pub fn validate(name: &str, input: &Json) -> Result<(), String> {
         "list_signals" => parse::<ListSignals>(input).map(drop),
         "read_signals" => parse::<ReadSignals>(input).map(drop),
         "list_modules" | "read_io_map" | "list_devices" => parse::<Empty>(input).map(drop),
+        "fetch_document" => parse::<FetchDocument>(input).map(drop),
         "read_module" => parse::<ReadModule>(input).map(drop),
         "draft_module" => parse::<DraftModule>(input).map(drop),
         "check_module" => parse::<DraftRef>(input).map(drop),
@@ -465,6 +525,16 @@ struct ComparePlc {
     device: String,
 }
 
+/// `fetch_document`'s input, the relay's schema: `""` and `0` mean unknown.
+#[derive(Deserialize, serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FetchDocument {
+    pub url: String,
+    pub vendor_id: u64,
+    pub product_code: u64,
+    pub query: String,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProposeIoMap {
@@ -480,9 +550,25 @@ pub fn module_name_ok(n: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Runs tool `name` on `input` (already [`validate`]d; checked again).
+/// Runs tool `name` on `input` (already [`validate`]d; checked again),
+/// with no relay at hand: `fetch_document` answers that it needs one.
 pub fn run(api: &dyn Caller, drafts: &mut Drafts, name: &str, input: &Json) -> Outcome {
+    run_with(api, None, drafts, name, input)
+}
+
+/// [`run`] with the relay the box talks to, for the tool the relay runs.
+pub fn run_with(
+    api: &dyn Caller,
+    relay: Option<&relay::Config>,
+    drafts: &mut Drafts,
+    name: &str,
+    input: &Json,
+) -> Outcome {
     let r = match name {
+        "fetch_document" => parse(input).map(|i| match relay {
+            Some(cfg) => fetch_document(api, cfg, &i),
+            None => fail("fetch_document needs the relay, and this box has none configured"),
+        }),
         "list_signals" => parse(input).map(|i| list_signals(api, &i)),
         "read_signals" => parse(input).map(|i| read_signals(api, &i)),
         "list_modules" => parse::<Empty>(input).map(|_| list_modules(api)),
@@ -757,6 +843,197 @@ fn plant_states(api: &dyn Caller, map: &helmsman_project::iomap::MapText, signal
         }
     }
     out
+}
+
+/// A drop-in name the box accepts, from what the relay said the document
+/// is called: ASCII letters, digits, `.`, `_` and `-`, no leading dot, at
+/// most 96 characters; `document` when nothing is left.
+fn safe_name(s: &str) -> String {
+    let mut out: String = s
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .take(96)
+        .collect();
+    while out.starts_with('.') {
+        out.remove(0);
+    }
+    if out.is_empty() { "document".into() } else { out }
+}
+
+/// `fetch_document`: the relay runs it (relay agent v6). The box posts the
+/// model's input to `POST /v1/agents/{version}/tools/fetch_document` and
+/// gets one of three answers: the device library's record (JSON, nothing
+/// stored), a document (bytes plus `x-document-*` headers), or a refusal.
+/// A document is checked (its kind's cap, the SHA-256 the relay named)
+/// and stored on the box as a drop-in through `POST /api/dropins`; the
+/// model gets its id, name, kind, size and hash. A PDF has no text on the
+/// box (`read_dropin` cannot read it): it is read when attached to a chat
+/// message, and the answer says so.
+fn fetch_document(api: &dyn Caller, cfg: &relay::Config, i: &FetchDocument) -> Outcome {
+    if i.url.chars().count() > FETCH_FIELD_MAX || i.query.chars().count() > FETCH_FIELD_MAX {
+        return fail(format!(
+            "url and query are at most {FETCH_FIELD_MAX} characters each"
+        ));
+    }
+    if !i.url.is_empty() && !i.url.starts_with("https://") {
+        return fail(
+            "the relay fetches https:// URLs only; give the document's https address, or \"\" to look the device up",
+        );
+    }
+    let body = serde_json::to_vec(i).unwrap_or_default();
+    let path = format!(
+        "{}/v1/agents/{}/tools/fetch_document",
+        cfg.url.prefix,
+        http::segment(&cfg.version)
+    );
+    let auth = format!("Bearer {}", cfg.token);
+    let req = http::Request {
+        method: "POST",
+        path: &path,
+        headers: &[("Authorization", &auth)],
+        json: Some(&body),
+        raw: None,
+    };
+    let resp = match http::send(&cfg.url, &req, cfg.timeouts) {
+        Ok(r) => r,
+        Err(e) => return fail(format!("the relay could not be reached: {e}")),
+    };
+    let status = resp.status;
+    let content_type = resp
+        .header("content-type")
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if status != 200 || content_type == "application/json" {
+        return relay_json_answer(status, resp);
+    }
+    store_fetched(api, resp)
+}
+
+/// The relay's JSON answers to `fetch_document`: a library record, no
+/// match, or a refusal, each in words for the model.
+fn relay_json_answer(status: u16, resp: http::Response) -> Outcome {
+    let j: Json = match resp.read_body(FETCH_JSON_MAX) {
+        Ok(b) => serde_json::from_slice(&b).unwrap_or(Json::Null),
+        Err(e) => return fail(format!("the relay's answer could not be read: {e}")),
+    };
+    match status {
+        200 if j["type"] == "library" => {
+            let device = &j["device"];
+            let summary = format!(
+                "library: {} {}",
+                device["vendor"].as_str().unwrap_or("?"),
+                device["model"].as_str().unwrap_or("?")
+            );
+            ok(
+                json!({
+                    "type": "library", "index_url": j["index_url"], "device": device,
+                    "note": "the public device library knows this device: use its map lines (protocols.*.map in the folder) with ADDR filled in; nothing was fetched",
+                }),
+                summary,
+            )
+        }
+        404 if j["type"] == "no_match" => fail(
+            "no document: the device library has no entry for it and no URL was given; ask the user for the manual, its URL, or the EDS file",
+        ),
+        200 => fail("the relay answered with JSON the box does not understand"),
+        _ => {
+            let e = &j["error"];
+            let kind = e["type"].as_str().unwrap_or("relay_error");
+            let msg = e["message"].as_str().unwrap_or("no reason given");
+            fail(format!("{kind} ({status}): {msg}"))
+        }
+    }
+}
+
+/// A fetched document from the relay: checked against its kind's cap and
+/// the SHA-256 the relay named, then stored on the box as a drop-in.
+fn store_fetched(api: &dyn Caller, resp: http::Response) -> Outcome {
+    // A document: the facts in headers, the bytes in the body.
+    let kind = resp.header("x-document-kind").unwrap_or("").to_string();
+    let (dropin_kind, media, cap) = match kind.as_str() {
+        "pdf" => ("pdf", "application/pdf", FETCH_PDF_MAX),
+        "eds" | "text" | "html-text" => ("prose", "text/plain; charset=utf-8", FETCH_TEXT_MAX),
+        other => {
+            return fail(format!(
+                "the relay sent a document of kind {other:?}, which the box does not keep"
+            ));
+        }
+    };
+    let name = safe_name(resp.header("x-document-name").unwrap_or("document"));
+    let said_sha = resp
+        .header("x-document-sha256")
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let source = resp.header("x-document-source").unwrap_or("").to_string();
+    if let Some(n) = resp
+        .header("content-length")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        && n > cap
+    {
+        return fail(format!(
+            "{name} is {n} bytes, past the {cap} bytes a fetched {kind} document may be; nothing stored. Ask the user for the pages that matter, or a smaller file"
+        ));
+    }
+    let bytes = match resp.read_body(cap) {
+        Ok(b) => b,
+        Err(http::Error::Protocol("response body too large")) => {
+            return fail(format!(
+                "{name} is larger than the {cap} bytes a fetched {kind} document may be; nothing stored. Ask the user for the pages that matter"
+            ));
+        }
+        Err(e) => return fail(format!("the document could not be read from the relay: {e}")),
+    };
+    if bytes.is_empty() {
+        return fail("the relay sent an empty document");
+    }
+    let got_sha = hex(&Sha256::digest(&bytes));
+    if said_sha.len() != 64 || got_sha != said_sha {
+        return fail("the document's SHA-256 does not match what the relay named; nothing stored");
+    }
+    if dropin_kind == "pdf" && !bytes.starts_with(b"%PDF-") {
+        return fail("the relay called it a PDF but the bytes are not one; nothing stored");
+    }
+    // `name` is already URL-safe ASCII (`safe_name`), so it goes as it is.
+    let path = format!("/api/dropins?name={name}&kind={dropin_kind}");
+    match api.post_bytes(&path, media, &bytes) {
+        Ok((201, meta)) => {
+            let id = meta["id"].as_u64().unwrap_or(0);
+            let next = if dropin_kind == "pdf" {
+                "a PDF has no text on the box: it is read when the user attaches this drop-in to a message; say which drop-in to attach"
+            } else {
+                "read it with read_dropin, chunk by chunk"
+            };
+            ok(
+                json!({
+                    "type": "document", "dropin_id": id, "name": meta["name"], "kind": kind,
+                    "dropin_kind": meta["kind"], "size": bytes.len(), "chunks": meta["chunks"],
+                    "sha256": got_sha, "source": source, "next": next,
+                }),
+                format!("fetched {name} ({} bytes) as drop-in {id}", bytes.len()),
+            )
+        }
+        // The box keeps less than the relay fetches (a PDF a chat can
+        // attach, a text drop-in): its own cap, in words.
+        Ok((413, b)) => fail(format!(
+            "{name} ({} bytes) is too large for the box to keep: {}. Ask the user for the pages that matter, or a smaller file",
+            bytes.len(),
+            b["error"].as_str().unwrap_or("past the box's drop-in limit")
+        )),
+        Ok((s, b)) => unexpected("storing the document as a drop-in", s, &b),
+        Err(e) => fail(e),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 fn list_modules(api: &dyn Caller) -> Outcome {

@@ -17,9 +17,11 @@
 //! every instance and call: their counts are totals over all of them. Each
 //! instance's own state is in the values (`timer.Q`, `sums[2].total`).
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use crate::check::{AggKind, Checked, Loc, PouCode, St, StKind, Type};
 use crate::interp::{Fault, Image, from_raw};
@@ -126,7 +128,7 @@ struct Leaf {
 pub struct TraceMap {
     stmts: Vec<StmtInfo>,
     leaves: Vec<Leaf>,
-    by_path: HashMap<String, usize>,
+    by_path: BTreeMap<String, usize>,
 }
 
 impl TraceMap {
@@ -373,7 +375,7 @@ impl Recorder {
     /// completes, so `cur` is left on the innermost one.
     pub fn enter(&mut self, tr: u32) -> u32 {
         self.bump(tr as usize);
-        std::mem::replace(&mut self.cur, tr)
+        core::mem::replace(&mut self.cur, tr)
     }
 
     /// IF or CASE `tr` took arm `k` (`k` = the number of arms: none held).
