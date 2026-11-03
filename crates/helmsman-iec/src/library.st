@@ -224,3 +224,16 @@ FUNCTION_BLOCK BLINK_PATTERN
     END_IF;
   END_IF;
 END_FUNCTION_BLOCK
+
+(* ASSERT: a requirement test's check (see `spec`). Not IEC 61131-3: a
+   Helmsman extension. FAILED latches on the first scan COND is FALSE and
+   FAILED_AT keeps when that was; a test program names one ASSERT per requirement
+   it checks, and the runner reads FAILED. *)
+FUNCTION_BLOCK ASSERT
+  VAR_INPUT COND : BOOL; END_VAR
+  VAR_OUTPUT FAILED : BOOL; FAILED_AT : TIME; END_VAR
+  IF NOT COND AND NOT FAILED THEN
+    FAILED := TRUE;
+    FAILED_AT := __NOW();
+  END_IF;
+END_FUNCTION_BLOCK

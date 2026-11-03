@@ -79,6 +79,7 @@ pub mod ladder;
 mod lexer;
 mod parser;
 pub mod plcopen;
+pub mod spec;
 mod state;
 pub mod trace;
 mod types;
