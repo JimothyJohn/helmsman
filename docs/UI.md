@@ -66,16 +66,24 @@ this; change it here first when a decision changes.
   `list_devices` tool) and Code (the Structured Text editor). One width
   for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
   pane on its tab, or shut it when that tab shows.
-- **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the
-  diagram does not show), Agent (Nick, 2026-11-01: the conversation is
-  pages, ‹ › walk them, Delete drops one, every kept page goes to the
-  model as context each time, and the pages live with the project as
-  `agent.md`, so a reload or a download keeps them; an earlier page's
-  code has its own Use this code. Use this code on a PROGRAM asks for
-  the program's name once per conversation; the answers after it land
-  in that project with the newest as `main.st` and the file it replaced
-  kept as the next `vN.st`, serially, however many; `vN.st` is never
-  built, and past the project's size the oldest go first). On a Pi the Trend opens with
+- **Right panel, collapsible, tabs (236 pt since the third tab):** I/O
+  (values; inputs the diagram does not show), Requirements (interview
+  2026-11-02: the project's requirement tests, `test_NAME.st` PROGRAMs
+  that drive the program's inputs, step the clock and check its outputs
+  with the ASSERT block; one row each, green or red, the requirement in
+  the file's first comment and, red, why in words and when; a Run button;
+  the page runs them after every build change and before Deploy and "Use
+  this code", a box runs them when a project opens, after each save and
+  before a deploy; a red one refuses both, naming the test), Agent (Nick,
+  2026-11-01: the conversation is pages, ‹ › walk them, Delete drops
+  one, every kept page goes to the model as context each time, and the
+  pages live with the project as `agent.md`, so a reload or a download
+  keeps them; an earlier page's code has its own Use this code; not on a
+  box yet. Use this code on a PROGRAM asks for the program's name once
+  per conversation; the answers after it land in that project with the
+  newest as `main.st` and the file it replaced kept as the next `vN.st`,
+  serially, however many; `vN.st` is never built, and past the project's
+  size the oldest go first). On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.

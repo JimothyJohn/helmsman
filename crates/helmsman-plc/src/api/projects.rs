@@ -11,8 +11,9 @@
 //! PUT    /api/projects/{p}/files/{f}          engineer: {text, version?}: save (a draft); version = what was read, null = new
 //! DELETE /api/projects/{p}/files/{f}          engineer
 //! POST   /api/projects/{p}/check              token or session: build it as a deploy would; nothing changes
+//! POST   /api/projects/{p}/tests              token or session: run its requirement tests (test_*.st) in the simulation; nothing changes
 //! POST   /api/projects/{p}/replay             engineer: sim replay of deploying it (evidence a deploy can cite)
-//! POST   /api/projects/{p}/deploy             engineer: {replay?}: build, apply through the approval policy, commit, hot-swap
+//! POST   /api/projects/{p}/deploy             engineer: {replay?}: tests, build, apply through the approval policy, commit, hot-swap; a red test refuses (409)
 //! GET    /api/projects/{p}/zip                the project as a .zip
 //! POST   /api/projects/{p}/zip[?replace=true] engineer: a .zip as project p (new, or in place of it)
 //! POST   /api/projects/{p}/import?file=F[&replace=true]
@@ -41,6 +42,7 @@
 //! compile, swap between scans, commit; a deploy that does not build
 //! changes nothing. Every call is audited.
 
+use helmsman_iec::{ImageSizes, spec};
 use serde_json::{Value as Json, json};
 
 use super::approve::{self, Approval, Target};
@@ -168,7 +170,7 @@ pub(super) fn allowed(path: &[&str]) -> Option<&'static str> {
             "api",
             "projects",
             _,
-            "rename" | "check" | "replay" | "deploy" | "import",
+            "rename" | "check" | "tests" | "replay" | "deploy" | "import",
         ]
         | ["api", "projects", _, "history", _, "restore"] => Some("POST"),
         ["api", "running"] | ["api", "projects", _, "history"] | ["api", "projects", _, "history", _] => {
@@ -250,6 +252,9 @@ pub(super) fn mutate(req: &Request, ctx: &Ctx, rest: &[&str]) -> Response {
     };
     if let ("POST", ["projects", _, "check"]) = (method, rest) {
         return check(req, ctx, rest[1]);
+    }
+    if let ("POST", ["projects", _, "tests"]) = (method, rest) {
+        return tests(req, ctx, rest[1]);
     }
     if let Err(r) = engineer(ctx, req, &what) {
         return r;
@@ -600,6 +605,92 @@ fn shape(appr: &Approval) -> Shape {
         i_len: appr.plant.i_len,
         q_len: appr.plant.q_len,
     }
+}
+
+/// How this box runs a project's requirement tests: its scan period and
+/// image sizes (the simulation's defaults on a box with no approval path).
+fn test_settings(ctx: &Ctx) -> spec::Settings {
+    match &ctx.approval {
+        Some(appr) => spec::Settings::new(ImageSizes {
+            i: appr.plant.i_len,
+            q: appr.plant.q_len,
+            m: appr.plant.defaults.m,
+        })
+        .period(appr.plant.defaults.period),
+        None => spec::Settings::new(ImageSizes { i: 32, q: 32, m: 256 }),
+    }
+}
+
+/// Project `name`'s requirement tests, run (`helmsman_iec::spec`), or
+/// why they could not be (the status, body and audit detail).
+fn run_tests(ctx: &Ctx, name: &str) -> Result<Vec<spec::Verdict>, (u16, Json, String)> {
+    let Some(p) = &ctx.projects else {
+        return Err((
+            404,
+            json!({ "error": "no projects on this box (--projects)", "changed": false }),
+            "no projects on this box".into(),
+        ));
+    };
+    let files: Files = p.read(name).map_err(|r| {
+        (
+            r.status,
+            json!({ "error": r.why, "changed": false }),
+            r.why.clone(),
+        )
+    })?;
+    let plan = spec::plan(files.st());
+    Ok(spec::run_all(&plan, test_settings(ctx)))
+}
+
+fn verdict_json(v: &spec::Verdict) -> Json {
+    json!({
+        "file": v.file,
+        "requirement": v.requirement,
+        "passed": v.passed(),
+        "why": v.why(),
+        "scans": v.scans,
+        "elapsed_ms": u64::try_from(v.elapsed.as_millis()).unwrap_or(u64::MAX),
+    })
+}
+
+/// `POST /api/projects/{p}/tests`: every requirement test of the project,
+/// green or red, with why. Nothing changes.
+fn tests(req: &Request, ctx: &Ctx, name: &str) -> Response {
+    let what = format!("project {}", clean(name));
+    match run_tests(ctx, name) {
+        Ok(v) => {
+            let red = spec::red(&v);
+            let body = json!({
+                "ok": red.is_empty(),
+                "tests": v.iter().map(verdict_json).collect::<Vec<_>>(),
+                "red": red,
+            });
+            let detail = format!("{what}: {} test(s), {} red", v.len(), red.len());
+            audited(ctx, req, 200, &body, &detail)
+        }
+        Err((status, body, why)) => audited(ctx, req, status, &body, &format!("{what}: tests: {why}")),
+    }
+}
+
+/// The deploy gate: `Ok` when every requirement test of project `name` is
+/// green (or it has none); else 409 naming each red one, nothing changed.
+pub(super) fn red_tests(ctx: &Ctx, name: &str) -> Result<(), (u16, Json, String)> {
+    let v = run_tests(ctx, name)?;
+    let red = spec::red(&v);
+    if red.is_empty() {
+        return Ok(());
+    }
+    let why = format!("{} requirement test(s) red: {}", red.len(), red.join("; "));
+    Err((
+        409,
+        json!({
+            "error": format!("not deployed: {why}"),
+            "changed": false,
+            "tests": v.iter().map(verdict_json).collect::<Vec<_>>(),
+            "red": red,
+        }),
+        why,
+    ))
 }
 
 /// Project `name` built against what runs: its change set, or the status,
