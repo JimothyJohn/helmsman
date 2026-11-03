@@ -62,6 +62,7 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
   until Nick runs its `scripts/create-github-repo.sh`, which creates
   JimothyJohn/agent-relay). Client-agnostic; the box↔relay contract is its
   `docs/relay-protocol.md`. Helmsman's agent profiles are
-  `agents/helmsman/<name>/` (ids `helmsman/v3`, ...); the bare `v3` and
-  `explain-v1` the box asks for are aliases.
+  `agents/helmsman/<name>/` (ids `helmsman/v5`, ...); the bare `v5` and
+  `explain-v2` the box asks for are aliases. A served profile never
+  changes: a prompt or tool change is a new id.
 - `.claude/handoff.md` (untracked): where the last session stopped.
