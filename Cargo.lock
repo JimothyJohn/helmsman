@@ -1579,6 +1579,7 @@ dependencies = [
  "gpiocdev",
  "helmsman-adapter",
  "helmsman-io",
+ "helmsman-modbus",
  "helmsman-proto",
  "i2cdev",
  "proptest",
@@ -1587,6 +1588,10 @@ dependencies = [
  "wasmi",
  "wat",
 ]
+
+[[package]]
+name = "helmsman-modbus"
+version = "0.1.0"
 
 [[package]]
 name = "helmsman-plc"

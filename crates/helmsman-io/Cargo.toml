@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The Modbus codec (PDUs, reply checks, MBAP), no_std, no deps: shared
+# with the edge node so the box and a node put the same bytes on the wire.
+helmsman-modbus = { path = "../helmsman-modbus" }
 # No `unrestricted`: the box build reads observed controllers, it never
 # writes them. `enip` adds only the Class 1 scanner (`scanner`), for the
 # adapters the box masters.
