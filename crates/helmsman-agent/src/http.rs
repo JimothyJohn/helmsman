@@ -239,6 +239,9 @@ pub struct Request<'a> {
     pub headers: &'a [(&'a str, &'a str)],
     /// Sent with `Content-Type: application/json` when present.
     pub json: Option<&'a [u8]>,
+    /// A body of another type, `(content type, bytes)`, when `json` is
+    /// `None`: a fetched document posted to the box as a drop-in.
+    pub raw: Option<(&'a str, &'a [u8])>,
 }
 
 /// Sends `req` to `url` (its prefix is not added: `req.path` is whole)
@@ -287,15 +290,20 @@ pub fn send(url: &Url, req: &Request<'_>, t: Timeouts) -> Result<Response, Error
         head.push_str(v);
         head.push_str("\r\n");
     }
-    if let Some(body) = req.json {
-        head.push_str("Content-Type: application/json\r\n");
+    let body: Option<(&str, &[u8])> = match (req.json, req.raw) {
+        (Some(j), _) => Some(("application/json", j)),
+        (None, Some((ct, b))) => Some((ct, b)),
+        (None, None) => None,
+    };
+    if let Some((ct, body)) = body {
+        let _ = write!(head, "Content-Type: {ct}\r\n");
         let _ = write!(head, "Content-Length: {}\r\n", body.len());
     } else if req.method != "GET" {
         head.push_str("Content-Length: 0\r\n");
     }
     head.push_str("\r\n");
     conn.write_all(head.as_bytes()).map_err(|e| io_error(&e))?;
-    if let Some(body) = req.json {
+    if let Some((_, body)) = body {
         conn.write_all(body).map_err(|e| io_error(&e))?;
     }
     conn.flush().map_err(|e| io_error(&e))?;
