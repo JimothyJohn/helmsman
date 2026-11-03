@@ -850,6 +850,10 @@ pub struct Chat {
     pub page: Option<usize>,
     /// The pages changed since they were last written to the project.
     pub pages_dirty: bool,
+    /// The project this conversation's PROGRAM answers land in, once
+    /// named (Nick, 2026-11-01: asked once per conversation; New
+    /// conversation forgets it).
+    pub program: Option<String>,
     pub answer: Option<Answer>,
     /// The user message the current answer answers.
     asked: String,
@@ -895,6 +899,7 @@ impl Chat {
             history: Vec::new(),
             page: None,
             pages_dirty: false,
+            program: None,
             answer: None,
             asked: String::new(),
             asked_question: String::new(),
@@ -1039,6 +1044,7 @@ impl Chat {
         self.pages_dirty |= !self.history.is_empty();
         self.history.clear();
         self.page = None;
+        self.program = None;
         self.answer = None;
     }
 

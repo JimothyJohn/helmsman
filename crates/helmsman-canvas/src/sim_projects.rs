@@ -63,6 +63,82 @@ impl Storage for MemStorage {
 
 /// The format the projects are stored in.
 const FORMAT: &str = "helmsman-projects 1";
+/// Most revisions kept per project in the browser's storage.
+pub const MAX_SIM_REVISIONS: usize = 20;
+
+/// One revision of a project here: its files as saved, who, when, what,
+/// and the Agent page the change came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimRevision {
+    pub n: u32,
+    pub at_ms: u64,
+    pub by: String,
+    pub what: String,
+    pub page: Option<String>,
+    pub files: BTreeMap<String, String>,
+}
+
+impl SimRevision {
+    #[must_use]
+    pub fn row(&self) -> crate::history_ui::RevisionRow {
+        crate::history_ui::RevisionRow {
+            n: self.n,
+            at_ms: self.at_ms,
+            by: self.by.clone(),
+            what: self.what.clone(),
+            page: self.page.is_some(),
+        }
+    }
+
+    #[must_use]
+    pub fn view(&self) -> crate::history_ui::RevisionView {
+        crate::history_ui::RevisionView {
+            row: self.row(),
+            files: self.files.clone(),
+            page: self.page.clone(),
+        }
+    }
+
+    fn json(&self) -> Json {
+        json!({
+            "n": self.n, "at_ms": self.at_ms, "by": self.by, "what": self.what,
+            "page": self.page, "files": self.files,
+        })
+    }
+
+    fn parse(j: &Json) -> Option<Self> {
+        let files: BTreeMap<String, String> = j["files"]
+            .as_object()?
+            .iter()
+            .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+            .collect();
+        Files(files.clone()).check().ok()?;
+        Some(Self {
+            n: u32::try_from(j["n"].as_u64()?).ok()?,
+            at_ms: j["at_ms"].as_u64().unwrap_or(0),
+            by: j["by"].as_str().unwrap_or("you").to_string(),
+            what: j["what"].as_str().unwrap_or("").to_string(),
+            page: j["page"].as_str().map(str::to_string),
+            files,
+        })
+    }
+}
+
+/// Now, as Unix milliseconds (the browser's clock, or the system's).
+#[must_use]
+pub fn wall_ms() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let ms = web_sys::js_sys::Date::now();
+        if ms.is_finite() && ms > 0.0 { ms as u64 } else { 0 }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+    }
+}
 
 /// A starter project made from a built-in example: named after its
 /// PROGRAM, one file.
@@ -136,6 +212,9 @@ pub struct SimProjects {
     pub notice: Option<(String, bool)>,
     /// An upload whose name is taken, waiting for Replace.
     pub pending: Option<(String, Files)>,
+    /// Each project's revisions, oldest first (the newest
+    /// [`MAX_SIM_REVISIONS`]).
+    pub history: BTreeMap<String, Vec<SimRevision>>,
 }
 
 impl std::fmt::Debug for SimProjects {
@@ -166,12 +245,14 @@ impl SimProjects {
             storage_problem: None,
             notice: None,
             pending: None,
+            history: BTreeMap::new(),
         };
         let mut open = None;
         match s.store.load() {
             Ok(Some(text)) => match parse(&text) {
-                Some((saved, last)) => {
+                Some((saved, last, history)) => {
                     s.saved = saved;
+                    s.history = history;
                     open = last;
                 }
                 None => {
@@ -191,7 +272,7 @@ impl SimProjects {
         s
     }
 
-    fn exists(&self, name: &str) -> bool {
+    pub(crate) fn exists(&self, name: &str) -> bool {
         self.saved.contains_key(name) || self.examples.contains_key(name)
     }
 
@@ -388,7 +469,7 @@ impl SimProjects {
     /// Writes the visitor's projects and which is open; a failure is
     /// noted once, and the projects stay in memory.
     fn persist(&mut self) {
-        let text = render(&self.saved, &self.open);
+        let text = render(&self.saved, &self.open, &self.history);
         if let Err(e) = self.store.save(&text)
             && self.storage_problem.is_none()
         {
@@ -398,14 +479,6 @@ impl SimProjects {
         }
     }
 
-    /// A free name for a copy of `base` (neither a project here nor an
-    /// example): `base`, else `base-2`, `-3`, ...
-    /// A project name not taken yet, from `base` (`base-2`, ... when it is).
-    #[must_use]
-    pub fn free_name(&self, base: &str) -> String {
-        self.free(base)
-    }
-
     /// A file name not taken in the open project, from `want`
     /// (`name-2.st`, ... when it is).
     #[must_use]
@@ -413,7 +486,7 @@ impl SimProjects {
         crate::projects::free_file_name(want, |n| self.files.contains_key(n))
     }
 
-    fn free(&self, base: &str) -> String {
+    pub(crate) fn free(&self, base: &str) -> String {
         let base: String = base.chars().take(44).collect();
         let taken = |n: &str| self.saved.contains_key(n) || self.examples.contains_key(n);
         if !taken(&base) {
@@ -428,6 +501,12 @@ impl SimProjects {
 
     /// Saves the open project; an example is saved as a copy, which opens.
     pub fn save(&mut self) {
+        self.save_as("saved", None);
+    }
+
+    /// [`Self::save`], recorded in the project's history as `what`, with
+    /// the Agent `page` the change came from when there was one.
+    pub fn save_as(&mut self, what: &str, page: Option<&str>) {
         let files = Files(self.files.clone());
         if let Err(e) = files.check() {
             self.note(format!("Not saved: {}", e.join("; ")), true);
@@ -445,7 +524,68 @@ impl SimProjects {
             self.saved.insert(self.open.clone(), files);
             self.note(format!("Saved {}.", self.open), false);
         }
+        self.record_revision(what, page);
         self.persist();
+    }
+
+    /// The open project's files as stored, as its next revision.
+    fn record_revision(&mut self, what: &str, page: Option<&str>) {
+        let Some(files) = self.saved.get(&self.open) else {
+            return;
+        };
+        let files: BTreeMap<String, String> = files
+            .0
+            .iter()
+            .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        let revs = self.history.entry(self.open.clone()).or_default();
+        let n = revs.last().map_or(1, |r| r.n + 1);
+        revs.push(SimRevision {
+            n,
+            at_ms: wall_ms(),
+            by: "you".into(),
+            what: what.chars().take(200).collect(),
+            page: page.map(|p| {
+                helmsman_project::agent::sanitize(p)
+                    .chars()
+                    .take(16 * 1024)
+                    .collect()
+            }),
+            files,
+        });
+        if revs.len() > MAX_SIM_REVISIONS {
+            let extra = revs.len() - MAX_SIM_REVISIONS;
+            revs.drain(..extra);
+        }
+    }
+
+    /// The open project's revisions, oldest first.
+    #[must_use]
+    pub fn revisions(&self) -> &[SimRevision] {
+        self.history.get(&self.open).map_or(&[], Vec::as_slice)
+    }
+
+    /// The open project's files back to revision `n`, saved as a new
+    /// revision. Whether there was such a revision.
+    pub fn restore(&mut self, n: u32) -> bool {
+        let Some(rev) = self.revisions().iter().find(|r| r.n == n).cloned() else {
+            return false;
+        };
+        let agent = self.files.get(helmsman_project::AGENT).cloned();
+        self.files = rev.files;
+        if let Some(a) = agent {
+            self.files.insert(helmsman_project::AGENT.into(), a);
+        }
+        self.current = self
+            .files
+            .keys()
+            .find(|f| *f == "main.st")
+            .or_else(|| self.files.keys().find(|f| file_name(f) == Some(FileKind::St)))
+            .cloned()
+            .unwrap_or_default();
+        self.save_as(&format!("restored revision {n}"), None);
+        true
     }
 
     /// The open project's shared diagram layout (`""`: none), as edited.
@@ -727,18 +867,33 @@ fn l5x(file: &str, bytes: &[u8]) -> Result<String, String> {
     Ok(converted.st)
 }
 
-fn render(saved: &BTreeMap<String, Files>, open: &str) -> String {
+fn render(
+    saved: &BTreeMap<String, Files>,
+    open: &str,
+    history: &BTreeMap<String, Vec<SimRevision>>,
+) -> String {
     json!({
         "format": FORMAT,
         "open": open,
         "projects": saved.iter().map(|(n, f)| (n.clone(), json!(f.0))).collect::<serde_json::Map<_, _>>(),
+        "history": history
+            .iter()
+            .filter(|(n, _)| saved.contains_key(*n))
+            .map(|(n, r)| (n.clone(), Json::Array(r.iter().map(SimRevision::json).collect())))
+            .collect::<serde_json::Map<_, _>>(),
     })
     .to_string()
 }
 
 /// What [`render`] wrote, each project held to the rules (one that breaks
 /// them is dropped, not trusted).
-fn parse(text: &str) -> Option<(BTreeMap<String, Files>, Option<String>)> {
+type Parsed = (
+    BTreeMap<String, Files>,
+    Option<String>,
+    BTreeMap<String, Vec<SimRevision>>,
+);
+
+fn parse(text: &str) -> Option<Parsed> {
     let j: Json = serde_json::from_str(text).ok()?;
     if j["format"] != FORMAT {
         return None;
@@ -756,5 +911,23 @@ fn parse(text: &str) -> Option<(BTreeMap<String, Files>, Option<String>)> {
             out.insert(name.clone(), files);
         }
     }
-    Some((out, j["open"].as_str().map(str::to_string)))
+    let mut history = BTreeMap::new();
+    if let Some(h) = j["history"].as_object() {
+        for (name, revs) in h {
+            if !out.contains_key(name) {
+                continue;
+            }
+            let mut revs: Vec<SimRevision> = revs
+                .as_array()
+                .map(|a| a.iter().filter_map(SimRevision::parse).collect())
+                .unwrap_or_default();
+            revs.sort_by_key(|r| r.n);
+            if revs.len() > MAX_SIM_REVISIONS {
+                let extra = revs.len() - MAX_SIM_REVISIONS;
+                revs.drain(..extra);
+            }
+            history.insert(name.clone(), revs);
+        }
+    }
+    Some((out, j["open"].as_str().map(str::to_string), history))
 }

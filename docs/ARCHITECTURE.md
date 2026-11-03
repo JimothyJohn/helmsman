@@ -1424,7 +1424,7 @@ module's unit tests.
 
 ## Agent loop (`agent-loop`, built)
 
-`helmsman-plc --relay URL --relay-token FILE [--relay-agent v5]` turns on
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v6]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
 an Anthropic key, and names no model, prompt or tool schema: the relay
@@ -1621,6 +1621,23 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   object's Get Instance Attribute List only (`LogixDriver::browse`); it
   exists for the `logix-tag` devices in the I/O map. Nothing ever goes
   back into the customer's PLC.
+- **Fetched documentation** (relay agent v6): `fetch_document {url,
+  vendor_id, product_code, query}` is the one tool the relay runs. The
+  box posts the input to the relay's
+  `POST /v1/agents/{version}/tools/fetch_document` with its relay token;
+  the relay answers with the public device library's record (nothing
+  fetched), a document from an allow-listed vendor site (PDF, EDS, text or
+  an HTML page as text, with its kind, name, SHA-256 and source in
+  headers), or a refusal (`404 no_match`, `403 fetch_refused`,
+  `429 rate_limited`, `502 fetch_failed`, each a tool error in words). The
+  box checks the document (the relay's caps, 12 MiB for a PDF and 2 MiB
+  for an EDS or text; the hash; a PDF's magic) and stores it as a
+  drop-in through `POST /api/dropins`, whose own caps (2 MiB PDF, 1 MiB
+  text) still apply and come back as a tool error. The model gets
+  `{dropin_id, name, kind, size, sha256, source}` and
+  reads an EDS or text with `read_dropin`; a PDF is read when attached to
+  a message. A box without a relay answers the tool with an error; the
+  MCP route offers the same tool with the box's relay.
 - **Watch modules.** A conversation that has read a PLC drop-in is
   watch-only from then on (`Drafts::watch_only`): its checks, simulations
   and proposals go to the box with `watch: true`, and it can propose no

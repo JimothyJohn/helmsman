@@ -655,21 +655,25 @@ fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
     assert!(!v.proj.dirty());
     let code = "PROGRAM lamp_test\nVAR lamp : BOOL; END_VAR\nlamp := TRUE;\nEND_PROGRAM\n";
     v.take_code(code.into());
+    // The conversation's first PROGRAM asks for its name (agent-iterations).
+    assert_eq!(v.proj.open, "blink", "nothing lands before the name");
+    v.confirm_program_name();
     assert_eq!(v.proj.open, "lamp_test", "a PROGRAM is a project of its own");
-    assert_eq!(v.proj.current, "lamp_test.st");
+    assert_eq!(v.proj.current, "main.st");
     assert!(v.proj.current_text_mut().unwrap().contains("PROGRAM lamp_test"));
     assert!(!v.proj.dirty(), "saved");
     assert!(v.session.diags.is_empty(), "{:?}", v.session.diag_lines());
-    // Again: a second project, not a clobbered first.
+    // Again: the same project, the earlier one kept as v1.st.
     v.take_code(code.into());
-    assert_eq!(v.proj.open, "lamp_test-2");
+    assert_eq!(v.proj.open, "lamp_test");
+    assert!(v.proj.files.contains_key("v1.st"));
     // A block goes into the open project as a file.
     let fb = "FUNCTION_BLOCK debounce\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\nq := x;\nEND_FUNCTION_BLOCK\n";
     v.take_code(fb.into());
-    assert_eq!(v.proj.open, "lamp_test-2");
+    assert_eq!(v.proj.open, "lamp_test");
     assert_eq!(v.proj.current, "debounce.st");
     // Unsaved edits ask first; "save, then open" keeps them.
-    v.proj.open_file("lamp_test.st");
+    v.proj.open_file("main.st");
     v.proj.current_text_mut().unwrap().push_str("(* mine *)");
     assert!(v.proj.dirty());
     v.take_code(code.into());
@@ -677,5 +681,5 @@ fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
         matches!(v.files_ui.confirm, Some(Act::UseAnswer { ref name, .. }) if name == "lamp_test"),
         "asked"
     );
-    assert_eq!(v.proj.open, "lamp_test-2", "nothing opened yet");
+    assert!(!v.proj.files.contains_key("v2.st"), "nothing landed yet");
 }
