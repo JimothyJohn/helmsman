@@ -388,6 +388,37 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
     }
 }
 
+/// The characters selected in the ST editor `id` (either order), when
+/// any are.
+#[must_use]
+pub fn selection(ctx: &egui::Context, id: egui::Id) -> Option<(usize, usize)> {
+    let r = TextEditState::load(ctx, id)?.cursor.char_range()?;
+    (r.primary.index != r.secondary.index).then_some((r.secondary.index.into(), r.primary.index.into()))
+}
+
+/// Drops the ST editor `id`'s selection, leaving the caret where it was.
+pub fn deselect(ctx: &egui::Context, id: egui::Id) {
+    if let Some(mut state) = TextEditState::load(ctx, id)
+        && let Some(r) = state.cursor.char_range()
+    {
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(r.primary)));
+        state.store(ctx, id);
+    }
+}
+
+/// Selects characters `a..b` of the ST editor `id` (the tests' mouse).
+#[cfg(test)]
+pub fn select(ctx: &egui::Context, id: egui::Id, a: usize, b: usize) {
+    let mut state = TextEditState::load(ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+        egui::text::CCursor::new(a),
+        egui::text::CCursor::new(b),
+    )));
+    state.store(ctx, id);
+}
+
 /// Undoes (or, `redo`, redoes) the last edit of the ST editor `id` on
 /// `text`, through the editor's own undo stack; whether anything changed.
 pub fn undo(ctx: &egui::Context, id: egui::Id, text: &mut String, redo: bool) -> bool {
