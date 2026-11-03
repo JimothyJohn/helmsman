@@ -12,8 +12,8 @@
 //! Without the `wasm` feature (the canvas) no driver loads: a map that
 //! names one is refused as naming a driver this build does not have.
 //!
-//! So is `enip-io` without helmsman-plc's `enip-io` feature, which the box
-//! build leaves out until the E1213 bench passes ([`not_in_build`]).
+//! So is `enip-io` in a helmsman-plc built without its `enip-io` feature
+//! (in the default build since the E1213 bench passed; [`not_in_build`]).
 
 use std::collections::BTreeMap;
 
@@ -120,8 +120,8 @@ pub fn check(bytes: &[u8]) -> Result<(), Vec<String>> {
 pub fn not_in_build(device: &Device) -> Option<Error> {
     (device.driver == helmsman_io::enip::DRIVER && !cfg!(feature = "enip-io")).then(|| {
         Error::UnknownDriver(format!(
-            "{}: not in this build (the EtherNet/IP scanner is out of the box until \
-             the E1213 bench passes; use modbus-tcp, or build helmsman-plc with `enip-io`)",
+            "{}: not in this build (helmsman-plc was built without its `enip-io` feature, \
+             the EtherNet/IP scanner; use modbus-tcp, or a default build)",
             device.driver
         ))
     })
