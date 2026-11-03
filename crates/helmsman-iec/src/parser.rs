@@ -8,6 +8,8 @@
 //! follows ruSTy; see tests/oracle.rs.
 
 use crate::lexer::{LexError, Pos, Tok, lex};
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expr {
