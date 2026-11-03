@@ -32,7 +32,9 @@ shows them.
 - **history (n)** folds the project's revisions: every save, upload,
   import and restore, newest first, with who did it, when and what. Click
   one to see it in the middle of the screen: the Agent page it came from,
-  if any, and each file's lines added and removed since. **Restore this
+  if any, and each file's lines added and removed since. A change from
+  the Agent says what it changed ("took the Agent's answer into lines
+  4–6 of main.st"). **Restore this
   revision** puts the files back as they were (a new revision; an
   engineer's on a box). The box keeps the last two hundred, the
   simulation the last twenty, in this browser.

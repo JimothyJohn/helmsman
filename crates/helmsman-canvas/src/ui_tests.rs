@@ -1691,6 +1691,63 @@ mod simulated {
         assert!((0.0..=8.0).contains(&grew), "the right panel grew {grew} pt");
     }
 
+    /// Card agent-scoped-edits: the Agent tab says what the next question
+    /// may change before it is asked. A built-in example: a new project;
+    /// a project of one's own: the open file; lines selected in the Code
+    /// tab: those lines, with Whole file to go back; the panels keep
+    /// their width with the line in them.
+    #[test]
+    fn the_agent_tab_names_the_scope_before_the_question() {
+        use crate::scope::Scope;
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let right = h.rect("right");
+        h.press("pane code");
+        h.press("tab claude");
+        h.wait(0.3);
+        assert!(h.has("agent scope"));
+        assert_eq!(h.app.sim.as_ref().unwrap().scope(), Scope::NewProject);
+        assert!(!h.has("scope whole file"));
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.open_project("mine");
+        }
+        h.wait(0.3);
+        assert_eq!(h.app.sim.as_ref().unwrap().scope(), Scope::File("main.st".into()));
+        assert!(h.has("agent scope") && !h.has("scope whole file"));
+        // Lines 2 and 3 selected in the editor.
+        let text = h.app.sim.as_ref().unwrap().proj.files["main.st"].clone();
+        assert!(text.lines().count() >= 3, "{text}");
+        let start = text.lines().next().unwrap().chars().count() + 1;
+        let end = start + text.lines().nth(1).unwrap().chars().count() + 2;
+        let id = eframe::egui::Id::unique("pg-source");
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        crate::editor::select(&h.ctx, id, start, end);
+        h.wait(0.1);
+        // The Agent tab takes the focus, and the editor drops its
+        // selection: the scope stays the lines.
+        h.ctx.memory_mut(|m| m.surrender_focus(id));
+        h.wait(0.2);
+        let scope = h.app.sim.as_ref().unwrap().scope();
+        assert_eq!(
+            scope,
+            Scope::Lines {
+                file: "main.st".into(),
+                from: 2,
+                to: 3
+            }
+        );
+        assert_eq!(scope.label(), "Editing: lines 2–3 of main.st");
+        assert!(h.has("scope whole file"));
+        let r = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
+        h.press("scope whole file");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().scope(), Scope::File("main.st".into()));
+        assert!(!h.has("scope whole file"));
+    }
+
     /// A resizable panel grows to any row that overflows it, every frame
     /// (four such rows were found on 2026-11-01). Every tab of every
     /// panel, visited; the panels end where they began, at most a scroll
