@@ -186,23 +186,40 @@ fn bundle_json(v: &Verified) -> Json {
 }
 
 /// `POST /api/bundles`.
-#[allow(clippy::too_many_lines)]
 pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
-    let refused = |status: u16, body: &Json, detail: &str| match audit(ctx, req, status, detail) {
-        Some(_) => Response::json(status, body),
-        None => audit_full(),
-    };
     let octets = req
         .content_type
         .as_deref()
         .is_some_and(|t| t == "application/octet-stream");
     if !octets {
-        return refused(
-            415,
-            &json!({ "error": "Content-Type must be application/octet-stream (the bundle file)" }),
-            "bundle: not application/octet-stream",
-        );
+        return match audit(ctx, req, 415, "bundle: not application/octet-stream") {
+            Some(_) => Response::json(
+                415,
+                &json!({ "error": "Content-Type must be application/octet-stream (the bundle file)" }),
+            ),
+            None => audit_full(),
+        };
     }
+    import_bytes(req, ctx, &req.body, "")
+}
+
+/// The import of `bytes` as a bundle file: verified against the trust
+/// store, bound to this box's signals by name, stored as a draft. `via`
+/// says where the bytes came from when not the request body (the
+/// marketplace), for the audit line and the proposal's note.
+#[allow(clippy::too_many_lines)]
+pub(super) fn import_bytes(req: &Request, ctx: &Ctx, bytes: &[u8], via: &str) -> Response {
+    let refused = |status: u16, body: &Json, detail: &str| {
+        let detail = if via.is_empty() {
+            detail.to_string()
+        } else {
+            format!("{detail} (via {via})")
+        };
+        match audit(ctx, req, status, &detail) {
+            Some(_) => Response::json(status, body),
+            None => audit_full(),
+        }
+    };
     let Some(trust) = &ctx.trust else {
         return refused(
             501,
@@ -210,7 +227,7 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
             "bundle: no trust store",
         );
     };
-    let v = match bundle::verify(&req.body, trust, &defaults(ctx)) {
+    let v = match bundle::verify(bytes, trust, &defaults(ctx)) {
         Ok(v) => v,
         Err(e) => {
             let status = match e {
@@ -283,7 +300,7 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
     };
     let (base, snap) = (running.id(), target.id());
     let m = &v.bundle.manifest;
-    let note = format!(
+    let mut note = format!(
         "bundle {} {} by {}, {} (bundle id {})",
         m.name,
         m.version,
@@ -291,6 +308,10 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
         v.trust.describe(),
         v.bundle.id()
     );
+    if !via.is_empty() {
+        note.push_str(", via ");
+        note.push_str(via);
+    }
     let p = json!({
         "id": id,
         "kind": "bundle",
@@ -309,7 +330,12 @@ pub(super) fn import(req: &Request, ctx: &Ctx) -> Response {
         "diff": render::diff(&diff(&running, &target)),
         "approval": approve::tier_json(ctx, &running, &target, None),
     });
-    let detail = format!("proposal {id}: {what}: snapshot {base} -> {snap}");
+    let mut detail = format!("proposal {id}: {what}: snapshot {base} -> {snap}");
+    if !via.is_empty() {
+        detail.push_str(" (via ");
+        detail.push_str(via);
+        detail.push(')');
+    }
     if audit_with(ctx, req, 201, &detail, Some(snap.to_string())).is_none() {
         return audit_full();
     }
