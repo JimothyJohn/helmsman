@@ -5,6 +5,8 @@
 //! instructions, and a CPT expression nests at most [`MAX_NEST`] deep, so
 //! hostile text cannot exhaust the stack.
 
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
 /// Deepest branch or expression nesting read.
 pub const MAX_NEST: usize = 32;
 /// Most instructions on one rung.
@@ -66,8 +68,8 @@ pub enum Index {
     Tag(String),
 }
 
-impl std::fmt::Display for Path {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Path {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(&self.base)?;
         for s in &self.segs {
             match s {
@@ -322,7 +324,7 @@ fn path_at(s: &[u8], i: &mut usize) -> Result<Path, String> {
                     while s.get(*i).is_some_and(u8::is_ascii_digit) {
                         *i += 1;
                     }
-                    let n: u32 = std::str::from_utf8(&s[st..*i])
+                    let n: u32 = core::str::from_utf8(&s[st..*i])
                         .ok()
                         .and_then(|t| t.parse().ok())
                         .ok_or("a bit number out of range")?;
@@ -346,7 +348,7 @@ fn path_at(s: &[u8], i: &mut usize) -> Result<Path, String> {
                     {
                         *i += 1;
                     }
-                    let t = std::str::from_utf8(&s[st..*i]).unwrap_or("");
+                    let t = core::str::from_utf8(&s[st..*i]).unwrap_or("");
                     if t.is_empty() {
                         return Err("an array subscript that is not a number or a tag".into());
                     }
@@ -449,7 +451,7 @@ impl E<'_> {
         while self.s.get(j).copied().is_some_and(is_ident) {
             j += 1;
         }
-        std::str::from_utf8(&self.s[self.i..j]).unwrap_or("")
+        core::str::from_utf8(&self.s[self.i..j]).unwrap_or("")
     }
 
     fn deeper(&mut self) -> Result<(), String> {
@@ -518,7 +520,7 @@ impl E<'_> {
         }) {
             self.i += 1;
         }
-        let t = std::str::from_utf8(&self.s[st..self.i]).unwrap_or("");
+        let t = core::str::from_utf8(&self.s[st..self.i]).unwrap_or("");
         let t = if neg { format!("-{t}") } else { t.to_string() };
         match number(&t) {
             Some(Operand::Int(n)) => Ok(Expr::Int(n)),
