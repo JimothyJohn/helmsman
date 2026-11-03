@@ -25,7 +25,7 @@ VAR
   clock : TON;
   weather : TON;
   storm : BOOL;
-  level_m : REAL := 1.5;
+  level_m : REAL := 1.5;  {state unit=m}
   inflow : REAL;
 END_VAR
 motor_a(IN := pump_a, PT := motor_delay);

@@ -21,7 +21,7 @@ VAR
   motor_a : TON;
   motor_b : TON;
   clock : TON;
-  value : REAL;
+  value : REAL;  {state}
   aim : REAL;
 END_VAR
 motor_a(IN := pump_a, PT := motor_delay);

@@ -30,8 +30,8 @@ VAR CONSTANT
 END_VAR
 VAR
   clock : TON;
-  level_m : REAL;
-  temp_c : REAL := 20.0;
+  level_m : REAL;  {state unit=m}
+  temp_c : REAL := 20.0;  {state unit=degC}
   in_open : TON;
   in_shut : TON;
   out_open : TON;
