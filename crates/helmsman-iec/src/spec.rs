@@ -41,8 +41,11 @@
 //! and the page's simulation both skip [`is_test`] files), so an old test
 //! never collides with a program.
 
-use std::fmt::Write as _;
-use std::time::Duration;
+use core::fmt::Write as _;
+use core::time::Duration;
+
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
 
 use crate::ast::{self, PouKind, Section, TypeRef};
 use crate::{Diagnostic, Image, ImageSizes, PortDir, Value, compile};
