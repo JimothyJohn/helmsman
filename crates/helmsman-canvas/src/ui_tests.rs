@@ -555,6 +555,52 @@ mod polish {
     }
 
     /// The hit stays "tab claude" (the stored key); only the label changed.
+    /// Nick, 2026-11-01: the conversation is pages with ‹ › and a
+    /// delete, in the Agent tab.
+    #[test]
+    fn the_agent_tab_pages_through_the_conversation() {
+        use crate::claude::Incoming;
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        assert!(!h.has("page prev"), "no pages, no strip");
+        {
+            let chat = &mut h.app.sim.as_mut().unwrap().chat;
+            chat.receive(Incoming::Proxy(true));
+            for q in ["first", "second"] {
+                chat.question = q.into();
+                let (seq, _) = chat.ask("x", &[], "").unwrap();
+                chat.receive(Incoming::Chunk {
+                    seq,
+                    text: crate::playground_tests::STREAM.into(),
+                });
+                chat.receive(Incoming::End { seq });
+            }
+        }
+        h.wait(0.2);
+        assert!(h.has("page prev") && h.has("page next"), "the strip");
+        assert!(!h.has("page delete"), "the live answer is not a page to delete");
+        h.press("page prev");
+        h.wait(0.2);
+        assert_eq!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .chat
+                .viewing()
+                .map(|e| e.question.clone()),
+            Some("second".into())
+        );
+        assert!(h.has("page delete"));
+        h.press("page delete");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().chat.history.len(), 1);
+        h.press("page next");
+        h.wait(0.2);
+        assert!(h.app.sim.as_ref().unwrap().chat.viewing().is_none());
+    }
+
     #[test]
     fn the_third_tab_reads_agent() {
         assert_eq!(Tab::Claude.label(), "Agent");
