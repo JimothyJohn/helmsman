@@ -199,6 +199,8 @@ pub fn measurement_names(s: &StateVar) -> Vec<String> {
         && suffix.len() <= 4
     {
         v.push(stem.to_string());
+        v.push(format!("{stem}_in"));
+        v.push(format!("{stem}_raw"));
     }
     v
 }
@@ -344,7 +346,14 @@ END_PROGRAM
         let mut v = var("level_m", "REAL", Some("m"));
         assert_eq!(
             measurement_names(&v),
-            ["level_m", "level_m_in", "level_m_raw", "level"]
+            [
+                "level_m",
+                "level_m_in",
+                "level_m_raw",
+                "level",
+                "level_in",
+                "level_raw"
+            ]
         );
         v.measured_by = Some("tx_level".into());
         assert_eq!(measurement_names(&v), ["tx_level"]);
