@@ -13,8 +13,10 @@ use std::time::Duration;
 
 use helmsman_proto::cip::{self, GeneralStatus};
 use helmsman_proto::codec::{Reader, Writer};
+use helmsman_proto::cpf;
 use helmsman_proto::encap::{Command, Frame, HEADER_LEN, Header};
 use helmsman_proto::explicit;
+use helmsman_proto::identity::SocketAddress;
 use helmsman_proto::io::{self, Class1Body, ForwardClose, ForwardOpen, ForwardOpenReply, IoPacket};
 use helmsman_proto::scanner::{Error, IoConfig, IoConnection};
 use helmsman_proto::session::Session;
@@ -40,12 +42,26 @@ struct Target {
 }
 
 /// Serves one session. Returns (tcp port, udp port, join handle).
-#[allow(clippy::too_many_lines)]
 fn spawn_target(refuse: Option<(u16, u16)>) -> (Target, thread::JoinHandle<()>) {
+    spawn_target_with(refuse, false)
+}
+
+/// As [`spawn_target`]; `elsewhere`: the target consumes O->T on a second
+/// UDP socket, which its `Forward_Open` reply names in an O->T
+/// socket-address item (CPF 0x8000, address 0.0.0.0, as the ioLogik E1213
+/// answers), and anything sent to `udp_port` is a test failure.
+#[allow(clippy::too_many_lines)]
+fn spawn_target_with(refuse: Option<(u16, u16)>, elsewhere: bool) -> (Target, thread::JoinHandle<()>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let tcp_port = listener.local_addr().unwrap().port();
     let udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let udp_port = udp.local_addr().unwrap().port();
+    let consume = if elsewhere {
+        UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap()
+    } else {
+        udp.try_clone().unwrap()
+    };
+    let consume_port = consume.local_addr().unwrap().port();
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -95,7 +111,7 @@ fn spawn_target(refuse: Option<(u16, u16)>) -> (Target, thread::JoinHandle<()>) 
                                     application_reply: vec![],
                                 };
                                 // I/O thread: consume O->T, echo as T->O to wherever it came from.
-                                let udp = udp.try_clone().unwrap();
+                                let udp = consume.try_clone().unwrap();
                                 let stop = Arc::clone(&stop);
                                 let has_header = fo.o_to_t.size > 2 + DATA_LEN;
                                 udp.set_read_timeout(Some(Duration::from_millis(20))).unwrap();
@@ -159,7 +175,23 @@ fn spawn_target(refuse: Option<(u16, u16)>) -> (Target, thread::JoinHandle<()>) 
                         }
                         _ => cip::Response::error(req.service, GeneralStatus::SERVICE_NOT_SUPPORTED),
                     };
-                    explicit::encode_send_rr_data_reply(SESSION, ctx, &resp)
+                    if elsewhere && resp.service == io::service::FORWARD_OPEN | cip::service::REPLY_BIT {
+                        let mut w = Writer::with_capacity(SocketAddress::LEN);
+                        SocketAddress {
+                            family: SocketAddress::AF_INET,
+                            port: consume_port,
+                            addr: Ipv4Addr::UNSPECIFIED,
+                        }
+                        .encode(&mut w);
+                        let sockaddr = w.into_inner();
+                        let item = [cpf::Item {
+                            type_id: cpf::item::SOCKADDR_O_TO_T,
+                            data: &sockaddr,
+                        }];
+                        explicit::encode_send_rr_data_reply_with_items(SESSION, ctx, &resp, &item)
+                    } else {
+                        explicit::encode_send_rr_data_reply(SESSION, ctx, &resp)
+                    }
                 }
                 _ => {
                     let mut h = Header::request(Command::Nop, 0, ctx);
@@ -173,6 +205,14 @@ fn spawn_target(refuse: Option<(u16, u16)>) -> (Target, thread::JoinHandle<()>) 
         stop.store(true, Ordering::Relaxed);
         if let Some(h) = io_thread.take() {
             h.join().unwrap();
+        }
+        if elsewhere {
+            // Nothing may have reached the port the originator was given.
+            udp.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+            let mut buf = [0u8; 1500];
+            if let Ok((n, from)) = udp.recv_from(&mut buf) {
+                panic!("{n} bytes of O->T from {from} reached the port the reply said not to use");
+            }
         }
     });
     (
@@ -212,6 +252,34 @@ fn exclusive_owner_round_trip_echoes_output_into_input() {
 
     let close = conn.close(&mut s).unwrap();
     assert_eq!(close.originator_vendor_id, 0xFFFF);
+    s.close();
+    handle.join().unwrap();
+}
+
+/// A target may answer `Forward_Open` with an O->T socket-address item
+/// naming where it consumes (the ioLogik E1213 names UDP 5222 and ignores
+/// O->T data sent to 2222): O->T goes there, and nowhere else.
+#[test]
+fn o_to_t_goes_to_the_port_the_reply_names() {
+    let (t, handle) = spawn_target_with(None, true);
+    let mut s = Session::connect((Ipv4Addr::LOCALHOST, t.tcp_port), Duration::from_secs(2)).unwrap();
+    let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let given = SocketAddrV4::new(Ipv4Addr::LOCALHOST, t.udp_port);
+    let cfg = IoConfig::exclusive_owner(151, 150, 100, DATA_LEN, DATA_LEN, Duration::from_millis(10));
+    let conn = IoConnection::open(&mut s, &sock, given, cfg).unwrap();
+    assert_ne!(conn.target(), given, "the reply's port was not honoured");
+    assert_eq!(
+        conn.target().ip(),
+        given.ip(),
+        "address 0.0.0.0 keeps the target's IP"
+    );
+
+    conn.set_output(&[4, 3, 2, 1]).unwrap();
+    let echoed = conn
+        .wait_for_input_eq(&[4, 3, 2, 1], Duration::from_secs(2))
+        .expect("no echo from the port the reply named");
+    assert_eq!(echoed.data, vec![4, 3, 2, 1]);
+    conn.close(&mut s).unwrap();
     s.close();
     handle.join().unwrap();
 }

@@ -2,7 +2,7 @@
 # as moxa-iologik-e1213-enip.map. Addresses are 0-based PDU addresses: the
 # manual's "Start Address (decimal)" column (ioLogik E1200 User's Manual
 # v15.10, p. A-7), not its 1-based "Start Register" (10001, 30017, ...).
-device e1213 modbus-tcp 192.168.3.60:502 unit=1 timeout_ms=300 poll_ms=20
+device e1213 modbus-tcp 10.0.0.57:502 unit=1 timeout_ms=300 poll_ms=20
 
 in  part_present  bool e1213 di:4
 in  door_closed   bool e1213 di:5

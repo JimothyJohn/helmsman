@@ -45,7 +45,10 @@ impl E1213Sim {
     }
 
     /// Any layout and application, on 127.0.0.1 at free ports, answering
-    /// each scanner at the port its O->T packets come from.
+    /// each scanner at the port its O->T packets come from, and consuming
+    /// O->T on a port of its own that each `Forward_Open` reply names (an
+    /// O->T socket-address item), as a real E1213 does with UDP 5222; O->T
+    /// sent to its I/O port is dropped, as the real one drops it.
     ///
     /// # Errors
     /// A socket that won't bind.
@@ -57,6 +60,7 @@ impl E1213Sim {
                 encap_port: 0,
                 io_port: 0,
                 peer_io_port: 0,
+                o_to_t_port: Some(0),
                 ..ServerConfig::default()
             },
         )?;

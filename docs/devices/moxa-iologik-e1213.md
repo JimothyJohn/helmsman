@@ -147,7 +147,10 @@ table and the EDS agree.
   simulator counts every DI's rising edges.
 
 The bench check (`scripts/bench-e1213.sh`) is what turns these into facts:
-it drives each wired DO and watches the DI it is wired to.
+it drives each wired DO and watches the DI it is wired to. What the bench
+unit showed so far is under "On the bench" below: the bit order and the
+DO status byte are confirmed, the DIO numbering and counter byte order are
+still inferred.
 
 ## Modbus/TCP (manual p. A-7)
 
@@ -183,6 +186,61 @@ The same signals over either transport; both files are checked by
 EtherNet/IP gives one exclusive owner and a cyclic image of all 51 bytes
 every RPI; Modbus/TCP gives request/reply per point and no ownership.
 
+## On the bench (2026-11-02)
+
+The unit on the bench: E1213, serial TAIGB1106222, firmware **V3.1
+Build19110615**, MAC 00-90-e8-7e-af-be, on the office LAN (10.0.0.x) by
+DHCP at 10.0.0.57 when this was written (its web console, "Ethernet
+Configuration", says DHCP; it was not at the factory 192.168.127.254).
+EtherNet/IP was already activated and enabled on it. DO-00..02 are wired
+to DI-00..02. Observed with a stand-alone Python scanner and the Modbus
+driver, both sides at once, so each fact below is from the wire:
+
+- **ListIdentity** answers vendor 991, type 0x0C, product code 515,
+  **revision 3.1**, status 0x0004, product name "ioLogik E1213". The EDS
+  v2.0 describes revision 4.1 (firmware 4.0): an electronic key with
+  `key=exact` against the built-in profile would be refused by this unit;
+  `key=compatible` or `key=off` (the default) connects.
+- **O->T goes to UDP 5222, not 2222.** The `Forward_Open` reply carries an
+  O->T socket-address item (CPF type 0x8000: `AF_INET`, port 5222, address
+  0.0.0.0). O->T datagrams sent to 2222 are accepted silently and ignored:
+  the outputs never move and the DO status byte stays 0. Sent to 5222,
+  every bit lands. helmsman's scanner honours the item since this day
+  (`helmsman_proto::scanner`, `IoConnection::target`); the simulated E1213
+  (`enip_sim`, `helmsman-adapter --o-to-t-port`) answers the same way and
+  drops O->T on its I/O port, so the conformance run exercises it.
+- **T->O comes from UDP source port 1032** on the device, to the
+  originator's 2222, every 100 ms at RPI 100 ms (29 datagrams in 3 s).
+- **Bit order confirmed:** O->T byte 0 bit *n* is DO-*n*; T->O byte 0 bit
+  *n* is DI-*n*; T->O byte 50 bit *n* is DO-*n*'s status. A DO written over
+  Modbus (coil *n*) shows in byte 50 bit *n* within one RPI, and the two
+  transports agree on every channel.
+- **The loops close only with EXT field power.** Until 24 V was on the
+  EXT terminals the DOs reported ON (coils, byte 50) while no DI followed,
+  and the console's overview said "DO(DO00-DO03) Power Source: Unselect or
+  No External Power". The E1213's DO is source type: it drives the EXT
+  supply out, so without EXT nothing reaches the DI (manual p. 2-6, "EXT
+  Power Configuration": JP10 field power is the default; the EXT LED
+  shows it, p. 1-4). The console's "DO(DO04-DO07) Power Source: Field
+  Power (Fixed)" is the hybrid DIO group.
+- **A second `Forward_Open` while a connection is open** is refused with
+  extended status 0x0100 (connection in use); a connection whose owner
+  vanishes without `Forward_Close` is held for about 10 s before another
+  owner is accepted.
+- **Counters read 0** in DI mode (counter mode is off, as Appendix E
+  says).
+- The console's DO page says "DO4-7 Channel Equal DIO0-3 Channel": the
+  hybrid channels are DO-04..07 / DI-08..11, as inferred above.
+- Modbus/TCP: `di:0..11`, `coil:0..7`, `ir:16..` and `hr:32` (DO-all, 8
+  bits wide: writing 0xA55A reads back 0x5A) all answer with unit id 1.
+
+What the macOS firewall does to this: the Mac allows incoming UDP only for
+software signed by a developer, and a cargo binary is ad-hoc signed, so
+T->O never reaches `conformance` or `helmsman-plc` until each is allowed
+(`scratch/02-allow-firewall.sh`, `sudo socketfilterfw --add --unblockapp`,
+again after every rebuild). Apple's own `python3` is allowed, which is how
+the facts above were taken over SSH.
+
 ## Checking it
 
 - Simulated, any machine: `cargo run -p helmsman-io --example conformance
@@ -193,3 +251,9 @@ every RPI; Modbus/TCP gives request/reply per point and no ownership.
   moxa-e1213`.
 - The real device: `scripts/bench-e1213.sh IP` (TODO.md `e1213-bench`):
   ListIdentity, the Identity object, then the conformance run over Class 1.
+  On a Mac, `scratch/02-allow-firewall.sh` first (above).
+- The loop check as a program: [`e1213-loop/`](e1213-loop/) (`main.st`,
+  `io.map` over Modbus/TCP, `io-enip.map` over EtherNet/IP) steps DO-00..02
+  and counts cycles and faults; `helmsman-plc docs/devices/e1213-loop/main.st
+  --io-map docs/devices/e1213-loop/io.map --ui target/canvas-dist` shows it
+  live in the canvas. Over Modbus on the bench: 11 cycles, 0 faults in 20 s.

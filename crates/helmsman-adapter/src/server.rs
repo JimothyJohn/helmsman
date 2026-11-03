@@ -17,6 +17,11 @@
 //!   does), else to `originator:peer_io_port` (2222 by default, `OpENer`'s
 //!   default; 0 answers each connection at the port its O->T packets come
 //!   from), and expires connections.
+//! - With `o_to_t_port` set, O->T is consumed on a UDP socket of its own
+//!   instead, which every `Forward_Open` reply names in an O->T
+//!   socket-address item (CPF 0x8000, address 0.0.0.0), and O->T sent to
+//!   the I/O endpoint is dropped: what a Moxa ioLogik E1213 (firmware 3.1)
+//!   does with port 5222. T->O still leaves from the I/O endpoint.
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -26,6 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use helmsman_proto::cip::service::REPLY_BIT;
 use helmsman_proto::codec::Reader;
 use helmsman_proto::encap::{self, Command, Frame, HEADER_LEN, Header, Status};
 use helmsman_proto::endpoint::{IoEndpoint, Owner};
@@ -47,6 +53,11 @@ pub struct ServerConfig {
     /// target sends to 2222). Nothing is produced until the first O->T
     /// packet arrives.
     pub peer_io_port: u16,
+    /// Consume O->T on this UDP port instead of the I/O endpoint and say
+    /// so in each `Forward_Open` reply (an O->T socket-address item); 0
+    /// picks a free port. `None`: on the I/O endpoint, with no such item,
+    /// as `OpENer` does.
+    pub o_to_t_port: Option<u16>,
     pub max_sessions: usize,
     pub session_idle: Duration,
 }
@@ -58,6 +69,7 @@ impl Default for ServerConfig {
             encap_port: encap::PORT,
             io_port: encap::IO_PORT,
             peer_io_port: encap::IO_PORT,
+            o_to_t_port: None,
             max_sessions: 32,
             session_idle: Duration::from_secs(120),
         }
@@ -71,6 +83,8 @@ pub struct Adapter {
     threads: Vec<JoinHandle<()>>,
     encap_addr: SocketAddrV4,
     endpoint: IoEndpoint,
+    /// The socket O->T is consumed on when it is not the endpoint.
+    o_to_t_addr: Option<SocketAddrV4>,
     dest: Arc<Mutex<Dest>>,
     sessions: Arc<AtomicUsize>,
 }
@@ -148,6 +162,15 @@ impl Adapter {
         device.set_id_allocator(endpoint.allocator());
         let owner = Arc::new(endpoint.owner());
         let dest = Arc::new(Mutex::new(Dest::default()));
+        let o_to_t = match cfg.o_to_t_port {
+            Some(port) => {
+                let sock = UdpSocket::bind(SocketAddrV4::new(cfg.bind, port))?;
+                sock.set_read_timeout(Some(Duration::from_millis(1)))?;
+                Some((v4(sock.local_addr()?)?, sock))
+            }
+            None => None,
+        };
+        let o_to_t_addr = o_to_t.as_ref().map(|(a, _)| *a);
 
         let device = Arc::new(Mutex::new(device));
         let stop = Arc::new(AtomicBool::new(false));
@@ -159,6 +182,7 @@ impl Adapter {
             let io = Io {
                 owner: Arc::clone(&owner),
                 dest: Arc::clone(&dest),
+                o_to_t_port: o_to_t_addr.map(|a| a.port()),
             };
             let (device, stop, sessions, cfg) = (
                 Arc::clone(&device),
@@ -179,10 +203,17 @@ impl Adapter {
                 udp_encap_loop(&udp_encap, &device, &stop, port);
             })?);
         }
+        if let Some((_, sock)) = o_to_t {
+            let (device, stop, dest) = (Arc::clone(&device), Arc::clone(&stop), Arc::clone(&dest));
+            threads.push(thread::Builder::new().name("eip-o-to-t".into()).spawn(move || {
+                o_to_t_loop(&sock, &device, &dest, &stop);
+            })?);
+        }
         {
             let io = Io {
                 owner,
                 dest: Arc::clone(&dest),
+                o_to_t_port: o_to_t_addr.map(|a| a.port()),
             };
             let (device, stop) = (Arc::clone(&device), Arc::clone(&stop));
             let peer_port = cfg.peer_io_port;
@@ -196,9 +227,18 @@ impl Adapter {
             threads,
             encap_addr,
             endpoint: endpoint.clone(),
+            o_to_t_addr,
             dest,
             sessions,
         })
+    }
+
+    /// Where O->T is consumed when that is not the I/O endpoint
+    /// (`ServerConfig::o_to_t_port`): the port each `Forward_Open` reply
+    /// names.
+    #[must_use]
+    pub const fn o_to_t_addr(&self) -> Option<SocketAddrV4> {
+        self.o_to_t_addr
     }
 
     #[must_use]
@@ -254,6 +294,8 @@ impl Drop for Adapter {
 struct Io {
     owner: Arc<Owner>,
     dest: Arc<Mutex<Dest>>,
+    /// The port O->T is consumed on instead of the endpoint, if any.
+    o_to_t_port: Option<u16>,
 }
 
 fn lock_dest(m: &Mutex<Dest>) -> std::sync::MutexGuard<'_, Dest> {
@@ -390,6 +432,39 @@ fn status_only(h: &Header, status: Status, session: u32) -> Vec<u8> {
     out.encode().to_vec()
 }
 
+/// The `SendRRData` reply frame for `resp`; a successful `Forward_Open`
+/// also carries an O->T socket-address item when O->T is consumed on
+/// `o_to_t_port` rather than the endpoint.
+fn rr_reply(h: &Header, resp: &helmsman_proto::cip::Response, o_to_t_port: Option<u16>) -> Vec<u8> {
+    let opened =
+        resp.service == helmsman_proto::io::service::FORWARD_OPEN | REPLY_BIT && resp.status.is_success();
+    match o_to_t_port {
+        Some(port) if opened => {
+            let sockaddr = o_to_t_sockaddr(port);
+            let item = [helmsman_proto::cpf::Item {
+                type_id: helmsman_proto::cpf::item::SOCKADDR_O_TO_T,
+                data: &sockaddr,
+            }];
+            explicit::encode_send_rr_data_reply_with_items(h.session_handle, h.sender_context, resp, &item)
+        }
+        _ => explicit::encode_send_rr_data_reply(h.session_handle, h.sender_context, resp),
+    }
+}
+
+/// An O->T socket-address item body naming `port` at 0.0.0.0: "send O->T
+/// here", the address being the one the session is with (what the E1213
+/// answers).
+fn o_to_t_sockaddr(port: u16) -> Vec<u8> {
+    let mut w = helmsman_proto::codec::Writer::with_capacity(SocketAddress::LEN);
+    SocketAddress {
+        family: SocketAddress::AF_INET,
+        port,
+        addr: Ipv4Addr::UNSPECIFIED,
+    }
+    .encode(&mut w);
+    w.into_inner()
+}
+
 /// The port of a T->O socket-address item among `items`, if any.
 fn t_to_o_port(items: &[helmsman_proto::cpf::Item<'_>]) -> Option<u16> {
     let item = items
@@ -483,11 +558,7 @@ fn serve_client(
                                 }
                                 resp
                             };
-                            Some(explicit::encode_send_rr_data_reply(
-                                h.session_handle,
-                                h.sender_context,
-                                &resp,
-                            ))
+                            Some(rr_reply(&h, &resp, io.o_to_t_port))
                         }
                         None => Some(status_only(&h, Status::IncorrectData, h.session_handle)),
                     }
@@ -538,10 +609,33 @@ fn udp_encap_loop(sock: &UdpSocket, device: &Mutex<Device>, stop: &AtomicBool, p
     }
 }
 
+/// O->T on the socket of its own (`ServerConfig::o_to_t_port`): the
+/// device checks connection ID, originator and sequence as on the endpoint.
+fn o_to_t_loop(sock: &UdpSocket, device: &Mutex<Device>, dest: &Mutex<Dest>, stop: &AtomicBool) {
+    let mut buf = [0u8; 1500];
+    while !stop.load(Ordering::Relaxed) {
+        let Ok((n, from)) = sock.recv_from(&mut buf) else {
+            continue;
+        };
+        let Ok(from) = v4(from) else { continue };
+        let Ok(pkt) = helmsman_proto::io::IoPacket::decode(&buf[..n]) else {
+            continue;
+        };
+        let mut dev = device::lock_ref(device);
+        if dev.on_io_packet(&buf[..n], *from.ip(), Instant::now()).is_ok() {
+            lock_dest(dest).seen.insert(pkt.connection_id, from);
+        }
+    }
+}
+
 fn io_loop(io: &Io, device: &Mutex<Device>, stop: &AtomicBool, peer_port: u16) {
     let mut routed: Vec<u32> = Vec::new();
     while !stop.load(Ordering::Relaxed) {
-        if let Some(d) = io.owner.recv_timeout(Duration::from_millis(1)) {
+        if let Some(d) = io.owner.recv_timeout(Duration::from_millis(1))
+            // With O->T consumed elsewhere, what reaches the endpoint is
+            // dropped, as the E1213 drops O->T sent to 2222.
+            && io.o_to_t_port.is_none()
+        {
             let mut dev = device::lock_ref(device);
             // The endpoint routed it here from the connection's originator;
             // the device still checks both, and the sequence.

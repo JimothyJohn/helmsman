@@ -704,6 +704,23 @@ into the code.
   status words and the counters' byte order are inferred, and say so.
 - **How to cite:** `E1200 manual v15.10 p. X-N`.
 
+### The bench E1213 (firmware V3.1 Build19110615), 2026-11-02
+
+- **What:** the unit itself, serial TAIGB1106222, observed over the wire
+  with a stand-alone Python scanner and Modbus client (session scratch,
+  not committed) while its web console was read page by page. What it
+  showed is in docs/devices/moxa-iologik-e1213.md, "On the bench": the
+  O->T socket-address item in its `Forward_Open` reply (UDP 5222), the
+  T->O source port, bit order, the EXT field power dependency, the
+  refusal code for a second owner, identity revision 3.1.
+- **Where:** 10.0.0.57 by DHCP on the office LAN at the time; MAC
+  00-90-e8-7e-af-be.
+- **Leaned on by:** `helmsman_proto::scanner` honouring the O->T
+  socket-address item, `helmsman_adapter::server`'s `o_to_t_port`, the
+  simulated E1213, the device doc's confirmed lines, the `e1213-loop`
+  example.
+- **How to cite:** `E1213 bench 2026-11-02` (and the device doc section).
+
 ### OpENer sample application EDS (`data/opener_sample_app.eds`)
 
 - **What:** the EDS for `OpENer`'s POSIX sample, the layout

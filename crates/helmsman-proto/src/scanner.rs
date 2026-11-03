@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 use crate::cpf;
 use crate::encap;
 use crate::endpoint::{IoEndpoint, Owner};
+use crate::explicit;
 use crate::identity::SocketAddress;
 use crate::io::{
     Class1Body, ConnectionPath, ElectronicKey, ForwardClose, ForwardCloseReply, ForwardOpen,
@@ -229,8 +230,9 @@ impl fmt::Debug for IoConnection {
 
 impl IoConnection {
     /// Send `Forward_Open` over `session`, then start producing to `target`
-    /// (the target's UDP I/O address, normally its IP at port 2222) and
-    /// consuming on `socket`.
+    /// (the target's UDP I/O address, normally its IP at port 2222, unless
+    /// the reply's O->T socket-address item names another; [`Self::target`])
+    /// and consuming on `socket`.
     ///
     /// # Errors
     /// `Refused` with the Connection Manager's extended status, or a
@@ -266,10 +268,11 @@ impl IoConnection {
         let serial = next_serial();
         let t_to_o_id = u32::from(serial) << 16 | u32::from(config.originator_vendor_id);
         let open = config.forward_open(serial, t_to_o_id);
-        let resp = send(session, &open.to_request(), &[])?;
+        let (resp, items) = send(session, &open.to_request(), &[])?;
         let reply = open_result(&resp)
             .map_err(session::Error::Decode)?
             .map_err(Error::Refused)?;
+        let target = o_to_t_target(&items, target);
         let mut buf = vec![0u8; 65535];
         let recv: Recv = Box::new(move |_wait| {
             let (n, from) = rx.recv_from(&mut buf).ok()?;
@@ -311,10 +314,11 @@ impl IoConnection {
             data: &sockaddr,
         }];
         let extra: &[cpf::Item<'_>] = if port == encap::IO_PORT { &[] } else { &item };
-        let resp = send(session, &open.to_request(), extra)?;
+        let (resp, items) = send(session, &open.to_request(), extra)?;
         let reply = open_result(&resp)
             .map_err(session::Error::Decode)?
             .map_err(Error::Refused)?;
+        let target = o_to_t_target(&items, target);
         if reply.t_to_o_connection_id != t_to_o_id {
             // The device chose the T->O ID itself; route that one instead.
             let _ = owner.unregister(t_to_o_id);
@@ -388,6 +392,13 @@ impl IoConnection {
     #[must_use]
     pub const fn reply(&self) -> &ForwardOpenReply {
         &self.reply
+    }
+
+    /// Where O->T data goes: the target given at open, or what its
+    /// `Forward_Open` reply's O->T socket-address item named instead.
+    #[must_use]
+    pub const fn target(&self) -> SocketAddrV4 {
+        self.target
     }
 
     #[must_use]
@@ -520,7 +531,7 @@ impl Closer {
     /// # Errors
     /// A refused close (unknown connection) or session error.
     pub fn send(&self, session: &mut Session) -> Result<ForwardCloseReply, Error> {
-        let resp = send(session, &self.0.to_request(), &[])?;
+        let (resp, _) = send(session, &self.0.to_request(), &[])?;
         close_result(&resp)
             .map_err(session::Error::Decode)?
             .map_err(Error::Refused)
@@ -577,10 +588,33 @@ fn send(
     session: &mut Session,
     request: &crate::cip::Request,
     extra: &[cpf::Item<'_>],
-) -> Result<crate::cip::Response, session::Error> {
+) -> Result<(crate::cip::Response, Vec<explicit::OwnedItem>), session::Error> {
     let mut mr = crate::codec::Writer::default();
     request.encode(&mut mr);
-    session.exchange_with(&mr.into_inner(), extra)
+    session.exchange_with_items(&mr.into_inner(), extra)
+}
+
+/// Where the target consumes O->T: `target` unless its `Forward_Open`
+/// reply carried an O->T socket-address item (CPF 0x8000) naming a port,
+/// and an address if that is not 0.0.0.0. CIP Volume 2 lets a target
+/// answer with one; the ioLogik E1213 (firmware 3.1) names UDP 5222 and
+/// ignores O->T data sent to 2222. `OpENer` answers with none.
+fn o_to_t_target(items: &[explicit::OwnedItem], target: SocketAddrV4) -> SocketAddrV4 {
+    let Some((_, data)) = items.iter().find(|(t, _)| *t == cpf::item::SOCKADDR_O_TO_T) else {
+        return target;
+    };
+    let Ok(addr) = SocketAddress::decode(&mut crate::codec::Reader::new(data)) else {
+        return target;
+    };
+    if addr.family != SocketAddress::AF_INET || addr.port == 0 {
+        return target;
+    }
+    let ip = if addr.addr.is_unspecified() {
+        *target.ip()
+    } else {
+        addr.addr
+    };
+    SocketAddrV4::new(ip, addr.port)
 }
 
 impl Drop for IoConnection {
