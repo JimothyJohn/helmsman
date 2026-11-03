@@ -607,6 +607,7 @@ impl Bench {
             path,
             headers: &headers,
             json: bytes.as_deref(),
+            raw: None,
         };
         let t = Timeouts {
             connect: Duration::from_secs(2),
@@ -635,6 +636,7 @@ impl Bench {
             path: "/api/chat",
             headers: &[("Authorization", &auth)],
             json: Some(&bytes),
+            raw: None,
         };
         let t = Timeouts {
             connect: Duration::from_secs(2),

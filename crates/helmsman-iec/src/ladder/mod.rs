@@ -52,10 +52,12 @@
 //! faults, which do not change a tag; the system's own `S:FS`; the
 //! controller's microsecond clock (a timer reads the scan's time once).
 
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
 pub mod rung;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt::Write as _;
+use alloc::collections::{BTreeMap, BTreeSet};
+use core::fmt::Write as _;
 
 use crate::l5x::{self, Data, Project, RoutineKind, TagKind};
 use rung::{Elem, Expr, Index, Instr, Op, Operand, Path, Seg};
@@ -89,8 +91,8 @@ pub struct Problem {
     pub msg: String,
 }
 
-impl std::fmt::Display for Problem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Problem {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if self.at.is_empty() {
             f.write_str(&self.msg)
         } else {
@@ -107,8 +109,8 @@ pub struct Refused {
     pub total: usize,
 }
 
-impl std::fmt::Display for Refused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Refused {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         for (k, p) in self.problems.iter().enumerate() {
             if k > 0 {
                 f.write_str("; ")?;
@@ -315,9 +317,9 @@ struct Cx {
     p: Project,
     tags: Vec<TagDef>,
     /// Upper-cased name -> tag, controller scope.
-    ctl: HashMap<String, TagId>,
+    ctl: BTreeMap<String, TagId>,
     /// Per program: upper-cased name -> tag.
-    prog: Vec<HashMap<String, TagId>>,
+    prog: Vec<BTreeMap<String, TagId>>,
     problems: Vec<Problem>,
     total: usize,
     notes: Vec<String>,
@@ -1238,7 +1240,7 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
     };
     let mut cx = Cx {
         tags: Vec::new(),
-        ctl: HashMap::new(),
+        ctl: BTreeMap::new(),
         prog: Vec::new(),
         problems: Vec::new(),
         total: 0,
@@ -1335,7 +1337,7 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
         }
     }
     for k in 0..cx.p.programs.len() {
-        cx.prog.push(HashMap::new());
+        cx.prog.push(BTreeMap::new());
         for t in cx.p.programs[k].tags.clone() {
             if add(&mut cx, &t, Some(k)).is_some() {
                 let pn = cx.p.programs[k].name.clone();

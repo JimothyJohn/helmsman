@@ -5,7 +5,8 @@
 # native) and the canvas for wasm32. Both broke dev on 2026-10-30 when PRs
 # that were each green landed together. It also lints helmsman-plc without
 # its `enip-io` feature (the EtherNet/IP scanner, in the default build since
-# the E1213 bench passed) so that the enip-less box keeps compiling.
+# the E1213 bench passed) so that the enip-less box keeps compiling, and
+# helmsman-iec without std for thumbv7em (the edge node, docs/EDGE.md).
 # Needs: `scripts/install-dev.sh`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,3 +15,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy -q -p helmsman-plc --no-default-features --features box,https --all-targets -- -D warnings
 cargo check -q -p helmsman-plc --no-default-features --all-targets
 cargo check -q --target wasm32-unknown-unknown -p helmsman-canvas
+# helmsman-iec without std (the edge node's build, docs/EDGE.md Phase 0):
+# clippy, so a std-only call fails here and not on the Xtensa toolchain.
+cargo clippy -q -p helmsman-iec --no-default-features --features libm --target thumbv7em-none-eabihf -- -D warnings
+cargo clippy -q -p helmsman-modbus --target thumbv7em-none-eabihf -- -D warnings
