@@ -2,7 +2,7 @@
 
 ## Open questions for Nick
 
-- [ ] **Where does the relay live?** The relay holds the Anthropic key and meters boxes, which the vision puts on the paid side of open core, and the `open-core-split` card says to decide before paid code lands in this MIT repo. So relay v0 is being built in a NEW local repo `../helmsman-relay` (Rust, SAM template, no remote, nothing deployed). Creating the private GitHub repo and deploying the stack (account 403059190476, us-east-1) are your steps; scripts and cards are in that repo's TODO.md.
+- [x] **Where does the relay live?** The relay holds the Anthropic key and meters boxes, which the vision puts on the paid side of open core, and the `open-core-split` card says to decide before paid code lands in this MIT repo. So relay v0 is being built in a NEW local repo `../helmsman-relay` (Rust, SAM template, no remote, nothing deployed). Creating the private GitHub repo and deploying the stack (account 403059190476, us-east-1) are your steps; scripts and cards are in that repo's TODO.md.
   asked: 2026-10-30
   by: claude-session
   needs: your call
@@ -14,6 +14,7 @@
   notes: left (2026-10-31, later): run ../agent-relay `scripts/create-github-repo.sh`, then merge its `feat/images-metering` branch; deploying is `relay-deploy`.
   notes: 2026-10-31: the local repo is now ../agent-relay (renamed, client-agnostic, profiles namespaced helmsman/<name> with the old bare names as aliases). Tick once the GitHub repo exists: run its scripts/create-github-repo.sh.
   answer: private repo JimothyJohn/agent-relay (recommended), an agnostic endpoint that happens to work with helmsman
+  notes: done 2026-11-03: JimothyJohn/agent-relay exists (private, main + dev), baseline wiring in its PR #1, the v4..v6 stack (feat/doc-fetch) in a PR into its dev. Left: relay-deploy.
 
 - [x] **Give the E1213 a fixed address?** It is on the office LAN by DHCP at 10.0.0.57 (lease from 10.0.0.1), so the address in docs/devices/e1213-loop/io.map and the enip map can change under us. Options: a DHCP reservation for 00-90-e8-7e-af-be on the router (nothing to change on the unit), a static address on the unit outside the router's pool (I don't know the pool), or move it to the 192.168.3.x device link where the maps used to point (192.168.3.60). The maps say 10.0.0.57 until you choose.
   asked: 2026-11-02
