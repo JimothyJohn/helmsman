@@ -27,6 +27,16 @@
   answer: DHCP reservation on the router (recommended)
   notes: interview 2026-11-02: Nick changed to "find it by identity instead, skip the reservation": card `device-by-identity`; the maps keep 10.0.0.57 until that lands.
 
+- [ ] **MCP clients cannot read /api/devices: allow it?** — found by the plant-states worker (2026-11-03): `mcp::reachable` lacks GET /api/devices, so `list_devices` fails over MCP (it always did) while it works for the relay agent. Allowing it widens what an engineer's own MCP client reads on the box (device names, addresses, link errors); read-only, no secrets.
+  needs: your call
+  result: list_devices works the same over MCP as through the relay, or stays relay-only on purpose
+  options: allow GET /api/devices, /api/devices/library and the discover POST over MCP (recommended) | allow the GET only | keep MCP without devices
+  est: 1h
+  difficulty: low
+  id: mcp-devices
+  asked: 2026-11-03
+  by: claude-session
+
 ## Tasks
 
 - [ ] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.
@@ -187,7 +197,7 @@
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **"Use this code" keeps every iteration under one program, the newest on top** — Nick 2026-11-01 (NEXTSESH): "Use this code" should create a new program in a folder named by the user, where each iteration is the newest file and the earlier ones are hidden away in the Files pane. Today a PROGRAM answer becomes a project named from the PROGRAM (lamp_test, lamp_test-2, ...) and a block becomes a file in the open project. Wanted: the first answer asks for the program's name once; later answers to the same conversation land in that program as iterations (lamp_test/v3.st or a dated name), the pane shows the newest and folds the rest under a "earlier (4)" row, and the running one is marked.
+- [x] **"Use this code" keeps every iteration under one program, the newest on top** — Nick 2026-11-01 (NEXTSESH): "Use this code" should create a new program in a folder named by the user, where each iteration is the newest file and the earlier ones are hidden away in the Files pane. Today a PROGRAM answer becomes a project named from the PROGRAM (lamp_test, lamp_test-2, ...) and a block becomes a file in the open project. Wanted: the first answer asks for the program's name once; later answers to the same conversation land in that program as iterations (lamp_test/v3.st or a dated name), the pane shows the newest and folds the rest under a "earlier (4)" row, and the running one is marked.
   needs: nothing beyond the projects store
   notes: Nick 2026-11-02 (board): "just do serially for now. It will be wildly long, likely hundreds if not thousands but fuck it." Interview 2026-11-02: the newest is always `main.st`; the one it replaced is renamed `vN.st` (N counting up) and folded under "earlier (n)" in the Files tab; the build takes `main.st`, older ones are kept out of the build; the running one is marked. The first answer asks for the program's name once.
   result: a conversation's answers pile up under one named program, newest first, the pane uncluttered
@@ -196,21 +206,23 @@
   depends: agent-pages
   status: ready
   notes: done 2026-11-02 night, PR #192 (merge queue, stacked on #187): FileKind::Iteration vN.st excluded from both builds, Name this program modal once per conversation, main.st newest, 'earlier (n)' fold, '· runs' mark. The name lives in page memory (asks again after a reload).
+  notes: landed 2026-11-03 through #201 (#192 closed: its commits came in with #201).
   id: agent-iterations
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **The Agent pane keeps the whole conversation as pages the engineer can curate** — Nick 2026-11-01 (NEXTSESH): every exchange is saved for context, shown as pages with back and forward arrows to switch between iterations; a page can be deleted; every remaining page goes into the context each time, so the engineer shapes what the agent sees to improve the output. Today the history lives in page memory only and "New conversation" clears it.
+- [x] **The Agent pane keeps the whole conversation as pages the engineer can curate** — Nick 2026-11-01 (NEXTSESH): every exchange is saved for context, shown as pages with back and forward arrows to switch between iterations; a page can be deleted; every remaining page goes into the context each time, so the engineer shapes what the agent sees to improve the output. Today the history lives in page memory only and "New conversation" clears it.
   needs: the conversation stored with the project (sim: browser storage; box: the store), a page strip in the tab
   result: pages with ‹ › arrows and a delete, the kept pages always sent as context, surviving a reload
   est: 2d
   difficulty: med
   notes: done 2026-11-02 night, PR #187 (merge queue): agent.md project file kind, page strip ‹ ›, delete, kept pages as context ≤512 kB, hidden from Files.
+  notes: landed 2026-11-03: #187 merged.
   id: agent-pages
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **Plant-model state variables map to real feedback devices, with suggestions** — Nick 2026-11-01 (NEXTSESH): the state variables a simulation's plant model keeps (the tank level, the belt position, the compressor pressure) should be easily replaceable by feedback devices on the real machine, and the agent should suggest the sensor that would capture each one, so what runs is modelled as closely as possible and the valuable signals are not left unmeasured. Each plant-model variable gets a "measured by" slot in the I/O map; empty slots are listed with a suggested device type (level transmitter, encoder, pressure transducer) and the agent's reasoning.
+- [x] **Plant-model state variables map to real feedback devices, with suggestions** — Nick 2026-11-01 (NEXTSESH): the state variables a simulation's plant model keeps (the tank level, the belt position, the compressor pressure) should be easily replaceable by feedback devices on the real machine, and the agent should suggest the sensor that would capture each one, so what runs is modelled as closely as possible and the valuable signals are not left unmeasured. Each plant-model variable gets a "measured by" slot in the I/O map; empty slots are listed with a suggested device type (level transmitter, encoder, pressure transducer) and the agent's reasoning.
   needs: the plant-model blocks declaring their state variables (a convention or a pragma), the I/O map's point for each
   notes: Nick 2026-11-02 (board): do it now with my own judgement. Judgement: a `(* state *)` pragma on a plant_model.st VAR marks a state variable; the Devices tab lists them under a "plant states" row with a `measured by` slot that is a map `in` line of the same name; the agent's suggestions (sensor type and reasoning) come from a tool reading the list; the simulation reads the mapped signal when one exists. Starts after `agent-scoped-edits`.
   result: a list per project of plant states, which sensor measures each on the machine, and suggestions for the rest; the simulation reads the sensor when one is mapped
@@ -219,6 +231,7 @@
   depends: machine-template
   status: ready
   notes: 2026-11-02 night: worker in progress (feat/plant-states) once #202 is in.
+  notes: landed 2026-11-03: #206 merged ({state} pragma, Plant states in the Devices tab, the simulation runs from a mapped sensor, Add a sensor…, in list_devices).
   id: sim-feedback-devices
   asked: 2026-11-01
   by: claude-session
@@ -232,7 +245,7 @@
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **The Agent edits only what is in focus, and every edit is filed, versioned and tested** — Nick 2026-11-01: the agent should only edit what it is focused on, and each of those edits should be file-managed, version-controlled and tested, the way a developer's change goes through a branch, a review and CI. Today "Use this code" replaces or adds a whole file and the answer carries whatever the model chose to rewrite. Wanted: the agent's scope is the file or block the engineer has picked (the ST selection, the picked block, the open file), it proposes a change to that scope alone and says so; each change lands as its own file or iteration (agent-iterations), as a commit in the project's history with the conversation page that produced it (version-control), and only after the project's requirement tests pass (spec-tests). A change outside the scope is refused by the page, not left to the model.
+- [x] **The Agent edits only what is in focus, and every edit is filed, versioned and tested** — Nick 2026-11-01: the agent should only edit what it is focused on, and each of those edits should be file-managed, version-controlled and tested, the way a developer's change goes through a branch, a review and CI. Today "Use this code" replaces or adds a whole file and the answer carries whatever the model chose to rewrite. Wanted: the agent's scope is the file or block the engineer has picked (the ST selection, the picked block, the open file), it proposes a change to that scope alone and says so; each change lands as its own file or iteration (agent-iterations), as a commit in the project's history with the conversation page that produced it (version-control), and only after the project's requirement tests pass (spec-tests). A change outside the scope is refused by the page, not left to the model.
   needs: agent-iterations, spec-tests, project-history
   notes: Nick 2026-11-02 (board): do it now with my own judgement. Interview 2026-11-02: the focus is the open file by default, the selected lines or the picked block when there is one, and the page says which rule applied; a change outside it is refused by the page (a byte-for-byte check against the rest of the project). History is `project-history` (revisions on the box), not git.
   result: an agent change names its scope, lands as one filed and committed iteration, and cannot skip the tests
@@ -241,11 +254,12 @@
   depends: agent-iterations, spec-tests, project-history
   status: ready
   notes: 2026-11-02 night: worker in progress (feat/agent-scoped-edits) once #187 #192 #194 #201 are in: scope module (file, selection or picked block), <edit_scope> envelope, byte-for-byte refusal outside the scope.
+  notes: landed 2026-11-03 in the simulation: #207 (scope.rs, <edit_scope>, byte-for-byte refusal, tests gate, one revision). A box has no Agent tab yet: card agent-on-box.
   id: agent-scoped-edits
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **Per-project history on the box: every save and every agent answer is a revision** — interview 2026-11-02 (the version-control card's first phase, chosen over git): each save and each "Use this code" writes a numbered revision into the project's folder on the box (the files plus the conversation page that produced it as a `.md`), listable in the Files tab (who, when, what), diffable as Structured Text, restorable as a new revision; deploys keep snapshotting into the store. Works from a browser; no git binary. `version-control` keeps the git export and remotes for later.
+- [x] **Per-project history on the box: every save and every agent answer is a revision** — interview 2026-11-02 (the version-control card's first phase, chosen over git): each save and each "Use this code" writes a numbered revision into the project's folder on the box (the files plus the conversation page that produced it as a `.md`), listable in the Files tab (who, when, what), diffable as Structured Text, restorable as a new revision; deploys keep snapshotting into the store. Works from a browser; no git binary. `version-control` keeps the git export and remotes for later.
   needs: nothing new (the projects store and the agent pages)
   result: a History row per project: revisions with their conversation, diff and restore; the agent's edits are never lost or anonymous
   est: 3d
@@ -253,6 +267,7 @@
   depends: agent-pages
   status: ready
   notes: done 2026-11-02 night, PR #201 (merge queue, stacked on #192): <state>/projects-history/NAME/NNNNNN with the page, GET …/history, GET …/history/{n}, POST …/history/{n}/restore (engineer), History row, LCS diff, restore; sim keeps 20 in browser storage.
+  notes: landed 2026-11-03: #201 merged.
   id: project-history
   asked: 2026-11-02
   by: claude-session
@@ -277,14 +292,25 @@
   asked: 2026-11-02
   by: claude-session
 
-- [ ] **A device named by its identity, not its address** — interview 2026-11-02 (the E1213 is a DHCP lease; Nick chose this over a router reservation): a map's `device` line may give `mac=00-90-e8-7e-af-be`, or `vendor=991 product=515 serial=0x2A629EAE`, in place of a host; at start and after a link loss the box resolves the address (ListIdentity broadcast for EtherNet/IP, ARP or a Modbus identification scan for Modbus TCP) and logs what it found; the Devices tab shows both the identity and the address resolved. The E1213 maps move to `mac=` once this lands.
+- [x] **A device named by its identity, not its address** — interview 2026-11-02 (the E1213 is a DHCP lease; Nick chose this over a router reservation): a map's `device` line may give `mac=00-90-e8-7e-af-be`, or `vendor=991 product=515 serial=0x2A629EAE`, in place of a host; at start and after a link loss the box resolves the address (ListIdentity broadcast for EtherNet/IP, ARP or a Modbus identification scan for Modbus TCP) and logs what it found; the Devices tab shows both the identity and the address resolved. The E1213 maps move to `mac=` once this lands.
   needs: nothing new (ListIdentity discovery exists; ARP reading is per platform)
   result: a DHCP device keeps working when its lease moves; a map travels between networks
   est: 1d
   difficulty: med
   notes: done 2026-11-02 night, PR #195 (merge queue): helmsman_io::resolve, `mac=` and `cip=V:P[:S]` endpoints, ListIdentity sweep, ARP table, /api/devices address; E1213 maps use mac=. No Modbus FC 43/14 probe (card modbus-identification).
+  notes: landed 2026-11-03: #195 merged. The Modbus probe is card modbus-identification.
   id: device-by-identity
   asked: 2026-11-02
+  by: claude-session
+
+- [ ] **The Agent on a box** — left out of agent-scoped-edits (#207): a box's canvas has no Agent tab (BoxView::tabs() is I/O and Requirements; a ui_test pins it), its page's CSP is connect-src 'self', and the box's agent runs through the relay as proposals (POST /api/chat). Give the box an Agent tab that talks to /api/chat, with the pages (#187), iterations (#201), the requirement gate (red_tests) and the edit scope (`scope::apply` takes plain files, so it is reusable) on the box side.
+  needs: the relay deployed (relay-deploy) to try it against a real model; the rest builds against the relay fixtures
+  result: the same agent workflow on a box as in the playground, every change still a proposal through the approval policy
+  est: 3d
+  difficulty: high
+  depends: agent-scoped-edits
+  id: agent-on-box
+  asked: 2026-11-03
   by: claude-session
 
 ## Product vision (interview 2026-10-29)
@@ -345,6 +371,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: wasm-driver, io-bench, agent-loop
   notes: EDS part started (feat/moxa-e1213): `helmsman_proto::eds` reads a vendor EDS and resolves its Class 1 connections, `enip-io` takes `eds=PATH`, so for an EtherNet/IP device the agent's job is choosing points, not writing a driver. Still to do here: the agent reading a manual's data map (Appendix B for the E1213) into points, and iterating on harness output.
   notes: 2026-11-02 night: the EDS half is PR #191 (device-import; in the merge queue); the manual half is the relay's helmsman/v5 profile (../agent-relay feat/driver-agent-profile): look up, EDS over hand-written points, manual table → cited map lines, inferred marked, propose and stop. Tick when #191 lands and the relay is deployed with v5.
+  notes: 2026-11-03: EDS half #191 merged; the manual half is the relay's helmsman/v5 profile (feat/driver-agent-profile). Tick with the relay deploy.
   id: driver-agent
   needs: the EDS (devices/moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds, untracked) first, then the manual's Appendix B
   notes: Nick 2026-11-02 (board): "JUST USE THE EDS FILE FIRST TO MAKE SURE IT'S LEGIT". Order: the EDS path end to end through `device-import`, then the manual-to-points part.
@@ -381,7 +408,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   id: device-library
   notes: 2026-11-02 (feat/devices-pane): the Devices tab exists: the map's devices as a tree with their points and live values, New device… as a form writing a `device` line, the listing as the agent's context (`<io_devices>` in the page, `list_devices` on the box). Next is `device-import`.
 
-- [ ] **Import a device from its file: an EDS, or a manual the agent reads** — Nick, 2026-11-02: in the Devices tab, "Import device…" takes a file. A known kind (an EDS, EtherNet/IP) becomes a device line the box can run (`enip-io ... eds=PATH`: the box keeps the file, `helmsman_proto::eds` reads it at start, the points come from its assemblies); anything else (a Modbus register map in a PDF manual, a datasheet) goes to the agent as a drop-in (POST /api/dropins already takes PDFs and documents) with "add this device", and the agent proposes the map lines (`propose_io_map`) for the engineer to approve. Needs a place for device files on the box (not a project file kind today: `<state-dir>/devices/NAME.eds` and an API route, or a new project file kind so the file travels with the project zip) and the Agent tab on a box (`claude-on-box`). Test subject: `devices/moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds` (untracked), against the bench E1213 at 10.0.0.57.
+- [x] **Import a device from its file: an EDS, or a manual the agent reads** — Nick, 2026-11-02: in the Devices tab, "Import device…" takes a file. A known kind (an EDS, EtherNet/IP) becomes a device line the box can run (`enip-io ... eds=PATH`: the box keeps the file, `helmsman_proto::eds` reads it at start, the points come from its assemblies); anything else (a Modbus register map in a PDF manual, a datasheet) goes to the agent as a drop-in (POST /api/dropins already takes PDFs and documents) with "add this device", and the agent proposes the map lines (`propose_io_map`) for the engineer to approve. Needs a place for device files on the box (not a project file kind today: `<state-dir>/devices/NAME.eds` and an API route, or a new project file kind so the file travels with the project zip) and the Agent tab on a box (`claude-on-box`). Test subject: `devices/moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds` (untracked), against the bench E1213 at 10.0.0.57.
   needs: a decision on where device files live (box state dir vs project file kind); the Agent tab on a box for the manual path
   result: a device goes from a vendor file to points in the tree without hand-written map lines; an unknown file still gets there through the agent, with approval
   options: box state dir + API route (EDS stays out of the project zip) | a project file kind (travels with the project; the zip grows) | both: project first, box dir later
@@ -390,6 +417,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   depends: device-library
   status: ready
   notes: done 2026-11-02 night, PR #191 (merge queue): flat NAME.eds project file kind, Import device… in the Devices tab, eds=NAME.eds resolved from the project folder; the E1213 EDS checked as fixture by hash, never committed.
+  notes: landed 2026-11-03: #191 merged.
   id: device-import
   answer: Start with the EDS to ensure it works.
   notes: interview 2026-11-02: device files are a project file kind (`devices/NAME.eds`, like `drivers/NAME.wasm`; travels with the zip); the Devices tab gets "Import device…"; an EDS becomes `device NAME enip-io ADDR eds=devices/NAME.eds` and the box reads it at start. Every imported device is also offered to the public library (`devices-repo`) so nobody maps it twice.
@@ -446,6 +474,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: high
   depends: driver-agent, relay-v0
   notes: 2026-11-02 night: relay half done on ../agent-relay feat/doc-fetch (fetch_document run by the relay: allow-list moxa.com first, SSRF rules, 12 MiB/2 MiB caps, 40 fetches + 100 MiB a day per box in the ledger, library-first, profile helmsman/v6); box half in progress (tool → relay route → drop-in; default agent v6).
+  notes: 2026-11-03: box half #205 merged (fetch_document, default agent v6); relay half on ../agent-relay feat/doc-fetch. Tick once the relay is on GitHub and deployed (relay-repo, relay-deploy).
   id: device-docs-lookup
   asked: 2026-11-01
   by: claude-session
@@ -457,6 +486,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   depends: device-import
   notes: 2026-11-02 night: github.com/JimothyJohn/helmsman-devices public (main + dev; Nick ran the script), E1213 first entry; PR #1 there adds index.json + scripts/build-index.py (dev → main is Nick's). Lookup in helmsman: PR #202 (merge queue): POST /api/devices/discover, GET /api/devices/library, On the network + Add to the map…, --devices-index. Identity first, text second; semantic later.
+  notes: 2026-11-03: #202 merged (discovery + lookup in helmsman). Left: helmsman-devices PR #1 (index.json) into its dev, then dev → main there (Nick) so boxes find matches; tick then.
   id: devices-repo
   asked: 2026-11-02
   by: claude-session
@@ -500,6 +530,17 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   needs: a decision taken (interview 2026-11-02): no console host at all; see notes
   notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (signed, A/B slots) once the node runs; depends on the edge spike (`node-modbus`) for the node half.
   status: ready
+
+- [ ] **Resume the edge node: faster scans, PSRAM, and the network receive path** — parked by Nick 2026-11-03 after the first runs on the boards (docs/EDGE.md Phase 1 and 2). Three open threads, in order: (1) the network: on the POE2 frames from the Studio never register (ARP replies unanswered, no UDP report sent) and the POE-ISO gets no DHCP lease; first flash supervictor's known-good POE-ISO firmware on the same board to tell this firmware from the board or switch, then compare the executor and interrupt setup (esp-rtos) and the main task's share of the CPU; (2) scan speed: 28 ms for the 4k-statement bench against < 5 ms; measure flash at 80 MHz QIO (it boots at 40 MHz DIO), the interpreter's i128 `Value::Int` on a 32-bit core, the no_std BTreeMap lookups, esp-alloc heap-stats, before any rewrite (a compact compiled form or compile-on-laptop is the bigger lever); (3) the PSRAM corruption: compiling the batch-mixer starter with PSRAM asks for 0x3F40D781 bytes (a rodata address read as a length).
+  needs: Nick's call to resume; the POE-ISO (WROOM, /dev/cu.usbserial-1130 on 2026-11-03) for the network thread since USB can stay on with PoE; the POE2 for PSRAM
+  result: a node that scans a realistic program inside its period and talks to the Studio, or a firm no with numbers for each thread
+  notes: the Studio's en0 has 10.0.0.241 (scratch/04-studio-wired-10net.sh; `off` removes it, a reboot too); LOG_SINK=10.0.0.241:9514 puts the reports on the wired side. Builds: scripts/node-build.sh [net], NODE_BOARD=poe-iso; flash: scripts/node-flash.sh [bench|modbus], Nick's step.
+  est: 1w
+  difficulty: high
+  depends: node-scan-bench
+  id: node-resume
+  asked: 2026-11-03
+  by: claude-session
 
 - [ ] **Vision sources** — deferred per interview; card kept so the signal model leaves room for camera-derived signals.
   est: 2w
@@ -567,7 +608,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: done 2026-11-02 night, PR #188 (G1): std feature default on, BTreeMap, libm optional for no_std only, thumbv7em build in lint.sh and install-dev.sh. PR #189 (CI step) is a DRAFT for Nick: workflow edit.
   id: iec-no-std
 
-- [ ] **Scan bench on the ESP32-POE2** — `crates/helmsman-node` (not a default workspace member): supervictor's board/poe2.rs and Ethernet bring-up copied in, Embassy and esp-hal 1.0 as supervictor pins them, trace_bench and the batch-mixer starter (blocks concatenated) embedded and compiled at boot; min/mean/max/p99 per scan and esp-alloc peak after compile and after 10 000 scans over USB serial. On a WROVER repeat with the program heap in PSRAM.
+- [x] **Scan bench on the ESP32-POE2** — `crates/helmsman-node` (not a default workspace member): supervictor's board/poe2.rs and Ethernet bring-up copied in, Embassy and esp-hal 1.0 as supervictor pins them, trace_bench and the batch-mixer starter (blocks concatenated) embedded and compiled at boot; min/mean/max/p99 per scan and esp-alloc peak after compile and after 10 000 scans over USB serial. On a WROVER repeat with the program heap in PSRAM.
   needs: the esp toolchain as supervictor pins it (espup, channel esp: on the Studio already); the POE2 on USB with ETHERNET UNPLUGGED (no isolation)
   notes: Nick 2026-11-02 (board): "Uh oh I think I triggered this already...anyway there's a PoE2 you can try out that could be programmed via the laptop-installed editor interface that I can test on." Interview 2026-11-02: the POE2 is on the Studio's USB (/dev/cu.usbserial-11220), Ethernet unplugged, and it is a WROVER (8 MB PSRAM), so G3 gets PSRAM as a second esp-alloc region for compile scratch. Flashing stays a hand-off (a scratch script Nick runs).
   status: ready
@@ -576,17 +617,19 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 1d
   difficulty: med
   depends: iec-no-std
-  notes: firmware done 2026-11-02 night, PR #193: crates/helmsman-node (outside the workspace, esp toolchain, make node-build), bench binary, PSRAM second round. NUMBERS PENDING Nick's flash: `scripts/node-flash.sh` (Ethernet unplugged, USB), paste the `--- round` lines into docs/EDGE.md Phase 1 and tick.
+  notes: firmware done 2026-11-02 night, PR #193: crates/helmsman-node (outside the workspace, esp toolchain, make node-build), bench binary, PSRAM second round.
+  notes: done 2026-11-03 on the board (#208 stack fix, #209/#210 numbers in docs/EDGE.md Phase 1): bench-4k 28.1 ms mean per scan (G2 fails, target < 5 ms, ~500x the Studio), the same with PSRAM; peak heap 198 KB of 229 KB internal (G3 fails on SRAM); the batch-mixer starter does not fit SRAM and its compile corrupts memory with PSRAM (an allocation of 0x3F40D781 bytes, a rodata address read as a length). Recorded and stopped, as the gate says; the follow-ups are in `node-resume`.
   id: node-scan-bench
 
 - [ ] **Modbus TCP from the node** — an async twin of helmsman-io's `Transport` over embassy-net's TCP socket behind a feature, `driver::Error` without std::io::Error, DI read and DO write batched to two round trips per scan; 10 ms scan against the E1213 (or the simulator) with DO0-3 looped to DI0-3; comms-loss safe state on yank.
   needs: flash on USB with Ethernet unplugged, THEN unplug USB, THEN PoE; the E1213's comms-loss safe state configured; a UDP log sink on the Studio
   notes: Nick 2026-11-02 (board): do it now with my own judgement. After `node-scan-bench`; then the node's own API and site beacon (`fleet-console`'s node half).
-  status: ready
   result: G4 (overruns < 1 % of scans over 10 min) and G5 (the block goes safe within its timeout on Ethernet loss)
   notes: docs/EDGE.md §Sync scan, async network, Phase 2
   est: 1d
   difficulty: med
   depends: node-scan-bench
-  notes: firmware done 2026-11-02 night, PRs #197 (helmsman-modbus no_std codec; helmsman-io frames through it) and #199: 10 ms scan, FC2 read + FC15 write, chase program, UDP report. NUMBERS PENDING Nick's run: `scripts/node-flash.sh modbus`, unplug USB, `/usr/bin/python3 -I scripts/node-log-sink.py`, plug PoE; G5 needs the E1213's Modbus watchdog safe mode set first.
+  notes: firmware done 2026-11-02 night, PRs #197 (helmsman-modbus no_std codec; helmsman-io frames through it) and #199: 10 ms scan, FC2 read + FC15 write, chase program, UDP report.
+  notes: run 2026-11-03, then PARKED by Nick: the Modbus loop works on the POE2 (lease, chase program on the E1213's DO-00..02); the UDP reports never arrive (the node never takes the Studio's ARP replies); the POE-ISO build (#211) links at 100 Mbit but gets no lease. Findings in docs/EDGE.md Phase 2; picked up again by `node-resume`. G4/G5 not measured (G4 fails anyway at 28 ms scans).
+  status: blocked
   id: node-modbus
