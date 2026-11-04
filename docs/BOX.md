@@ -37,12 +37,18 @@ partition (FAT, readable anywhere) and put under `helmsman/`:
 
 - `relay-url`: the relay's `https://` URL, one line;
 - `relay-token`: the box's `hmr1_…` token, one line;
-- `box-name` (optional): the box's name on its site.
+- `site` (optional): the site the box joins, 1 to 32 of `A-Z a-z 0-9 . _ -`;
+- `box-name` (optional, needs `site`): the box's name on its site, at most
+  48 of `A-Z a-z 0-9 _ -` (other characters become `-`).
+
+The URL and the token go together: one without the other sets no relay.
+A value the box would refuse is left out with a line in the journal, so a
+bad pairing file never stops the PLC service.
 
 `helmsman-firstboot` runs before the PLC service at every boot: it writes
 the token into `/etc/helmsman-plc/relay-token` (root, 0600), sets
 `PLC_RELAY_ARGS` in `/etc/helmsman-plc/env` (`--relay URL --relay-token
-/run/credentials/helmsman-plc.service/relay-token [--box-name NAME]`) and
+/run/credentials/helmsman-plc.service/relay-token [--site SITE [--box-name NAME]]`) and
 removes the token from the boot partition. Without the files it does
 nothing; add them later and `sudo systemctl start helmsman-firstboot`.
 A pairing *code* the box exchanges for a token itself is relay work (the

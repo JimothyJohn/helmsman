@@ -25,7 +25,10 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   reaches the canvas.
 - **Test helpers that start the binary** (`plc()` in tests/bin.rs and its
   copies) pass `--opcua off`; a subcommand (`account`, `bundle`) must be the
-  first argument, so those helpers build a bare `Command`.
+  first argument, so those helpers build a bare `Command`. A box a test
+  spawns (one that keeps running) gets `HELMSMAN_EXIT_WITH_STDIN=1` and a
+  piped stdin its `Child` keeps, so it dies with a killed test; don't set
+  it on `.output()` runs (that closes stdin at once).
 - **Timing in tests.** No fixed sleeps before an assertion: wait with a
   deadline (`wait(...)` in tests/reload.rs). Watchers start once the state
   they watch holds. The suite must pass with 6 copies running at once.

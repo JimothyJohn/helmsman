@@ -175,3 +175,7 @@ required-features = ["box"]
 [[test]]
 name = "https"
 required-features = ["box", "https"]
+
+[[test]]
+name = "firstboot"
+required-features = ["box"]
