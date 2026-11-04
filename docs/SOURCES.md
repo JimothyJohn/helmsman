@@ -522,6 +522,12 @@ into the code.
   `None`), `Constant`, `Dimensions` (p.107); `DataTypes` (p.37ff.);
   `MainRoutineName` (p.196); `RLLContent` / `Rung` (pp.206-208);
   `STContent` / `Line` (p.264ff.); tasks and `ScheduledProgram` (p.313).
+- **A task's `Rate` (p.313, checked 2026-11-04):** "how often to run the
+  task (1.000...2,000,000.000 µs)". The unit there contradicts the same
+  chapter: its safety-task example has `Rate := 10` and the note under
+  it puts that rate between 5 ms and 500 ms (p.315). Still to confirm on
+  a real Studio 5000 export (`l5x-real-export`). `helmsman_iec` reads `Rate` as ms,
+  whole (`10` or `10.000`), and refuses a periodic task with any other.
 - **Not in RM014's text:** the root's `TargetName` and `TargetType`
   attributes (they are in real exports and in the `l5x` package; RM014's
   root example is not in the extracted text). Still to do: run the reader

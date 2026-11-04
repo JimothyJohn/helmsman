@@ -1197,7 +1197,12 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   (PLCopen TC6) lowered to `F.st` by the existing importer; `F.L5X`
   (Rockwell ladder) converted to `F.st` by `helmsman_iec::ladder` (below,
   "L5X ladder import"), or 422 with every problem, each at its program,
-  routine and rung (the first 20 in the message, then a count).
+  routine and rung (the first 20 in the message, then a count). An
+  L5X's periodic tasks also write `program TASK scan_ms=N` into
+  project.settings (`helmsman_project::settings::set_scans`: a missing
+  line is added, a bare one gets `scan_ms`, an engineer's `scan_ms` is
+  kept and named in the response's `notes`); the playground does the
+  same.
 - **The engineer gate.** Every write (create, copy, rename, delete,
   save, upload, import, replay, deploy) needs a login session of an
   engineer or above (an account's, or the engineer's role-PIN session on
@@ -1355,7 +1360,10 @@ converts or nothing is written.
   two programs in one task that share a name, or that shadow a
   controller tag, become `PROGRAM_TAG`; a tag whose name ST keeps
   (`Log`, `Max`, `Limit`) becomes `Log_tag`. An export without tasks is
-  one PROGRAM named as the controller. Every PROGRAM is compiled before
+  one PROGRAM named as the controller. A periodic task's `Rate` (whole
+  ms, RM014 p.313) is its PROGRAM's scan (`Converted::scans`, written to
+  project.settings by the import); a continuous task's PROGRAM runs
+  every base scan, as the note says. Every PROGRAM is compiled before
   it is returned: a converter fault is a refusal, never a broken file.
 - **Refused**, each with its place: any other instruction (add-on
   instructions named as such), FBD, SFC and ST routines (Logix ST calls
@@ -1363,7 +1371,10 @@ converts or nothing is written.
   CONTROL, module I/O such as `Local:1:I.Data.3`, also through an alias),
   indirect subscripts, produced/consumed and InOut tags, constant tags
   written, JSR with parameters or inside a branch, JSR to the main
-  routine, programs in no task or disabled, event tasks, a controller
+  routine, programs in no task or disabled, event tasks, periodic tasks
+  whose `Rate` is not a whole number of ms from 1 to 10000 (refused, not
+  clamped: a clamped or default scan runs the logic at a period it was
+  not written for), a controller
   tag two tasks use (the box's PROGRAMs share no memory), conflicting
   pseudo-operands, malformed rungs. The file passes the L5X reader's
   limits (no DTD so no entities or XXE, nesting 256, 8 MiB, 100 000
