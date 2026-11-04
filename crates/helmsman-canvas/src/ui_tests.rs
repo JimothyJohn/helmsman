@@ -555,6 +555,52 @@ mod polish {
     }
 
     /// The hit stays "tab claude" (the stored key); only the label changed.
+    /// Nick, 2026-11-01: the conversation is pages with ‹ › and a
+    /// delete, in the Agent tab.
+    #[test]
+    fn the_agent_tab_pages_through_the_conversation() {
+        use crate::claude::Incoming;
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        assert!(!h.has("page prev"), "no pages, no strip");
+        {
+            let chat = &mut h.app.sim.as_mut().unwrap().chat;
+            chat.receive(Incoming::Proxy(true));
+            for q in ["first", "second"] {
+                chat.question = q.into();
+                let (seq, _) = chat.ask("x", &[], "").unwrap();
+                chat.receive(Incoming::Chunk {
+                    seq,
+                    text: crate::playground_tests::STREAM.into(),
+                });
+                chat.receive(Incoming::End { seq });
+            }
+        }
+        h.wait(0.2);
+        assert!(h.has("page prev") && h.has("page next"), "the strip");
+        assert!(!h.has("page delete"), "the live answer is not a page to delete");
+        h.press("page prev");
+        h.wait(0.2);
+        assert_eq!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .chat
+                .viewing()
+                .map(|e| e.question.clone()),
+            Some("second".into())
+        );
+        assert!(h.has("page delete"));
+        h.press("page delete");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().chat.history.len(), 1);
+        h.press("page next");
+        h.wait(0.2);
+        assert!(h.app.sim.as_ref().unwrap().chat.viewing().is_none());
+    }
+
     #[test]
     fn the_third_tab_reads_agent() {
         assert_eq!(Tab::Claude.label(), "Agent");
@@ -992,6 +1038,470 @@ mod chrome {
         assert_eq!(Chrome::restored(&h.app.chrome.saved()).pane, Pane::Devices);
     }
 
+    /// `device-import`: Import device… takes a vendor's EDS; the file joins
+    /// the project as `NAME.eds` and the New device form opens filled in
+    /// (EtherNet/IP, named after the EDS's product, `eds=NAME.eds`); the
+    /// address typed, Add writes the line. Examples are read-only; junk
+    /// is refused with a note.
+    #[test]
+    fn importing_an_eds_keeps_the_file_and_fills_the_device_form() {
+        use crate::projects::Workspace;
+        const FACTS: &str = include_str!("../../helmsman-proto/tests/fixtures/e1213-facts.eds");
+        let mut h = Harness::new(App::sim());
+        // An example is read-only: refused with a note, nothing kept.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("E1213.eds", FACTS.as_bytes().to_vec());
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert!(!sim.proj.files.contains_key("e1213.eds"));
+            assert!(
+                sim.proj
+                    .notice
+                    .as_ref()
+                    .is_some_and(|(t, err)| *err && t.contains("read-only")),
+                "{:?}",
+                sim.proj.notice
+            );
+            assert!(sim.devices_ui.adding.is_none());
+        }
+        h.app.sim.as_mut().unwrap().proj.create("mine", None);
+        h.wait(0.2);
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("Moxa E1213 (v2.0).EDS", FACTS.as_bytes().to_vec());
+        h.press("pane devices");
+        h.wait(0.3);
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert_eq!(
+                sim.proj.files.get("moxa-e1213-v2-0.eds").map(String::as_str),
+                Some(FACTS)
+            );
+            let d = sim.devices_ui.adding.as_ref().expect("the form opened");
+            assert_eq!(d.name, "e1213", "named after the EDS's product");
+            assert_eq!(crate::devices::PROTOCOLS[d.protocol].0, "enip-io");
+            assert_eq!(d.params, "eds=moxa-e1213-v2-0.eds rpi_ms=100 poll_ms=20");
+        }
+        assert!(h.has("device form"));
+        h.press("device endpoint");
+        h.frame(vec![Event::Text("10.0.0.57".into())]);
+        h.press("device ok");
+        h.wait(0.3);
+        assert!(!h.has("device form"));
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(
+            map.ends_with("device e1213 enip-io 10.0.0.57 eds=moxa-e1213-v2-0.eds rpi_ms=100 poll_ms=20\n"),
+            "{map}"
+        );
+        assert!(h.has("device e1213"), "listed in the tree");
+        // Again: the file is replaced, not duplicated.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("Moxa E1213 (v2.0).EDS", FACTS.as_bytes().to_vec());
+        assert_eq!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .proj
+                .files
+                .keys()
+                .filter(|k| crate::devices::is_eds(k))
+                .count(),
+            1
+        );
+        h.app.sim.as_mut().unwrap().devices_ui.adding = None;
+        // Junk: not text, refused with a note; a nameless file, refused.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("bin.eds", vec![0xff, 0xfe, 0, 1]);
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert!(
+                sim.proj
+                    .notice
+                    .as_ref()
+                    .is_some_and(|(t, err)| *err && t.contains("refused")),
+                "{:?}",
+                sim.proj.notice
+            );
+            assert!(sim.devices_ui.adding.is_none());
+        }
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .upload("---.eds", FACTS.as_bytes().to_vec());
+        assert!(h.app.sim.as_ref().unwrap().devices_ui.adding.is_none());
+        // The right-click menu offers the import.
+        h.right_click(h.rect("devices blank").center());
+        assert!(h.has("menu import device"));
+        h.press("menu import device");
+        h.wait(0.2);
+        assert!(
+            !h.has("device form"),
+            "the picker is the browser's; no form until a file comes back"
+        );
+    }
+
+    /// `devices-repo`: Scan in the Devices tab lists what answers on the
+    /// network (the simulation: its E1213), says whether the map binds it,
+    /// and "Add to the map…" opens the form filled in by identity; once
+    /// the map names it the row says so and the item is disabled.
+    #[test]
+    fn scan_lists_the_network_and_adds_a_found_device_by_identity() {
+        use crate::devices::Scan;
+        let mut h = Harness::new(App::sim());
+        h.app.sim.as_mut().unwrap().proj.create("mine", None);
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(h.has("devices scan"), "the Scan button");
+        assert!(!h.has("network 192.168.127.254"));
+        h.press("devices scan");
+        h.wait(0.3);
+        assert_eq!(h.app.sim.as_ref().unwrap().devices_ui.scan, Scan::Done);
+        assert!(h.has("network 192.168.127.254"), "the simulated E1213 answered");
+        let f = &h.app.sim.as_ref().unwrap().devices_ui.found[0];
+        assert_eq!((f.vendor_id, f.product_code), (991, 515));
+        assert_eq!(f.mapped, None, "a fresh project maps nothing");
+        // The agent's context lists it too.
+        let text = h.app.sim.as_ref().unwrap().devices_text();
+        assert!(
+            text.contains("On the network (ListIdentity):\n  E1213 192.168.127.254 vendor 991 product 515"),
+            "{text}"
+        );
+        assert!(text.contains("not in the map"), "{text}");
+        // Add to the map: the form, filled in by identity.
+        h.right_click(h.rect("network 192.168.127.254").center());
+        assert!(h.has("menu add network"));
+        h.press("menu add network");
+        h.wait(0.2);
+        assert!(h.has("device form"));
+        let d = h
+            .app
+            .sim
+            .as_ref()
+            .unwrap()
+            .devices_ui
+            .adding
+            .clone()
+            .expect("the form");
+        assert_eq!(d.name, "e1213");
+        assert_eq!(d.endpoint, "cip=991:515:0x00e12130");
+        assert_eq!(d.protocol, 1, "EtherNet/IP");
+        h.press("device ok");
+        h.wait(0.3);
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(
+            map.contains("device e1213 enip-io cip=991:515:0x00e12130 rpi_ms=100 poll_ms=20\n"),
+            "{map}"
+        );
+        // Scan again: now the map binds it.
+        h.press("devices scan");
+        h.wait(0.3);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
+            Some("e1213")
+        );
+        h.right_click(h.rect("network 192.168.127.254").center());
+        h.press("menu add network");
+        h.wait(0.2);
+        assert!(!h.has("device form"), "already in the map: nothing to add");
+    }
+
+    /// The library's match fills the form's name and profile in.
+    #[test]
+    fn a_library_match_names_the_device_and_its_profile() {
+        use crate::devices::{Found, NewDevice};
+        use helmsman_project::devlib::Index;
+        let index = Index::parse(r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "kind": "remote-io", "identity": { "enip": { "vendor_id": 991, "product_code": 515 } }, "protocols": { "enip": { "driver": "enip-io", "map": "enip.map", "profile": "moxa-e1213" } } } ] }"#).unwrap();
+        let mut h = Harness::new(App::sim());
+        h.app.sim.as_mut().unwrap().proj.create("mine", None);
+        h.press("pane devices");
+        h.press("devices scan");
+        h.wait(0.2);
+        h.app.sim.as_mut().unwrap().devices_ui.attach_library(&index);
+        let f: Found = h.app.sim.as_ref().unwrap().devices_ui.found[0].clone();
+        assert_eq!(
+            f.library.as_ref().map(|l| l.model.as_str()),
+            Some("ioLogik E1213")
+        );
+        let d = NewDevice::from_found(&f);
+        assert_eq!(d.name, "iologik_e1213");
+        assert_eq!(d.params, "profile=moxa-e1213 rpi_ms=100 poll_ms=20");
+        assert!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .devices_text()
+                .contains("library: Moxa ioLogik E1213")
+        );
+    }
+
+    /// Nick, 2026-11-02 (sim-feedback-devices): a plant model's `{state}`
+    /// variables are listed in the Devices tab with the simulation's value,
+    /// the map signal that measures each on the real machine, or the sensor
+    /// that would; "Add a sensor…" writes that signal's `in` line onto
+    /// io.map, and the agent's context carries the same list.
+    #[test]
+    fn plant_states_list_the_models_quantities_and_add_a_sensor_line() {
+        let mut h = Harness::new(App::sim());
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(!h.has("plant states"), "the blink example keeps no plant model");
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("well", Some("pump-station"));
+            let src = sim.proj.build_src();
+            assert!(sim.session.load(&src), "the pump station compiles");
+            // Loading stops the simulation, as a deploy would; run it so the
+            // plant model scans and the trace has its values.
+            sim.session.set_running(true);
+        }
+        h.wait(0.5);
+        assert!(
+            h.has("plant states"),
+            "the starter's plant model marks its well level"
+        );
+        assert!(h.has("state level_m"));
+        let states = {
+            let sim = h.app.sim.as_ref().unwrap();
+            let map = helmsman_project::iomap::skim(sim.proj.files.get("io.map").map_or("", String::as_str));
+            sim.plant_states(&map)
+        };
+        assert_eq!(states.len(), 1, "{states:?}");
+        // The well fills from 1.5 m while it runs: a live value, not the initial one.
+        match states[0].value {
+            Some(helmsman_iec::Value::Real(x)) if (1.4..2.0).contains(&x) => {}
+            other => panic!("the model's value from the trace: {other:?}"),
+        }
+        assert_eq!(states[0].unit.as_deref(), Some("m"));
+        assert_eq!(states[0].measured_by, None);
+        assert_eq!(states[0].suggestion, "level transmitter");
+        let text = h.app.sim.as_ref().unwrap().devices_text();
+        assert!(text.contains("plant states"), "{text}");
+        assert!(text.contains("level_m REAL unit=m = 1.5"), "{text}");
+        assert!(text.contains("  in plant_model (plant_model.st:"), "{text}");
+        assert!(text.contains("not measured; level transmitter would"), "{text}");
+        // Add a sensor: the form, filled in for the state, writes one in line.
+        h.right_click(h.rect("state level_m").center());
+        assert!(h.has("menu add sensor"));
+        h.press("menu add sensor");
+        h.wait(0.2);
+        assert!(h.has("sensor form"), "the form in the centre");
+        assert!(
+            h.has("sensor device box"),
+            "no device in the map: the box's channels"
+        );
+        h.press("sensor ok");
+        h.wait(0.3);
+        assert!(!h.has("sensor form"), "added: the form is gone");
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(
+            map.ends_with("in  level_m real box i2c:1:0x48:0:i16 unit=m\n"),
+            "{map}"
+        );
+        h.wait(0.3);
+        let states = {
+            let sim = h.app.sim.as_ref().unwrap();
+            let map = helmsman_project::iomap::skim(&sim.proj.files["io.map"]);
+            sim.plant_states(&map)
+        };
+        let m = states[0].measured_by.as_ref().expect("now measured");
+        assert_eq!((m.signal.as_str(), m.device.as_str()), ("level_m", "box"));
+        let text = h.app.sim.as_ref().unwrap().devices_text();
+        assert!(
+            text.contains("measured by level_m (box i2c:1:0x48:0:i16)"),
+            "{text}"
+        );
+        // Measured: the menu item is disabled, so pressing it opens nothing.
+        h.right_click(h.rect("state level_m").center());
+        h.press("menu add sensor");
+        h.wait(0.2);
+        assert!(!h.has("sensor form"), "a measured state offers no second sensor");
+        h.frame(vec![Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        }]);
+    }
+
+    /// The Files tab shows the program's files, marks main.st as the one
+    /// running, and folds the earlier iterations under one row.
+    #[test]
+    fn the_files_tab_folds_the_earlier_iterations() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj
+                .files
+                .insert("v1.st".into(), "PROGRAM old END_PROGRAM".into());
+            sim.proj
+                .files
+                .insert("v2.st".into(), "PROGRAM older END_PROGRAM".into());
+            sim.proj.save();
+            sim.open_project("mine");
+        }
+        h.press("pane files");
+        h.wait(0.3);
+        assert!(h.has("file main.st"));
+        assert!(h.has("earlier"), "the fold row");
+        assert!(!h.has("file v1.st") && !h.has("file v2.st"), "folded by default");
+        h.press("earlier");
+        h.wait(0.2);
+        assert!(h.has("file v2.st") && h.has("file v1.st"));
+        let v2 = h.rect("file v2.st");
+        let v1 = h.rect("file v1.st");
+        assert!(v2.top() < v1.top(), "newest first");
+        h.press("earlier");
+        h.wait(0.2);
+        assert!(!h.has("file v1.st"));
+    }
+
+    /// The Files tab's History row folds the revisions; a revision opens
+    /// in the centre with its diff and Restore, and Close shuts it.
+    #[test]
+    fn the_files_tab_lists_revisions_and_opens_one_in_the_centre() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.open_project("mine");
+            sim.proj.current_text_mut().unwrap().push_str("\n(* one *)");
+            sim.proj.save();
+            sim.proj.current_text_mut().unwrap().push_str("\n(* two *)");
+            sim.proj.save();
+        }
+        h.press("pane files");
+        h.wait(0.3);
+        assert!(h.has("history"), "the fold row");
+        assert!(!h.has("revision 1"), "folded by default");
+        h.press("history");
+        h.wait(0.2);
+        assert!(h.has("revision 1") && h.has("revision 2"));
+        let r2 = h.rect("revision 2");
+        let r1 = h.rect("revision 1");
+        assert!(r2.top() < r1.top(), "newest first");
+        h.press("revision 1");
+        h.wait(0.3);
+        assert!(h.has("revision form") && h.has("revision restore") && h.has("revision close"));
+        assert!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .revision
+                .as_ref()
+                .is_some_and(|v| v.row.n == 1)
+        );
+        h.press("revision restore");
+        h.wait(0.3);
+        assert!(!h.has("revision form"), "restored and shut");
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(
+            sim.proj.files["main.st"].ends_with("(* one *)"),
+            "revision 1's text is back"
+        );
+        assert_eq!(sim.proj.revisions().len(), 3);
+        assert_eq!(sim.proj.revisions()[2].what, "restored revision 1");
+        h.press("revision 2");
+        h.wait(0.3);
+        assert!(h.has("revision form"));
+        h.press("revision close");
+        h.wait(0.2);
+        assert!(!h.has("revision form"));
+    }
+
+    /// Requirement tests in the simulation (TODO.md spec-tests): the
+    /// Requirements tab lists the project's `test_*.st` files green or
+    /// red with why; a red one refuses Deploy and a block answer's "Use
+    /// this code", naming it; a test file never builds into the program;
+    /// fixed, the deploy goes through.
+    #[test]
+    fn requirement_tests_gate_deploy_and_use_this_code_in_the_simulation() {
+        let mut h = Harness::new(App::sim());
+        h.press("tab tests");
+        h.wait(0.3);
+        assert_eq!(h.app.chrome.tab, Tab::Requirements);
+        assert!(h.has("tests run"));
+        assert!(!h.has("test test_lamp"), "the blink example has no tests");
+        let main = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
+        let red = "(* The lamp stays off while start is held. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_stays_off : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_stays_off(COND := NOT lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj.files.insert("main.st".into(), main.into());
+            sim.proj.add_file("test_lamp.st", red.into());
+            sim.proj.save();
+            sim.open_project("mine");
+        }
+        h.wait(0.3);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.tests.ran && sim.tests.rows.len() == 1, "{:?}", sim.tests);
+        assert!(!sim.tests.rows[0].passed);
+        assert_eq!(
+            sim.tests.rows[0].requirement,
+            "The lamp stays off while start is held."
+        );
+        assert!(h.has("test test_lamp"), "the row shows");
+        assert!(
+            !sim.session.src.contains("PROGRAM test_lamp"),
+            "the test is not in the build"
+        );
+        // Deploy: refused, with the test named.
+        h.key(Modifiers::COMMAND, Key::D);
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        let notice = sim.notice.clone().unwrap_or_default();
+        assert!(
+            notice.starts_with("Refused: requirement test test_lamp:"),
+            "{notice}"
+        );
+        // A block answer into this project: refused too; nothing added.
+        let before = sim.proj.files.len();
+        h.app.sim.as_mut().unwrap().take_code(
+            "FUNCTION_BLOCK helper\nVAR_INPUT x : BOOL; END_VAR\nVAR_OUTPUT y : BOOL; END_VAR\ny := x;\nEND_FUNCTION_BLOCK\n"
+                .into(),
+        );
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert_eq!(sim.proj.files.len(), before, "{:?}", sim.proj.files.keys());
+        assert!(sim.notice.clone().unwrap_or_default().starts_with("Refused:"));
+        // Fixed: green, Run reruns, Deploy goes through.
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.files.insert(
+                "test_lamp.st".into(),
+                red.replace("stays off", "comes on")
+                    .replace("COND := NOT lamp", "COND := lamp"),
+            );
+        }
+        h.press("tests run");
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.tests.rows[0].passed, "{:?}", sim.tests);
+        h.key(Modifiers::COMMAND, Key::D);
+        h.wait(0.2);
+        let sim = h.app.sim.as_ref().unwrap();
+        let notice = sim.notice.clone().unwrap_or_default();
+        assert!(notice.starts_with("mine is running in this page"), "{notice}");
+        // The tab is remembered.
+        assert_eq!(Chrome::restored(&h.app.chrome.saved()).tab, Tab::Requirements);
+    }
+
     #[test]
     fn double_clicking_a_file_opens_the_code_tab() {
         let mut h = Harness::new(App::sim());
@@ -1015,6 +1525,27 @@ mod chrome {
         let v = h.app.sim.as_mut().unwrap();
         v.proj.current_text_mut().unwrap().push_str("(* edit *)");
         v.take_code("PROGRAM other\nEND_PROGRAM\n".into());
+        // The first PROGRAM answer asks for the program's name first (a
+        // few frames: a new modal settles into the centre on its second).
+        h.wait(0.2);
+        assert!(h.has("program name") && h.has("program ok"));
+        h.press("program ok");
+        {
+            let v = h.app.sim.as_ref().unwrap();
+            assert!(
+                v.program_name.is_none(),
+                "the name was taken: {:?}",
+                v.program_name
+            );
+            assert!(
+                v.files_ui.confirm.is_some(),
+                "the unsaved-edits question is pending: open={} dirty={} program={:?} files={:?}",
+                v.proj.open,
+                v.proj.dirty(),
+                v.chat.program,
+                v.proj.files.keys().collect::<Vec<_>>()
+            );
+        }
         h.frame(vec![]);
         assert!(h.has("confirm yes") && h.has("confirm drop") && h.has("confirm no"));
         h.press("confirm no");
@@ -1290,25 +1821,38 @@ mod simulated {
 
     /// Nick, 2026-11-01: the trend's window is 1, 10 or 100 s, so the
     /// line can cross the pane fast or slow; the history is kept for the
-    /// widest, so widening shows what already ran.
+    /// widest, so widening shows what already ran. Nick, 2026-11-02: one
+    /// logarithmic slider from 100 ms to 10 min instead of three buttons,
+    /// the plot following as it moves.
     #[test]
-    fn the_trend_window_is_one_ten_or_a_hundred_seconds() {
+    fn the_trend_window_is_a_log_slider_from_100_ms_to_10_min() {
+        use crate::playground_view::{WINDOW_MAX_MS, WINDOW_MIN_MS, window_label};
         let mut h = Harness::new(App::sim());
         h.wait(0.3);
-        for s in [1u64, 10, 100] {
-            assert!(h.has(&format!("trend window {s}")), "no {s} s button");
-        }
+        assert!(h.has("trend window"), "the slider");
+        assert!(!h.has("trend window 10"), "the buttons are gone");
         let window = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.window_ms;
         assert_eq!(window(&h), 10_000, "opens on 10 s");
-        h.press("trend window 1");
-        assert_eq!(window(&h), 1_000);
+        let slider = h.rect("trend window");
+        h.click(Pos2::new(slider.left() + 1.0, slider.center().y));
+        assert_eq!(window(&h), WINDOW_MIN_MS, "the left end is 100 ms");
         let kept = h.app.sim.as_ref().unwrap().session.trend.samples.len();
-        h.press("trend window 100");
-        assert_eq!(window(&h), 100_000);
+        h.click(Pos2::new(slider.right() - 1.0, slider.center().y));
+        assert_eq!(window(&h), WINDOW_MAX_MS, "the right end is 10 min");
         assert!(
             h.app.sim.as_ref().unwrap().session.trend.samples.len() >= kept,
             "narrowing dropped nothing"
         );
+        // Logarithmic: the middle of the track is near the geometric mean
+        // (~7.7 s), not the arithmetic one (5 min).
+        h.click(Pos2::new(slider.center().x, slider.center().y));
+        let mid = window(&h);
+        assert!((3_000..=20_000).contains(&mid), "mid-track window {mid} ms");
+        assert_eq!(window_label(100), "100 ms");
+        assert_eq!(window_label(2_500), "2.5 s");
+        assert_eq!(window_label(10_000), "10 s");
+        assert_eq!(window_label(60_000), "1 min");
+        assert_eq!(window_label(600_000), "10 min");
     }
 
     /// Nick, 2026-11-01: the Agent pane widened when an answer held long
@@ -1330,6 +1874,63 @@ mod simulated {
         h.wait(0.5);
         let grew = right.left() - h.rect("right").left();
         assert!((0.0..=8.0).contains(&grew), "the right panel grew {grew} pt");
+    }
+
+    /// Card agent-scoped-edits: the Agent tab says what the next question
+    /// may change before it is asked. A built-in example: a new project;
+    /// a project of one's own: the open file; lines selected in the Code
+    /// tab: those lines, with Whole file to go back; the panels keep
+    /// their width with the line in them.
+    #[test]
+    fn the_agent_tab_names_the_scope_before_the_question() {
+        use crate::scope::Scope;
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let right = h.rect("right");
+        h.press("pane code");
+        h.press("tab claude");
+        h.wait(0.3);
+        assert!(h.has("agent scope"));
+        assert_eq!(h.app.sim.as_ref().unwrap().scope(), Scope::NewProject);
+        assert!(!h.has("scope whole file"));
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.open_project("mine");
+        }
+        h.wait(0.3);
+        assert_eq!(h.app.sim.as_ref().unwrap().scope(), Scope::File("main.st".into()));
+        assert!(h.has("agent scope") && !h.has("scope whole file"));
+        // Lines 2 and 3 selected in the editor.
+        let text = h.app.sim.as_ref().unwrap().proj.files["main.st"].clone();
+        assert!(text.lines().count() >= 3, "{text}");
+        let start = text.lines().next().unwrap().chars().count() + 1;
+        let end = start + text.lines().nth(1).unwrap().chars().count() + 2;
+        let id = eframe::egui::Id::unique("pg-source");
+        h.ctx.memory_mut(|m| m.request_focus(id));
+        crate::editor::select(&h.ctx, id, start, end);
+        h.wait(0.1);
+        // The Agent tab takes the focus, and the editor drops its
+        // selection: the scope stays the lines.
+        h.ctx.memory_mut(|m| m.surrender_focus(id));
+        h.wait(0.2);
+        let scope = h.app.sim.as_ref().unwrap().scope();
+        assert_eq!(
+            scope,
+            Scope::Lines {
+                file: "main.st".into(),
+                from: 2,
+                to: 3
+            }
+        );
+        assert_eq!(scope.label(), "Editing: lines 2–3 of main.st");
+        assert!(h.has("scope whole file"));
+        let r = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
+        h.press("scope whole file");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().scope(), Scope::File("main.st".into()));
+        assert!(!h.has("scope whole file"));
     }
 
     /// A resizable panel grows to any row that overflows it, every frame
@@ -1401,11 +2002,13 @@ mod boxed {
                 name: "box".into(),
                 state: "up".into(),
                 error: None,
+                address: None,
             },
             DeviceRow {
                 name: "rio".into(),
                 state: "down".into(),
                 error: Some("connection refused".into()),
+                address: None,
             },
         ];
         let mut h = Harness::new(App::boxed());
@@ -1425,6 +2028,101 @@ mod boxed {
             !h.has("device form"),
             "no project open, nobody signed in: nothing to add to"
         );
+    }
+
+    /// On a box, Scan posts to `/api/devices/discover` and the answer's
+    /// devices show with what the box said: mapped or not, the library's
+    /// match; a refusal shows as text, and a hostile body lists nothing.
+    #[test]
+    fn scan_on_a_box_posts_and_lists_the_answer() {
+        use crate::box_projects::PCall;
+        use crate::devices::Scan;
+        use crate::review::Answer;
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.press("pane devices");
+        h.wait(0.2);
+        h.press("devices scan");
+        h.frame(vec![]);
+        let sent = std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent);
+        let scan = sent
+            .iter()
+            .find(|r| r.call == PCall::Discover)
+            .expect("the scan was sent");
+        assert_eq!(
+            (scan.method, scan.url.as_str()),
+            ("POST", "/api/devices/discover?fresh=1")
+        );
+        assert_eq!(h.app.boxv.as_ref().unwrap().devices_ui.scan, Scan::Running);
+        let body = r#"{ "devices": [ { "address": "10.0.0.57", "mac": "00-90-e8-7e-af-be", "vendor_id": 991, "product_code": 515,
+            "revision": "3.1", "serial": "0x2a629eae", "product_name": "ioLogik E1213", "cip": "cip=991:515:0x2a629eae",
+            "mapped": "e1213", "library": { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "driver": "enip-io", "profile": "moxa-e1213" } },
+            { "address": "10.0.0.9", "vendor_id": 1, "product_code": 2, "product_name": "../etc/passwd\u0007", "mapped": null, "library": null } ],
+            "age_ms": 3, "library": { "devices": 1 } }"#;
+        let ctx = h.ctx.clone();
+        h.app.boxv.as_mut().unwrap().step_all(
+            &ctx,
+            Vec::new(),
+            vec![(
+                PCall::Discover,
+                Answer {
+                    status: 200,
+                    retry_after: None,
+                    body: body.into(),
+                },
+            )],
+            h.time,
+        );
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let ui = &h.app.boxv.as_ref().unwrap().devices_ui;
+        assert_eq!(ui.scan, Scan::Done);
+        assert_eq!(ui.found.len(), 2);
+        assert_eq!(ui.found[0].mapped.as_deref(), Some("e1213"));
+        assert_eq!(
+            ui.found[1].product_name, "../etc/passwd",
+            "control characters dropped"
+        );
+        assert!(h.has("network 10.0.0.57") && h.has("network 10.0.0.9"));
+        // A refusal.
+        h.app.boxv.as_mut().unwrap().step_all(
+            &ctx,
+            Vec::new(),
+            vec![(
+                PCall::Discover,
+                Answer {
+                    status: 409,
+                    retry_after: None,
+                    body: r#"{"error":"busy"}"#.into(),
+                },
+            )],
+            h.time,
+        );
+        assert!(matches!(
+            h.app.boxv.as_ref().unwrap().devices_ui.scan,
+            Scan::Failed(_)
+        ));
+        // Garbage lists nothing and fails softly.
+        h.app.boxv.as_mut().unwrap().step_all(
+            &ctx,
+            Vec::new(),
+            vec![(
+                PCall::Discover,
+                Answer {
+                    status: 200,
+                    retry_after: None,
+                    body: "[[[".into(),
+                },
+            )],
+            h.time,
+        );
+        assert!(matches!(
+            h.app.boxv.as_ref().unwrap().devices_ui.scan,
+            Scan::Failed(_)
+        ));
     }
 
     #[test]
@@ -1825,7 +2523,12 @@ mod reviewing {
 #[test]
 fn the_simulation_survives_a_click_storm_on_every_tab() {
     let mut h = Harness::new(App::sim());
-    for tab in ["tab io", "tab claude"] {
+    for tab in ["tab io", "tab tests", "tab claude"] {
+        // A storm may have hit the panel's hide chevron: open it again.
+        if !h.has(tab) {
+            h.press("right");
+            h.wait(0.3);
+        }
         h.press(tab);
         let below = h.rect("header").bottom() + 4.0;
         for x in (0..1400u16).step_by(131) {

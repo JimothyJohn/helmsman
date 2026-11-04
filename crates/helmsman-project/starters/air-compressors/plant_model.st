@@ -28,7 +28,7 @@ VAR
   clock : TON;
   shift : TON;
   heavy : BOOL := TRUE;
-  bar : REAL := 7.0;
+  bar : REAL := 7.0;  {state unit=bar}
   use : REAL;
 END_VAR
 motor_1(IN := comp_1, PT := motor_delay);

@@ -108,8 +108,22 @@ label is drawn, the icon stands alone at a readable size.
   project's I/O map names, each with its points under it, their live
   values, and whether the link is up; a right-click on the blank space
   adds a device (name, protocol, address, settings) as a line of the
-  map, and one map may mix Modbus TCP and EtherNet/IP devices. The agent
-  reads the same listing. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
+  map; Import device… takes the vendor's EDS file, keeps it in the
+  project and fills the form in from it. Under the map's devices, **On
+  the network**: Scan lists every EtherNet/IP device that answers on the
+  LAN, says whether the map already has it, and shows what the public
+  device library knows of it; right-click one that is not in the map and
+  Add to the map… opens the form filled in, the device named by its
+  identity so a changed address never loses it. One map may mix Modbus
+  TCP and EtherNet/IP devices. The agent reads the same listing, network
+  included. Under that, **Plant states**: the quantities a project's
+  plant model keeps for the machine it stands in for (mark a variable
+  with `{state unit=m}` on its line), each with the simulation's value
+  and the sensor that measures it on the real machine, or the kind of
+  sensor that would; right-click one and Add a sensor… writes that
+  signal into the map. When that signal is one of the program's inputs,
+  in the same unit, the simulation runs the model from it: set it in
+  the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
   Structured Text editor. Errors are marked on the line as you type; the
   program running does not change until you deploy. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
@@ -118,7 +132,9 @@ label is drawn, the icon stands alone at a readable size.
   hundred things the page had to say, with the error count on the tab.
 - **The side panel**, on the right (<kbd>Alt</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
-  diagram does not show; and **Agent**, where you describe what you want.
+  diagram does not show; **Requirements**, the project's requirement tests,
+  one row each, green or red with why (see [Requirement tests](projects.html#requirement-tests));
+  and **Agent**, where you describe what you want.
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
 

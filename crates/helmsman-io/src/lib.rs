@@ -30,6 +30,7 @@ pub mod local;
 pub mod logix;
 pub mod modbus;
 pub mod model;
+pub mod resolve;
 pub mod rtu;
 pub mod sim;
 pub mod text;

@@ -26,7 +26,7 @@ VAR
   gate_retracted : TON;
   next_part : TON;
   blocking : TP;
-  parts : INT;
+  parts : INT;  {state}
   part_len : TIME;
 END_VAR
 motor(IN := belt, PT := motor_delay);

@@ -29,14 +29,20 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
+    /// The project's requirement tests, green or red (`helmsman_iec::spec`).
+    Requirements,
     Claude,
 }
 
 impl Tab {
+    /// Every tab, in the panel's order.
+    pub const ALL: [Self; 3] = [Self::Io, Self::Requirements, Self::Claude];
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
+            Self::Requirements => "Requirements",
             Self::Claude => "Agent",
         }
     }
@@ -44,6 +50,7 @@ impl Tab {
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
+            Self::Requirements => "tests",
             Self::Claude => "claude",
         }
     }
@@ -104,8 +111,10 @@ impl Pane {
 /// tab (Nick, 2026-11-01); 200 since the third tab (three tab buttons and
 /// the hide chevron must fit the row, or the pane grows every frame).
 pub const LEFT_W: f32 = 200.0;
-/// The right panel's width when first opened, points.
-pub const RIGHT_W: f32 = 204.0;
+/// The right panel's width when first opened, points: 236 since the
+/// Requirements tab (three tab buttons and the hide chevron must fit the
+/// row, or the panel grows every frame).
+pub const RIGHT_W: f32 = 236.0;
 
 /// The Editor's layout and the Monitor's scan detail (kept per browser)
 /// and what was drawn where this frame (tests click by it).
@@ -196,7 +205,7 @@ impl Chrome {
                 Some(("bottom", "messages")) => c.bottom = Bottom::Messages,
                 Some(("bottom", "trend")) => c.bottom = Bottom::Trend,
                 Some(("tab", v)) => {
-                    if let Some(t) = [Tab::Io, Tab::Claude].into_iter().find(|t| t.key() == v) {
+                    if let Some(t) = Tab::ALL.into_iter().find(|t| t.key() == v) {
                         c.tab = t;
                     }
                 }
@@ -379,6 +388,37 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
     }
 }
 
+/// The characters selected in the ST editor `id` (either order), when
+/// any are.
+#[must_use]
+pub fn selection(ctx: &egui::Context, id: egui::Id) -> Option<(usize, usize)> {
+    let r = TextEditState::load(ctx, id)?.cursor.char_range()?;
+    (r.primary.index != r.secondary.index).then_some((r.secondary.index.into(), r.primary.index.into()))
+}
+
+/// Drops the ST editor `id`'s selection, leaving the caret where it was.
+pub fn deselect(ctx: &egui::Context, id: egui::Id) {
+    if let Some(mut state) = TextEditState::load(ctx, id)
+        && let Some(r) = state.cursor.char_range()
+    {
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(r.primary)));
+        state.store(ctx, id);
+    }
+}
+
+/// Selects characters `a..b` of the ST editor `id` (the tests' mouse).
+#[cfg(test)]
+pub fn select(ctx: &egui::Context, id: egui::Id, a: usize, b: usize) {
+    let mut state = TextEditState::load(ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+        egui::text::CCursor::new(a),
+        egui::text::CCursor::new(b),
+    )));
+    state.store(ctx, id);
+}
+
 /// Undoes (or, `redo`, redoes) the last edit of the ST editor `id` on
 /// `text`, through the editor's own undo stack; whether anything changed.
 pub fn undo(ctx: &egui::Context, id: egui::Id, text: &mut String, redo: bool) -> bool {
@@ -430,7 +470,7 @@ pub trait Body {
     fn messages(&mut self) -> &mut crate::messages::Log;
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
-    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab);
+    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome);
     /// The diagram with its breadcrumbs; a block click calls
     /// [`Chrome::goto`].
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
@@ -577,7 +617,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                     t = Some(header_toggle(ui, false, "hide the panel"));
                     for &k in tabs {
                         let b = egui::Button::selectable(tab == k, RichText::new(k.label()).strong())
-                            .min_size(Vec2::new(64.0, TAP * 0.75));
+                            .min_size(Vec2::new(0.0, TAP * 0.75));
                         let r = ui.add(b);
                         hits.push((format!("tab {}", k.key()), r.rect));
                         if r.clicked() {
@@ -586,7 +626,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                     }
                 });
                 ui.separator();
-                body.tab(ui, tab);
+                body.tab(ui, tab, chrome);
                 t
             } else {
                 Some(strip_toggle(ui, true, "show the panel"))

@@ -1,0 +1,92 @@
+[package]
+name = "helmsman-node"
+version = "0.1.0"
+description = "Helmsman's IEC runtime on an ESP32-POE2: the edge spike's firmware (docs/EDGE.md)"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/JimothyJohn/helmsman"
+publish = false
+
+# Not a workspace member: the Xtensa target needs the esp toolchain
+# (`rustup toolchain list` shows `esp`, from `espup install`) and
+# build-std, which the host gate must not pull in. Own Cargo.lock, own
+# .cargo/config.toml; build from this folder: `make node-build` at the root.
+[workspace]
+
+[features]
+# `net`: Ethernet on the POE2 (EMAC + LAN8720A), the embassy executor and
+# the Modbus TCP client: Phase 2's `modbus` binary. The `bench` binary
+# (Phase 1) needs none of it.
+net = [
+  "dep:embassy-executor",
+  "dep:embassy-net",
+  "dep:embassy-net-driver",
+  "dep:embassy-time",
+  "dep:embedded-io-async",
+  "dep:esp-rtos",
+  "dep:esp32",
+  "dep:ph-esp32-mac",
+  "dep:static_cell",
+]
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "modbus"
+path = "src/bin/modbus.rs"
+required-features = ["net"]
+
+[dependencies]
+# The runtime, without std: the clock comes in through `scan_at`, the
+# float functions from libm (helmsman-iec's `libm` feature).
+helmsman-iec = { path = "../helmsman-iec", default-features = false, features = ["libm"] }
+# The Modbus codec (PDUs, reply checks, MBAP), no_std, no deps: the same
+# bytes the box puts on the wire.
+helmsman-modbus = { path = "../helmsman-modbus" }
+
+# The esp-rs stack, at the versions supervictor's edge crate pins (its
+# Cargo.lock, 2026-11-02): esp-hal 1.0.0 exactly (1.1 removed unstable
+# APIs its neighbours still use), the esp-idf bootloader's app descriptor
+# (espflash's bootloader refuses an image without one), esp-alloc with its
+# heap statistics (max usage: the G3 number; the per-alloc bookkeeping
+# costs a little scan time, named in the output), esp-println on UART0
+# (USB serial), esp-backtrace as the panic handler.
+esp-hal = { version = "=1.0.0", features = ["esp32", "unstable", "psram", "rt"] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32"] }
+esp-alloc = { version = "0.9.0", features = ["internal-heap-stats"] }
+esp-println = { version = "0.16.1", features = ["esp32"] }
+esp-backtrace = { version = "0.18.1", features = ["esp32", "panic-handler", "println"] }
+
+# `net` only. esp-rtos is the embassy executor and time driver on this
+# chip; embassy-net the TCP/UDP stack (DHCP for the lease); ph-esp32-mac
+# the ESP32 EMAC driver (crates.io 0.1.1 cannot read the PHY over MDIO;
+# this is the upstream merge commit of the fix, the tree supervictor's
+# rack runs; a release is awaited); the esp32 PAC for the two registers
+# esp-hal does not expose (APLL power-up, the GPIO0 clock-out mux);
+# static_cell for the stack's statics.
+embassy-executor = { version = "0.9.1", optional = true }
+embassy-time = { version = "0.5", features = ["generic-queue-8"], optional = true }
+embassy-net = { version = "0.9.1", features = ["dhcpv4", "medium-ethernet", "proto-ipv4", "tcp", "udp"], optional = true }
+embassy-net-driver = { version = "0.2", optional = true }
+embedded-io-async = { version = "0.7.0", optional = true }
+esp-rtos = { version = "0.2", features = ["embassy", "esp32"], optional = true }
+esp32 = { version = "0.42", optional = true }
+ph-esp32-mac = { git = "https://github.com/photon-circus/ph-esp32-mac", rev = "b05d53ade4224361175283ac1b65c7504a029301", features = ["esp-hal", "embassy-net", "log"], optional = true }
+static_cell = { version = "2.1.0", features = ["nightly"], optional = true }
+
+[profile.release]
+# Speed is what is measured; frame pointers stay for esp-backtrace.
+opt-level = 3
+debug = 2
+codegen-units = 1
+lto = "fat"
+incremental = false
+overflow-checks = false
+debug-assertions = false
+
+[profile.dev]
+# The interpreter in a debug build is too slow to say anything; always
+# build release for the board.
+opt-level = 1

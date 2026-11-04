@@ -94,6 +94,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        canvas's ⋯ menu. Plain HTTP on the same port is
                        served only from this host (loopback, an SSH
                        tunnel); from the LAN it is redirected to https://
+  --market-allow-local on|off
+                       let POST /api/market/* fetch a marketplace index from a
+                       local address (loopback, a private range): a bench or a
+                       LAN mirror. Default off: a marketplace is a public site
   --opcua ADDR        read-only OPC UA server (see helmsman_plc::opcua) on
                        ADDR (default 127.0.0.1:4840: loopback only), or `off`.
                        Anonymous, SecurityPolicy None: nothing is signed or
@@ -103,11 +107,14 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        it the agent is offline and /api/chat answers 503
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
                        The box never holds an Anthropic key.
-  --relay-agent V      the agent version to ask the relay for (default v3)
+  --relay-agent V      the agent version to ask the relay for (default v6)
   --relay-explain-agent V
                        the agent version POST /api/explain asks for (an
-                       explain profile; default explain-v1). The box runs
+                       explain profile; default explain-v2). The box runs
                        only read-only tools for it either way.
+  --devices-index URL  the device library's index the Devices tab and the
+                       agent look a found device up in (default the public
+                       library's, see docs/devices/; `off` for none)
   --site NAME          announce this box on the LAN as part of site NAME
                        (a UDP multicast beacon to 239.255.72.77:41910, TTL
                        1, every 5 s) and list the boxes of that site it
@@ -150,6 +157,15 @@ const INPUTS: u16 = 150;
 /// Assembly the program writes as `%Q` and the scanner reads (T->O).
 const OUTPUTS: u16 = 100;
 
+/// Which hosts `POST /api/market/*` may fetch from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarketHosts {
+    /// Public addresses only (a box's default).
+    Public,
+    /// Local addresses too (`--market-allow-local on`: a bench, a LAN mirror).
+    Local,
+}
+
 struct Opts {
     programs: Vec<PathBuf>,
     modules: Vec<String>,
@@ -166,6 +182,8 @@ struct Opts {
     /// Serve the API over HTTPS (`--https`, on by default in a build with
     /// the `https` feature).
     https: bool,
+    /// Where the marketplace routes may fetch from (`--market-allow-local`).
+    market: MarketHosts,
     opcua: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
     relay: Option<String>,
@@ -174,6 +192,8 @@ struct Opts {
     relay_explain_agent: Option<String>,
     ui: Option<PathBuf>,
     site: Option<String>,
+    /// `--devices-index`: `None` is the default library, `Some("off")` none.
+    devices_index: Option<String>,
     box_name: Option<String>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
@@ -222,14 +242,16 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         https: cfg!(feature = "https"),
+        market: MarketHosts::Public,
         opcua: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 4840))),
         state_dir: None,
         relay: None,
         relay_token: None,
-        relay_agent: "v3".into(),
+        relay_agent: "v6".into(),
         relay_explain_agent: None,
         ui: None,
         site: None,
+        devices_index: None,
         box_name: None,
         policy: None,
         set_pin: None,
@@ -288,6 +310,13 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     _ => return Err(format!("--https: expected on or off, got {v:?}")),
                 };
             }
+            "--market-allow-local" => {
+                o.market = match v.as_str() {
+                    "on" => MarketHosts::Local,
+                    "off" => MarketHosts::Public,
+                    _ => return Err(format!("--market-allow-local: expected on or off, got {v:?}")),
+                };
+            }
             "--opcua" if v == "off" => o.opcua = None,
             "--opcua" => {
                 o.opcua = Some(
@@ -325,6 +354,10 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     "--screen is retired: the Monitor (/?monitor) builds its tiles from the program".into(),
                 );
             }
+            "--devices-index" if v == "off" || v.starts_with("https://") || v.starts_with("http://") => {
+                o.devices_index = Some(v.clone());
+            }
+            "--devices-index" => return Err(format!("--devices-index: a http(s):// URL or off, got {v:?}")),
             "--site" if site::valid_token(v) => o.site = Some(v.clone()),
             "--site" => return Err(format!("--site: 1 to 32 of A-Z a-z 0-9 . _ -, got {v:?}")),
             "--box-name" if site::valid_name(v) => o.box_name = Some(v.clone()),
@@ -889,13 +922,16 @@ fn plan_io(
         Arc::clone(table),
         Arc::new(move |d: &helmsman_io::Device| helmsman_io::open_on(d, Some(&io))),
         channels,
-        Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
-            match err {
-                None => eprintln!("helmsman-plc: device {name} up"),
-                Some(e) => eprintln!("helmsman-plc: device {name} down: {e}"),
-            }
-            devices.set(name, err.map(ToString::to_string));
-        }),
+        Arc::new(
+            move |name: &str, err: Option<&helmsman_io::Error>, address: Option<String>| {
+                match (err, &address) {
+                    (None, Some(a)) => eprintln!("helmsman-plc: device {name} up at {a}"),
+                    (None, None) => eprintln!("helmsman-plc: device {name} up"),
+                    (Some(e), _) => eprintln!("helmsman-plc: device {name} down: {e}"),
+                }
+                devices.set_with(name, err.map(ToString::to_string), address);
+            },
+        ),
     );
     let plan = set.plan_with(&map.cloned().unwrap_or_default(), drivers)?;
     Ok((set, plan))
@@ -1060,6 +1096,7 @@ fn start_api(
     let extras = api::Extras {
         ui,
         trust: Some(trust),
+        market_local: o.market == MarketHosts::Local,
     };
     let site = o
         .site
@@ -1074,6 +1111,11 @@ fn start_api(
         drivers: Some(helmsman_plc::driver_dir::DriverDir::in_state_dir(&dir)),
         running_drivers,
         trend_pins: Some(dir.join("trend-pins")),
+        discovery: api::discover::Discovery::lan(match o.devices_index.as_deref() {
+            Some("off") => None,
+            Some(url) => Some(url.to_string()),
+            None => Some(helmsman_project::devlib::DEFAULT_URL.to_string()),
+        }),
     };
     let server = Api::start_secure(cfg, shared, extras, site.as_ref().map(Site::handle), more, tls)
         .map_err(|e| format!("--api {bind}: {e}"))?;
@@ -1213,7 +1255,7 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
     setup.explain_agent = Some(
         o.relay_explain_agent
             .clone()
-            .unwrap_or_else(|| "explain-v1".into()),
+            .unwrap_or_else(|| "explain-v2".into()),
     );
     Ok(Some(setup))
 }

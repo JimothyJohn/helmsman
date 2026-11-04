@@ -661,6 +661,26 @@ into the code.
 
 ## Device sources
 
+### supervictor (Nick's ESP32-POE-ISO fleet firmware) and ph-esp32-mac
+
+- **What:** the Ethernet bring-up the edge node copies (crates/helmsman-node:
+  `board.rs`, `ethernet.rs`, 2026-11-03): `supervictor/edge/src/board/poe_iso.rs`
+  (the APLL at 50 MHz, mirroring ESP-IDF `rtc_clk_apll_enable` /
+  `rtc_clk_apll_coeff_set`) and `board/poe2.rs` (the clock out of GPIO0 via
+  clock-output channel 1, as Olimex's `LAN8720-POE2` Arduino example and
+  ESP-IDF `esp_clock_output_start(CLKOUT_SIG_APLL, 0)` do), and
+  `network/ethernet.rs` (EMAC init, PHY init, DHCP after link-up with
+  promiscuous mode held until a lease), which follows `ph-esp32-mac`'s
+  hardware-verified embassy-net example. `HARDWARE.md` §4.2 there: the POE2
+  has no galvanic isolation, never USB and PoE together.
+- **Where:** `/Users/nick/github/supervictor` (private); `ph-esp32-mac` at
+  `photon-circus/ph-esp32-mac` commit `b05d53ade4224361175283ac1b65c7504a029301`
+  (the upstream merge of the MDIO fix; crates.io 0.1.1 cannot read the PHY),
+  as supervictor pins it. esp-hal 1.0.0, esp-alloc 0.9.0, esp-rtos 0.2,
+  embassy-net 0.9.1 at supervictor's versions.
+- **Leaned on by:** docs/EDGE.md Phases 1 and 2, crates/helmsman-node.
+- **How to cite:** `supervictor edge <file>` / `ph-esp32-mac b05d53a <file>`.
+
 ### Moxa ioLogik E1213 EDS, v2.0 (EtherNet/IP Electronic Data Sheet)
 
 - **What:** `moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`,
@@ -703,6 +723,20 @@ into the code.
   and connection limit, the Modbus example map. Bit positions within the
   status words and the counters' byte order are inferred, and say so.
 - **How to cite:** `E1200 manual v15.10 p. X-N`.
+
+### The host's ARP table: `proc(5)` and `arp(8)`
+
+- **What:** where `helmsman_io::resolve` looks a `mac=` endpoint up.
+  Linux: `/proc/net/arp`, a header line then one entry a line (`IP
+  address`, `HW type`, `Flags`, `HW address`, `Mask`, `Device`), flags
+  `0x0` for an incomplete entry (`man 5 proc`, "/proc/net/arp"). macOS and
+  the BSDs: `arp -an`, one line an entry, `? (10.0.0.57) at
+  0:90:e8:7e:af:be on en1 ifscope [ethernet]`, hex bytes without leading
+  zeros, `(incomplete)` for an entry with no address (`man 8 arp`).
+- **Leaned on by:** `resolve::arp_lookup` reads both shapes by looking
+  for an IPv4 token and a MAC token on one line, so the exact columns
+  never matter; incomplete entries have no MAC token and fall through.
+- **How to cite:** `proc(5) /proc/net/arp`, `arp(8)`.
 
 ### The bench E1213 (firmware V3.1 Build19110615), 2026-11-02
 

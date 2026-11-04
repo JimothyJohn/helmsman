@@ -138,3 +138,64 @@ proptest! {
         prop_assert_eq!(p.get("x"), Some(Value::Int(v)));
     }
 }
+
+const MODEL: &str = "
+FUNCTION_BLOCK tank
+VAR_OUTPUT seen : REAL; END_VAR
+VAR level : REAL := 1.5; count : INT; END_VAR
+  level := level + 0.5;
+  count := count + 1;
+  seen := level;
+END_FUNCTION_BLOCK
+PROGRAM main
+VAR_OUTPUT out : REAL; END_VAR
+VAR plant : tank; lamp AT %QX0.0 : BOOL; END_VAR
+  plant();
+  out := plant.seen;
+END_PROGRAM";
+
+#[test]
+fn set_writes_a_function_block_internal_between_scans() {
+    let mut p = compile(MODEL, SIZES).unwrap();
+    let mut img = helmsman_iec::Image::new(SIZES);
+    p.scan(&mut img).unwrap();
+    assert_eq!(p.get("plant.level"), Some(Value::Real(2.0)));
+    p.set("PLANT.Level", Value::Real(10.0)).unwrap();
+    p.scan(&mut img).unwrap();
+    assert_eq!(
+        p.get("out"),
+        Some(Value::Real(10.5)),
+        "the scan ran from the written value"
+    );
+}
+
+#[test]
+fn set_refuses_what_is_not_a_scalar_or_does_not_fit_and_keeps_the_old_value() {
+    let mut p = compile(MODEL, SIZES).unwrap();
+    for (path, v, want) in [
+        ("plant", Value::Real(1.0), SetError::NoSuchVariable),
+        ("plant.nope", Value::Real(1.0), SetError::NoSuchVariable),
+        ("plant.level.x", Value::Real(1.0), SetError::NoSuchVariable),
+        ("plant[1]", Value::Real(1.0), SetError::NoSuchVariable),
+        ("lamp", Value::Bool(true), SetError::NoSuchVariable),
+        ("", Value::Real(1.0), SetError::NoSuchVariable),
+        ("..", Value::Real(1.0), SetError::NoSuchVariable),
+        ("plant.level", Value::Int(1), SetError::Kind(Ty::Real)),
+        ("plant.level", Value::Real(f64::NAN), SetError::Range(Ty::Real)),
+        ("plant.level", Value::Real(1e300), SetError::Range(Ty::Real)),
+        ("plant.count", Value::Int(40000), SetError::Range(Ty::Int)),
+        ("plant.count", Value::Bool(true), SetError::Kind(Ty::Int)),
+    ] {
+        assert_eq!(p.set(path, v), Err(want), "{path} <- {v:?}");
+    }
+    assert_eq!(p.get("plant.level"), Some(Value::Real(1.5)));
+    assert_eq!(p.get("plant.count"), Some(Value::Int(0)));
+}
+
+proptest! {
+    #[test]
+    fn set_never_panics_on_any_path(path in ".{0,40}", x in proptest::num::f64::ANY) {
+        let mut p = compile(MODEL, SIZES).unwrap();
+        let _ = p.set(&path, Value::Real(x));
+    }
+}

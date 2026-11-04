@@ -39,7 +39,9 @@ this; change it here first when a decision changes.
   restart (the simulation), then save, upload, download. Strokes in the
   brand colours; each tells its key on hover.
 - **Bottom panel**, under the diagram, collapsible and resizable (View ›
-  Trend, Alt 2), two tabs: Trend (its time axis is the long side) and
+  Trend, Alt 2), two tabs: Trend (its time axis is the long side; one
+  Window slider, logarithmic from 100 ms to 10 min, the plot following
+  as it moves; Nick, 2026-11-02) and
   Messages (the last 200 things the page had to say, filtered by level
   with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
@@ -51,19 +53,83 @@ this; change it here first when a decision changes.
   project, and on the blank space New project and Paste; New project and
   Copy project are also the File menu's first items; the Delete key
   deletes the row last clicked, a double click on a file opens the Code
-  tab, and every delete is confirmed in a modal at the screen's centre),
+  tab, every delete is confirmed in a modal at the screen's centre, and
+  the earlier iterations of the program, `vN.st`, fold under one
+  "earlier (n)" row with `main.st` marked as the one running),
   Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
   system's, each with its points under it, live values and the link's
   state; on a box the open project's `io.map`, else the map the box runs;
   a right-click on the blank space adds a device as a file is added: a
   form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
-  and settings, written as one `device` line of `io.map`; the same
-  listing is the context the agent gets, in the page and as the box's
-  `list_devices` tool) and Code (the Structured Text editor). One width
+  and settings, written as one `device` line of `io.map`; Import device…
+  takes a vendor's EDS, which joins the project as `NAME.eds` and fills
+  the form in (EtherNet/IP, `eds=NAME.eds`); the box reads the file from
+  the project when the map loads (2026-11-02, `device-import`); under the
+  map's devices, "On the network": Scan asks the box for one ListIdentity
+  sweep (`POST /api/devices/discover`; the simulation answers with its
+  simulated E1213) and lists every device that answered, with whether a
+  map device binds it and what the public device library knows of it
+  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
+  then by vendor and model text; `--devices-index` points a box at
+  another); a right-click on one not in the map offers Add to the map…,
+  the form filled in by identity (`cip=V:P:S`) with the library's name
+  and profile (2026-11-02, `devices-repo`); the same listing, network
+  included, is the context the agent gets, in the page and as the box's
+  `list_devices` tool; under that, "Plant states" (2026-11-02,
+  `sim-feedback-devices`): the quantities the project's plant model
+  keeps, marked `{state [unit=U] [measured_by=NAME]}` on their VAR line
+  (the IEC pragma the compiler skips), each with the simulation's value,
+  the map `in` signal that measures it on the real machine (found by
+  name: the state's, `NAME_in`, `NAME_raw`, the name without its unit
+  suffix, or the attribute) or, unmeasured, the sensor kind that would
+  (level transmitter, pressure transducer, RTD, encoder, flow meter,
+  load cell, counter input, a switch); a right-click on an unmeasured
+  state offers Add a sensor…, a form in the centre (signal name, the
+  map's device, point, unit) that appends the `in` line; a measuring
+  signal that is one of the program's inputs, in the state's unit and
+  not a `_raw` count, stands in for the model's variable in the
+  simulation (it is written into each instance before every scan, so
+  the model runs from the sensor, set in the I/O tab); the agent's
+  context carries the same list, so it can suggest and reason about
+  what the machine does not measure yet) and Code (the Structured Text
+  editor). One width
   for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
   pane on its tab, or shut it when that tab shows.
-- **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the
-  diagram does not show), Agent. On a Pi the Trend opens with
+- **Right panel, collapsible, tabs (236 pt since the third tab):** I/O
+  (values; inputs the diagram does not show), Requirements (interview
+  2026-11-02: the project's requirement tests, `test_NAME.st` PROGRAMs
+  that drive the program's inputs, step the clock and check its outputs
+  with the ASSERT block; one row each, green or red, the requirement in
+  the file's first comment and, red, why in words and when; a Run button;
+  the page runs them after every build change and before Deploy and "Use
+  this code", a box runs them when a project opens, after each save and
+  before a deploy; a red one refuses both, naming the test), Agent (Nick,
+  2026-11-01: the conversation is pages, ‹ › walk them, Delete drops
+  one, every kept page goes to the model as context each time, and the
+  pages live with the project as `agent.md`, so a reload or a download
+  keeps them; an earlier page's code has its own Use this code; not on a
+  box yet. The agent edits only what is in focus (Nick 2026-11-01,
+  interview 2026-11-02, card `agent-scoped-edits`): the open file by
+  default, the lines selected in the Code tab or the block picked in the
+  diagram (its statement, while the diagram is of the editor's text) when
+  there is one; a line above the question says which ("Editing: main.st",
+  "Editing: lines 12–30 of main.st", "Editing: block Motor1") and by which
+  rule, with Whole file to drop the selection or pick. The scope goes to
+  the model in an `<edit_scope>` envelope and back with the page; Use
+  this code takes the answer into that scope only (`scope.rs`,
+  `apply`): another file, lines outside the selection, a block's
+  neighbour, several code blocks, the page's envelope markers or no
+  change at all are refused, saying what it tried to touch, and nothing
+  outside the scope changes, byte for byte. A taken change must keep the
+  requirement tests green; unsaved edits are saved first, then the
+  change is one revision with its page. A whole `main.st` with its
+  PROGRAM lands as an iteration; lines and blocks are edited in place.
+  With a built-in example open (read-only) the scope is a new project:
+  Use this code on a PROGRAM asks for the program's name once per
+  conversation; the answers after it land in that project with the
+  newest as `main.st` and the file it replaced kept as the next `vN.st`,
+  serially, however many; `vN.st` is never built, and past the project's
+  size the oldest go first). On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.
@@ -97,7 +163,15 @@ this; change it here first when a decision changes.
   running. Opening or editing another project never disturbs the running
   one.
 - **Save** writes the edited files (a draft; a file someone else saved
-  since it was read is refused, and the page offers to reload it).
+  since it was read is refused, and the page offers to reload it). Every
+  save, upload, import and restore is a **revision** of the project on
+  the box (Nick 2026-11-01, project-history; interview 2026-11-02:
+  revisions, not git): the files as they were, who, when, what, and the
+  Agent page the change came from when there was one. The Files tab's
+  History row lists them; a revision opens in the centre with a line
+  diff against the project as it is and Restore (an engineer's, a new
+  revision). The simulation keeps the newest twenty in the browser's
+  storage the same way. Deploy snapshots in the store are untouched.
   **Deploy** saves first, compiles the open project, records a snapshot in
   the store (history and rollback keep working) and hot-swaps it in
   between scans; compile errors list file and line, and a click goes

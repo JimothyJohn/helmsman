@@ -1,7 +1,9 @@
 # Moxa ioLogik E1213 over EtherNet/IP (enip-io, one Class 1 exclusive-owner
 # connection at 100 ms). docs/devices/moxa-iologik-e1213.md says where each
-# address comes from. Bench wiring: DO-00..02 to DI-00..02; the unit is at 10.0.0.57 by DHCP (TODO.md e1213-address).
-device e1213 enip-io 10.0.0.57 profile=moxa-e1213 rpi_ms=100 poll_ms=20
+# address comes from. Bench wiring: DO-00..02 to DI-00..02; the unit is a DHCP
+# lease (10.0.0.57 on 2026-11-02), so it is named by its MAC and the box finds
+# it when it connects (device-by-identity; `cip=991:515` would do as well).
+device e1213 enip-io mac=00-90-e8-7e-af-be profile=moxa-e1213 rpi_ms=100 poll_ms=20
 
 # DI-00..DI-07 (and DI-08..11 when the DIO jumpers say DI): input bytes 0-1
 in  part_present  bool e1213 di:4

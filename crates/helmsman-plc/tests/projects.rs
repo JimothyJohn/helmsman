@@ -1469,6 +1469,66 @@ fn a_deploy_racing_saves_runs_one_whole_version() {
     assert!(ids.contains(&b.head()));
 }
 
+/// `device-import`: an uploaded EDS is kept as the project's `NAME.eds`
+/// (its stem as a slug), checked to read as an EDS; the map may then name
+/// it with `eds=NAME.eds`.
+#[test]
+fn an_eds_imports_into_a_project_as_a_device_file() {
+    const FACTS: &str = include_str!("../../helmsman-proto/tests/fixtures/e1213-facts.eds");
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(&s, "dev", &[]);
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/dev/import?file=Moxa%20E1213%20(v2.0).EDS",
+        Some(&s),
+        "application/octet-stream",
+        FACTS.as_bytes(),
+    );
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(r.json()["name"], "moxa-e1213-v2-0.eds");
+    let kept = file(b.addr, "dev", "moxa-e1213-v2-0.eds").json()["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(kept, FACTS, "byte for byte");
+    // Garbage is not an EDS; binary is not text.
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/dev/import?file=junk.eds",
+        Some(&s),
+        "application/octet-stream",
+        b"[Device]\n  this is not = an EDS ; ; ;\n[[[",
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/dev/import?file=bin.eds",
+        Some(&s),
+        "application/octet-stream",
+        &[0xff, 0xfe, 0x00, 0x01],
+    );
+    assert_eq!(r.status, 422, "{r:?}");
+    // A name nothing survives of.
+    let r = send(
+        b.addr,
+        "POST",
+        "/api/projects/dev/import?file=---.eds",
+        Some(&s),
+        "application/octet-stream",
+        FACTS.as_bytes(),
+    );
+    assert_eq!(r.status, 400, "{r:?}");
+    // The file is a project file like any other: it is in the zip.
+    let zip = send(b.addr, "GET", "/api/projects/dev/zip", Some(&s), "", &[]);
+    assert_eq!(zip.status, 200, "{zip:?}");
+    let files = helmsman_project::read_zip(&zip.body).unwrap();
+    assert_eq!(files.get("moxa-e1213-v2-0.eds"), Some(FACTS));
+}
+
 #[test]
 fn plcopen_and_st_files_import_into_a_project_and_build() {
     let b = Bench::new();
@@ -1946,6 +2006,137 @@ fn seed(state: &Path, args: &[&str]) -> (bool, String) {
     (out.status.success(), text)
 }
 
+/// A requirement test checks the lamp follows start within a few scans
+/// (`helmsman_iec::spec`): green against MAIN.
+const TEST_GREEN: &str = "\
+(* The lamp is on within 50 ms of start. *)
+PROGRAM test_lamp
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
+VAR t : TON; lamp_follows_start : ASSERT; (* on within 50 ms *) END_VAR
+  start := TRUE;
+  t(IN := TRUE, PT := T#50ms);
+  IF t.Q THEN
+    lamp_follows_start(COND := lamp);
+    done := TRUE;
+  END_IF;
+END_PROGRAM
+";
+
+/// The same test demanding the opposite: red against MAIN.
+const TEST_RED: &str = "\
+(* The lamp stays off while start is held. *)
+PROGRAM test_lamp
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
+VAR t : TON; lamp_stays_off : ASSERT; END_VAR
+  start := TRUE;
+  t(IN := TRUE, PT := T#50ms);
+  IF t.Q THEN
+    lamp_stays_off(COND := NOT lamp);
+    done := TRUE;
+  END_IF;
+END_PROGRAM
+";
+
+/// Requirement tests (TODO.md spec-tests): `test_*.st` files run on the
+/// box through `POST /api/projects/{p}/tests` (token or session, nothing
+/// changes), never build into a module, and a red one refuses the deploy
+/// with 409 naming the requirement, nothing changed; green, it deploys.
+#[test]
+fn requirement_tests_run_on_the_box_and_a_red_one_refuses_the_deploy() {
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(
+        &s,
+        "line3",
+        &[
+            ("main.st", MAIN),
+            ("blocks.st", BLOCKS),
+            ("io.map", MAP),
+            ("test_lamp.st", TEST_RED),
+        ],
+    );
+    let before = b.head();
+    // The test file is no module.
+    let check = post_json(b.addr, "/api/projects/line3/check", Some(&s), &json!({})).json();
+    assert_eq!(check["ok"], true, "{check}");
+    let mods: Vec<&str> = check["modules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(mods, ["conveyor"], "{check}");
+    // The tests run with the token too (a read).
+    let r = post_json(b.addr, "/api/projects/line3/tests", Some(TOKEN), &json!({}));
+    assert_eq!(r.status, 200, "{r:?}");
+    let j = r.json();
+    assert_eq!(j["ok"], false, "{j}");
+    assert_eq!(j["tests"].as_array().unwrap().len(), 1, "{j}");
+    assert_eq!(j["tests"][0]["file"], "test_lamp.st", "{j}");
+    assert_eq!(
+        j["tests"][0]["requirement"], "The lamp stays off while start is held.",
+        "{j}"
+    );
+    assert_eq!(j["tests"][0]["passed"], false, "{j}");
+    assert!(
+        j["tests"][0]["why"]
+            .as_str()
+            .unwrap()
+            .starts_with("lamp stays off failed at "),
+        "{j}"
+    );
+    assert_eq!(j["red"].as_array().unwrap().len(), 1, "{j}");
+    assert_eq!(
+        post_json(b.addr, "/api/projects/nope/tests", Some(TOKEN), &json!({})).status,
+        404
+    );
+    assert_eq!(
+        post_json(b.addr, "/api/projects/line3/tests", None, &json!({})).status,
+        401,
+        "no credential, no run"
+    );
+    // The deploy is refused before anything builds or runs.
+    let r = b.deploy(&s, "line3");
+    assert_eq!(r.status, 409, "{r:?}");
+    let j = r.json();
+    assert!(j["error"].as_str().unwrap().contains("requirement test"), "{j}");
+    assert!(j["error"].as_str().unwrap().contains("test_lamp"), "{j}");
+    assert_eq!(j["changed"], false, "{j}");
+    assert_eq!(j["tests"][0]["passed"], false, "{j}");
+    assert_eq!(b.head(), before, "nothing committed");
+    // Fixed: green, and the deploy goes through.
+    let r = put_file(b.addr, &s, "line3", "test_lamp.st", TEST_GREEN, None);
+    assert_eq!(r.status, 200, "{r:?}");
+    let j = post_json(b.addr, "/api/projects/line3/tests", Some(&s), &json!({})).json();
+    assert_eq!(j["ok"], true, "{j}");
+    assert_eq!(j["tests"][0]["passed"], true, "{j}");
+    assert_eq!(j["tests"][0]["why"], "", "{j}");
+    let r = b.deploy(&s, "line3");
+    assert_eq!(r.status, 200, "{r:?}");
+    wait("the module running", || b.modules() == ["conveyor"]);
+    // The refusal and the runs are audited.
+    let audit = get(b.addr, "/api/audit?limit=1000").json();
+    let detail: Vec<String> = audit["entries"]
+        .as_array()
+        .or_else(|| audit.as_array())
+        .map(|a| {
+            a.iter()
+                .map(|e| e["detail"].as_str().unwrap_or("").to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        detail.iter().any(|d| d.contains("1 test(s), 1 red")),
+        "the red run is audited: {detail:?}"
+    );
+    assert!(
+        detail.iter().any(|d| d.contains("requirement test(s) red")),
+        "the refusal is audited: {detail:?}"
+    );
+}
+
 /// Card seed-deploys: a first install makes the project and nothing
 /// else. The store stays empty and the box boots running nothing, until
 /// an engineer deploys through the approval path (covered by
@@ -2013,4 +2204,133 @@ fn a_first_install_seeds_a_project_without_deploying_it_and_never_again() {
     std::fs::write(&src, "PROGRAM broken\n  x := ;\nEND_PROGRAM\n").unwrap();
     let (ok, out) = seed(&bad, &["broken", src.to_str().unwrap()]);
     assert!(!ok && out.contains("broken.st:2"), "{out}");
+}
+
+/// Nick 2026-11-01 (project-history; interview 2026-11-02: revisions on
+/// the box, not git): every save is a revision with who, when and what,
+/// an Agent page rides along when the save came from one, a revision is
+/// read whole and restored as a new revision by an engineer only, and a
+/// renamed or deleted project takes its history with it.
+#[test]
+fn every_save_is_a_revision_an_engineer_can_read_and_restore() {
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(&s, "line3", &[("main.st", MAIN)]);
+    let r = put_file(b.addr, &s, "line3", "main.st", "PROGRAM x END_PROGRAM", None);
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["revision"], 2, "the project's making was revision 1");
+    // A save from the Agent tab carries its page.
+    let r = send(
+        b.addr,
+        "PUT",
+        "/api/projects/line3/files/main.st",
+        Some(&s),
+        "application/json",
+        json!({ "text": "PROGRAM y END_PROGRAM", "page": "Make it blink\n\n<!-- page -->\nanswer" })
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    let h = get(b.addr, "/api/projects/line3/history").json();
+    let revs = h["revisions"].as_array().unwrap();
+    assert_eq!(revs.len(), 3, "{h}");
+    assert_eq!(revs[1]["n"], 2);
+    assert_eq!(revs[1]["by"], "alice (engineer)");
+    assert_eq!(revs[1]["what"], "saved main.st");
+    assert_eq!(revs[1]["page"], false);
+    assert_eq!(revs[2]["what"], "took the Agent's answer into main.st");
+    assert_eq!(revs[2]["page"], true);
+    assert!(revs[2]["at_ms"].as_u64().unwrap() >= revs[1]["at_ms"].as_u64().unwrap());
+    assert_eq!(revs[2]["files"], json!(["main.st"]));
+    let two = get(b.addr, "/api/projects/line3/history/2").json();
+    assert_eq!(two["files"]["main.st"], "PROGRAM x END_PROGRAM");
+    assert_eq!(two["page"], Json::Null);
+    let three = get(b.addr, "/api/projects/line3/history/3").json();
+    assert_eq!(three["page"], "Make it blink\n\n<!-- page -->\nanswer");
+    assert_eq!(get(b.addr, "/api/projects/line3/history/9").status, 404);
+    assert_eq!(get(b.addr, "/api/projects/line3/history/x").status, 404);
+    assert_eq!(get(b.addr, "/api/projects/nope/history").status, 404);
+    // Restore: an engineer's; the operator and the bare token are refused.
+    let bob = b.login("bob", BOB);
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/history/2/restore",
+        Some(&bob),
+        &json!({}),
+    );
+    assert_eq!(r.status, 403, "{r:?}");
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/history/2/restore",
+        Some(TOKEN),
+        &json!({}),
+    );
+    assert_eq!(r.status, 403, "{r:?}");
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/history/2/restore",
+        Some(&s),
+        &json!({}),
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["restored"], 2);
+    assert_eq!(r.json()["revision"], 4);
+    assert_eq!(
+        file(b.addr, "line3", "main.st").json()["text"],
+        "PROGRAM x END_PROGRAM"
+    );
+    let h = get(b.addr, "/api/projects/line3/history").json();
+    assert_eq!(h["revisions"][3]["what"], "restored revision 2");
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/history/99/restore",
+        Some(&s),
+        &json!({}),
+    );
+    assert_eq!(r.status, 404, "{r:?}");
+    // Rename takes the history along; delete takes it away.
+    let r = post_json(
+        b.addr,
+        "/api/projects/line3/rename",
+        Some(&s),
+        &json!({ "to": "line4" }),
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        get(b.addr, "/api/projects/line3/history").status,
+        404,
+        "gone with the name"
+    );
+    assert_eq!(
+        get(b.addr, "/api/projects/line4/history").json()["revisions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    let r = send(
+        b.addr,
+        "DELETE",
+        "/api/projects/line4",
+        Some(&s),
+        "application/json",
+        b"",
+    );
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        get(b.addr, "/api/projects/line4/history").status,
+        404,
+        "gone with the project"
+    );
+    assert!(!b.state.join("projects-history").join("line4").exists());
+    // A malformed save key is still refused.
+    let r = send(
+        b.addr,
+        "PUT",
+        "/api/projects/line3/files/main.st",
+        Some(&s),
+        "application/json",
+        json!({ "text": "x", "pages": "no" }).to_string().as_bytes(),
+    );
+    assert_eq!(r.status, 400, "{r:?}");
 }

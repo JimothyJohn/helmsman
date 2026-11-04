@@ -175,13 +175,14 @@
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **Requirements become tests: the agent and the engineer agree on a result, and a test keeps it** — Nick 2026-11-01 (NEXTSESH): the killer feature is verification, the way Lean makes you prove the result you asked for. The conversation quantifies each requirement ("the lamp is on within 2 s of start_pb", "the belt never runs with the guard open"), each one becomes a simulation test (a scenario of inputs over time plus assertions on outputs and timing) kept with the project, and every deploy and every "Use this code" replays the whole set and refuses a regression, with the failing requirement named in the engineer's words. The agent proposes the tests from the spec; the engineer edits and approves them like code. Replay exists (`POST /api/projects/{p}/replay`, sim-replay); this is the requirement-to-scenario layer on top and the pane that shows red and green per requirement.
+- [x] **Requirements become tests: the agent and the engineer agree on a result, and a test keeps it** — Nick 2026-11-01 (NEXTSESH): the killer feature is verification, the way Lean makes you prove the result you asked for. The conversation quantifies each requirement ("the lamp is on within 2 s of start_pb", "the belt never runs with the guard open"), each one becomes a simulation test (a scenario of inputs over time plus assertions on outputs and timing) kept with the project, and every deploy and every "Use this code" replays the whole set and refuses a regression, with the failing requirement named in the engineer's words. The agent proposes the tests from the spec; the engineer edits and approves them like code. Replay exists (`POST /api/projects/{p}/replay`, sim-replay); this is the requirement-to-scenario layer on top and the pane that shows red and green per requirement.
   needs: a small standard FB (ASSERT) and a test runner in the simulator and on the box; an agent profile that writes tests from a requirement
   notes: interview 2026-11-02: requirement tests are ST test programs in the project (`test_NAME.st`: script inputs, step the simulation N scans, ASSERT outputs and timing), deterministic, written and read by the agent in the same language, run in the page and on the box; a scenario table or agent-judged acceptance were declined. First cut (1w): the FB, the runner, red/green per test in a Requirements tab, and "Use this code" plus Deploy refusing a red one; the plain-words requirement is the test file's header comment.
   result: a Requirements tab: each requirement in plain words with its test, green or red after every deploy; the agent's code cannot land past a red one
   est: 1w
   difficulty: high
   status: ready
+  notes: done 2026-11-02 night, PR #194: helmsman_iec::spec runner (two programs in lockstep), ASSERT FB (FAILED, FAILED_AT), test_*.st skipped by the build, POST /api/projects/{p}/tests, Requirements tab (right panel), Deploy 409 and Use this code refused on red. Left: nested ASSERT instances, located %IX inputs, the relay profile that writes tests from a requirement, a help picture.
   id: spec-tests
   asked: 2026-11-01
   by: claude-session
@@ -194,6 +195,7 @@
   difficulty: med
   depends: agent-pages
   status: ready
+  notes: done 2026-11-02 night, PR #192 (merge queue, stacked on #187): FileKind::Iteration vN.st excluded from both builds, Name this program modal once per conversation, main.st newest, 'earlier (n)' fold, '· runs' mark. The name lives in page memory (asks again after a reload).
   id: agent-iterations
   asked: 2026-11-01
   by: claude-session
@@ -203,6 +205,7 @@
   result: pages with ‹ › arrows and a delete, the kept pages always sent as context, surviving a reload
   est: 2d
   difficulty: med
+  notes: done 2026-11-02 night, PR #187 (merge queue): agent.md project file kind, page strip ‹ ›, delete, kept pages as context ≤512 kB, hidden from Files.
   id: agent-pages
   asked: 2026-11-01
   by: claude-session
@@ -215,6 +218,7 @@
   difficulty: med
   depends: machine-template
   status: ready
+  notes: 2026-11-02 night: worker in progress (feat/plant-states) once #202 is in.
   id: sim-feedback-devices
   asked: 2026-11-01
   by: claude-session
@@ -236,6 +240,7 @@
   difficulty: high
   depends: agent-iterations, spec-tests, project-history
   status: ready
+  notes: 2026-11-02 night: worker in progress (feat/agent-scoped-edits) once #187 #192 #194 #201 are in: scope module (file, selection or picked block), <edit_scope> envelope, byte-for-byte refusal outside the scope.
   id: agent-scoped-edits
   asked: 2026-11-01
   by: claude-session
@@ -247,16 +252,28 @@
   difficulty: med
   depends: agent-pages
   status: ready
+  notes: done 2026-11-02 night, PR #201 (merge queue, stacked on #192): <state>/projects-history/NAME/NNNNNN with the page, GET …/history, GET …/history/{n}, POST …/history/{n}/restore (engineer), History row, LCS diff, restore; sim keeps 20 in browser storage.
   id: project-history
   asked: 2026-11-02
   by: claude-session
 
-- [ ] **Trend window: an exponential slider from 100 ms to 10 min, live** — Nick 2026-11-02 (NEXT.md): the window should go down to 1 s and 100 ms, and instead of the three buttons a slider, exponential, that changes the drawn window on the fly. The choppy line seen from localhost is a known quirk he has seen before and expects to vanish on a box; verify once, do not chase it.
+- [x] **Trend window: an exponential slider from 100 ms to 10 min, live** — Nick 2026-11-02 (NEXT.md): the window should go down to 1 s and 100 ms, and instead of the three buttons a slider, exponential, that changes the drawn window on the fly. The choppy line seen from localhost is a known quirk he has seen before and expects to vanish on a box; verify once, do not chase it.
   needs: nothing
   result: one slider under the Trend (log scale, 100 ms ..= 10 min, the value shown), the plot following as it moves; the three buttons gone; the choice kept per browser as before
   est: 4h
   difficulty: low
+  notes: done 2026-11-02 night, PR #185: one log slider in both trends, 100 ms..10 min, value beside it; choppiness not reproducible headless, left alone.
   id: trend-window-slider
+  asked: 2026-11-02
+  by: claude-session
+
+- [ ] **Modbus identification probe (FC 43/14) for discovery and identity** — left out by the device-by-identity and discovery workers (2026-11-02 night): `cip=` identities and the ListIdentity sweep cover EtherNet/IP; a Modbus-only device is found today only by `mac=` once the host has seen it. Add Read Device Identification (FC 43, MEI type 14: VendorName, ProductCode, MajorMinorRevision) to helmsman-io's modbus driver, a bounded probe of the ARP table's hosts on 502 in `POST /api/devices/discover` when asked (`?modbus=1`), a `modbus=VENDOR:PRODUCT` identity endpoint resolved by that probe, and the library lookup by it (`identity.modbus` in device.toml exists). Cite the Modbus Application Protocol spec section in docs/SOURCES.md.
+  needs: a Modbus device that answers FC 43/14 to test on (does the E1213? check on the bench; the simulator answers it either way)
+  result: a Modbus-only block is found and matched like an EtherNet/IP one
+  est: 1d
+  difficulty: med
+  depends: device-by-identity
+  id: modbus-identification
   asked: 2026-11-02
   by: claude-session
 
@@ -265,6 +282,7 @@
   result: a DHCP device keeps working when its lease moves; a map travels between networks
   est: 1d
   difficulty: med
+  notes: done 2026-11-02 night, PR #195 (merge queue): helmsman_io::resolve, `mac=` and `cip=V:P[:S]` endpoints, ListIdentity sweep, ARP table, /api/devices address; E1213 maps use mac=. No Modbus FC 43/14 probe (card modbus-identification).
   id: device-by-identity
   asked: 2026-11-02
   by: claude-session
@@ -326,6 +344,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: high
   depends: wasm-driver, io-bench, agent-loop
   notes: EDS part started (feat/moxa-e1213): `helmsman_proto::eds` reads a vendor EDS and resolves its Class 1 connections, `enip-io` takes `eds=PATH`, so for an EtherNet/IP device the agent's job is choosing points, not writing a driver. Still to do here: the agent reading a manual's data map (Appendix B for the E1213) into points, and iterating on harness output.
+  notes: 2026-11-02 night: the EDS half is PR #191 (device-import; in the merge queue); the manual half is the relay's helmsman/v5 profile (../agent-relay feat/driver-agent-profile): look up, EDS over hand-written points, manual table → cited map lines, inferred marked, propose and stop. Tick when #191 lands and the relay is deployed with v5.
   id: driver-agent
   needs: the EDS (devices/moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds, untracked) first, then the manual's Appendix B
   notes: Nick 2026-11-02 (board): "JUST USE THE EDS FILE FIRST TO MAKE SURE IT'S LEGIT". Order: the EDS path end to end through `device-import`, then the manual-to-points part.
@@ -370,15 +389,17 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: med
   depends: device-library
   status: ready
+  notes: done 2026-11-02 night, PR #191 (merge queue): flat NAME.eds project file kind, Import device… in the Devices tab, eds=NAME.eds resolved from the project folder; the E1213 EDS checked as fixture by hash, never committed.
   id: device-import
   answer: Start with the EDS to ensure it works.
   notes: interview 2026-11-02: device files are a project file kind (`devices/NAME.eds`, like `drivers/NAME.wasm`; travels with the zip); the Devices tab gets "Import device…"; an EDS becomes `device NAME enip-io ADDR eds=devices/NAME.eds` and the box reads it at start. Every imported device is also offered to the public library (`devices-repo`) so nobody maps it twice.
 
-- [ ] **Stock module: counters and uptime** — cycle counts, run/idle/down state, shift totals; the first shipped module, written in ST like everything else, so it doubles as the agent's few-shot example.
+- [x] **Stock module: counters and uptime** — cycle counts, run/idle/down state, shift totals; the first shipped module, written in ST like everything else, so it doubles as the agent's few-shot example.
   est: 2d
   difficulty: low
   depends: m1-demo
   status: ready
+  notes: done 2026-11-02 night, PR #190: starters/counters (Template): debounce + production_counters blocks, run/idle/down, shift totals on shift_id, uptime %, plant model, io.map on box channels.
   id: stock-counters
   notes: Nick 2026-11-02 (board): do it now with my own judgement. Judgement: a starter under Templates (`counters`): cycle count from a part-present input with debounce, run/idle/down from a running input and a timeout, shift totals reset by the calendar's `shift_id`, uptime as a REAL percentage; its own `test_counters.st` once `spec-tests` exists, else a plant_model.st exercising it.
 
@@ -424,6 +445,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 1w
   difficulty: high
   depends: driver-agent, relay-v0
+  notes: 2026-11-02 night: relay half done on ../agent-relay feat/doc-fetch (fetch_document run by the relay: allow-list moxa.com first, SSRF rules, 12 MiB/2 MiB caps, 40 fetches + 100 MiB a day per box in the ledger, library-first, profile helmsman/v6); box half in progress (tool → relay route → drop-in; default agent v6).
   id: device-docs-lookup
   asked: 2026-11-01
   by: claude-session
@@ -434,6 +456,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 2d
   difficulty: med
   depends: device-import
+  notes: 2026-11-02 night: github.com/JimothyJohn/helmsman-devices public (main + dev; Nick ran the script), E1213 first entry; PR #1 there adds index.json + scripts/build-index.py (dev → main is Nick's). Lookup in helmsman: PR #202 (merge queue): POST /api/devices/discover, GET /api/devices/library, On the network + Add to the map…, --devices-index. Identity first, text second; semantic later.
   id: devices-repo
   asked: 2026-11-02
   by: claude-session
@@ -472,6 +495,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 3w
   difficulty: high
   depends: relay-v0, bundle-format
+  notes: 2026-11-02 night: the node half moved: helmsman-node runs the scan bench and Modbus (PRs #193, #199); its own API + site beacon and the Site view across nodes are what this card is now.
   id: fleet-console
   needs: a decision taken (interview 2026-11-02): no console host at all; see notes
   notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (signed, A/B slots) once the node runs; depends on the edge spike (`node-modbus`) for the node half.
@@ -488,6 +512,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 3w
   difficulty: high
   depends: bundle-format, market-floor
+  notes: walking skeleton done 2026-11-02 night, PR #196: bundle::index (signed canonical JSON), bundle::market fetch (public hosts only), CLI bundle index/fetch, POST /api/market/list and /api/market/install through the bundle import and approval policy, --market-allow-local. Card stays open for accounts, payments, the AI review.
   id: marketplace
   needs: the walking skeleton only, for now
   notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a static, signed index of bundles (a JSON file and the bundles in a public repo, signed by trusted publishers), a box lists it and installs from it through the existing bundle path and approval policy; no accounts, no payments, no AI review yet. Est for the skeleton: 2d.
@@ -497,26 +522,29 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 2w
   difficulty: high
   depends: relay-v0
+  notes: walking skeleton done 2026-11-02 night, PR #198: scripts/pi-image.sh (pi-gen in Docker, pinned ref), helmsman-firstboot pairing files → LoadCredential, docs/BOX.md; not booted. Pairing by code needs a relay endpoint (relay card). Card stays open for enclosure/BOM and a booted image.
   id: box-sku
   needs: the walking skeleton only, for now
   notes: Nick 2026-11-02 (board): do it now with my own judgement; interview: walking skeletons. Cut: a reproducible Pi image build script (pi-gen or rpi-image-gen, the box binary and the canvas preinstalled, the systemd unit, first boot pairs with the relay from a one-time code) checked by booting it in QEMU in CI; no enclosure or BOM yet. Est for the skeleton: 2d.
   status: ready
 
-- [ ] **Open-core split** — decide which crates stay MIT and where relay/fleet/verified-market code lives (private repo), before any paid code lands here.
+- [x] **Open-core split** — decide which crates stay MIT and where relay/fleet/verified-market code lives (private repo), before any paid code lands here.
   est: 2h
   difficulty: low
   depends: relay-v0
+  notes: done 2026-11-02 night, PR #186: LICENSING.md + NOTICE. This repo STAYS Apache-2.0 (commit 1f7a4de, 2026-11-01); relay MIT (on its feat/usage-metering branch), device library MIT, marketplace server side private. Flip this repo to MIT only if Nick says so (one Cargo line + LICENSE).
   id: open-core-split
   needs: nothing: decided
   notes: Nick 2026-11-02 (board): "relay can be MIT. Fleet is Apache, marketplace should be private. Add Stripe integration to possible charge upon uplink of datapoint and reading of data and ingestion by users or agents on a usage rate tied as close as possible to energy usage (that last part may be too abstract and separated from cost though)". Interview: meter now, charge later (`usage-metering`). To do here: LICENSE files (this repo and the relay MIT, the fleet/site code Apache-2.0 with a NOTICE, the marketplace private), a LICENSING.md naming which is which.
   status: ready
 
-- [ ] **Usage metering in the relay: a ledger now, Stripe later** — interview 2026-11-02 (open-core-split's billing half): the relay records usage events per box (datapoints uplinked, reads served, agent tokens in and out) in a durable ledger with a daily roll-up per box and per account; Stripe test-mode meters are wired to the roll-up behind a flag, no live charging and no prices set. Rates can be set later, energy-linked or not; the ledger is what any rate multiplies.
+- [x] **Usage metering in the relay: a ledger now, Stripe later** — interview 2026-11-02 (open-core-split's billing half): the relay records usage events per box (datapoints uplinked, reads served, agent tokens in and out) in a durable ledger with a daily roll-up per box and per account; Stripe test-mode meters are wired to the roll-up behind a flag, no live charging and no prices set. Rates can be set later, energy-linked or not; the ledger is what any rate multiplies.
   needs: the relay deployed (`relay-deploy`); a Stripe test-mode account (Nick's step)
   result: every box's usage is counted and visible per day; turning billing on is a flag and a price, not a build
   est: 2d
   difficulty: med
   depends: relay-v0
+  notes: done 2026-11-02 night on ../agent-relay feat/usage-metering (merges feat/images-metering): per-account roll-ups, datapoints/reads counters, Stripe test meters behind RELAY_STRIPE_METERS, key from Secrets Manager, no prices. Live only after relay-deploy; Nick: repo creation, deploy, Stripe test key, Docker integration run.
   id: usage-metering
   asked: 2026-11-02
   by: claude-session
@@ -529,13 +557,14 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: low
   id: canvas-try
 
-- [ ] **helmsman-iec no_std + alloc** — a `std` feature (default on): HashMap/HashSet → BTreeMap/BTreeSet, Arc/Duration/Error/fmt from alloc and core, the parsed library passed in instead of a OnceLock, `Program::scan` behind `std`, `State` carrying a Duration instead of an Instant, and the twelve REAL builtins (SQRT, LN, SIN, ..., round/trunc) from `libm` as an optional dep only the no_std build enables (they have no core counterpart on rustc 1.99; checked). No logic moves, only imports.
+- [x] **helmsman-iec no_std + alloc** — a `std` feature (default on): HashMap/HashSet → BTreeMap/BTreeSet, Arc/Duration/Error/fmt from alloc and core, the parsed library passed in instead of a OnceLock, `Program::scan` behind `std`, `State` carrying a Duration instead of an Instant, and the twelve REAL builtins (SQRT, LN, SIN, ..., round/trunc) from `libm` as an optional dep only the no_std build enables (they have no core counterpart on rustc 1.99; checked). No logic moves, only imports.
   needs: nothing new; docs/EDGE.md "What the runtime needs from std today" is the item list
   result: G1 — `cargo build -p helmsman-iec --no-default-features --target thumbv7em-none-eabihf` in CI and scripts/lint.sh; every existing test, the ruSTy differential and the property tests green on std; the box build's dependency tree unchanged
   options: libm optional under not(std) | gate the REAL builtins behind std and refuse them on a node
   notes: docs/EDGE.md §Phases, Phase 0. Studio baseline 2026-11-01: trace_bench 57.8 µs/scan tracing off (M1 Max, release)
   est: 1d
   difficulty: low
+  notes: done 2026-11-02 night, PR #188 (G1): std feature default on, BTreeMap, libm optional for no_std only, thumbv7em build in lint.sh and install-dev.sh. PR #189 (CI step) is a DRAFT for Nick: workflow edit.
   id: iec-no-std
 
 - [ ] **Scan bench on the ESP32-POE2** — `crates/helmsman-node` (not a default workspace member): supervictor's board/poe2.rs and Ethernet bring-up copied in, Embassy and esp-hal 1.0 as supervictor pins them, trace_bench and the batch-mixer starter (blocks concatenated) embedded and compiled at boot; min/mean/max/p99 per scan and esp-alloc peak after compile and after 10 000 scans over USB serial. On a WROVER repeat with the program heap in PSRAM.
@@ -547,6 +576,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 1d
   difficulty: med
   depends: iec-no-std
+  notes: firmware done 2026-11-02 night, PR #193: crates/helmsman-node (outside the workspace, esp toolchain, make node-build), bench binary, PSRAM second round. NUMBERS PENDING Nick's flash: `scripts/node-flash.sh` (Ethernet unplugged, USB), paste the `--- round` lines into docs/EDGE.md Phase 1 and tick.
   id: node-scan-bench
 
 - [ ] **Modbus TCP from the node** — an async twin of helmsman-io's `Transport` over embassy-net's TCP socket behind a feature, `driver::Error` without std::io::Error, DI read and DO write batched to two round trips per scan; 10 ms scan against the E1213 (or the simulator) with DO0-3 looped to DI0-3; comms-loss safe state on yank.
@@ -558,4 +588,5 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 1d
   difficulty: med
   depends: node-scan-bench
+  notes: firmware done 2026-11-02 night, PRs #197 (helmsman-modbus no_std codec; helmsman-io frames through it) and #199: 10 ms scan, FC2 read + FC15 write, chase program, UDP report. NUMBERS PENDING Nick's run: `scripts/node-flash.sh modbus`, unplug USB, `/usr/bin/python3 -I scripts/node-log-sink.py`, plug PoE; G5 needs the E1213's Modbus watchdog safe mode set first.
   id: node-modbus

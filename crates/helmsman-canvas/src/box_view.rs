@@ -167,6 +167,7 @@ impl BoxView {
         for (call, a) in answers {
             match call {
                 PCall::TrendPins | PCall::SavePins | PCall::Trend => self.trend.answer(&call, &a, now),
+                PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
                 call => self.projects.answer(call, &a),
             }
         }
@@ -344,10 +345,18 @@ impl BoxView {
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
         editor::show(ui, chrome, self);
+        if self.devices_ui.take_import() {
+            #[cfg(target_arch = "wasm32")]
+            crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
+        }
         if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
         {
             self.add_device_line(&line);
         }
+        if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
+            self.add_device_line(&line);
+        }
+        self.revision_ui(&ui.ctx().clone(), chrome);
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.project_act(a);
         }
@@ -389,6 +398,37 @@ impl BoxView {
     }
 
     /// The box runs with projects.
+    /// Import device…: a vendor's EDS joins the open project as
+    /// `NAME.eds` (a new file on the box, or the draft of one that exists)
+    /// and the New device form opens filled in from it.
+    fn import_eds(&mut self, file: &str, bytes: &[u8]) {
+        let Some(o) = &mut self.projects.open else {
+            self.projects
+                .note(format!("Open a project to import {file} into it."), true);
+            return;
+        };
+        let text = match helmsman_project::check_text(bytes) {
+            Ok(t) => t.to_string(),
+            Err(e) => {
+                self.projects.note(format!("{file} was refused: {e}"), true);
+                return;
+            }
+        };
+        let Some(target) = helmsman_project::eds_file_name(file) else {
+            self.projects.note(
+                format!("{file}: nothing of the name survives as a file name (a-z 0-9 _ -)"),
+                true,
+            );
+            return;
+        };
+        match o.bufs.get_mut(&target) {
+            Some(b) if b.loaded => b.text.clone_from(&text),
+            Some(_) => {}
+            None => self.projects.new_file_with(&target, &text),
+        }
+        self.devices_ui.adding = Some(crate::devices::NewDevice::from_eds(&target, &text));
+    }
+
     /// The Devices tab's Add: one `device` line onto the open project's
     /// `io.map`, made if the project has none (a draft; Save writes it).
     fn add_device_line(&mut self, line: &str) {
@@ -669,6 +709,41 @@ impl BoxView {
             }
             // The Agent's answer lands in the simulation's projects.
             Act::UseAnswer { .. } => {}
+            Act::ShowRevision(n) => {
+                if let Some(o) = &open {
+                    self.projects.read_revision(&o.name, n);
+                }
+            }
+        }
+    }
+
+    /// The revision on view, in the middle of the screen, until Close or
+    /// Restore (an engineer's; the box records the restore).
+    fn revision_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) {
+        let Some(view) = self.projects.revision.clone() else {
+            return;
+        };
+        let current: std::collections::BTreeMap<String, String> = self
+            .projects
+            .open
+            .as_ref()
+            .map(|o| {
+                o.bufs
+                    .iter()
+                    .filter(|(n, b)| b.loaded && !helmsman_project::agent::is_agent_file(n))
+                    .map(|(n, b)| (n.clone(), b.text.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let write = self.writable();
+        match crate::history_ui::modal(ctx, chrome, &view, &current, &write) {
+            Some(crate::history_ui::HistoryAct::Close) => self.projects.revision = None,
+            Some(crate::history_ui::HistoryAct::Restore(n)) => {
+                if let Some(name) = self.projects.open.as_ref().map(|o| o.name.clone()) {
+                    self.projects.restore(&name, n);
+                }
+            }
+            None => {}
         }
     }
 }
@@ -784,7 +859,11 @@ impl Workspace for BoxView {
 
     fn upload(&mut self, file: &str, bytes: Vec<u8>) {
         if is_engineer(self.session.as_ref()).is_ok() && self.has_projects() {
-            self.projects.upload(file, bytes, false);
+            if crate::devices::is_eds(file) {
+                self.import_eds(file, &bytes);
+            } else {
+                self.projects.upload(file, bytes, false);
+            }
         }
     }
 
@@ -892,7 +971,14 @@ impl Body for BoxView {
             let open = self.projects.open.clone();
             let files: Vec<(String, bool)> = open
                 .as_ref()
-                .map(|o| o.bufs.iter().map(|(n, b)| (n.clone(), b.dirty())).collect())
+                .map(|o| {
+                    o.bufs
+                        .iter()
+                        // The Agent's pages are the Agent tab's, not a file to open.
+                        .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+                        .map(|(n, b)| (n.clone(), b.dirty()))
+                        .collect()
+                })
                 .unwrap_or_default();
             let listing = Listing {
                 projects: &self.projects.projects,
@@ -902,6 +988,10 @@ impl Body for BoxView {
                 write,
                 dirty: self.projects.dirty(),
                 starters: true,
+                running: open
+                    .as_ref()
+                    .is_some_and(|o| self.projects.running.as_deref() == Some(o.name.as_str())),
+                history: &self.projects.history,
             };
             if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
                 self.project_act(a);
@@ -979,7 +1069,7 @@ impl Body for BoxView {
                 .iter()
                 .find(|d| d.name == name)
                 .map_or(LinkState::Unknown, |d| match d.state.as_str() {
-                    "up" => LinkState::Up,
+                    "up" => LinkState::Up(d.address.clone()),
                     "down" => LinkState::Down(d.error.clone().unwrap_or_default()),
                     _ => LinkState::Unknown,
                 })
@@ -990,7 +1080,27 @@ impl Body for BoxView {
         } else {
             Err("This box runs without projects: its map is a file on the box.".into())
         };
-        self.devices_ui.show(ui, &nodes, &source, chrome, &write);
+        // The open project's plant model, read as text: no plant model
+        // runs on a box, so no value; the measuring signals are live.
+        let files: Vec<(String, String)> = open
+            .map(|o| {
+                o.bufs
+                    .iter()
+                    .filter(|(_, b)| b.loaded)
+                    .map(|(n, b)| (n.clone(), b.text.clone()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let refs: Vec<(&str, &str)> = files.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
+        let signal_value = |name: &str| live(name).and_then(|l| l.value);
+        self.devices_ui.plant.states = crate::plant::states(&refs, &map, &|_| None, &signal_value);
+        self.devices_ui.plant.devices = crate::plant::device_choices(&map);
+        self.devices_ui.plant.simulated = false;
+        if self.devices_ui.show(ui, &nodes, &source, chrome, &write) == Some(crate::devices::DeviceAct::Scan)
+        {
+            self.devices_ui.scan = crate::devices::Scan::Running;
+            self.projects.discover();
+        }
     }
 
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -1083,10 +1193,25 @@ impl Body for BoxView {
 
     fn tabs(&self) -> &'static [Tab] {
         // Claude comes to the box later (docs/UI.md).
-        &[Tab::Io]
+        &[Tab::Io, Tab::Requirements]
     }
 
-    fn tab(&mut self, ui: &mut egui::Ui, _tab: Tab) {
+    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
+        if tab == Tab::Requirements {
+            // The box ran them (POST /api/projects/{p}/tests) when the
+            // project opened and after each save; Run asks again.
+            let source = match &self.projects.open {
+                Some(o) if self.has_projects() => format!("run on the box for {}", o.name),
+                _ => "open a project to run its requirement tests".to_string(),
+            };
+            let busy = self.projects.testing;
+            egui::ScrollArea::vertical().id_salt("box-tests").show(ui, |ui| {
+                if crate::requirements::ui(ui, chrome, &self.projects.tests, &source, busy) {
+                    self.projects.run_tests();
+                }
+            });
+            return;
+        }
         let t = theme(ui);
         let scan = self.state.scan.as_ref().map(|s| s as &dyn Scan);
         egui::ScrollArea::vertical().id_salt("box-io").show(ui, |ui| {

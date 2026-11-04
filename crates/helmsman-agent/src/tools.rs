@@ -32,6 +32,14 @@
 //! and only a person with a role PIN applies it (always
 //! output-affecting). A watch-only conversation proposes no map.
 //!
+//! **The relay runs one tool** (relay agent v6): `fetch_document`. The box
+//! posts the model's input to the relay's
+//! `POST /v1/agents/{version}/tools/fetch_document` and stores what comes
+//! back as a drop-in (`POST /api/dropins`): the relay has the internet and
+//! the vendor allow-list, the box may have neither. The box still checks
+//! the document (kind, size cap, the SHA-256 the relay named) before
+//! storing it, and a box without a relay answers the tool with an error.
+//!
 //! **Data, not instructions.** Everything a tool returns comes from the
 //! plant: tag names, units, ST source and its comments, manifests and
 //! their prompt lines, diagnostics quoting them. It goes back to the model
@@ -46,11 +54,13 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Map, Value as Json, json};
+use sha2::{Digest, Sha256};
 
 use crate::http::{self, Timeouts, Url};
+use crate::relay;
 
 /// The tools the box runs, as named in the relay's `tools.json`.
-pub const NAMES: [&str; 14] = [
+pub const NAMES: [&str; 15] = [
     "list_signals",
     "read_signals",
     "list_devices",
@@ -63,9 +73,28 @@ pub const NAMES: [&str; 14] = [
     "read_dropin",
     "read_plc_program",
     "compare_plc_tags",
+    "fetch_document",
     "read_io_map",
     "propose_io_map",
 ];
+
+/// The one tool the relay runs (`fetch_document`, relay agent v6): the
+/// box posts the model's input to the relay and stores what comes back as
+/// a drop-in. Needs a relay; without one the tool answers with an error.
+pub const RELAY_RUN: [&str; 1] = ["fetch_document"];
+
+/// The largest PDF the relay fetches (relay-protocol.md, "Relay-run
+/// tools"): a bigger body breaks the contract and is refused here, before
+/// anything is stored. The box's own drop-in cap (2 MiB, the size a chat
+/// can attach) is smaller and is the box's answer to keep.
+pub const FETCH_PDF_MAX: usize = 12 * 1024 * 1024;
+/// The largest EDS or text the relay fetches; the box's text drop-in cap
+/// (1 MiB) is again its own answer.
+pub const FETCH_TEXT_MAX: usize = 2 * 1024 * 1024;
+/// Longest `url` or `query` the relay takes.
+pub const FETCH_FIELD_MAX: usize = 2048;
+/// Largest JSON answer read from the relay's fetch route.
+const FETCH_JSON_MAX: usize = 256 * 1024;
 
 /// The tools explain mode runs: reads only. Nothing in it drafts,
 /// checks, simulates or proposes, so an explanation can change nothing
@@ -140,6 +169,7 @@ impl BoxApi {
             path,
             headers,
             json: bytes.as_deref(),
+            raw: None,
         };
         let resp = http::send(&self.url, &req, self.timeouts).map_err(|e| format!("box API: {e}"))?;
         let status = resp.status;
@@ -154,6 +184,21 @@ impl BoxApi {
     /// The box API could not be reached or did not answer.
     pub fn post(&self, path: &str, body: &Json) -> Result<(u16, Json), String> {
         self.call("POST", path, Some(body))
+    }
+
+    fn post_raw(&self, path: &str, content_type: &str, bytes: &[u8]) -> Result<(u16, Json), String> {
+        let auth = format!("Bearer {}", self.token);
+        let req = http::Request {
+            method: "POST",
+            path,
+            headers: &[("Authorization", &auth)],
+            json: None,
+            raw: Some((content_type, bytes)),
+        };
+        let resp = http::send(&self.url, &req, self.timeouts).map_err(|e| format!("box API: {e}"))?;
+        let status = resp.status;
+        let body = resp.read_body(MAX_BODY).map_err(|e| format!("box API: {e}"))?;
+        Ok((status, serde_json::from_slice(&body).unwrap_or(Json::Null)))
     }
 }
 
@@ -183,11 +228,25 @@ pub trait Caller {
     fn post(&self, path: &str, body: &Json) -> Result<(u16, Json), String> {
         self.call("POST", path, Some(body))
     }
+
+    /// `POST path` with the token and `bytes` as the body under
+    /// `content_type` (a fetched document into `/api/dropins`).
+    ///
+    /// # Errors
+    /// See [`Caller::call`]; a caller that cannot carry bytes says so.
+    fn post_bytes(&self, path: &str, content_type: &str, bytes: &[u8]) -> Result<(u16, Json), String> {
+        let _ = (path, content_type, bytes);
+        Err("this caller cannot post a document".into())
+    }
 }
 
 impl Caller for BoxApi {
     fn call(&self, method: &str, path: &str, body: Option<&Json>) -> Result<(u16, Json), String> {
         Self::call(self, method, path, body)
+    }
+
+    fn post_bytes(&self, path: &str, content_type: &str, bytes: &[u8]) -> Result<(u16, Json), String> {
+        self.post_raw(path, content_type, bytes)
     }
 }
 
@@ -370,6 +429,7 @@ pub fn validate(name: &str, input: &Json) -> Result<(), String> {
         "list_signals" => parse::<ListSignals>(input).map(drop),
         "read_signals" => parse::<ReadSignals>(input).map(drop),
         "list_modules" | "read_io_map" | "list_devices" => parse::<Empty>(input).map(drop),
+        "fetch_document" => parse::<FetchDocument>(input).map(drop),
         "read_module" => parse::<ReadModule>(input).map(drop),
         "draft_module" => parse::<DraftModule>(input).map(drop),
         "check_module" => parse::<DraftRef>(input).map(drop),
@@ -465,6 +525,16 @@ struct ComparePlc {
     device: String,
 }
 
+/// `fetch_document`'s input, the relay's schema: `""` and `0` mean unknown.
+#[derive(Deserialize, serde::Serialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FetchDocument {
+    pub url: String,
+    pub vendor_id: u64,
+    pub product_code: u64,
+    pub query: String,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProposeIoMap {
@@ -480,9 +550,25 @@ pub fn module_name_ok(n: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Runs tool `name` on `input` (already [`validate`]d; checked again).
+/// Runs tool `name` on `input` (already [`validate`]d; checked again),
+/// with no relay at hand: `fetch_document` answers that it needs one.
 pub fn run(api: &dyn Caller, drafts: &mut Drafts, name: &str, input: &Json) -> Outcome {
+    run_with(api, None, drafts, name, input)
+}
+
+/// [`run`] with the relay the box talks to, for the tool the relay runs.
+pub fn run_with(
+    api: &dyn Caller,
+    relay: Option<&relay::Config>,
+    drafts: &mut Drafts,
+    name: &str,
+    input: &Json,
+) -> Outcome {
     let r = match name {
+        "fetch_document" => parse(input).map(|i| match relay {
+            Some(cfg) => fetch_document(api, cfg, &i),
+            None => fail("fetch_document needs the relay, and this box has none configured"),
+        }),
         "list_signals" => parse(input).map(|i| list_signals(api, &i)),
         "read_signals" => parse(input).map(|i| read_signals(api, &i)),
         "list_modules" => parse::<Empty>(input).map(|_| list_modules(api)),
@@ -566,7 +652,11 @@ fn read_signals(api: &dyn Caller, i: &ReadSignals) -> Outcome {
 /// points (the signals bound to it, with live values): what the canvas's
 /// Devices tab shows. Signals on an id no `device` line declares (`box`,
 /// `screen`, `module`) are listed under that id too. Without a running
-/// map (a box on module files) the devices come with no points.
+/// map (a box on module files) the devices come with no points. Then
+/// `on_the_network`: what one `ListIdentity` sweep found (`POST
+/// /api/devices/discover`, read-only), each with whether the map binds it
+/// and the device library's match, so the agent sees unmapped devices;
+/// a box that does not scan says so in `network_unavailable`.
 fn list_devices(api: &dyn Caller) -> Outcome {
     use helmsman_project::iomap;
     let links = match api.get("/api/devices") {
@@ -584,23 +674,23 @@ fn list_devices(api: &dyn Caller) -> Outcome {
         Ok(l) => l,
         Err(o) => return o,
     };
-    let link = |name: &str| -> (Json, Json) {
+    let link = |name: &str| -> (Json, Json, Json) {
         links
             .iter()
             .find(|d| d["name"].as_str() == Some(name))
-            .map_or((json!("unknown"), Json::Null), |d| {
-                (d["state"].clone(), d["error"].clone())
+            .map_or((json!("unknown"), Json::Null, Json::Null), |d| {
+                (d["state"].clone(), d["error"].clone(), d["address"].clone())
             })
     };
     let mut devices: Vec<Json> = map
         .devices
         .iter()
         .map(|d| {
-            let (state, error) = link(&d.name);
+            let (state, error, address) = link(&d.name);
             let params: Map<String, Json> = d.params.iter().map(|(k, v)| (k.clone(), json!(v))).collect();
             json!({
                 "name": d.name, "driver": d.driver, "endpoint": d.endpoint, "params": params,
-                "state": state, "error": error, "points": [],
+                "state": state, "error": error, "address": address, "points": [],
             })
         })
         .collect();
@@ -609,10 +699,10 @@ fn list_devices(api: &dyn Caller) -> Outcome {
             .iter()
             .position(|d| d["name"].as_str() == Some(s.device.as_str()))
             .unwrap_or_else(|| {
-                let (state, error) = link(&s.device);
+                let (state, error, address) = link(&s.device);
                 devices.push(json!({
                     "name": s.device, "driver": Json::Null, "endpoint": Json::Null, "params": {},
-                    "state": state, "error": error, "points": [],
+                    "state": state, "error": error, "address": address, "points": [],
                 }));
                 devices.len() - 1
             });
@@ -639,19 +729,311 @@ fn list_devices(api: &dyn Caller) -> Outcome {
         {
             devices.push(json!({
                 "name": name, "driver": Json::Null, "endpoint": Json::Null, "params": {},
-                "state": l["state"], "error": l["error"], "points": [],
+                "state": l["state"], "error": l["error"], "address": l["address"], "points": [],
             }));
         }
     }
-    let n = devices.len();
-    let summary = format!(
-        "{n} device(s), {} up",
-        devices.iter().filter(|d| d["state"] == "up").count()
-    );
+    let (network, unavailable) = match api.post("/api/devices/discover", &json!({})) {
+        Ok((200, j)) => (j["devices"].as_array().cloned().unwrap_or_default(), Json::Null),
+        Ok((s, b)) => (
+            Vec::new(),
+            json!(format!(
+                "{s}: {}",
+                b["error"].as_str().unwrap_or("no reason given")
+            )),
+        ),
+        Err(e) => (Vec::new(), json!(e)),
+    };
+    let plant = plant_states(api, &map, &signals);
+    let summary = devices_summary(&devices, &network, &plant);
     ok(
-        json!({ "devices": devices, "map_lines_skipped": map.odd }),
+        json!({
+            "devices": devices, "map_lines_skipped": map.odd,
+            "on_the_network": network, "network_unavailable": unavailable,
+            "plant_states": plant,
+        }),
         summary,
     )
+}
+
+/// `list_devices`'s one-line summary.
+fn devices_summary(devices: &[Json], network: &[Json], plant: &[Json]) -> String {
+    let up = devices.iter().filter(|d| d["state"] == "up").count();
+    let unmapped = network.iter().filter(|d| d["mapped"].is_null()).count();
+    let unmeasured = plant.iter().filter(|s| s["measured_by"].is_null()).count();
+    format!(
+        "{} device(s) in the map, {up} up; {} on the network, {unmapped} not in the map; {} plant state(s), {unmeasured} unmeasured",
+        devices.len(),
+        network.len(),
+        plant.len()
+    )
+}
+
+/// Most project files `plant_states` reads.
+const MAX_PLANT_FILES: usize = 32;
+
+/// A Structured Text file of a project, by extension (any case).
+fn is_st_file(name: &str) -> bool {
+    std::path::Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("st"))
+}
+
+/// The running project's plant-model states (`{state}` declarations in
+/// its `.st` files, `helmsman_project::plant`): name, type, unit, the POU
+/// and file, the map `in` signal that measures each (with its live value)
+/// or the sensor kind that would. Each is `simulated_only`: the list is
+/// read from the files, no plant model value comes from a box. Empty when
+/// the box runs no project or its projects cannot be read.
+fn plant_states(api: &dyn Caller, map: &helmsman_project::iomap::MapText, signals: &[Json]) -> Vec<Json> {
+    use helmsman_project::plant;
+    let Ok((200, running)) = api.get("/api/running") else {
+        return Vec::new();
+    };
+    let Some(project) = running["project"].as_str() else {
+        return Vec::new();
+    };
+    let Ok((200, listing)) = api.get(&format!("/api/projects/{}", http::segment(project))) else {
+        return Vec::new();
+    };
+    let names: Vec<String> = listing["files"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| f["name"].as_str())
+                .filter(|n| is_st_file(n))
+                .take(MAX_PLANT_FILES)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for file in names {
+        let Ok((200, f)) = api.get(&format!(
+            "/api/projects/{}/files/{}",
+            http::segment(project),
+            http::segment(&file)
+        )) else {
+            continue;
+        };
+        let Some(text) = f["text"].as_str() else { continue };
+        for v in plant::skim(text) {
+            let measured = plant::measurement_names(&v).iter().find_map(|want| {
+                map.signals
+                    .iter()
+                    .find(|s| s.dir == "in" && s.name.eq_ignore_ascii_case(want))
+                    .map(|s| {
+                        let live = signals.iter().find(|x| {
+                            x["name"]
+                                .as_str()
+                                .is_some_and(|n| n.eq_ignore_ascii_case(&s.name))
+                        });
+                        json!({
+                            "signal": s.name, "device": s.device, "point": s.point,
+                            "value": live.map_or(Json::Null, |l| l["value"].clone()),
+                        })
+                    })
+            });
+            out.push(json!({
+                "name": v.name, "type": v.ty, "unit": v.unit, "pou": v.pou,
+                "file": file, "line": v.line, "simulated_only": true,
+                "measured_by": measured.unwrap_or(Json::Null),
+                "suggested_sensor": plant::suggest(&v),
+            }));
+        }
+    }
+    out
+}
+
+/// A drop-in name the box accepts, from what the relay said the document
+/// is called: ASCII letters, digits, `.`, `_` and `-`, no leading dot, at
+/// most 96 characters; `document` when nothing is left.
+fn safe_name(s: &str) -> String {
+    let mut out: String = s
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        .take(96)
+        .collect();
+    while out.starts_with('.') {
+        out.remove(0);
+    }
+    if out.is_empty() { "document".into() } else { out }
+}
+
+/// `fetch_document`: the relay runs it (relay agent v6). The box posts the
+/// model's input to `POST /v1/agents/{version}/tools/fetch_document` and
+/// gets one of three answers: the device library's record (JSON, nothing
+/// stored), a document (bytes plus `x-document-*` headers), or a refusal.
+/// A document is checked (its kind's cap, the SHA-256 the relay named)
+/// and stored on the box as a drop-in through `POST /api/dropins`; the
+/// model gets its id, name, kind, size and hash. A PDF has no text on the
+/// box (`read_dropin` cannot read it): it is read when attached to a chat
+/// message, and the answer says so.
+fn fetch_document(api: &dyn Caller, cfg: &relay::Config, i: &FetchDocument) -> Outcome {
+    if i.url.chars().count() > FETCH_FIELD_MAX || i.query.chars().count() > FETCH_FIELD_MAX {
+        return fail(format!(
+            "url and query are at most {FETCH_FIELD_MAX} characters each"
+        ));
+    }
+    if !i.url.is_empty() && !i.url.starts_with("https://") {
+        return fail(
+            "the relay fetches https:// URLs only; give the document's https address, or \"\" to look the device up",
+        );
+    }
+    let body = serde_json::to_vec(i).unwrap_or_default();
+    let path = format!(
+        "{}/v1/agents/{}/tools/fetch_document",
+        cfg.url.prefix,
+        http::segment(&cfg.version)
+    );
+    let auth = format!("Bearer {}", cfg.token);
+    let req = http::Request {
+        method: "POST",
+        path: &path,
+        headers: &[("Authorization", &auth)],
+        json: Some(&body),
+        raw: None,
+    };
+    let resp = match http::send(&cfg.url, &req, cfg.timeouts) {
+        Ok(r) => r,
+        Err(e) => return fail(format!("the relay could not be reached: {e}")),
+    };
+    let status = resp.status;
+    let content_type = resp
+        .header("content-type")
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if status != 200 || content_type == "application/json" {
+        return relay_json_answer(status, resp);
+    }
+    store_fetched(api, resp)
+}
+
+/// The relay's JSON answers to `fetch_document`: a library record, no
+/// match, or a refusal, each in words for the model.
+fn relay_json_answer(status: u16, resp: http::Response) -> Outcome {
+    let j: Json = match resp.read_body(FETCH_JSON_MAX) {
+        Ok(b) => serde_json::from_slice(&b).unwrap_or(Json::Null),
+        Err(e) => return fail(format!("the relay's answer could not be read: {e}")),
+    };
+    match status {
+        200 if j["type"] == "library" => {
+            let device = &j["device"];
+            let summary = format!(
+                "library: {} {}",
+                device["vendor"].as_str().unwrap_or("?"),
+                device["model"].as_str().unwrap_or("?")
+            );
+            ok(
+                json!({
+                    "type": "library", "index_url": j["index_url"], "device": device,
+                    "note": "the public device library knows this device: use its map lines (protocols.*.map in the folder) with ADDR filled in; nothing was fetched",
+                }),
+                summary,
+            )
+        }
+        404 if j["type"] == "no_match" => fail(
+            "no document: the device library has no entry for it and no URL was given; ask the user for the manual, its URL, or the EDS file",
+        ),
+        200 => fail("the relay answered with JSON the box does not understand"),
+        _ => {
+            let e = &j["error"];
+            let kind = e["type"].as_str().unwrap_or("relay_error");
+            let msg = e["message"].as_str().unwrap_or("no reason given");
+            fail(format!("{kind} ({status}): {msg}"))
+        }
+    }
+}
+
+/// A fetched document from the relay: checked against its kind's cap and
+/// the SHA-256 the relay named, then stored on the box as a drop-in.
+fn store_fetched(api: &dyn Caller, resp: http::Response) -> Outcome {
+    // A document: the facts in headers, the bytes in the body.
+    let kind = resp.header("x-document-kind").unwrap_or("").to_string();
+    let (dropin_kind, media, cap) = match kind.as_str() {
+        "pdf" => ("pdf", "application/pdf", FETCH_PDF_MAX),
+        "eds" | "text" | "html-text" => ("prose", "text/plain; charset=utf-8", FETCH_TEXT_MAX),
+        other => {
+            return fail(format!(
+                "the relay sent a document of kind {other:?}, which the box does not keep"
+            ));
+        }
+    };
+    let name = safe_name(resp.header("x-document-name").unwrap_or("document"));
+    let said_sha = resp
+        .header("x-document-sha256")
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let source = resp.header("x-document-source").unwrap_or("").to_string();
+    if let Some(n) = resp
+        .header("content-length")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        && n > cap
+    {
+        return fail(format!(
+            "{name} is {n} bytes, past the {cap} bytes a fetched {kind} document may be; nothing stored. Ask the user for the pages that matter, or a smaller file"
+        ));
+    }
+    let bytes = match resp.read_body(cap) {
+        Ok(b) => b,
+        Err(http::Error::Protocol("response body too large")) => {
+            return fail(format!(
+                "{name} is larger than the {cap} bytes a fetched {kind} document may be; nothing stored. Ask the user for the pages that matter"
+            ));
+        }
+        Err(e) => return fail(format!("the document could not be read from the relay: {e}")),
+    };
+    if bytes.is_empty() {
+        return fail("the relay sent an empty document");
+    }
+    let got_sha = hex(&Sha256::digest(&bytes));
+    if said_sha.len() != 64 || got_sha != said_sha {
+        return fail("the document's SHA-256 does not match what the relay named; nothing stored");
+    }
+    if dropin_kind == "pdf" && !bytes.starts_with(b"%PDF-") {
+        return fail("the relay called it a PDF but the bytes are not one; nothing stored");
+    }
+    // `name` is already URL-safe ASCII (`safe_name`), so it goes as it is.
+    let path = format!("/api/dropins?name={name}&kind={dropin_kind}");
+    match api.post_bytes(&path, media, &bytes) {
+        Ok((201, meta)) => {
+            let id = meta["id"].as_u64().unwrap_or(0);
+            let next = if dropin_kind == "pdf" {
+                "a PDF has no text on the box: it is read when the user attaches this drop-in to a message; say which drop-in to attach"
+            } else {
+                "read it with read_dropin, chunk by chunk"
+            };
+            ok(
+                json!({
+                    "type": "document", "dropin_id": id, "name": meta["name"], "kind": kind,
+                    "dropin_kind": meta["kind"], "size": bytes.len(), "chunks": meta["chunks"],
+                    "sha256": got_sha, "source": source, "next": next,
+                }),
+                format!("fetched {name} ({} bytes) as drop-in {id}", bytes.len()),
+            )
+        }
+        // The box keeps less than the relay fetches (a PDF a chat can
+        // attach, a text drop-in): its own cap, in words.
+        Ok((413, b)) => fail(format!(
+            "{name} ({} bytes) is too large for the box to keep: {}. Ask the user for the pages that matter, or a smaller file",
+            bytes.len(),
+            b["error"].as_str().unwrap_or("past the box's drop-in limit")
+        )),
+        Ok((s, b)) => unexpected("storing the document as a drop-in", s, &b),
+        Err(e) => fail(e),
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 fn list_modules(api: &dyn Caller) -> Outcome {
@@ -1232,5 +1614,158 @@ fn propose_io_map(api: &dyn Caller, drafts: &mut Drafts, i: &ProposeIoMap) -> Ou
         }
         Ok((s, b)) => unexpected("proposing the I/O map", s, &b),
         Err(e) => fail(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A box that answers fixed routes; anything else is a 404.
+    struct Routes(Vec<(String, u16, Json)>);
+
+    impl Caller for Routes {
+        fn call(&self, method: &str, path: &str, _: Option<&Json>) -> Result<(u16, Json), String> {
+            let key = format!("{method} {path}");
+            Ok(self
+                .0
+                .iter()
+                .find(|(k, _, _)| *k == key)
+                .map_or((404, json!({"error": "no such resource"})), |(_, s, b)| {
+                    (*s, b.clone())
+                }))
+        }
+    }
+
+    const MODEL: &str = "FUNCTION_BLOCK plant_model
+VAR
+  level_m : REAL := 1.5;  {state unit=m}
+  temp_c : REAL;  {state unit=degC}
+  note : STRING := '{state}';
+END_VAR
+END_FUNCTION_BLOCK
+";
+
+    fn routes(extra: Vec<(&str, u16, Json)>) -> Routes {
+        let mut r: Vec<(String, u16, Json)> = vec![
+            ("GET /api/devices", 200, json!([{"name": "box", "state": "up"}])),
+            (
+                "GET /api/io_map",
+                200,
+                json!({"text": "in  level_m real box ai:0 unit=m\nin level_in real box ai:1\n"}),
+            ),
+            (
+                "GET /api/signals",
+                200,
+                json!([{"name": "LEVEL_M", "value": 2.25}]),
+            ),
+            ("POST /api/devices/discover", 200, json!({"devices": []})),
+        ]
+        .into_iter()
+        .map(|(k, s, b)| (k.to_string(), s, b))
+        .collect();
+        r.extend(extra.into_iter().map(|(k, s, b)| (k.to_string(), s, b)));
+        Routes(r)
+    }
+
+    #[test]
+    fn list_devices_carries_the_running_projects_plant_states() {
+        let api = routes(vec![
+            ("GET /api/running", 200, json!({"project": "well"})),
+            (
+                "GET /api/projects/well",
+                200,
+                json!({"files": [
+                    {"name": "plant_model.ST"}, {"name": "io.map"}, {"name": "main.st"},
+                ]}),
+            ),
+            (
+                "GET /api/projects/well/files/plant_model%2EST",
+                200,
+                json!({"text": MODEL}),
+            ),
+            (
+                "GET /api/projects/well/files/main%2Est",
+                500,
+                json!({"error": "disk"}),
+            ),
+        ]);
+        let o = list_devices(&api);
+        assert!(o.ok, "{}", o.data);
+        let plant = o.data["plant_states"].as_array().expect("a list");
+        assert_eq!(plant.len(), 2, "{}", o.data);
+        let level = &plant[0];
+        assert_eq!(level["name"], "level_m");
+        assert_eq!(level["unit"], "m");
+        assert_eq!(level["file"], "plant_model.ST");
+        assert_eq!(level["simulated_only"], true);
+        assert_eq!(level["measured_by"]["signal"], "level_m");
+        assert_eq!(level["measured_by"]["value"], 2.25, "the live signal");
+        assert_eq!(plant[1]["name"], "temp_c");
+        assert!(plant[1]["measured_by"].is_null(), "{}", o.data);
+        assert_eq!(plant[1]["suggested_sensor"], "RTD or thermocouple");
+        assert!(
+            o.summary.ends_with("; 2 plant state(s), 1 unmeasured"),
+            "{}",
+            o.summary
+        );
+    }
+
+    #[test]
+    fn a_box_without_a_project_or_with_hostile_names_lists_no_states_and_reads_nothing_else() {
+        // No projects on the box: the rest of the listing stands.
+        let o = list_devices(&routes(vec![]));
+        assert!(o.ok, "{}", o.data);
+        assert_eq!(o.data["plant_states"], json!([]));
+        assert!(
+            o.summary.ends_with("; 0 plant state(s), 0 unmeasured"),
+            "{}",
+            o.summary
+        );
+        // A project and file named to escape their path are sent encoded,
+        // so they reach no other route.
+        let api = routes(vec![
+            ("GET /api/running", 200, json!({"project": "../etc"})),
+            (
+                "GET /api/projects/%2E%2E%2Fetc",
+                200,
+                json!({"files": [{"name": "../../passwd.st"}, {"name": 7}, {}]}),
+            ),
+            (
+                "GET /api/projects/%2E%2E%2Fetc/files/%2E%2E%2F%2E%2E%2Fpasswd%2Est",
+                200,
+                json!({"text": MODEL}),
+            ),
+        ]);
+        let o = list_devices(&api);
+        assert_eq!(
+            o.data["plant_states"].as_array().map(Vec::len),
+            Some(2),
+            "{}",
+            o.data
+        );
+        assert_eq!(o.data["plant_states"][0]["file"], "../../passwd.st");
+        // A listing of many files reads at most MAX_PLANT_FILES of them.
+        let files: Vec<Json> = (0..100).map(|k| json!({"name": format!("f{k}.st")})).collect();
+        let mut extra = vec![
+            ("GET /api/running".to_string(), 200, json!({"project": "big"})),
+            ("GET /api/projects/big".to_string(), 200, json!({"files": files})),
+        ];
+        for k in 0..100 {
+            extra.push((
+                format!("GET /api/projects/big/files/f{k}%2Est"),
+                200,
+                json!({"text": MODEL}),
+            ));
+        }
+        let mut api = routes(vec![]);
+        api.0.extend(extra);
+        let o = list_devices(&api);
+        assert_eq!(
+            o.data["plant_states"].as_array().map(Vec::len),
+            Some(2 * MAX_PLANT_FILES),
+            "{}",
+            o.summary
+        );
     }
 }

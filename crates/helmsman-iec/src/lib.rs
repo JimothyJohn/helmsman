@@ -101,6 +101,7 @@ mod lexer;
 mod once;
 mod parser;
 pub mod plcopen;
+pub mod spec;
 mod state;
 pub mod trace;
 mod types;
@@ -420,28 +421,26 @@ impl Program {
         let (slot, Type::Elem(ty)) = (prog.base + v.off, v.ty) else {
             return Err(SetError::NoSuchInput);
         };
-        let stored = match (ty, value) {
-            (Ty::Bool, Value::Bool(_)) => value,
-            (t, Value::Real(x)) if t.is_real() => {
-                if !x.is_finite() {
-                    return Err(SetError::Range(ty));
-                }
-                let r = types::round_real(t, x);
-                if !r.is_finite() {
-                    return Err(SetError::Range(ty));
-                }
-                Value::Real(r)
-            }
-            (t, Value::Int(n)) if t != Ty::Bool && !t.is_real() => {
-                let (lo, hi) = t.range();
-                if n < lo || n > hi {
-                    return Err(SetError::Range(ty));
-                }
-                value
-            }
-            _ => return Err(SetError::Kind(ty)),
-        };
+        let stored = checked(ty, value)?;
         self.mem[slot] = stored;
+        Ok(())
+    }
+
+    /// Writes any scalar variable by path (`count`, `plant.level_m`,
+    /// `grid[1,2]`; case-insensitive), function block internals included,
+    /// between scans: what a host does to stand a measured value in for a
+    /// simulated one. Same rules as [`Self::set_input`]: nothing wrapped,
+    /// truncated or converted. Located variables live in the image and
+    /// enumerations are refused.
+    ///
+    /// # Errors
+    /// No such scalar, or a value of the wrong kind or out of range; the
+    /// variable keeps its previous value.
+    pub fn set(&mut self, path: &str, value: Value) -> Result<(), SetError> {
+        let Some((slot, Type::Elem(ty))) = self.resolve(path) else {
+            return Err(SetError::NoSuchVariable);
+        };
+        self.mem[slot] = checked(ty, value)?;
         Ok(())
     }
 
@@ -473,11 +472,13 @@ pub struct Port {
     pub ty: Ty,
 }
 
-/// Why [`Program::set_input`] refused a value.
+/// Why [`Program::set_input`] or [`Program::set`] refused a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetError {
     /// The program has no `VAR_INPUT` of that name.
     NoSuchInput,
+    /// [`Program::set`]: no scalar variable at that path.
+    NoSuchVariable,
     /// A value of the wrong kind (BOOL, integer or real) for this type.
     Kind(Ty),
     /// Out of this type's range, or a non-finite real.
@@ -488,6 +489,7 @@ impl core::fmt::Display for SetError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::NoSuchInput => f.write_str("no such VAR_INPUT"),
+            Self::NoSuchVariable => f.write_str("no such variable"),
             Self::Kind(t) => write!(f, "wrong kind of value for {t}"),
             Self::Range(t) => write!(f, "value out of range for {t}"),
         }
@@ -495,6 +497,28 @@ impl core::fmt::Display for SetError {
 }
 
 impl core::error::Error for SetError {}
+
+/// `value` as a `ty` variable stores it, or why it does not fit.
+fn checked(ty: Ty, value: Value) -> Result<Value, SetError> {
+    Ok(match (ty, value) {
+        (Ty::Bool, Value::Bool(_)) => value,
+        (t, Value::Real(x)) if t.is_real() => {
+            let r = if x.is_finite() { types::round_real(t, x) } else { x };
+            if !r.is_finite() {
+                return Err(SetError::Range(ty));
+            }
+            Value::Real(r)
+        }
+        (t, Value::Int(n)) if t != Ty::Bool && !t.is_real() => {
+            let (lo, hi) = t.range();
+            if n < lo || n > hi {
+                return Err(SetError::Range(ty));
+            }
+            value
+        }
+        _ => return Err(SetError::Kind(ty)),
+    })
+}
 
 /// `name[1,2]` -> ("NAME", Some([1, 2])); `name` -> ("NAME", None).
 fn split_index(seg: &str) -> Option<(&str, Option<Vec<i128>>)> {

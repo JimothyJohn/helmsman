@@ -70,6 +70,15 @@ impl Error {
 
 impl std::error::Error for Error {}
 
+impl From<helmsman_modbus::Error> for Error {
+    fn from(e: helmsman_modbus::Error) -> Self {
+        match e {
+            helmsman_modbus::Error::Protocol(s) => Self::Protocol(s),
+            helmsman_modbus::Error::Exception(c) => Self::Exception(c),
+        }
+    }
+}
+
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
@@ -95,6 +104,13 @@ pub trait Driver {
     /// # Errors
     /// Bad address, read-only point, wrong value type, or the device refused.
     fn write(&mut self, addr: &str, value: Value) -> Result<(), Error>;
+
+    /// Where the device was found, once connected: the address a `mac=` or
+    /// `cip=` endpoint resolved to (`crate::resolve`), or the host's; `None`
+    /// before the first connection or for a driver with no network.
+    fn address(&self) -> Option<String> {
+        None
+    }
 }
 
 /// How a map names a driver compiled to WebAssembly: `wasm:NAME`, NAME

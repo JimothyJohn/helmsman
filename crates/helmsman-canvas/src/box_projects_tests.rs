@@ -220,9 +220,11 @@ impl Bench {
                 Arc::clone(&table),
                 Arc::new(helmsman_io::open),
                 Arc::new(|| Box::new(Channels::new())),
-                Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
-                    dv.set(name, err.map(ToString::to_string));
-                }),
+                Arc::new(
+                    move |name: &str, err: Option<&helmsman_io::Error>, _address: Option<String>| {
+                        dv.set(name, err.map(ToString::to_string));
+                    },
+                ),
             );
             set.start(&parsed.map).unwrap();
             handle.with_links(Arc::new(Mutex::new(set)))
@@ -633,6 +635,60 @@ impl Harness {
 
 // ---- the tests ----
 
+/// Nick 2026-11-01 (project-history): the page lists the box's revisions
+/// after each save, reads one whole, and restores it as an engineer.
+#[test]
+fn the_page_lists_reads_and_restores_the_boxs_revisions() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    settle(&b, &jar, p);
+    let base = p.history.len();
+    assert!(base >= 1, "{:?}", p.history);
+    assert_eq!(p.history[0].what, "saved main.st");
+    assert_eq!(p.history[0].by, "alice (engineer)");
+    p.open_file("main.st");
+    let edited = MAIN.replace("reset := FALSE", "reset := NOT start");
+    p.current_mut().unwrap().text.clone_from(&edited);
+    p.save();
+    settle(&b, &jar, p);
+    assert_eq!(p.history.len(), base + 1, "a save is a revision");
+    // The last revision `make` wrote holds MAIN (its first is the empty file).
+    let last = u32::try_from(base).unwrap();
+    p.read_revision("line", last);
+    settle(&b, &jar, p);
+    let view = p.revision.clone().expect("the revision on view");
+    assert_eq!(view.row.n, last);
+    assert_eq!(view.files["main.st"], MAIN);
+    assert_eq!(view.page, None);
+    p.restore("line", last);
+    settle(&b, &jar, p);
+    assert!(p.revision.is_none(), "shut after the restore");
+    assert_eq!(p.current().unwrap().text, MAIN, "the file came back");
+    assert_eq!(p.history.len(), base + 2);
+    assert_eq!(p.history[base + 1].what, format!("restored revision {last}"));
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], MAIN);
+    // An operator sees the history and cannot restore.
+    let jar2 = Jar::default();
+    let mut w = page(&b, &jar2, Some(("bob", BOB)));
+    let q = &mut w.projects;
+    q.open_project("line");
+    settle(&b, &jar2, q);
+    assert_eq!(q.history.len(), base + 2);
+    q.restore("line", 2);
+    settle(&b, &jar2, q);
+    assert_eq!(q.history.len(), base + 2, "nothing restored");
+    assert!(
+        q.notice
+            .as_ref()
+            .is_some_and(|(n, err)| *err && n.contains("not restored")),
+        "{:?}",
+        q.notice
+    );
+}
+
 #[test]
 fn an_engineer_lists_opens_edits_saves_and_deploys_a_project_on_the_box() {
     let b = Bench::new();
@@ -837,6 +893,118 @@ fn a_stale_save_is_a_409_and_reload_brings_the_boxs_text() {
         b.json("/api/projects/line/files/main.st")["text"],
         format!("(* second *)\n{MAIN}")
     );
+}
+
+/// A requirement test that wants the lamp off while start is held: red
+/// against MAIN (the latch turns the lamp on).
+const TEST_RED: &str = "\
+(* The lamp stays off while start is held. *)
+PROGRAM test_lamp
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
+VAR t : TON; lamp_stays_off : ASSERT; END_VAR
+  start := TRUE;
+  t(IN := TRUE, PT := T#50ms);
+  IF t.Q THEN
+    lamp_stays_off(COND := NOT lamp);
+    done := TRUE;
+  END_IF;
+END_PROGRAM
+";
+
+/// The same test, wanting the lamp on: green against MAIN.
+const TEST_GREEN: &str = "\
+(* The lamp is on within 50 ms of start. *)
+PROGRAM test_lamp
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
+VAR t : TON; lamp_follows_start : ASSERT; END_VAR
+  start := TRUE;
+  t(IN := TRUE, PT := T#50ms);
+  IF t.Q THEN
+    lamp_follows_start(COND := lamp);
+    done := TRUE;
+  END_IF;
+END_PROGRAM
+";
+
+/// Requirement tests on a box (TODO.md spec-tests): opening a project runs
+/// its `test_*.st` files on the box and the Requirements tab shows each,
+/// red or green with why; a red one refuses the deploy, saying which; a
+/// save runs them again, and green, the deploy goes through.
+#[test]
+fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(
+        &b,
+        &jar,
+        p,
+        "line",
+        &[
+            ("main.st", MAIN),
+            ("blocks.st", BLOCKS),
+            ("io.map", MAP),
+            ("test_lamp.st", TEST_RED),
+        ],
+    );
+    settle(&b, &jar, p);
+    assert!(p.tests.ran, "opening the project ran its tests on the box");
+    assert_eq!(p.tests.rows.len(), 1, "{:?}", p.tests);
+    assert!(!p.tests.rows[0].passed);
+    assert_eq!(
+        p.tests.rows[0].requirement,
+        "The lamp stays off while start is held."
+    );
+    assert!(
+        p.tests.rows[0].why.starts_with("lamp stays off failed at "),
+        "{:?}",
+        p.tests
+    );
+    assert_eq!(p.tests.red().len(), 1);
+
+    // Deploy: refused by the box, naming the test; nothing runs from it.
+    p.deploy();
+    settle(&b, &jar, p);
+    let Deploy::Failed(why) = &p.deploy else {
+        panic!("deployed past a red test: {:?}", p.deploy);
+    };
+    assert!(
+        why.contains("requirement test") && why.contains("test_lamp"),
+        "{why}"
+    );
+    assert!(p.running.is_none());
+
+    // The tab draws the row red and the refusal shows under the header.
+    let ctx = egui::Context::default();
+    v.step_all(&ctx, vec![], vec![], 0.0);
+    let mut chrome = crate::editor::Chrome::default();
+    chrome.tab = crate::editor::Tab::Requirements;
+    let mut out = ctx.run_ui(RawInput::default(), |ui| {
+        crate::editor::Body::tab(&mut v, ui, crate::editor::Tab::Requirements, &mut chrome);
+    });
+    out.textures_delta.clear();
+    assert!(chrome.rect("test test_lamp").is_some(), "{:?}", chrome.hits);
+    assert!(chrome.rect("tests run").is_some());
+
+    // Fixed and saved: the box runs them again, green, and deploys.
+    let p = &mut v.projects;
+    p.open_file("test_lamp.st");
+    p.current_mut().unwrap().text = TEST_GREEN.to_string();
+    p.save();
+    settle(&b, &jar, p);
+    assert!(p.tests.rows[0].passed, "{:?}", p.tests);
+    p.deploy();
+    settle(&b, &jar, p);
+    assert!(
+        matches!(p.deploy, Deploy::Done(_)),
+        "{:?} {:?}",
+        p.deploy,
+        p.tests
+    );
+    assert_eq!(p.running.as_deref(), Some("line"));
 }
 
 #[test]
