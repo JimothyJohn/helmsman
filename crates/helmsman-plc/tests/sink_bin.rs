@@ -10,6 +10,11 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+/// Set to `1`, the box exits when its stdin closes: every box a test starts
+/// gets it with a piped stdin its handle holds, so the box dies with the
+/// test even when the test is killed outright.
+const EXIT_WITH_STDIN: &str = "HELMSMAN_EXIT_WITH_STDIN";
+
 fn plc() -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"));
     // No box API here: its default port and state directory are shared.
@@ -90,6 +95,8 @@ fn a_module_output_is_published_by_the_core() {
             "--scan-ms",
             "2",
         ])
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();

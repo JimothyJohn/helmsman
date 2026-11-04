@@ -149,13 +149,14 @@
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **Test-started boxes die with their test** — a test process killed abruptly leaves its helmsman-plc running (two were found on the Studio, one holding port 8080). Give test children a parent-death signal, such as exiting when a stdin pipe closes.
+- [x] **Test-started boxes die with their test** — a test process killed abruptly leaves its helmsman-plc running (two were found on the Studio, one holding port 8080). Give test children a parent-death signal, such as exiting when a stdin pipe closes.
   result: no box outlives the test run that started it
   est: 2h
   difficulty: low
   id: test-box-orphans
   asked: 2026-11-01
   by: claude-session
+  notes: done 2026-11-04, PR #216: HELMSMAN_EXIT_WITH_STDIN=1 makes a box exit when its stdin closes; every test-spawned box gets it with a piped stdin its Child holds; tests/bin.rs kill -9s a parent and waits for the box and its port to go
 
 - [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc); a first install seeds project `line` from programs/line.st, deployed (`helmsman-plc project seed`, the unit's ExecStartPre); `PLC_MODE=program` keeps the old one-file mode. Built and tested here; yours to run against the Pi (native terminal or `!`: it needs Docker, trunk, and SSH with sudo on the Pi, and the firewall step is refused from an agent).
   needs: you to run the two commands (the Pi's IP); the Pi on Debian Trixie with key SSH and passwordless sudo (scripts/pi-prep.sh)
