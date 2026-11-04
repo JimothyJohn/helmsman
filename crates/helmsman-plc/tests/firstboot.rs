@@ -164,6 +164,35 @@ fn every_later_boot_writes_the_same_line() {
     }
 }
 
+/// Regression, 2026-11-04 (CI): only a file's first line counts, and
+/// reading it piped `tr` into `head -1` under pipefail, so a file with
+/// more after its first line could kill `tr` with SIGPIPE and the script
+/// with it. A megabyte after the line makes that certain, not a race.
+#[test]
+fn a_pairing_file_with_more_after_its_first_line_is_read_by_that_line() {
+    let r = root();
+    let tail = "x".repeat(1 << 20);
+    put(&r, "relay-url", &format!("{URL}\r\n{tail}\n"));
+    put(&r, "relay-token", &format!("{TOKEN}\n{tail}"));
+    put(&r, "site", &format!("  line-a  \n{tail}"));
+    put(&r, "box-name", &format!("Press 4\n{tail}"));
+    let b = boot(&r);
+    assert_eq!(
+        words(b.line.as_deref()),
+        [
+            "--relay",
+            URL,
+            "--relay-token",
+            CRED,
+            "--site",
+            "line-a",
+            "--box-name",
+            "Press-4"
+        ]
+    );
+    box_accepts(b.line.as_deref());
+}
+
 #[test]
 fn half_a_relay_pair_sets_no_relay() {
     let r = root();
