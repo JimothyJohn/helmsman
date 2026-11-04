@@ -477,8 +477,12 @@ fn by(req: &Request) -> String {
         .map_or_else(|| "box".to_string(), crate::policy::account::Principal::label)
 }
 
+/// What a single uploaded file becomes: the file it goes in, its text,
+/// and the `(PROGRAM, scan_ms)` an L5X's periodic tasks ask for.
+type Imported = (String, String, Vec<(String, u32)>);
+
 /// The ST a single uploaded file becomes, and the file it goes in.
-fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> {
+fn imported(file: &str, body: &[u8]) -> Result<Imported, (u16, String)> {
     let lower = file.to_ascii_lowercase();
     let (stem, ext) = lower
         .rsplit_once('.')
@@ -497,7 +501,7 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
         let text = project::check_text(body).map_err(|e| (422, format!("{file}: {e}")))?;
         #[cfg(feature = "enip-io")]
         helmsman_io::enip::check_eds(text).map_err(|e| (422, format!("{file} is not an EDS: {e}")))?;
-        return Ok((target, text.to_string()));
+        return Ok((target, text.to_string(), Vec::new()));
     }
     let target = format!("{stem}.st");
     if project::file_name(&target) != Some(FileKind::St) {
@@ -509,7 +513,7 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
     match ext {
         "st" => {
             let text = project::check_text(body).map_err(|e| (422, format!("{file}: {e}")))?;
-            Ok((target, text.to_string()))
+            Ok((target, text.to_string(), Vec::new()))
         }
         "xml" => {
             let text = std::str::from_utf8(body).map_err(|_| (422, format!("{file}: not UTF-8")))?;
@@ -523,7 +527,7 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
                     ),
                 )
             })?;
-            Ok((target, lowered.st().to_string()))
+            Ok((target, lowered.st().to_string(), Vec::new()))
         }
         "l5x" => {
             // Ladder in the converted subset becomes ST; anything else
@@ -536,12 +540,43 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
                 }
                 (422, format!("{file} is not converted: {}", lines.join("; ")))
             })?;
-            Ok((target, converted.st))
+            Ok((target, converted.st, converted.scans))
         }
         _ => Err((
             415,
             "import takes .st, .xml (PLCopen TC6), .L5X (Logix ladder) or .eds (a device's EDS)".into(),
         )),
+    }
+}
+
+/// Writes an imported L5X's task rates into project.settings
+/// ([`helmsman_project::settings::set_scans`]), only if the file is still
+/// what was read. Whether it changed, and what the engineer should know:
+/// a `scan_ms` kept, or why the file was not written (the `.st` is
+/// imported either way).
+fn import_scans(p: &Projects, name: &str, scans: &[(String, u32)]) -> (bool, Vec<String>) {
+    if scans.is_empty() {
+        return (false, Vec::new());
+    }
+    let current = match p.file(name, project::SETTINGS) {
+        Ok(t) => Some(t),
+        Err(r) if r.status == 404 => None,
+        Err(r) => return (false, vec![format!("project.settings not read: {}", r.why)]),
+    };
+    let (text, mut notes) = helmsman_project::settings::set_scans(current.as_deref().unwrap_or(""), scans);
+    if current.as_deref() == Some(text.as_str()) {
+        return (false, notes);
+    }
+    let seen = current.as_deref().map(|t| project::version(t.as_bytes()));
+    match p.save(name, project::SETTINGS, text.as_bytes(), Some(seen.as_deref())) {
+        Ok(_) => (true, notes),
+        Err(r) => {
+            notes.push(format!(
+                "project.settings not updated with the task rates: {}",
+                r.why
+            ));
+            (false, notes)
+        }
     }
 }
 
@@ -564,7 +599,7 @@ fn import(
         Ok(r) => r,
         Err(e) => return done(400, json!({ "error": e }), format!("{what}: malformed import")),
     };
-    let (target, text) = match imported(file, &req.body) {
+    let (target, text, scans) = match imported(file, &req.body) {
         Ok(x) => x,
         Err((status, e)) => {
             return done(status, json!({ "error": e }), format!("{what}: import refused"));
@@ -573,16 +608,22 @@ fn import(
     let if_match = if replace { None } else { Some(None) };
     match p.save(name, &target, text.as_bytes(), if_match) {
         Ok(version) => {
+            let (scanned, notes) = import_scans(p, name, &scans);
+            let also = if scanned {
+                " and its task rates in project.settings"
+            } else {
+                ""
+            };
             let _ = p.record_revision(
                 name,
                 &by(req),
-                &format!("imported {} as {target}", clean(file)),
+                &format!("imported {} as {target}{also}", clean(file)),
                 None,
             );
             done(
                 201,
-                json!({ "name": target, "version": version, "bytes": text.len() }),
-                format!("{what}: imported {} as {target}", clean(file)),
+                json!({ "name": target, "version": version, "bytes": text.len(), "notes": notes }),
+                format!("{what}: imported {} as {target}{also}", clean(file)),
             )
         }
         Err(r) => failed(r, "import not saved"),
