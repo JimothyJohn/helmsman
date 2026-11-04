@@ -50,12 +50,25 @@ if [ -z "${SERIAL_PORT:-}" ]; then
   esac
 fi
 
-echo "ESP32-POE2 on $SERIAL_PORT, image: $bin"
-echo
-echo "  ⚠  The POE2 has no isolation: USB and PoE together can damage the board,"
-echo "     the switch port or this computer. Confirm the Ethernet cable is OUT."
-echo
-read -r -p "Ethernet unplugged, flash now? [y/N] " yes
+case "${NODE_BOARD:-poe2}" in
+  poe-iso)
+    echo "ESP32-POE-ISO on $SERIAL_PORT, image: $bin"
+    echo
+    echo "  The POE-ISO is isolated: USB may stay on while it runs on PoE (that is"
+    echo "  why this board can show its serial log on the network). Check the board"
+    echo "  on $SERIAL_PORT IS the POE-ISO: on a POE2 never plug PoE with USB in."
+    echo
+    read -r -p "This is the POE-ISO, flash now? [y/N] " yes
+    ;;
+  *)
+    echo "ESP32-POE2 on $SERIAL_PORT, image: $bin"
+    echo
+    echo "  ⚠  The POE2 has no isolation: USB and PoE together can damage the board,"
+    echo "     the switch port or this computer. Confirm the Ethernet cable is OUT."
+    echo
+    read -r -p "Ethernet unplugged, flash now? [y/N] " yes
+    ;;
+esac
 [ "$yes" = "y" ] || [ "$yes" = "Y" ] || { echo "not flashing"; exit 1; }
 
 # shellcheck disable=SC2086
@@ -67,7 +80,10 @@ cd crates/helmsman-node
 espflash flash --monitor --port "$SERIAL_PORT" \
   "target/xtensa-esp32-none-elf/release/$bin" 2>&1 | tee "../../$log"
 echo "log: $log"
-if [ "$bin" = modbus ]; then
+if [ "$bin" = modbus ] && [ "${NODE_BOARD:-poe2}" = poe-iso ]; then
+  echo "now: start the sink (/usr/bin/python3 -I scripts/node-log-sink.py), plug PoE (USB may stay),"
+  echo "     and rerun: espflash monitor --port $SERIAL_PORT to watch the console."
+elif [ "$bin" = modbus ]; then
   echo "now: unplug USB, start the sink (/usr/bin/python3 -I scripts/node-log-sink.py), plug PoE."
 else
   echo "paste the '--- round' lines into docs/EDGE.md (Phase 1, numbers)"

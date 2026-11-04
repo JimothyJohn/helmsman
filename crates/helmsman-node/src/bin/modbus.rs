@@ -119,9 +119,10 @@ async fn main(spawner: Spawner) -> ! {
 
     println!();
     println!(
-        "helmsman-node modbus ({} {})",
+        "helmsman-node modbus ({} {}) on the {}",
         env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_VERSION")
+        env!("CARGO_PKG_VERSION"),
+        helmsman_node::board::BOARD
     );
     println!(
         "block {E1213_ADDR}:{E1213_PORT} unit {UNIT}; log sink {LOG_SINK}; scan {} ms",
