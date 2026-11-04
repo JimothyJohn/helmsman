@@ -39,6 +39,11 @@ use helmsman_plc::store::{ChangeSet, Meta, ModuleFiles, Store};
 use helmsman_plc::{Runtime, SignalTable, Window};
 use serde_json::{Value as Json, json};
 
+/// Set to `1`, the box exits when its stdin closes: every box a test starts
+/// gets it with a piped stdin its handle holds, so the box dies with the
+/// test even when the test is killed outright.
+const EXIT_WITH_STDIN: &str = "HELMSMAN_EXIT_WITH_STDIN";
+
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ALICE: &str = "alice-engineer-pw";
 const BOB: &str = "bob-operator-pw";
@@ -1700,6 +1705,8 @@ fn plc_projects(state: &Path) -> Plc {
         .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
         .args(["--api", "127.0.0.1:0", "--state-dir"])
         .arg(state)
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
