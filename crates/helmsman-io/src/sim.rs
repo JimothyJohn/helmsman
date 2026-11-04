@@ -200,6 +200,15 @@ impl State {
         }
     }
 
+    /// FC 43: Read Device Identification when the simulator has
+    /// [`Identification`], else Illegal Function as a device without it.
+    fn identify(&self, pdu: &[u8]) -> Vec<u8> {
+        match &self.identification {
+            Some(id) => id.answer(pdu),
+            None => vec![ENCAPSULATED_INTERFACE | 0x80, ILLEGAL_FUNCTION],
+        }
+    }
+
     /// Answers one request PDU (App §6), or an exception (App §7).
     #[must_use]
     pub fn handle(&mut self, pdu: &[u8]) -> Vec<u8> {
@@ -300,10 +309,7 @@ impl State {
                 }
                 pdu[..5].to_vec()
             }
-            ENCAPSULATED_INTERFACE => match &self.identification {
-                Some(id) => id.answer(pdu),
-                None => ex(ILLEGAL_FUNCTION),
-            },
+            ENCAPSULATED_INTERFACE => self.identify(pdu),
             _ => ex(ILLEGAL_FUNCTION),
         }
     }

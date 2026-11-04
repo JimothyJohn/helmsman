@@ -4,14 +4,17 @@
 //! `device.toml` there by its `scripts/build-index.py`. A box fetches it
 //! and a browser's simulation fetches it, both through this: parse the
 //! file, match a device found on the network by identity first (an
-//! EtherNet/IP vendor id and product code), then by vendor and model text.
+//! EtherNet/IP vendor id and product code, or a Modbus device's Read
+//! Device Identification `VendorName` and `ProductCode`), then by vendor and
+//! model text.
 //! Semantic search is for later, once there are entries enough to need it.
 //!
 //! ```json
 //! { "format": "helmsman-devices-index 1",
 //!   "devices": [ { "folder": "devices/moxa/iologik-e1213",
 //!                  "vendor": "Moxa", "model": "ioLogik E1213", "kind": "remote-io",
-//!                  "identity": { "enip": { "vendor_id": 991, "product_code": 515 } },
+//!                  "identity": { "enip": { "vendor_id": 991, "product_code": 515 },
+//!                                "modbus": { "vendor_name": "Moxa", "product_code": "E1213" } },
 //!                  "protocols": { "enip": { "driver": "enip-io", "map": "enip.map",
 //!                                           "profile": "moxa-e1213",
 //!                                           "eds": { "name": "...", "size": 42906, "sha256": "..." } },
@@ -67,6 +70,9 @@ pub struct Entry {
     pub kind: String,
     /// `ListIdentity`'s vendor id and product code, when the device speaks EtherNet/IP.
     pub enip: Option<(u16, u16)>,
+    /// Read Device Identification's `VendorName` and `ProductCode`
+    /// (`identity.modbus` in device.toml), when the device answers it.
+    pub modbus: Option<(String, String)>,
     pub protocols: Vec<Protocol>,
 }
 
@@ -183,6 +189,18 @@ fn entry(j: &Json) -> Result<Entry, String> {
         None => None,
         Some(e) => Some((u16_of(e, "vendor_id")?, u16_of(e, "product_code")?)),
     };
+    let modbus = match j.get("identity").and_then(|i| i.get("modbus")) {
+        None => None,
+        Some(m) => {
+            let (v, p) = (text(m, "vendor_name")?, text(m, "product_code")?);
+            if v.trim().is_empty() || p.trim().is_empty() {
+                return Err(format!(
+                    "{folder}: identity.modbus needs vendor_name and product_code"
+                ));
+            }
+            Some((v, p))
+        }
+    };
     let mut protocols = Vec::new();
     if let Some(p) = j.get("protocols") {
         let obj = p.as_object().ok_or("protocols: not an object")?;
@@ -196,6 +214,7 @@ fn entry(j: &Json) -> Result<Entry, String> {
         model,
         kind: text(j, "kind")?,
         enip,
+        modbus,
         protocols,
     })
 }
@@ -244,6 +263,36 @@ impl Index {
             .iter()
             .filter(|e| e.enip == Some((vendor_id, product_code)))
             .collect()
+    }
+
+    /// The entries whose Modbus identity (`identity.modbus`) is
+    /// `vendor_name`, `product_code`, trimmed and case-blind as a
+    /// `modbus=` endpoint matches.
+    #[must_use]
+    pub fn by_modbus(&self, vendor_name: &str, product_code: &str) -> Vec<&Entry> {
+        let eq = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+        self.devices
+            .iter()
+            .filter(|e| {
+                e.modbus
+                    .as_ref()
+                    .is_some_and(|(v, p)| eq(v, vendor_name) && eq(p, product_code))
+            })
+            .collect()
+    }
+
+    /// A device found by the Modbus identification probe: its identity
+    /// first, then vendor and product code as text.
+    #[must_use]
+    pub fn lookup_modbus(&self, vendor_name: &str, product_code: &str) -> Option<&Entry> {
+        self.by_modbus(vendor_name, product_code)
+            .into_iter()
+            .next()
+            .or_else(|| {
+                self.search(&format!("{vendor_name} {product_code}"))
+                    .into_iter()
+                    .next()
+            })
     }
 
     /// The entries whose vendor or model contains every word of `query`,
@@ -296,7 +345,8 @@ mod tests {
 
     const GOOD: &str = r#"{ "format": "helmsman-devices-index 1", "built": "2026-11-02",
       "devices": [ { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213",
-        "kind": "remote-io", "identity": { "enip": { "vendor_id": 991, "product_code": 515 } },
+        "kind": "remote-io", "identity": { "enip": { "vendor_id": 991, "product_code": 515 },
+                                           "modbus": { "vendor_name": "Moxa", "product_code": "E1213" } },
         "protocols": { "enip": { "driver": "enip-io", "map": "enip.map", "profile": "moxa-e1213",
           "eds": { "name": "x.eds", "size": 42906, "sha256": "3895fbca8bb036c1b31a9d6b68dea69eca6892fe0a6bce7409ab76311cfd470d" } },
           "modbus": { "driver": "modbus-tcp", "map": "modbus.map" } } },
@@ -324,6 +374,17 @@ mod tests {
         assert!(i.lookup(1, 2, "nothing like it").is_none());
         assert_eq!(i.search("moxa e1213").len(), 1);
         assert_eq!(i.search("").len(), 0);
+        // By Modbus identity (case-blind, trimmed), then text.
+        assert_eq!(i.by_modbus(" moxa ", "e1213").len(), 1);
+        assert_eq!(i.by_modbus("Moxa", "E1214").len(), 0);
+        assert_eq!(i.lookup_modbus("MOXA", "E1213").unwrap().model, "ioLogik E1213");
+        assert_eq!(
+            i.lookup_modbus("Acme", "Relay").unwrap().vendor,
+            "Acme",
+            "by text"
+        );
+        assert!(i.lookup_modbus("Nobody", "X1").is_none());
+        assert_eq!(i.devices[1].modbus, None);
     }
 
     #[test]
@@ -343,6 +404,9 @@ mod tests {
             r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/a/b", "vendor": "a", "model": "b", "protocols": { "enip": { "driver": "enip-io", "eds": { "name": "x.eds", "sha256": "nope" } } } } ] }"#,
             r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/a/b", "vendor": "a", "model": "b" }, { "folder": "devices/a/b", "vendor": "a", "model": "c" } ] }"#,
             r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/a/b", "vendor": "a\u0000", "model": "b" } ] }"#,
+            r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/a/b", "vendor": "a", "model": "b", "identity": { "modbus": { "vendor_name": "a" } } } ] }"#,
+            r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/a/b", "vendor": "a", "model": "b", "identity": { "modbus": { "vendor_name": 1, "product_code": "x" } } } ] }"#,
+            r#"{ "format": "helmsman-devices-index 1", "devices": [ { "folder": "devices/a/b", "vendor": "a", "model": "b", "identity": { "modbus": { "vendor_name": "a\n", "product_code": "x" } } } ] }"#,
         ];
         for b in bad {
             assert!(Index::parse(b).is_err(), "{b:.80}");

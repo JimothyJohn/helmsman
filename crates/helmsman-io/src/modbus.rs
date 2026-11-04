@@ -52,11 +52,11 @@ pub const MAX_ID_TEXT: usize = 64;
 /// sends can break a log line or the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceIdentification {
-    /// Object 0x00, VendorName.
+    /// Object 0x00, `VendorName`.
     pub vendor_name: String,
-    /// Object 0x01, ProductCode.
+    /// Object 0x01, `ProductCode`.
     pub product_code: String,
-    /// Object 0x02, MajorMinorRevision.
+    /// Object 0x02, `MajorMinorRevision`.
     pub revision: String,
     /// The conformity level the device reported (0x01-0x03, 0x81-0x83).
     pub conformity: u8,
@@ -324,10 +324,19 @@ pub struct Client {
     /// The address the endpoint resolved to at the last connection
     /// (`crate::resolve`: a `mac=` endpoint is looked up again each time).
     resolved: Option<std::net::SocketAddrV4>,
+    /// When a `modbus=` endpoint's probe last found nothing, and why: the
+    /// probe asks every host in the ARP table, so a missing device is
+    /// looked for again only after [`PROBE_COOLDOWN`], not every cycle.
+    missed: Option<(Instant, String)>,
+    /// `None`: the host's ([`crate::resolve::Resolver::default`]).
+    resolver: Option<crate::resolve::Resolver>,
 }
 
 /// Modbus/TCP's port, when an endpoint names none.
 pub const DEFAULT_PORT: u16 = 502;
+/// How long a `modbus=` endpoint that was not found waits before the
+/// next probe.
+pub const PROBE_COOLDOWN: Duration = Duration::from_secs(10);
 
 impl Client {
     #[must_use]
@@ -339,7 +348,18 @@ impl Client {
             stream: None,
             tid: 0,
             resolved: None,
+            missed: None,
+            resolver: None,
         }
+    }
+
+    /// The same client, looking identities up with `r` (its ARP table,
+    /// sweep and probe, unit included) instead of the host's: how a test
+    /// keeps the probe off the network it runs on.
+    #[must_use]
+    pub fn with_resolver(mut self, r: crate::resolve::Resolver) -> Self {
+        self.resolver = Some(r);
+        self
     }
 
     /// Where the unit was found at the last connection.
@@ -350,12 +370,38 @@ impl Client {
 
     fn connect(&mut self) -> Result<&mut TcpStream, Error> {
         if self.stream.is_none() {
-            // A `modbus=` endpoint asks the unit this client talks to.
-            let mut resolver = crate::resolve::Resolver::default();
-            if let Some(p) = resolver.modbus.as_mut() {
-                p.unit = self.unit;
+            let probed = self.endpoint.starts_with("modbus=");
+            if probed
+                && let Some((at, why)) = &self.missed
+                && at.elapsed() < PROBE_COOLDOWN
+            {
+                return Err(Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    why.clone(),
+                )));
             }
-            let addr = crate::resolve::socket_addr(&self.endpoint, DEFAULT_PORT, &resolver)?;
+            // A `modbus=` endpoint asks the unit this client talks to.
+            let host;
+            let resolver = if let Some(r) = &self.resolver {
+                r
+            } else {
+                let mut r = crate::resolve::Resolver::default();
+                if let Some(p) = r.modbus.as_mut() {
+                    p.unit = self.unit;
+                }
+                host = r;
+                &host
+            };
+            let addr = match crate::resolve::socket_addr(&self.endpoint, DEFAULT_PORT, resolver) {
+                Ok(a) => a,
+                Err(e) => {
+                    if probed {
+                        self.missed = Some((Instant::now(), e.to_string()));
+                    }
+                    return Err(Error::Io(e));
+                }
+            };
+            self.missed = None;
             let s = TcpStream::connect_timeout(&std::net::SocketAddr::V4(addr), self.timeout)?;
             s.set_read_timeout(Some(self.timeout))?;
             s.set_write_timeout(Some(self.timeout))?;

@@ -7,7 +7,7 @@
 //! - `cip=991:515` or `cip=991:515:0x2A629EAE` (vendor id, product code
 //!   and, if given, serial number, as `ListIdentity` reports them): an
 //!   EtherNet/IP device's identity;
-//! - `modbus=Moxa:E1213` (VendorName and ProductCode, as Read Device
+//! - `modbus=Moxa:E1213` (`VendorName` and `ProductCode`, as Read Device
 //!   Identification reports them; `%XX` for a byte that is not a letter, a
 //!   digit or one of `-._~`, so `modbus=Schneider%20Electric:BMX`): a
 //!   Modbus TCP device's identity, matched case-blind on the trimmed text.
@@ -38,7 +38,7 @@
 //! `Resolver` is how a test substitutes the ARP table and the sweep's
 //! target.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
@@ -54,8 +54,8 @@ pub enum Identity {
         product: u16,
         serial: Option<u32>,
     },
-    /// `modbus=VENDOR:PRODUCT`: Read Device Identification's VendorName
-    /// and ProductCode, decoded.
+    /// `modbus=VENDOR:PRODUCT`: Read Device Identification's `VendorName`
+    /// and `ProductCode`, decoded.
     Modbus { vendor: String, product: String },
 }
 
@@ -68,7 +68,7 @@ pub fn percent_encode(s: &str) -> String {
         if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
             out.push(char::from(b));
         } else {
-            out.push_str(&format!("%{b:02X}"));
+            let _ = write!(out, "%{b:02X}");
         }
     }
     out
@@ -517,8 +517,17 @@ impl ModbusSeen {
 /// # Errors
 /// No probe configured, or the ARP table could not be read.
 pub fn probe_modbus(r: &Resolver) -> io::Result<Vec<ModbusSeen>> {
+    probe_until(r, None)
+}
+
+/// [`probe_modbus`], starting no further host once one answers as
+/// `wanted` says (a `modbus=` being resolved needs only its device).
+fn probe_until(
+    r: &Resolver,
+    wanted: Option<&(dyn Fn(&crate::modbus::DeviceIdentification) -> bool + Sync)>,
+) -> io::Result<Vec<ModbusSeen>> {
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Instant;
 
     let Some(p) = &r.modbus else {
@@ -531,12 +540,16 @@ pub fn probe_modbus(r: &Resolver) -> io::Result<Vec<ModbusSeen>> {
     let hosts = probe_targets(&table, p);
     let deadline = Instant::now() + p.total;
     let next = AtomicUsize::new(0);
+    let done = AtomicBool::new(false);
     let found = Mutex::new(Vec::new());
     let workers = p.concurrency.clamp(1, 32).min(hosts.len());
     std::thread::scope(|s| {
         for _ in 0..workers {
             s.spawn(|| {
                 loop {
+                    if done.load(Ordering::Relaxed) {
+                        break;
+                    }
                     let Some(&(ip, mac)) = hosts.get(next.fetch_add(1, Ordering::Relaxed)) else {
                         break;
                     };
@@ -546,6 +559,9 @@ pub fn probe_modbus(r: &Resolver) -> io::Result<Vec<ModbusSeen>> {
                     }
                     let addr = SocketAddr::V4(SocketAddrV4::new(ip, p.port));
                     if let Ok(id) = crate::modbus::identify(addr, p.unit, p.per_host.min(left)) {
+                        if wanted.is_some_and(|w| w(&id)) {
+                            done.store(true, Ordering::Relaxed);
+                        }
                         found
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -629,14 +645,14 @@ pub fn resolve(id: &Identity, port: u16, r: &Resolver) -> io::Result<SocketAddrV
                     format!("{id}: no Modbus identification probe to find it with"),
                 ));
             }
-            let found = probe_modbus(r)?;
+            let is_it = |d: &crate::modbus::DeviceIdentification| {
+                modbus_text_eq(vendor, &d.vendor_name) && modbus_text_eq(product, &d.product_code)
+            };
+            let found = probe_until(r, Some(&is_it))?;
             let n = found.len();
             found
                 .iter()
-                .find(|s| {
-                    modbus_text_eq(vendor, &s.identification.vendor_name)
-                        && modbus_text_eq(product, &s.identification.product_code)
-                })
+                .find(|s| is_it(&s.identification))
                 .map(|s| SocketAddrV4::new(s.address, port))
                 .ok_or_else(|| {
                     io::Error::new(

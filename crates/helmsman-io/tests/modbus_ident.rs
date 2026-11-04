@@ -3,6 +3,7 @@
 //! sockets, the reply parser under proptest, and the ARP-table probe that
 //! resolves a `modbus=VENDOR:PRODUCT` endpoint.
 
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::sync::Arc;
@@ -150,9 +151,22 @@ fn ask(addr: SocketAddr) -> (Result<DeviceIdentification, Error>, Duration) {
     (r, t.elapsed())
 }
 
+/// What a scripted server answers the k-th request with.
+type Answer = Box<dyn Fn(usize, &[u8]) -> Option<Vec<u8>> + Send + Sync>;
+
 #[test]
 fn hostile_servers_get_a_bounded_error_never_a_hang() {
-    let cases: Vec<(&str, Box<dyn Fn(usize, &[u8]) -> Option<Vec<u8>> + Send + Sync>)> = vec![
+    for (what, answer) in hostile_cases() {
+        let (addr, _) = scripted(answer);
+        let (r, took) = ask(addr);
+        assert!(r.is_err(), "{what}: {r:?}");
+        assert!(took < Duration::from_secs(2), "{what}: took {took:?}");
+    }
+}
+
+/// A server that lies, breaks the layout or never answers, each its own way.
+fn hostile_cases() -> Vec<(&'static str, Answer)> {
+    vec![
         (
             "wrong MEI type",
             Box::new(|_, _| {
@@ -249,14 +263,11 @@ fn hostile_servers_get_a_bounded_error_never_a_hang() {
         ),
         ("empty PDU", Box::new(|_, _| Some(Vec::new()))),
         ("never answers", Box::new(|_, _| None)),
-    ];
-    for (what, answer) in cases {
-        let (addr, _) = scripted(answer);
-        let (r, took) = ask(addr);
-        assert!(r.is_err(), "{what}: {r:?}");
-        assert!(took < Duration::from_secs(2), "{what}: took {took:?}");
-    }
-    // The chain that never ends is cut at the cap, not followed.
+    ]
+}
+
+#[test]
+fn a_more_follows_chain_that_never_ends_is_cut_at_the_cap() {
     let asked = Arc::new(AtomicUsize::new(0));
     let a2 = Arc::clone(&asked);
     let (addr, _) = scripted(move |k, _| {
@@ -345,10 +356,11 @@ fn a_server_that_hangs_up_mid_reply_is_an_error() {
 }
 
 fn arp_for(ips: &[Ipv4Addr]) -> String {
-    ips.iter()
-        .enumerate()
-        .map(|(k, ip)| format!("? ({ip}) at 2:0:0:0:0:{k:x} on en0 ifscope [ethernet]\n"))
-        .collect()
+    let mut out = String::new();
+    for (k, ip) in ips.iter().enumerate() {
+        let _ = writeln!(out, "? ({ip}) at 2:0:0:0:0:{k:x} on en0 ifscope [ethernet]");
+    }
+    out
 }
 
 fn resolver(table: String, port: u16) -> Resolver {
@@ -445,7 +457,7 @@ fn the_probe_is_bounded_in_hosts_and_time() {
         p.total = Duration::from_millis(300);
     }
     let t = Instant::now();
-    assert!(resolve::probe_modbus(&r).unwrap().is_empty());
+    assert_eq!(resolve::probe_modbus(&r).unwrap(), Vec::new());
     assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
     // A silent server that accepts and never answers: the same bound.
     let (addr, conns) = scripted(|_, _| None);
@@ -454,7 +466,7 @@ fn the_probe_is_bounded_in_hosts_and_time() {
         p.per_host = Duration::from_millis(200);
     }
     let t = Instant::now();
-    assert!(resolve::probe_modbus(&r).unwrap().is_empty());
+    assert_eq!(resolve::probe_modbus(&r).unwrap(), Vec::new());
     assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
     assert_eq!(conns.load(Ordering::SeqCst), 1);
 }
@@ -566,6 +578,21 @@ proptest! {
         let _ = modbus::identify(addr, 1, Duration::from_millis(150));
         prop_assert!(t.elapsed() < Duration::from_secs(1));
     }
+}
+
+#[test]
+fn a_missing_modbus_device_is_not_probed_for_every_cycle() {
+    let (addr, conns) = scripted(|_, _| Some(page(0, 0, 3, &[(0, b"Other"), (1, b"Thing"), (2, b"1")])));
+    let r = resolver(arp_for(&[Ipv4Addr::LOCALHOST]), addr.port());
+    let mut c = Client::new("modbus=Moxa:E1213", 1, Duration::from_millis(300)).with_resolver(r);
+    let e = c.read_registers(0x03, 0, 1).unwrap_err();
+    assert!(e.to_string().contains("no such device among the 1"), "{e}");
+    assert_eq!(conns.load(Ordering::SeqCst), 1);
+    // The link retries at once: the same answer, no second probe.
+    let again = c.read_registers(0x03, 0, 1).unwrap_err();
+    assert_eq!(again.to_string(), e.to_string());
+    assert_eq!(conns.load(Ordering::SeqCst), 1);
+    assert_eq!(c.resolved(), None);
 }
 
 #[test]

@@ -169,7 +169,7 @@ pub struct Devices {
     browsers: Mutex<BTreeMap<String, Browser>>,
     /// Where each link found its device, as the driver reported it last
     /// (`helmsman_io::Driver::address`): the resolved address of a
-    /// `mac=` or `cip=` endpoint, or the host's.
+    /// `mac=`, `cip=` or `modbus=` endpoint, or the host's.
     addresses: Mutex<BTreeMap<String, String>>,
 }
 
