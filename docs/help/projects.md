@@ -99,7 +99,9 @@ the first tests from your requirements, then edit them like any file.
 `.zip`. **Upload** takes a `.zip` (a whole project), an `.st` file (into
 the open project), a PLCopen `.xml` export, or a ladder export (`.l5x`),
 which is converted to Structured Text where the conversion is exact and
-refused where it is not, saying why.
+refused where it is not, saying why. Each periodic task of a ladder export
+keeps its period: the import writes it into `project.settings` as that
+program's `scan_ms`, unless you have set one there already.
 
 ## Examples and starters
 

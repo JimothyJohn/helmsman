@@ -161,13 +161,14 @@
   by: claude-session
   notes: DNS is live and docs/CNAME is in dev (#125); left: Nick's dev -> master merge, then Pages settings -> Enforce HTTPS. Tick it then.
 
-- [ ] **Apply an L5X task's scan rate** — a converted periodic task's rate is only a note at the top of the generated `.st`; project.settings isn't touched, so the program runs at the default scan.
+- [x] **Apply an L5X task's scan rate** — a converted periodic task's rate is only a note at the top of the generated `.st`; project.settings isn't touched, so the program runs at the default scan.
   result: an imported periodic task runs at its Logix period
   est: 2h
   difficulty: low
   id: l5x-task-rate
   asked: 2026-11-01
   by: claude-session
+  notes: done 2026-11-04, PR #220: a periodic task's Rate becomes `program TASK scan_ms=N` in project.settings on import (box and playground), one per task; a Rate outside whole 1..=10000 ms is refused, not clamped; an engineer's existing scan_ms is kept and named
 
 - [x] **Test-started boxes die with their test** — a test process killed abruptly leaves its helmsman-plc running (two were found on the Studio, one holding port 8080). Give test children a parent-death signal, such as exiting when a stdin pipe closes.
   result: no box outlives the test run that started it
