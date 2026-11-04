@@ -414,7 +414,46 @@ unplugged, unplug USB, plug PoE, read the log over UDP to the laptop. G4
 over 10 minutes; then set the block's comms-loss safe state, yank the
 node's cable, and time the outputs going safe.
 
-*Built 2026-11-03 (feat/node-modbus); numbers pending Nick's flash.* The
+*Built 2026-11-03 (feat/node-modbus). Run on the boards 2026-11-03, then
+**parked by Nick the same evening** (TODO.md `node-resume`).* What the runs
+showed:
+
+- **Stack.** The first flash panicked on its stack guard right after the PHY
+  came up: the 160 KiB internal heap left the main stack 1 704 bytes. Fixed
+  in #208 (heap 112 KiB, stack 50 856 B; `scripts/node-build.sh` refuses an
+  image under 32 KiB). After it the POE2 boots, gets a DHCP lease (10.0.0.50)
+  and runs the chase program against the E1213 over Modbus TCP: DO-00..02
+  step every 500 ms, watched from the Studio. **The Modbus loop works on
+  hardware.** No G4 number: with 28 ms scans (Phase 1) against a 10 ms
+  period, G4 fails regardless.
+- **POE2: frames from the Studio never register.** The UDP reports never
+  reached the sink. tcpdump on the Studio: the node asks `who-has 10.0.0.41`
+  about once a second, the Studio answers each time (`is-at
+  7e:28:c7:a7:d6:f3`, its Wi-Fi address on en1), the node never takes the
+  answer and never sends a datagram; it also answers no ping. Ruled out: the
+  macOS firewall (the sink's python is permitted; a datagram from the Studio
+  itself arrives), the UDP bind (embassy-net gives port 0 a free port), the
+  report's size (about 250 B in a 512 B buffer), smoltcp's neighbour cache
+  (8 entries). The E1213's frames do get in (Modbus works), so it is some
+  frames, not all.
+- **POE-ISO (WROOM, `NODE_BOARD=poe-iso`, #211): no lease.** The RMII clock
+  on GPIO17 works: PHY id 0x0007c0f1, `link up Mbps100 Full`. Then one DHCP
+  request (seen by tcpdump on the Studio's wired en0) in about 30 s, no
+  retries, no lease. Whether the router's offer reached the board is not
+  known (a unicast offer never passes the Studio's switch port).
+- **Not the bring-up code.** helmsman-node's `ethernet.rs` matches
+  supervictor's hardware-verified one line for line (buffer counts and
+  sizes, promiscuous mode while DHCP runs, the ph-esp32-mac commit); the
+  EMAC's DMA buffers sit in internal DRAM.
+- **Where it points.** The receive path, or the network task stalling after
+  its first send, in what surrounds the bring-up: the executor and interrupt
+  setup (esp-rtos), or how the main task shares the CPU with the network
+  task. Unproven.
+- **Next step when resumed.** Flash supervictor's own known-good POE-ISO
+  firmware on the same board and port: a lease there puts the bug in this
+  firmware; none puts it in the board or the switch.
+
+The
 shared part is the codec: `crates/helmsman-modbus` (`no_std`, no deps; PR
 #197) holds the PDUs, reply checks and MBAP framing that helmsman-io's
 client and the node's client both use, since helmsman-io itself cannot
