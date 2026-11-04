@@ -125,6 +125,11 @@ impl Bench {
     /// of `%I` and of `%Q` of its own, in order; the scripted shift drives
     /// the first one's.
     pub fn with(programs: &[(&str, &str)]) -> Self {
+        Self::with_chat(programs, None)
+    }
+
+    /// [`Self::with`] and a chat route (`POST /api/chat`) to `chat`'s relay.
+    pub fn with_chat(programs: &[(&str, &str)], chat: Option<helmsman_plc::api::chat::Setup>) -> Self {
         let n = programs.len();
         let slots = programs
             .iter()
@@ -167,7 +172,7 @@ impl Bench {
             running: None,
             snapshots: None,
             approval: None,
-            chat: None,
+            chat,
         };
         let api = Api::start(cfg, shared).unwrap();
         let addr = api.addr();
