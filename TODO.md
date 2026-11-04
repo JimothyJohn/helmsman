@@ -38,6 +38,26 @@
   asked: 2026-11-03
   by: claude-session
 
+- [ ] **Deploy the relay's agent v7, then point the bench Pi at it** — every turn on agents v3 to v6 is refused by the model API (strict tools with `minimum`, `maxLength`, `pattern`; found on the first live turn, 2026-11-04). agent-relay#4 (merged) adds `helmsman/v7`; deploying it was refused from the agent.
+  needs: you to run the two scripts, in order
+  result: a real chat turn from the bench Pi through the relay; then #218 leaves draft (box default v7)
+  notes: `./scratch/06-relay-deploy.sh` (the key is stored: `!` works), then `! ./scratch/10-pi-agent-v7.sh` (adds --relay-agent v7 on the Pi, RESTARTS helmsman-plc, sends one read-only turn and checks text comes back)
+  est: 10m
+  difficulty: low
+  id: relay-v7-deploy
+  asked: 2026-11-04
+  by: claude-session
+
+- [ ] **Make v3 to v6 work on the wire too?** — boxes that ask for v3..v6 (the Pi's old binary defaults to v3) get a 422 on every turn. v7 fixes new asks; the relay could also strip the refused keywords from strict tools when it sends v3..v6, so old boxes work without a flag. That changes what a served id sends, which the profile rule forbids, so it is your call.
+  needs: your call
+  result: old boxes either work unchanged or are told to ask for v7
+  options: leave v3..v6 as served; boxes move to v7 (recommended) | strip on the wire for v3..v6 | alias v3..v6 to v7
+  est: 1h
+  difficulty: low
+  id: relay-old-profiles
+  asked: 2026-11-04
+  by: claude-session
+
 ## Tasks
 
 - [ ] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.
@@ -311,6 +331,7 @@
   difficulty: high
   depends: agent-scoped-edits
   id: agent-on-box
+  notes: 2026-11-04 overnight, PR #217 (first cut): the Agent tab on a box over POST /api/chat, streamed, tool rows, proposals -> Review #n -> Proposals, status line; tested against the real box API and a scripted relay. Left: pages and iterations on the box, scope::apply box side. Tried for real on the bench Pi: the relay answered 422 (v3..v6 strict tools carry minimum/maxLength/pattern, refused by the model API); agent-relay#4 adds helmsman/v7, #218 (draft) makes it the box default once deployed.
   asked: 2026-11-03
   by: claude-session
 
