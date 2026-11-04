@@ -33,4 +33,25 @@ case "$mode" in
   clippy) cargo clippy --release ${features[@]+"${features[@]}"} -- -D warnings ;;
   *) echo "usage: $0 [build|net|clippy [net]]" >&2; exit 2 ;;
 esac
+# The main stack is what the statics leave of the DRAM segment
+# (_stack_start - _stack_end); a heap that grows eats it silently, and the
+# node then dies on its stack guard (2026-11-03: 1.7 KiB left). Refuse an
+# image with less than MIN_STACK.
+MIN_STACK=$((32 * 1024))
+if [ "$mode" != clippy ]; then
+  bins=(bench)
+  [ ${#features[@]} -gt 0 ] && bins+=(modbus)
+  for b in "${bins[@]}"; do
+    elf="target/xtensa-esp32-none-elf/release/$b"
+    start=$(xtensa-esp32-elf-nm "$elf" | awk '$3 == "_stack_start_cpu0" { print $1 }')
+    end=$(xtensa-esp32-elf-nm "$elf" | awk '$3 == "_stack_end_cpu0" { print $1 }')
+    [ -n "$start" ] && [ -n "$end" ] || { echo "$b: no stack symbols in $elf" >&2; exit 1; }
+    stack=$(( 0x$start - 0x$end ))
+    echo "$b: main stack $stack bytes"
+    if [ "$stack" -lt "$MIN_STACK" ]; then
+      echo "$b: the main stack is under $MIN_STACK bytes; shrink HEAP_SIZE in src/bin/$b.rs" >&2
+      exit 1
+    fi
+  done
+fi
 echo "built: crates/helmsman-node/target/xtensa-esp32-none-elf/release/{bench$( [ ${#features[@]} -gt 0 ] && echo ,modbus )}"
