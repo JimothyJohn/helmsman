@@ -777,6 +777,7 @@ fn a_cip_identity_endpoint_is_found_by_list_identity_and_reports_its_address() {
             arp: Box::new(|| Ok(String::new())),
             sweep: Some(encap),
             window: Duration::from_millis(300),
+            modbus: None,
         },
     )
     .unwrap();
@@ -792,6 +793,7 @@ fn a_cip_identity_endpoint_is_found_by_list_identity_and_reports_its_address() {
             arp: Box::new(|| Ok(String::new())),
             sweep: Some(encap),
             window: Duration::from_millis(300),
+            modbus: None,
         },
     )
     .unwrap_err();
@@ -808,6 +810,7 @@ fn a_cip_identity_endpoint_is_found_by_list_identity_and_reports_its_address() {
             arp: Box::new(|| Ok(String::new())),
             sweep: Some(encap),
             window: Duration::from_millis(300),
+            modbus: None,
         },
     )
     .unwrap_err();
@@ -829,6 +832,7 @@ fn a_scan_lists_the_simulated_e1213_once_with_its_identity() {
         arp: Box::new(move || Ok(table.clone())),
         sweep: Some(encap),
         window: Duration::from_millis(300),
+        modbus: None,
     })
     .unwrap();
     assert_eq!(seen.len(), 1, "{seen:?}");
@@ -843,6 +847,7 @@ fn a_scan_lists_the_simulated_e1213_once_with_its_identity() {
         arp: Box::new(|| Err(std::io::Error::other("no arp here"))),
         sweep: Some(encap),
         window: Duration::from_millis(300),
+        modbus: None,
     })
     .unwrap();
     assert_eq!(seen.len(), 1);

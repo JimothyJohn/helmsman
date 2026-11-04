@@ -13,10 +13,11 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::modbus::{
-    COIL_OFF, COIL_ON, ILLEGAL_DATA_ADDRESS, ILLEGAL_DATA_VALUE, ILLEGAL_FUNCTION, MAX_PDU, MAX_READ_BITS,
-    MAX_READ_REGS, MAX_WRITE_REGS, MBAP_LEN, READ_COILS, READ_DISCRETE_INPUTS, READ_HOLDING_REGISTERS,
-    READ_INPUT_REGISTERS, SERVER_DEVICE_FAILURE, WRITE_MULTIPLE_REGISTERS, WRITE_SINGLE_COIL,
-    WRITE_SINGLE_REGISTER,
+    COIL_OFF, COIL_ON, ENCAPSULATED_INTERFACE, ILLEGAL_DATA_ADDRESS, ILLEGAL_DATA_VALUE, ILLEGAL_FUNCTION,
+    MAX_PDU, MAX_READ_BITS, MAX_READ_REGS, MAX_WRITE_REGS, MBAP_LEN, MEI_READ_DEVICE_ID,
+    OBJECT_MAJOR_MINOR_REVISION, OBJECT_PRODUCT_CODE, OBJECT_VENDOR_NAME, READ_COILS, READ_DISCRETE_INPUTS,
+    READ_HOLDING_REGISTERS, READ_INPUT_REGISTERS, SERVER_DEVICE_FAILURE, WRITE_MULTIPLE_REGISTERS,
+    WRITE_SINGLE_COIL, WRITE_SINGLE_REGISTER,
 };
 
 /// A misbehaviour for the next request(s).
@@ -83,6 +84,86 @@ pub struct State {
     pub faults: Vec<Fault>,
     /// Requests answered, faults included.
     pub requests: u64,
+    /// What Read Device Identification (FC 43/14) answers; `None`: the
+    /// function is refused with Illegal Function, as a device without it
+    /// does.
+    pub identification: Option<Identification>,
+}
+
+/// The simulator's Read Device Identification objects (App §6.21
+/// pp.43-46): stream access (codes 01-03) from the object asked for,
+/// restarting at the first object when that id is unknown, at most
+/// `per_reply` objects a reply with More Follows and Next Object Id for
+/// the rest; individual access (code 04) for one object, Illegal Data
+/// Address when there is none; any other code Illegal Data Value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Identification {
+    /// `(object id, value)`, ascending by id.
+    pub objects: Vec<(u8, Vec<u8>)>,
+    /// Objects a reply carries at most (at least 1); fewer when the PDU
+    /// would pass 253 bytes.
+    pub per_reply: usize,
+}
+
+impl Identification {
+    /// The basic three objects in one reply.
+    #[must_use]
+    pub fn basic(vendor: &str, product: &str, revision: &str) -> Self {
+        Self {
+            objects: vec![
+                (OBJECT_VENDOR_NAME, vendor.as_bytes().to_vec()),
+                (OBJECT_PRODUCT_CODE, product.as_bytes().to_vec()),
+                (OBJECT_MAJOR_MINOR_REVISION, revision.as_bytes().to_vec()),
+            ],
+            per_reply: 3,
+        }
+    }
+
+    fn answer(&self, pdu: &[u8]) -> Vec<u8> {
+        let ex = |code: u8| vec![ENCAPSULATED_INTERFACE | 0x80, code];
+        let &[_, mei, code, object] = pdu else {
+            return ex(ILLEGAL_DATA_VALUE);
+        };
+        if mei != MEI_READ_DEVICE_ID {
+            return ex(ILLEGAL_FUNCTION);
+        }
+        let mut out = vec![ENCAPSULATED_INTERFACE, MEI_READ_DEVICE_ID, code, 0x81];
+        let push = |out: &mut Vec<u8>, (id, v): &(u8, Vec<u8>)| {
+            out.push(*id);
+            out.push(u8::try_from(v.len()).unwrap_or(u8::MAX));
+            out.extend(v.iter().take(usize::from(u8::MAX)));
+        };
+        match code {
+            0x01..=0x03 => {
+                let start = self.objects.iter().position(|(id, _)| *id == object).unwrap_or(0);
+                let mut body = Vec::new();
+                let mut n = 0usize;
+                let mut next = None;
+                for o in &self.objects[start..] {
+                    if n == self.per_reply.max(1) || out.len() + 3 + body.len() + 2 + o.1.len() > MAX_PDU {
+                        next = Some(o.0);
+                        break;
+                    }
+                    push(&mut body, o);
+                    n += 1;
+                }
+                out.push(if next.is_some() { 0xFF } else { 0x00 });
+                out.push(next.unwrap_or(0));
+                out.push(u8::try_from(n).unwrap_or(u8::MAX));
+                out.extend(body);
+                out
+            }
+            0x04 => {
+                let Some(o) = self.objects.iter().find(|(id, _)| *id == object) else {
+                    return ex(ILLEGAL_DATA_ADDRESS);
+                };
+                out.extend([0x00, 0x00, 0x01]);
+                push(&mut out, o);
+                out
+            }
+            _ => ex(ILLEGAL_DATA_VALUE),
+        }
+    }
 }
 
 impl State {
@@ -219,6 +300,10 @@ impl State {
                 }
                 pdu[..5].to_vec()
             }
+            ENCAPSULATED_INTERFACE => match &self.identification {
+                Some(id) => id.answer(pdu),
+                None => ex(ILLEGAL_FUNCTION),
+            },
             _ => ex(ILLEGAL_FUNCTION),
         }
     }
