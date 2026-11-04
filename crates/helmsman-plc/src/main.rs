@@ -8,7 +8,7 @@
 //! the network so the PLC can still be found.
 
 use std::fs;
-use std::io::BufRead as _;
+use std::io::{BufRead as _, Write as _};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -951,6 +951,31 @@ fn describe(s: &Spec) -> String {
     )
 }
 
+/// The environment variable that ties a running box to its stdin: set to
+/// `1`, the box exits as soon as its stdin reaches end of file. A test
+/// holds the write end of a pipe, so the box dies with the test however
+/// the test dies (a `kill -9` included; macOS has no parent-death
+/// signal). Off by default: an installed box's stdin is `/dev/null`.
+const EXIT_WITH_STDIN: &str = "HELMSMAN_EXIT_WITH_STDIN";
+
+/// With [`EXIT_WITH_STDIN`] set to `1`, a thread that reads stdin to its
+/// end, then ends the process.
+fn exit_with_stdin() {
+    if std::env::var_os(EXIT_WITH_STDIN).is_none_or(|v| v != "1") {
+        return;
+    }
+    std::thread::spawn(|| {
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+        // Not eprintln!: stderr may be a pipe whose reader died with the
+        // parent, and a panic here would leave the box running.
+        let _ = writeln!(
+            std::io::stderr(),
+            "helmsman-plc: stdin closed ({EXIT_WITH_STDIN}=1): exiting"
+        );
+        std::process::exit(0);
+    });
+}
+
 /// Where the token lives: `--state-dir`, systemd's `$STATE_DIRECTORY`,
 /// or `./helmsman-state`.
 fn state_dir(o: &Opts) -> PathBuf {
@@ -1396,6 +1421,7 @@ fn run(o: &Opts) -> Result<(), String> {
     if let Some(role) = o.set_pin {
         return set_pin(o, role);
     }
+    exit_with_stdin();
     let access = o.api.map(|_| load_access(o)).transpose()?;
     let cfg = device_config(o.serial);
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));

@@ -31,7 +31,11 @@ Helmsman box: pairing files, read once at first boot by helmsman-firstboot.
 
   relay-url     the relay's https URL, one line (optional)
   relay-token   the box's relay token (hmr1_...), one line (optional)
-  box-name      this box's name on the site (optional; default: the hostname)
+  site          the site this box joins, 1 to 32 of A-Z a-z 0-9 . _ - (optional)
+  box-name      this box's name on the site (optional, needs site; default:
+                the hostname)
+
+relay-url and relay-token go together: one without the other is ignored.
 
 The token file is moved into the box's state directory and removed from
 here. Without these files the box runs without an agent; add them later
