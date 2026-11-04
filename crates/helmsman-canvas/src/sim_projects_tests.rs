@@ -483,6 +483,14 @@ fn an_l5x_upload_becomes_the_boxs_st_or_is_refused_whole() {
         .st;
     assert_eq!(v.proj.files.get("Ladder.st"), Some(&box_st), "the box's .st");
     assert_eq!(v.proj.current, "Ladder.st");
+    // MainTask is periodic every 10 ms: project.settings says so, as the
+    // box's import writes it.
+    let settings = v.proj.files.get("project.settings").cloned().unwrap_or_default();
+    assert!(
+        settings.lines().any(|l| l == "program MainTask scan_ms=10"),
+        "{settings}"
+    );
+    assert!(msg.contains("task rates"), "{msg}");
     // It builds and runs in the page (the starter's main.st aside), its
     // inputs the ladder's.
     v.proj.delete_file("main.st");
