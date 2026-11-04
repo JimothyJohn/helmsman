@@ -14,6 +14,11 @@ use std::time::{Duration, Instant};
 
 use proptest::prelude::*;
 
+/// Set to `1`, the box exits when its stdin closes: every box a test starts
+/// gets it with a piped stdin its handle holds, so the box dies with the
+/// test even when the test is killed outright.
+const EXIT_WITH_STDIN: &str = "HELMSMAN_EXIT_WITH_STDIN";
+
 const JS: &str = "helmsman-canvas-0123456789abcdef.js";
 const WASM: &str = "helmsman-canvas-0123456789abcdef_bg.wasm";
 const SECRET: &str = "SECRET-7f3a-do-not-serve";
@@ -107,7 +112,12 @@ fn spawn(ui: Option<&Path>) -> Plc {
     if let Some(ui) = ui {
         c.arg("--ui").arg(ui);
     }
-    let mut child = c.stderr(Stdio::piped()).spawn().unwrap();
+    let mut child = c
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
     let mut addr = None;
     let mut canvas = ui.is_none();
