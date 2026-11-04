@@ -60,6 +60,11 @@ pub struct BoxView {
     pub view: Option<Viewer>,
     /// The Trend tab: pinned signals from the box's history.
     pub trend: BoxTrend,
+    /// The Agent tab: the conversation with the agent the box runs.
+    pub agent: crate::box_agent::BoxAgent,
+    /// A proposal the Agent tab asked to open under Proposals; the app
+    /// takes it.
+    pub wants_review: Option<u64>,
     /// The diagram's shared default and this browser's tweaks.
     pub layers: Layers,
     /// The lowering the view was built from.
@@ -76,6 +81,11 @@ pub struct BoxView {
     driver: crate::web::Driver,
     #[cfg(target_arch = "wasm32")]
     http: crate::web::ProjHttp,
+    #[cfg(target_arch = "wasm32")]
+    chat: crate::web::ChatHttp,
+    /// Natively: the chat requests asked for, and whether the status was.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub chat_sent: Vec<crate::box_agent::Request>,
     /// Commands not carried out (no transport here: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub sent: Vec<Cmd>,
@@ -146,6 +156,12 @@ impl BoxView {
             driver: crate::web::Driver::default(),
             #[cfg(target_arch = "wasm32")]
             http: crate::web::ProjHttp::default(),
+            #[cfg(target_arch = "wasm32")]
+            chat: crate::web::ChatHttp::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            chat_sent: Vec::new(),
+            agent: crate::box_agent::BoxAgent::new(),
+            wants_review: None,
             #[cfg(not(target_arch = "wasm32"))]
             sent: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -292,7 +308,64 @@ impl BoxView {
         let now = ctx.input(|i| i.time);
         let (msgs, answers) = self.inbox();
         self.step_all(ctx, msgs, answers, now);
+        self.chat_inbox();
         self.watch(now);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn chat_inbox(&mut self) {
+        for i in self.chat.drain() {
+            match i {
+                crate::web::ChatIn::Turn(inc) => {
+                    let was = self.agent.busy();
+                    self.agent.apply(inc);
+                    // A turn that ended may have changed the agent's state.
+                    if was && !self.agent.busy() {
+                        self.agent.status = crate::box_agent::Status::Unread;
+                    }
+                }
+                crate::web::ChatIn::Status(status, body) => self.agent.status_answer(status, &body),
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::unused_self)]
+    const fn chat_inbox(&mut self) {}
+
+    /// The Agent tab: drawn, and what it asked for carried out.
+    fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
+        use crate::box_agent::{Act, Status};
+
+        if self.agent.status == Status::Unread && !self.agent.status_asked {
+            self.agent.status_asked = true;
+            #[cfg(target_arch = "wasm32")]
+            self.chat.status(ui.ctx());
+        }
+        let who = match &self.session {
+            None => Some("Sign in (top right) to talk to the agent.".to_string()),
+            Some(_) => None,
+        };
+        match crate::box_agent::ui(ui, chrome, &mut self.agent, who.as_deref()) {
+            Some(Act::Send) => {
+                if let Some(req) = self.agent.send() {
+                    #[cfg(target_arch = "wasm32")]
+                    self.chat.send(req, ui.ctx());
+                    #[cfg(not(target_arch = "wasm32"))]
+                    self.chat_sent.push(req);
+                }
+            }
+            Some(Act::Stop) => {
+                self.agent.stop();
+                #[cfg(target_arch = "wasm32")]
+                self.chat.abort();
+            }
+            Some(Act::New) => {
+                self.agent.new_conversation();
+            }
+            Some(Act::Review(id)) => self.wants_review = Some(id),
+            None => {}
+        }
     }
 
     /// Reports to the log what changed: the link, a deploy's outcome, a
@@ -1192,11 +1265,14 @@ impl Body for BoxView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        // Claude comes to the box later (docs/UI.md).
-        &[Tab::Io, Tab::Requirements]
+        &[Tab::Io, Tab::Requirements, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
+        if tab == Tab::Claude {
+            self.agent_tab(ui, chrome);
+            return;
+        }
         if tab == Tab::Requirements {
             // The box ran them (POST /api/projects/{p}/tests) when the
             // project opened and after each save; Run asks again.
