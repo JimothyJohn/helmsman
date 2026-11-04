@@ -107,8 +107,18 @@ this; change it here first when a decision changes.
   2026-11-01: the conversation is pages, ‹ › walk them, Delete drops
   one, every kept page goes to the model as context each time, and the
   pages live with the project as `agent.md`, so a reload or a download
-  keeps them; an earlier page's code has its own Use this code; not on a
-  box yet. The agent edits only what is in focus (Nick 2026-11-01,
+  keeps them; an earlier page's code has its own Use this code. On a box
+  (card `agent-on-box`, first cut) the Agent tab talks to the agent the
+  box runs through its relay, `POST /api/chat` with the session cookie:
+  the reply streams in with each tool it ran, ✓ or ✗ and a summary, and
+  each change it stored as a proposal with a Review #n button that opens
+  it under Proposals, where it is replayed, approved or left like any
+  other; nothing on the tab applies a change. A line on top says whether
+  the agent is online, offline (a message is then read by rule: a param
+  edit becomes a proposal, nothing else) or not configured; signed out,
+  Send stays off. Stop ends the answer on the page; New conversation
+  starts one of its own on the box. Pages, iterations and the edit scope
+  are the page's alone for now. The agent edits only what is in focus (Nick 2026-11-01,
   interview 2026-11-02, card `agent-scoped-edits`): the open file by
   default, the lines selected in the Code tab or the block picked in the
   diagram (its statement, while the diagram is of the editor's text) when

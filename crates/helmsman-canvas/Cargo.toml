@@ -71,6 +71,8 @@ web-sys = { version = "0.3", features = [
 # must stay free of SQLite and TLS (tests/wasm_deps.rs).
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 helmsman-plc = { path = "../helmsman-plc", features = ["box"] }
+helmsman-agent = { path = "../helmsman-agent" }
+proptest = "1.12"
 helmsman-io = { path = "../helmsman-io" }
 
 [lints]

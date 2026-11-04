@@ -318,6 +318,12 @@ impl App {
                 if std::mem::take(&mut b.wants_sim) {
                     self.source = Source::Sim;
                 }
+                // The Agent tab's "Review #n": the Proposals screen, on it.
+                if let Some(id) = b.wants_review.take() {
+                    let r = self.review.get_or_insert_with(ReviewView::new);
+                    r.state.open(id);
+                    self.screen = Screen::Proposals;
+                }
                 // A project call found the session gone: so is the header's.
                 if std::mem::take(&mut b.projects.ended)
                     && let Some(r) = &mut self.review
