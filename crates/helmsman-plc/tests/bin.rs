@@ -12,6 +12,11 @@ use helmsman_proto::cip::class;
 use helmsman_proto::scanner::{Input, IoConfig, IoConnection};
 use helmsman_proto::session::Session;
 
+/// Set to `1`, the box exits when its stdin closes: every box a test starts
+/// gets it with a piped stdin its handle holds, so the box dies with the
+/// test even when the test is killed outright.
+const EXIT_WITH_STDIN: &str = "HELMSMAN_EXIT_WITH_STDIN";
+
 struct Running {
     child: Child,
     stderr: BufReader<ChildStderr>,
@@ -102,6 +107,8 @@ fn spawn_with(args: &[&std::ffi::OsStr], peer_io_port: u16) -> (Running, SocketA
         // Its own API port and token, so parallel tests never share them.
         .args(["--api", "127.0.0.1:0", "--state-dir"])
         .arg(state_dir())
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -1006,6 +1013,8 @@ fn spawn_api(state: &Path) -> (Running, std::net::SocketAddr, String) {
         .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
         .args(["--api", "127.0.0.1:0", "--state-dir"])
         .arg(state)
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -1371,6 +1380,8 @@ fn the_binary_boots_a_wasm_driver_from_its_state_directory() {
             .arg(&map)
             .args(["--encap-port", "0", "--io-port", "0", "--state-dir"])
             .arg(state)
+            .env(EXIT_WITH_STDIN, "1")
+            .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap()
@@ -1384,7 +1395,11 @@ fn the_binary_boots_a_wasm_driver_from_its_state_directory() {
             std::fs::create_dir_all(state.join("drivers")).unwrap();
             std::fs::write(state.join("drivers/modbus.wasm"), b).unwrap();
         }
-        let out = boot(&state).wait_with_output().unwrap();
+        // Hold stdin open: wait_with_output closes it, and that would end
+        // the box (EXIT_WITH_STDIN) before it could refuse.
+        let mut child = boot(&state);
+        let _stdin = child.stdin.take();
+        let out = child.wait_with_output().unwrap();
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(1), "{err}");
         assert!(err.contains(says), "{err}");
@@ -1428,6 +1443,8 @@ fn the_default_state_directory_is_in_the_working_directory_never_the_crate() {
         .current_dir(&cwd)
         .arg(&echo)
         .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -1443,4 +1460,83 @@ fn the_default_state_directory_is_in_the_working_directory_never_the_crate() {
     assert!(said.contains("helmsman-state/api-token"), "{said}");
     assert!(cwd.join("helmsman-state/api-token").is_file(), "{said}");
     assert!(!in_crate.exists(), "{}", leaked());
+}
+
+/// Set in a re-run of this test binary: the state directory of the box the
+/// run starts and holds ([`orphan_parent`]).
+const ORPHAN_PARENT: &str = "HELMSMAN_TEST_ORPHAN_PARENT";
+
+/// Only in a re-run with [`ORPHAN_PARENT`] set (otherwise a no-op): starts
+/// a box the way every test does, prints `orphan-box PID API` and stays
+/// alive, holding the box's stdin, until it is killed.
+#[test]
+fn orphan_parent() {
+    use std::io::Write as _;
+    let Some(state) = std::env::var_os(ORPHAN_PARENT) else {
+        return;
+    };
+    let (mut running, api, _) = spawn_api(Path::new(&state));
+    let mut out = std::io::stdout();
+    writeln!(out, "orphan-box {} {api}", running.child.id()).unwrap();
+    out.flush().unwrap();
+    // Drain the box's stderr so it never blocks on a full pipe; then wait
+    // to be killed (the test below does it).
+    let mut line = String::new();
+    while running.stderr.read_line(&mut line).unwrap_or(0) > 0 {
+        line.clear();
+    }
+    loop {
+        std::thread::park();
+    }
+}
+
+#[cfg(unix)]
+fn alive(pid: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", pid])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// A test killed outright (`kill -9`: no unwinding, no Drop) takes its box
+/// with it: the box's stdin pipe closes with the test, and the box exits
+/// on that, freeing its ports.
+#[cfg(unix)]
+#[test]
+fn a_box_dies_with_the_test_that_started_it() {
+    let mut parent = Command::new(std::env::current_exe().unwrap())
+        .args(["orphan_parent", "--exact", "--nocapture", "--test-threads", "1"])
+        .env(ORPHAN_PARENT, state_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(parent.stdout.take().unwrap());
+    let (pid, api) = loop {
+        let mut line = String::new();
+        assert!(lines.read_line(&mut line).unwrap() > 0, "the parent exited first");
+        // libtest's `test orphan_parent ... ` comes first on the line.
+        if let Some((_, rest)) = line.trim_end().split_once("orphan-box ") {
+            let (pid, api) = rest.split_once(' ').unwrap();
+            break (pid.to_string(), api.parse::<std::net::SocketAddr>().unwrap());
+        }
+    };
+    assert!(alive(&pid), "the box runs");
+    assert!(
+        std::net::TcpStream::connect(api).is_ok(),
+        "the box serves its API"
+    );
+    parent.kill().unwrap();
+    parent.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let gone = || !alive(&pid) && std::net::TcpStream::connect(api).is_err();
+    while !gone() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !gone() {
+        let _ = Command::new("kill").args(["-9", &pid]).status();
+        panic!("box {pid} outlived its test (API {api})");
+    }
 }

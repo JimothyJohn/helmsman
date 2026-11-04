@@ -12,8 +12,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use helmsman_io::enip_sim::E1213Sim;
+use helmsman_io::resolve::ModbusProbe;
+use helmsman_io::sim::{Identification, Sim, State};
 use helmsman_plc::SignalTable;
-use helmsman_plc::api::discover::Discovery;
+use helmsman_plc::api::discover::{Arp, Discovery};
 use helmsman_plc::api::{
     Api, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, More, Shared,
 };
@@ -130,6 +132,17 @@ fn request(addr: SocketAddr, method: &str, path: &str, bearer: bool) -> Resp {
 /// A box whose running map names the simulated E1213 by `cip=`, scanning
 /// at the simulator's address, with the library at `library`.
 fn box_with(sim: &E1213Sim, library: Option<String>, map: &str) -> Api {
+    box_probing(sim, library, map, None, Arp::Host)
+}
+
+/// [`box_with`], with the Modbus probe and the ARP table given.
+fn box_probing(
+    sim: &E1213Sim,
+    library: Option<String>,
+    map: &str,
+    modbus: Option<ModbusProbe>,
+    arp: Arp,
+) -> Api {
     let parsed = helmsman_io::text::parse("in ready bool box di:0\n").unwrap();
     let table = SignalTable::new(&parsed.map, &parsed.safe).unwrap();
     let catalog = Catalog {
@@ -165,6 +178,8 @@ fn box_with(sim: &E1213Sim, library: Option<String>, map: &str) -> Api {
             sweep: Some(encap),
             window: Duration::from_millis(300),
             library,
+            modbus,
+            arp,
         },
         ..More::default()
     };
@@ -317,5 +332,92 @@ fn a_box_without_scanning_or_library_says_so() {
     assert!(
         m["unavailable"].as_str().unwrap().contains("devices-index off"),
         "{m}"
+    );
+}
+
+const MODBUS_INDEX: &str = r#"{ "format": "helmsman-devices-index 1", "devices": [
+  { "folder": "devices/moxa/iologik-e1213", "vendor": "Moxa", "model": "ioLogik E1213", "kind": "remote-io",
+    "identity": { "enip": { "vendor_id": 991, "product_code": 515 },
+                  "modbus": { "vendor_name": "Moxa", "product_code": "E1213" } },
+    "protocols": { "enip": { "driver": "enip-io", "map": "enip.map", "profile": "moxa-e1213" },
+                   "modbus": { "driver": "modbus-tcp", "map": "modbus.map" } } } ] }"#;
+
+/// `modbus-identification`: `?modbus=1` probes the ARP table's hosts with
+/// FC 43/14 (here the simulator, on loopback), and the device found is
+/// matched to the map line naming it by `modbus=` and to the library's
+/// `identity.modbus`.
+#[test]
+fn a_modbus_probe_finds_the_device_its_map_line_and_its_library_entry() {
+    let sim = E1213Sim::start().unwrap();
+    let mut st = State::new(8);
+    st.identification = Some(Identification::basic("Moxa", "E1213", "V3.1 Build19110615"));
+    let rio = Sim::start(st).unwrap();
+    let lib = Files::serve(BTreeMap::from([("/index.json", MODBUS_INDEX.to_string())]));
+    let probe = ModbusProbe {
+        port: rio.addr.port(),
+        per_host: Duration::from_millis(500),
+        total: Duration::from_secs(2),
+        ..ModbusProbe::default()
+    };
+    let arp = Arp::Fixed("? (127.0.0.1) at 0:90:e8:7e:af:be on lo0 ifscope [ethernet]\n".into());
+    let api = box_probing(
+        &sim,
+        Some(lib.url("/index.json")),
+        "device rio modbus-tcp modbus=moxa:e1213 unit=1\nin di0 bool rio di:0\n",
+        Some(probe),
+        arp,
+    );
+    // Without the flag: no probe, no `modbus` in the answer.
+    let plain = request(api.addr(), "POST", "/api/devices/discover", true).json();
+    assert!(plain.get("modbus").is_none(), "{plain}");
+    assert_eq!(rio.state().requests, 0, "nothing asked the Modbus device");
+    // With it: a fresh scan (the cached one had no probe).
+    let scan = request(api.addr(), "POST", "/api/devices/discover?modbus=1", true);
+    assert_eq!(scan.status, 200, "{}", scan.body);
+    let j = scan.json();
+    let found = j["modbus"].as_array().unwrap();
+    assert_eq!(found.len(), 1, "{j}");
+    let d = &found[0];
+    assert_eq!(d["address"], "127.0.0.1");
+    assert_eq!(d["mac"], "00-90-e8-7e-af-be");
+    assert_eq!(d["vendor_name"], "Moxa");
+    assert_eq!(d["product_code"], "E1213");
+    assert_eq!(d["revision"], "V3.1 Build19110615");
+    assert_eq!(d["identity"], "modbus=Moxa:E1213");
+    assert_eq!(d["mapped"], "rio", "the map names it by modbus=, case-blind");
+    assert_eq!(d["library"]["model"], "ioLogik E1213");
+    assert_eq!(d["library"]["driver"], "modbus-tcp");
+    assert_eq!(d["library"]["map"], "modbus.map");
+    // The EtherNet/IP list is still there beside it.
+    assert_eq!(j["devices"].as_array().unwrap().len(), 1, "{j}");
+    // The probe was read-only: identification requests only.
+    assert!(rio.state().requests >= 1);
+    assert_eq!(rio.state().coils, vec![false; 8]);
+    assert_eq!(rio.state().holding, vec![0; 8]);
+    // Answered from memory within a minute, probe included.
+    let before = rio.state().requests;
+    let again = request(api.addr(), "POST", "/api/devices/discover?modbus=1", true).json();
+    assert_eq!(again["modbus"], j["modbus"]);
+    assert_eq!(rio.state().requests, before);
+    let audit = request(api.addr(), "GET", "/api/audit?limit=100", false).json();
+    assert!(
+        audit.as_array().unwrap().iter().any(|e| e["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("1 Modbus (FC 43/14), read-only"))),
+        "{audit}"
+    );
+}
+
+#[test]
+fn a_box_without_the_probe_refuses_modbus_scans() {
+    let sim = E1213Sim::start().unwrap();
+    let api = box_with(&sim, None, "in ready bool box di:0\n");
+    let r = request(api.addr(), "POST", "/api/devices/discover?modbus=1", true);
+    assert_eq!(r.status, 501, "{}", r.body);
+    assert!(r.body.contains("Modbus"), "{}", r.body);
+    // The plain scan still works.
+    assert_eq!(
+        request(api.addr(), "POST", "/api/devices/discover", true).status,
+        200
     );
 }

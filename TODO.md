@@ -38,6 +38,27 @@
   asked: 2026-11-03
   by: claude-session
 
+- [x] **Deploy the relay's agent v7, then point the bench Pi at it** — every turn on agents v3 to v6 is refused by the model API (strict tools with `minimum`, `maxLength`, `pattern`; found on the first live turn, 2026-11-04). agent-relay#4 (merged) adds `helmsman/v7`; deploying it was refused from the agent.
+  needs: you to run the two scripts, in order
+  result: a real chat turn from the bench Pi through the relay; then #218 leaves draft (box default v7)
+  notes: `./scratch/06-relay-deploy.sh` (the key is stored: `!` works), then `! ./scratch/10-pi-agent-v7.sh` (adds --relay-agent v7 on the Pi, RESTARTS helmsman-plc, sends one read-only turn and checks text comes back)
+  est: 10m
+  difficulty: low
+  id: relay-v7-deploy
+  notes: done 2026-11-04: relay deployed from dev 7ef0352 (serves helmsman/v7, 15 tools); the bench Pi asks v7 and a real turn ran list_signals and answered (end_turn, 67 output tokens). #218 (box default v7) out of draft, auto-merge.
+  asked: 2026-11-04
+  by: claude-session
+
+- [ ] **Make v3 to v6 work on the wire too?** — boxes that ask for v3..v6 (the Pi's old binary defaults to v3) get a 422 on every turn. v7 fixes new asks; the relay could also strip the refused keywords from strict tools when it sends v3..v6, so old boxes work without a flag. That changes what a served id sends, which the profile rule forbids, so it is your call.
+  needs: your call
+  result: old boxes either work unchanged or are told to ask for v7
+  options: leave v3..v6 as served; boxes move to v7 (recommended) | strip on the wire for v3..v6 | alias v3..v6 to v7
+  est: 1h
+  difficulty: low
+  id: relay-old-profiles
+  asked: 2026-11-04
+  by: claude-session
+
 ## Tasks
 
 - [ ] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.
@@ -141,21 +162,23 @@
   by: claude-session
   notes: DNS is live and docs/CNAME is in dev (#125); left: Nick's dev -> master merge, then Pages settings -> Enforce HTTPS. Tick it then.
 
-- [ ] **Apply an L5X task's scan rate** — a converted periodic task's rate is only a note at the top of the generated `.st`; project.settings isn't touched, so the program runs at the default scan.
+- [x] **Apply an L5X task's scan rate** — a converted periodic task's rate is only a note at the top of the generated `.st`; project.settings isn't touched, so the program runs at the default scan.
   result: an imported periodic task runs at its Logix period
   est: 2h
   difficulty: low
   id: l5x-task-rate
   asked: 2026-11-01
   by: claude-session
+  notes: done 2026-11-04, PR #220: a periodic task's Rate becomes `program TASK scan_ms=N` in project.settings on import (box and playground), one per task; a Rate outside whole 1..=10000 ms is refused, not clamped; an engineer's existing scan_ms is kept and named
 
-- [ ] **Test-started boxes die with their test** — a test process killed abruptly leaves its helmsman-plc running (two were found on the Studio, one holding port 8080). Give test children a parent-death signal, such as exiting when a stdin pipe closes.
+- [x] **Test-started boxes die with their test** — a test process killed abruptly leaves its helmsman-plc running (two were found on the Studio, one holding port 8080). Give test children a parent-death signal, such as exiting when a stdin pipe closes.
   result: no box outlives the test run that started it
   est: 2h
   difficulty: low
   id: test-box-orphans
   asked: 2026-11-01
   by: claude-session
+  notes: done 2026-11-04, PR #216: HELMSMAN_EXIT_WITH_STDIN=1 makes a box exit when its stdin closes; every test-spawned box gets it with a piped stdin its Child holds; tests/bin.rs kill -9s a parent and waits for the box and its port to go
 
 - [ ] **The Pi runs `--projects`** — deploy/helmsman-plc.service and scripts/pi-deploy-plc.sh start the box with `--projects` (state in /var/lib/helmsman-plc); a first install seeds project `line` from programs/line.st, deployed (`helmsman-plc project seed`, the unit's ExecStartPre); `PLC_MODE=program` keeps the old one-file mode. Built and tested here; yours to run against the Pi (native terminal or `!`: it needs Docker, trunk, and SSH with sudo on the Pi, and the firewall step is refused from an agent).
   needs: you to run the two commands (the Pi's IP); the Pi on Debian Trixie with key SSH and passwordless sudo (scripts/pi-prep.sh)
@@ -289,6 +312,8 @@
   est: 1d
   difficulty: med
   depends: device-by-identity
+  notes: 2026-11-04 night, PR #219 (open, not ticked): FC 43/14 in the codec (helmsman-modbus) and helmsman-io (`modbus::identify`, `Client::read_device_identification`, More Follows capped at 8 replies, one deadline per host), the simulator answers it (`sim::Identification`), `modbus=VENDOR:PRODUCT` endpoints (%XX for spaces, case-blind) resolved by the ARP-table probe (64 hosts, 8 at a time, 500 ms each, 3 s total; a miss waits 10 s before the next probe), `POST /api/devices/discover?modbus=1` with a `modbus` list (mapped, library by `identity.modbus`), spec cited §6.21 pp.43-46. Left: the canvas Devices tab does not ask `?modbus=1` or show the list; helmsman-devices' build-index.py does not emit `identity.modbus` yet and the E1213's device.toml has none (not bench-checked); `GET /api/devices/library` has no Modbus-identity query.
+  notes: 2026-11-04: the E1213 was not on the LAN (10.0.0.57 down, not in the ARP table, no ListIdentity answer but the Studio's own box), so what it answers to FC 43/14 is still unchecked.
   id: modbus-identification
   asked: 2026-11-02
   by: claude-session
@@ -311,6 +336,7 @@
   difficulty: high
   depends: agent-scoped-edits
   id: agent-on-box
+  notes: 2026-11-04 overnight, PR #217 (first cut): the Agent tab on a box over POST /api/chat, streamed, tool rows, proposals -> Review #n -> Proposals, status line; tested against the real box API and a scripted relay. Left: pages and iterations on the box, scope::apply box side. Tried for real on the bench Pi: the relay answered 422 (v3..v6 strict tools carry minimum/maxLength/pattern, refused by the model API); agent-relay#4 adds helmsman/v7, #218 (draft) makes it the box default once deployed.
   asked: 2026-11-03
   by: claude-session
 

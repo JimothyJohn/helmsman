@@ -381,6 +381,27 @@ into the code.
   p.30, 1-123 registers), exception replies and codes (§7 p.47). The same
   application layer runs over RTU (`rtu.rs`), which also takes reply lengths
   from it.
+- **Read Device Identification** (card `modbus-identification`;
+  `crates/helmsman-modbus` `pdu::read_device_id` / `reply::device_id`,
+  `helmsman-io` `modbus::app::read_device_identification` and
+  `modbus::identify`, the simulator's `sim::Identification`): FC 43 is the
+  Encapsulated Interface Transport (§6.19 p.41) and MEI type 14 (0x0E) Read
+  Device Identification (§6.21 "43 / 14 (0x2B / 0x0E) Read Device
+  Identification", pp.43-46). Used from it: the object table, with
+  VendorName 0x00, ProductCode 0x01 and MajorMinorRevision 0x02 the
+  mandatory Basic category, all ASCII strings (p.43); the request (function,
+  MEI type, Read Device ID code 01-04, Object Id) and response layout
+  (conformity level 0x01-0x03 / 0x81-0x83, More Follows 0x00 / 0xFF, Next
+  Object Id, Number of Objects, then id, length, value per object) and the
+  0xAB exception (pp.43-44); exception 03 for an illegal Read Device ID
+  code, a stream from an unknown Object Id restarting at object 0, the
+  client asking again from the Next Object Id while More Follows is 0xFF,
+  individual access (code 04) answering exception 02 for an unknown object
+  (p.44); the worked examples, whose object lengths are hex (0x16 for the
+  22-byte "Company identification"), one reply and a two-transaction More
+  Follows (p.45); the server state diagram, Figure 30 (p.46). Page numbers
+  re-checked 2026-11-04 against the file above (same sha256, read with
+  `pdftotext -layout`; the page footer's "n/50").
 - **How to cite:** `App §<x> p.<n>` in the module, after the module docs name
   the document once.
 
@@ -501,6 +522,12 @@ into the code.
   `None`), `Constant`, `Dimensions` (p.107); `DataTypes` (p.37ff.);
   `MainRoutineName` (p.196); `RLLContent` / `Rung` (pp.206-208);
   `STContent` / `Line` (p.264ff.); tasks and `ScheduledProgram` (p.313).
+- **A task's `Rate` (p.313, checked 2026-11-04):** "how often to run the
+  task (1.000...2,000,000.000 µs)". The unit there contradicts the same
+  chapter: its safety-task example has `Rate := 10` and the note under
+  it puts that rate between 5 ms and 500 ms (p.315). Still to confirm on
+  a real Studio 5000 export (`l5x-real-export`). `helmsman_iec` reads `Rate` as ms,
+  whole (`10` or `10.000`), and refuses a periodic task with any other.
 - **Not in RM014's text:** the root's `TargetName` and `TargetType`
   attributes (they are in real exports and in the `l5x` package; RM014's
   root example is not in the extracted text). Still to do: run the reader

@@ -1984,6 +1984,75 @@ mod boxed {
         h.app.boxv.as_ref().unwrap()
     }
 
+    /// The Agent tab on a box: signed out, Send stays off; signed in, the
+    /// message goes to `POST /api/chat` with no session yet; a proposal
+    /// the box streams back opens under Proposals from its Review button.
+    #[test]
+    fn the_agent_tab_on_a_box_sends_signed_in_and_opens_a_proposal_for_review() {
+        use crate::app::Screen;
+        use crate::box_agent::Incoming;
+        use crate::review::Session;
+        use serde_json::{Value as Json, json};
+
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        h.press("tab claude");
+        h.frame(vec![]);
+        assert!(h.has("agent status"));
+
+        h.app.boxv.as_mut().unwrap().agent.draft = "why does the conveyor stop?".into();
+        h.frame(vec![]);
+        h.press("agent send");
+        h.frame(vec![]);
+        assert_eq!(boxed(&h).chat_sent.len(), 0, "signed out, nothing is sent");
+
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("nick".into()),
+            role: "engineer".into(),
+        });
+        h.frame(vec![]);
+        h.press("agent send");
+        h.frame(vec![]);
+        let sent = &boxed(&h).chat_sent;
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].url, "/api/chat");
+        let body: Json = serde_json::from_str(&sent[0].body).unwrap();
+        assert_eq!(
+            body,
+            json!({ "message": "why does the conveyor stop?", "session": null })
+        );
+        assert!(h.has("agent stop"), "Stop while it answers");
+
+        let seq = sent[0].seq;
+        let stream = "event: session\ndata: {\"id\":\"s1\"}\n\n\
+            event: proposal\ndata: {\"ids\":[3],\"summary\":\"speed to 2\"}\n\n\
+            event: done\ndata: {\"stop\":\"end_turn\",\"why\":null,\"steps\":2,\"output_tokens\":9,\"proposals\":[3]}\n\n";
+        h.app.boxv.as_mut().unwrap().agent.apply(Incoming::Chunk {
+            seq,
+            text: stream.into(),
+        });
+        h.frame(vec![]);
+        assert!(h.has("agent new"), "the turn ended");
+        h.press("agent review");
+        h.frame(vec![]);
+        h.frame(vec![]);
+        assert_eq!(h.app.screen, Screen::Proposals);
+        let asked: Vec<String> = h
+            .app
+            .review
+            .as_ref()
+            .unwrap()
+            .sent
+            .iter()
+            .map(|r| r.url.clone())
+            .collect();
+        assert!(asked.iter().any(|u| u == "/api/proposals/3"), "{asked:?}");
+    }
+
     /// The Devices tab on a box: the map the box runs, each device with
     /// the link state the box reports and its points' live values; adding
     /// a device needs a project open and an engineer, so here the menu
@@ -2142,8 +2211,8 @@ mod boxed {
         assert_eq!(v.because, None, "opens with no path lit");
         assert_eq!(b.status(h.time, &Theme::dark()).0, "● connected");
         assert!(
-            !h.has("tab trend") && !h.has("tab claude"),
-            "I/O alone on a box (the Trend is along the bottom); Claude comes later"
+            !h.has("tab trend") && h.has("tab claude"),
+            "I/O and the Agent on a box (the Trend is along the bottom)"
         );
         assert_eq!(h.app.chrome.tab, Tab::Io);
 

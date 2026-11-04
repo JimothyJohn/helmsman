@@ -65,7 +65,7 @@ Three directions of traffic, three different rules:
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
-| `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10), reply checks (exact lengths, exceptions, echoes), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
+| `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10, 43/14 Read Device Identification), reply checks (exact lengths, exceptions, echoes, identification objects), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
 | `helmsman-node` | The edge node's firmware (docs/EDGE.md): `helmsman-iec` without std on an Olimex ESP32-POE2 (esp-hal, the esp toolchain, Xtensa). Not a workspace member (own lock, `make node-build`): the scan bench (Phase 1), then Modbus TCP to a remote block over embassy-net (Phase 2). | built: Phase 1; Phase 2 in progress |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
@@ -133,7 +133,10 @@ scan; the scheduler bounds how often.
   (`modbus-tcp`, `modbus-rtu`, `enip-io`, `logix-tag`), `endpoint` (`host:port`, a
   serial port's path for `modbus-rtu`, or an identity the box resolves
   when it connects: `mac=00-90-e8-7e-af-be` through its ARP table,
-  `cip=VENDOR:PRODUCT[:SERIAL]` through one `ListIdentity` broadcast;
+  `cip=VENDOR:PRODUCT[:SERIAL]` through one `ListIdentity` broadcast,
+  `modbus=VENDOR:PRODUCT` through Read Device Identification (FC 43/14)
+  to TCP 502 of the hosts its ARP table lists, bounded in hosts,
+  concurrency and time (`modbus-identification`);
   `helmsman_io::resolve`, `device-by-identity`), driver params (`unit`,
   `timeout_ms`, and the serial settings).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
@@ -1194,7 +1197,12 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   (PLCopen TC6) lowered to `F.st` by the existing importer; `F.L5X`
   (Rockwell ladder) converted to `F.st` by `helmsman_iec::ladder` (below,
   "L5X ladder import"), or 422 with every problem, each at its program,
-  routine and rung (the first 20 in the message, then a count).
+  routine and rung (the first 20 in the message, then a count). An
+  L5X's periodic tasks also write `program TASK scan_ms=N` into
+  project.settings (`helmsman_project::settings::set_scans`: a missing
+  line is added, a bare one gets `scan_ms`, an engineer's `scan_ms` is
+  kept and named in the response's `notes`); the playground does the
+  same.
 - **The engineer gate.** Every write (create, copy, rename, delete,
   save, upload, import, replay, deploy) needs a login session of an
   engineer or above (an account's, or the engineer's role-PIN session on
@@ -1352,7 +1360,10 @@ converts or nothing is written.
   two programs in one task that share a name, or that shadow a
   controller tag, become `PROGRAM_TAG`; a tag whose name ST keeps
   (`Log`, `Max`, `Limit`) becomes `Log_tag`. An export without tasks is
-  one PROGRAM named as the controller. Every PROGRAM is compiled before
+  one PROGRAM named as the controller. A periodic task's `Rate` (whole
+  ms, RM014 p.313) is its PROGRAM's scan (`Converted::scans`, written to
+  project.settings by the import); a continuous task's PROGRAM runs
+  every base scan, as the note says. Every PROGRAM is compiled before
   it is returned: a converter fault is a refusal, never a broken file.
 - **Refused**, each with its place: any other instruction (add-on
   instructions named as such), FBD, SFC and ST routines (Logix ST calls
@@ -1360,7 +1371,10 @@ converts or nothing is written.
   CONTROL, module I/O such as `Local:1:I.Data.3`, also through an alias),
   indirect subscripts, produced/consumed and InOut tags, constant tags
   written, JSR with parameters or inside a branch, JSR to the main
-  routine, programs in no task or disabled, event tasks, a controller
+  routine, programs in no task or disabled, event tasks, periodic tasks
+  whose `Rate` is not a whole number of ms from 1 to 10000 (refused, not
+  clamped: a clamped or default scan runs the logic at a period it was
+  not written for), a controller
   tag two tasks use (the box's PROGRAMs share no memory), conflicting
   pseudo-operands, malformed rungs. The file passes the L5X reader's
   limits (no DTD so no entities or XXE, nesting 256, 8 MiB, 100 000

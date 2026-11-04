@@ -6,7 +6,11 @@
 //!   device's Ethernet address, which a DHCP lease never changes;
 //! - `cip=991:515` or `cip=991:515:0x2A629EAE` (vendor id, product code
 //!   and, if given, serial number, as `ListIdentity` reports them): an
-//!   EtherNet/IP device's identity.
+//!   EtherNet/IP device's identity;
+//! - `modbus=Moxa:E1213` (`VendorName` and `ProductCode`, as Read Device
+//!   Identification reports them; `%XX` for a byte that is not a letter, a
+//!   digit or one of `-._~`, so `modbus=Schneider%20Electric:BMX`): a
+//!   Modbus TCP device's identity, matched case-blind on the trimmed text.
 //!
 //! A driver resolves such an endpoint to an address when it connects, at
 //! start and again after a link loss, so a device whose lease moved is
@@ -21,13 +25,20 @@
 //! - `cip=`: one `ListIdentity` broadcast ([`helmsman_proto::discover`]);
 //!   the first reply whose vendor, product code (and serial, when given)
 //!   match is the device; the address is the one the reply came from.
+//! - `modbus=`: the identification probe ([`probe_modbus`]): Read Device
+//!   Identification (FC 43/14, [`crate::modbus::identify`]) to TCP 502 of
+//!   each host the ARP table lists, and nothing else: a bounded number of
+//!   hosts, a few at a time, each under a deadline and the whole probe
+//!   under another. A device the host has not talked to yet is not in the
+//!   table, so, as for `mac=`, it needs one ping or its address the first
+//!   time.
 //!
 //! The resolved address is what the link reports going up with, so the
 //! Devices tab shows both the identity and where it was found. The
 //! `Resolver` is how a test substitutes the ARP table and the sweep's
 //! target.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
@@ -43,6 +54,53 @@ pub enum Identity {
         product: u16,
         serial: Option<u32>,
     },
+    /// `modbus=VENDOR:PRODUCT`: Read Device Identification's `VendorName`
+    /// and `ProductCode`, decoded.
+    Modbus { vendor: String, product: String },
+}
+
+/// `s` with every byte but ASCII letters, digits and `-._~` as `%XX`: one
+/// token of a map line, whatever a device calls itself.
+#[must_use]
+pub fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+/// `%XX` decoded; `None` for a `%` without two hex digits or bytes that
+/// are not UTF-8.
+fn percent_decode(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = b.get(i + 1..i + 3)?;
+            if !hex.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            out.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Whether a device's identification text is the text a `modbus=` names:
+/// trimmed, case-blind.
+#[must_use]
+pub fn modbus_text_eq(named: &str, reported: &str) -> bool {
+    named.trim().eq_ignore_ascii_case(reported.trim())
 }
 
 impl fmt::Display for Identity {
@@ -63,6 +121,9 @@ impl fmt::Display for Identity {
                 product,
                 serial: Some(s),
             } => write!(f, "cip={vendor}:{product}:{s:#010x}"),
+            Self::Modbus { vendor, product } => {
+                write!(f, "modbus={}:{}", percent_encode(vendor), percent_encode(product))
+            }
         }
     }
 }
@@ -88,6 +149,9 @@ pub fn parse(endpoint: &str) -> Result<Endpoint, String> {
     }
     if let Some(cip) = endpoint.strip_prefix("cip=") {
         return parse_cip(cip).map(Endpoint::Identity);
+    }
+    if let Some(m) = endpoint.strip_prefix("modbus=") {
+        return parse_modbus(m).map(Endpoint::Identity);
     }
     if endpoint.is_empty() || endpoint.chars().any(char::is_whitespace) {
         return Err("a host is one word, like 192.168.1.50:502".into());
@@ -139,6 +203,59 @@ fn parse_cip(s: &str) -> Result<Identity, String> {
     })
 }
 
+fn parse_modbus(s: &str) -> Result<Identity, String> {
+    let shape = "modbus= is VENDOR:PRODUCT, as the device's identification names them (%20 for a space), like modbus=Moxa:E1213";
+    let Some((v, p)) = s.split_once(':') else {
+        return Err(shape.into());
+    };
+    if p.contains(':') || s.chars().any(char::is_whitespace) {
+        return Err(shape.into());
+    }
+    let text = |raw: &str| {
+        percent_decode(raw)
+            .filter(|t| {
+                !t.trim().is_empty()
+                    && t.chars().count() <= crate::modbus::MAX_ID_TEXT
+                    && !t.chars().any(char::is_control)
+            })
+            .ok_or_else(|| shape.to_string())
+    };
+    Ok(Identity::Modbus {
+        vendor: text(v)?,
+        product: text(p)?,
+    })
+}
+
+/// How the identification probe ([`probe_modbus`]) is bounded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModbusProbe {
+    /// The TCP port asked (502, TCP §3.1.3 p.5; a test's simulator elsewhere).
+    pub port: u16,
+    /// The unit id asked.
+    pub unit: u8,
+    /// One host's deadline: connect, requests and replies.
+    pub per_host: Duration,
+    /// The whole probe's: a host not started by then is not asked.
+    pub total: Duration,
+    /// Most hosts asked; the ARP table's first ones in address order.
+    pub max_hosts: usize,
+    /// Most hosts asked at once.
+    pub concurrency: usize,
+}
+
+impl Default for ModbusProbe {
+    fn default() -> Self {
+        Self {
+            port: crate::modbus::DEFAULT_PORT,
+            unit: 1,
+            per_host: Duration::from_millis(500),
+            total: Duration::from_secs(3),
+            max_hosts: 64,
+            concurrency: 8,
+        }
+    }
+}
+
 /// How identities are looked up: the ARP table's text and where a
 /// `ListIdentity` goes. [`Resolver::default`] is the host's; a test gives
 /// its own.
@@ -151,6 +268,8 @@ pub struct Resolver {
     pub sweep: Option<SocketAddrV4>,
     /// How long replies are gathered.
     pub window: Duration,
+    /// The Modbus identification probe for `modbus=`; `None`: no probe.
+    pub modbus: Option<ModbusProbe>,
 }
 
 impl fmt::Debug for Resolver {
@@ -158,6 +277,7 @@ impl fmt::Debug for Resolver {
         f.debug_struct("Resolver")
             .field("sweep", &self.sweep)
             .field("window", &self.window)
+            .field("modbus", &self.modbus)
             .finish_non_exhaustive()
     }
 }
@@ -168,6 +288,7 @@ impl Default for Resolver {
             arp: Box::new(host_arp_table),
             sweep: Some(SocketAddrV4::new(Ipv4Addr::BROADCAST, 44818)),
             window: Duration::from_millis(700),
+            modbus: Some(ModbusProbe::default()),
         }
     }
 }
@@ -318,6 +439,149 @@ fn sweep(target: SocketAddrV4, window: Duration) -> io::Result<helmsman_proto::d
     helmsman_proto::discover::sweep(&socket, target, window)
 }
 
+/// The hosts `table` (either format) lists with a complete entry, in
+/// address order, each once: what the Modbus probe may ask. Incomplete
+/// entries, group MACs (broadcast, multicast) and multicast, broadcast or
+/// unspecified addresses are no device and are left out.
+#[must_use]
+pub fn arp_hosts(table: &str) -> Vec<(Ipv4Addr, [u8; 6])> {
+    let mut out: Vec<(Ipv4Addr, [u8; 6])> = Vec::new();
+    for line in table.lines() {
+        let mut ip = None;
+        let mut mac = None;
+        for tok in line.split_whitespace() {
+            let t = tok.trim_matches(|c| c == '(' || c == ')');
+            if let Ok(a) = t.parse::<Ipv4Addr>() {
+                ip.get_or_insert(a);
+            } else if let Some(m) = parse_mac(t) {
+                mac.get_or_insert(m);
+            }
+        }
+        if let (Some(a), Some(m)) = (ip, mac)
+            && m != [0; 6]
+            && m[0] & 1 == 0
+            && !a.is_multicast()
+            && !a.is_broadcast()
+            && !a.is_unspecified()
+            && !out.iter().any(|(x, _)| *x == a)
+        {
+            out.push((a, m));
+        }
+    }
+    out.sort_by_key(|(a, _)| *a);
+    out
+}
+
+/// The hosts the probe asks for `table`: [`arp_hosts`], the first
+/// [`ModbusProbe::max_hosts`] of them.
+#[must_use]
+pub fn probe_targets(table: &str, p: &ModbusProbe) -> Vec<(Ipv4Addr, [u8; 6])> {
+    arp_hosts(table).into_iter().take(p.max_hosts).collect()
+}
+
+/// A host that answered the Modbus identification probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModbusSeen {
+    pub address: Ipv4Addr,
+    /// From the ARP table the host was taken from.
+    pub mac: Option<[u8; 6]>,
+    pub identification: crate::modbus::DeviceIdentification,
+}
+
+impl ModbusSeen {
+    /// The `modbus=VENDOR:PRODUCT` identity a map may name this device by.
+    #[must_use]
+    pub fn identity(&self) -> Identity {
+        Identity::Modbus {
+            vendor: self.identification.vendor_name.clone(),
+            product: self.identification.product_code.clone(),
+        }
+    }
+
+    /// The `mac=` identity, when the MAC is known.
+    #[must_use]
+    pub fn mac_text(&self) -> Option<String> {
+        self.mac.map(|m| Identity::Mac(m).to_string())
+    }
+}
+
+/// The Modbus identification probe: Read Device Identification
+/// ([`crate::modbus::identify`], read-only) to `r`'s port on each host of
+/// `r`'s ARP table ([`arp_hosts`]) and no other, at most
+/// [`ModbusProbe::max_hosts`] of them, [`ModbusProbe::concurrency`] at a
+/// time, each within [`ModbusProbe::per_host`]; no host is started after
+/// [`ModbusProbe::total`], so the probe ends by `total + per_host`. Hosts
+/// that refuse, time out or answer something that does not read are
+/// passed over. The ones that answered, in address order.
+///
+/// # Errors
+/// No probe configured, or the ARP table could not be read.
+pub fn probe_modbus(r: &Resolver) -> io::Result<Vec<ModbusSeen>> {
+    probe_until(r, None)
+}
+
+/// [`probe_modbus`], starting no further host once one answers as
+/// `wanted` says (a `modbus=` being resolved needs only its device).
+fn probe_until(
+    r: &Resolver,
+    wanted: Option<&(dyn Fn(&crate::modbus::DeviceIdentification) -> bool + Sync)>,
+) -> io::Result<Vec<ModbusSeen>> {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Instant;
+
+    let Some(p) = &r.modbus else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "no Modbus identification probe",
+        ));
+    };
+    let table = (r.arp)()?;
+    let hosts = probe_targets(&table, p);
+    let deadline = Instant::now() + p.total;
+    let next = AtomicUsize::new(0);
+    let done = AtomicBool::new(false);
+    let found = Mutex::new(Vec::new());
+    let workers = p.concurrency.clamp(1, 32).min(hosts.len());
+    std::thread::scope(|s| {
+        for _ in 0..workers {
+            s.spawn(|| {
+                loop {
+                    if done.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let Some(&(ip, mac)) = hosts.get(next.fetch_add(1, Ordering::Relaxed)) else {
+                        break;
+                    };
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    let addr = SocketAddr::V4(SocketAddrV4::new(ip, p.port));
+                    if let Ok(id) = crate::modbus::identify(addr, p.unit, p.per_host.min(left)) {
+                        if wanted.is_some_and(|w| w(&id)) {
+                            done.store(true, Ordering::Relaxed);
+                        }
+                        found
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(ModbusSeen {
+                                address: ip,
+                                mac: Some(mac),
+                                identification: id,
+                            });
+                    }
+                }
+            });
+        }
+    });
+    let mut out = found
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    out.sort_by_key(|s| s.address);
+    Ok(out)
+}
+
 /// Where `id` is now, at `port`.
 ///
 /// # Errors
@@ -373,6 +637,31 @@ pub fn resolve(id: &Identity, port: u16, r: &Resolver) -> io::Result<SocketAddrV
                     format!("{id}: no such device among the {n} that answered ListIdentity"),
                 )),
             }
+        }
+        Identity::Modbus { vendor, product } => {
+            if r.modbus.is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("{id}: no Modbus identification probe to find it with"),
+                ));
+            }
+            let is_it = |d: &crate::modbus::DeviceIdentification| {
+                modbus_text_eq(vendor, &d.vendor_name) && modbus_text_eq(product, &d.product_code)
+            };
+            let found = probe_until(r, Some(&is_it))?;
+            let n = found.len();
+            found
+                .iter()
+                .find(|s| is_it(&s.identification))
+                .map(|s| SocketAddrV4::new(s.address, port))
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!(
+                            "{id}: no such device among the {n} that answered Read Device Identification (only hosts in this host's ARP table are asked: ping the device once, or give its address)"
+                        ),
+                    )
+                })
         }
     }
 }
@@ -508,6 +797,7 @@ mod tests {
             arp: Box::new(move || Ok(table.to_string())),
             sweep: None,
             window: Duration::from_millis(10),
+            modbus: None,
         }
     }
 
@@ -538,6 +828,7 @@ mod tests {
             arp: Box::new(|| Err(io::Error::other("no arp"))),
             sweep: None,
             window: Duration::from_millis(10),
+            modbus: None,
         };
         assert!(socket_addr("mac=00-90-e8-7e-af-be", 502, &failing).is_err());
     }
@@ -587,6 +878,7 @@ mod discover_tests {
                 arp: Box::new(|| Ok(String::new())),
                 sweep: None,
                 window: Duration::from_millis(10),
+                modbus: None,
             })
             .is_err()
         );
