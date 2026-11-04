@@ -14,13 +14,29 @@
 //! clock only starts once we run, as Olimex ships it.
 //!
 //! No galvanic isolation on this board: never USB and Ethernet together.
+//!
+//! With the `poe-iso` feature the same code drives an **ESP32-POE-ISO**
+//! (WROOM, no PSRAM, so GPIO16/17 are free): the RMII clock leaves on
+//! GPIO17 through its IO_MUX function `EMAC_CLK_OUT_180`, as supervictor's
+//! hardware-verified `board/poe_iso.rs` does; PHY, SMI pins, PHY power gate
+//! and APLL are the same. That board is isolated: USB stays on while it runs
+//! on PoE, which is what makes its serial log readable on the network.
 
 /// PHY address on the SMI bus (LAN8720A PHYAD0 strapped low).
 pub const PHY_ADDR: u8 = 0;
 /// Gates 3.3 V to the PHY; driven high before any MDIO access.
 pub const PHY_POWER_GPIO: u8 = 12;
-/// RMII reference clock output: APLL via clock-output channel 1 on GPIO0.
+/// RMII reference clock output: APLL via clock-output channel 1 on GPIO0
+/// (POE2), or the EMAC's own clock-out on GPIO17 (POE-ISO).
+#[cfg(not(feature = "poe-iso"))]
 pub const RMII_CLK_OUT_GPIO: u8 = 0;
+#[cfg(feature = "poe-iso")]
+pub const RMII_CLK_OUT_GPIO: u8 = 17;
+/// The board this image is for, as the console names it.
+#[cfg(not(feature = "poe-iso"))]
+pub const BOARD: &str = "ESP32-POE2";
+#[cfg(feature = "poe-iso")]
+pub const BOARD: &str = "ESP32-POE-ISO";
 /// RMII reference clock frequency the PHY needs.
 pub const RMII_CLK_HZ: u32 = 50_000_000;
 /// ESP32 crystal frequency in MHz (40 on every production board; the bench
@@ -29,6 +45,9 @@ pub const XTAL_FREQ_MHZ: u32 = 40;
 
 /// IO_MUX function 1 on GPIO0 = `CLK_OUT1` (soc/io_mux_reg.h).
 const FUNC_GPIO0_CLK_OUT1: u8 = 1;
+/// IO_MUX function 5 on GPIO17 = `EMAC_CLK_OUT_180` (soc/io_mux_reg.h).
+#[cfg(feature = "poe-iso")]
+const FUNC_GPIO17_EMAC_CLK_OUT_180: u8 = 5;
 /// `PIN_CTRL` clock-output selector value for the APLL (soc/clk_tree_defs.h).
 const CLKOUT_SIG_APLL: u8 = 6;
 
@@ -141,7 +160,10 @@ const APLL_CAL_DELAY_3: u8 = 0x1f;
 /// `Emac::init`) is what finally lets the MAC run from the same APLL.
 pub fn enable_rmii_clk_out(delay: &mut esp_hal::delay::Delay) {
     enable_apll_50mhz(delay);
+    #[cfg(not(feature = "poe-iso"))]
     route_apll_clk_out_gpio0();
+    #[cfg(feature = "poe-iso")]
+    route_clk_out_gpio17();
 }
 
 /// Mirrors ESP-IDF `rtc_clk_apll_enable(true)` and `rtc_clk_apll_coeff_set`.
@@ -191,8 +213,23 @@ fn enable_apll_50mhz(delay: &mut esp_hal::delay::Delay) {
     }
 }
 
+/// GPIO17 as the EMAC's reference clock output (`EMAC_CLK_OUT_180`): the
+/// POE-ISO's route, as supervictor's `board/poe_iso.rs`
+/// `route_clk_out_gpio17`. The clock reaches the pad once the EMAC's
+/// internal-clock selector is set (ph-esp32-mac does that in `init`).
+#[cfg(feature = "poe-iso")]
+fn route_clk_out_gpio17() {
+    // SAFETY: the IO_MUX register block at its fixed address; the write
+    // touches pad 17's function select only.
+    let io_mux = unsafe { &*esp32::IO_MUX::ptr() };
+    io_mux
+        .gpio17()
+        .modify(|_, w| unsafe { w.mcu_sel().bits(FUNC_GPIO17_EMAC_CLK_OUT_180) });
+}
+
 /// GPIO0 as an output pad driven by clock-output channel 1, channel 1 fed by
 /// the APLL. Mirrors ESP-IDF `esp_clock_output_start(CLKOUT_SIG_APLL, 0)`.
+#[cfg(not(feature = "poe-iso"))]
 fn route_apll_clk_out_gpio0() {
     // SAFETY: the GPIO and IO_MUX register blocks at their fixed addresses;
     // the writes below touch pad 0 and clock-output channel 1 only.

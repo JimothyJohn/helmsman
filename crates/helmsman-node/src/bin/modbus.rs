@@ -47,7 +47,12 @@ esp_bootloader_esp_idf::esp_app_desc!(
     esp_bootloader_esp_idf::SECURE_VERSION
 );
 
-const HEAP_SIZE: usize = 160 * 1024;
+/// Internal heap in the main DRAM segment, which the stack shares: at
+/// 160 KiB the stack was 1.7 KiB and the node panicked on its stack guard
+/// right after the PHY came up (2026-11-03). 112 KiB leaves about 50 KiB;
+/// the chase program and the sockets need far less heap than that.
+/// `scripts/node-build.sh` refuses an image with less than 32 KiB.
+const HEAP_SIZE: usize = 112 * 1024;
 const DRAM2_HEAP_SIZE: usize = 96 * 1024;
 
 /// The remote block: the bench E1213 unless `E1213_ADDR` says otherwise at
@@ -114,9 +119,10 @@ async fn main(spawner: Spawner) -> ! {
 
     println!();
     println!(
-        "helmsman-node modbus ({} {})",
+        "helmsman-node modbus ({} {}) on the {}",
         env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_VERSION")
+        env!("CARGO_PKG_VERSION"),
+        helmsman_node::board::BOARD
     );
     println!(
         "block {E1213_ADDR}:{E1213_PORT} unit {UNIT}; log sink {LOG_SINK}; scan {} ms",

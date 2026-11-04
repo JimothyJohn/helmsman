@@ -352,7 +352,35 @@ max / p99 per-scan time and `esp-alloc` stats after compile and after
 10 000 scans over USB serial. Ethernet unplugged throughout; USB power.
 Repeat with the program heap in PSRAM on a WROVER.
 
-*Built 2026-11-03 (feat/node-scan-bench); numbers pending Nick's flash.*
+*Built 2026-11-03 (feat/node-scan-bench).* **Numbers, the board, 2026-11-03**
+(Olimex ESP32-POE2, ESP32 rev 3.0 WROVER-E, 240 MHz, flash 40 MHz DIO as
+the bootloader reports it; after `fix/node-stack`: 128 KiB + 96 KiB
+internal heap, 60 784 B main stack):
+
+| round | program | compile | heap for the program | 10 000 scans: min / mean / p99 / max | peak heap |
+| --- | --- | --- | --- | --- | --- |
+| 1, internal SRAM (229 376 B heap) | bench-4k | 40.9 ms | 158 216 B | 31.8 / 32.0 / 32.3 / 32.8 ms | 198 440 B (13.5 % headroom) |
+| 1, internal SRAM | cell (batch-mixer) | out of heap during compile: the allocator's error handler aborts | | | |
+| 1, internal SRAM, second flash | bench-4k | 38.7 ms | 158 216 B | 27.9 / 28.1 / 28.3 / 28.9 ms | 198 440 B |
+| 2, + PSRAM (4 423 680 B heap) | bench-4k | 19.0 ms | 85 308 B | 27.9 / 28.1 / 28.3 / 28.9 ms | 198 440 B |
+| 2, + PSRAM | cell (batch-mixer) | **panic during compile**: "memory allocation of 1061212033 bytes failed" in `check::Ck::coerce` (a `Vec::reserve`) | | | |
+
+**G2 fails**: 32 ms against < 5 ms, about 520× the Studio's 61.8 µs
+(a 240 MHz in-order core alone would explain 50–100×). Suspects, not yet
+measured: flash at 40 MHz DIO (instruction fetch through the cache), the
+interpreter's `i128` `Value::Int` on a 32-bit core, the BTreeMap lookups
+the no_std port brought in, and esp-alloc's heap-stats. **G3 fails on
+internal SRAM** (13.5 % headroom for bench-4k, the starter does not fit);
+with PSRAM the scan time is unchanged (esp-alloc fills internal SRAM
+first, so the program likely still sits there). The batch-mixer starter
+**crashes compiling with PSRAM**: the size asked for, 1 061 212 033 =
+0x3F40D781, is an address in the flash-mapped rodata, so a pointer is
+being read as a length: memory corruption on the board, not an
+out-of-memory (the same source compiles on the host and in every test).
+Suspects, not yet tested: the ESP32's PSRAM cache behaviour and esp-alloc's
+PSRAM region. Per the rule above: record and stop; the follow-on (speed,
+and the PSRAM corruption) is a separate card.
+
 `crates/helmsman-node` is excluded from the workspace (own Cargo.lock,
 `rust-toolchain.toml` channel `esp`, `.cargo/config.toml` with the Xtensa
 target and build-std), built by `make node-build` (`scripts/node-build.sh`;
