@@ -28,6 +28,13 @@ features=()
 case "${2:-${1:-}}" in
   net) features=(--features net) ;;
 esac
+# NODE_BOARD=poe-iso builds for the ESP32-POE-ISO (RMII clock on GPIO17);
+# the default is the ESP32-POE2.
+case "${NODE_BOARD:-poe2}" in
+  poe2) ;;
+  poe-iso) [ ${#features[@]} -gt 0 ] && features=(--features net,poe-iso) ;;
+  *) echo "NODE_BOARD: poe2 or poe-iso, not ${NODE_BOARD}" >&2; exit 2 ;;
+esac
 case "$mode" in
   build|net) cargo build --release ${features[@]+"${features[@]}"} ;;
   clippy) cargo clippy --release ${features[@]+"${features[@]}"} -- -D warnings ;;
