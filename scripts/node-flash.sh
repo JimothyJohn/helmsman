@@ -28,6 +28,14 @@
 #
 # Usage: scripts/node-flash.sh [bench|modbus]
 #        SERIAL_PORT=/dev/cu.usbserial-XXXX scripts/node-flash.sh modbus
+#        NODE_BOARD=poe-iso scripts/node-flash.sh modbus
+#
+# The port and the board's MAC are remembered per board after a flash that
+# completes (scratch/node-board.<board>, untracked): with several boards on
+# USB the next run takes the remembered port without SERIAL_PORT, reads that
+# one board's MAC first (espflash board-info: it resets only the board about
+# to be flashed) and refuses if it is not the board remembered under that
+# name, so a POE2 is never flashed as a POE-ISO by a moved cable.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v espflash >/dev/null || { echo "espflash missing: cargo install espflash --locked" >&2; exit 1; }
@@ -38,6 +46,18 @@ case "$bin" in
   *) echo "usage: $0 [bench|modbus]" >&2; exit 2 ;;
 esac
 
+board="${NODE_BOARD:-poe2}"
+root="$PWD"
+memo="$root/scratch/node-board.$board"
+want_mac=""
+memo_port=""
+if [ -f "$memo" ]; then
+  read -r memo_port want_mac < "$memo" || true
+fi
+if [ -z "${SERIAL_PORT:-}" ] && [ -n "$memo_port" ] && [ -e "$memo_port" ]; then
+  SERIAL_PORT="$memo_port"
+  echo "$board: the remembered port $SERIAL_PORT (MAC $want_mac)"
+fi
 if [ -z "${SERIAL_PORT:-}" ]; then
   ports=()
   for p in /dev/cu.usbserial-* /dev/cu.usbmodem* /dev/cu.SLAB_USBtoUART* /dev/ttyUSB* /dev/ttyACM*; do
@@ -46,10 +66,21 @@ if [ -z "${SERIAL_PORT:-}" ]; then
   case "${#ports[@]}" in
     0) echo "no USB serial port: is the POE2 on USB?" >&2; exit 1 ;;
     1) SERIAL_PORT="${ports[0]}" ;;
-    *) echo "several serial ports (${ports[*]}): set SERIAL_PORT=" >&2; exit 1 ;;
+    *) echo "several serial ports (${ports[*]}): set SERIAL_PORT= once; it is remembered for $board" >&2; exit 1 ;;
   esac
 fi
 
+mac="$(espflash board-info --port "$SERIAL_PORT" 2>/dev/null | awk '/MAC address/ { print $3 }')"
+if [ -z "$mac" ]; then
+  echo "no ESP32 answers on $SERIAL_PORT (espflash board-info)" >&2
+  exit 1
+fi
+if [ -n "$want_mac" ] && [ "$mac" != "$want_mac" ]; then
+  echo "FAIL: $SERIAL_PORT has MAC $mac, but $board was $want_mac: another board is on that port." >&2
+  echo "      Set SERIAL_PORT= for $board (and NODE_BOARD= for the other board) to flash it." >&2
+  exit 1
+fi
+echo "board on $SERIAL_PORT: MAC $mac"
 case "${NODE_BOARD:-poe2}" in
   poe-iso)
     echo "ESP32-POE-ISO on $SERIAL_PORT, image: $bin"
@@ -80,6 +111,10 @@ cd crates/helmsman-node
 espflash flash --monitor --port "$SERIAL_PORT" \
   "target/xtensa-esp32-none-elf/release/$bin" 2>&1 | tee "../../$log"
 echo "log: $log"
+if grep -q "Flashing has completed" "$root/$log"; then
+  printf '%s %s\n' "$SERIAL_PORT" "$mac" > "$memo"
+  echo "remembered: $board on $SERIAL_PORT, MAC $mac ($memo)"
+fi
 if [ "$bin" = modbus ] && [ "${NODE_BOARD:-poe2}" = poe-iso ]; then
   echo "now: start the sink (/usr/bin/python3 -I scripts/node-log-sink.py), plug PoE (USB may stay),"
   echo "     and rerun: espflash monitor --port $SERIAL_PORT to watch the console."
