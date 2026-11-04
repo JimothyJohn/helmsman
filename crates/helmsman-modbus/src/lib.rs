@@ -35,6 +35,18 @@ pub const WRITE_SINGLE_REGISTER: u8 = 0x06;
 pub const WRITE_MULTIPLE_COILS: u8 = 0x0F;
 pub const WRITE_MULTIPLE_REGISTERS: u8 = 0x10;
 
+/// App §6.19 p.41, §6.21 p.43: Encapsulated Interface Transport, the
+/// function code Read Device Identification rides on.
+pub const ENCAPSULATED_INTERFACE: u8 = 0x2B;
+/// App §6.21 p.43: MEI type 14, Read Device Identification.
+pub const MEI_READ_DEVICE_ID: u8 = 0x0E;
+/// App §6.21 p.44: Read Device ID code 01, the basic objects as a stream.
+pub const READ_DEVICE_ID_BASIC: u8 = 0x01;
+/// App §6.21 p.43: the three mandatory (basic) objects.
+pub const OBJECT_VENDOR_NAME: u8 = 0x00;
+pub const OBJECT_PRODUCT_CODE: u8 = 0x01;
+pub const OBJECT_MAJOR_MINOR_REVISION: u8 = 0x02;
+
 /// App §6.1 p.11, §6.2 p.12: 1 to 2000 bits per read.
 pub const MAX_READ_BITS: u16 = 2000;
 /// App §6.3 p.15, §6.4 p.16: 1 to 125 registers per read.
@@ -166,6 +178,32 @@ pub mod pdu {
         debug_assert!(p.len() <= MAX_PDU);
         Ok(p)
     }
+
+    /// FC 0x2B / MEI 0x0E: Read Device Identification, `code` (01-04)
+    /// from object `object` (App §6.21 p.43).
+    #[must_use]
+    pub fn read_device_id(code: u8, object: u8) -> Vec<u8> {
+        vec![
+            super::ENCAPSULATED_INTERFACE,
+            super::MEI_READ_DEVICE_ID,
+            code,
+            object,
+        ]
+    }
+}
+
+/// One Read Device Identification reply (App §6.21 pp.43-44): what the
+/// server says it conforms to, whether more objects follow and from
+/// which, and the objects in this reply, in wire order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceIdPage {
+    /// 0x01-0x03 or 0x81-0x83; kept as sent, informational only.
+    pub conformity: u8,
+    /// `Some(next)`: More Follows was 0xFF and the next request starts at
+    /// object `next`. `None`: More Follows was 0x00.
+    pub next: Option<u8>,
+    /// `(object id, value bytes)`; a value is at most 247 bytes.
+    pub objects: alloc::vec::Vec<(u8, alloc::vec::Vec<u8>)>,
 }
 
 /// Reply checks, App §6 and §7: anything not exactly what the request asks
@@ -174,7 +212,70 @@ pub mod reply {
     use alloc::format;
     use alloc::vec::Vec;
 
-    use super::{Error, WRITE_MULTIPLE_COILS, WRITE_MULTIPLE_REGISTERS};
+    use super::{
+        DeviceIdPage, ENCAPSULATED_INTERFACE, Error, MEI_READ_DEVICE_ID, WRITE_MULTIPLE_COILS,
+        WRITE_MULTIPLE_REGISTERS,
+    };
+
+    /// FC 0x2B / MEI 0x0E, Read Device Identification (App §6.21
+    /// pp.43-44): MEI type, Read Device ID code, conformity level, More
+    /// Follows (0x00 or 0xFF), Next Object Id, Number of Objects, then that
+    /// many objects of id, length, value. Every length is checked against
+    /// what is left of the PDU, the count must match the objects present
+    /// and nothing may follow the last one.
+    ///
+    /// # Errors
+    /// An exception, another MEI type or Read Device ID code than asked
+    /// for, a More Follows other than 0x00 or 0xFF, a count or a length
+    /// that does not match the bytes, or bytes after the last object.
+    pub fn device_id(code: u8, pdu: &[u8]) -> Result<DeviceIdPage, Error> {
+        let b = body(ENCAPSULATED_INTERFACE, pdu)?;
+        let &[mei, got_code, conformity, more, next, n, ref objects_bytes @ ..] = b else {
+            return Err(Error::Protocol(format!(
+                "device identification reply of {} bytes",
+                pdu.len()
+            )));
+        };
+        if mei != MEI_READ_DEVICE_ID {
+            return Err(Error::Protocol(format!("MEI type {mei:#04x}, expected 0x0e")));
+        }
+        if got_code != code {
+            return Err(Error::Protocol(format!(
+                "Read Device ID code {got_code:#04x}, expected {code:#04x}"
+            )));
+        }
+        let next = match more {
+            0x00 => None,
+            0xFF => Some(next),
+            m => return Err(Error::Protocol(format!("More Follows {m:#04x}"))),
+        };
+        let mut rest: &[u8] = objects_bytes;
+        let mut objects = Vec::with_capacity(usize::from(n));
+        for k in 0..n {
+            let &[id, len, ref tail @ ..] = rest else {
+                return Err(Error::Protocol(format!("{n} objects announced, {k} present")));
+            };
+            let Some((value, after)) = tail.split_at_checked(usize::from(len)) else {
+                return Err(Error::Protocol(format!(
+                    "object {id:#04x} of {len} bytes, {} left",
+                    tail.len()
+                )));
+            };
+            objects.push((id, value.to_vec()));
+            rest = after;
+        }
+        if !rest.is_empty() {
+            return Err(Error::Protocol(format!(
+                "{} bytes after the last of {n} objects",
+                rest.len()
+            )));
+        }
+        Ok(DeviceIdPage {
+            conformity,
+            next,
+            objects,
+        })
+    }
 
     /// Strips the function code, turning an exception reply (function code +
     /// 0x80, one exception byte; App §7 p.47) into [`Error::Exception`].
@@ -433,6 +534,58 @@ mod tests {
             mbap::check_head(&[1, 2, 0, 0, 0, 3, 8], 0x0102, 7).is_err(),
             "unit"
         );
+    }
+
+    /// The spec's own example (App §6.21 p.45): basic identification in one
+    /// response, lengths in hex.
+    #[test]
+    fn device_identification_reads_the_spec_example() {
+        assert_eq!(
+            pdu::read_device_id(READ_DEVICE_ID_BASIC, 0),
+            [0x2B, 0x0E, 0x01, 0x00]
+        );
+        let mut r = vec![0x2B, 0x0E, 0x01, 0x01, 0x00, 0x00, 0x03];
+        for (id, v) in [
+            (0u8, &b"Company identification"[..]),
+            (1, b"Product code XX"),
+            (2, b"V2.11"),
+        ] {
+            r.push(id);
+            r.push(u8::try_from(v.len()).unwrap());
+            r.extend(v);
+        }
+        let page = reply::device_id(READ_DEVICE_ID_BASIC, &r).unwrap();
+        assert_eq!(page.conformity, 0x01);
+        assert_eq!(page.next, None);
+        assert_eq!(page.objects.len(), 3);
+        assert_eq!(page.objects[2], (2, b"V2.11".to_vec()));
+        // More Follows 0xFF names the next object.
+        let mut more = r.clone();
+        more[4] = 0xFF;
+        more[5] = 0x02;
+        assert_eq!(
+            reply::device_id(READ_DEVICE_ID_BASIC, &more).unwrap().next,
+            Some(2)
+        );
+        let bad = |f: &dyn Fn(&mut Vec<u8>)| {
+            let mut x = r.clone();
+            f(&mut x);
+            reply::device_id(READ_DEVICE_ID_BASIC, &x)
+        };
+        assert!(bad(&|x| x[1] = 0x0D).is_err(), "MEI type 13");
+        assert!(bad(&|x| x[2] = 0x02).is_err(), "another code");
+        assert!(bad(&|x| x[4] = 0x01).is_err(), "More Follows 1");
+        assert!(bad(&|x| x[6] = 4).is_err(), "count says 4");
+        assert!(bad(&|x| x[6] = 2).is_err(), "count says 2: trailing bytes");
+        assert!(bad(&|x| x.truncate(x.len() - 1)).is_err(), "truncated value");
+        assert!(bad(&|x| x[8] = 0xFF).is_err(), "length past the end");
+        assert!(bad(&|x| x.push(0)).is_err(), "trailing byte");
+        assert!(bad(&|x| x.truncate(6)).is_err(), "no count");
+        assert_eq!(
+            reply::device_id(READ_DEVICE_ID_BASIC, &[0xAB, 0x01]),
+            Err(Error::Exception(ILLEGAL_FUNCTION))
+        );
+        assert!(reply::device_id(READ_DEVICE_ID_BASIC, &[0x03, 2, 0, 0]).is_err());
     }
 
     #[test]

@@ -65,7 +65,7 @@ Three directions of traffic, three different rules:
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
-| `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10), reply checks (exact lengths, exceptions, echoes), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
+| `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10, 43/14 Read Device Identification), reply checks (exact lengths, exceptions, echoes, identification objects), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
 | `helmsman-node` | The edge node's firmware (docs/EDGE.md): `helmsman-iec` without std on an Olimex ESP32-POE2 (esp-hal, the esp toolchain, Xtensa). Not a workspace member (own lock, `make node-build`): the scan bench (Phase 1), then Modbus TCP to a remote block over embassy-net (Phase 2). | built: Phase 1; Phase 2 in progress |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
@@ -133,7 +133,10 @@ scan; the scheduler bounds how often.
   (`modbus-tcp`, `modbus-rtu`, `enip-io`, `logix-tag`), `endpoint` (`host:port`, a
   serial port's path for `modbus-rtu`, or an identity the box resolves
   when it connects: `mac=00-90-e8-7e-af-be` through its ARP table,
-  `cip=VENDOR:PRODUCT[:SERIAL]` through one `ListIdentity` broadcast;
+  `cip=VENDOR:PRODUCT[:SERIAL]` through one `ListIdentity` broadcast,
+  `modbus=VENDOR:PRODUCT` through Read Device Identification (FC 43/14)
+  to TCP 502 of the hosts its ARP table lists, bounded in hosts,
+  concurrency and time (`modbus-identification`);
   `helmsman_io::resolve`, `device-by-identity`), driver params (`unit`,
   `timeout_ms`, and the serial settings).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,

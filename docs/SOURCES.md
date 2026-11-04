@@ -381,6 +381,27 @@ into the code.
   p.30, 1-123 registers), exception replies and codes (§7 p.47). The same
   application layer runs over RTU (`rtu.rs`), which also takes reply lengths
   from it.
+- **Read Device Identification** (card `modbus-identification`;
+  `crates/helmsman-modbus` `pdu::read_device_id` / `reply::device_id`,
+  `helmsman-io` `modbus::app::read_device_identification` and
+  `modbus::identify`, the simulator's `sim::Identification`): FC 43 is the
+  Encapsulated Interface Transport (§6.19 p.41) and MEI type 14 (0x0E) Read
+  Device Identification (§6.21 "43 / 14 (0x2B / 0x0E) Read Device
+  Identification", pp.43-46). Used from it: the object table, with
+  VendorName 0x00, ProductCode 0x01 and MajorMinorRevision 0x02 the
+  mandatory Basic category, all ASCII strings (p.43); the request (function,
+  MEI type, Read Device ID code 01-04, Object Id) and response layout
+  (conformity level 0x01-0x03 / 0x81-0x83, More Follows 0x00 / 0xFF, Next
+  Object Id, Number of Objects, then id, length, value per object) and the
+  0xAB exception (pp.43-44); exception 03 for an illegal Read Device ID
+  code, a stream from an unknown Object Id restarting at object 0, the
+  client asking again from the Next Object Id while More Follows is 0xFF,
+  individual access (code 04) answering exception 02 for an unknown object
+  (p.44); the worked examples, whose object lengths are hex (0x16 for the
+  22-byte "Company identification"), one reply and a two-transaction More
+  Follows (p.45); the server state diagram, Figure 30 (p.46). Page numbers
+  re-checked 2026-11-04 against the file above (same sha256, read with
+  `pdftotext -layout`; the page footer's "n/50").
 - **How to cite:** `App §<x> p.<n>` in the module, after the module docs name
   the document once.
 
