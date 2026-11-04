@@ -31,7 +31,17 @@ token_file="$root/etc/helmsman-plc/relay-token"
 cred=/run/credentials/helmsman-plc.service/relay-token
 [ -d "$boot" ] || exit 0
 
-trim() { tr -d '\r' < "$1" | head -1 | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'; }
+# A file's first line, carriage returns and the blanks at either end
+# removed. No pipe: `tr | head -1` under pipefail let `tr` die of SIGPIPE
+# on a file with more after that line, and the script with it.
+trim() {
+    local line=""
+    IFS= read -r line < "$1" || true
+    line="${line//$'\r'/}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    printf '%s\n' "$line"
+}
 
 # https://HOST[:PORT][/PATH]: a shape the box's URL parser always takes.
 url_ok() {
