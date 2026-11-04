@@ -38,13 +38,14 @@
   asked: 2026-11-03
   by: claude-session
 
-- [ ] **Deploy the relay's agent v7, then point the bench Pi at it** — every turn on agents v3 to v6 is refused by the model API (strict tools with `minimum`, `maxLength`, `pattern`; found on the first live turn, 2026-11-04). agent-relay#4 (merged) adds `helmsman/v7`; deploying it was refused from the agent.
+- [x] **Deploy the relay's agent v7, then point the bench Pi at it** — every turn on agents v3 to v6 is refused by the model API (strict tools with `minimum`, `maxLength`, `pattern`; found on the first live turn, 2026-11-04). agent-relay#4 (merged) adds `helmsman/v7`; deploying it was refused from the agent.
   needs: you to run the two scripts, in order
   result: a real chat turn from the bench Pi through the relay; then #218 leaves draft (box default v7)
   notes: `./scratch/06-relay-deploy.sh` (the key is stored: `!` works), then `! ./scratch/10-pi-agent-v7.sh` (adds --relay-agent v7 on the Pi, RESTARTS helmsman-plc, sends one read-only turn and checks text comes back)
   est: 10m
   difficulty: low
   id: relay-v7-deploy
+  notes: done 2026-11-04: relay deployed from dev 7ef0352 (serves helmsman/v7, 15 tools); the bench Pi asks v7 and a real turn ran list_signals and answered (end_turn, 67 output tokens). #218 (box default v7) out of draft, auto-merge.
   asked: 2026-11-04
   by: claude-session
 
