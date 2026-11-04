@@ -429,6 +429,134 @@ async fn fetch(
     })
 }
 
+/// What the Agent tab's transport hands back.
+pub enum ChatIn {
+    Turn(crate::box_agent::Incoming),
+    /// `GET /api/chat/status`: the status and the body.
+    Status(u16, String),
+}
+
+/// The box Agent tab's transport: `POST /api/chat` read as a stream
+/// (same-origin, the session cookie and `X-Helmsman-Request`, see
+/// [`init`]), stopped with an `AbortController`; and the status read.
+#[derive(Default)]
+pub struct ChatHttp {
+    inbox: Rc<RefCell<Vec<ChatIn>>>,
+    abort: Option<web_sys::AbortController>,
+}
+
+impl ChatHttp {
+    /// What arrived since the last call.
+    pub fn drain(&mut self) -> Vec<ChatIn> {
+        std::mem::take(&mut *self.inbox.borrow_mut())
+    }
+
+    /// Stops the turn streaming now, if any.
+    pub fn abort(&mut self) {
+        if let Some(c) = self.abort.take() {
+            c.abort();
+        }
+    }
+
+    pub fn status(&mut self, ctx: &egui::Context) {
+        let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let a = fetch("GET", crate::box_agent::STATUS_URL, None, None)
+                .await
+                .unwrap_or_else(|why| Answer {
+                    status: 0,
+                    retry_after: None,
+                    body: why,
+                });
+            inbox.borrow_mut().push(ChatIn::Status(a.status, a.body));
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn send(&mut self, req: crate::box_agent::Request, ctx: &egui::Context) {
+        self.abort();
+        let controller = web_sys::AbortController::new().ok();
+        let signal = controller.as_ref().map(web_sys::AbortController::signal);
+        self.abort = controller;
+        let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let seq = req.seq;
+            let push = |i: crate::box_agent::Incoming| {
+                inbox.borrow_mut().push(ChatIn::Turn(i));
+                ctx.request_repaint();
+            };
+            if let Err(why) = chat(&req, signal.as_ref(), &push).await {
+                push(crate::box_agent::Incoming::Failed { seq, why });
+            }
+        });
+    }
+}
+
+/// `POST /api/chat`, its event stream handed over as it arrives.
+async fn chat(
+    req: &crate::box_agent::Request,
+    signal: Option<&web_sys::AbortSignal>,
+    push: &dyn Fn(crate::box_agent::Incoming),
+) -> Result<(), String> {
+    use web_sys::js_sys::{Reflect, Uint8Array};
+
+    use crate::box_agent::Incoming;
+
+    let seq = req.seq;
+    let window = web_sys::window().ok_or("no window")?;
+    let (init, headers) = init("POST")?;
+    headers
+        .set("Content-Type", "application/json")
+        .map_err(|e| text(&e))?;
+    init.set_headers(&headers);
+    init.set_body(&JsValue::from_str(&req.body));
+    init.set_signal(signal);
+    let request = web_sys::Request::new_with_str_and_init(req.url, &init).map_err(|e| text(&e))?;
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|e| text(&e))?
+        .dyn_into()
+        .map_err(|e| text(&e))?;
+    if resp.status() != 200 {
+        let b = JsFuture::from(resp.text().map_err(|e| text(&e))?)
+            .await
+            .map_err(|e| text(&e))?;
+        let mut body = b.as_string().unwrap_or_default();
+        body.truncate(64 << 10);
+        push(Incoming::Status {
+            seq,
+            status: resp.status(),
+            body,
+        });
+        return Ok(());
+    }
+    let stream = resp.body().ok_or("no body")?;
+    let reader: web_sys::ReadableStreamDefaultReader =
+        stream.get_reader().dyn_into().map_err(|e| text(&e))?;
+    let decoder = web_sys::TextDecoder::new().map_err(|e| text(&e))?;
+    let opts = web_sys::TextDecodeOptions::new();
+    opts.set_stream(true);
+    loop {
+        let r = JsFuture::from(reader.read()).await.map_err(|e| text(&e))?;
+        let done = Reflect::get(&r, &JsValue::from_str("done"))
+            .map_err(|e| text(&e))?
+            .as_bool()
+            .unwrap_or(true);
+        if done {
+            push(Incoming::End { seq });
+            return Ok(());
+        }
+        let value: Uint8Array = Reflect::get(&r, &JsValue::from_str("value"))
+            .map_err(|e| text(&e))?
+            .dyn_into()
+            .map_err(|e| text(&e))?;
+        let chunk = decoder
+            .decode_with_js_u8_array_and_options(&value, &opts)
+            .map_err(|e| text(&e))?;
+        push(Incoming::Chunk { seq, text: chunk });
+    }
+}
+
 /// The project and force routes' transport: one `fetch` per [`PReq`],
 /// its body bytes as they are (a `.zip`, a file, JSON).
 #[derive(Default)]

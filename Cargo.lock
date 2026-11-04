@@ -1547,11 +1547,13 @@ name = "helmsman-canvas"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "helmsman-agent",
  "helmsman-diagram",
  "helmsman-iec",
  "helmsman-io",
  "helmsman-plc",
  "helmsman-project",
+ "proptest",
  "serde_json",
  "wasm-bindgen-futures",
  "web-sys",
