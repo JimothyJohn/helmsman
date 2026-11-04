@@ -501,6 +501,17 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (signed, A/B slots) once the node runs; depends on the edge spike (`node-modbus`) for the node half.
   status: ready
 
+- [ ] **Resume the edge node: faster scans, PSRAM, and the network receive path** — parked by Nick 2026-11-03 after the first runs on the boards (docs/EDGE.md Phase 1 and 2). Three open threads, in order: (1) the network: on the POE2 frames from the Studio never register (ARP replies unanswered, no UDP report sent) and the POE-ISO gets no DHCP lease; first flash supervictor's known-good POE-ISO firmware on the same board to tell this firmware from the board or switch, then compare the executor and interrupt setup (esp-rtos) and the main task's share of the CPU; (2) scan speed: 28 ms for the 4k-statement bench against < 5 ms; measure flash at 80 MHz QIO (it boots at 40 MHz DIO), the interpreter's i128 `Value::Int` on a 32-bit core, the no_std BTreeMap lookups, esp-alloc heap-stats, before any rewrite (a compact compiled form or compile-on-laptop is the bigger lever); (3) the PSRAM corruption: compiling the batch-mixer starter with PSRAM asks for 0x3F40D781 bytes (a rodata address read as a length).
+  needs: Nick's call to resume; the POE-ISO (WROOM, /dev/cu.usbserial-1130 on 2026-11-03) for the network thread since USB can stay on with PoE; the POE2 for PSRAM
+  result: a node that scans a realistic program inside its period and talks to the Studio, or a firm no with numbers for each thread
+  notes: the Studio's en0 has 10.0.0.241 (scratch/04-studio-wired-10net.sh; `off` removes it, a reboot too); LOG_SINK=10.0.0.241:9514 puts the reports on the wired side. Builds: scripts/node-build.sh [net], NODE_BOARD=poe-iso; flash: scripts/node-flash.sh [bench|modbus], Nick's step.
+  est: 1w
+  difficulty: high
+  depends: node-scan-bench
+  id: node-resume
+  asked: 2026-11-03
+  by: claude-session
+
 - [ ] **Vision sources** — deferred per interview; card kept so the signal model leaves room for camera-derived signals.
   est: 2w
   difficulty: high
@@ -567,7 +578,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: done 2026-11-02 night, PR #188 (G1): std feature default on, BTreeMap, libm optional for no_std only, thumbv7em build in lint.sh and install-dev.sh. PR #189 (CI step) is a DRAFT for Nick: workflow edit.
   id: iec-no-std
 
-- [ ] **Scan bench on the ESP32-POE2** — `crates/helmsman-node` (not a default workspace member): supervictor's board/poe2.rs and Ethernet bring-up copied in, Embassy and esp-hal 1.0 as supervictor pins them, trace_bench and the batch-mixer starter (blocks concatenated) embedded and compiled at boot; min/mean/max/p99 per scan and esp-alloc peak after compile and after 10 000 scans over USB serial. On a WROVER repeat with the program heap in PSRAM.
+- [x] **Scan bench on the ESP32-POE2** — `crates/helmsman-node` (not a default workspace member): supervictor's board/poe2.rs and Ethernet bring-up copied in, Embassy and esp-hal 1.0 as supervictor pins them, trace_bench and the batch-mixer starter (blocks concatenated) embedded and compiled at boot; min/mean/max/p99 per scan and esp-alloc peak after compile and after 10 000 scans over USB serial. On a WROVER repeat with the program heap in PSRAM.
   needs: the esp toolchain as supervictor pins it (espup, channel esp: on the Studio already); the POE2 on USB with ETHERNET UNPLUGGED (no isolation)
   notes: Nick 2026-11-02 (board): "Uh oh I think I triggered this already...anyway there's a PoE2 you can try out that could be programmed via the laptop-installed editor interface that I can test on." Interview 2026-11-02: the POE2 is on the Studio's USB (/dev/cu.usbserial-11220), Ethernet unplugged, and it is a WROVER (8 MB PSRAM), so G3 gets PSRAM as a second esp-alloc region for compile scratch. Flashing stays a hand-off (a scratch script Nick runs).
   status: ready
@@ -576,7 +587,8 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 1d
   difficulty: med
   depends: iec-no-std
-  notes: firmware done 2026-11-02 night, PR #193: crates/helmsman-node (outside the workspace, esp toolchain, make node-build), bench binary, PSRAM second round. NUMBERS PENDING Nick's flash: `scripts/node-flash.sh` (Ethernet unplugged, USB), paste the `--- round` lines into docs/EDGE.md Phase 1 and tick.
+  notes: firmware done 2026-11-02 night, PR #193: crates/helmsman-node (outside the workspace, esp toolchain, make node-build), bench binary, PSRAM second round.
+  notes: done 2026-11-03 on the board (#208 stack fix, #209/#210 numbers in docs/EDGE.md Phase 1): bench-4k 28.1 ms mean per scan (G2 fails, target < 5 ms, ~500x the Studio), the same with PSRAM; peak heap 198 KB of 229 KB internal (G3 fails on SRAM); the batch-mixer starter does not fit SRAM and its compile corrupts memory with PSRAM (an allocation of 0x3F40D781 bytes, a rodata address read as a length). Recorded and stopped, as the gate says; the follow-ups are in `node-resume`.
   id: node-scan-bench
 
 - [ ] **Modbus TCP from the node** — an async twin of helmsman-io's `Transport` over embassy-net's TCP socket behind a feature, `driver::Error` without std::io::Error, DI read and DO write batched to two round trips per scan; 10 ms scan against the E1213 (or the simulator) with DO0-3 looped to DI0-3; comms-loss safe state on yank.
@@ -588,5 +600,7 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   est: 1d
   difficulty: med
   depends: node-scan-bench
-  notes: firmware done 2026-11-02 night, PRs #197 (helmsman-modbus no_std codec; helmsman-io frames through it) and #199: 10 ms scan, FC2 read + FC15 write, chase program, UDP report. NUMBERS PENDING Nick's run: `scripts/node-flash.sh modbus`, unplug USB, `/usr/bin/python3 -I scripts/node-log-sink.py`, plug PoE; G5 needs the E1213's Modbus watchdog safe mode set first.
+  notes: firmware done 2026-11-02 night, PRs #197 (helmsman-modbus no_std codec; helmsman-io frames through it) and #199: 10 ms scan, FC2 read + FC15 write, chase program, UDP report.
+  notes: run 2026-11-03, then PARKED by Nick: the Modbus loop works on the POE2 (lease, chase program on the E1213's DO-00..02); the UDP reports never arrive (the node never takes the Studio's ARP replies); the POE-ISO build (#211) links at 100 Mbit but gets no lease. Findings in docs/EDGE.md Phase 2; picked up again by `node-resume`. G4/G5 not measured (G4 fails anyway at 28 ms scans).
+  status: blocked
   id: node-modbus
