@@ -70,9 +70,12 @@ const CELL: &str = concat!(
     include_str!("../../../helmsman-project/starters/blocks/step_sequencer.st"),
 );
 
-/// Internal heap: the main DRAM segment, then the otherwise unused dram2
-/// segment (the figures supervictor settled on for the same chip).
-const HEAP_SIZE: usize = 160 * 1024;
+/// Internal heap: part of the main DRAM segment, then the otherwise unused
+/// dram2 segment. The main segment is shared with the stack, which gets
+/// what the statics leave: at 160 KiB the stack was 27 KiB and the boot
+/// compile did not finish (2026-11-03); 128 KiB leaves it about 60 KiB.
+/// `scripts/node-build.sh` refuses an image with less than 32 KiB.
+const HEAP_SIZE: usize = 128 * 1024;
 const DRAM2_HEAP_SIZE: usize = 96 * 1024;
 
 #[esp_hal::main]
