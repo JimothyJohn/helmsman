@@ -551,3 +551,180 @@ proptest! {
         }
     }
 }
+
+/// Programs `A` and `B`, each alone in a task: `tasks` as (name, type,
+/// the task's `Rate` attribute as written, or none), as an export has them.
+fn rated(tasks: &[(&str, &str, Option<&str>)]) -> String {
+    let progs = ["A", "B"];
+    let x = X {
+        ctl_tags: "",
+        programs: progs
+            .iter()
+            .take(tasks.len())
+            .map(|p| (*p, "", vec![("Main", "RLL", vec!["XIC(Go)OTE(Run);"])]))
+            .collect(),
+        tasks: tasks
+            .iter()
+            .zip(progs)
+            .map(|((n, ty, _), p)| (*n, *ty, vec![p]))
+            .collect(),
+    };
+    let mut xml = x.xml().replace(
+        "<Tags></Tags>",
+        &format!("<Tags>{}{}</Tags>", tag("Go", "BOOL"), tag("Run", "BOOL")),
+    );
+    for (n, _, rate) in tasks {
+        let from = format!("<Task Name=\"{n}\" Type=");
+        let at = xml.find(&from).unwrap();
+        let end = at + xml[at..].find('>').unwrap();
+        let attrs = xml[at..end].replace(" Rate=\"10\"", "");
+        let attrs = match rate {
+            Some(r) => format!("{attrs} Rate=\"{r}\""),
+            None => attrs,
+        };
+        xml.replace_range(at..end, &attrs);
+    }
+    xml
+}
+
+#[test]
+fn a_periodic_tasks_rate_becomes_its_programs_scan() {
+    for (rate, ms) in [
+        ("10", 10),
+        ("1", 1),
+        ("10000", 10_000),
+        ("10.000", 10),
+        (" 250 ", 250),
+    ] {
+        let c = ladder::convert(&rated(&[("Fast", "PERIODIC", Some(rate))])).unwrap();
+        assert_eq!(c.scans, [("Fast".to_string(), ms)], "Rate={rate:?}");
+        assert!(
+            c.notes
+                .iter()
+                .any(|n| n.contains(&format!("periodic every {ms} ms"))
+                    && n.contains(&format!("scan_ms={ms}"))),
+            "{:?}",
+            c.notes
+        );
+        assert!(
+            c.st.contains(&format!("scan_ms={ms}")),
+            "the note heads the file:\n{}",
+            c.st
+        );
+    }
+    // The fixture's MainTask.
+    let c = ladder::convert(&fixture("ladder.L5X")).unwrap();
+    assert_eq!(c.scans, [("MainTask".to_string(), 10)]);
+}
+
+/// The box's programs each keep their own scan (project.settings has a
+/// `scan_ms` per PROGRAM), so two periodic tasks keep two rates.
+#[test]
+fn two_periodic_tasks_keep_their_own_rates() {
+    let c = ladder::convert(&rated(&[
+        ("Fast", "PERIODIC", Some("5")),
+        ("Slow", "PERIODIC", Some("500")),
+    ]))
+    .unwrap();
+    assert_eq!(c.programs, ["Fast", "Slow"]);
+    assert_eq!(c.scans, [("Fast".to_string(), 5), ("Slow".to_string(), 500)]);
+}
+
+/// A rate the box cannot run is refused, not clamped or dropped to the
+/// default scan, with what it was.
+#[test]
+fn a_periodic_rate_the_box_cannot_scan_is_refused() {
+    for rate in [
+        "0",
+        "-5",
+        "+10",
+        "1e9",
+        "1000000000",
+        "10001",
+        "2000000.000",
+        "4294967296",
+        "99999999999999999999999999999999999999",
+        "2.5",
+        "10.0001",
+        "",
+        " ",
+        "ten",
+        "0x10",
+        "10ms",
+        "\u{ff11}\u{ff10}",
+        "1&#9;0",
+    ] {
+        let r = refused(&rated(&[("Fast", "PERIODIC", Some(rate))]));
+        has(&r, "task Fast", "periodic");
+        assert!(
+            r.problems.iter().all(|p| !p.msg.contains('\t')),
+            "control characters stay out: {r}"
+        );
+    }
+    has(
+        &refused(&rated(&[("Fast", "PERIODIC", Some("0"))])),
+        "task Fast",
+        "outside the 1 to 10000 ms",
+    );
+    has(
+        &refused(&rated(&[("Fast", "PERIODIC", Some("1e9"))])),
+        "task Fast",
+        "Rate \"1e9\"",
+    );
+    has(
+        &refused(&rated(&[("Fast", "PERIODIC", None)])),
+        "task Fast",
+        "no Rate",
+    );
+    // A huge Rate is clipped in the message.
+    let long = "9".repeat(5000);
+    let r = refused(&rated(&[("Fast", "PERIODIC", Some(&long))]));
+    assert!(r.to_string().len() < 500, "{r}");
+}
+
+/// A continuous task runs every base scan, as before, whatever its Rate
+/// says (exports carry one on every task); an event task is still refused.
+#[test]
+fn continuous_tasks_keep_the_base_scan_and_event_tasks_stay_refused() {
+    for rate in [Some("10"), Some("0"), Some("junk"), None] {
+        let c = ladder::convert(&rated(&[("Main", "CONTINUOUS", rate)])).unwrap();
+        assert!(c.scans.is_empty(), "{:?}", c.scans);
+        assert!(
+            c.notes
+                .iter()
+                .any(|n| n.contains("continuous") && n.contains("base scan")),
+            "{:?}",
+            c.notes
+        );
+    }
+    let c = ladder::convert(&rated(&[
+        ("Main", "CONTINUOUS", Some("10")),
+        ("Fast", "PERIODIC", Some("20")),
+    ]))
+    .unwrap();
+    assert_eq!(c.scans, [("Fast".to_string(), 20)]);
+    has(
+        &refused(&rated(&[("Ev", "EVENT", Some("10"))])),
+        "task Ev",
+        "event tasks",
+    );
+}
+
+proptest! {
+    /// Any Rate converts to the ms it says, or is refused: never another
+    /// scan, never a panic.
+    #[test]
+    fn any_rate_is_its_scan_or_refused(rate in "[0-9.+eE -]{0,14}") {
+        match ladder::convert(&rated(&[("Fast", "PERIODIC", Some(&rate))])) {
+            Ok(c) => {
+                let t = rate.trim();
+                let (int, frac) = t.split_once('.').unwrap_or((t, ""));
+                prop_assert!(frac.bytes().all(|b| b == b'0'), "{:?}", rate);
+                let n: u32 = int.parse().unwrap();
+                prop_assert!((1..=ladder::MAX_SCAN_MS).contains(&n));
+                prop_assert_eq!(c.scans, vec![("Fast".to_string(), n)]);
+            }
+            Err(r) => prop_assert!(r.problems.iter().any(|p| p.at == "task Fast"), "{}", r),
+        }
+    }
+}

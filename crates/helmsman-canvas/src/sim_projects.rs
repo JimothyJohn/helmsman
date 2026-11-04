@@ -813,10 +813,26 @@ impl SimProjects {
         }
         if ext.eq_ignore_ascii_case("l5x") {
             match l5x(file, bytes) {
-                Ok(st) => {
+                Ok((st, scans)) => {
                     self.files.insert(target.clone(), st);
                     self.current.clone_from(&target);
-                    self.note(format!("Imported {file} into {} as {target}.", self.open), false);
+                    // The task rates, as the box writes them.
+                    let mut said = format!("Imported {file} into {} as {target}.", self.open);
+                    if !scans.is_empty() {
+                        let settings = helmsman_project::SETTINGS;
+                        let had = self.files.get(settings).cloned().unwrap_or_default();
+                        let (text, notes) = helmsman_project::settings::set_scans(&had, &scans);
+                        if text != had {
+                            self.files.insert(settings.to_string(), text);
+                            said.push_str(" Its task rates are in project.settings.");
+                        }
+                        for n in notes {
+                            said.push(' ');
+                            said.push_str(&n);
+                            said.push('.');
+                        }
+                    }
+                    self.note(said, false);
                 }
                 Err(e) => self.note(e, true),
             }
@@ -854,7 +870,7 @@ impl SimProjects {
 /// ladder in the converted subset becomes Structured Text
 /// ([`helmsman_iec::ladder::convert`]); anything else refuses the whole
 /// file, every problem with its rung (the first 20, then how many more).
-fn l5x(file: &str, bytes: &[u8]) -> Result<String, String> {
+fn l5x(file: &str, bytes: &[u8]) -> Result<(String, Vec<(String, u32)>), String> {
     let text = std::str::from_utf8(bytes).map_err(|_| format!("{file}: not UTF-8"))?;
     let converted = helmsman_iec::ladder::convert(text).map_err(|r| {
         let mut lines: Vec<String> = r.problems.iter().take(20).map(ToString::to_string).collect();
@@ -864,7 +880,7 @@ fn l5x(file: &str, bytes: &[u8]) -> Result<String, String> {
         format!("{file} is not converted: {}", lines.join("; "))
     })?;
     helmsman_project::check_text(converted.st.as_bytes()).map_err(|e| format!("{file} was refused: {e}"))?;
-    Ok(converted.st)
+    Ok((converted.st, converted.scans))
 }
 
 fn render(

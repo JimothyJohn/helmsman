@@ -1680,6 +1680,97 @@ fn plcopen_and_st_files_import_into_a_project_and_build() {
     assert_eq!(r.status, 422, "{r:?}");
 }
 
+/// `ladder.L5X` (`MainTask` periodic every 10 ms) with its task's Rate set
+/// to `rate`.
+fn l5x_rated(rate: &str) -> Vec<u8> {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../helmsman-iec/tests/fixtures/l5x");
+    let src = std::fs::read_to_string(dir.join("ladder.L5X")).unwrap();
+    let from = "Type=\"PERIODIC\" Rate=\"10\"";
+    assert!(src.contains(from), "the fixture's MainTask");
+    src.replace(from, &format!("Type=\"PERIODIC\" Rate=\"{rate}\""))
+        .into_bytes()
+}
+
+fn import_l5x(b: &Bench, s: &str, project: &str, query: &str, body: &[u8]) -> Resp {
+    send(
+        b.addr,
+        "POST",
+        &format!("/api/projects/{project}/import?file=bench.L5X{query}"),
+        Some(s),
+        "application/xml",
+        body,
+    )
+}
+
+#[test]
+fn an_imported_periodic_task_runs_at_its_logix_rate() {
+    let b = Bench::new();
+    let s = b.alice();
+    // A project with settings of its own: they stay, MainTask's line is added.
+    b.project(&s, "lad", &[("project.settings", "author Nick\n")]);
+    let r = import_l5x(&b, &s, "lad", "", &l5x_rated("25"));
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(r.json()["notes"], json!([]), "{r:?}");
+    let settings = file(b.addr, "lad", "project.settings").json()["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(settings, "author Nick\nprogram MainTask scan_ms=25\n");
+    // What a deploy would run: MainTask's module every 25 ms, not the
+    // default scan (this bench takes no map, so it is built, not deployed).
+    let r = post_json(b.addr, "/api/projects/lad/check", Some(&s), &json!({}));
+    assert_eq!(r.status, 200, "{r:?}");
+    let files = Projects::in_state_dir(&b.state).unwrap().read("lad").unwrap();
+    let shape = Shape {
+        defaults: defaults(),
+        i_len: 32,
+        q_len: 32,
+    };
+    let built = build::build("lad", &files, None, &shape).unwrap();
+    let manifest = &built.change.modules["maintask"].manifest;
+    let scan: Vec<&str> = manifest
+        .lines()
+        .filter_map(|l| l.strip_prefix("scan_ms"))
+        .map(str::trim)
+        .collect();
+    assert_eq!(scan, ["25"], "{manifest}");
+
+    // Imported again with another rate: the engineer's scan_ms is kept,
+    // and the response says so.
+    let r = import_l5x(&b, &s, "lad", "&replace=true", &l5x_rated("50"));
+    assert_eq!(r.status, 201, "{r:?}");
+    let notes = r.json()["notes"].clone();
+    assert_eq!(
+        notes,
+        json!(["project.settings keeps program MainTask scan_ms=25; its Logix task runs every 50 ms"]),
+        "{r:?}"
+    );
+    assert_eq!(
+        file(b.addr, "lad", "project.settings").json()["text"],
+        "author Nick\nprogram MainTask scan_ms=25\n"
+    );
+
+    // A project without settings gets a file of one line.
+    b.project(&s, "fresh", &[]);
+    let r = import_l5x(&b, &s, "fresh", "", &l5x_rated("10.000"));
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(
+        file(b.addr, "fresh", "project.settings").json()["text"],
+        "program MainTask scan_ms=10\n"
+    );
+
+    // A rate the box cannot scan refuses the whole file: nothing written.
+    b.project(&s, "bad", &[]);
+    for rate in ["0", "-5", "1e9", "10001", "2.5", "abc", &"9".repeat(4000)] {
+        let r = import_l5x(&b, &s, "bad", "", &l5x_rated(rate));
+        assert_eq!(r.status, 422, "Rate={rate:?}: {r:?}");
+        let e = r.json()["error"].as_str().unwrap().to_string();
+        assert!(e.contains("task MainTask"), "{e}");
+        assert_eq!(file(b.addr, "bad", "bench.st").status, 404, "{rate:?}");
+        assert_eq!(file(b.addr, "bad", "project.settings").status, 404, "{rate:?}");
+    }
+}
+
 // ---- the binary ------------------------------------------------------------------
 
 struct Plc {

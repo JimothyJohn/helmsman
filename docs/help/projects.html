@@ -162,7 +162,10 @@ project as a <code>.zip</code>. <strong>Upload</strong> takes a
 <code>.zip</code> (a whole project), an <code>.st</code> file (into the
 open project), a PLCopen <code>.xml</code> export, or a ladder export
 (<code>.l5x</code>), which is converted to Structured Text where the
-conversion is exact and refused where it is not, saying why.</p>
+conversion is exact and refused where it is not, saying why. Each
+periodic task of a ladder export keeps its period: the import writes it
+into <code>project.settings</code> as that program's
+<code>scan_ms</code>, unless you have set one there already.</p>
 <h2 id="examples-and-starters">Examples and starters</h2>
 <p>The simulation ships with short <strong>examples</strong> that teach
 one thing each, and with <strong>machines</strong> and
