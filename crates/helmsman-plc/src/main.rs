@@ -107,7 +107,7 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        it the agent is offline and /api/chat answers 503
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
                        The box never holds an Anthropic key.
-  --relay-agent V      the agent version to ask the relay for (default v6)
+  --relay-agent V      the agent version to ask the relay for (default v7)
   --relay-explain-agent V
                        the agent version POST /api/explain asks for (an
                        explain profile; default explain-v2). The box runs
@@ -247,7 +247,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         state_dir: None,
         relay: None,
         relay_token: None,
-        relay_agent: "v6".into(),
+        relay_agent: "v7".into(),
         relay_explain_agent: None,
         ui: None,
         site: None,

@@ -1427,7 +1427,7 @@ module's unit tests.
 
 ## Agent loop (`agent-loop`, built)
 
-`helmsman-plc --relay URL --relay-token FILE [--relay-agent v6]` turns on
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v7]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
 an Anthropic key, and names no model, prompt or tool schema: the relay

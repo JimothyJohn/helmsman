@@ -1340,13 +1340,14 @@ fn the_retired_screen_flag_is_refused_with_the_reason() {
     assert!(!help.contains("--screen") && !help.contains("andon"), "{help}");
 }
 
-/// The relay serves agent v3 (the drop-in tools) and explain-v1 (read-only
-/// tools, floor language); a box asks for them unless told otherwise.
+/// A box asks the relay for agent v7 (v6's tools with strict schemas the
+/// model API takes; v3 to v6 are refused there) and explain-v2 (read-only
+/// tools, floor language) unless told otherwise.
 #[test]
 fn the_default_agent_versions_are_the_ones_the_relay_serves() {
     let out = plc().arg("--help").output().unwrap();
     let usage = String::from_utf8_lossy(&out.stdout);
-    assert!(usage.contains("(default v6)"), "{usage}");
+    assert!(usage.contains("(default v7)"), "{usage}");
     assert!(usage.contains("default explain-v2"), "{usage}");
 }
 
