@@ -96,7 +96,10 @@ fn main() -> ! {
     );
     println!("--- round 1: internal SRAM ---");
     run("bench-4k", BENCH);
-    run("cell", CELL);
+    // The batch-mixer starter does not fit internal SRAM: on the board
+    // (2026-11-03) its compile ran out of heap and the allocator's error
+    // handler aborts, so round 2 never ran. It runs with PSRAM only.
+    println!("cell: skipped on internal SRAM alone (out of heap on 2026-11-03)");
 
     esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram);
     println!(
