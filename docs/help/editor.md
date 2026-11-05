@@ -67,7 +67,11 @@ you cannot draw into it. What you can do:
   on a box they are forces (see [On a box](box.html)).
 - **Go into a block.** Double-click a function block instance to see its
   own diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the breadcrumbs come back
-  up.
+  up. From the keyboard, pick the instance and press <kbd>Ctrl</kbd>
+  <kbd>]</kbd> to go in and <kbd>Ctrl</kbd> <kbd>[</kbd> to come out (the
+  instance stays picked, so <kbd>Ctrl</kbd> <kbd>]</kbd> goes back in).
+  With the simulation stopped, each also steps one scan, so you watch
+  the instance work as you move through the levels.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
   Reset layout goes back; View › Save layout as default keeps your
   arrangement with the project so everyone opens it that way. Pan with a

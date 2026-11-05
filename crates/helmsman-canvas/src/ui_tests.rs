@@ -2018,6 +2018,53 @@ mod simulated {
         assert_eq!(sim_view(&h).diagram().pou, "STATION");
     }
 
+    #[test]
+    fn ctrl_close_bracket_steps_into_the_picked_instance_and_ctrl_open_bracket_back_out() {
+        let mut h = stations();
+        h.key(Modifiers::SHIFT, Key::F8);
+        let scans = |h: &Harness| h.app.sim.as_ref().unwrap().session.scans;
+        // The first instance block on the program's diagram.
+        let v = h.app.sim.as_mut().unwrap().viewer.as_mut().unwrap();
+        let (n, instance) = v
+            .diagram()
+            .nodes
+            .iter()
+            .find_map(|n| match &n.kind {
+                helmsman_diagram::NodeKind::Fb { instance, fb } if fb.eq_ignore_ascii_case("station") => {
+                    Some((n.id, instance.clone()))
+                }
+                _ => None,
+            })
+            .expect("a station instance");
+        v.pick = Some(Pick::Node(n));
+        let before = scans(&h);
+        h.key(Modifiers::COMMAND, Key::CloseBracket);
+        let v = sim_view(&h);
+        assert_eq!(v.diagram().pou, "STATION");
+        assert!(
+            v.scopes[v.scope]
+                .prefix
+                .eq_ignore_ascii_case(&format!("{instance}.")),
+            "{:?}",
+            v.scopes[v.scope]
+        );
+        assert_eq!(scans(&h), before + 1, "stopped, it steps one scan");
+        // Nothing picked inside: Ctrl ] does nothing.
+        h.key(Modifiers::COMMAND, Key::CloseBracket);
+        assert_eq!(scans(&h), before + 1);
+        h.key(Modifiers::COMMAND, Key::OpenBracket);
+        let v = sim_view(&h);
+        assert_eq!(v.scope, 0, "back on the program");
+        assert_eq!(v.pick, Some(Pick::Node(n)), "the instance left is picked");
+        assert_eq!(scans(&h), before + 2);
+        // At the top, Ctrl [ does nothing; running, the keys only move.
+        h.key(Modifiers::COMMAND, Key::OpenBracket);
+        assert_eq!(scans(&h), before + 2);
+        h.app.sim.as_mut().unwrap().session.set_running(true);
+        h.key(Modifiers::COMMAND, Key::CloseBracket);
+        assert_eq!(sim_view(&h).diagram().pou, "STATION");
+    }
+
     /// Nick, 2026-11-01: the Trend runs along the bottom, where its time
     /// axis is long, not in the side panel's tabs.
     #[test]

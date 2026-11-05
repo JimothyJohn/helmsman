@@ -898,10 +898,54 @@ impl Viewer {
         let NodeKind::Fb { instance, .. } = &self.diagram().node(n).kind else {
             return None;
         };
+        self.instance_scope(instance)
+    }
+
+    /// The scope of block instance `instance` called on the diagram shown,
+    /// if it has a diagram of its own (a user function block's).
+    fn instance_scope(&self, instance: &str) -> Option<usize> {
         let want = format!("{}{instance}.", self.scopes[self.scope].prefix);
         self.scopes
             .iter()
             .position(|s| s.prefix.eq_ignore_ascii_case(&want))
+    }
+
+    /// Opens the picked block instance's diagram (Ctrl ]); whether the
+    /// pick was an instance with a diagram of its own.
+    pub fn step_into(&mut self) -> bool {
+        let Some(Pick::Node(n)) = self.pick else {
+            return false;
+        };
+        let Some(NodeKind::Fb { instance, .. }) = self.diagram().nodes.get(n.0 as usize).map(|n| &n.kind)
+        else {
+            return false;
+        };
+        let Some(k) = self.instance_scope(&instance.clone()) else {
+            return false;
+        };
+        self.open(k);
+        true
+    }
+
+    /// Up to the caller's diagram (Ctrl [), the instance just left picked
+    /// there so Ctrl ] goes back in; whether there was a level up.
+    pub fn step_out(&mut self) -> bool {
+        let Some(up) = self.parent() else {
+            return false;
+        };
+        let left = self.scopes[self.scope].prefix.clone();
+        self.open(up);
+        let pre = self.scopes[up].prefix.clone();
+        self.pick = self
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, NodeKind::Fb { instance, .. }
+                    if format!("{pre}{instance}.").eq_ignore_ascii_case(&left))
+            })
+            .map(|n| Pick::Node(n.id));
+        true
     }
 
     /// What a drag starting at screen point `p` takes hold of.
