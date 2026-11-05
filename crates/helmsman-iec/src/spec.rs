@@ -18,6 +18,17 @@
 //! (a test that checks nothing is not green). Deterministic: no wall
 //! clock, no I/O.
 //!
+//! **No test yet** (Nick, 2026-11-05: the Requirements tab is a list of
+//! requirements, each with the test the agent writes behind it). A test
+//! file that states its requirement (a first comment) but declares no
+//! `ASSERT`, or whose PROGRAM has an empty body, is *untested*
+//! ([`Outcome::Untested`]): the requirement is written down and nothing
+//! checks it yet. It is neither green nor red: [`red`] leaves it out, so
+//! it never refuses a deploy or a "Use this code", and [`Verdict::state`]
+//! says `untested`. A file with neither a comment nor an empty body and
+//! no `ASSERT` is still red ([`Outcome::NoAssert`]). [`header`] writes the
+//! requirement line a new test file starts with.
+//!
 //! What a test says in words: its first comment is the requirement (the
 //! tab shows it); each `ASSERT` instance's name, and the comment on its
 //! declaration line if there is one, name the check that failed.
@@ -109,6 +120,8 @@ pub struct TestSrc {
     pub src: String,
     /// The test's first comment, one line; the file's name when it has none.
     pub requirement: String,
+    /// Whether the file states its requirement (has a first comment).
+    pub stated: bool,
 }
 
 /// A project's `.st` files split for testing: the build (every non-test
@@ -182,10 +195,12 @@ pub fn plan<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> Plan {
             for (n, t) in &shared {
                 push_file(&mut src, n, t);
             }
+            let stated = first_comment(text);
             TestSrc {
                 file: (*name).to_string(),
                 src,
-                requirement: first_comment(text)
+                stated: stated.is_some(),
+                requirement: stated
                     .unwrap_or_else(|| words(name.trim_end_matches(".st").trim_start_matches(TEST_PREFIX))),
             }
         })
@@ -205,6 +220,9 @@ pub enum Outcome {
     NeverDone,
     /// The test holds no `ASSERT`: it checks nothing.
     NoAssert,
+    /// No test yet: the file states its requirement but declares no
+    /// `ASSERT` (or its PROGRAM's body is empty). Neither green nor red.
+    Untested,
     /// The test does not compile.
     TestDoesNotCompile(Vec<Diagnostic>),
     /// The program under test does not compile.
@@ -237,11 +255,35 @@ impl Verdict {
         self.outcome == Outcome::Passed
     }
 
-    /// Why it is red, in one line (empty when green).
+    /// Whether nothing checks the requirement yet ([`Outcome::Untested`]).
+    #[must_use]
+    pub fn untested(&self) -> bool {
+        self.outcome == Outcome::Untested
+    }
+
+    /// Whether it refuses a deploy: neither green nor untested.
+    #[must_use]
+    pub fn red(&self) -> bool {
+        !self.passed() && !self.untested()
+    }
+
+    /// `passed`, `failed` or `untested`.
+    #[must_use]
+    pub fn state(&self) -> &'static str {
+        match self.outcome {
+            Outcome::Passed => "passed",
+            Outcome::Untested => "untested",
+            _ => "failed",
+        }
+    }
+
+    /// Why it is red, in one line (empty when green; what is missing when
+    /// untested).
     #[must_use]
     pub fn why(&self) -> String {
         match &self.outcome {
             Outcome::Passed => String::new(),
+            Outcome::Untested => "no test yet: nothing checks this requirement".into(),
             Outcome::Failed { check, at } => format!("{check} failed at {}", secs(*at)),
             Outcome::NeverDone => format!("never set DONE within {}", secs(self.elapsed)),
             Outcome::NoAssert => "has no ASSERT: it checks nothing".into(),
@@ -293,6 +335,16 @@ fn asserts(src: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Whether the first PROGRAM in `src` has an empty body.
+fn empty_body(src: &str) -> bool {
+    ast::parse(src).is_ok_and(|u| {
+        u.pous
+            .iter()
+            .find(|p| matches!(p.kind, PouKind::Program))
+            .is_some_and(|p| p.body.is_empty())
+    })
+}
+
 /// Runs one test against `main` (the program under test's source).
 #[must_use]
 #[allow(clippy::too_many_lines)]
@@ -315,7 +367,12 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
         Err(d) => return verdict(Outcome::ProgramDoesNotCompile(d), 0, zero),
     };
     if checks.is_empty() {
-        return verdict(Outcome::NoAssert, 0, zero);
+        let none = if test.stated || empty_body(&test.src) {
+            Outcome::Untested
+        } else {
+            Outcome::NoAssert
+        };
+        return verdict(none, 0, zero);
     }
     // The test drives these inputs of the program; it reads those outputs.
     let mut drives = Vec::new();
@@ -394,14 +451,102 @@ pub fn run_all(plan: &Plan, settings: Settings) -> Vec<Verdict> {
 }
 
 /// The red verdicts' one-line reasons, for a refusal: `test_lamp: lamp on
-/// in time failed at 2.00 s`.
+/// in time failed at 2.00 s`. An untested one is not red.
 #[must_use]
 pub fn red(verdicts: &[Verdict]) -> Vec<String> {
     verdicts
         .iter()
-        .filter(|v| !v.passed())
+        .filter(|v| v.red())
         .map(|v| format!("{}: {}", v.file.trim_end_matches(".st"), v.why()))
         .collect()
+}
+
+/// Longest test name ([`name_ok`]): `test_NAME.st` then fits a project's
+/// 64-character file stem with room to spare.
+pub const NAME_MAX: usize = 48;
+
+/// Whether `name` is a requirement test's name (`test_NAME.st` is its
+/// file): snake case, 1 to [`NAME_MAX`] of `a-z 0-9 _`, starting with a
+/// letter.
+#[must_use]
+pub fn name_ok(name: &str) -> bool {
+    let b = name.as_bytes();
+    (1..=NAME_MAX).contains(&b.len())
+        && b[0].is_ascii_lowercase()
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'_')
+}
+
+/// A test name made from a requirement's words: lower case `a-z 0-9`,
+/// every run of anything else one `_`, trimmed, at most `max` (and
+/// [`NAME_MAX`]) cut at a word where it can be, starting with a letter
+/// (`r_` in front of a digit). `requirement` when nothing survives.
+/// Always [`name_ok`].
+#[must_use]
+pub fn slug(text: &str, max: usize) -> String {
+    let max = max.clamp(1, NAME_MAX);
+    let mut out = String::new();
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('_') {
+            out.push('_');
+        }
+    }
+    if out.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+        out.insert_str(0, "r_");
+    }
+    if out.len() > max {
+        let cut = out[..=max].rfind('_').filter(|&k| k > 0).unwrap_or(max);
+        out.truncate(cut);
+    }
+    let out = out.trim_end_matches('_').to_string();
+    if out.is_empty() {
+        "requirement".chars().take(max).collect()
+    } else {
+        out
+    }
+}
+
+/// `text` safe inside one `(* ... *)` comment: a space goes between any
+/// `(` and `*` or `*` and `)` side by side, so it can neither close the
+/// comment nor open another; whitespace runs (newlines included) become
+/// one space.
+#[must_use]
+pub fn neutralise(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in one_line(text).chars() {
+        let last = out.chars().last();
+        if (last == Some('*') && c == ')') || (last == Some('(') && c == '*') {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The first line of a requirement test: the requirement as a comment,
+/// [`neutralise`]d, so the test's first comment reads it back.
+#[must_use]
+pub fn header(requirement: &str) -> String {
+    format!("(* {} *)\n", neutralise(requirement))
+}
+
+/// The requirement a test file states, as [`plan`] reads it (its first
+/// comment, one line), if it states one.
+#[must_use]
+pub fn stated(text: &str) -> Option<String> {
+    first_comment(text)
+}
+
+/// A test file with only its requirement, nothing that checks it: what
+/// runs as [`Outcome::Untested`].
+#[must_use]
+pub fn placeholder(name: &str, requirement: &str) -> String {
+    format!(
+        "{}PROGRAM {TEST_PREFIX}{name}\nEND_PROGRAM\n",
+        header(requirement)
+    )
 }
 
 #[cfg(test)]
@@ -517,6 +662,112 @@ END_PROGRAM
         let v = one(LAMP, none);
         assert_eq!(v.outcome, Outcome::NoAssert);
         assert_eq!(v.requirement, "x", "no comment: the file's name as words");
+    }
+
+    #[test]
+    fn a_stated_requirement_with_nothing_checking_it_is_untested_not_red() {
+        // The placeholder the box writes: the requirement, an empty PROGRAM.
+        let v = one(LAMP, &placeholder("x", "The lamp is on within 2 s."));
+        assert_eq!(v.outcome, Outcome::Untested, "{}", v.why());
+        assert_eq!((v.state(), v.red(), v.passed()), ("untested", false, false));
+        assert_eq!(v.requirement, "The lamp is on within 2 s.");
+        assert_eq!(v.why(), "no test yet: nothing checks this requirement");
+        assert!(red(std::slice::from_ref(&v)).is_empty(), "never refuses a deploy");
+        // A body but no ASSERT, with its requirement stated: untested too.
+        let v = one(
+            LAMP,
+            "(* lamp on *)\nPROGRAM test_x VAR_OUTPUT done : BOOL; END_VAR done := TRUE; END_PROGRAM",
+        );
+        assert_eq!(v.state(), "untested");
+        // An empty body with no comment: untested (nothing written yet).
+        assert_eq!(one(LAMP, "PROGRAM test_x END_PROGRAM").state(), "untested");
+        // Still red: a stated test that does not compile, or that fails.
+        let v = one(LAMP, "(* lamp on *)\nPROGRAM test_x x := ; END_PROGRAM");
+        assert_eq!(v.state(), "failed");
+        assert!(v.red());
+        let broken = LAMP.replace("lamp := t.Q;", "lamp := FALSE;");
+        assert_eq!(one(&broken, TEST_OK).state(), "failed");
+        assert_eq!(one(LAMP, TEST_OK).state(), "passed");
+        // A mix: only the failing one is red.
+        let plan = plan([
+            ("main.st", broken.as_str()),
+            ("test_a.st", TEST_OK),
+            ("test_b.st", placeholder("b", "b").as_str()),
+        ]);
+        let v = run_all(&plan, settings());
+        assert_eq!(red(&v).len(), 1, "{:?}", red(&v));
+        assert!(red(&v)[0].starts_with("test_a: "));
+    }
+
+    #[test]
+    fn names_and_slugs() {
+        for ok in ["a", "lamp_on", "x1", &"a".repeat(NAME_MAX)] {
+            assert!(name_ok(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "_a",
+            "1a",
+            "Lamp",
+            "a-b",
+            "../x",
+            "a/b",
+            "a.st",
+            "a b",
+            "é",
+            &"a".repeat(NAME_MAX + 1),
+        ] {
+            assert!(!name_ok(bad), "{bad}");
+        }
+        assert_eq!(
+            slug("The lamp is on within 2 s of start_pb.", 48),
+            "the_lamp_is_on_within_2_s_of_start_pb"
+        );
+        assert_eq!(slug("  ** ", 48), "requirement");
+        assert_eq!(slug("2 lamps", 48), "r_2_lamps");
+        assert_eq!(slug("alpha beta gamma", 12), "alpha_beta");
+        assert_eq!(slug("../../etc/passwd", 48), "etc_passwd");
+    }
+
+    #[test]
+    fn the_header_cannot_close_its_comment() {
+        let h = header("x *) PROGRAM evil END_PROGRAM (* y");
+        assert_eq!(h, "(* x * ) PROGRAM evil END_PROGRAM ( * y *)\n");
+        assert_eq!(
+            stated(&h).as_deref(),
+            Some("x * ) PROGRAM evil END_PROGRAM ( * y")
+        );
+        let file = placeholder("x", "a *)(*) b\nc");
+        let v = one(LAMP, &file);
+        assert_eq!(v.state(), "untested", "{}", v.why());
+        assert_eq!(v.requirement, "a * )( * ) b c");
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn any_slug_is_a_name(text in "\\PC{0,200}", max in 0usize..80) {
+            let s = slug(&text, max);
+            proptest::prop_assert!(name_ok(&s), "{:?} -> {:?}", text, s);
+            proptest::prop_assert!(s.len() <= max.clamp(1, NAME_MAX));
+        }
+
+        #[test]
+        fn any_requirement_reads_back_and_never_escapes_its_comment(text in "\\PC{0,200}") {
+            let n = neutralise(&text);
+            proptest::prop_assert!(!n.contains("*)") && !n.contains("(*"), "{:?}", n);
+            let file = placeholder("x", &text);
+            // The comment ends where the header line ends, nowhere before.
+            let first = file.lines().next().unwrap();
+            proptest::prop_assert_eq!(first.find("*)"), Some(first.len() - 2));
+            if n.is_empty() {
+                proptest::prop_assert_eq!(stated(&file), None);
+            } else {
+                proptest::prop_assert_eq!(stated(&file), Some(n.clone()));
+            }
+            let plan = plan([("main.st", LAMP), ("test_x.st", file.as_str())]);
+            let v = run(&plan.main, &plan.tests[0], settings());
+            proptest::prop_assert_eq!(v.state(), "untested", "{}", v.why());
+        }
     }
 
     #[test]

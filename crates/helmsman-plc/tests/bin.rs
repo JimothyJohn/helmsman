@@ -1350,14 +1350,16 @@ fn the_retired_screen_flag_is_refused_with_the_reason() {
 }
 
 /// A box asks the relay for agent v7 (v6's tools with strict schemas the
-/// model API takes; v3 to v6 are refused there) and explain-v2 (read-only
-/// tools, floor language) unless told otherwise.
+/// model API takes; v3 to v6 are refused there), explain-v2 (read-only
+/// tools, floor language) and tests-v1 (the requirement route's one
+/// tool, `submit_test`) unless told otherwise.
 #[test]
 fn the_default_agent_versions_are_the_ones_the_relay_serves() {
     let out = plc().arg("--help").output().unwrap();
     let usage = String::from_utf8_lossy(&out.stdout);
     assert!(usage.contains("(default v7)"), "{usage}");
     assert!(usage.contains("default explain-v2"), "{usage}");
+    assert!(usage.contains("default tests-v1"), "{usage}");
 }
 
 /// A map naming `wasm:NAME` boots on `<state-dir>/drivers/NAME.wasm`, with
