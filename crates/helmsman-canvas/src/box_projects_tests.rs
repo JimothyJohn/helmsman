@@ -953,7 +953,7 @@ fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
     settle(&b, &jar, p);
     assert!(p.tests.ran, "opening the project ran its tests on the box");
     assert_eq!(p.tests.rows.len(), 1, "{:?}", p.tests);
-    assert!(!p.tests.rows[0].passed);
+    assert!(!p.tests.rows[0].passed());
     assert_eq!(
         p.tests.rows[0].requirement,
         "The lamp stays off while start is held."
@@ -995,7 +995,7 @@ fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
     p.current_mut().unwrap().text = TEST_GREEN.to_string();
     p.save();
     settle(&b, &jar, p);
-    assert!(p.tests.rows[0].passed, "{:?}", p.tests);
+    assert!(p.tests.rows[0].passed(), "{:?}", p.tests);
     p.deploy();
     settle(&b, &jar, p);
     assert!(

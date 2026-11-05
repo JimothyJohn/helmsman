@@ -1505,7 +1505,7 @@ mod chrome {
         h.wait(0.3);
         let sim = h.app.sim.as_ref().unwrap();
         assert!(sim.tests.ran && sim.tests.rows.len() == 1, "{:?}", sim.tests);
-        assert!(!sim.tests.rows[0].passed);
+        assert!(!sim.tests.rows[0].passed());
         assert_eq!(
             sim.tests.rows[0].requirement,
             "The lamp stays off while start is held."
@@ -1546,7 +1546,7 @@ mod chrome {
         h.press("tests run");
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
-        assert!(sim.tests.rows[0].passed, "{:?}", sim.tests);
+        assert!(sim.tests.rows[0].passed(), "{:?}", sim.tests);
         h.key(Modifiers::COMMAND, Key::D);
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();

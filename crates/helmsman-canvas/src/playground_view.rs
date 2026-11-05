@@ -133,6 +133,13 @@ pub struct PlaygroundView {
     /// (`crate::requirements`): after every build change, before Deploy
     /// and "Use this code".
     pub tests: crate::requirements::Results,
+    /// The Requirements tab's field and open row.
+    pub req_ui: crate::requirements::ReqUi,
+    /// The requirement being added, and the last one's outcome.
+    pub adding: Option<crate::requirements::Adding>,
+    /// The next requirement request's seq: far from the Agent's, so the
+    /// shared transport's answers go to the right one.
+    req_seq: u64,
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
@@ -197,6 +204,9 @@ impl PlaygroundView {
             program_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
+            req_ui: crate::requirements::ReqUi::default(),
+            adding: None,
+            req_seq: 1 << 40,
             selection: None,
             use_error: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -623,6 +633,104 @@ impl PlaygroundView {
             }
             Err(e) => self.ask_error = Some(e),
         }
+    }
+
+    /// Adds a requirement: the Agent writes its test when it can be
+    /// reached (the visitor's key or the local proxy); else it is written
+    /// as "no test yet".
+    pub fn add_requirement(&mut self, text: &str, ctx: &egui::Context) {
+        use crate::requirements::{Adding, Phase, name_for, page_request};
+        if self.proj.is_example() || crate::requirements::refusal(text).is_some() {
+            return;
+        }
+        let taken: Vec<String> = self.proj.files.keys().cloned().collect();
+        let name = name_for(text, &taken);
+        self.req_seq += 1;
+        let seq = self.req_seq;
+        let mut a = Adding::in_page(text, &name, seq);
+        match self.chat.route() {
+            Ok(route) => {
+                let programs: Vec<(String, String)> = self
+                    .proj
+                    .files
+                    .iter()
+                    .filter(|(f, _)| {
+                        helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                            && !helmsman_iec::spec::is_test(f)
+                    })
+                    .map(|(f, t)| (f.clone(), t.clone()))
+                    .collect();
+                let req = page_request(&route, self.chat.model, text, &name, &programs);
+                self.link.send(seq, req, ctx);
+            }
+            Err(_) => {
+                let file = self.write_test(&name, &helmsman_iec::spec::placeholder(&name, text));
+                a.phase = Phase::Untested {
+                    file,
+                    why: "No agent here: paste an API key in the Agent tab, or open the row and write the test yourself."
+                        .into(),
+                };
+            }
+        }
+        self.adding = Some(a);
+    }
+
+    /// Writes `test_<name>.st` into the open project, saved, and runs the
+    /// tests; the file's name.
+    fn write_test(&mut self, name: &str, text: &str) -> String {
+        let file = format!("test_{name}.st");
+        self.proj.files.insert(file.clone(), text.to_string());
+        self.proj.save();
+        self.run_tests();
+        file
+    }
+
+    /// An answer for the requirement being added: taken (`true`) or not
+    /// one of its pieces.
+    fn requirement_answer(&mut self, m: &crate::claude::Incoming) -> bool {
+        use crate::claude::Incoming;
+        use crate::requirements::{Phase, State};
+        let Some(a) = self.adding.as_mut() else { return false };
+        let seq = match m {
+            Incoming::Status { seq, .. }
+            | Incoming::Chunk { seq, .. }
+            | Incoming::End { seq }
+            | Incoming::Unreachable { seq, .. } => *seq,
+            Incoming::Proxy(_) => return false,
+        };
+        if seq != a.seq {
+            return seq > 1 << 40;
+        }
+        match m {
+            Incoming::Chunk { text, .. } => a.chunk(text),
+            Incoming::Status { status, body, .. } => a.phase = Phase::Failed(format!("the Agent answered {status}: {}", body.chars().take(200).collect::<String>())),
+            Incoming::Unreachable { why, .. } => a.end(Some(why)),
+            Incoming::End { .. } => {
+                a.end(None);
+                if a.busy() {
+                    let (name, requirement) = (a.name.clone(), a.requirement.clone());
+                    let program = a.page_program();
+                    let text = match &program {
+                        Some(p) => format!("{}{}", helmsman_iec::spec::header(&requirement), p.trim_start()),
+                        None => helmsman_iec::spec::placeholder(&name, &requirement),
+                    };
+                    let file = self.write_test(&name, &text);
+                    let row = self.tests.rows.iter().find(|r| r.file == file).cloned();
+                    let a = self.adding.as_mut().expect("still adding");
+                    a.phase = match (program, row) {
+                        (None, _) => Phase::Untested {
+                            file,
+                            why: "the Agent's answer held no test; open the row to write one".into(),
+                        },
+                        (Some(_), Some(r)) if r.state == State::Untested => Phase::Untested { file, why: String::new() },
+                        (Some(_), Some(r)) => Phase::Written { file, state: r.state, why: r.why },
+                        (Some(_), None) => Phase::Written { file, state: State::Failed, why: "it did not run".into() },
+                    };
+                }
+            }
+            Incoming::Proxy(_) => {}
+        }
+        true
     }
 
     pub fn stop_answer(&mut self) {
@@ -1087,7 +1195,9 @@ impl PlaygroundView {
             }
         }
         for m in self.link.drain() {
-            self.chat.receive(m);
+            if !self.requirement_answer(&m) {
+                self.chat.receive(m);
+            }
         }
         self.save_pages();
         let t = ctx.input(|i| i.time);
@@ -1432,11 +1542,42 @@ impl Body for PlaygroundView {
         match tab {
             Tab::Io => self.io(ui),
             Tab::Requirements => {
-                egui::ScrollArea::vertical().id_salt("pg-tests").show(ui, |ui| {
-                    if crate::requirements::ui(ui, chrome, &self.tests, "run in this page", false) {
+                let ctx = ui.ctx().clone();
+                let act = egui::ScrollArea::vertical()
+                    .id_salt("pg-tests")
+                    .show(ui, |ui| {
+                        let files = &self.proj.files;
+                        let source = |f: &str| files.get(f).cloned();
+                        let cannot_add = self
+                            .proj
+                            .is_example()
+                            .then(|| "Make this example your own first: click it in Files and name it.".to_string());
+                        let view = crate::requirements::View {
+                            results: &self.tests,
+                            adding: self.adding.as_ref(),
+                            busy: false,
+                            cannot_add,
+                            source: &source,
+                            agent: "the Agent (your API key or the local proxy)",
+                        };
+                        crate::requirements::ui(ui, chrome, &view, &mut self.req_ui)
+                    })
+                    .inner;
+                match act {
+                    Some(crate::requirements::Act::Add(text)) => self.add_requirement(&text, &ctx),
+                    Some(crate::requirements::Act::Run) => self.run_tests(),
+                    Some(crate::requirements::Act::Edit(f)) => {
+                        self.proj.open_file(&f);
+                        self.reload();
+                        chrome.show_code();
+                    }
+                    Some(crate::requirements::Act::Delete(f)) => {
+                        self.proj.delete_file(&f);
+                        self.req_ui.open = None;
                         self.run_tests();
                     }
-                });
+                    None => {}
+                }
             }
             Tab::Claude => self.claude(ui, chrome),
         }
