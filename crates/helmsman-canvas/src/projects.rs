@@ -91,6 +91,9 @@ pub enum Act {
     DeleteFile(String),
     /// A file's text to the sidebar's clipboard (right-click › Copy).
     CopyFile(String),
+    /// Deploy the open project, as File › Deploy (right-click a file ›
+    /// Deploy; Nick, 2026-11-05).
+    Deploy,
     /// A copy of a file beside it, under a free name (right-click ›
     /// Duplicate).
     DuplicateFile(String),
@@ -130,6 +133,8 @@ pub struct Listing<'a> {
     pub running: bool,
     /// The open project's revisions, oldest first (the History row).
     pub history: &'a [crate::history_ui::RevisionRow],
+    /// Whether the open project may be deployed now, or why not.
+    pub deploy: Result<(), String>,
 }
 
 /// Which name the sidebar's text field is for.
@@ -389,7 +394,7 @@ impl FilesUi {
                     .tip(if runs {
                         "The file that runs. Double-click to edit it; right-click for more."
                     } else {
-                        "Click to open, double-click to edit; right-click to copy, rename or delete."
+                        "Click to open, double-click to edit; right-click to deploy, copy, rename or delete."
                     });
                 chrome.hit(format!("file {f}"), r.rect);
                 if r.clicked() {
@@ -413,6 +418,23 @@ impl FilesUi {
                     }
                 };
                 r.context_menu(|ui| {
+                    // Deploy first: the step a right-click is most often
+                    // for (Nick, 2026-11-05). It deploys the project, whose
+                    // main.st runs, whichever file was clicked.
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu deploy",
+                        "Deploy",
+                        l.deploy.is_ok(),
+                        l.deploy.as_ref().err().map_or(
+                            "Saves, checks and runs this project (its main.st), as File › Deploy.",
+                            String::as_str,
+                        ),
+                    ) {
+                        act = Some(Act::Deploy);
+                    }
+                    ui.separator();
                     if menu_item(
                         ui,
                         chrome,

@@ -457,6 +457,7 @@ impl PlaygroundView {
                 self.proj.add_file(&name, text);
                 self.edited(f64::NEG_INFINITY);
             }
+            Act::Deploy => self.deploy(),
         }
     }
 
@@ -1494,6 +1495,8 @@ impl Body for PlaygroundView {
             starters: false,
             running: self.proj.running.as_deref() == Some(open.as_str()),
             history: &history,
+            // The page deploys at once: never busy.
+            deploy: Ok(()),
         };
         if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
             self.act(a);

@@ -1117,6 +1117,9 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
         // Deploy is the File menu's (disabled here; pressing it is nothing).
         h.press("bar file");
         h.press("file deploy");
+        // ... and a file's right-click menu's (disabled here too).
+        h.right_click(h.rect("file main.st").center());
+        h.press("menu deploy");
         // Reads (the Trend's pins) go; no write does.
         let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
         assert!(sent.is_empty(), "{sent:?}");
@@ -1135,6 +1138,19 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
             role: "engineer".into(),
         }),
     );
+    // Right-click a file › Deploy starts the deploy, the check first
+    // (Nick, 2026-11-05).
+    h.app.chrome.show_files();
+    h.wait(0.3);
+    h.right_click(h.rect("file main.st").center());
+    h.press("menu deploy");
+    let sent = h.sent();
+    assert!(
+        sent.iter()
+            .any(|q| q.method == "POST" && q.url.ends_with("/check")),
+        "{sent:?}"
+    );
+    h.bv().projects.deploy = Deploy::Idle;
     h.bv().projects.current_mut().unwrap().text.push_str("(* mine *)");
     h.frame(vec![]);
     assert!(h.app.chrome.rect("dirty").is_some(), "the header marks it");

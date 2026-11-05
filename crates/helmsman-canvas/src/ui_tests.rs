@@ -910,6 +910,7 @@ mod chrome {
         let at = h.rect("file blink.st").center();
         h.right_click(at);
         let items = [
+            "menu deploy",
             "menu copy",
             "menu paste",
             "menu duplicate",
@@ -925,6 +926,30 @@ mod chrome {
                 "right-click: {k} is {w} pt wide against {widest}"
             );
         }
+    }
+
+    /// Right-click a file › Deploy runs the open project, as File ›
+    /// Deploy does (Nick, 2026-11-05).
+    #[test]
+    fn a_files_right_click_deploys_the_project() {
+        let mut h = Harness::new(App::sim());
+        h.press("bar file");
+        h.press("file copy");
+        h.press("name ok");
+        h.wait(0.3);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.open, "blink-copy");
+        assert_ne!(
+            h.app.sim.as_ref().unwrap().proj.running.as_deref(),
+            Some("blink-copy"),
+            "a copy does not run until deployed"
+        );
+        h.right_click(h.rect("file blink.st").center());
+        h.press("menu deploy");
+        h.wait(0.3);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().proj.running.as_deref(),
+            Some("blink-copy")
+        );
     }
 
     /// Rename and Delete are the right-click menu's and the Delete key's,
@@ -1648,6 +1673,7 @@ mod chrome {
         let at = h.rect("file blink.st").center();
         h.right_click(at);
         for k in [
+            "menu deploy",
             "menu copy",
             "menu paste",
             "menu duplicate",
