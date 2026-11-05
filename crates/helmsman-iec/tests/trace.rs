@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use helmsman_iec::trace::{Shape, StmtId, Trace};
-use helmsman_iec::{FaultKind, Image, ImageSizes, Program, Value, compile};
+use helmsman_iec::{FaultKind, Image, ImageSizes, Program, Stopped, Value, compile};
 use proptest::prelude::*;
 
 const SIZES: ImageSizes = ImageSizes { i: 32, q: 32, m: 64 };
@@ -512,6 +512,179 @@ proptest! {
             }
         }
     }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    /// A scan run to a breakpoint changes nothing, stops exactly when the
+    /// full scan starts a breakpoint statement more than `skip` times, and
+    /// shows a prefix of the full scan; one that ends is the full scan.
+    #[test]
+    fn scan_to_stops_where_the_full_scan_would_pass(
+        body in proptest::collection::vec(stmt(), 1..6),
+        warmup in proptest::collection::vec(any::<u8>(), 0..4),
+        inp in any::<u8>(),
+        picks in proptest::collection::vec(any::<prop::sample::Index>(), 0..4),
+        skip in 0..6u32,
+    ) {
+        let src = program(&body);
+        let Ok(mut p) = compile(&src, SIZES) else {
+            return Err(TestCaseError::fail(format!("does not compile:\n{src}")));
+        };
+        p.set_budget(5_000);
+        let mut img = Image::new(SIZES);
+        for (n, &w) in warmup.iter().enumerate() {
+            img.i[0] = w;
+            if p.scan_at(&mut img, Duration::from_millis(u64::try_from(n).unwrap() * 7)).is_err() {
+                return Ok(());
+            }
+        }
+        img.i[0] = inp;
+        let now = Duration::from_millis(100);
+        let n = p.trace_map().stmts().len();
+        let mut breaks: Vec<StmtId> = picks
+            .iter()
+            .map(|i| StmtId(u32::try_from(i.index(n)).unwrap()))
+            .collect();
+        breaks.sort_unstable();
+        breaks.dedup();
+
+        let before = state(&p, &img);
+        let (stopped, paused) = p.scan_to(&img, now, &breaks, skip);
+        prop_assert_eq!(&state(&p, &img), &before, "scan_to changed the program\n{}", src);
+
+        let (r, full) = p.scan_traced(&mut img, now);
+        let passes: u32 = breaks.iter().map(|&id| full.hits(id)).sum();
+        match stopped {
+            Stopped::Before(id) => {
+                prop_assert!(passes > skip, "stopped with {} hits, skip {}\n{}", passes, skip, src);
+                prop_assert!(breaks.contains(&id));
+                prop_assert_eq!(paused.paused_at(), Some(id));
+                prop_assert_eq!(paused.fault(), None);
+                let seen: u32 = breaks.iter().map(|&b| paused.hits(b)).sum();
+                prop_assert_eq!(seen, skip, "{} breakpoint hits passed before stopping", seen);
+                for k in 0..n {
+                    let id = StmtId(u32::try_from(k).unwrap());
+                    prop_assert!(paused.hits(id) <= full.hits(id), "statement {} ran more paused", k);
+                }
+            }
+            Stopped::End(end) => {
+                prop_assert!(passes <= skip, "ran through {} hits, skip {}\n{}", passes, skip, src);
+                prop_assert_eq!(end, r);
+                prop_assert_eq!(paused.paused_at(), None);
+                prop_assert_eq!(paused.image(), full.image());
+                for (path, v) in full.values() {
+                    prop_assert_eq!(Some(format!("{v:?}")), paused.get(path).map(|x| format!("{x:?}")), "{}", path);
+                }
+            }
+        }
+    }
+}
+
+const STEPS_SRC: &str = "FUNCTION_BLOCK acc
+VAR_INPUT x : INT; END_VAR
+VAR total : INT; END_VAR
+total := total + x;
+END_FUNCTION_BLOCK
+PROGRAM t
+VAR a, b, c, i, s : INT; one, two : acc; q AT %QX0.0 : BOOL := TRUE; END_VAR
+a := 1;
+b := a + 1;
+c := b * 10;
+FOR i := 1 TO 5 DO
+  s := s + i;
+END_FOR;
+one(x := 3);
+two(x := 4);
+END_PROGRAM";
+
+#[test]
+fn a_breakpoint_shows_the_values_just_before_its_statement() {
+    let mut p = build(STEPS_SRC);
+    let img = Image::new(SIZES);
+    let map = p.trace_map();
+    let line = |m: &str| u32::try_from(STEPS_SRC.lines().position(|l| l.contains(m)).unwrap() + 1).unwrap();
+    let stmt = |m: &str| map.at_line(line(m)).next().unwrap();
+    let c = stmt("c := b");
+
+    let (stopped, t) = p.scan_to(&img, Duration::ZERO, &[c], 0);
+    assert_eq!(stopped, Stopped::Before(c));
+    assert_eq!(t.paused_at(), Some(c));
+    assert_eq!((int(&t, "a"), int(&t, "b"), int(&t, "c")), (1, 2, 0));
+    assert_eq!(t.hits(c), 0, "the paused statement has not run");
+    assert!(t.ran(stmt("b := a")));
+    assert_eq!(
+        t.image().q[0] & 1,
+        1,
+        "a cold start's located values are in the paused image"
+    );
+    assert_eq!(
+        p.get("b"),
+        Some(Value::Int(0)),
+        "the program itself has not moved"
+    );
+
+    // Resuming is the full scan: same arguments, run for real.
+    let mut img = img;
+    let (r, full) = p.scan_traced(&mut img, Duration::ZERO);
+    r.unwrap();
+    assert_eq!(int(&full, "c"), 20);
+    assert_eq!(p.get("c"), Some(Value::Int(20)));
+}
+
+#[test]
+fn skip_walks_a_loop_body_and_each_function_block_instance() {
+    let p = build(STEPS_SRC);
+    let img = Image::new(SIZES);
+    let map = p.trace_map();
+    let line = |m: &str| u32::try_from(STEPS_SRC.lines().position(|l| l.contains(m)).unwrap() + 1).unwrap();
+    let body = map.at_line(line("s := s + i")).next().unwrap();
+    for skip in 0..5 {
+        let (stopped, t) = p.scan_to(&img, Duration::ZERO, &[body], skip);
+        assert_eq!(stopped, Stopped::Before(body));
+        assert_eq!(int(&t, "i"), i128::from(skip) + 1, "pass {skip}");
+        assert_eq!(int(&t, "s"), (1..=i128::from(skip)).sum::<i128>());
+    }
+    let (stopped, t) = p.scan_to(&img, Duration::ZERO, &[body], 5);
+    assert_eq!(stopped, Stopped::End(Ok(())), "five passes, no sixth");
+    assert_eq!(t.paused_at(), None);
+    assert_eq!(int(&t, "s"), 15);
+
+    // A statement in a function block's body stops in every instance.
+    let total = map.in_pou("acc").next().unwrap();
+    let (_, t) = p.scan_to(&img, Duration::ZERO, &[total], 0);
+    assert_eq!((int(&t, "one.x"), int(&t, "one.total")), (3, 0));
+    let (_, t) = p.scan_to(&img, Duration::ZERO, &[total], 1);
+    assert_eq!(
+        (int(&t, "one.total"), int(&t, "two.x"), int(&t, "two.total")),
+        (3, 4, 0)
+    );
+
+    // Two breakpoints: the first one the scan reaches, then the next.
+    let a = map.at_line(line("a := 1")).next().unwrap();
+    let (s0, _) = p.scan_to(&img, Duration::ZERO, &[total, a], 0);
+    let (s1, _) = p.scan_to(&img, Duration::ZERO, &[total, a], 1);
+    assert_eq!((s0, s1), (Stopped::Before(a), Stopped::Before(total)));
+}
+
+#[test]
+fn a_fault_before_the_breakpoint_ends_the_scan_with_it() {
+    let src = "PROGRAM t
+VAR a, z : INT; END_VAR
+a := 10 / z;
+a := 1;
+END_PROGRAM";
+    let p = build(src);
+    let map = p.trace_map();
+    let later = map.at_line(4).next().unwrap();
+    let (stopped, t) = p.scan_to(&Image::new(SIZES), Duration::ZERO, &[later], 0);
+    let Stopped::End(Err(f)) = stopped else {
+        panic!("{stopped:?}")
+    };
+    assert_eq!(f.kind, FaultKind::DivisionByZero);
+    assert_eq!(t.fault(), Some(f));
+    assert_eq!(t.paused_at(), None);
 }
 
 /// The library doc's blink program, traced on every scan, matches the

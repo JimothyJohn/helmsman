@@ -16,7 +16,7 @@ use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, SimRevision, Storage};
-use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WARN, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 use crate::theme::{Theme, theme};
 use crate::tips::Tip;
@@ -932,6 +932,17 @@ impl PlaygroundView {
             .cloned()
     }
 
+    /// Where the paused scan stands, as the files show it: `12` or
+    /// `12 of motor.st`.
+    fn paused_line(&self) -> Option<String> {
+        let id = self.session.paused_at()?;
+        let line = self.session.trace.as_ref()?.map().stmt(id)?.line;
+        Some(match self.proj.locate(line) {
+            Some((file, l)) => format!("{l} of {file}"),
+            None => line.to_string(),
+        })
+    }
+
     /// The block picked in the diagram as a scope: its file, its name and
     /// the lines of the statement it was lowered from. Only while the
     /// diagram is of the text in the editor (an edit not yet deployed
@@ -1335,6 +1346,8 @@ impl Body for PlaygroundView {
         let s = &self.session;
         let state = if s.fault.is_some() {
             "faulted"
+        } else if s.paused.is_some() {
+            "paused"
         } else if s.running {
             "running"
         } else {
@@ -1360,6 +1373,7 @@ impl Body for PlaygroundView {
 
     fn has_notices(&self) -> bool {
         self.session.fault.is_some()
+            || self.session.paused.is_some()
             || self.notice.is_some()
             || self.proj.notice.is_some()
             || self.proj.storage_problem.is_some()
@@ -1369,6 +1383,19 @@ impl Body for PlaygroundView {
         let t = theme(ui);
         if let Some(f) = &self.session.fault {
             ui.colored_label(RED, format!("Fault: {f}. Run or Step restarts the program."));
+        }
+        if self.session.paused.is_some() {
+            let at = self
+                .paused_line()
+                .map_or_else(String::new, |l| format!(" before line {l}"));
+            ui.horizontal_wrapped(|ui| {
+                ui.colored_label(WARN, format!("Paused at a breakpoint{at}."))
+                    .tip("The diagram and the values show the scan as it stood just before that statement.");
+                ui.label(
+                    RichText::new("F10 runs the rest of the scan. Ctrl Enter goes on to the next stop.")
+                        .color(t.muted),
+                );
+            });
         }
         if let Some(n) = &self.notice {
             ui.label(RichText::new(n).color(t.muted));
@@ -1634,6 +1661,8 @@ impl Body for PlaygroundView {
                 .update(self.proj.files.get(crate::icons::FILE).map(String::as_str));
             v.crumbs_ui(ui, &[]);
             let area = ui.available_rect_before_wrap();
+            v.breaks.clone_from(&self.session.breaks);
+            v.paused = self.session.paused_at();
             v.canvas(ui, scan);
             let mut jump = None;
             if v.pick != self.last_pick {
@@ -2539,6 +2568,14 @@ impl Workspace for PlaygroundView {
 
     fn cross_references(&mut self) -> bool {
         self.viewer.as_mut().is_some_and(Viewer::cross_references)
+    }
+
+    fn toggle_breakpoint(&mut self) -> bool {
+        let Some(id) = self.viewer.as_ref().and_then(Viewer::picked_stmt) else {
+            return false;
+        };
+        self.session.toggle_break(id);
+        true
     }
 
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {

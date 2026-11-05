@@ -21,6 +21,7 @@
 //! | Devices tab | Alt 4 | (a key of our own) |
 //! | Go to definition (picked block's variable) | Ctrl/⌘ Shift D | Go to Definition |
 //! | Cross references (its reads and writes lit) | Ctrl/⌘ Shift X | Display Cross References |
+//! | Breakpoint on the picked block (simulation) | Ctrl/⌘ B | (Toggle Breakpoint is F9 there) |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
 //!
 //! The shortcuts are read at the end of the frame, after every widget
@@ -49,6 +50,7 @@ pub enum Action {
     Trend,
     GoToDefinition,
     CrossReferences,
+    Breakpoint,
     /// Cold restart of the simulation (a glyph; no key).
     Restart,
     Upload,
@@ -104,6 +106,7 @@ pub const TABLE: &[Hotkey] = &[
         Key::X,
         "Display Cross References",
     ),
+    key(Action::Breakpoint, Modifiers::COMMAND, Key::B, ""),
     key(Action::Files, Modifiers::ALT, Key::Num0, "Devices"),
     key(Action::St, Modifiers::ALT, Key::Num1, "POUs"),
     key(Action::Trend, Modifiers::ALT, Key::Num2, "Modules"),
@@ -131,6 +134,10 @@ const fn does(action: Action) -> &'static str {
         Action::Panel => "The side panel (I/O, Agent)",
         Action::GoToDefinition => "Go to definition: the picked block's variable, at its VAR line",
         Action::CrossReferences => "Cross references: every read and write of it lit",
+        Action::Breakpoint => {
+            "Breakpoint on the picked block (simulation): the scan stops before it; F10 runs the rest \
+             of the scan, Ctrl Enter goes on to the next stop"
+        }
         Action::Restart | Action::Upload | Action::Download => "",
     }
 }
@@ -182,8 +189,8 @@ pub fn markdown() -> String {
     }
     out.push_str("| Alt ↑ | Up one level in the diagram | |\n");
     out.push_str(
-        "\nReserved, not built yet, on chords rather than function keys: Ctrl B toggle a \
-         breakpoint on the picked block, Ctrl ] / Ctrl [ step into / out of an instance, \
+        "\nReserved, not built yet, on chords rather than function keys: \
+         Ctrl ] / Ctrl [ step into / out of an instance, \
          Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F find in \
          the Structured Text with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2 the Agent.\n",
     );

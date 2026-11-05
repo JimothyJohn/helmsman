@@ -39,6 +39,8 @@ mod box_trend;
 mod box_view;
 mod claude;
 mod commit;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod debugger_tests;
 mod devices;
 mod editor;
 mod glyphs;

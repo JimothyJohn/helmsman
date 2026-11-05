@@ -439,6 +439,13 @@ impl App {
                     w.cross_references();
                 }
             }
+            Action::Breakpoint => {
+                if self.source == Source::Sim
+                    && let Some(w) = self.workspace()
+                {
+                    w.toggle_breakpoint();
+                }
+            }
             Action::Restart => {
                 if self.source == Source::Sim
                     && let Some(s) = self.sim.as_mut()
@@ -967,6 +974,20 @@ impl App {
                 ) && let Some(w) = self.workspace()
                 {
                     w.cross_references();
+                }
+                if self.source == Source::Sim
+                    && menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "edit breakpoint",
+                        "Breakpoint",
+                        false,
+                        &k(Action::Breakpoint),
+                        "Sets or clears a breakpoint on the picked block: the simulation's scan stops just before it.",
+                    )
+                    && let Some(w) = self.workspace()
+                {
+                    w.toggle_breakpoint();
                 }
             });
             hits.push(("bar edit".to_string(), e.response.rect));

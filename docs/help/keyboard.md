@@ -16,6 +16,7 @@ CODESYS's default keys where the browser leaves them alone, nothing on a key the
 | Ctrl Shift Z | Redo in the Structured Text |  |
 | Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
 | Ctrl Shift X | Cross references: every read and write of it lit | Display Cross References |
+| Ctrl B | Breakpoint on the picked block (simulation): the scan stops before it; F10 runs the rest of the scan, Ctrl Enter goes on to the next stop |  |
 | Alt 0 | The left pane's Files tab | Devices |
 | Alt 1 | The left pane's Code tab (the Structured Text) | POUs |
 | Alt 2 | The bottom panel (Trend, Messages) | Modules |
@@ -23,4 +24,4 @@ CODESYS's default keys where the browser leaves them alone, nothing on a key the
 | Alt 4 | The left pane's Devices tab (the I/O map's devices and points) |  |
 | Alt ↑ | Up one level in the diagram | |
 
-Reserved, not built yet, on chords rather than function keys: Ctrl B toggle a breakpoint on the picked block, Ctrl ] / Ctrl [ step into / out of an instance, Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F find in the Structured Text with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2 the Agent.
+Reserved, not built yet, on chords rather than function keys: Ctrl ] / Ctrl [ step into / out of an instance, Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F find in the Structured Text with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2 the Agent.

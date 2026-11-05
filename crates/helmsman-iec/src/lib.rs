@@ -123,9 +123,9 @@ pub use state::{Carry, State};
 pub use types::{Ty, Value};
 
 use check::{AggKind, Checked, Type};
-use interp::Machine;
+use interp::{Halt, Machine};
 use parser::Section;
-use trace::{Recorder, Trace, TraceMap};
+use trace::{Recorder, StmtId, Trace, TraceMap};
 
 /// Instructions one scan may execute before it faults (see [`FaultKind::Watchdog`]).
 pub const DEFAULT_BUDGET: u64 = 1_000_000;
@@ -169,6 +169,39 @@ pub struct Program {
     counters: u32,
     /// Built on the first traced scan; shared by its clones.
     map: Once<Arc<TraceMap>>,
+}
+
+/// Where [`Program::scan_to`] stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    /// Before this statement, at a breakpoint.
+    Before(StmtId),
+    /// At the end of the scan, no breakpoint reached: the scan's result.
+    End(Result<(), Fault>),
+}
+
+/// One scan of `code`'s program over `mem` and `image`.
+fn run_on(
+    code: &Checked,
+    budget: u64,
+    mem: &mut [Value],
+    image: &mut Image,
+    now: Duration,
+    tap: Option<&mut Recorder>,
+) -> Result<(), Halt> {
+    let mut m = Machine {
+        mem,
+        image,
+        pous: &code.pous,
+        library: code.library,
+        base: 0,
+        budget,
+        now: i128::try_from(now.as_nanos())
+            .unwrap_or(i128::MAX)
+            .min(i128::from(i64::MAX)),
+        tap,
+    };
+    m.run(&code.pous[code.program])
 }
 
 /// Compiles a unit holding one `PROGRAM` (plus any FUNCTIONs,
@@ -266,8 +299,49 @@ impl Program {
         let r = self.run(image, now, Some(&mut rec));
         let prog = &self.code.pous[self.code.program];
         let frame = self.mem[prog.base..prog.base + prog.size].to_vec();
-        let trace = Trace::new(self.trace_map(), now, rec, frame, image.clone(), r.err());
+        let trace = Trace::new(self.trace_map(), now, rec, frame, image.clone(), r.err(), false);
         (r, trace)
+    }
+
+    /// Runs a scan as far as a breakpoint, on copies: the program's
+    /// variables and `image` are left as they were, so the scan can be
+    /// looked at as it stood and then run for real.
+    ///
+    /// The scan stops before the `skip + 1`-th start of any statement in
+    /// `breaks` (statements in a function block's body stop in every
+    /// instance). The trace shows the scan up to there
+    /// ([`Trace::paused_at`]), the values as of that moment. A scan is
+    /// deterministic in its variables, `image` and `now`, so
+    /// [`Program::scan_traced`] with the same arguments runs through the
+    /// same moment and on to the end: that is how a paused scan resumes.
+    /// `skip + 1` stops at the next hit.
+    ///
+    /// Returns where the scan stopped: before a statement, or at its end
+    /// (no breakpoint was reached, `skip` included) with the scan's result.
+    pub fn scan_to(&self, image: &Image, now: Duration, breaks: &[StmtId], skip: u32) -> (Stopped, Trace) {
+        let map = self.trace_map();
+        let counters = breaks.iter().filter_map(|&id| map.counter(id)).collect();
+        let mut rec = Recorder::with_breaks(self.counters, counters, skip);
+        let mut mem = self.mem.clone();
+        let mut image = image.clone();
+        if self.cold {
+            interp::init_located(&mut image, &self.code.loc_init);
+        }
+        let r = run_on(&self.code, self.budget, &mut mem, &mut image, now, Some(&mut rec));
+        let prog = &self.code.pous[self.code.program];
+        let frame = mem[prog.base..prog.base + prog.size].to_vec();
+        let fault = match r {
+            Err(Halt::Fault(f)) => Some(f),
+            _ => None,
+        };
+        let paused = matches!(r, Err(Halt::Break(_)));
+        let trace = Trace::new(map, now, rec, frame, image, fault, paused);
+        let stopped = match (trace.paused_at(), fault) {
+            (Some(id), _) => Stopped::Before(id),
+            (None, Some(f)) => Stopped::End(Err(f)),
+            (None, None) => Stopped::End(Ok(())),
+        };
+        (stopped, trace)
     }
 
     /// The statement table and variable list every trace of this program
@@ -284,20 +358,10 @@ impl Program {
             interp::init_located(image, &self.code.loc_init);
             self.cold = false;
         }
-        let program = &self.code.pous[self.code.program];
-        let mut m = Machine {
-            mem: &mut self.mem,
-            image,
-            pous: &self.code.pous,
-            library: self.code.library,
-            base: 0,
-            budget: self.budget,
-            now: i128::try_from(now.as_nanos())
-                .unwrap_or(i128::MAX)
-                .min(i128::from(i64::MAX)),
-            tap,
-        };
-        m.run(program)
+        run_on(&self.code, self.budget, &mut self.mem, image, now, tap).map_err(|h| match h {
+            Halt::Fault(f) => f,
+            Halt::Break(_) => unreachable!("only scan_to sets breakpoints"),
+        })
     }
 
     /// Restores every variable to its initial value (a cold restart); the
