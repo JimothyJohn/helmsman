@@ -64,8 +64,12 @@ impl Harness {
                     }
                     let job = &t.galley.job;
                     for sec in &job.sections {
-                        let text = job.text.get(sec.byte_range.start.0..sec.byte_range.end.0).unwrap_or("");
-                        if !text.trim().is_empty() && sec.format.font_id.size < crate::theme::MIN_TEXT - 0.01 {
+                        let text = job
+                            .text
+                            .get(sec.byte_range.start.0..sec.byte_range.end.0)
+                            .unwrap_or("");
+                        if !text.trim().is_empty() && sec.format.font_id.size < crate::theme::MIN_TEXT - 0.01
+                        {
                             out.push((sec.format.font_id.size, text.trim().chars().take(60).collect()));
                         }
                     }
@@ -2001,13 +2005,34 @@ mod simulated {
                 seen.push(format!("{key}: {size} pt {text:?}"));
             }
         }
+        for menu in ["bar file", "bar edit", "bar view", "bar help"] {
+            h.press(menu);
+            h.frame(vec![]);
+            h.frame(vec![]);
+            for (size, text) in h.small_text() {
+                seen.push(format!("{menu}: {size} pt {text:?}"));
+            }
+            h.frame(vec![eframe::egui::Event::Key {
+                key: eframe::egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: eframe::egui::Modifiers::NONE,
+            }]);
+            h.wait(0.2);
+        }
         h.app.screen = crate::app::Screen::Monitor;
         h.wait(0.3);
         for (size, text) in h.small_text() {
             seen.push(format!("monitor: {size} pt {text:?}"));
         }
         seen.dedup();
-        assert_eq!(seen, [] as [String; 0], "text below the minimum:\n{}", seen.join("\n"));
+        assert_eq!(
+            seen,
+            [] as [String; 0],
+            "text below the minimum:\n{}",
+            seen.join("\n")
+        );
     }
 
     #[test]
@@ -2055,6 +2080,50 @@ mod boxed {
 
     fn boxed(h: &Harness) -> &BoxView {
         h.app.boxv.as_ref().unwrap()
+    }
+
+    /// The minimum holds on a box too: its tabs, signed in, and the
+    /// Proposals screen.
+    #[test]
+    fn no_text_on_a_box_is_below_the_minimum() {
+        use crate::review::Session;
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.wait(0.2);
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("nick".into()),
+            role: "engineer".into(),
+        });
+        h.wait(0.2);
+        let mut seen = Vec::new();
+        for key in [
+            "pane files",
+            "pane devices",
+            "pane code",
+            "tab io",
+            "tab tests",
+            "tab claude",
+        ] {
+            h.press(key);
+            h.wait(0.3);
+            for (size, text) in h.small_text() {
+                seen.push(format!("{key}: {size} pt {text:?}"));
+            }
+        }
+        h.app.screen = crate::app::Screen::Proposals;
+        h.wait(0.3);
+        for (size, text) in h.small_text() {
+            seen.push(format!("proposals: {size} pt {text:?}"));
+        }
+        seen.dedup();
+        assert_eq!(
+            seen,
+            [] as [String; 0],
+            "text below the minimum:\n{}",
+            seen.join("\n")
+        );
     }
 
     /// The Agent tab on a box: signed out, Send stays off; signed in, the
