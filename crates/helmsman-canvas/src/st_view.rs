@@ -16,6 +16,7 @@ use helmsman_diagram::{
     Diagram, Drivers, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, drivers,
 };
 use helmsman_iec::Value;
+use helmsman_iec::trace::StmtId;
 
 /// Brand colours (docs/brand/index.html).
 pub mod brand {
@@ -177,6 +178,10 @@ pub struct Viewer {
     /// The blocks' one-character icons (the project's `icons.map` over
     /// the built-in ones).
     pub icons: crate::icons::Icons,
+    /// Breakpoints to mark, as the host keeps them (the simulation's).
+    pub breaks: Vec<StmtId>,
+    /// The statement a paused scan stopped before.
+    pub paused: Option<StmtId>,
 }
 
 /// One row of the program tree.
@@ -343,6 +348,19 @@ impl Viewer {
             moved,
             edits: 0,
             icons: crate::icons::Icons::default(),
+            breaks: Vec::new(),
+            paused: None,
+        }
+    }
+
+    /// The statement the picked block or region was lowered from: what a
+    /// breakpoint (Ctrl B) goes on.
+    #[must_use]
+    pub fn picked_stmt(&self) -> Option<StmtId> {
+        let d = self.diagram();
+        match self.pick? {
+            Pick::Node(n) => d.nodes.get(n.0 as usize).map(|n| n.stmt),
+            Pick::Region(r) => d.regions.get(r.0 as usize).map(|r| r.stmt),
         }
     }
 
@@ -1003,6 +1021,8 @@ impl Viewer {
                 lit: self.lit.as_ref(),
                 vars: self.module.program().map(|p| &p.vars),
                 icons: &self.icons,
+                breaks: &self.breaks,
+                paused: self.paused,
             },
         );
     }
@@ -1096,6 +1116,23 @@ struct Marks<'a> {
     vars: Option<&'a std::collections::HashMap<String, Var>>,
     /// The blocks' icons.
     icons: &'a crate::icons::Icons,
+    /// Statements with a breakpoint: a red dot on the blocks they end in
+    /// (an IF's, CASE's or loop's on its first region's label).
+    breaks: &'a [StmtId],
+    /// The statement a paused scan stopped before: outlined.
+    paused: Option<StmtId>,
+}
+
+/// Where a statement is marked on the diagram: the blocks it ends in, or
+/// for an IF, CASE or loop its first region.
+fn marked(d: &Diagram, id: StmtId) -> (Vec<NodeId>, Option<RegionId>) {
+    let Some(s) = d.stmts.iter().find(|s| s.id == id) else {
+        return (Vec::new(), None);
+    };
+    match s.arms.first() {
+        Some(&r) => (Vec::new(), Some(r)),
+        None => (s.roots.clone(), None),
+    }
 }
 
 /// The program variable a node's path starts at (`M.ON` is `M`'s).
@@ -1178,6 +1215,22 @@ fn bubble(painter: &egui::Painter, t: &Theme, p: Pos2, z: f32, seen: Option<Valu
     );
 }
 
+/// A breakpoint's mark: a red dot with a dark rim, centred at `at`.
+fn break_dot(painter: &egui::Painter, at: Pos2, z: f32) {
+    let r = (6.0 * z).max(4.0);
+    painter.circle(at, r, brand::RED, Stroke::new((1.5 * z).max(1.0), BLACK));
+}
+
+/// Where a paused scan stands: a thick warning-coloured frame.
+fn paused_outline(painter: &egui::Painter, r: Rect, z: f32) {
+    painter.rect_stroke(
+        r.expand(5.0 * z),
+        CornerRadius::same(7),
+        Stroke::new((3.0 * z).max(2.0), brand::WARN),
+        StrokeKind::Outside,
+    );
+}
+
 fn draw(
     painter: &egui::Painter,
     t: &Theme,
@@ -1193,7 +1246,17 @@ fn draw(
         lit,
         vars,
         icons,
+        breaks,
+        paused,
     } = marks;
+    let mut dot_nodes = std::collections::HashSet::new();
+    let mut dot_regions = std::collections::HashSet::new();
+    for &b in breaks {
+        let (ns, r) = marked(d, b);
+        dot_nodes.extend(ns);
+        dot_regions.extend(r);
+    }
+    let (here_nodes, here_region) = paused.map_or_else(|| (Vec::new(), None), |p| marked(d, p));
     let z = cam.zoom;
     let strength = |on: bool| if lit.is_none() || on { 1.0 } else { DIMMED };
     // Pins entered through a bubble: no pin dot over it.
@@ -1233,6 +1296,12 @@ fn draw(
             Stroke::new(width * z, stroke),
             StrokeKind::Inside,
         );
+        if here_region == Some(r.id) {
+            paused_outline(painter, rect, z);
+        }
+        if dot_regions.contains(&r.id) {
+            break_dot(painter, rect.min + Vec2::new(-2.0, LABEL_H / 2.0) * z, z);
+        }
         if text {
             let at = rect.min + Vec2::new(8.0, LABEL_H / 2.0) * z;
             painter.text(at, Align2::LEFT_CENTER, &r.label, font(12.0 * z), stroke);
@@ -1375,6 +1444,12 @@ fn draw(
             Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
+        if here_nodes.contains(&n.id) {
+            paused_outline(painter, r, z);
+        }
+        if dot_nodes.contains(&n.id) {
+            break_dot(painter, r.min + Vec2::new(-2.0, HEADER / 2.0) * z, z);
+        }
         // The block's one-character icon: at the header's left edge beside
         // the label, or alone and large enough to read when the label is
         // too small to draw (Nick, 2026-11-01).

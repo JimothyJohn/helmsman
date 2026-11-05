@@ -12,8 +12,8 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use helmsman_diagram::Module;
-use helmsman_iec::trace::Trace;
-use helmsman_iec::{Diagnostic, Image, ImageSizes, PortDir, Program, Ty, Value, compile};
+use helmsman_iec::trace::{StmtId, Trace};
+use helmsman_iec::{Diagnostic, Image, ImageSizes, PortDir, Program, Stopped, Ty, Value, compile};
 
 /// Process image: 8 bytes each way (`%IX0.0` .. `%IX7.7`), some memory.
 pub const SIZES: ImageSizes = ImageSizes { i: 8, q: 8, m: 64 };
@@ -382,6 +382,27 @@ impl Build {
     }
 }
 
+/// `breaks` of `old`'s program, as statements of `new`'s: the ones
+/// whose POU, line and column are still a statement's. An edit that
+/// moves a statement drops its breakpoint.
+fn moved_breaks(old: &Build, new: &Build, breaks: &[StmtId]) -> Vec<StmtId> {
+    let (was, now) = (old.program.trace_map(), new.program.trace_map());
+    let mut out: Vec<StmtId> = breaks
+        .iter()
+        .filter_map(|&id| {
+            let s = was.stmt(id)?;
+            now.stmts()
+                .iter()
+                .position(|t| t.pou == s.pou && t.line == s.line && t.col == s.col)
+                .and_then(|k| u32::try_from(k).ok())
+                .map(StmtId)
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// One trend sample: program time and each trended signal's value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sample {
@@ -514,6 +535,14 @@ pub struct Session {
     /// scan the variable takes the point's value, so the model runs from
     /// the sensor instead of its own state.
     pub sensors: Vec<(String, String)>,
+    /// Breakpoints (Ctrl B): statements of the running build a scan stops
+    /// before, sorted. A statement in a function block's body stops in
+    /// every instance.
+    pub breaks: Vec<StmtId>,
+    /// The scan stopped at a breakpoint, not yet committed: how many
+    /// breakpoint hits it passed first. [`Self::trace`] is that moment;
+    /// the program and the image are still as the scan found them.
+    pub paused: Option<u32>,
     /// Page time the clock last caught up to, s.
     last: Option<f64>,
     acc_ms: f64,
@@ -535,6 +564,8 @@ impl Session {
             trace: None,
             trend: Trend::default(),
             sensors: Vec::new(),
+            breaks: Vec::new(),
+            paused: None,
             last: None,
             acc_ms: 0.0,
         };
@@ -589,6 +620,11 @@ impl Session {
         self.take(src);
         match Build::new(&self.src) {
             Ok(mut b) => {
+                self.breaks = self
+                    .build
+                    .as_ref()
+                    .map_or_else(Vec::new, |old| moved_breaks(old, &b, &self.breaks));
+                self.paused = None;
                 if let Some(old) = &self.build {
                     for p in b.points.iter_mut().filter(|p| p.dir == Dir::In) {
                         if let Some(o) = old
@@ -676,13 +712,39 @@ impl Session {
     }
 
     /// Run or stop. Starting clears a fault and restarts the program cold
-    /// if it had faulted.
+    /// if it had faulted. Starting from a breakpoint goes on to the
+    /// scan's next breakpoint hit, and runs on from there if there is
+    /// none; stopping leaves a paused scan paused.
     pub fn set_running(&mut self, on: bool) {
         if on && self.fault.is_some() {
             self.restart();
         }
-        self.running = on;
         self.last = None;
+        if on
+            && let Some(skip) = self.paused
+            && self.scan_or_pause(skip + 1)
+        {
+            return;
+        }
+        self.running = on;
+    }
+
+    /// Sets or clears a breakpoint on `id` (Ctrl B). Clearing the one a
+    /// scan is paused at leaves it paused there (F10 finishes the scan).
+    pub fn toggle_break(&mut self, id: StmtId) {
+        match self.breaks.binary_search(&id) {
+            Ok(k) => {
+                self.breaks.remove(k);
+            }
+            Err(k) => self.breaks.insert(k, id),
+        }
+    }
+
+    /// The statement the paused scan stopped before.
+    #[must_use]
+    pub fn paused_at(&self) -> Option<StmtId> {
+        self.paused?;
+        self.trace.as_ref()?.paused_at()
     }
 
     /// Cold restart: initial values, clock to zero, trend cleared.
@@ -695,15 +757,48 @@ impl Session {
         self.scans = 0;
         self.fault = None;
         self.trace = None;
+        self.paused = None;
         self.trend.samples.clear();
     }
 
-    /// One scan, traced, whether running or not (Step).
+    /// One scan, traced, whether running or not (Step). It stops at a
+    /// breakpoint; from one, it runs the rest of the scan.
     pub fn step(&mut self) {
         if self.fault.is_some() {
             self.restart();
         }
+        if self.paused.is_some() {
+            self.scan(true);
+        } else {
+            self.scan_or_pause(0);
+        }
+    }
+
+    /// A scan that stops before its `skip + 1`-th breakpoint hit (the
+    /// program untouched, the moment in [`Self::trace`]), or runs to its
+    /// end, traced, when it has no such hit. Whether it stopped.
+    fn scan_or_pause(&mut self, skip: u32) -> bool {
+        if !self.breaks.is_empty() && self.peek(skip) {
+            self.running = false;
+            return true;
+        }
         self.scan(true);
+        false
+    }
+
+    /// Runs the coming scan as far as its `skip + 1`-th breakpoint hit;
+    /// if it gets there, the moment is the trace and the scan is paused.
+    fn peek(&mut self, skip: u32) -> bool {
+        self.feed();
+        let Some(b) = &self.build else { return false };
+        let now = Duration::from_millis(self.now_ms);
+        let (stopped, trace) = b.program.scan_to(&b.image, now, &self.breaks, skip);
+        if !matches!(stopped, Stopped::Before(_)) {
+            return false;
+        }
+        self.trace = Some(trace);
+        self.paused = Some(skip);
+        true
     }
 
     /// Runs the scans due by page time `t` (s) at the scan period, the
@@ -711,6 +806,11 @@ impl Session {
     pub fn advance(&mut self, t: f64) {
         let last = self.last.replace(t).unwrap_or(t);
         if !self.running {
+            // Paused: the moment follows the inputs as they change. If it
+            // no longer comes, the scan stays paused where it was shown.
+            if let Some(skip) = self.paused {
+                self.peek(skip);
+            }
             return;
         }
         #[allow(clippy::cast_precision_loss)]
@@ -724,10 +824,14 @@ impl Session {
         }
         if due == 0 && self.trace.is_none() {
             // Something to draw from the first frame.
-            self.scan(true);
+            self.scan_or_pause(0);
             return;
         }
         for k in 0..due {
+            if !self.breaks.is_empty() && self.peek(0) {
+                self.running = false;
+                return;
+            }
             self.scan(k + 1 == due);
             if self.fault.is_some() {
                 break;
@@ -735,7 +839,9 @@ impl Session {
         }
     }
 
-    fn scan(&mut self, traced: bool) {
+    /// Puts the panel's inputs and the measured plant states into the
+    /// program and its image, as the coming scan reads them.
+    fn feed(&mut self) {
         let Some(b) = &mut self.build else { return };
         for p in b.points.iter().filter(|p| p.dir == Dir::In) {
             match p.place {
@@ -770,6 +876,14 @@ impl Session {
             // A kind or range the variable cannot hold leaves the model's own.
             let _ = b.program.set(path, v);
         }
+    }
+
+    /// Runs the coming scan to its end, committed: the program, the
+    /// image, the outputs and the clock move on.
+    fn scan(&mut self, traced: bool) {
+        self.feed();
+        self.paused = None;
+        let Some(b) = &mut self.build else { return };
         let now = Duration::from_millis(self.now_ms);
         let r = if traced {
             let (r, trace) = b.program.scan_traced(&mut b.image, now);

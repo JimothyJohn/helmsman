@@ -835,6 +835,11 @@ pub trait Workspace {
     /// Lights every read and write of the picked block's variable on the
     /// diagram (Cross references); whether there was one.
     fn cross_references(&mut self) -> bool;
+    /// Sets or clears a breakpoint on the picked block (Ctrl B); whether
+    /// there was a block to put one on. Only the simulation stops.
+    fn toggle_breakpoint(&mut self) -> bool {
+        false
+    }
 }
 
 /// The file and line a line of a project build is from: the build is every

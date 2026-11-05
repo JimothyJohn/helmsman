@@ -437,6 +437,47 @@ mod polish {
     }
 
     #[test]
+    fn ctrl_b_on_a_picked_block_pauses_the_scan_there_and_f10_runs_the_rest() {
+        fn session(h: &Harness) -> &crate::playground::Session {
+            &h.app.sim.as_ref().unwrap().session
+        }
+        let mut h = Harness::new(App::sim());
+        h.key(Modifiers::ALT, Key::Num1);
+        h.wait(0.6);
+        let (at, _) = super::node(super::sim_view(&h), super::write_to("LAMP"));
+        h.click(at);
+        h.frame(vec![]);
+        let id = super::sim_view(&h).picked_stmt().expect("a statement picked");
+        h.key(Modifiers::COMMAND, Key::B);
+        assert_eq!(session(&h).breaks, vec![id], "Ctrl B sets the breakpoint");
+        assert_eq!(super::sim_view(&h).breaks, vec![id], "and the diagram marks it");
+        // Stopped, F10 steps a scan: it stops before the statement.
+        h.key(Modifiers::SHIFT, Key::F8);
+        assert!(!session(&h).running);
+        if session(&h).paused.is_some() {
+            // It was running and stopped there on its own: finish that scan.
+            h.key(Modifiers::NONE, Key::F10);
+        }
+        // The lamp's write is under `IF pulse.Q`: F10 steps scans until
+        // the timer fires and the scan stops before it.
+        let mut steps = 0;
+        while session(&h).paused.is_none() && steps < 200 {
+            h.key(Modifiers::NONE, Key::F10);
+            steps += 1;
+        }
+        assert_eq!(session(&h).paused_at(), Some(id), "after {steps} steps");
+        let scans = session(&h).scans;
+        assert_eq!(super::sim_view(&h).paused, Some(id), "the diagram shows where");
+        h.key(Modifiers::NONE, Key::F10);
+        assert_eq!(session(&h).paused, None, "F10 again runs the rest");
+        assert_eq!(session(&h).scans, scans + 1);
+        h.key(Modifiers::COMMAND, Key::B);
+        assert!(session(&h).breaks.is_empty(), "Ctrl B again clears it");
+        h.press("bar edit");
+        assert!(h.has("edit breakpoint"), "the Edit menu lists it with its key");
+    }
+
+    #[test]
     fn alt_f8_opens_sign_in_and_ctrl_f8_signs_out_on_a_box() {
         let mut h = Harness::new(App::boxed());
         assert!(!h.app.login);

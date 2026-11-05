@@ -18,6 +18,22 @@ clock beside it is the program's own time.
 One program runs in the page at a time. Opening or deploying another
 stops the one before.
 
+## Breakpoints
+
+Pick a block in the diagram and press <kbd>Ctrl</kbd> <kbd>B</kbd> (or
+**Edit › Breakpoint**): a red dot marks it. The next scan that reaches
+the block stops just before it runs, the simulation stops with it, and
+the diagram and every value show the scan as it stood at that moment.
+The block is framed in orange and the notice under the header names its
+line. <kbd>F10</kbd> runs the rest of that scan.
+<kbd>Ctrl</kbd> <kbd>Enter</kbd> goes on to the next stop: the same
+block's next pass in a loop, another breakpoint, or the next scan. An
+input you change while stopped shows at once in what the diagram shows.
+A breakpoint inside a function block stops in every instance of it.
+<kbd>Ctrl</kbd> <kbd>B</kbd> on the block again clears it. Stopping at a
+breakpoint changes nothing the program does: the scan runs exactly as it
+would have.
+
 ## Editing
 
 Type in the Structured Text pane. The editor checks what you typed after
