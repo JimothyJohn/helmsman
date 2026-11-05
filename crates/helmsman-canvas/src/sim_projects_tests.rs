@@ -17,7 +17,7 @@ use crate::sim_projects::{SimProjects, Storage, example_project};
 
 /// A storage two page loads share (a browser's `localStorage`).
 #[derive(Clone, Default)]
-struct Shared(Rc<RefCell<Option<String>>>);
+pub(crate) struct Shared(Rc<RefCell<Option<String>>>);
 
 impl Storage for Shared {
     fn load(&self) -> Result<Option<String>, String> {

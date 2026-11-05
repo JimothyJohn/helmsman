@@ -57,6 +57,8 @@ mod playground_view;
 mod projects;
 mod remote;
 mod requirements;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod requirements_tests;
 mod review;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod review_tests;

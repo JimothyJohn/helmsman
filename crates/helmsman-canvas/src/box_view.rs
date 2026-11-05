@@ -420,12 +420,15 @@ impl BoxView {
     }
 
     /// A piece of the box's answer to the requirement being added.
-    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub fn requirement_answer(&mut self, inc: crate::box_agent::Incoming) {
         use crate::box_agent::Incoming;
         let Some(a) = self.adding.as_mut() else { return };
         let seq = match &inc {
-            Incoming::Status { seq, .. } | Incoming::Chunk { seq, .. } | Incoming::End { seq } | Incoming::Failed { seq, .. } => *seq,
+            Incoming::Status { seq, .. }
+            | Incoming::Chunk { seq, .. }
+            | Incoming::End { seq }
+            | Incoming::Failed { seq, .. } => *seq,
         };
         if seq != a.seq {
             return;

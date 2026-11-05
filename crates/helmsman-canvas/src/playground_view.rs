@@ -664,6 +664,9 @@ impl PlaygroundView {
                 let req = page_request(&route, self.chat.model, text, &name, &programs);
                 self.link.send(seq, req, ctx);
             }
+            Err(why) if matches!(self.chat.proxy, crate::claude::Proxy::Checking) => {
+                a.phase = Phase::Failed(why.into());
+            }
             Err(_) => {
                 let file = self.write_test(&name, &helmsman_iec::spec::placeholder(&name, text));
                 a.phase = Phase::Untested {
@@ -691,7 +694,9 @@ impl PlaygroundView {
     fn requirement_answer(&mut self, m: &crate::claude::Incoming) -> bool {
         use crate::claude::Incoming;
         use crate::requirements::{Phase, State};
-        let Some(a) = self.adding.as_mut() else { return false };
+        let Some(a) = self.adding.as_mut() else {
+            return false;
+        };
         let seq = match m {
             Incoming::Status { seq, .. }
             | Incoming::Chunk { seq, .. }
@@ -704,7 +709,12 @@ impl PlaygroundView {
         }
         match m {
             Incoming::Chunk { text, .. } => a.chunk(text),
-            Incoming::Status { status, body, .. } => a.phase = Phase::Failed(format!("the Agent answered {status}: {}", body.chars().take(200).collect::<String>())),
+            Incoming::Status { status, body, .. } => {
+                a.phase = Phase::Failed(format!(
+                    "the Agent answered {status}: {}",
+                    body.chars().take(200).collect::<String>()
+                ));
+            }
             Incoming::Unreachable { why, .. } => a.end(Some(why)),
             Incoming::End { .. } => {
                 a.end(None);
@@ -723,9 +733,20 @@ impl PlaygroundView {
                             file,
                             why: "the Agent's answer held no test; open the row to write one".into(),
                         },
-                        (Some(_), Some(r)) if r.state == State::Untested => Phase::Untested { file, why: String::new() },
-                        (Some(_), Some(r)) => Phase::Written { file, state: r.state, why: r.why },
-                        (Some(_), None) => Phase::Written { file, state: State::Failed, why: "it did not run".into() },
+                        (Some(_), Some(r)) if r.state == State::Untested => Phase::Untested {
+                            file,
+                            why: String::new(),
+                        },
+                        (Some(_), Some(r)) => Phase::Written {
+                            file,
+                            state: r.state,
+                            why: r.why,
+                        },
+                        (Some(_), None) => Phase::Written {
+                            file,
+                            state: State::Failed,
+                            why: "it did not run".into(),
+                        },
                     };
                 }
             }
@@ -1565,10 +1586,9 @@ impl Body for PlaygroundView {
                     .show(ui, |ui| {
                         let files = &self.proj.files;
                         let source = |f: &str| files.get(f).cloned();
-                        let cannot_add = self
-                            .proj
-                            .is_example()
-                            .then(|| "Make this example your own first: click it in Files and name it.".to_string());
+                        let cannot_add = self.proj.is_example().then(|| {
+                            "Make this example your own first: click it in Files and name it.".to_string()
+                        });
                         let view = crate::requirements::View {
                             results: &self.tests,
                             adding: self.adding.as_ref(),

@@ -14,6 +14,8 @@
 //! checks the test ([`Backend::Box`]). A red test refuses Deploy and "Use
 //! this code"; a grey one does not.
 
+use std::fmt::Write as _;
+
 use eframe::egui::{self, Color32, RichText, Sense};
 use helmsman_iec::spec::Verdict;
 use serde_json::{Value as Json, json};
@@ -194,9 +196,16 @@ pub enum Phase {
     /// The agent is writing (or the box is checking) the test.
     Writing,
     /// The test is written (and run): the file and how it went.
-    Written { file: String, state: State, why: String },
+    Written {
+        file: String,
+        state: State,
+        why: String,
+    },
     /// Written as "no test yet": no agent, or it wrote nothing usable.
-    Untested { file: String, why: String },
+    Untested {
+        file: String,
+        why: String,
+    },
     Failed(String),
 }
 
@@ -231,7 +240,9 @@ pub fn refusal(text: &str) -> Option<String> {
     if n == 0 {
         Some("Type a requirement first.".into())
     } else if n > MAX_REQUIREMENT {
-        Some(format!("A requirement is at most {MAX_REQUIREMENT} characters ({n} now)."))
+        Some(format!(
+            "A requirement is at most {MAX_REQUIREMENT} characters ({n} now)."
+        ))
     } else if t.chars().any(char::is_control) {
         Some("A requirement is one line.".into())
     } else {
@@ -244,7 +255,11 @@ pub fn refusal(text: &str) -> Option<String> {
 #[must_use]
 pub fn name_for(text: &str, taken: &[String]) -> String {
     let base = helmsman_iec::spec::slug(text, 45);
-    let free = |n: &str| !taken.iter().any(|f| f.eq_ignore_ascii_case(&format!("test_{n}.st")));
+    let free = |n: &str| {
+        !taken
+            .iter()
+            .any(|f| f.eq_ignore_ascii_case(&format!("test_{n}.st")))
+    };
     if free(&base) {
         return base;
     }
@@ -359,9 +374,16 @@ impl Adding {
                 let file = s("file");
                 let state = State::parse(&s("state"));
                 self.phase = if state == State::Untested {
-                    Phase::Untested { file, why: String::new() }
+                    Phase::Untested {
+                        file,
+                        why: String::new(),
+                    }
                 } else {
-                    Phase::Written { file, state, why: s("why") }
+                    Phase::Written {
+                        file,
+                        state,
+                        why: s("why"),
+                    }
                 };
             }
             "error" if self.busy() => self.phase = Phase::Failed(s("message")),
@@ -459,7 +481,11 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi)
     let add_why = v
         .cannot_add
         .clone()
-        .or_else(|| v.adding.filter(|a| a.busy()).map(|_| "The agent is still writing the last one.".into()))
+        .or_else(|| {
+            v.adding
+                .filter(|a| a.busy())
+                .map(|_| "The agent is still writing the last one.".into())
+        })
         .or_else(|| refusal(&rui.draft));
     let field = ui.add(
         egui::TextEdit::singleline(&mut rui.draft)
@@ -474,20 +500,26 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi)
     chrome.hit("req draft", field.rect);
     let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
     ui.horizontal_wrapped(|ui| {
-        let add = egui::Button::new(RichText::new("Add").strong()).min_size(egui::vec2(TAP * 1.5, TAP * 0.75));
-        let r = ui.add_enabled(add_why.is_none(), add).tip(add_why.clone().unwrap_or_else(|| {
-            format!(
-                "Adds the requirement to the list; {} writes its test and runs it. \
+        let add =
+            egui::Button::new(RichText::new("Add").strong()).min_size(egui::vec2(TAP * 1.5, TAP * 0.75));
+        let r = ui
+            .add_enabled(add_why.is_none(), add)
+            .tip(add_why.clone().unwrap_or_else(|| {
+                format!(
+                    "Adds the requirement to the list; {} writes its test and runs it. \
                  With no agent it is added as \"no test yet\".",
-                v.agent
-            )
-        }));
+                    v.agent
+                )
+            }));
         chrome.hit("req add", r.rect);
         if (r.clicked() || enter) && add_why.is_none() {
             act = Some(Act::Add(std::mem::take(&mut rui.draft).trim().to_string()));
         }
         let run = ui
-            .add_enabled(!v.busy, egui::Button::new(if v.busy { "Running…" } else { "Run all" }))
+            .add_enabled(
+                !v.busy,
+                egui::Button::new(if v.busy { "Running…" } else { "Run all" }),
+            )
             .tip("Runs every requirement's test against the program in the simulation.");
         chrome.hit("tests run", run.rect);
         if run.clicked() {
@@ -499,7 +531,9 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi)
     if let Some(a) = v.adding {
         let (line, color) = match &a.phase {
             Phase::Writing => (format!("Writing the test for: {}", a.requirement), t.muted),
-            Phase::Written { state: State::Passed, .. } => (format!("Added and passing: {}", a.requirement), t.fg),
+            Phase::Written {
+                state: State::Passed, ..
+            } => (format!("Added and passing: {}", a.requirement), t.fg),
             Phase::Written { why, .. } => (format!("Added, and it fails: {}. {why}", a.requirement), RED),
             Phase::Untested { why, .. } => (
                 if why.is_empty() {
@@ -523,7 +557,12 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi)
 
     // The list.
     let n = v.results.rows.len();
-    let grey = v.results.rows.iter().filter(|r| r.state == State::Untested).count();
+    let grey = v
+        .results
+        .rows
+        .iter()
+        .filter(|r| r.state == State::Untested)
+        .count();
     let red = v.results.rows.iter().filter(|r| r.state == State::Failed).count();
     let summary = if !v.results.ran {
         "Not run yet".to_string()
@@ -532,15 +571,19 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi)
     } else {
         let mut s = format!("{} of {n} passing", v.results.green());
         if red > 0 {
-            s.push_str(&format!(", {red} failing"));
+            let _ = write!(s, ", {red} failing");
         }
         if grey > 0 {
-            s.push_str(&format!(", {grey} with no test yet"));
+            let _ = write!(s, ", {grey} with no test yet");
         }
         s
     };
     let r = ui
-        .label(RichText::new(summary).strong().color(if red > 0 { RED } else { t.fg }))
+        .label(
+            RichText::new(summary)
+                .strong()
+                .color(if red > 0 { RED } else { t.fg }),
+        )
         .tip("A failing requirement stops Deploy and \"Use this code\"; one with no test yet does not.");
     chrome.hit("req summary", r.rect);
     for row in &v.results.rows {
@@ -579,23 +622,26 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi)
         }
         if open {
             if let Some(src) = (v.source)(&row.file) {
-                egui::Frame::new()
-                    .fill(t.panel)
-                    .inner_margin(6.0)
-                    .show(ui, |ui| {
-                        ui.add(egui::Label::new(RichText::new(src.trim_end()).monospace()).wrap())
-                            .tip(format!("The test behind this requirement, {}.", row.file));
-                    });
+                egui::Frame::new().fill(t.panel).inner_margin(6.0).show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(src.trim_end()).monospace()).wrap())
+                        .tip(format!("The test behind this requirement, {}.", row.file));
+                });
             }
             ui.horizontal_wrapped(|ui| {
-                let e = ui.button("Edit test").tip("Opens this test in the Code tab to change it by hand.");
+                let e = ui
+                    .button("Edit test")
+                    .tip("Opens this test in the Code tab to change it by hand.");
                 chrome.hit(format!("test edit {}", row.name()), e.rect);
                 if e.clicked() {
                     act = Some(Act::Edit(row.file.clone()));
                 }
                 let d = ui
                     .add_enabled(v.cannot_add.is_none(), egui::Button::new("Delete"))
-                    .tip(v.cannot_add.clone().unwrap_or_else(|| "Removes this requirement and its test.".into()));
+                    .tip(
+                        v.cannot_add
+                            .clone()
+                            .unwrap_or_else(|| "Removes this requirement and its test.".into()),
+                    );
                 chrome.hit(format!("test delete {}", row.name()), d.rect);
                 if d.clicked() {
                     act = Some(Act::Delete(row.file.clone()));
