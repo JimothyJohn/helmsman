@@ -156,6 +156,20 @@ impl fmt::Display for Fault {
     }
 }
 
+/// Why a scan stopped early: a fault, or a breakpoint (the counter of the
+/// statement it stopped before; see [`Recorder::stops_at`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Halt {
+    Fault(Fault),
+    Break(u32),
+}
+
+impl From<Fault> for Halt {
+    fn from(f: Fault) -> Self {
+        Self::Fault(f)
+    }
+}
+
 enum Flow {
     Next,
     Exit,
@@ -425,14 +439,21 @@ pub struct Machine<'a> {
     pub tap: Option<&'a mut Recorder>,
 }
 
-type Res<T> = Result<T, Fault>;
+type Res<T> = Result<T, Halt>;
 
 impl Machine<'_> {
+    /// Statement `tr` starts, or the scan stops before it at a breakpoint.
     #[inline]
-    fn enter(&mut self, tr: u32) -> u32 {
+    fn enter(&mut self, tr: u32) -> Res<u32> {
         match &mut self.tap {
-            Some(r) => r.enter(tr),
-            None => 0,
+            Some(r) => {
+                if r.stops_at(tr) {
+                    r.cur = tr;
+                    return Err(Halt::Break(tr));
+                }
+                Ok(r.enter(tr))
+            }
+            None => Ok(0),
         }
     }
 
@@ -472,7 +493,8 @@ impl Machine<'_> {
                 return Err(Fault {
                     kind: FaultKind::IndexOutOfRange,
                     line,
-                });
+                }
+                .into());
             }
             i += usize::try_from(v - d.lo).unwrap_or(0) * d.stride;
         }
@@ -552,7 +574,7 @@ impl Machine<'_> {
                 let k = real(self.eval(k, line)?);
                 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                 let out = match op {
-                    BinOp::Div if k == 0.0 => return Err(f(FaultKind::DivisionByZero)),
+                    BinOp::Div if k == 0.0 => return Err(f(FaultKind::DivisionByZero).into()),
                     BinOp::Div => crate::fmath::round(ns as f64 / k) as i128,
                     _ => crate::fmath::round(ns as f64 * k) as i128,
                 };
@@ -611,12 +633,9 @@ impl Machine<'_> {
         self.base = callee;
         let r = self.block(&pou.body);
         self.base = saved;
-        r.map_err(|f| {
-            if c.pou < self.library {
-                Fault { line, ..f }
-            } else {
-                f
-            }
+        r.map_err(|h| match h {
+            Halt::Fault(f) if c.pou < self.library => Halt::Fault(Fault { line, ..f }),
+            h => h,
         })?;
         for o in &c.outs {
             if let Some((from, to)) = o.conv {
@@ -635,7 +654,8 @@ impl Machine<'_> {
             return Err(Fault {
                 kind: FaultKind::Watchdog,
                 line,
-            });
+            }
+            .into());
         }
         self.budget -= 1;
         Ok(())
@@ -662,7 +682,7 @@ impl Machine<'_> {
     }
 
     fn stmt(&mut self, s: &St) -> Res<Flow> {
-        let outer = self.enter(s.tr);
+        let outer = self.enter(s.tr)?;
         let flow = self.exec(s)?;
         self.leave(outer);
         Ok(flow)
@@ -763,7 +783,7 @@ impl Machine<'_> {
     }
 
     /// Runs the program POU once.
-    pub fn run(&mut self, program: &PouCode) -> Res<()> {
+    pub(crate) fn run(&mut self, program: &PouCode) -> Res<()> {
         for &(off, len) in &program.temps {
             self.mem[program.base + off..program.base + off + len]
                 .copy_from_slice(&program.init[off..off + len]);
@@ -791,8 +811,12 @@ pub fn eval_const(e: &Ex) -> Result<Value, String> {
         now: 0,
         tap: None,
     };
-    m.eval(e, 0).map_err(|f| match f.kind {
-        FaultKind::DivisionByZero => "integer division by zero in an initial value".to_string(),
-        k => format!("{k:?} in an initial value"),
+    m.eval(e, 0).map_err(|h| match h {
+        Halt::Fault(Fault {
+            kind: FaultKind::DivisionByZero,
+            ..
+        }) => "integer division by zero in an initial value".to_string(),
+        Halt::Fault(f) => format!("{:?} in an initial value", f.kind),
+        Halt::Break(_) => unreachable!("a constant is evaluated without a tap"),
     })
 }
