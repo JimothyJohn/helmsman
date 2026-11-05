@@ -24,6 +24,7 @@ use crate::remote::{BoxState, segment};
 use crate::review::Session;
 use crate::sim_projects::Storage;
 use crate::theme::theme;
+use crate::tips::Tip;
 
 /// Signals one trend draws at most (as in the simulation).
 pub const PINS: usize = crate::playground::TREND_SIGNALS;
@@ -290,12 +291,19 @@ impl BoxTrend {
         let now = ui.ctx().input(|i| i.time);
         let who = owner(session).unwrap_or_else(|| "this browser".into());
         let t = theme(ui);
-        ui.label(RichText::new(format!("Pin up to {PINS} signals (kept for {who})")).color(t.muted));
+        ui.label(RichText::new("Signals").strong().color(t.muted))
+            .tip(format!(
+                "Click a signal to pin it to the trend, up to {PINS}. The pins are kept for {who}."
+            ));
         let mut flip = None;
         ui.horizontal_wrapped(|ui| {
             for s in &state.signals {
                 let on = self.pins.contains(&s.name);
-                let r = ui.selectable_label(on, s.name.to_ascii_lowercase());
+                let r = ui.selectable_label(on, s.name.to_ascii_lowercase()).tip(if on {
+                    "On the trend. Click to take it off."
+                } else {
+                    "Click to pin it to the trend."
+                });
                 chrome.hit(format!("pin {}", s.name), r.rect);
                 if r.clicked() {
                     flip = Some(s.name.clone());

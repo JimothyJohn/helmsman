@@ -31,6 +31,7 @@ use eframe::egui;
 use serde_json::{Value as Json, json};
 
 use crate::claude::{Event, Sse};
+use crate::tips::Tip;
 
 /// The box's longest message, in characters (`api::chat::MAX_MESSAGE`).
 pub const MAX_MESSAGE: usize = 8000;
@@ -93,6 +94,18 @@ impl Status {
             Self::Offline(m) => format!(
                 "The agent is offline ({m}). A message is read by rule: a param edit becomes a proposal, nothing else runs."
             ),
+        }
+    }
+
+    /// The status in a few words, for the tab (its tooltip is [`Self::line`]).
+    #[must_use]
+    pub const fn short(&self) -> &'static str {
+        match self {
+            Self::Unread => "Agent on this box",
+            Self::Unknown => "Agent status unknown",
+            Self::Unconfigured(_) => "No agent on this box",
+            Self::Online => "Agent online",
+            Self::Offline(_) => "Agent offline",
         }
     }
 
@@ -522,7 +535,7 @@ pub enum Act {
 }
 
 /// Draws the Agent tab; `who` is why this page may not send (not signed
-/// in), shown instead of the Send button's work.
+/// in), shown as the message field's hint and the Send button's tooltip.
 pub fn ui(
     ui: &mut egui::Ui,
     chrome: &mut crate::editor::Chrome,
@@ -540,47 +553,48 @@ pub fn ui(
         // Room for the scroll bar (a resizable panel grows to any row
         // that overflows it).
         ui.set_max_width(ui.available_width() - 12.0);
-        let l = ui.label(RichText::new(a.status.line()).color(t.muted));
+        let l = ui
+            .label(RichText::new(a.status.short()).color(t.muted))
+            .tip(format!(
+                "{} Every change it makes is a proposal: you review and approve it under Proposals.",
+                a.status.line()
+            ));
         chrome.hit("agent status", l.rect);
-        ui.label(
-            RichText::new("Every change it makes is a proposal: you review and approve it under Proposals.")
-                .small()
-                .color(t.muted),
-        );
         ui.add_space(4.0);
-        if let Some(w) = who {
-            ui.label(RichText::new(w).color(t.muted));
-        }
         ui.add(
             egui::TextEdit::multiline(&mut a.draft)
                 .id_salt("box-agent-message")
-                .hint_text("e.g. Why does the conveyor stop after a jam clears?")
+                .hint_text(who.unwrap_or("e.g. Why does the conveyor stop after a jam clears?"))
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
-        );
+        )
+        .tip(format!(
+            "Your message to the agent on this box, at most {MAX_MESSAGE} characters."
+        ));
         ui.horizontal_wrapped(|ui| {
             let send = egui::Button::new(RichText::new("Send").strong().color(BLACK))
                 .fill(YELLOW)
                 .min_size(Vec2::new(TAP * 1.5, TAP * 0.75));
-            let r = ui.add_enabled(who.is_none() && a.refusal().is_none(), send);
+            let why = who.map(str::to_string).or_else(|| a.refusal());
+            let r = ui
+                .add_enabled(why.is_none(), send)
+                .tip(why.unwrap_or_else(|| "Sends the message to the agent on this box.".to_string()));
             chrome.hit("agent send", r.rect);
-            if r.on_hover_text("sends the message to the agent on this box")
-                .clicked()
-            {
+            if r.clicked() {
                 act = Some(Act::Send);
             }
             if a.busy() {
-                let r = ui.button("Stop");
+                let r = ui.button("Stop").tip("Stops the answer under way.");
                 chrome.hit("agent stop", r.rect);
                 if r.clicked() {
                     act = Some(Act::Stop);
                 }
             } else if !a.turns.is_empty() {
-                let r = ui.button("New conversation");
+                let r = ui
+                    .button("New conversation")
+                    .tip("The next message starts a conversation of its own.");
                 chrome.hit("agent new", r.rect);
-                if r.on_hover_text("the next message starts a conversation of its own")
-                    .clicked()
-                {
+                if r.clicked() {
                     act = Some(Act::New);
                 }
             }
@@ -619,9 +633,11 @@ pub fn ui(
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new(format!("Proposed: {summary}")).strong());
                                 for id in ids {
-                                    let r = ui.small_button(format!("Review #{id}"));
+                                    let r = ui
+                                        .small_button(format!("Review #{id}"))
+                                        .tip("Opens this proposal under Proposals.");
                                     chrome.hit("agent review", r.rect);
-                                    if r.on_hover_text("opens it under Proposals").clicked() {
+                                    if r.clicked() {
                                         act = Some(Act::Review(*id));
                                     }
                                 }
@@ -633,8 +649,11 @@ pub fn ui(
                         Item::Fallback { proposed, .. } => {
                             if let Some(id) = proposed {
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label("Read by rule: a param proposal.");
-                                    let r = ui.small_button(format!("Review #{id}"));
+                                    ui.label("Read by rule: a param proposal.")
+                                        .tip("The agent was offline, so the box read the message by rule.");
+                                    let r = ui
+                                        .small_button(format!("Review #{id}"))
+                                        .tip("Opens this proposal under Proposals.");
                                     chrome.hit("agent review", r.rect);
                                     if r.clicked() {
                                         act = Some(Act::Review(*id));
