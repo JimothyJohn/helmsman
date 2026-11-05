@@ -282,10 +282,12 @@ impl BoxAgent {
         }
     }
 
-    /// A turn is streaming.
+    /// A turn is streaming: its stream is open and it has not ended. After
+    /// `done` or `error` the stream is still read to its close, for a
+    /// `status` that follows them.
     #[must_use]
-    pub const fn busy(&self) -> bool {
-        self.sse.is_some()
+    pub fn busy(&self) -> bool {
+        self.sse.is_some() && self.turns.last().is_some_and(|t| t.end.is_none())
     }
 
     /// Why the draft cannot be sent now, if it cannot.
@@ -385,9 +387,6 @@ impl BoxAgent {
                 };
                 for e in events {
                     self.event(&e);
-                    if self.sse.is_none() {
-                        return;
-                    }
                 }
             }
             Incoming::End { .. } => {
@@ -482,7 +481,6 @@ impl BoxAgent {
                 let stop = clip(d["stop"].as_str().unwrap_or("end_turn"), 32);
                 let why = d["why"].as_str().map(|w| clip(w, MAX_LINE));
                 t.end = Some(End::Done { stop, why });
-                self.sse = None;
             }
             "error" => {
                 let m = s("message");
@@ -491,7 +489,6 @@ impl BoxAgent {
                 } else {
                     m
                 }));
-                self.sse = None;
             }
             _ => {}
         }

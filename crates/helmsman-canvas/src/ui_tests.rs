@@ -1306,6 +1306,15 @@ mod chrome {
         assert!(!h.has("plant states"), "the blink example keeps no plant model");
         {
             let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.examples.insert(
+                "pump-station".into(),
+                helmsman_project::Files(
+                    crate::test_programs::PUMP_STATION
+                        .iter()
+                        .map(|(n, t)| ((*n).to_string(), (*t).to_string()))
+                        .collect(),
+                ),
+            );
             sim.proj.create("well", Some("pump-station"));
             let src = sim.proj.build_src();
             assert!(sim.session.load(&src), "the pump station compiles");
@@ -1621,16 +1630,19 @@ mod chrome {
             !h.has("new project") && !h.has("copy project"),
             "the buttons are gone"
         );
-        // A right-click on a project offers its copy, rename and delete.
-        h.right_click(h.rect("project blink").center());
-        assert!(h.has("menu copy project"));
-        assert!(
-            !h.has("menu rename project") || {
-                // Listed but disabled for an example: a press does nothing.
-                h.press("menu rename project");
-                h.app.sim.as_ref().unwrap().files_ui.naming.is_none()
-            }
-        );
+        // A right-click on a project of your own offers its copy, rename
+        // and delete (an example has none: a click makes your copy).
+        h.right_click(h.rect("project blink-copy").center());
+        for k in ["menu copy project", "menu rename project", "menu delete project"] {
+            assert!(h.has(k), "{k}");
+        }
+        h.frame(vec![eframe::egui::Event::Key {
+            key: eframe::egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: eframe::egui::Modifiers::NONE,
+        }]);
         h.frame(vec![]);
         let text = h.app.sim.as_ref().unwrap().proj.files["blink.st"].clone();
         let at = h.rect("file blink.st").center();
@@ -1764,7 +1776,7 @@ mod simulated {
 
     fn stations() -> Harness {
         let mut h = Harness::new(App::sim());
-        let src = crate::playground::EXAMPLES
+        let src = crate::test_programs::PROGRAMS
             .iter()
             .find(|e| e.name.contains("stations"))
             .unwrap()

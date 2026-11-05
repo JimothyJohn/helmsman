@@ -103,15 +103,13 @@ refused where it is not, saying why. Each periodic task of a ladder export
 keeps its period: the import writes it into `project.settings` as that
 program's `scan_ms`, unless you have set one there already.
 
-## Examples and starters
+## Examples
 
-The simulation ships with short **examples** that teach one thing each,
-and with **machines** and **templates**: worked programs for a conveyor
-sorter, a pump station, a batch mixer and the like, each with a plant
-model so it runs with nothing wired, and two templates to begin a
-discrete or a process program from. They are read-only; Save copies one
-into a project of your own. On a box, "Start from a machine or template"
-in the Files pane asks for a name and sends the copy to the box.
+Five short **examples** teach one thing each: Blink, Read and write,
+Logic (AND, OR, NOT), a start/stop latch and a counter. Click one and
+give it a name: it becomes a program of your own to change. On a box the
+same list makes the program on the box, its inputs and outputs on the
+box's own channels so it runs with nothing wired.
 
 [Examples and starters](starters.html) lists them, generated from the
 program itself.

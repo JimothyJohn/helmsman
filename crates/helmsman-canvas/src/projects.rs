@@ -8,10 +8,7 @@
 //! Nothing here talks to a box or to storage: the sidebar answers with an
 //! [`Act`], and the view carries it out.
 
-use std::collections::HashSet;
-
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, Vec2};
-use helmsman_project::starters::{Kind, STARTERS, starter};
 
 use crate::editor::Chrome;
 use crate::st_view::TAP;
@@ -61,12 +58,9 @@ impl ProjectRow {
 pub enum Group {
     /// The person's own.
     Mine,
-    /// The small built-in examples, always in view.
+    /// The built-in examples, always in view: a click asks for a name and
+    /// makes the person's own copy.
     FirstSteps,
-    /// Worked machines, folded until asked for.
-    Machines,
-    /// Starting points, folded until asked for.
-    Templates,
 }
 
 /// What the sidebar asks for.
@@ -167,10 +161,6 @@ pub struct FilesUi {
     /// The project or file last clicked; the Delete key deletes it (or
     /// the open project when nothing was).
     pub picked: Option<Picked>,
-    /// The long lists opened by hand.
-    pub unfolded: HashSet<Group>,
-    /// The list of machines and templates to start from is open.
-    pub starters_open: bool,
     /// The earlier iterations (`vN.st`) are unfolded.
     pub earlier_open: bool,
     /// The History row is unfolded.
@@ -233,10 +223,7 @@ impl FilesUi {
         for p in l.projects {
             if p.group != shown {
                 shown = p.group;
-                self.group_header(ui, l, shown, chrome);
-            }
-            if !self.group_open(l, p.group) {
-                continue;
+                group_header(ui, shown);
             }
             let open = l.open == Some(p.name.as_str());
             let mut text = format!("{} {}", if open { "▾" } else { "▸" }, p.name);
@@ -246,11 +233,22 @@ impl FilesUi {
             let color = if p.running { t.accent } else { t.fg };
             let r = ui.selectable_label(open, RichText::new(text).monospace().color(color));
             chrome.hit(format!("project {}", p.name), r.rect);
-            let r = match starter(&p.name).filter(|_| p.example()) {
-                Some(s) => r.tip(format!("{}: {}", s.title, s.about)),
-                None if p.running => r.tip("This project runs now. Click to open it; right-click for more."),
-                None => r.tip("Click to open the project; right-click to copy, rename or delete it."),
-            };
+            if p.example() {
+                let title = example_title(&p.name).unwrap_or(&p.name);
+                let r = r.tip(format!(
+                    "{title}: click to make your own copy of this example, under a name you choose."
+                ));
+                if r.clicked() {
+                    let name = free_name(l, &p.name);
+                    self.ask(Naming::FromStarter(p.name.clone()), &name);
+                }
+                continue;
+            }
+            let r = r.tip(if open {
+                "Your program, open. Right-click to copy, rename or delete it."
+            } else {
+                "Your program: click to open it. Right-click to copy, rename or delete it."
+            });
             if r.clicked() {
                 self.picked = Some(Picked::Project(p.name.clone()));
             }
@@ -316,7 +314,7 @@ impl FilesUi {
                 .tip("Right-click the empty space below, or use File › New project.");
         }
         if l.starters {
-            self.starters_ui(ui, &l.write, chrome);
+            self.starters_ui(ui, l, chrome);
         }
         if let Some(open) = l.open {
             ui.separator();
@@ -517,77 +515,25 @@ impl FilesUi {
         }
     }
 
-    /// Whether `g`'s rows show: the short lists always; a long one once
-    /// unfolded, or while the open project is in it.
-    fn group_open(&self, l: &Listing<'_>, g: Group) -> bool {
-        match g {
-            Group::Mine | Group::FirstSteps => true,
-            Group::Machines | Group::Templates => {
-                self.unfolded.contains(&g)
-                    || l.projects
-                        .iter()
-                        .any(|p| p.group == g && l.open == Some(p.name.as_str()))
-            }
-        }
-    }
-
-    /// A list's heading; a long list's folds on a click.
-    fn group_header(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, g: Group, chrome: &mut Chrome) {
+    /// The examples on a box (the simulation lists them with the
+    /// projects): a click asks for the new program's name.
+    fn starters_ui(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, chrome: &mut Chrome) {
         let t = theme(ui);
-        let title = match g {
-            Group::Mine => return,
-            Group::FirstSteps => {
-                ui.add_space(4.0);
-                ui.label(RichText::new("Examples").strong().color(t.muted))
-                    .tip("Built-in examples to open and run. Copy one to change it.");
-                return;
-            }
-            Group::Machines => "Machines",
-            Group::Templates => "Templates",
-        };
-        let open = self.group_open(l, g);
-        let n = l.projects.iter().filter(|p| p.group == g).count();
-        let text = format!("{} {title} ({n})", if open { "▾" } else { "▸" });
         ui.add_space(4.0);
-        let r = ui
-            .selectable_label(false, RichText::new(text).strong().color(t.muted))
-            .tip(format!(
-                "Click to show or hide the {}.",
-                title.to_ascii_lowercase()
-            ));
-        chrome.hit(format!("group {title}"), r.rect);
-        if r.clicked() && !self.unfolded.remove(&g) {
-            self.unfolded.insert(g);
-        }
-    }
-
-    /// "Start from a machine or template": the same list the simulation
-    /// has; a click asks for the new project's name.
-    fn starters_ui(&mut self, ui: &mut egui::Ui, write: &Result<(), String>, chrome: &mut Chrome) {
-        let t = theme(ui);
-        let arrow = if self.starters_open { "▾" } else { "▸" };
-        let r = ui
-            .selectable_label(
-                false,
-                RichText::new(format!("{arrow} Start from a machine or template")).color(t.muted),
-            )
-            .tip("A new project from a ready machine or template. Click to show or hide the list.");
-        chrome.hit("starters", r.rect);
-        if r.clicked() {
-            self.starters_open = !self.starters_open;
-        }
-        if !self.starters_open {
-            return;
-        }
-        for (kind, title) in [(Kind::Machine, "Machines"), (Kind::Template, "Templates")] {
-            ui.label(RichText::new(title).strong().color(t.muted))
-                .tip("Click one to make a new project from it.");
-            for s in STARTERS.iter().filter(|s| s.kind == kind) {
-                let r = write_button(ui, write, s.title, s.about);
-                chrome.hit(format!("starter {}", s.name), r.rect);
-                if r.clicked() {
-                    self.ask(Naming::FromStarter(s.name.into()), s.name);
-                }
+        ui.label(RichText::new("Examples").strong().color(t.muted))
+            .tip("Short programs that teach one thing each. Click one to make it a program of your own on this box.");
+        for e in &crate::playground::EXAMPLES {
+            let (name, _) = crate::sim_projects::example_project(e.src);
+            let r = write_button(
+                ui,
+                &l.write,
+                e.name,
+                "makes your own copy of this example, under a name you choose",
+            );
+            chrome.hit(format!("starter {name}"), r.rect);
+            if r.clicked() {
+                let free = free_name(l, &name);
+                self.ask(Naming::FromStarter(name), &free);
             }
         }
     }
@@ -665,7 +611,10 @@ impl FilesUi {
         let what = match &n {
             Naming::NewProject => "New project".to_string(),
             Naming::CopyProject(p) => format!("Copy {p} as"),
-            Naming::FromStarter(p) => format!("New project from {p}, named"),
+            Naming::FromStarter(p) => format!(
+                "Name your program (from the {} example)",
+                example_title(p).unwrap_or(p)
+            ),
             Naming::RenameProject(p) => format!("Rename {p} to"),
             Naming::NewFile => "New file".to_string(),
             Naming::RenameFile(f) => format!("Rename {f} to"),
@@ -872,6 +821,39 @@ pub fn slug(file: &str) -> String {
     let mut out = out.trim_end_matches('-').to_string();
     out.truncate(48);
     if out.is_empty() { "project".into() } else { out }
+}
+
+/// An example's title from its project name.
+fn example_title(name: &str) -> Option<&'static str> {
+    crate::playground::EXAMPLES
+        .iter()
+        .find(|e| crate::sim_projects::example_project(e.src).0 == name)
+        .map(|e| e.name)
+}
+
+/// `base`, or `base-2`, `base-3`, ... whichever no project has yet.
+fn free_name(l: &Listing<'_>, base: &str) -> String {
+    let taken = |n: &str| l.projects.iter().any(|p| p.name == n);
+    if !taken(base) {
+        return base.to_string();
+    }
+    // One more name tried than there are projects: one of them is free.
+    let last = l.projects.len() + 2;
+    (2..=last)
+        .map(|k| format!("{base}-{k}"))
+        .find(|n| !taken(n))
+        .unwrap_or_else(|| format!("{base}-{last}"))
+}
+
+/// A list's heading.
+fn group_header(ui: &mut egui::Ui, g: Group) {
+    let t = theme(ui);
+    if g == Group::FirstSteps {
+        ui.add_space(4.0);
+        ui.label(RichText::new("Examples").strong().color(t.muted)).tip(
+            "Short programs that teach one thing each. Click one to make your own copy under a name you choose.",
+        );
+    }
 }
 
 #[cfg(test)]

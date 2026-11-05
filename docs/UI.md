@@ -200,16 +200,17 @@ this; change it here first when a decision changes.
   compile is refused and the old program keeps running. A browser that
   keeps nothing (a private window) still works; the projects last until
   the page closes.
-- **Machines and templates.** Worked machines (conveyor sorter, pump
-  station, batch mixer, pick and place, bottle filler, air compressors,
-  air handler) and templates (discrete machine, process loop) are one list,
-  kept as files in `crates/helmsman-project/starters/`. In the simulation
-  the Files sidebar shows Examples (the short teaching programs, in view,
-  and the one a first visit opens), then Machines and Templates, folded
-  until opened; each is a read-only starter that Save copies. On a box,
-  "Start from a machine or template" in the sidebar asks an engineer for a
-  name and sends the project as its `.zip`; nothing else changes what the
-  box holds, and a first install still seeds `line` alone, undeployed.
+- **Examples** (Nick, 2026-11-05). Five programs from the first chapters
+  of a Structured Text book, a few lines each: Blink, Read and write,
+  Logic (AND, OR, NOT), Start/stop latch, Counter (`playground::EXAMPLES`).
+  The worked machines and templates are gone. A click on an example asks
+  for the program's name (prefilled, made unique) and opens the person's
+  own copy; the example itself never opens for editing (a first visit
+  shows Blink running). On a box the same list sends the copy as a `.zip`
+  with an `io.map` made from the example's own ports, BOOL inputs on the
+  box's `di` channels and outputs on its `do` channels, so it deploys with
+  nothing wired; nothing else changes what the box holds, and a first
+  install still seeds `line` alone, undeployed.
 
 ## Keyboard
 

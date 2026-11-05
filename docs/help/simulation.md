@@ -44,9 +44,8 @@ show.
   commits it, <kbd>Esc</kbd> puts the old value back. The I/O panel's
   sliders apply as you drag.
 
-The machine examples read a plant model, a block that stands in for the
-tank, the belt or the compressors, so that they move with nothing wired.
-Nothing moves until you press `start_pb`.
+A project can carry a plant model, a block that stands in for the tank,
+the belt or the compressors, so that it moves with nothing wired.
 
 ## The trend
 

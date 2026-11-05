@@ -478,13 +478,21 @@ impl BoxProjects {
         ));
     }
 
-    /// A new project `name` with the files of a built-in machine or
-    /// template, sent as the project's `.zip` so it arrives all at once.
+    /// A new project `name` holding the built-in example `from` (its
+    /// project name), sent as the project's `.zip` so it arrives whole.
     pub fn create_from(&mut self, name: &str, from: &str) {
-        let Some(s) = helmsman_project::starters::starter(from) else {
+        let Some(e) = crate::playground::EXAMPLES
+            .iter()
+            .find(|e| crate::sim_projects::example_project(e.src).0 == from)
+        else {
             return;
         };
-        match s.project().to_zip() {
+        let (_, file) = crate::sim_projects::example_project(e.src);
+        let files = helmsman_project::Files(std::collections::BTreeMap::from([
+            (file, e.src.to_string()),
+            ("io.map".to_string(), crate::sim_projects::example_io_map(e.src)),
+        ]));
+        match files.to_zip() {
             Ok(zip) => self.upload(&format!("{name}.zip"), zip, false),
             Err(e) => self.note(format!("{name} was not made: {e}"), true),
         }

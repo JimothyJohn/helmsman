@@ -17,7 +17,6 @@
 
 use std::collections::BTreeMap;
 
-use helmsman_project::starters::{Kind, STARTERS, starter};
 use helmsman_project::{FileKind, Files, file_name, project_name};
 use serde_json::{Value as Json, json};
 
@@ -160,6 +159,43 @@ pub fn example_project(src: &str) -> (String, String) {
     (name, file)
 }
 
+/// The `io.map` an example takes onto a box, from its own ports: a box
+/// binds every program port to a signal, and an example comes with none.
+/// BOOL inputs on the box's own `di` channels and BOOL outputs on its `do`
+/// channels, in order, as the old starters had them, so it runs with
+/// nothing wired; a number output on the screen.
+#[must_use]
+pub fn example_io_map(src: &str) -> String {
+    use crate::playground::Dir;
+    use helmsman_iec::Ty;
+    let s = crate::playground::Session::new(src);
+    let mut out = String::from(
+        "# This example's inputs and outputs, on the box's own channels so it\n\
+         # runs with nothing wired. If this box's own channels are wired to\n\
+         # anything, these lines drive it: check them first. To use a remote\n\
+         # I/O module, declare it and change the device on each line.\n",
+    );
+    let (mut di, mut dq) = (0, 0);
+    for p in s.inputs().chain(s.outputs()) {
+        let name = p.name.to_ascii_lowercase();
+        let line = match (p.dir, p.ty) {
+            (Dir::In, Ty::Bool) => {
+                di += 1;
+                format!("in  {name} bool box di:{}", di - 1)
+            }
+            (Dir::Out, Ty::Bool) => {
+                dq += 1;
+                format!("out {name} bool box do:{} safe=false", dq - 1)
+            }
+            (Dir::Out, _) => format!("out {name} int screen {name} safe=0"),
+            (Dir::In, _) => format!("in  {name} int screen {name}"),
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 fn examples() -> BTreeMap<String, Files> {
     EXAMPLES
         .iter()
@@ -167,17 +203,12 @@ fn examples() -> BTreeMap<String, Files> {
             let (name, file) = example_project(e.src);
             (name, Files(BTreeMap::from([(file, e.src.to_string())])))
         })
-        .chain(STARTERS.iter().map(|s| (s.name.to_string(), s.project())))
         .collect()
 }
 
 /// The list a built-in project is under.
-fn group_of(name: &str) -> Group {
-    match starter(name).map(|s| s.kind) {
-        Some(Kind::Machine) => Group::Machines,
-        Some(Kind::Template) => Group::Templates,
-        None => Group::FirstSteps,
-    }
+const fn group_of(_name: &str) -> Group {
+    Group::FirstSteps
 }
 
 /// What a new project starts with.
@@ -382,18 +413,13 @@ impl SimProjects {
             .cloned()
             .unwrap_or_default();
         self.pending = None;
-        if self.is_example() {
-            if let Some(e) = EXAMPLES.iter().find(|e| example_project(e.src).0 == name) {
-                self.note(
-                    format!("{}: a built-in example. Save keeps your own copy.", e.name),
-                    false,
-                );
-            } else if let Some(s) = starter(name) {
-                self.note(
-                    format!("{}: {}. Save keeps your own copy.", s.title, s.about),
-                    false,
-                );
-            }
+        if self.is_example()
+            && let Some(e) = EXAMPLES.iter().find(|e| example_project(e.src).0 == name)
+        {
+            self.note(
+                format!("{}: a built-in example. Save keeps your own copy.", e.name),
+                false,
+            );
         }
         self.persist();
     }

@@ -422,6 +422,32 @@ fn proposals_are_listed_with_their_ids_for_the_review() {
     assert!(!a.busy());
 }
 
+/// Regression, 2026-11-05: a turn the relay dropped ends with `error`
+/// and then `status` (offline); the tab stopped reading at `error`, so
+/// the offline line was lost whenever both came in one piece.
+#[test]
+fn the_status_after_a_turns_error_still_lands() {
+    let error = ev(
+        "error",
+        &json!({"kind": "relay_unreachable", "message": "the relay did not answer", "retryable": true}),
+    );
+    let status = ev(
+        "status",
+        &json!({"state": "offline", "message": "relay unreachable"}),
+    );
+    for pieces in [vec![error.clone() + &status], vec![error.clone(), status.clone()]] {
+        let (mut a, seq) = started();
+        for text in pieces {
+            a.apply(Incoming::Chunk { seq, text });
+        }
+        assert!(matches!(&a.turns[0].end, Some(End::Failed(w)) if w == "the relay did not answer"));
+        assert_eq!(a.status, Status::Offline("relay unreachable".into()));
+        assert!(!a.busy(), "the turn is over");
+        a.apply(Incoming::End { seq });
+        assert!(!a.busy());
+    }
+}
+
 #[test]
 fn a_stream_cut_short_ends_the_turn_and_late_pieces_are_ignored() {
     let (mut a, seq) = started();
