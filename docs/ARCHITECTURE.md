@@ -1588,8 +1588,9 @@ HTTP from another host is refused (Box API, HTTPS). Sources:
 - **Tools.** The agent's eleven (`helmsman_agent::tools::NAMES`), by the
   same executor, which reaches the box through `tools::Caller`: the chat
   agent's goes over loopback HTTP, MCP's calls the API's handler in
-  process and may reach only the reads and the four draft routes
-  (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
+  process and may reach only the reads (the devices and the library
+  among them), the read-only network scan (`list_devices`, allowed by
+  Nick 2026-11-05) and the four draft routes (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
   stays a person on the canvas. Results are text inside the agent's
   `<box-data>` envelope, never `structuredContent`.
 - **Drafts.** The protocol has no sessions, so drafts are server-minted
