@@ -2265,6 +2265,68 @@ mod simulated {
     }
 
     #[test]
+    fn ctrl_f_finds_in_the_st_and_ctrl_g_walks_the_matches() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        h.press("pane code");
+        h.wait(0.3);
+        let left = h.rect("left");
+        h.key(Modifiers::COMMAND, Key::F);
+        assert!(h.app.chrome.code_open());
+        assert!(h.app.chrome.find.is_some(), "the find box opens");
+        let editor = eframe::egui::Id::unique("pg-source");
+        h.frame(vec![]);
+        assert!(
+            h.ctx.memory(|m| m.has_focus(editor.with("find"))),
+            "and takes the keyboard"
+        );
+        h.frame(vec![Event::Text("PULSE".into())]);
+        h.frame(vec![]);
+        let src = h.app.sim.as_ref().unwrap().session.src.clone();
+        let want = crate::find::matches(&src, "pulse");
+        assert!(want.len() >= 2, "Blink names its timer more than once");
+        // While the find box has the keyboard the editor keeps a caret:
+        // at the current match's start.
+        let selected = |h: &Harness| {
+            let caret = eframe::egui::text_edit::TextEditState::load(&h.ctx, editor)
+                .and_then(|s| s.cursor.char_range())
+                .expect("a caret")
+                .primary
+                .index
+                .0;
+            let current = h.app.chrome.find.as_ref().map(|f| f.current);
+            let at = want.iter().position(|r| src[..r.start].chars().count() == caret);
+            assert_eq!(at, current, "the caret is at the current match");
+            at
+        };
+        assert_eq!(selected(&h), Some(0), "typing selects the first match");
+        h.key(Modifiers::COMMAND, Key::G);
+        h.frame(vec![]);
+        assert_eq!(selected(&h), Some(1), "Ctrl G: the next");
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::G);
+        h.frame(vec![]);
+        assert_eq!(selected(&h), Some(0), "Ctrl Shift G: back");
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::G);
+        h.frame(vec![]);
+        assert_eq!(selected(&h), Some(want.len() - 1), "and round to the last");
+        let l = h.rect("left").right() - left.right();
+        assert!((0.0..=8.0).contains(&l), "the find row widened the pane {l} pt");
+        h.ctx.memory_mut(|m| m.request_focus(editor.with("find")));
+        h.frame(vec![]);
+        h.key(Modifiers::NONE, Key::Escape);
+        assert!(h.app.chrome.find.is_none(), "Esc closes it");
+        h.frame(vec![]);
+        assert!(
+            h.ctx.memory(|m| m.has_focus(editor)),
+            "the editor takes the keyboard"
+        );
+        let last = &want[want.len() - 1];
+        let chars = |byte: usize| src[..byte].chars().count();
+        let (a, b) = crate::editor::selection(&h.ctx, editor).expect("the match selected");
+        assert_eq!((a.min(b), a.max(b)), (chars(last.start), chars(last.end)));
+    }
+
+    #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());
         h.wait(0.3);

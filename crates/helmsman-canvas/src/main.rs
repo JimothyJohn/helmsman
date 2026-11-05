@@ -43,6 +43,7 @@ mod commit;
 mod debugger_tests;
 mod devices;
 mod editor;
+mod find;
 mod glyphs;
 mod history_ui;
 mod hotkeys;

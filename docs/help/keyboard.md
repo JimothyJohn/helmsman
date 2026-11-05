@@ -21,6 +21,9 @@ CODESYS's default keys where the browser leaves them alone, nothing on a key the
 | Ctrl Shift U | Release every force on the box |  |
 | Ctrl ] | Into the picked block instance's diagram; a stopped simulation steps one scan |  |
 | Ctrl [ | Out to the caller's diagram; a stopped simulation steps one scan |  |
+| Ctrl F | Find in the Structured Text (Enter: next, Esc: close) |  |
+| Ctrl G | The next match |  |
+| Ctrl Shift G | The previous match |  |
 | Alt 0 | The left pane's Files tab | Devices |
 | Alt 1 | The left pane's Code tab (the Structured Text) | POUs |
 | Alt 2 | The bottom panel (Trend, Messages) | Modules |
@@ -28,4 +31,4 @@ CODESYS's default keys where the browser leaves them alone, nothing on a key the
 | Alt 4 | The left pane's Devices tab (the I/O map's devices and points) |  |
 | Alt ↑ | Up one level in the diagram | |
 
-Reserved, not built yet, on chords rather than function keys: Ctrl F find in the Structured Text with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2 the Agent.
+Reserved, not built yet: F2 / Shift F2 for the Agent.

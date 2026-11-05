@@ -444,6 +444,14 @@ impl App {
                     w.force_picked(ctx);
                 }
             }
+            Action::Find => {
+                self.chrome.show_code();
+                crate::find::Find::open(&mut self.chrome.find);
+            }
+            Action::FindNext | Action::FindPrevious => {
+                self.chrome.show_code();
+                crate::find::Find::step(&mut self.chrome.find, if a == Action::FindNext { 1 } else { -1 });
+            }
             Action::StepInto | Action::StepOut => {
                 if let Some(w) = self.workspace() {
                     if a == Action::StepInto {

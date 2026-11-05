@@ -169,6 +169,8 @@ pub struct Chrome {
     /// Where the diagram was drawn this frame (the glyph buttons sit in
     /// its top-right corner).
     pub diagram: Rect,
+    /// The find box over the ST pane, while open (Ctrl F).
+    pub find: Option<crate::find::Find>,
 }
 
 impl Default for Chrome {
@@ -186,6 +188,7 @@ impl Default for Chrome {
             jump: None,
             hits: Vec::new(),
             diagram: Rect::NOTHING,
+            find: None,
         }
     }
 }
@@ -765,6 +768,7 @@ pub fn st_editor(
 ) -> egui::Response {
     let font = FontId::monospace(crate::theme::MONO);
     let row = ui.fonts_mut(|f| f.row_height(&font));
+    let found = crate::find::row(ui, &mut chrome.find, id, text.as_str());
     let mut scroll = egui::ScrollArea::vertical().id_salt(id.with("scroll"));
     if let Some(line) = chrome.jump.take() {
         #[allow(clippy::cast_precision_loss)]
@@ -784,8 +788,33 @@ pub fn st_editor(
             state.store(ui.ctx(), id);
         }
     }
-    let at = chrome.line;
+    // The current match: selected and scrolled to.
+    if let Some(f) = &found
+        && f.reveal
+        && let Some(r) = f.current.and_then(|k| f.ranges.get(k))
+    {
+        let s = text.as_str();
+        let line = s[..r.start].matches('\n').count();
+        #[allow(clippy::cast_precision_loss)]
+        let y = line.saturating_sub(4) as f32 * row;
+        scroll = scroll.vertical_scroll_offset(y);
+        crate::find::select(ui.ctx(), id, s, r.clone(), true);
+    }
     let t = theme(ui);
+    let marks: Vec<(std::ops::Range<usize>, Color32)> = found
+        .as_ref()
+        .map(|f| {
+            f.ranges
+                .iter()
+                .enumerate()
+                .map(|(k, r)| {
+                    let strength = if f.current == Some(k) { 0.75 } else { 0.3 };
+                    (r.clone(), crate::st_view::brand::YELLOW.gamma_multiply(strength))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let at = chrome.line;
     scroll
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
@@ -796,8 +825,9 @@ pub fn st_editor(
                 let wrap = (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0);
                 // The rows the text takes at that width: each source line
                 // numbered on its first row, its wrapped rows blank.
-                let galley =
-                    ui.fonts_mut(|f| f.layout_job(highlight(text.as_str(), diags, at, &font, wrap, &t)));
+                let mut job = highlight(text.as_str(), diags, at, &font, wrap, &t);
+                crate::find::mark(&mut job, &marks);
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
                 let mut gutter = LayoutJob::default();
                 for (n, number) in numbering(galley.rows.iter().map(|r| r.ends_with_newline)) {
                     let bad = diags.iter().any(|(l, _)| *l as usize == n);
@@ -819,7 +849,8 @@ pub fn st_editor(
                 gutter.wrap.max_width = f32::INFINITY;
                 ui.label(gutter);
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
-                    let job = highlight(buf.as_str(), diags, at, &font, wrap, &t);
+                    let mut job = highlight(buf.as_str(), diags, at, &font, wrap, &t);
+                    crate::find::mark(&mut job, &marks);
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
                 // A tooltip would sit over the code under the pointer while
