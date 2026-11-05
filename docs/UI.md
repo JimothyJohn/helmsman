@@ -245,12 +245,12 @@ The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
 | Ctrl Shift U | Release every force (box, engineer) | |
 | Ctrl ] | Into the picked block instance's diagram; a stopped simulation steps one scan | |
 | Ctrl [ | Out to the caller's diagram, the instance left picked; a stopped simulation steps one scan | |
+| Ctrl F | Find in the ST: every match marked, the current one brighter and scrolled to; Enter / Shift Enter next / previous, Esc closes with the match selected | |
+| Ctrl G, Ctrl Shift G | Next / previous match | |
 | Alt ↑ | Up one level in the diagram | |
 
-Each menu item prints its key. Reserved, not built (TODO cards
-`hotkey-*`), on chords rather than F keys: Ctrl F
-find in the ST with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2
-the Agent.
+Each menu item prints its key. Reserved, not built (TODO card
+`hotkey-agent-reserved`): F2 / Shift F2 the Agent.
 
 ## Monitor (phone to wall TV; replaces Andon)
 
