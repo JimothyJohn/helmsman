@@ -1007,6 +1007,34 @@ impl Workspace for BoxView {
         self.view.as_mut().is_some_and(Viewer::cross_references)
     }
 
+    fn force_picked(&mut self, ctx: &egui::Context) -> bool {
+        if is_engineer(self.session.as_ref()).is_err() {
+            return false;
+        }
+        let Some((_, path)) = self.view.as_ref().and_then(Viewer::picked_read) else {
+            return false;
+        };
+        let Some(sig) = self.input(&path).cloned() else {
+            return false;
+        };
+        match sig.value {
+            Some(Value::Bool(on)) => self.force(&sig.name, Value::Bool(!on)),
+            Some(Value::Int(_) | Value::Real(_)) => {
+                ctx.memory_mut(|m| m.request_focus(egui::Id::unique(("box-force-number", &sig.name))));
+            }
+            None => return false,
+        }
+        true
+    }
+
+    fn release_all(&mut self) -> bool {
+        if is_engineer(self.session.as_ref()).is_err() || self.state.forces.is_empty() {
+            return false;
+        }
+        self.projects.release(None);
+        true
+    }
+
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
         if self.writable().is_err() {
             return false;

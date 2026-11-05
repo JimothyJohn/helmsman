@@ -36,6 +36,11 @@ lists every force with a release for each and for all, and forces end
 when you sign out or deploy. Forcing is for commissioning and
 troubleshooting; the audit log records each one.
 
+From the keyboard: pick the input's block and press <kbd>Ctrl</kbd>
+<kbd>Shift</kbd> <kbd>F</kbd> to force it (a BOOL flips, a number's
+field opens for the value), and <kbd>Ctrl</kbd> <kbd>Shift</kbd>
+<kbd>U</kbd> releases every force. Both are in the Edit menu.
+
 ## The trend
 
 The Trend tab opens with the box's own history of each pinned signal,
