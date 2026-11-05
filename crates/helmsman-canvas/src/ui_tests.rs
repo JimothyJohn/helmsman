@@ -910,6 +910,7 @@ mod chrome {
         let at = h.rect("file blink.st").center();
         h.right_click(at);
         let items = [
+            "menu deploy",
             "menu copy",
             "menu paste",
             "menu duplicate",
@@ -927,6 +928,32 @@ mod chrome {
         }
     }
 
+    /// Right-click a file › Deploy runs the open project, as File ›
+    /// Deploy does (Nick, 2026-11-05).
+    #[test]
+    fn a_files_right_click_deploys_the_project() {
+        let mut h = Harness::new(App::sim());
+        h.press("bar file");
+        h.press("file copy");
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
+        h.press("name ok");
+        h.wait(0.3);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.open, "blink-copy");
+        assert_ne!(
+            h.app.sim.as_ref().unwrap().proj.running.as_deref(),
+            Some("blink-copy"),
+            "a copy does not run until deployed"
+        );
+        h.right_click(h.rect("file blink.st").center());
+        h.press("menu deploy");
+        h.wait(0.3);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().proj.running.as_deref(),
+            Some("blink-copy")
+        );
+    }
+
     /// Rename and Delete are the right-click menu's and the Delete key's,
     /// not buttons under the lists; the question is asked in the middle
     /// of the screen (Nick, 2026-11-02).
@@ -935,6 +962,8 @@ mod chrome {
         let mut h = Harness::new(App::sim());
         h.press("bar file");
         h.press("file copy");
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
         h.press("name ok");
         h.wait(0.3);
         assert_eq!(h.app.sim.as_ref().unwrap().proj.open, "blink-copy");
@@ -944,8 +973,8 @@ mod chrome {
         assert!(h.has("new file"), "New file stays a button");
         // Delete from the file's menu: asked in the centre, Keep says no.
         h.press("new file");
-        // The name field is drawn under the button, so a frame later.
-        h.frame(vec![]);
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
         h.press("name");
         h.key(Modifiers::COMMAND, Key::A);
         h.frame(vec![Event::Text("two.st".into())]);
@@ -1622,7 +1651,9 @@ mod chrome {
         // tab asking for the name.
         h.press("bar file");
         h.press("file copy");
-        assert!(h.app.chrome.files_open(), "the name is asked on the Files tab");
+        assert!(h.app.chrome.files_open(), "it lands on the Files tab");
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
         h.press("name ok");
         h.wait(0.3);
         assert!(h.has("file blink.st"), "blink-copy open with its file");
@@ -1648,6 +1679,7 @@ mod chrome {
         let at = h.rect("file blink.st").center();
         h.right_click(at);
         for k in [
+            "menu deploy",
             "menu copy",
             "menu paste",
             "menu duplicate",
@@ -1676,8 +1708,15 @@ mod chrome {
         // New project from a right-click on the pane's blank space.
         h.right_click(h.rect("files blank").center());
         h.press("menu new project");
-        // The name field is drawn above the blank space, so a frame later.
-        h.frame(vec![]);
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
+        // A popup in the middle of the screen, not a field in the side
+        // panel (Nick, 2026-11-05).
+        let form = h.rect("name form");
+        assert!(
+            form.center().x > h.rect("left").right(),
+            "the name is asked in the centre: {form:?}"
+        );
         h.press("name");
         h.frame(vec![Event::Text("mine".into())]);
         h.press("name ok");

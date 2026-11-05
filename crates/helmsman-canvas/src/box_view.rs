@@ -546,6 +546,9 @@ impl BoxView {
             self.add_device_line(&line);
         }
         self.revision_ui(&ui.ctx().clone(), chrome);
+        if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
+            self.project_act(a);
+        }
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.project_act(a);
         }
@@ -904,6 +907,7 @@ impl BoxView {
             }
             // The Agent's answer lands in the simulation's projects.
             Act::UseAnswer { .. } => {}
+            Act::Deploy => self.deploy(),
             Act::ShowRevision(n) => {
                 if let Some(o) = &open {
                     self.projects.read_revision(&o.name, n);
@@ -1192,6 +1196,13 @@ impl Body for BoxView {
                     .as_ref()
                     .is_some_and(|o| self.projects.running.as_deref() == Some(o.name.as_str())),
                 history: &self.projects.history,
+                deploy: self.writable().and_then(|()| {
+                    if self.busy() {
+                        Err("A save or deploy is under way.".into())
+                    } else {
+                        Ok(())
+                    }
+                }),
             };
             if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
                 self.project_act(a);

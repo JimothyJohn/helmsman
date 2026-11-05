@@ -91,6 +91,9 @@ pub enum Act {
     DeleteFile(String),
     /// A file's text to the sidebar's clipboard (right-click › Copy).
     CopyFile(String),
+    /// Deploy the open project, as File › Deploy (right-click a file ›
+    /// Deploy; Nick, 2026-11-05).
+    Deploy,
     /// A copy of a file beside it, under a free name (right-click ›
     /// Duplicate).
     DuplicateFile(String),
@@ -130,6 +133,8 @@ pub struct Listing<'a> {
     pub running: bool,
     /// The open project's revisions, oldest first (the History row).
     pub history: &'a [crate::history_ui::RevisionRow],
+    /// Whether the open project may be deployed now, or why not.
+    pub deploy: Result<(), String>,
 }
 
 /// Which name the sidebar's text field is for.
@@ -168,6 +173,8 @@ pub struct FilesUi {
     /// The file last copied (name, text): the app's own, not the
     /// system's, so a paste works in any open project here.
     pub clipboard: Option<(String, String)>,
+    /// The name popup just opened: its field takes the keyboard.
+    pub focus_name: bool,
 }
 
 /// A file name not taken, from `want`: `want` itself, else `stem-2.ext`,
@@ -389,7 +396,7 @@ impl FilesUi {
                     .tip(if runs {
                         "The file that runs. Double-click to edit it; right-click for more."
                     } else {
-                        "Click to open, double-click to edit; right-click to copy, rename or delete."
+                        "Click to open, double-click to edit; right-click to deploy, copy, rename or delete."
                     });
                 chrome.hit(format!("file {f}"), r.rect);
                 if r.clicked() {
@@ -413,6 +420,23 @@ impl FilesUi {
                     }
                 };
                 r.context_menu(|ui| {
+                    // Deploy first: the step a right-click is most often
+                    // for (Nick, 2026-11-05). It deploys the project, whose
+                    // main.st runs, whichever file was clicked.
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu deploy",
+                        "Deploy",
+                        l.deploy.is_ok(),
+                        l.deploy.as_ref().err().map_or(
+                            "Saves, checks and runs this project (its main.st), as File › Deploy.",
+                            String::as_str,
+                        ),
+                    ) {
+                        act = Some(Act::Deploy);
+                    }
+                    ui.separator();
                     if menu_item(
                         ui,
                         chrome,
@@ -479,9 +503,6 @@ impl FilesUi {
             self.naming = None;
             self.confirm = Some(a);
         }
-        if let Some(a) = self.naming_ui(ui, chrome) {
-            act = Some(a);
-        }
         if l.write.is_err() {
             self.naming = None;
             if !matches!(self.confirm, Some(Act::OpenProject(_))) {
@@ -546,6 +567,7 @@ impl FilesUi {
         self.naming = Some(n);
         self.input = start.into();
         self.confirm = None;
+        self.focus_name = true;
     }
 
     /// Asks for a new, empty project's name (File › New project, or a
@@ -610,7 +632,13 @@ impl FilesUi {
         act
     }
 
-    fn naming_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) -> Option<Act> {
+    /// The name asked for (new project, a copy, a rename, a new file) as
+    /// a box in the middle of the screen over a dimmed page, whichever
+    /// tab is up (Nick, 2026-11-05: the New project prompt a popup, not
+    /// a field in the side panel). Enter or OK uses the name; Cancel,
+    /// Escape or a click outside leaves things as they are. The view
+    /// draws it each frame after the Editor; returns what was asked.
+    pub fn naming_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<Act> {
         let n = self.naming.clone()?;
         let what = match &n {
             Naming::NewProject => "New project".to_string(),
@@ -627,41 +655,61 @@ impl FilesUi {
             Naming::NewFile | Naming::RenameFile(_) => "NAME.st",
             _ => "a-z 0-9 _ -",
         };
-        let mut out = None;
-        ui.separator();
-        ui.label(RichText::new(what).strong());
-        let t = ui
-            .add(
-                egui::TextEdit::singleline(&mut self.input)
-                    .hint_text(hint)
-                    .desired_width(f32::INFINITY),
-            )
-            .tip(format!("The name ({hint}). Enter confirms."));
-        chrome.hit("name", t.rect);
-        let enter = t.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        ui.horizontal(|ui| {
-            let ok = ui.button("OK").tip("Uses this name (Enter).");
-            chrome.hit("name ok", ok.rect);
-            let no = ui.button("Cancel").tip("Leaves things as they are.");
-            chrome.hit("name cancel", no.rect);
-            if ok.clicked() || enter {
-                let name = self.input.trim().to_string();
-                if !name.is_empty() {
-                    out = Some(match n.clone() {
-                        Naming::NewProject => Act::NewProject(name),
-                        Naming::CopyProject(from) => Act::CopyProject { from, to: name },
-                        Naming::FromStarter(from) => Act::FromStarter { from, to: name },
-                        Naming::RenameProject(from) => Act::RenameProject { from, to: name },
-                        Naming::NewFile => Act::NewFile(name),
-                        Naming::RenameFile(from) => Act::RenameFile { from, to: name },
-                    });
-                }
-                self.naming = None;
-            } else if no.clicked() {
-                self.naming = None;
+        let mut ok = false;
+        let mut cancel = false;
+        let m = egui::Modal::new(egui::Id::unique("files-name")).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(RichText::new(what).strong().size(16.0));
+            ui.add_space(8.0);
+            let t = ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.input)
+                        .hint_text(hint)
+                        .desired_width(f32::INFINITY),
+                )
+                .tip(format!("The name ({hint}). Enter confirms."));
+            chrome.hit("name", t.rect);
+            if std::mem::take(&mut self.focus_name) {
+                t.request_focus();
             }
+            let enter = t.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let yes = ui
+                    .add(egui::Button::new(RichText::new("OK").strong()).min_size(tall))
+                    .tip("Uses this name (Enter).");
+                chrome.hit("name ok", yes.rect);
+                let no = ui
+                    .add(egui::Button::new("Cancel").min_size(tall))
+                    .tip("Leaves things as they are (Escape).");
+                chrome.hit("name cancel", no.rect);
+                ok = yes.clicked() || enter;
+                cancel = no.clicked();
+            });
         });
-        out
+        chrome.hit("name form", m.response.rect);
+        // OK first: the click that pressed it also reads as a click on
+        // the modal's backdrop, which would otherwise shut the question.
+        if ok {
+            self.naming = None;
+            let name = self.input.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            return Some(match n {
+                Naming::NewProject => Act::NewProject(name),
+                Naming::CopyProject(from) => Act::CopyProject { from, to: name },
+                Naming::FromStarter(from) => Act::FromStarter { from, to: name },
+                Naming::RenameProject(from) => Act::RenameProject { from, to: name },
+                Naming::NewFile => Act::NewFile(name),
+                Naming::RenameFile(from) => Act::RenameFile { from, to: name },
+            });
+        }
+        if cancel || m.should_close() {
+            self.naming = None;
+        }
+        None
     }
 
     /// The pending question ([`Self::confirm`]) as a box in the middle of

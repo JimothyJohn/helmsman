@@ -457,6 +457,7 @@ impl PlaygroundView {
                 self.proj.add_file(&name, text);
                 self.edited(f64::NEG_INFINITY);
             }
+            Act::Deploy => self.deploy(),
         }
     }
 
@@ -1193,6 +1194,9 @@ impl PlaygroundView {
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
         }
+        if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
+            self.act(a);
+        }
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
         }
@@ -1494,6 +1498,8 @@ impl Body for PlaygroundView {
             starters: false,
             running: self.proj.running.as_deref() == Some(open.as_str()),
             history: &history,
+            // The page deploys at once: never busy.
+            deploy: Ok(()),
         };
         if let Some(a) = self.files_ui.show(ui, &listing, chrome) {
             self.act(a);
