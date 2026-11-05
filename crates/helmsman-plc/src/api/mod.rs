@@ -49,6 +49,7 @@
 //! GET  /api/dropins/{id}/plc?view=V...    a PLC drop-in's inventory (overview, tags, routine, names)
 //! POST /api/devices/{name}/browse         token: an observed controller's tag list, read-only
 //! GET  /api/projects ...                  the editor's projects; PUT, DELETE, deploy and uploads need an engineer session (see [`projects`])
+//! POST /api/projects/{p}/requirements    engineer session: one requirement in words; the agent writes its test (see [`requirements`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
 //! GET  /api/forces                        forced inputs; POST and DELETE need an engineer session (see [`forces`])
 //! GET  /api/drivers ...                   the box's WASM driver files; list, PUT and DELETE need an engineer session (see [`drivers`])
@@ -118,6 +119,7 @@ pub mod photo;
 pub mod projects;
 pub mod proposal;
 pub mod render;
+pub mod requirements;
 pub mod sim;
 pub mod store;
 pub mod swap;
@@ -756,6 +758,8 @@ enum Reply {
     Chat(chat::Taken),
     /// One explanation for the agent.
     Explain(explain::Job),
+    /// One requirement: the agent writes its test.
+    Requirement(Box<requirements::Job>),
     /// A file of the UI.
     File(ui::Asset),
 }
@@ -892,6 +896,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 chat.serve(&mut stream, taken, &ctx.catalog());
             }
         }
+        Reply::Requirement(job) => requirements::serve(ctx, &mut stream, &job),
         Reply::File(asset) => {
             let _ = ui::send(&mut stream, asset);
         }
@@ -904,7 +909,11 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 Reply::Traces(k) => trace_stream(&mut stream, ctx, k),
                 Reply::AllTraces => all_traces_stream(&mut stream, ctx),
                 Reply::Values => value_stream(&mut stream, ctx),
-                Reply::Once(_) | Reply::Chat(_) | Reply::Explain(_) | Reply::File(_) => Ok(()),
+                Reply::Once(_)
+                | Reply::Chat(_)
+                | Reply::Explain(_)
+                | Reply::Requirement(_)
+                | Reply::File(_) => Ok(()),
             };
         }
     }
@@ -1006,6 +1015,17 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         && req.segments[1] == "explain"
     {
         return start_explain(req, ctx);
+    }
+    if let [api, projects, name, requirements] = req.segments.as_slice()
+        && req.method == "POST"
+        && api == "api"
+        && projects == "projects"
+        && requirements == "requirements"
+    {
+        return match requirements::start(req, ctx, name) {
+            Ok(job) => Reply::Requirement(Box::new(job)),
+            Err(r) => Reply::Once(r),
+        };
     }
     if mcp_route {
         return Reply::Once(mcp::post(req, ctx));
@@ -1820,6 +1840,8 @@ fn index(agent: bool) -> Json {
             e("PUT", "/api/projects/{p}/files/{f}", true, "engineer session: save {text, version?} (a draft; version: what was read, null: a new file)"),
             e("DELETE", "/api/projects/{p}/files/{f}", true, "engineer session: delete a file"),
             e("POST", "/api/projects/{p}/check", true, "build the project as a deploy would: its modules and tier, or every problem with file and line; nothing changes"),
+            e("POST", "/api/projects/{p}/tests", true, "run the project's requirement tests (test_*.st) in the simulation: each passed, failed or untested (no test yet, never red), with why; nothing changes"),
+            e("POST", "/api/projects/{p}/requirements", true, "engineer session: one requirement {text, name?} (one line, 1 to 500 characters): the agent writes its test, compiled and run here, saved as a revision; offline it is written down untested. An event stream: requirement, text, tool_call, tool_result, retrying, test, done or error"),
             e("POST", "/api/projects/{p}/replay", true, "engineer session: sim replay of deploying the project (evidence for deploy)"),
             e("POST", "/api/projects/{p}/deploy", true, "engineer session: {replay?}: build, apply through the approval policy, commit a snapshot, hot-swap between scans"),
             e("GET", "/api/projects/{p}/zip", false, "the project as a .zip (its .st files, io.map, project.settings)"),
