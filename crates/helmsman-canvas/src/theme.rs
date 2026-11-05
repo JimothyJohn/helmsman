@@ -147,7 +147,13 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     if ctx.theme() != want {
         ctx.set_theme(want);
     }
-    if ctx.style_of(ctx.theme()).text_styles.get(&egui::TextStyle::Body).map(|f| f.size) != Some(BODY) {
+    if ctx
+        .style_of(ctx.theme())
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .map(|f| f.size)
+        != Some(BODY)
+    {
         ctx.all_styles_mut(|s| s.text_styles = text_styles());
     }
 }

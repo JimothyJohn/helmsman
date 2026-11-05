@@ -2569,15 +2569,14 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
     } else {
         format!("{name} = {}", show(p.ty, p.value))
     };
-    let b =
-        egui::Button::new(
-            RichText::new(text)
-                .monospace()
-                .size(crate::theme::MIN_TEXT)
-                .color(if on { t.accent } else { t.fg }),
-        )
-        .wrap_mode(egui::TextWrapMode::Truncate)
-        .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
+    let b = egui::Button::new(
+        RichText::new(text)
+            .monospace()
+            .size(crate::theme::MIN_TEXT)
+            .color(if on { t.accent } else { t.fg }),
+    )
+    .wrap_mode(egui::TextWrapMode::Truncate)
+    .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
     ui.add(b).on_hover_text("click: pick it").clicked()
 }
 

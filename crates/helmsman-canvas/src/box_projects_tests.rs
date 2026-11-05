@@ -1492,35 +1492,29 @@ fn the_shared_layout_round_trips_through_the_running_project_for_an_engineer_onl
     assert_eq!(b.send(&jar, &bad).status, 422);
 }
 
-/// Every built-in machine and template arrives on the box as a project, all
-/// its files at once, and deploys there against the real API as it stands.
+/// Every example arrives on the box as a project of its own, named as asked,
+/// and deploys there against the real API as it stands.
 #[test]
-fn a_new_project_from_any_machine_or_template_deploys_on_the_box() {
-    use helmsman_project::starters::STARTERS;
+fn a_new_project_from_any_example_deploys_on_the_box() {
     let b = Bench::build(true);
     let jar = Jar::default();
     let mut v = page(&b, &jar, Some(("alice", ALICE)));
     let p = &mut v.projects;
-    for s in STARTERS {
-        let name = format!("my-{}", s.name);
-        p.create_from(&name, s.name);
+    for e in &crate::playground::EXAMPLES {
+        let (from, file) = crate::sim_projects::example_project(e.src);
+        let name = format!("my-{from}").replace('_', "-");
+        p.create_from(&name, &from);
         settle(&b, &jar, p);
         assert_eq!(p.open.as_ref().unwrap().name, name, "{:?}", p.notice);
-        let mut want: Vec<&str> = s.files.iter().map(|(f, _)| *f).collect();
+        let mut want = vec![file.as_str(), "io.map"];
         want.sort_unstable();
         assert_eq!(files(p), want);
-        assert_eq!(
-            p.current().unwrap().text,
-            s.files[0].1,
-            "{}: main.st first",
-            s.name
-        );
+        assert_eq!(p.current().unwrap().text, e.src, "{from}");
         p.deploy();
         settle(&b, &jar, p);
         assert!(
             matches!(p.deploy, Deploy::Done(_)),
-            "{}: {:?} {:?}",
-            s.name,
+            "{from}: {:?} {:?}",
             p.deploy,
             p.diags
         );
@@ -1538,16 +1532,16 @@ fn a_new_project_from_any_machine_or_template_deploys_on_the_box() {
         });
     }
     // A name that is taken is not overwritten without asking.
-    p.create_from("my-batch-mixer", "pump-station");
+    p.create_from("my-blink", "counter");
     settle(&b, &jar, p);
     let (msg, err) = p.notice.clone().unwrap();
     assert!(err && msg.contains("Replace it?"), "{msg}");
     assert!(
-        b.json("/api/projects/my-batch-mixer/files/main.st")["text"]
+        b.json("/api/projects/my-blink/files/blink.st")["text"]
             .as_str()
             .unwrap()
-            .contains("mixer_tank"),
-        "still the mixer"
+            .contains("PROGRAM blink"),
+        "still blink"
     );
 }
 
@@ -1560,9 +1554,7 @@ fn only_an_engineer_can_start_a_project_from_the_list() {
     let session = v.session.clone();
     let mut h = Harness::new(v, session);
     h.wait(0.2);
-    h.press("starters");
-    h.wait(0.1);
-    h.press("starter pump-station");
+    h.press("starter latch");
     h.wait(0.1);
     assert!(h.app.chrome.rect("name").is_some(), "the name is asked for");
     h.press("name ok");
@@ -1571,22 +1563,21 @@ fn only_an_engineer_can_start_a_project_from_the_list() {
         .iter()
         .find(|q| q.method == "POST")
         .unwrap_or_else(|| panic!("nothing sent: {sent:?}"));
-    assert_eq!(up.url, "/api/projects/pump-station/zip");
+    assert_eq!(up.url, "/api/projects/latch/zip");
     assert_eq!(up.ctype, "application/zip");
     for q in sent {
         let a = b.send(&jar, &q);
         h.bv().projects.answer(q.call, &a);
     }
-    assert_eq!(b.get("/api/projects/pump-station/files/plant_model.st").0, 200);
+    assert_eq!(b.get("/api/projects/latch/files/latch.st").0, 200);
+    assert_eq!(b.get("/api/projects/latch/files/io.map").0, 200);
 
     let jar = Jar::default();
     let v = page(&b, &jar, Some(("bob", BOB)));
     let session = v.session.clone();
     let mut h = Harness::new(v, session);
     h.wait(0.2);
-    h.press("starters");
-    h.wait(0.1);
-    h.press("starter pump-station");
+    h.press("starter latch");
     h.wait(0.1);
     assert_eq!(h.app.chrome.rect("name"), None, "disabled for an operator");
     let writes: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();

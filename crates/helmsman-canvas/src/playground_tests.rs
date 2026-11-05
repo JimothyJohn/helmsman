@@ -16,14 +16,15 @@ use crate::claude::{
 };
 use crate::editor::{Chrome, Tab, highlight};
 use crate::playground::{
-    Dir, EXAMPLES, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget, nice_range,
-    tick_label,
+    Dir, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget, nice_range, tick_label,
 };
 use crate::playground_view::{PlaygroundView, window_label};
 use crate::projects::Workspace;
 use crate::sim_projects::Storage;
 
 const KEY: &str = "sk-ant-api03-TESTKEY-not-a-real-key-0123456789";
+
+use crate::test_programs::PROGRAMS as EXAMPLES;
 
 fn example(name: &str) -> &'static str {
     EXAMPLES
@@ -70,6 +71,41 @@ fn every_example_compiles_draws_and_has_io() {
         assert!(s.outputs().count() > 0, "{} has outputs", e.name);
         assert!(!s.stale());
         assert!(!s.running, "a new session waits for Run");
+    }
+}
+
+/// The examples the page offers (Nick, 2026-11-05): the first chapters of
+/// an ST book, a few lines each, every one with an output to watch and,
+/// but Blink, an input to switch; each runs without a fault.
+#[test]
+fn the_offered_examples_are_short_and_each_has_io() {
+    let names: Vec<&str> = crate::playground::EXAMPLES.iter().map(|e| e.name).collect();
+    assert_eq!(
+        names,
+        [
+            "Blink",
+            "Read and write",
+            "Logic: AND, OR, NOT",
+            "Start/stop latch",
+            "Counter"
+        ]
+    );
+    for e in crate::playground::EXAMPLES {
+        assert!(e.src.lines().count() <= 25, "{} is short", e.name);
+        let mut s = Session::new(e.src);
+        assert_eq!(s.diag_lines(), Vec::<String>::new(), "{}", e.name);
+        assert!(
+            s.build.as_ref().and_then(|b| b.module.as_ref()).is_some(),
+            "{} draws",
+            e.name
+        );
+        assert!(s.outputs().count() > 0, "{} has an output", e.name);
+        assert_eq!(s.inputs().count() > 0, e.name != "Blink", "{} inputs", e.name);
+        s.set_running(true);
+        for _ in 0..100 {
+            s.step();
+        }
+        assert_eq!(s.fault, None, "{}", e.name);
     }
 }
 
@@ -1407,6 +1443,22 @@ struct Screen {
 }
 
 impl Screen {
+    /// The page as it opens (the first example, its project open), with
+    /// no fixture loaded over it.
+    fn as_opened() -> Self {
+        let mut chrome = Chrome::default();
+        chrome.show_code();
+        let mut s = Self {
+            ctx: egui::Context::default(),
+            view: PlaygroundView::new(),
+            chrome,
+            time: 0.0,
+        };
+        s.frame(vec![]);
+        s.frame(vec![]);
+        s
+    }
+
     fn new() -> Self {
         // The ST open on the left pane's Code tab, as the simulation starts.
         let mut chrome = Chrome::default();
@@ -1417,6 +1469,10 @@ impl Screen {
             chrome,
             time: 0.0,
         };
+        // The fixture blink (an enable and a period to drive), as the page
+        // opened before the textbook examples; running, as it opens.
+        s.view.load(example("blink"), "blink");
+        s.view.session.set_running(true);
         s.frame(vec![]);
         s.frame(vec![]);
         s
@@ -1961,19 +2017,6 @@ fn every_tab_and_example_draws() {
         }
         assert!(s.view.session.scans > 0, "{k}");
     }
-    for st in helmsman_project::starters::STARTERS {
-        let mut src = String::new();
-        for (f, text) in st.files {
-            if helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St) {
-                src.push_str(text);
-            }
-        }
-        s.view.load(&src, st.name);
-        s.view.session.set_running(true);
-        s.wait(0.1);
-        assert!(s.view.session.scans > 0, "{}", st.name);
-        assert_eq!(s.view.session.fault, None, "{}", st.name);
-    }
     // A program with no diagram still runs and the screen says why not.
     s.view.load("", "nothing");
     s.wait(0.1);
@@ -1992,7 +2035,7 @@ fn tapping_an_output_picks_it() {
 
 #[test]
 fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
-    let mut s = Screen::new();
+    let mut s = Screen::as_opened();
     s.chrome.tab = Tab::Claude;
     s.frame(vec![]);
     s.view.chat.question = "a latch please".into();

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Helmsman Help · Examples and starters</title>
+<title>Helmsman Help · Examples</title>
 <link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
 <script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -63,105 +63,19 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples and starters</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
-<h1 id="examples-and-starters">Examples and starters</h1>
-<p>What the simulation opens with, generated from the program itself.
-Each is read-only; Save copies one into a project of your own.</p>
-<h2 id="examples">Examples</h2>
-<p>Short programs that teach one thing each.</p>
+<h1 id="examples">Examples</h1>
+<p>Short programs that teach one thing each, the first chapters of a
+Structured Text book. Pick one and name it: it becomes a program of your
+own to change.</p>
 <ul>
-<li><strong>Blink (TON)</strong></li>
+<li><strong>Blink</strong></li>
+<li><strong>Read and write</strong></li>
+<li><strong>Logic: AND, OR, NOT</strong></li>
 <li><strong>Start/stop latch</strong></li>
 <li><strong>Counter</strong></li>
-<li><strong>Traffic light</strong></li>
-<li><strong>Line of stations (nested blocks)</strong></li>
 </ul>
-<h2 id="machines">Machines</h2>
-<p>Worked programs, each with a plant model so it runs with nothing
-wired; press <code>start_pb</code> to start one.</p>
-<table>
-<thead>
-<tr>
-<th>project</th>
-<th></th>
-<th>what it shows</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>conveyor-sorter</code></td>
-<td><strong>Conveyor sorter</strong></td>
-<td>Measures parts at a photo eye and diverts the long ones, with belt
-tracking and a jam alarm</td>
-</tr>
-<tr>
-<td><code>pump-station</code></td>
-<td><strong>Pump station</strong></td>
-<td>Two pumps on a wet well, duty and standby, run from a level
-transmitter</td>
-</tr>
-<tr>
-<td><code>batch-mixer</code></td>
-<td><strong>Batch mixing tank</strong></td>
-<td>Fill, heat while agitating, hold and drain, with interlocks on the
-heater</td>
-</tr>
-<tr>
-<td><code>pick-and-place</code></td>
-<td><strong>Pick and place</strong></td>
-<td>A three-cylinder pneumatic arm with end switches and travel
-timeouts</td>
-</tr>
-<tr>
-<td><code>bottle-filler</code></td>
-<td><strong>Bottle filler and capper</strong></td>
-<td>An indexing conveyor with a timed fill head and a cap press</td>
-</tr>
-<tr>
-<td><code>air-compressors</code></td>
-<td><strong>Air compressor staging</strong></td>
-<td>Three compressors staged on header pressure, with a rotating
-lead</td>
-</tr>
-<tr>
-<td><code>air-handler</code></td>
-<td><strong>Air handling unit</strong></td>
-<td>Damper, fan with airflow proof, PID on the heating coil, freeze
-stat</td>
-</tr>
-</tbody>
-</table>
-<h2 id="templates">Templates</h2>
-<p>A skeleton to begin a program of that shape from.</p>
-<table>
-<thead>
-<tr>
-<th>project</th>
-<th></th>
-<th>what it shows</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>discrete-template</code></td>
-<td><strong>Discrete machine</strong></td>
-<td>A motor, a cylinder and a step sequence, ready to rename and
-extend</td>
-</tr>
-<tr>
-<td><code>counters</code></td>
-<td><strong>Production counters</strong></td>
-<td>Parts made, running or idle or down, shift totals and uptime, from
-one sensor and a run signal</td>
-</tr>
-<tr>
-<td><code>process-template</code></td>
-<td><strong>Process loop</strong></td>
-<td>A scaled measurement, a PID loop and two pumps sharing the duty</td>
-</tr>
-</tbody>
-</table>
 </main>
 </div>
 <footer><div class="wrap">Helmsman Factory Automation · early release · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>

@@ -121,10 +121,7 @@ fn examples_are_read_only_starters_and_saving_one_keeps_a_copy() {
     assert!(v.session.running, "running, as the playground always opened");
     let rows = v.proj.rows();
     assert!(rows.iter().all(ProjectRow::example), "{rows:?}");
-    assert_eq!(
-        rows.len(),
-        crate::playground::EXAMPLES.len() + helmsman_project::starters::STARTERS.len()
-    );
+    assert_eq!(rows.len(), crate::playground::EXAMPLES.len());
     assert!(rows.iter().any(|r| r.name == "blink" && r.running));
     // Edited and saved: a copy under a free name, opened; the example
     // itself is unchanged.
@@ -323,6 +320,10 @@ fn opening_another_project_with_unsaved_edits_asks_first() {
     let ctx = egui::Context::default();
     frame(&ctx, &mut app, 0.0);
     frame(&ctx, &mut app, 0.1);
+    // A program of the visitor's own to switch to.
+    app.sim.as_mut().unwrap().proj.create("mine", Some("latch"));
+    app.sim.as_mut().unwrap().open_project("blink");
+    frame(&ctx, &mut app, 0.15);
     app.sim
         .as_mut()
         .unwrap()
@@ -333,14 +334,14 @@ fn opening_another_project_with_unsaved_edits_asks_first() {
     frame(&ctx, &mut app, 0.2);
     let at = app
         .chrome
-        .rect("project latch")
-        .expect("the example listed")
+        .rect("project mine")
+        .expect("the visitor's program listed")
         .center();
     click(&ctx, &mut app, at, 0.3);
     let v = app.sim.as_ref().unwrap();
     assert_eq!(
         v.files_ui.confirm,
-        Some(Act::OpenProject("latch".into())),
+        Some(Act::OpenProject("mine".into())),
         "asked first"
     );
     assert_eq!(v.title(), "blink", "not opened yet");
@@ -348,18 +349,18 @@ fn opening_another_project_with_unsaved_edits_asks_first() {
     click(&ctx, &mut app, at, 0.4);
     assert_eq!(app.title(), "blink");
     assert!(app.sim.as_ref().unwrap().proj.dirty(), "the edits stay");
-    let at = app.chrome.rect("project latch").unwrap().center();
+    let at = app.chrome.rect("project mine").unwrap().center();
     click(&ctx, &mut app, at, 0.5);
     let at = app.chrome.rect("confirm yes").unwrap().center();
     click(&ctx, &mut app, at, 0.6);
-    assert_eq!(app.title(), "latch");
+    assert_eq!(app.title(), "mine");
     let v = app.sim.as_ref().unwrap();
     assert!(!v.proj.dirty());
     assert!(
         v.session.running,
-        "opened running (an example that sits still looks dead)"
+        "opened running (a program that sits still looks dead)"
     );
-    assert_eq!(v.proj.running.as_deref(), Some("latch"));
+    assert_eq!(v.proj.running.as_deref(), Some("mine"));
     // A fresh page with nothing stored starts clean.
     assert!(!SimProjects::load(Box::new(Shared::default())).dirty());
     assert!(Files(BTreeMap::new()).check().is_ok());
@@ -513,56 +514,49 @@ fn an_l5x_upload_becomes_the_boxs_st_or_is_refused_whole() {
     assert_eq!(v.proj.files, before, "nothing imported");
 }
 
-/// The long lists start folded, a heading opens them, and a machine copied
-/// with Save is the visitor's own, with every file.
+/// Nick, 2026-11-05: the examples are the only built-in list (no
+/// Machines, no Templates), and clicking one asks for a name and opens the
+/// visitor's own copy, the example unchanged.
 #[test]
-fn machines_and_templates_are_folded_groups_and_save_copies_one() {
+fn clicking_an_example_names_and_opens_your_own_copy() {
     let ctx = egui::Context::default();
     let mut app = App::sim();
     app.chrome.show_files();
     frame(&ctx, &mut app, 0.1);
-    for key in ["project blink", "group Machines", "group Templates"] {
-        assert!(app.chrome.rect(key).is_some(), "{key}");
+    for e in &crate::playground::EXAMPLES {
+        let (name, _) = example_project(e.src);
+        assert!(app.chrome.rect(&format!("project {name}")).is_some(), "{name}");
     }
-    assert!(
-        app.chrome.rect("project batch-mixer").is_none(),
-        "folded at first"
-    );
-    assert!(
-        app.chrome.rect("project discrete-template").is_none(),
-        "folded at first"
-    );
-
-    let at = app.chrome.rect("group Machines").unwrap().center();
+    for gone in ["group Machines", "group Templates", "project batch-mixer"] {
+        assert!(app.chrome.rect(gone).is_none(), "{gone}");
+    }
+    let at = app.chrome.rect("project counter").unwrap().center();
     click(&ctx, &mut app, at, 0.2);
     frame(&ctx, &mut app, 0.3);
-    let at = app.chrome.rect("project batch-mixer").expect("unfolded").center();
-    assert!(
-        app.chrome.rect("project discrete-template").is_none(),
-        "its own fold"
+    let v = app.sim.as_ref().unwrap();
+    assert_eq!(
+        v.files_ui.naming,
+        Some(crate::projects::Naming::FromStarter("counter".into())),
+        "a click asks for a name, it opens nothing"
     );
+    assert_eq!(v.files_ui.input, "counter-2", "a free name, the example's taken");
+    let at = app.chrome.rect("name ok").expect("the name popup").center();
     click(&ctx, &mut app, at, 0.4);
     frame(&ctx, &mut app, 0.5);
     let v = app.sim.as_mut().unwrap();
-    assert_eq!(v.title(), "batch-mixer");
-    assert_eq!(v.proj.current, "main.st", "the controls first");
-    assert!(v.proj.is_example());
-    assert!(v.session.diags.is_empty(), "{:?}", v.session.diag_lines());
-    assert!(v.proj.files.contains_key("plant_model.st") && v.proj.files.contains_key("io.map"));
-    let files = v.proj.files.clone();
-    v.save();
-    assert_eq!(v.title(), "batch-mixer-2");
-    assert!(!v.proj.is_example());
-    assert_eq!(v.proj.saved["batch-mixer-2"].0, files, "the whole project");
-    assert!(helmsman_project::starters::starter("batch-mixer").is_some());
-
-    // The copy opens with the visitor's own projects, above the examples.
+    assert_eq!(v.title(), "counter-2");
+    assert!(!v.proj.is_example(), "the visitor's own");
+    let src = crate::playground::EXAMPLES
+        .iter()
+        .find(|e| e.name == "Counter")
+        .unwrap()
+        .src;
+    assert_eq!(v.proj.files.get("counter.st").map(String::as_str), Some(src));
     let rows = v.proj.rows();
-    assert_eq!(rows[0].name, "batch-mixer-2");
-    assert!(!rows[0].example());
+    assert_eq!(rows[0].name, "counter-2");
     assert!(
-        rows.iter().any(|r| r.name == "batch-mixer" && r.example()),
-        "still there"
+        rows.iter().any(|r| r.name == "counter" && r.example()),
+        "the example stays"
     );
 }
 

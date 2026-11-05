@@ -10,11 +10,11 @@ use crate::app::{App, Screen, Source, wants_monitor, wants_sim};
 use crate::box_tests::{Bench, DEMO};
 use crate::editor::Chrome;
 use crate::monitor::{Feed, Group, NARROW, STALE_AFTER, Shape, Tile, TileKind};
-use crate::playground::EXAMPLES;
 use crate::remote::{Cmd, Fetch, Msg, Stream};
 use crate::review::{Method, Session};
 use crate::review_view::ReviewView;
 use crate::st_view::TAP;
+use crate::test_programs::PROGRAMS as EXAMPLES;
 
 /// The box's demo line: two feeders, two stations of two motors each.
 const LINE: &str = include_str!("../../helmsman-plc/programs/line.st");

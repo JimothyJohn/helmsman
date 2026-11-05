@@ -7,7 +7,6 @@ use eframe::egui::{Response, WidgetText};
 
 pub trait Tip {
     /// The same tooltip whether the control is enabled or not.
-    #[must_use]
     fn tip(self, text: impl Into<WidgetText>) -> Self;
 }
 

@@ -107,7 +107,10 @@ fn untipped(src: &str) -> Vec<(usize, String)> {
                             .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
                         let rest = block[k + name.len()..].trim_start();
                         let rest = rest.strip_prefix(".clone()").unwrap_or(rest).trim_start();
-                        before_ok && rest.strip_prefix('.').is_some_and(|r| r.trim_start().starts_with(t))
+                        before_ok
+                            && rest
+                                .strip_prefix('.')
+                                .is_some_and(|r| r.trim_start().starts_with(t))
                     })
                 });
                 if used {
@@ -135,7 +138,8 @@ fn every_control_has_a_tooltip() {
     files.sort();
     for path in files {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name == "web.rs" {
+        let rs = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("rs"));
+        if !rs || name.ends_with("_tests.rs") || name == "web.rs" {
             continue;
         }
         let src = std::fs::read_to_string(&path).unwrap();

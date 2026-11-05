@@ -69,7 +69,7 @@ mod sim_projects;
 mod sim_projects_tests;
 mod st_view;
 #[cfg(test)]
-mod starter_tests;
+mod test_programs;
 mod theme;
 mod tips;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -87,35 +87,14 @@ fn help_tables(which: &str) -> Option<String> {
     match which {
         "keyboard" => Some(hotkeys::markdown()),
         "starters" => {
-            use helmsman_project::starters::{Kind, STARTERS};
             let mut out = String::from(
-                "# Examples and starters\n\n\
-                 What the simulation opens with, generated from the program itself. \
-                 Each is read-only; Save copies one into a project of your own.\n\n\
-                 ## Examples\n\nShort programs that teach one thing each.\n\n",
+                "# Examples\n\n\
+                 Short programs that teach one thing each, the first chapters of a \
+                 Structured Text book. Pick one and name it: it becomes a program of \
+                 your own to change.\n\n",
             );
             for e in &playground::EXAMPLES {
                 let _ = writeln!(out, "- **{}**", e.name);
-            }
-            for (kind, title, lede) in [
-                (
-                    Kind::Machine,
-                    "Machines",
-                    "Worked programs, each with a plant model so it runs with nothing wired; press `start_pb` to start one.",
-                ),
-                (
-                    Kind::Template,
-                    "Templates",
-                    "A skeleton to begin a program of that shape from.",
-                ),
-            ] {
-                let _ = write!(
-                    out,
-                    "\n## {title}\n\n{lede}\n\n| project | | what it shows |\n|---|---|---|\n"
-                );
-                for st in STARTERS.iter().filter(|s| s.kind == kind) {
-                    let _ = writeln!(out, "| `{}` | **{}** | {} |", st.name, st.title, st.about);
-                }
             }
             Some(out)
         }

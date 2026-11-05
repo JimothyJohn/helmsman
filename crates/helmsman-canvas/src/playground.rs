@@ -45,40 +45,70 @@ pub struct Example {
     pub src: &'static str,
 }
 
+/// The examples (Nick, 2026-11-05): what the first chapters of a
+/// Structured Text book teach, one idea each, a few lines long. Inputs are
+/// `VAR_INPUT`s the I/O tab switches; outputs are `VAR_OUTPUT`s it shows.
 pub const EXAMPLES: [Example; 5] = [
     Example {
-        name: "Blink (TON)",
+        name: "Blink",
         src: "PROGRAM blink
-VAR_INPUT
-  enable : BOOL := TRUE;
-  period : TIME := T#500ms;
-END_VAR
 VAR_OUTPUT
   lamp : BOOL;
 END_VAR
 VAR
   pulse : TON;
 END_VAR
-(* A timer that restarts itself: Q is TRUE for one scan every period. *)
-pulse(IN := enable AND NOT pulse.Q, PT := period);
+(* The timer restarts itself every 500 ms; each time, the lamp flips. *)
+pulse(IN := NOT pulse.Q, PT := T#500ms);
 IF pulse.Q THEN
   lamp := NOT lamp;
 END_IF;
-IF NOT enable THEN
-  lamp := FALSE;
-END_IF;
+END_PROGRAM
+",
+    },
+    Example {
+        name: "Read and write",
+        src: "PROGRAM read_write
+VAR_INPUT
+  switch : BOOL;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+END_VAR
+(* Read an input, write an output: the lamp follows the switch. *)
+lamp := switch;
+END_PROGRAM
+",
+    },
+    Example {
+        name: "Logic: AND, OR, NOT",
+        src: "PROGRAM logic
+VAR_INPUT
+  a : BOOL;
+  b : BOOL;
+END_VAR
+VAR_OUTPUT
+  both : BOOL;
+  either : BOOL;
+  neither : BOOL;
+END_VAR
+both := a AND b;
+either := a OR b;
+neither := NOT (a OR b);
 END_PROGRAM
 ",
     },
     Example {
         name: "Start/stop latch",
         src: "PROGRAM latch
-VAR
-  start AT %IX0.0 : BOOL;  (* push button *)
-  stop AT %IX0.1 : BOOL;   (* push button *)
-  motor AT %QX0.0 : BOOL;
+VAR_INPUT
+  start : BOOL;
+  stop : BOOL;
 END_VAR
-(* Seal-in: start latches the motor on, stop wins. *)
+VAR_OUTPUT
+  motor : BOOL;
+END_VAR
+(* Start turns the motor on and it stays on; stop turns it off. *)
 motor := (start OR motor) AND NOT stop;
 END_PROGRAM
 ",
@@ -89,121 +119,18 @@ END_PROGRAM
 VAR_INPUT
   pulse : BOOL;
   reset : BOOL;
-  target : INT := 5;
 END_VAR
 VAR_OUTPUT
   count : INT;
   done : BOOL;
 END_VAR
 VAR
-  parts : CTU;
+  c : CTU;
 END_VAR
-(* Counts rising edges of pulse until it reaches target. *)
-parts(CU := pulse, R := reset, PV := target);
-count := parts.CV;
-done := parts.Q;
-END_PROGRAM
-",
-    },
-    Example {
-        name: "Traffic light",
-        src: "PROGRAM traffic
-VAR_INPUT
-  run : BOOL := TRUE;
-  green_time : TIME := T#3s;
-END_VAR
-VAR_OUTPUT
-  red : BOOL;
-  yellow : BOOL;
-  green : BOOL;
-END_VAR
-VAR
-  phase : INT;  (* 0 green, 1 yellow, 2 red *)
-  dwell : TIME;
-  t : TON;
-END_VAR
-CASE phase OF
-  0: dwell := green_time;
-  1: dwell := T#1s;
-ELSE
-  dwell := T#3s;
-END_CASE;
-t(IN := run AND NOT t.Q, PT := dwell);
-IF t.Q THEN
-  phase := (phase + 1) MOD 3;
-END_IF;
-green := run AND (phase = 0);
-yellow := run AND (phase = 1);
-red := NOT run OR (phase = 2);
-END_PROGRAM
-",
-    },
-    Example {
-        name: "Line of stations (nested blocks)",
-        src: "(* A line of two stations, each driving two motors: open the
-   instances in the tree on the left, or double-click a block. *)
-FUNCTION_BLOCK motor
-VAR_INPUT
-  run : BOOL;
-  fault : BOOL;
-END_VAR
-VAR_OUTPUT
-  running : BOOL;
-  tripped : BOOL;
-END_VAR
-VAR
-  start_delay : TON;
-END_VAR
-start_delay(IN := run AND NOT tripped, PT := T#300ms);
-IF fault THEN
-  tripped := TRUE;
-ELSIF NOT run THEN
-  tripped := FALSE;
-END_IF;
-running := start_delay.Q AND NOT tripped;
-END_FUNCTION_BLOCK
-
-FUNCTION_BLOCK station
-VAR_INPUT
-  enable : BOOL;
-  part_present : BOOL;
-  jam : BOOL;
-END_VAR
-VAR_OUTPUT
-  busy : BOOL;
-  alarm : BOOL;
-END_VAR
-VAR
-  infeed : motor;
-  outfeed : motor;
-END_VAR
-infeed(run := enable AND NOT part_present, fault := jam);
-outfeed(run := enable AND part_present, fault := FALSE);
-busy := infeed.running OR outfeed.running;
-alarm := infeed.tripped;
-END_FUNCTION_BLOCK
-
-PROGRAM line
-VAR_INPUT
-  enable : BOOL := TRUE;
-  part_at_1 : BOOL;
-  part_at_2 : BOOL;
-  jam_1 : BOOL;
-END_VAR
-VAR_OUTPUT
-  station1_busy : BOOL;
-  station2_busy : BOOL;
-  alarm : BOOL;
-END_VAR
-VAR
-  s1 : station;
-  s2 : station;
-END_VAR
-s1(enable := enable, part_present := part_at_1, jam := jam_1);
-s2(enable := enable, part_present := part_at_2, jam := FALSE);
-station1_busy := s1.busy;
-station2_busy := s2.busy;
-alarm := s1.alarm OR s2.alarm;
+(* Counts rising edges of pulse; done at 10; reset starts over. *)
+c(CU := pulse, R := reset, PV := 10);
+count := c.CV;
+done := c.Q;
 END_PROGRAM
 ",
     },

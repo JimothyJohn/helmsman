@@ -51,23 +51,23 @@ const SCANS: usize = 10_000;
 /// The host bench's workload, about 4 000 statements a scan.
 const BENCH: &str = include_str!("../../../helmsman-iec/examples/trace_bench.st");
 
-/// A realistic cell: the batch-mixer starter's controls with the blocks it
+/// A realistic cell: the old batch-mixer starter's controls (kept in bench/) with the blocks it
 /// uses, as the project builds them (the plant model left out: on a real
 /// machine the sensors replace it).
 const CELL: &str = concat!(
-    include_str!("../../../helmsman-project/starters/batch-mixer/main.st"),
+    include_str!("../../bench/batch_mixer.st"),
     "\n",
-    include_str!("../../../helmsman-project/starters/blocks/analog_scale.st"),
+    include_str!("../../bench/analog_scale.st"),
     "\n",
-    include_str!("../../../helmsman-project/starters/blocks/latched_alarm.st"),
+    include_str!("../../bench/latched_alarm.st"),
     "\n",
-    include_str!("../../../helmsman-project/starters/blocks/motor_starter.st"),
+    include_str!("../../bench/motor_starter.st"),
     "\n",
-    include_str!("../../../helmsman-project/starters/blocks/solenoid_valve.st"),
+    include_str!("../../bench/solenoid_valve.st"),
     "\n",
-    include_str!("../../../helmsman-project/starters/blocks/stack_light.st"),
+    include_str!("../../bench/stack_light.st"),
     "\n",
-    include_str!("../../../helmsman-project/starters/blocks/step_sequencer.st"),
+    include_str!("../../bench/step_sequencer.st"),
 );
 
 /// Internal heap: part of the main DRAM segment, then the otherwise unused
