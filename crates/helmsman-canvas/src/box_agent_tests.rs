@@ -197,7 +197,7 @@ fn turn(a: &mut BoxAgent, b: &Bench, message: &str, piece: usize, token: Option<
     a.draft = message.into();
     let req = a.send().expect("the draft is sendable");
     assert_eq!(req.url, "/api/chat");
-    let (status, body) = post(b.addr, req.url, &req.body, token);
+    let (status, body) = post(b.addr, &req.url, &req.body, token);
     let seq = req.seq;
     if status != 200 {
         a.apply(Incoming::Status { seq, status, body });

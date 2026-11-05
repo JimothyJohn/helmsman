@@ -349,10 +349,14 @@ impl FilesUi {
                 .filter(|(f, _)| helmsman_project::iteration_number(f).is_some())
                 .collect();
             earlier.sort_by_key(|(f, _)| std::cmp::Reverse(helmsman_project::iteration_number(f)));
+            // Requirement tests live behind their rows in the Requirements
+            // tab (Nick, 2026-11-05), not here.
             let mut rows: Vec<&(String, bool)> = l
                 .files
                 .iter()
-                .filter(|(f, _)| helmsman_project::iteration_number(f).is_none())
+                .filter(|(f, _)| {
+                    helmsman_project::iteration_number(f).is_none() && !helmsman_iec::spec::is_test(f)
+                })
                 .collect();
             if !earlier.is_empty() {
                 let arrow = if self.earlier_open { "▾" } else { "▸" };

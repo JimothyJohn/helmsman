@@ -630,7 +630,7 @@ mod in_the_page {
             r.page
         );
         assert!(
-            v.tests.ran && v.tests.rows.iter().all(|t| t.passed),
+            v.tests.ran && v.tests.rows.iter().all(crate::requirements::Row::passed),
             "{:?}",
             v.tests
         );

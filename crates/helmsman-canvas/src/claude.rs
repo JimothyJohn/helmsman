@@ -282,28 +282,31 @@ fn neutralize(text: &str, tag: &str) -> String {
     }
 }
 
-/// The Messages API request for `ctx`, after the kept pages
-/// ([`context_pages`]), streamed, with the fixed system prompt cached.
+/// `data` ready to go inside a `<box-data>` envelope: a closing tag in it
+/// cannot end the envelope early.
 #[must_use]
-pub fn request(route: &Route, model: Model, history: &[Exchange], ctx: &Context<'_>) -> Request {
-    let mut messages = Vec::new();
-    for e in context_pages(history) {
-        messages.push(json!({"role": "user", "content": e.asked}));
-        messages.push(json!({"role": "assistant", "content": e.answer}));
-    }
-    messages.push(json!({"role": "user", "content": user_message(ctx)}));
-    let mut body = json!({
+pub fn neutralize_data(data: &str) -> String {
+    neutralize(data, "box-data")
+}
+
+/// A one-message request with its own system prompt (the Requirements
+/// tab's test writer), on the same route and with the same headers as the
+/// Agent's.
+#[must_use]
+pub fn one_shot(route: &Route, model: Model, system: &str, user: &str) -> Request {
+    let body = json!({
         "model": model.id(),
         "max_tokens": MAX_TOKENS,
         "stream": true,
         "output_config": {"effort": "medium"},
-        "system": [{
-            "type": "text",
-            "text": SYSTEM,
-            "cache_control": {"type": "ephemeral"},
-        }],
-        "messages": messages,
+        "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        "messages": [{"role": "user", "content": user}],
     });
+    finish(route, model, body)
+}
+
+/// The headers and the URL for `route`, around `body`.
+fn finish(route: &Route, model: Model, mut body: Json) -> Request {
     let mut headers = vec![
         ("content-type", "application/json".to_string()),
         ("anthropic-version", API_VERSION.to_string()),
@@ -328,6 +331,31 @@ pub fn request(route: &Route, model: Model, history: &[Exchange], ctx: &Context<
         headers,
         body: body.to_string(),
     }
+}
+
+/// The Messages API request for `ctx`, after the kept pages
+/// ([`context_pages`]), streamed, with the fixed system prompt cached.
+#[must_use]
+pub fn request(route: &Route, model: Model, history: &[Exchange], ctx: &Context<'_>) -> Request {
+    let mut messages = Vec::new();
+    for e in context_pages(history) {
+        messages.push(json!({"role": "user", "content": e.asked}));
+        messages.push(json!({"role": "assistant", "content": e.answer}));
+    }
+    messages.push(json!({"role": "user", "content": user_message(ctx)}));
+    let body = json!({
+        "model": model.id(),
+        "max_tokens": MAX_TOKENS,
+        "stream": true,
+        "output_config": {"effort": "medium"},
+        "system": [{
+            "type": "text",
+            "text": SYSTEM,
+            "cache_control": {"type": "ephemeral"},
+        }],
+        "messages": messages,
+    });
+    finish(route, model, body)
 }
 
 /// One server-sent event.

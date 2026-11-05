@@ -218,7 +218,7 @@ impl Turn {
 pub struct Request {
     /// Ties the answer's pieces to this turn.
     pub seq: u64,
-    pub url: &'static str,
+    pub url: String,
     pub body: String,
 }
 
@@ -324,7 +324,7 @@ impl BoxAgent {
         self.turns.push(Turn::new(message.clone()));
         Some(Request {
             seq: self.seq,
-            url: CHAT_URL,
+            url: CHAT_URL.to_string(),
             body: json!({ "message": message, "session": self.session }).to_string(),
         })
     }

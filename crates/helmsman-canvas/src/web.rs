@@ -511,7 +511,7 @@ async fn chat(
     init.set_headers(&headers);
     init.set_body(&JsValue::from_str(&req.body));
     init.set_signal(signal);
-    let request = web_sys::Request::new_with_str_and_init(req.url, &init).map_err(|e| text(&e))?;
+    let request = web_sys::Request::new_with_str_and_init(&req.url, &init).map_err(|e| text(&e))?;
     let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|e| text(&e))?

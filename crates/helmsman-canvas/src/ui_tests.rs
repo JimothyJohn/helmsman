@@ -1505,7 +1505,7 @@ mod chrome {
         h.wait(0.3);
         let sim = h.app.sim.as_ref().unwrap();
         assert!(sim.tests.ran && sim.tests.rows.len() == 1, "{:?}", sim.tests);
-        assert!(!sim.tests.rows[0].passed);
+        assert!(!sim.tests.rows[0].passed());
         assert_eq!(
             sim.tests.rows[0].requirement,
             "The lamp stays off while start is held."
@@ -1546,7 +1546,7 @@ mod chrome {
         h.press("tests run");
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
-        assert!(sim.tests.rows[0].passed, "{:?}", sim.tests);
+        assert!(sim.tests.rows[0].passed(), "{:?}", sim.tests);
         h.key(Modifiers::COMMAND, Key::D);
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
@@ -1773,6 +1773,44 @@ mod simulated {
     use crate::app::App;
     use crate::editor::Tab;
     use crate::st_view::{Pick, TAP, node_near};
+
+    /// Nick, 2026-11-05: the Requirements tab lists requirements in plain
+    /// words with the test behind each row; a row opens to its test, and
+    /// the test file stays out of the Files list.
+    #[test]
+    fn a_requirement_is_a_row_with_its_test_behind_it_not_a_file() {
+        let mut h = Harness::new(App::sim());
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.proj.create("mine", Some("latch"));
+            v.open_project("mine");
+        }
+        h.wait(0.2);
+        let ctx = h.ctx.clone();
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .add_requirement("The motor runs once start is pressed", &ctx);
+        h.press("tab tests");
+        h.wait(0.2);
+        assert!(h.has("req draft") && h.has("req add"), "the field to add one");
+        let row = "test test_the_motor_runs_once_start_is_pressed";
+        assert!(h.has(row), "its row");
+        h.press(row);
+        h.wait(0.2);
+        assert!(
+            h.has("test edit test_the_motor_runs_once_start_is_pressed"),
+            "opened: Edit"
+        );
+        h.press("pane files");
+        h.wait(0.2);
+        assert!(h.has("file latch.st"));
+        assert!(
+            !h.has("file test_the_motor_runs_once_start_is_pressed.st"),
+            "the test lives behind its row"
+        );
+    }
 
     fn stations() -> Harness {
         let mut h = Harness::new(App::sim());
