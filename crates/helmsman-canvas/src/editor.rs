@@ -15,6 +15,7 @@ use eframe::egui::{
 
 use crate::st_view::TAP;
 use crate::theme::{Theme, theme};
+use crate::tips::Tip;
 
 /// Where the app keeps [`Chrome`] in the browser's storage.
 pub const CHROME_KEY: &str = "helmsman-canvas/editor";
@@ -44,6 +45,16 @@ impl Tab {
             Self::Io => "I/O",
             Self::Requirements => "Requirements",
             Self::Claude => "Agent",
+        }
+    }
+
+    /// The tab button's tooltip.
+    #[must_use]
+    pub const fn tip(self) -> &'static str {
+        match self {
+            Self::Io => "The program's inputs and outputs with their live values.",
+            Self::Requirements => "The project's requirement tests, green or red. A red test stops Deploy.",
+            Self::Claude => "Ask the agent about the program, or have it propose a change.",
         }
     }
 
@@ -95,6 +106,16 @@ impl Pane {
             Self::Files => "Files",
             Self::Devices => "Devices",
             Self::Code => "Code",
+        }
+    }
+
+    /// The tab button's tooltip.
+    #[must_use]
+    pub const fn tip(self) -> &'static str {
+        match self {
+            Self::Files => "The projects and the open one's files (Alt+0 opens or shuts it).",
+            Self::Devices => "The I/O map: the remote modules and their points (Alt+4 opens or shuts it).",
+            Self::Code => "The Structured Text of the open file (Alt+1 opens or shuts it).",
         }
     }
 
@@ -302,16 +323,17 @@ impl Chrome {
     }
 }
 
-/// A menu item: a full-width button that closes its menu when clicked.
-/// Whether it was.
+/// A menu item: a full-width button that closes its menu when clicked,
+/// with `tip` on hover (and when disabled: say why). Whether it was.
 pub fn menu_item(
     ui: &mut egui::Ui,
     chrome: &mut Chrome,
     key: &str,
     text: impl Into<RichText>,
     on: bool,
+    tip: &str,
 ) -> bool {
-    menu_item_keyed(ui, chrome, key, text, on, "")
+    menu_item_keyed(ui, chrome, key, text, on, "", tip)
 }
 
 /// [`menu_item`] with its keyboard shortcut printed at the right.
@@ -322,18 +344,17 @@ pub fn menu_item_keyed(
     text: impl Into<RichText>,
     on: bool,
     shortcut: &str,
+    tip: &str,
 ) -> bool {
     // No `available_width()` here: a menu measures itself against the
     // style's default area (600 pt) before it knows its size, and an item
     // that wide would be remembered. The menu's justified layout fills
     // every item to the widest one instead.
-    let b = egui::Button::selectable(on, text.into()).min_size(Vec2::new(74.0, TAP * 0.7));
-    let b = if shortcut.is_empty() {
-        b
-    } else {
-        b.shortcut_text(RichText::new(shortcut).weak())
-    };
-    let r = ui.add(b);
+    let mut b = egui::Button::selectable(on, text.into()).min_size(Vec2::new(74.0, TAP * 0.7));
+    if !shortcut.is_empty() {
+        b = b.shortcut_text(RichText::new(shortcut).weak());
+    }
+    let r = ui.add(b).tip(tip);
     chrome.hit(key, r.rect);
     if r.clicked() {
         ui.close();
@@ -349,10 +370,26 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
     let (code, files, right) = (chrome.code_open(), chrome.files_open(), chrome.right);
     let ctx = ui.ctx().clone();
     let k = |a| label(&ctx, a);
-    if menu_item_keyed(ui, chrome, "view st", "Structured Text", code, &k(Action::St)) {
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view st",
+        "Structured Text",
+        code,
+        &k(Action::St),
+        "Shows or hides the code pane.",
+    ) {
         chrome.toggle_code();
     }
-    if menu_item_keyed(ui, chrome, "view files", "Files", files, &k(Action::Files)) {
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view files",
+        "Files",
+        files,
+        &k(Action::Files),
+        "Shows or hides the projects and their files.",
+    ) {
         chrome.toggle_files();
     }
     let devices = chrome.devices_open();
@@ -363,14 +400,31 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Devices",
         devices,
         &k(Action::Devices),
+        "Shows or hides the I/O map's devices.",
     ) {
         chrome.toggle_devices();
     }
-    if menu_item_keyed(ui, chrome, "view panel", "Side panel", right, &k(Action::Panel)) {
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view panel",
+        "Side panel",
+        right,
+        &k(Action::Panel),
+        "Shows or hides the panel on the right: I/O, Requirements, Agent.",
+    ) {
         chrome.right = !right;
     }
     let trend = chrome.trend;
-    if menu_item_keyed(ui, chrome, "view trend", "Trend", trend, &k(Action::Trend)) {
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view trend",
+        "Trend",
+        trend,
+        &k(Action::Trend),
+        "Shows or hides the trend and messages along the bottom.",
+    ) {
         chrome.trend = !trend;
     }
     for &t in tabs {
@@ -381,6 +435,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
             &format!("view tab {}", t.key()),
             format!("    {}", t.label()),
             on,
+            t.tip(),
         ) {
             chrome.tab = t;
             chrome.right = true;
@@ -546,14 +601,14 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                     for p in Pane::ALL {
                         let b = egui::Button::selectable(pane == p, RichText::new(p.label()).strong())
                             .min_size(Vec2::new(0.0, TAP * 0.75));
-                        let r = ui.add(b);
+                        let r = ui.add(b).tip(p.tip());
                         hits.push((format!("pane {}", p.key()), r.rect));
                         if r.clicked() {
                             pane = p;
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        t = Some(header_toggle(ui, true, "hide the pane"));
+                        t = Some(header_toggle(ui, true, "Hides the pane."));
                     });
                 });
                 ui.separator();
@@ -572,7 +627,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 }
                 t
             } else {
-                Some(strip_toggle(ui, false, "show the pane"))
+                Some(strip_toggle(ui, false, "Shows the pane."))
             };
             if let Some(t) = toggle {
                 hits.push(("left".to_string(), t.rect));
@@ -614,11 +669,11 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             let toggle = if open {
                 let mut t = None;
                 ui.horizontal(|ui| {
-                    t = Some(header_toggle(ui, false, "hide the panel"));
+                    t = Some(header_toggle(ui, false, "Hides the panel (Alt+3)."));
                     for &k in tabs {
                         let b = egui::Button::selectable(tab == k, RichText::new(k.label()).strong())
                             .min_size(Vec2::new(0.0, TAP * 0.75));
-                        let r = ui.add(b);
+                        let r = ui.add(b).tip(k.tip());
                         hits.push((format!("tab {}", k.key()), r.rect));
                         if r.clicked() {
                             tab = k;
@@ -629,7 +684,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 body.tab(ui, tab, chrome);
                 t
             } else {
-                Some(strip_toggle(ui, true, "show the panel"))
+                Some(strip_toggle(ui, true, "Shows the panel (Alt+3)."))
             };
             if let Some(t) = toggle {
                 hits.push(("right".to_string(), t.rect));
@@ -655,14 +710,26 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             // Tabs: Trend | Messages (errors counted on the tab).
             let label = body.messages().label();
             ui.horizontal(|ui| {
-                for (b, text, key) in [
-                    (Bottom::Trend, "Trend".to_string(), "bottom trend"),
-                    (Bottom::Messages, label, "bottom messages"),
+                for (b, text, key, tip) in [
+                    (
+                        Bottom::Trend,
+                        "Trend".to_string(),
+                        "bottom trend",
+                        "Pinned signals over time (Alt+2).",
+                    ),
+                    (
+                        Bottom::Messages,
+                        label,
+                        "bottom messages",
+                        "What happened: connections, deploys, faults and errors, newest last.",
+                    ),
                 ] {
-                    let r = ui.add(
-                        egui::Button::selectable(chrome.bottom == b, RichText::new(text).strong())
-                            .min_size(Vec2::new(64.0, TAP * 0.6)),
-                    );
+                    let r = ui
+                        .add(
+                            egui::Button::selectable(chrome.bottom == b, RichText::new(text).strong())
+                                .min_size(Vec2::new(64.0, TAP * 0.6)),
+                        )
+                        .tip(tip);
                     chrome.hit(key, r.rect);
                     if r.clicked() {
                         chrome.bottom = b;
@@ -696,7 +763,7 @@ pub fn st_editor(
     limit: usize,
     chrome: &mut Chrome,
 ) -> egui::Response {
-    let font = FontId::monospace(13.0);
+    let font = FontId::monospace(crate::theme::MONO);
     let row = ui.fonts_mut(|f| f.row_height(&font));
     let mut scroll = egui::ScrollArea::vertical().id_salt(id.with("scroll"));
     if let Some(line) = chrome.jump.take() {
@@ -755,8 +822,10 @@ pub fn st_editor(
                     let job = highlight(buf.as_str(), diags, at, &font, wrap, &t);
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
+                // A tooltip would sit over the code under the pointer while
+                // the engineer types; the pane's tab button has one.
                 ui.add(
-                    egui::TextEdit::multiline(text)
+                    egui::TextEdit::multiline(text) // tip: exempt
                         .id(id)
                         .code_editor()
                         .desired_width(wrap)

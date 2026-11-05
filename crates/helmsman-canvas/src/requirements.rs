@@ -14,6 +14,7 @@ use serde_json::Value as Json;
 use crate::editor::Chrome;
 use crate::st_view::TAP;
 use crate::theme::theme;
+use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
@@ -121,8 +122,9 @@ impl Results {
 }
 
 /// The tab: a line with the count and a Run button, then a row per test.
-/// Returns whether Run was pressed. `source` says where the results came
-/// from (the page, or the box) and `busy` that a run is under way.
+/// Returns whether Run was pressed. `source`, a sentence for the count's
+/// tooltip, says where the results came from (the page, or the box) and
+/// `busy` that a run is under way.
 pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, results: &Results, source: &str, busy: bool) -> bool {
     let t = theme(ui);
     let mut run = false;
@@ -146,30 +148,27 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, results: &Results, source: &st
         } else {
             t.fg
         };
-        ui.label(RichText::new(summary).strong().color(color));
-        let b = ui.add_enabled(!busy, egui::Button::new(if busy { "Running…" } else { "Run" }));
+        let what = "A requirement test is a test_NAME.st PROGRAM: its first comment states the \
+                    requirement, it drives the program's inputs, steps the clock, checks the \
+                    outputs with ASSERT and sets done. A red test stops Deploy and Use this code.";
+        let head = ui.label(RichText::new(summary).strong().color(color));
+        if source.is_empty() {
+            head.tip(what);
+        } else {
+            head.tip(format!("{source} {what}"));
+        }
+        let b = ui
+            .add_enabled(!busy, egui::Button::new(if busy { "Running…" } else { "Run" }))
+            .tip(if busy {
+                "The tests are running.".to_string()
+            } else {
+                "Runs every requirement test again.".to_string()
+            });
         chrome.hit("tests run", b.rect);
         if b.clicked() {
             run = true;
         }
     });
-    if !source.is_empty() {
-        ui.add(egui::Label::new(RichText::new(source).small().color(t.muted)).truncate());
-    }
-    if results.ran && results.rows.is_empty() {
-        ui.add(
-            egui::Label::new(
-                RichText::new(
-                    "A requirement test is a test_NAME.st PROGRAM: its first comment says the \
-                     requirement, it drives the program's inputs, steps the clock and checks the \
-                     outputs with ASSERT, and sets done. A red one stops Deploy and Use this code.",
-                )
-                .small()
-                .color(t.muted),
-            )
-            .wrap(),
-        );
-    }
     for r in &results.rows {
         let dot = if r.passed {
             RichText::new("●").color(t.accent)

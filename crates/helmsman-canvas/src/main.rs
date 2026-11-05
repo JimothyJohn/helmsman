@@ -71,6 +71,9 @@ mod st_view;
 #[cfg(test)]
 mod starter_tests;
 mod theme;
+mod tips;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tips_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod ui_tests;
 #[cfg(target_arch = "wasm32")]

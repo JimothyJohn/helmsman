@@ -148,7 +148,7 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 c + Vec2::new(0.0, -w * 0.2),
                 egui::Align2::CENTER_CENTER,
                 "?",
-                egui::FontId::proportional(b.height() * 0.78),
+                egui::FontId::proportional((b.height() * 0.78).max(crate::theme::MIN_TEXT)),
                 color,
             );
         }

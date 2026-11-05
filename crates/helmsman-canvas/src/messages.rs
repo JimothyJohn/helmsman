@@ -9,6 +9,7 @@ use eframe::egui::{self, RichText};
 
 use crate::st_view::brand::{GREEN, RED, WARN};
 use crate::theme::theme;
+use crate::tips::Tip;
 
 /// How many messages the log keeps.
 pub const KEEP: usize = 200;
@@ -141,7 +142,9 @@ impl Log {
                 .enumerate()
             {
                 let text = RichText::new(format!("{name} {}", counts[k])).color(color);
-                let r = ui.add(egui::Button::selectable(self.show[k], text));
+                let r = ui
+                    .add(egui::Button::selectable(self.show[k], text))
+                    .tip(format!("Shows or hides the {name}."));
                 chrome.hit(format!("messages {name}"), r.rect);
                 if r.clicked() {
                     self.show[k] = !self.show[k];

@@ -14,6 +14,8 @@ struct Harness {
     time: f64,
     /// The window, in points.
     size: Vec2,
+    /// What the last frame drew.
+    shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 impl Harness {
@@ -23,6 +25,7 @@ impl Harness {
             app,
             time: 0.0,
             size: Vec2::new(1400.0, 860.0),
+            shapes: Vec::new(),
         };
         // Two frames: panels settle their sizes, the view fits the graph.
         h.frame(vec![]);
@@ -42,6 +45,46 @@ impl Harness {
         let mut out = ctx.run_ui(input, |ui| app.show(ui));
         // No renderer here to upload textures to.
         out.textures_delta.clear();
+        self.shapes = out.shapes;
+    }
+
+    /// Every piece of text the last frame drew outside the diagram (which
+    /// zooms) below [`crate::theme::MIN_TEXT`]: its size and the text.
+    fn small_text(&self) -> Vec<(f32, String)> {
+        fn walk(shape: &egui::Shape, clip: Rect, diagram: Rect, out: &mut Vec<(f32, String)>) {
+            match shape {
+                egui::Shape::Vec(v) => {
+                    for s in v {
+                        walk(s, clip, diagram, out);
+                    }
+                }
+                egui::Shape::Text(t) => {
+                    if diagram.is_positive() && diagram.contains_rect(clip) {
+                        return;
+                    }
+                    let job = &t.galley.job;
+                    for sec in &job.sections {
+                        let text = job
+                            .text
+                            .get(sec.byte_range.start.0..sec.byte_range.end.0)
+                            .unwrap_or("");
+                        if !text.trim().is_empty() && sec.format.font_id.size < crate::theme::MIN_TEXT - 0.01
+                        {
+                            out.push((sec.format.font_id.size, text.trim().chars().take(60).collect()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let diagram = self.app.chrome.diagram;
+        let mut out = Vec::new();
+        for c in &self.shapes {
+            walk(&c.shape, c.clip_rect, diagram, &mut out);
+        }
+        out.sort_by(|a, b| a.1.cmp(&b.1));
+        out.dedup();
+        out
     }
 
     /// Frames for `secs` of page time (animations end).
@@ -846,7 +889,9 @@ mod chrome {
             h.frame(vec![]);
             let rects: Vec<Rect> = items.iter().map(|k| h.rect(k)).collect();
             let widest = rects.iter().map(Rect::width).fold(0.0, f32::max);
-            assert!(widest <= 220.0, "{open}: an item {widest} pt wide");
+            // 220 pt at the old 12.5 pt body text, in proportion to today's.
+            let cap = 220.0 * crate::theme::BODY / 12.5;
+            assert!(widest <= cap, "{open}: an item {widest} pt wide");
             for (k, r) in items.iter().zip(&rects) {
                 assert!(
                     (r.width() - widest).abs() < 1.0,
@@ -1937,6 +1982,59 @@ mod simulated {
     /// (four such rows were found on 2026-11-01). Every tab of every
     /// panel, visited; the panels end where they began, at most a scroll
     /// bar's width wider.
+    /// Nick, 2026-11-05: nothing around the diagram is drawn below
+    /// `MIN_TEXT`, on any pane, tab or bottom panel of the simulation.
+    #[test]
+    fn no_text_around_the_diagram_is_below_the_minimum() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let mut seen = Vec::new();
+        for key in [
+            "pane files",
+            "pane devices",
+            "pane code",
+            "tab io",
+            "tab tests",
+            "tab claude",
+            "bottom messages",
+            "bottom trend",
+        ] {
+            h.press(key);
+            h.wait(0.3);
+            for (size, text) in h.small_text() {
+                seen.push(format!("{key}: {size} pt {text:?}"));
+            }
+        }
+        for menu in ["bar file", "bar edit", "bar view", "bar help"] {
+            h.press(menu);
+            h.frame(vec![]);
+            h.frame(vec![]);
+            for (size, text) in h.small_text() {
+                seen.push(format!("{menu}: {size} pt {text:?}"));
+            }
+            h.frame(vec![eframe::egui::Event::Key {
+                key: eframe::egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: eframe::egui::Modifiers::NONE,
+            }]);
+            h.wait(0.2);
+        }
+        h.app.screen = crate::app::Screen::Monitor;
+        h.wait(0.3);
+        for (size, text) in h.small_text() {
+            seen.push(format!("monitor: {size} pt {text:?}"));
+        }
+        seen.dedup();
+        assert_eq!(
+            seen,
+            [] as [String; 0],
+            "text below the minimum:\n{}",
+            seen.join("\n")
+        );
+    }
+
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());
@@ -1982,6 +2080,50 @@ mod boxed {
 
     fn boxed(h: &Harness) -> &BoxView {
         h.app.boxv.as_ref().unwrap()
+    }
+
+    /// The minimum holds on a box too: its tabs, signed in, and the
+    /// Proposals screen.
+    #[test]
+    fn no_text_on_a_box_is_below_the_minimum() {
+        use crate::review::Session;
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.wait(0.2);
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("nick".into()),
+            role: "engineer".into(),
+        });
+        h.wait(0.2);
+        let mut seen = Vec::new();
+        for key in [
+            "pane files",
+            "pane devices",
+            "pane code",
+            "tab io",
+            "tab tests",
+            "tab claude",
+        ] {
+            h.press(key);
+            h.wait(0.3);
+            for (size, text) in h.small_text() {
+                seen.push(format!("{key}: {size} pt {text:?}"));
+            }
+        }
+        h.app.screen = crate::app::Screen::Proposals;
+        h.wait(0.3);
+        for (size, text) in h.small_text() {
+            seen.push(format!("proposals: {size} pt {text:?}"));
+        }
+        seen.dedup();
+        assert_eq!(
+            seen,
+            [] as [String; 0],
+            "text below the minimum:\n{}",
+            seen.join("\n")
+        );
     }
 
     /// The Agent tab on a box: signed out, Send stays off; signed in, the

@@ -30,6 +30,7 @@ use crate::sim_projects::Storage;
 use crate::st_view::brand::{BLACK, WARN};
 use crate::st_view::{Pick, Viewer, show};
 use crate::theme::{Theme, theme};
+use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Largest file the editor takes (the box's `project::MAX_FILE`).
@@ -343,7 +344,7 @@ impl BoxView {
             self.chat.status(ui.ctx());
         }
         let who = match &self.session {
-            None => Some("Sign in (top right) to talk to the agent.".to_string()),
+            None => Some("Sign in (top right) to talk to the agent".to_string()),
             Some(_) => None,
         };
         match crate::box_agent::ui(ui, chrome, &mut self.agent, who.as_deref()) {
@@ -616,17 +617,23 @@ impl BoxView {
             .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    let r = ui.label(RichText::new("FORCED").strong().color(BLACK));
+                    let r = ui.label(RichText::new("FORCED").strong().color(BLACK)).tip(
+                        "These inputs hold the value an engineer forced, whatever the module reads. \
+                         A force ends on release, logout or deploy.",
+                    );
                     chrome.hit("forces", r.rect);
                     for f in &self.state.forces {
                         ui.label(
                             RichText::new(format!("{} = {} ({})", f.point(), show(f.value), f.by))
                                 .monospace()
                                 .color(BLACK),
-                        );
+                        )
+                        .tip("The input, the value it is forced to, and who forced it.");
                         let b = egui::Button::new("release");
                         let r = match &can {
-                            Ok(()) => ui.add(b),
+                            Ok(()) => ui
+                                .add(b)
+                                .tip("Releases this force: the input reads its module again."),
                             Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
                         };
                         chrome.hit(format!("release {}", f.id), r.rect);
@@ -636,7 +643,7 @@ impl BoxView {
                     }
                     let b = egui::Button::new(RichText::new("Release all").strong());
                     let r = match &can {
-                        Ok(()) => ui.add(b),
+                        Ok(()) => ui.add(b).tip("Releases every force on the box."),
                         Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
                     };
                     chrome.hit("release all", r.rect);
@@ -689,7 +696,7 @@ impl BoxView {
                     tag.center(),
                     egui::Align2::CENTER_CENTER,
                     "FORCED",
-                    egui::FontId::monospace(11.0),
+                    egui::FontId::monospace(crate::theme::MIN_TEXT),
                     BLACK,
                 );
                 chrome.hit(format!("forced {}", sig.name), tag);
@@ -950,11 +957,12 @@ impl Body for BoxView {
         let t = theme(ui);
         let now = ui.ctx().input(|i| i.time);
         let (text, color) = self.status(now, &t);
-        ui.label(RichText::new(text).monospace().color(color));
+        ui.label(RichText::new(text).monospace().color(color))
+            .tip("The page's live connection to the box.");
         if matches!(self.state.link(), Link::Unreachable { .. }) {
             let r = ui
                 .button("Simulate in this browser")
-                .on_hover_text("run the program in this page instead, no box needed");
+                .tip("Runs the program in this page instead. No box needed.");
             chrome.hit("simulate", r.rect);
             if r.clicked() {
                 self.wants_sim = true;
@@ -967,7 +975,7 @@ impl Body for BoxView {
                     .monospace()
                     .color(t.muted),
             )
-            .on_hover_text(format!("scan {}", s.scan));
+            .tip(format!("The box's clock since start, at scan {}.", s.scan));
         }
     }
 
@@ -1010,14 +1018,18 @@ impl Body for BoxView {
             let r = ui.label(RichText::new(text).color(if error { RED } else { t.muted }));
             chrome.hit("notice", r.rect);
             if self.projects.pending.is_some() && error {
-                let r = ui.button("Replace");
+                let r = ui
+                    .button("Replace")
+                    .tip("Saves your version over the one on the box.");
                 chrome.hit("replace", r.rect);
                 if r.clicked() {
                     self.projects.replace();
                 }
             }
             if let Some(f) = self.projects.conflict.clone() {
-                let r = ui.button(format!("Reload {f}"));
+                let r = ui
+                    .button(format!("Reload {f}"))
+                    .tip("Drops your edits to this file and loads the box's version.");
                 chrome.hit("reload", r.rect);
                 if r.clicked() {
                     self.projects.reload(&f);
@@ -1070,7 +1082,8 @@ impl Body for BoxView {
                 self.project_act(a);
             }
             ui.separator();
-            ui.label(RichText::new("Running").strong().color(t.muted));
+            ui.label(RichText::new("Running").strong().color(t.muted))
+                .tip("The modules the box runs now, each a program. Click one to see it live.");
         }
         let mut chosen = None;
         let modules = self.state.modules.clone();
@@ -1086,8 +1099,8 @@ impl Body for BoxView {
             let r = ui.selectable_label(selected, text);
             chrome.hit(format!("module {}", m.name), r.rect);
             let r = match &m.fault {
-                Some(f) => r.on_hover_text(f),
-                None => r,
+                Some(f) => r.tip(format!("Faulted: {f}")),
+                None => r.tip("A module: its state and scans so far. Click to open its diagram."),
             };
             if r.clicked() {
                 chosen = Some(m.name.clone());
@@ -1185,11 +1198,14 @@ impl Body for BoxView {
                 return;
             };
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Structured Text").strong());
+                ui.label(RichText::new("Structured Text").strong())
+                    .tip("The open file of the project. Save keeps it on the box; Deploy runs it.");
                 match &write {
                     Ok(()) => {}
                     Err(why) => {
-                        let r = ui.label(RichText::new(format!("read-only: {why}")).color(t.muted));
+                        let r = ui
+                            .label(RichText::new("read-only").color(t.muted))
+                            .tip(why.clone());
                         chrome.hit("read-only", r.rect);
                     }
                 }
@@ -1242,8 +1258,10 @@ impl Body for BoxView {
             return;
         }
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Structured Text").strong());
-            ui.label(RichText::new("read-only: changes reach the box as proposals").color(t.muted));
+            ui.label(RichText::new("Structured Text").strong())
+                .tip("The source of the module that runs.");
+            ui.label(RichText::new("read-only").color(t.muted))
+                .tip("Changes reach the box as proposals.");
         });
         match &self.view {
             Some(v) => {
@@ -1277,8 +1295,8 @@ impl Body for BoxView {
             // The box ran them (POST /api/projects/{p}/tests) when the
             // project opened and after each save; Run asks again.
             let source = match &self.projects.open {
-                Some(o) if self.has_projects() => format!("run on the box for {}", o.name),
-                _ => "open a project to run its requirement tests".to_string(),
+                Some(o) if self.has_projects() => format!("The box runs them for {}.", o.name),
+                _ => "Open a project to run its requirement tests.".to_string(),
             };
             let busy = self.projects.testing;
             egui::ScrollArea::vertical().id_salt("box-tests").show(ui, |ui| {

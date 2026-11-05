@@ -20,6 +20,7 @@ use crate::review::{
 };
 use crate::st_view::brand::{BLACK, YELLOW};
 use crate::theme::{Theme, theme};
+use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Removed lines and ghost blocks.
@@ -196,11 +197,8 @@ impl ReviewView {
 
     fn left(&mut self, ui: &mut egui::Ui) {
         let t = theme(ui);
-        ui.heading(RichText::new("Proposals").color(t.accent));
-        ui.label(
-            RichText::new("drafts the agent made; approving one goes through the box's policy")
-                .color(t.muted),
-        );
+        ui.heading(RichText::new("Proposals").color(t.accent))
+            .tip("Drafts the agent made. Approving one goes through the box's policy.");
         ui.separator();
         self.login_ui(ui);
         ui.separator();
@@ -211,13 +209,14 @@ impl ReviewView {
     /// and password with accounts, else a role and its PIN).
     pub fn login_ui(&mut self, ui: &mut egui::Ui) {
         let t = theme(ui);
-        ui.label(RichText::new("Signed in").strong());
+        ui.label(RichText::new("Signed in").strong()).tip(SESSION);
         if let Some(who) = self.state.signed_in() {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("● {who}")).color(t.accent));
+                ui.label(RichText::new(format!("● {who}")).color(t.accent))
+                    .tip("Approvals and edits are made as this user.");
                 let out = ui
                     .button("Sign out")
-                    .on_hover_text("end the session now, here and on the box");
+                    .tip("Ends the session now, here and on the box (Ctrl+F8).");
                 self.rects.push(("logout".into(), out.rect));
                 if out.clicked() {
                     self.state.logout();
@@ -255,30 +254,31 @@ impl ReviewView {
         if let Some(p) = &self.state.login_problem {
             ui.colored_label(RED, p);
         }
-        ui.label(
-            RichText::new("The box keeps the session (1 h, or 15 min unused) in a cookie this page cannot read; signing out ends it on the box. Approvals are made as who is signed in.")
-                .small()
-                .color(t.muted),
-        );
     }
 
     /// A user name and masked password; whether "Sign in" was asked for.
     fn account_fields(&mut self, ui: &mut egui::Ui) -> bool {
-        let user = ui.add(
-            egui::TextEdit::singleline(&mut self.user_input)
-                .hint_text("user")
-                .desired_width(f32::INFINITY),
-        );
+        let user = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.user_input)
+                    .hint_text("user")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("Your user name on this box.");
         self.rects.push(("user".into(), user.rect));
-        let pass = ui.add(
-            egui::TextEdit::singleline(&mut self.password_input)
-                .password(true)
-                .hint_text("password")
-                .desired_width(f32::INFINITY),
-        );
+        let pass = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.password_input)
+                    .password(true)
+                    .hint_text("password")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("Your password. Enter signs in.");
         self.rects.push(("password".into(), pass.rect));
         let enter = pass.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let go = ui.add_enabled(!self.state.logging_in, egui::Button::new("Sign in"));
+        let go = ui
+            .add_enabled(!self.state.logging_in, egui::Button::new("Sign in"))
+            .tip(sign_in_tip(self.state.logging_in));
         self.rects.push(("login".into(), go.rect));
         go.clicked() || enter
     }
@@ -287,19 +287,25 @@ impl ReviewView {
     fn pin_fields(&mut self, ui: &mut egui::Ui) -> bool {
         ui.horizontal_wrapped(|ui| {
             for r in ROLES {
-                let b = ui.selectable_value(&mut self.role_input, r.to_string(), r);
+                let b = ui
+                    .selectable_value(&mut self.role_input, r.to_string(), r)
+                    .tip(format!("Sign in as {r}, with that role's PIN."));
                 self.rects.push((format!("role {r}"), b.rect));
             }
         });
-        let pin = ui.add(
-            egui::TextEdit::singleline(&mut self.pin_input)
-                .password(true)
-                .hint_text("PIN")
-                .desired_width(f32::INFINITY),
-        );
+        let pin = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.pin_input)
+                    .password(true)
+                    .hint_text("PIN")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("The role's PIN. Enter signs in.");
         self.rects.push(("pin".into(), pin.rect));
         let enter = pin.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let go = ui.add_enabled(!self.state.logging_in, egui::Button::new("Sign in"));
+        let go = ui
+            .add_enabled(!self.state.logging_in, egui::Button::new("Sign in"))
+            .tip(sign_in_tip(self.state.logging_in));
         self.rects.push(("login".into(), go.rect));
         go.clicked() || enter
     }
@@ -307,8 +313,13 @@ impl ReviewView {
     fn drafts_ui(&mut self, ui: &mut egui::Ui) {
         let t = theme(ui);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Drafts").strong());
-            if ui.small_button("Refresh").clicked() {
+            ui.label(RichText::new("Drafts").strong())
+                .tip("The box's proposals, newest last. Click one to review it.");
+            if ui
+                .small_button("Refresh")
+                .tip("Asks the box for its proposals again.")
+                .clicked()
+            {
                 self.state.refresh();
             }
         });
@@ -326,7 +337,9 @@ impl ReviewView {
                     badge(ui, tier, tier_colors(&t, tier));
                 }
                 let text = RichText::new(format!("#{} {} · {}", r.id, r.title, r.status)).monospace();
-                let row = ui.selectable_label(open == Some(r.id), text);
+                let row = ui
+                    .selectable_label(open == Some(r.id), text)
+                    .tip("Click to review this proposal.");
                 self.rects.push((format!("row {}", r.id), row.rect));
                 if row.clicked() {
                     chosen = Some(r.id);
@@ -400,8 +413,7 @@ impl ReviewView {
         section(ui, "Approve");
         approve_ui(ui, o, now, &mut out);
         if let Some(u) = o.undo.as_mut() {
-            section(ui, "Undo");
-            ui.label("Roll back to what ran before, through the same approval check.");
+            section(ui, "Undo").tip("Roll back to what ran before, through the same approval check.");
             replay_ui(ui, u, &mut out);
             step_ui(ui, u, now, "Undo", &mut out);
         }
@@ -444,10 +456,24 @@ struct Out {
     signed_in: Option<String>,
 }
 
-fn section(ui: &mut egui::Ui, title: &str) {
+/// What the session note under the sign-in said, now the heading's tooltip.
+const SESSION: &str = "The box keeps the session (1 h, or 15 min unused) in a cookie this page \
+                       cannot read; signing out ends it on the box. Approvals are made as who \
+                       is signed in.";
+
+/// The Sign in button's tooltip.
+const fn sign_in_tip(busy: bool) -> &'static str {
+    if busy {
+        "Signing in: waiting for the box."
+    } else {
+        "Signs in to this box (Alt+F8)."
+    }
+}
+
+fn section(ui: &mut egui::Ui, title: &str) -> egui::Response {
     let t = theme(ui);
     ui.add_space(10.0);
-    ui.label(RichText::new(title.to_uppercase()).strong().color(t.accent));
+    ui.label(RichText::new(title.to_uppercase()).strong().color(t.accent))
 }
 
 fn short_id(s: &str) -> String {
@@ -609,8 +635,12 @@ fn diagram(ui: &mut egui::Ui, d: &Drawn, pou: &mut usize, cam: &mut Cam) {
     let t = theme(ui);
     let (added, removed, changed) = d.diff.counts();
     ui.label(format!(
-        "{added} block(s) added, {changed} changed, {removed} removed (shown as ghosts below the diagram)"
-    ));
+        "{added} block(s) added, {changed} changed, {removed} removed"
+    ))
+    .tip(
+        "Yellow: added. Yellow outline: changed. Dashed grey, below the diagram: removed. \
+         Drag to pan, pinch to zoom, double-click to fit.",
+    );
     if d.diff.is_empty() {
         ui.label(RichText::new("The diagram is unchanged.").color(t.muted));
     }
@@ -619,7 +649,17 @@ fn diagram(ui: &mut egui::Ui, d: &Drawn, pou: &mut usize, cam: &mut Cam) {
     ui.horizontal_wrapped(|ui| {
         for (k, n) in names.iter().enumerate() {
             let mark = if changed_pous.contains(n) { " •" } else { "" };
-            if ui.selectable_label(*pou == k, format!("{n}{mark}")).clicked() && *pou != k {
+            let tip = if mark.is_empty() {
+                "Shows this POU's diagram."
+            } else {
+                "Shows this POU's diagram. • : the change touches it."
+            };
+            if ui
+                .selectable_label(*pou == k, format!("{n}{mark}"))
+                .tip(tip)
+                .clicked()
+                && *pou != k
+            {
                 *pou = k;
                 cam.fitted = false;
             }
@@ -673,11 +713,6 @@ fn diagram(ui: &mut egui::Ui, d: &Drawn, pou: &mut usize, cam: &mut Cam) {
     if let Some(o) = old {
         draw_ghosts(&painter, *cam, o, &ghosts, &ghost_wires, p.diagram.size.1);
     }
-    ui.label(
-        RichText::new("yellow: added · yellow outline: changed · dashed grey: removed · drag to pan, pinch to zoom, double-click to fit")
-            .small()
-            .color(t.muted),
-    );
 }
 
 /// What to highlight in the proposed diagram.
@@ -884,7 +919,11 @@ fn replay_ui(ui: &mut egui::Ui, step: &Step, out: &mut Out) {
     ui.horizontal_wrapped(|ui| {
         let b = ui
             .add_enabled(!running, egui::Button::new(label))
-            .on_hover_text("the box replays what runs and this change over its recorded window");
+            .tip(if running {
+                "The replay is running."
+            } else {
+                "The box replays what runs and this change over its recorded inputs."
+            });
         out.rects.push((format!("replay {:?}", step.target), b.rect));
         if b.clicked() {
             out.act.push(Act::Replay(step.target.clone()));
@@ -945,12 +984,24 @@ fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut O
     ui.horizontal_wrapped(|ui| {
         match &out.signed_in {
             Some(who) => ui.label(RichText::new(format!("as {who}")).color(t.muted)),
-            None => ui.label(RichText::new("Sign in (left) to approve.").color(t.muted)),
+            None => ui.label(RichText::new("not signed in").color(t.muted)),
+        }
+        .tip("Approvals are made as who is signed in.");
+        let why = if out.signed_in.is_none() {
+            format!("Sign in (left) to {}.", verb.to_ascii_lowercase())
+        } else if let Some(left) = locked {
+            format!("The box refuses for now: try again in {left} s.")
+        } else if sending {
+            "Waiting for the box's answer.".to_string()
+        } else {
+            format!("{verb}: the box checks its approval policy first.")
         };
-        let button = ui.add_enabled(
-            out.signed_in.is_some() && locked.is_none() && !sending,
-            egui::Button::new(RichText::new(verb).strong()),
-        );
+        let button = ui
+            .add_enabled(
+                out.signed_in.is_some() && locked.is_none() && !sending,
+                egui::Button::new(RichText::new(verb).strong()),
+            )
+            .tip(why);
         out.rects.push((format!("go {:?}", step.target), button.rect));
         go = button.clicked();
         if sending {
@@ -1119,7 +1170,7 @@ fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
                 rect.right_top() + Vec2::new(-4.0, 2.0),
                 Align2::RIGHT_TOP,
                 "chart cut short; counts are exact",
-                FontId::proportional(10.0),
+                FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );
         }
@@ -1129,14 +1180,14 @@ fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
             inner.left_top(),
             Align2::LEFT_TOP,
             format!("{:.3}", range.1),
-            FontId::monospace(10.0),
+            FontId::monospace(crate::theme::MIN_TEXT),
             t.muted,
         );
         p.text(
             inner.left_bottom(),
             Align2::LEFT_BOTTOM,
             format!("{:.3}", range.0),
-            FontId::monospace(10.0),
+            FontId::monospace(crate::theme::MIN_TEXT),
             t.muted,
         );
     }
