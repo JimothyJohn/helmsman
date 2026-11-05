@@ -1983,7 +1983,7 @@ mod simulated {
     /// panel, visited; the panels end where they began, at most a scroll
     /// bar's width wider.
     /// Nick, 2026-11-05: nothing around the diagram is drawn below
-    /// MIN_TEXT, on any pane, tab or bottom panel of the simulation.
+    /// `MIN_TEXT`, on any pane, tab or bottom panel of the simulation.
     #[test]
     fn no_text_around_the_diagram_is_below_the_minimum() {
         let mut h = Harness::new(App::sim());

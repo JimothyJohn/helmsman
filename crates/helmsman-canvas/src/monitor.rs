@@ -34,6 +34,7 @@ use crate::remote::{BoxState, Link};
 use crate::st_view::TAP;
 use crate::st_view::brand::{WHITE, YELLOW};
 use crate::theme::theme;
+use crate::tips::Tip;
 
 /// Seconds without a new scan after which a program's tiles go grey.
 pub const STALE_AFTER: f64 = 3.0;
@@ -632,11 +633,17 @@ impl Monitor {
         let t = theme(ui);
         ui.horizontal_wrapped(|ui| {
             let size = 16.0 * k;
-            let back = ui.add_enabled(
-                self.at.is_some(),
-                egui::Button::new(egui::RichText::new("‹ Back").size(size).strong())
-                    .min_size(Vec2::new(TAP * 1.6 * k, TAP * k)),
-            );
+            let back = ui
+                .add_enabled(
+                    self.at.is_some(),
+                    egui::Button::new(egui::RichText::new("‹ Back").size(size).strong())
+                        .min_size(Vec2::new(TAP * 1.6 * k, TAP * k)),
+                )
+                .tip(if self.at.is_some() {
+                    "Up one level."
+                } else {
+                    "Up one level: this is the top already."
+                });
             chrome.hit("monitor back", back.rect);
             if back.clicked() {
                 self.back();
@@ -652,11 +659,17 @@ impl Monitor {
                 } else {
                     rt.color(t.fg)
                 };
-                let r = ui.add(
-                    egui::Button::new(rt)
-                        .frame(false)
-                        .min_size(Vec2::new(0.0, TAP * k)),
-                );
+                let r = ui
+                    .add(
+                        egui::Button::new(rt)
+                            .frame(false)
+                            .min_size(Vec2::new(0.0, TAP * k)),
+                    )
+                    .tip(if last {
+                        "The level shown now."
+                    } else {
+                        "Goes back to this level."
+                    });
                 chrome.hit(format!("monitor crumb {i}"), r.rect);
                 if r.clicked() && !last {
                     go = Some(to.clone());
@@ -708,7 +721,12 @@ impl Monitor {
     /// (`run`, `step`, `restart`), so the hotkeys' tests and the page's
     /// behave alike on either screen.
     fn transport(&mut self, ui: &mut egui::Ui, t: Transport, chrome: &mut Chrome) {
-        let (icon, tip) = if t.running {
+        let (icon, tip) = if !t.built {
+            (
+                glyphs::Icon::Run,
+                "Run (Ctrl+Enter): the program does not compile yet.",
+            )
+        } else if t.running {
             (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
         } else {
             (glyphs::Icon::Run, "Run (Ctrl+Enter)")

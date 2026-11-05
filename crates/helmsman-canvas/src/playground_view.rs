@@ -19,6 +19,7 @@ use crate::sim_projects::{SimProjects, SimRevision, Storage};
 use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 use crate::theme::{Theme, theme};
+use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// The ST editor's widget id (its selection is the Agent's scope).
@@ -1000,18 +1001,18 @@ impl PlaygroundView {
         let mut ok = false;
         let m = egui::Modal::new(egui::Id::unique("pg-program-name")).show(ctx, |ui| {
             ui.set_max_width(420.0);
-            ui.label(
-                RichText::new("Name this program")
-                    .strong()
-                    .size(16.0),
-            );
-            ui.label("The Agent's answers in this conversation land in a project of this name: the newest as main.st, the earlier ones kept under it.");
+            let why = "The Agent's answers in this conversation land in a project of this name: \
+                       the newest as main.st, the earlier ones kept under it.";
+            ui.label(RichText::new("Name this program").strong().size(16.0))
+                .tip(why);
             ui.add_space(8.0);
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut p.input)
-                    .hint_text("a-z 0-9 _ -")
-                    .desired_width(f32::INFINITY),
-            );
+            let field = ui
+                .add(
+                    egui::TextEdit::singleline(&mut p.input)
+                        .hint_text("a-z 0-9 _ -")
+                        .desired_width(f32::INFINITY),
+                )
+                .tip(format!("{why} Enter confirms."));
             chrome.hit("program name", field.rect);
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if let Some(e) = &p.error {
@@ -1020,9 +1021,13 @@ impl PlaygroundView {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
-                let yes = ui.add(egui::Button::new(RichText::new("Use this code").strong()).min_size(tall));
+                let yes = ui
+                    .add(egui::Button::new(RichText::new("Use this code").strong()).min_size(tall))
+                    .tip("Makes the project under this name and takes the code into it (Enter).");
                 chrome.hit("program ok", yes.rect);
-                let no = ui.add(egui::Button::new("Cancel").min_size(tall));
+                let no = ui
+                    .add(egui::Button::new("Cancel").min_size(tall))
+                    .tip("Leaves the code in the answer. Nothing is made.");
                 chrome.hit("program cancel", no.rect);
                 if yes.clicked() || enter {
                     ok = true;
@@ -1212,7 +1217,10 @@ impl Body for PlaygroundView {
                     RED
                 }),
         )
-        .on_hover_text(format!("{} scans", s.scans));
+        .tip(format!(
+            "The simulation's state and clock, after {} scans.",
+            s.scans
+        ));
     }
 
     fn has_notices(&self) -> bool {
@@ -1234,7 +1242,9 @@ impl Body for PlaygroundView {
             let r = ui.label(RichText::new(n).color(if error { RED } else { t.muted }));
             chrome.hit("notice", r.rect);
             if error && self.proj.pending.is_some() {
-                let r = ui.button("Replace");
+                let r = ui
+                    .button("Replace")
+                    .tip("Saves your version over the one kept in this browser.");
                 chrome.hit("replace", r.rect);
                 if r.clicked() {
                     self.proj.replace();
@@ -1253,25 +1263,30 @@ impl Body for PlaygroundView {
         let now = ui.ctx().input(|i| i.time);
         let stale = self.session.stale();
         let errors = self.session.diags.len();
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Structured Text").strong());
+        // An edit is only checked: what runs is the last deploy, as on a box.
+        let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Structured Text").strong())
+                .tip("The open file. It is checked as you type; Deploy runs it.");
             if self.pending.is_some() {
-                ui.label(RichText::new("…").color(t.muted));
+                ui.label(RichText::new("…").color(t.muted))
+                    .tip("Checking the edit.");
             } else if errors > 0 {
-                ui.label(RichText::new(format!("✖ {errors} error(s)")).color(RED));
+                ui.label(RichText::new(format!("✖ {errors} error(s)")).color(RED))
+                    .tip("The list under the code has each one. Click an error to go to its line.");
             } else {
-                ui.label(RichText::new("✔ compiles").color(t.muted));
+                ui.label(RichText::new("✔ compiles").color(t.muted))
+                    .tip("The program has no errors.");
+            }
+            if undeployed {
+                let note = if errors > 0 {
+                    "The program running is unchanged. Fix the errors, then Deploy."
+                } else {
+                    "The program running is unchanged. Deploy runs this version."
+                };
+                ui.label(RichText::new("· not deployed").color(t.muted)).tip(note);
             }
         });
-        // An edit is only checked: what runs is the last deploy, as on a box.
-        if stale && self.pending.is_none() && self.session.build.is_some() {
-            let note = if errors > 0 {
-                "The program running is unchanged. Fix the errors, then Deploy."
-            } else {
-                "The program running is unchanged. Deploy runs this version."
-            };
-            ui.label(RichText::new(note).small().color(t.muted));
-        }
         let all = self.diags();
         let current = self.proj.current.clone();
         let diags: Vec<(u32, u32)> = all
@@ -1283,7 +1298,8 @@ impl Body for PlaygroundView {
         let list_h = if self.session.diags.is_empty() { 0.0 } else { 110.0 };
         let size = Vec2::new(ui.available_width(), (avail - list_h).max(120.0));
         let Some(text) = self.proj.current_text_mut() else {
-            ui.label(RichText::new("No file open: make one in Files.").color(t.muted));
+            ui.label(RichText::new("No file open.").color(t.muted))
+                .tip("Open or make one in Files.");
             return;
         };
         let r = ui
@@ -1352,7 +1368,8 @@ impl Body for PlaygroundView {
             self.act(a);
         }
         ui.separator();
-        ui.label(RichText::new("Program").strong().color(t.muted));
+        ui.label(RichText::new("Program").strong().color(t.muted))
+            .tip("The compiled program: each POU and the instances it calls. Click one to open its diagram.");
         match &mut self.viewer {
             Some(v) => {
                 ui.indent("pg-tree", |ui| v.tree_ui(ui));
@@ -1433,7 +1450,7 @@ impl Body for PlaygroundView {
             Tab::Io => self.io(ui),
             Tab::Requirements => {
                 egui::ScrollArea::vertical().id_salt("pg-tests").show(ui, |ui| {
-                    if crate::requirements::ui(ui, chrome, &self.tests, "run in this page", false) {
+                    if crate::requirements::ui(ui, chrome, &self.tests, "This page runs them.", false) {
                         self.run_tests();
                     }
                 });
@@ -1503,19 +1520,16 @@ impl PlaygroundView {
             .filter(|p| !on_map.iter().any(|r| r.eq_ignore_ascii_case(&p.name)))
             .collect();
         egui::ScrollArea::vertical().id_salt("pg-io").show(ui, |ui| {
-            ui.label(RichText::new("Inputs").strong());
-            if inputs.is_empty() {
-                ui.label(
-                    RichText::new("No VAR_INPUT or %IX bit: add one to get a control.")
-                        .small()
-                        .color(t.muted),
-                );
+            let inputs_tip = if inputs.is_empty() {
+                "No VAR_INPUT or %IX bit: add one to get a control."
             } else if off_map.len() < inputs.len() {
-                ui.label(
-                    RichText::new("Switch, press or drag the inputs on their blocks in the diagram.")
-                        .small()
-                        .color(t.muted),
-                );
+                "Switch, press or drag the inputs here, or on their blocks in the diagram."
+            } else {
+                "Switch, press or drag the inputs here."
+            };
+            ui.label(RichText::new("Inputs").strong()).tip(inputs_tip);
+            if inputs.is_empty() {
+                ui.label(RichText::new("none").color(t.muted)).tip(inputs_tip);
             }
             // Two columns when the panel is wide enough for them (Nick,
             // 2026-11-01: denser); each cell capped at its column's width,
@@ -1539,14 +1553,14 @@ impl PlaygroundView {
                 self.session.set_input(&name, v);
             }
             ui.add_space(8.0);
-            ui.label(RichText::new("Outputs").strong())
-                .on_hover_text("click: pick it");
+            let outputs_tip = if outputs.is_empty() {
+                "No VAR_OUTPUT or %QX bit: add one to get a lamp."
+            } else {
+                "Click an output to pick its block in the diagram."
+            };
+            ui.label(RichText::new("Outputs").strong()).tip(outputs_tip);
             if outputs.is_empty() {
-                ui.label(
-                    RichText::new("No VAR_OUTPUT or %QX bit: add one to get a lamp.")
-                        .small()
-                        .color(t.muted),
-                );
+                ui.label(RichText::new("none").color(t.muted)).tip(outputs_tip);
             }
             let mut picked = None;
             let (cols, col) = columns(ui);
@@ -1576,7 +1590,10 @@ impl PlaygroundView {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             return;
         }
-        ui.label(RichText::new(format!("Pin up to {TREND_SIGNALS} signals")).color(t.muted));
+        ui.label(RichText::new("Signals").strong().color(t.muted))
+            .tip(format!(
+                "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
+            ));
         let points: Vec<String> = self
             .session
             .outputs()
@@ -1586,7 +1603,16 @@ impl PlaygroundView {
         ui.horizontal_wrapped(|ui| {
             for name in &points {
                 let on = self.session.trend.signals.contains(name);
-                if ui.selectable_label(on, name.to_ascii_lowercase()).clicked() {
+                let tip = if on {
+                    "On the trend. Click to take it off."
+                } else {
+                    "Click to pin it to the trend."
+                };
+                if ui
+                    .selectable_label(on, name.to_ascii_lowercase())
+                    .tip(tip)
+                    .clicked()
+                {
                     self.session.trend.toggle(name);
                 }
             }
@@ -1605,18 +1631,18 @@ impl PlaygroundView {
             ui.set_max_width(ui.available_width() - 12.0);
             match self.chat.proxy {
                 Proxy::Yes => {
-                    ui.label(
-                        RichText::new("Using the local proxy: the API key stays on this machine.")
-                            .color(t.muted),
-                    );
+                    ui.label(RichText::new("Using the local proxy").color(t.muted))
+                        .tip("The API key stays on this machine.");
                 }
                 Proxy::Checking => {
-                    ui.label(RichText::new("Checking for a local proxy…").color(t.muted));
+                    ui.label(RichText::new("Checking for a local proxy…").color(t.muted))
+                        .tip("With a local proxy the API key stays on this machine.");
                 }
                 Proxy::No => self.key_ui(ui),
             }
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Model").color(t.muted));
+                ui.label(RichText::new("Model").color(t.muted))
+                    .tip("The model that answers. A larger one is slower and costs more.");
                 // No wider than the panel: a row that overflows a resizable
                 // panel widens it every frame.
                 egui::ComboBox::from_id_salt("pg-model")
@@ -1624,9 +1650,12 @@ impl PlaygroundView {
                     .selected_text(self.chat.model.label())
                     .show_ui(ui, |ui| {
                         for m in Model::ALL {
-                            ui.selectable_value(&mut self.chat.model, m, m.label());
+                            ui.selectable_value(&mut self.chat.model, m, m.label())
+                                .tip(format!("Answers with {}.", m.label()));
                         }
-                    });
+                    })
+                    .response
+                    .tip("The model that answers. A larger one is slower and costs more.");
             });
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
@@ -1636,6 +1665,11 @@ impl PlaygroundView {
                     .hint_text("e.g. Add a stop button that resets the counter")
                     .desired_rows(3)
                     .desired_width(f32::INFINITY),
+            )
+            .tip(
+                "Ask for a program (\"a conveyor that stops on a jam\"), a fix for the errors, or \
+                 what a line does. The Agent sees the editor's program and changes only what the \
+                 line above names.",
             );
             ui.horizontal(|ui| {
                 let busy = self.chat.busy();
@@ -1644,15 +1678,25 @@ impl PlaygroundView {
                     .min_size(Vec2::new(TAP * 1.5, TAP * 0.75));
                 if ui
                     .add_enabled(!busy, ask)
-                    .on_hover_text("sends the question with the editor's program and its errors")
+                    .tip(if busy {
+                        "Wait for the answer, or Stop it."
+                    } else {
+                        "Sends the question with the editor's program and its errors."
+                    })
                     .clicked()
                 {
                     self.ask(&ctx);
                 }
-                if busy && ui.button("Stop").clicked() {
+                if busy && ui.button("Stop").tip("Stops the answer under way.").clicked() {
                     self.stop_answer();
                 }
-                if !self.chat.history.is_empty() && !busy && ui.button("New conversation").clicked() {
+                if !self.chat.history.is_empty()
+                    && !busy
+                    && ui
+                        .button("New conversation")
+                        .tip("The next question starts a conversation of its own.")
+                        .clicked()
+                {
                     self.chat.clear();
                 }
             });
@@ -1679,32 +1723,42 @@ impl PlaygroundView {
         }
         let at = self.chat.page;
         ui.horizontal_wrapped(|ui| {
-            let prev = ui.add_enabled(at != Some(0), egui::Button::new("‹"));
+            let prev = ui
+                .add_enabled(at != Some(0), egui::Button::new("‹"))
+                .tip(if at == Some(0) {
+                    "This is the first page."
+                } else {
+                    "The page before."
+                });
             chrome.hit("page prev", prev.rect);
-            if prev.on_hover_text("the page before").clicked() {
+            if prev.clicked() {
                 self.chat.prev_page();
             }
-            let next = ui.add_enabled(at.is_some(), egui::Button::new("›"));
+            let next = ui
+                .add_enabled(at.is_some(), egui::Button::new("›"))
+                .tip(if at.is_some() {
+                    "The page after. Past the last, the new answer."
+                } else {
+                    "This is the newest answer."
+                });
             chrome.hit("page next", next.rect);
-            if next
-                .on_hover_text("the page after; past the last, the new answer")
-                .clicked()
-            {
+            if next.clicked() {
                 self.chat.next_page();
             }
             let where_ = match at {
                 Some(k) => format!("page {} of {n}", k + 1),
                 None => format!("{n} page(s) kept"),
             };
-            let l = ui.label(RichText::new(where_).color(t.muted));
+            let l = ui
+                .label(RichText::new(where_).color(t.muted))
+                .tip("Every kept page goes to the model with the next question.");
             chrome.hit("page where", l.rect);
             if at.is_some() {
-                let del = ui.button("Delete page");
+                let del = ui
+                    .button("Delete page")
+                    .tip("Drops this page from the conversation and from what the model sees.");
                 chrome.hit("page delete", del.rect);
-                if del
-                    .on_hover_text("drops this page from the conversation and from what the model sees")
-                    .clicked()
-                {
+                if del.clicked() {
                     self.chat.delete_page();
                 }
             }
@@ -1716,22 +1770,20 @@ impl PlaygroundView {
     /// next question may change and which rule gave it, with Whole file
     /// while a selection or a pick narrows it.
     fn scope_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let t = theme(ui);
         let scope = self.scope();
         let mut whole = false;
         // Wrapped: a long name in a plain row would widen the panel.
         ui.horizontal_wrapped(|ui| {
-            let r = ui.label(RichText::new(scope.label()).strong());
+            let r = ui.label(RichText::new(scope.label()).strong()).tip(scope.rule());
             chrome.hit("agent scope", r.rect);
             if scope.lines().is_some() {
                 let b = ui
                     .small_button("Whole file")
-                    .on_hover_text("drops the selection and the pick: the Agent edits the open file");
+                    .tip("Drops the selection and the pick: the Agent edits the open file.");
                 chrome.hit("scope whole file", b.rect);
                 whole = b.clicked();
             }
         });
-        ui.label(RichText::new(scope.rule()).small().color(t.muted));
         if whole {
             self.whole_file(&ui.ctx().clone());
         }
@@ -1743,8 +1795,9 @@ impl PlaygroundView {
         let b = egui::Button::new(RichText::new("Use this code").strong().color(BLACK))
             .fill(YELLOW)
             .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
-        let r = ui.add(b).on_hover_text(
-            "takes the code into what it was asked about, if the requirement tests pass, and saves it as a revision; Deploy runs it",
+        let r = ui.add(b).tip(
+            "Takes the code into what it was asked about, if the requirement tests pass, and saves \
+             it as a revision. Deploy runs it.",
         );
         chrome.hit("use code", r.rect);
         if let Some(why) = &self.use_error {
@@ -1767,24 +1820,25 @@ impl PlaygroundView {
     }
 
     fn key_ui(&mut self, ui: &mut egui::Ui) {
-        let t = theme(ui);
-        ui.label(RichText::new("Anthropic API key").strong());
-        let r = ui.add(
-            egui::TextEdit::singleline(self.chat.key_mut())
-                .id_salt("pg-key")
-                .password(true)
-                .hint_text("sk-ant-…")
-                .desired_width(f32::INFINITY),
-        );
+        let held = "Held in this page only; sent only to api.anthropic.com, billed to your account.";
+        let key_tip = if self.chat.from_env {
+            format!("{held} Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
+        } else {
+            held.to_string()
+        };
+        ui.label(RichText::new("Anthropic API key").strong())
+            .tip(&key_tip);
+        let r = ui
+            .add(
+                egui::TextEdit::singleline(self.chat.key_mut())
+                    .id_salt("pg-key")
+                    .password(true)
+                    .hint_text("sk-ant-…")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip(&key_tip);
         if r.changed() {
             self.chat.key_changed();
-        }
-        if self.chat.from_env {
-            ui.label(
-                RichText::new("Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
-                    .small()
-                    .color(t.muted),
-            );
         }
         if self.chat.has_key() && !self.chat.key_looks_right() {
             ui.label(
@@ -1796,7 +1850,7 @@ impl PlaygroundView {
         let mut remember = self.chat.remember;
         if ui
             .checkbox(&mut remember, "Remember on this device")
-            .on_hover_text("stores the key in this browser's localStorage")
+            .tip("Stores the key in this browser's localStorage.")
             .changed()
         {
             self.chat.set_remember(remember);
@@ -1814,16 +1868,14 @@ impl PlaygroundView {
         // Wrapped: in a plain row a label extends, and a row wider than a
         // resizable panel widens it every frame.
         ui.horizontal_wrapped(|ui| {
-            if self.chat.has_key() && ui.button("Forget key").clicked() {
+            if self.chat.has_key()
+                && ui
+                    .button("Forget key")
+                    .tip("Clears the key from this page and this browser.")
+                    .clicked()
+            {
                 self.chat.forget_key();
             }
-            ui.label(
-                RichText::new(
-                    "Held in this page only; sent only to api.anthropic.com, billed to your account.",
-                )
-                .small()
-                .color(t.muted),
-            );
         });
         ui.add_space(6.0);
     }
@@ -1831,13 +1883,6 @@ impl PlaygroundView {
     fn answer_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         let Some(a) = &self.chat.answer else {
-            ui.label(
-                RichText::new(
-                    "Ask for a program (\"a conveyor that stops on a jam\"), a fix for the \
-                     errors, or what a line does. The Agent sees the editor's program and changes only what the line above names.",
-                )
-                .color(t.muted),
-            );
             return;
         };
         if let Some(m) = &a.model
@@ -1993,18 +2038,21 @@ pub fn window_slider(ui: &mut egui::Ui, chrome: &mut Chrome, window_ms: &mut u64
     #[allow(clippy::cast_precision_loss)]
     let mut v = (*window_ms).clamp(WINDOW_MIN_MS, WINDOW_MAX_MS) as f64;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Window").color(t.muted));
+        ui.label(RichText::new("Window").color(t.muted))
+            .tip("How much time the trend shows.");
         // The value label at the right needs ~52 pt; the slider takes the
         // rest, so the row never widens the panel.
         let label_w = 56.0;
         let w = (ui.available_width() - label_w - 12.0).max(40.0);
         ui.spacing_mut().slider_width = w;
         #[allow(clippy::cast_precision_loss)]
-        let r = ui.add(
-            egui::Slider::new(&mut v, WINDOW_MIN_MS as f64..=WINDOW_MAX_MS as f64)
-                .logarithmic(true)
-                .show_value(false),
-        );
+        let r = ui
+            .add(
+                egui::Slider::new(&mut v, WINDOW_MIN_MS as f64..=WINDOW_MAX_MS as f64)
+                    .logarithmic(true)
+                    .show_value(false),
+            )
+            .tip("Drag to show more or less time on the trend.");
         chrome.hit("trend window", r.rect);
         ui.add(
             egui::Label::new(
@@ -2466,7 +2514,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             .sense(Sense::click_and_drag())
             .wrap_mode(egui::TextWrapMode::Truncate)
             .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-            let r = ui.add(b).on_hover_text("push button: on while held");
+            let r = ui.add(b).tip("Push button: on while held.");
             out = Some(Value::Bool(r.is_pointer_button_down_on()));
         }
         Some(Widget::Toggle) => {
@@ -2479,7 +2527,7 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
             .fill(if on { YELLOW } else { t.rule })
             .wrap_mode(egui::TextWrapMode::Truncate)
             .min_size(Vec2::new(ui.available_width().min(TAP * 3.0), TAP * 0.8));
-            if ui.add(b).on_hover_text("switch: click to flip").clicked() {
+            if ui.add(b).tip("Switch: click to flip.").clicked() {
                 out = Some(Value::Bool(!on));
             }
         }
@@ -2493,7 +2541,10 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 _ => 0,
             };
             let before = v;
-            ui.add(egui::Slider::new(&mut v, slo..=shi).show_value(false));
+            ui.add(egui::Slider::new(&mut v, slo..=shi).show_value(false))
+                .tip(format!(
+                    "Drag to set the input, {slo} to {shi}. Type any value in the box."
+                ));
             if v != before {
                 out = Some(Value::Int(i128::from(v)));
             }
@@ -2519,7 +2570,8 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 _ => 0.0,
             };
             let before = v;
-            ui.add(egui::Slider::new(&mut v, -100.0..=100.0).show_value(false));
+            ui.add(egui::Slider::new(&mut v, -100.0..=100.0).show_value(false))
+                .tip("Drag to set the input, -100 to 100. Type any value in the box.");
             if v.to_bits() != before.to_bits() && v.is_finite() {
                 out = Some(Value::Real(v));
             }
@@ -2545,8 +2597,10 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 _ => 0,
             };
             let before = ms;
-            ui.add(egui::Slider::new(&mut ms, 0..=10_000).show_value(false));
-            ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"));
+            ui.add(egui::Slider::new(&mut ms, 0..=10_000).show_value(false))
+                .tip("Drag to set the time, up to 10 s.");
+            ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"))
+                .tip("The time in ms. Drag, or double-click to type it, up to a day.");
             if ms != before {
                 out = Some(Value::Int(i128::from(ms) * 1_000_000));
             }
@@ -2569,16 +2623,15 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
     } else {
         format!("{name} = {}", show(p.ty, p.value))
     };
-    let b =
-        egui::Button::new(
-            RichText::new(text)
-                .monospace()
-                .size(crate::theme::MIN_TEXT)
-                .color(if on { t.accent } else { t.fg }),
-        )
-        .wrap_mode(egui::TextWrapMode::Truncate)
-        .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
-    ui.add(b).on_hover_text("click: pick it").clicked()
+    let b = egui::Button::new(
+        RichText::new(text)
+            .monospace()
+            .size(crate::theme::MIN_TEXT)
+            .color(if on { t.accent } else { t.fg }),
+    )
+    .wrap_mode(egui::TextWrapMode::Truncate)
+    .min_size(Vec2::new(ui.available_width(), TAP * 0.8));
+    ui.add(b).tip("Click to pick its block in the diagram.").clicked()
 }
 
 /// A value for a readout (TIME in ms).
