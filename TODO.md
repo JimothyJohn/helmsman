@@ -28,12 +28,14 @@
   answer: DHCP reservation on the router (recommended)
   notes: interview 2026-11-02: Nick changed to "find it by identity instead, skip the reservation": card `device-by-identity`; the maps keep 10.0.0.57 until that lands.
 
-- [ ] **MCP clients cannot read /api/devices: allow it?** — found by the plant-states worker (2026-11-03): `mcp::reachable` lacks GET /api/devices, so `list_devices` fails over MCP (it always did) while it works for the relay agent. Allowing it widens what an engineer's own MCP client reads on the box (device names, addresses, link errors); read-only, no secrets.
+- [x] **MCP clients cannot read /api/devices: allow it?** — found by the plant-states worker (2026-11-03): `mcp::reachable` lacks GET /api/devices, so `list_devices` fails over MCP (it always did) while it works for the relay agent. Allowing it widens what an engineer's own MCP client reads on the box (device names, addresses, link errors); read-only, no secrets.
   needs: your call
   result: list_devices works the same over MCP as through the relay, or stays relay-only on purpose
   options: allow GET /api/devices, /api/devices/library and the discover POST over MCP (recommended) | allow the GET only | keep MCP without devices
   est: 1h
   difficulty: low
+  answer: allow GET /api/devices, /api/devices/library and the discover POST over MCP (Nick, 2026-11-05: no retroactive handling, there is one box)
+  notes: 2026-11-05: built in #235 (GET /api/devices, GET /api/devices/library, POST /api/devices/discover reachable over MCP; regression test list_devices_works_over_mcp).
   id: mcp-devices
   asked: 2026-11-03
   by: claude-session
@@ -49,50 +51,56 @@
   asked: 2026-11-04
   by: claude-session
 
-- [ ] **Make v3 to v6 work on the wire too?** — boxes that ask for v3..v6 (the Pi's old binary defaults to v3) get a 422 on every turn. v7 fixes new asks; the relay could also strip the refused keywords from strict tools when it sends v3..v6, so old boxes work without a flag. That changes what a served id sends, which the profile rule forbids, so it is your call.
+- [x] **Make v3 to v6 work on the wire too?** — boxes that ask for v3..v6 (the Pi's old binary defaults to v3) get a 422 on every turn. v7 fixes new asks; the relay could also strip the refused keywords from strict tools when it sends v3..v6, so old boxes work without a flag. That changes what a served id sends, which the profile rule forbids, so it is your call.
   needs: your call
   result: old boxes either work unchanged or are told to ask for v7
   options: leave v3..v6 as served; boxes move to v7 (recommended) | strip on the wire for v3..v6 | alias v3..v6 to v7
   est: 1h
   difficulty: low
+  answer: leave v3..v6 as served; boxes move to v7 (Nick, 2026-11-05: not retroactive, one box)
+  notes: 2026-11-05: nothing to build; v3..v6 stay as served and the one box asks for v7.
   id: relay-old-profiles
   asked: 2026-11-04
   by: claude-session
 
 ## Tasks
 
-- [ ] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.
+- [x] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.
   needs: pause-at-statement in helmsman-iec's interpreter
   result: Ctrl B toggles a breakpoint on the picked block; a marker on the block and the ST line; the scan pauses there
   est: 2d
   difficulty: med
+  notes: landed 2026-11-05: #230 (Program::scan_to runs a scan to a breakpoint on copies, resume = the full scan; Ctrl B, red dot, orange frame, paused notice; F10 runs the rest, Ctrl Enter the next stop). Box side not built (read-only, later).
   id: hotkey-breakpoint-build
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **Step into / out of an instance (Ctrl ] / Ctrl [)** — Nick 2026-11-01: a non-F key. Stopped, Ctrl ] on a picked function-block block opens that instance's diagram and steps one scan; Ctrl [ goes up a level (Alt ↑ today) and keeps stepping.
+- [x] **Step into / out of an instance (Ctrl ] / Ctrl [)** — Nick 2026-11-01: a non-F key. Stopped, Ctrl ] on a picked function-block block opens that instance's diagram and steps one scan; Ctrl [ goes up a level (Alt ↑ today) and keeps stepping.
   needs: nothing
   result: the two keys in hotkeys::TABLE, the open-and-step behaviour, docs/UI.md rows
   est: 1d
   difficulty: low
+  notes: landed 2026-11-05: #233 (Ctrl ] / Ctrl [; a stopped simulation steps one scan; the instance left stays picked).
   id: hotkey-step-into-build
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **Force the picked input from the keyboard (Ctrl Shift F / Ctrl Shift U)** — Nick 2026-11-01: a non-F key. With a block picked, Ctrl Shift F forces it (flip a BOOL, open the number field), Ctrl Shift U releases every force (the banner's button). On a box the engineer's audited force path; in the simulation the switch.
+- [x] **Force the picked input from the keyboard (Ctrl Shift F / Ctrl Shift U)** — Nick 2026-11-01: a non-F key. With a block picked, Ctrl Shift F forces it (flip a BOOL, open the number field), Ctrl Shift U releases every force (the banner's button). On a box the engineer's audited force path; in the simulation the switch.
   needs: nothing
   result: the two keys, acting through the existing force path
   est: 4h
   difficulty: low
+  notes: landed 2026-11-05: #231 (Ctrl Shift F flips a switch or opens a number field, a box force for an engineer; Ctrl Shift U releases all on a box; Edit menu items).
   id: hotkey-force-build
   asked: 2026-11-01
   by: claude-session
 
-- [ ] **Find in the Structured Text (Ctrl F, Ctrl G next, Ctrl Shift G previous)** — Nick 2026-11-01: keys that feel familiar rather than F3. A find box over the ST pane, the match marked like a diagnostic, Enter or Ctrl G next, Ctrl Shift G previous; the page takes Ctrl F from the browser (hotkeys::wants). Replace can wait.
+- [x] **Find in the Structured Text (Ctrl F, Ctrl G next, Ctrl Shift G previous)** — Nick 2026-11-01: keys that feel familiar rather than F3. A find box over the ST pane, the match marked like a diagnostic, Enter or Ctrl G next, Ctrl Shift G previous; the page takes Ctrl F from the browser (hotkeys::wants). Replace can wait.
   needs: nothing
   result: a find box in the ST pane on the three keys
   est: 1d
   difficulty: low
+  notes: landed 2026-11-05: #234 (find row over the ST pane, matches marked, Enter / Ctrl G next, Shift Enter / Ctrl Shift G previous, Esc selects the match in the editor). Replace not built.
   id: hotkey-find-build
   asked: 2026-11-01
   by: claude-session
