@@ -6,7 +6,9 @@
 use eframe::egui::{Response, WidgetText};
 
 pub trait Tip {
-    /// The same tooltip whether the control is enabled or not.
+    /// The same tooltip whether the control is enabled or not. Not
+    /// `must_use`: a label's response is dropped once it has its tooltip,
+    /// as egui's own `on_hover_text`'s is.
     fn tip(self, text: impl Into<WidgetText>) -> Self;
 }
 

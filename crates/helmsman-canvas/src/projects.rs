@@ -185,10 +185,18 @@ pub fn free_file_name(want: &str, taken: impl Fn(&str) -> bool) -> String {
 }
 
 /// A right-click menu's item: whether it was clicked (the menu closes).
-fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enabled: bool) -> bool {
+/// `tip` shows on hover, enabled or not: when disabled, say why.
+fn menu_item(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    text: &str,
+    enabled: bool,
+    tip: &str,
+) -> bool {
     // A fixed floor, not `available_width()`: see editor::menu_item_keyed.
     let b = egui::Button::new(text).min_size(Vec2::new(110.0, TAP * 0.6));
-    let r = ui.add_enabled(enabled, b);
+    let r = ui.add_enabled(enabled, b).tip(tip);
     chrome.hit(key, r.rect);
     if r.clicked() {
         ui.close();
@@ -201,8 +209,8 @@ fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enab
 fn write_button(ui: &mut egui::Ui, write: &Result<(), String>, text: &str, hint: &str) -> egui::Response {
     let b = egui::Button::new(text).min_size(Vec2::new(0.0, TAP * 0.7));
     match write {
-        Ok(()) => ui.add(b).on_hover_text(hint),
-        Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
+        Ok(()) => ui.add(b).tip(hint),
+        Err(why) => ui.add_enabled(false, b).tip(why),
     }
 }
 
@@ -259,8 +267,23 @@ impl FilesUi {
             // (Nick, 2026-11-02).
             let can_write = l.write.is_ok();
             let mine = !p.example();
+            let or_why = |tip: &str| match (&l.write, mine) {
+                (Err(why), _) => why.clone(),
+                (Ok(()), false) => "A built-in example stays as it is: copy it first.".to_string(),
+                (Ok(()), true) => tip.to_string(),
+            };
             r.context_menu(|ui| {
-                if menu_item(ui, chrome, "menu copy project", "Copy project…", can_write) {
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu copy project",
+                    "Copy project…",
+                    can_write,
+                    l.write
+                        .as_ref()
+                        .err()
+                        .map_or("Copies it under a new name.", String::as_str),
+                ) {
                     self.copy_project(&p.name);
                 }
                 if menu_item(
@@ -269,6 +292,7 @@ impl FilesUi {
                     "menu rename project",
                     "Rename project…",
                     can_write && mine,
+                    &or_why("Gives the project a new name."),
                 ) {
                     self.ask(Naming::RenameProject(p.name.clone()), &p.name);
                 }
@@ -278,6 +302,7 @@ impl FilesUi {
                     "menu delete project",
                     "Delete project…",
                     can_write && mine,
+                    &or_why("Deletes the project and all its files, asked first."),
                 ) {
                     self.naming = None;
                     self.confirm = Some(Act::DeleteProject(p.name.clone()));
@@ -285,7 +310,8 @@ impl FilesUi {
             });
         }
         if l.projects.is_empty() {
-            ui.label(RichText::new("No projects yet.").color(t.muted));
+            ui.label(RichText::new("No projects yet.").color(t.muted))
+                .tip("Right-click the empty space below, or use File › New project.");
         }
         if l.starters {
             self.starters_ui(ui, l, chrome);
@@ -294,11 +320,22 @@ impl FilesUi {
             ui.separator();
             let is_example = l.projects.iter().any(|p| p.name == open && p.example());
             let can_write = l.write.is_ok() && !is_example;
-            let head = ui.label(RichText::new(format!("{open}: files")).strong().color(t.muted));
+            let head = ui
+                .label(RichText::new(format!("{open}: files")).strong().color(t.muted))
+                .tip("The open project's files. Right-click to paste a copied file.");
+            let paste_tip = if is_example {
+                "A built-in example stays as it is: copy the project first."
+            } else if let Err(why) = &l.write {
+                why.as_str()
+            } else if self.clipboard.is_none() {
+                "Nothing copied yet: right-click a file and Copy."
+            } else {
+                "Pastes the copied file into this project."
+            };
             // Right-click the heading: paste into this project.
             head.context_menu(|ui| {
                 let paste = self.clipboard.is_some() && can_write;
-                if menu_item(ui, chrome, "menu paste", "Paste", paste)
+                if menu_item(ui, chrome, "menu paste", "Paste", paste, paste_tip)
                     && let Some((name, text)) = self.clipboard.clone()
                 {
                     act = Some(Act::PasteFile { name, text });
@@ -319,12 +356,14 @@ impl FilesUi {
                 .collect();
             if !earlier.is_empty() {
                 let arrow = if self.earlier_open { "▾" } else { "▸" };
-                let r = ui.selectable_label(
-                    false,
-                    RichText::new(format!("{arrow} earlier ({})", earlier.len()))
-                        .monospace()
-                        .color(t.muted),
-                );
+                let r = ui
+                    .selectable_label(
+                        false,
+                        RichText::new(format!("{arrow} earlier ({})", earlier.len()))
+                            .monospace()
+                            .color(t.muted),
+                    )
+                    .tip("Earlier iterations of the program, newest first. Click to show or hide them.");
                 chrome.hit("earlier", r.rect);
                 if r.clicked() {
                     self.earlier_open = !self.earlier_open;
@@ -341,7 +380,13 @@ impl FilesUi {
                     if *dirty { " ●" } else { "" },
                     if runs { "  · runs" } else { "" }
                 );
-                let r = ui.selectable_label(here, RichText::new(text).monospace());
+                let r = ui
+                    .selectable_label(here, RichText::new(text).monospace())
+                    .tip(if runs {
+                        "The file that runs. Double-click to edit it; right-click for more."
+                    } else {
+                        "Click to open, double-click to edit; right-click to copy, rename or delete."
+                    });
                 chrome.hit(format!("file {f}"), r.rect);
                 if r.clicked() {
                     self.picked = Some(Picked::File(f.clone()));
@@ -356,30 +401,65 @@ impl FilesUi {
                 }
                 // Right-click a file: copy, paste, duplicate, rename, delete
                 // (Nick, 2026-11-01: easy copy and paste of files).
+                let write_tip = |tip: &'static str| -> &str {
+                    if is_example {
+                        "A built-in example stays as it is: copy the project first."
+                    } else {
+                        l.write.as_ref().err().map_or(tip, String::as_str)
+                    }
+                };
                 r.context_menu(|ui| {
-                    if menu_item(ui, chrome, "menu copy", "Copy", true) {
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu copy",
+                        "Copy",
+                        true,
+                        "Copies the file, to paste into this or another project.",
+                    ) {
                         act = Some(Act::CopyFile(f.clone()));
                     }
                     let paste = self.clipboard.is_some() && can_write;
-                    if menu_item(ui, chrome, "menu paste", "Paste", paste)
+                    if menu_item(ui, chrome, "menu paste", "Paste", paste, paste_tip)
                         && let Some((name, text)) = self.clipboard.clone()
                     {
                         act = Some(Act::PasteFile { name, text });
                     }
-                    if menu_item(ui, chrome, "menu duplicate", "Duplicate", can_write) {
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu duplicate",
+                        "Duplicate",
+                        can_write,
+                        write_tip("Makes a copy of the file beside it."),
+                    ) {
                         act = Some(Act::DuplicateFile(f.clone()));
                     }
-                    if menu_item(ui, chrome, "menu rename", "Rename…", can_write) {
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu rename",
+                        "Rename…",
+                        can_write,
+                        write_tip("Gives the file a new name."),
+                    ) {
                         self.ask(Naming::RenameFile(f.clone()), f);
                     }
-                    if menu_item(ui, chrome, "menu delete", "Delete…", can_write) {
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu delete",
+                        "Delete…",
+                        can_write,
+                        write_tip("Deletes the file, asked first (Delete key)."),
+                    ) {
                         self.naming = None;
                         self.confirm = Some(Act::DeleteFile(f.clone()));
                     }
                 });
             }
             if !is_example {
-                let r = write_button(ui, &l.write, "New file", "a new .st file in this project");
+                let r = write_button(ui, &l.write, "New file", "Adds a new .st file to this project.");
                 chrome.hit("new file", r.rect);
                 if r.clicked() {
                     self.ask(Naming::NewFile, ".st");
@@ -494,11 +574,30 @@ impl FilesUi {
         chrome.hit("files blank", r.rect);
         let mut act = None;
         r.context_menu(|ui| {
-            if menu_item(ui, chrome, "menu new project", "New project…", write.is_ok()) {
+            if menu_item(
+                ui,
+                chrome,
+                "menu new project",
+                "New project…",
+                write.is_ok(),
+                write
+                    .as_ref()
+                    .err()
+                    .map_or("Starts an empty project.", String::as_str),
+            ) {
                 self.new_project();
             }
             let paste = can_paste && write.is_ok() && self.clipboard.is_some();
-            if menu_item(ui, chrome, "menu paste", "Paste", paste)
+            let paste_tip = if let Err(why) = write {
+                why.as_str()
+            } else if !can_paste {
+                "Open a project of your own to paste into."
+            } else if self.clipboard.is_none() {
+                "Nothing copied yet: right-click a file and Copy."
+            } else {
+                "Pastes the copied file into the open project."
+            };
+            if menu_item(ui, chrome, "menu paste", "Paste", paste, paste_tip)
                 && let Some((name, text)) = self.clipboard.clone()
             {
                 act = Some(Act::PasteFile { name, text });
@@ -527,17 +626,19 @@ impl FilesUi {
         let mut out = None;
         ui.separator();
         ui.label(RichText::new(what).strong());
-        let t = ui.add(
-            egui::TextEdit::singleline(&mut self.input)
-                .hint_text(hint)
-                .desired_width(f32::INFINITY),
-        );
+        let t = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.input)
+                    .hint_text(hint)
+                    .desired_width(f32::INFINITY),
+            )
+            .tip(format!("The name ({hint}). Enter confirms."));
         chrome.hit("name", t.rect);
         let enter = t.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         ui.horizontal(|ui| {
-            let ok = ui.button("OK");
+            let ok = ui.button("OK").tip("Uses this name (Enter).");
             chrome.hit("name ok", ok.rect);
-            let no = ui.button("Cancel");
+            let no = ui.button("Cancel").tip("Leaves things as they are.");
             chrome.hit("name cancel", no.rect);
             if ok.clicked() || enter {
                 let name = self.input.trim().to_string();
@@ -588,10 +689,18 @@ impl FilesUi {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
-                let yes = ui.add(egui::Button::new(RichText::new(verb).color(RED)).min_size(tall));
+                let yes = ui
+                    .add(egui::Button::new(RichText::new(verb).color(RED)).min_size(tall))
+                    .tip(match &a {
+                        Act::DeleteProject(_) | Act::DeleteFile(_) => "Deletes it. There is no undo.",
+                        Act::UseAnswer { .. } => "Saves the edits here, then opens the agent's code.",
+                        _ => "Opens it. The edits here are lost.",
+                    });
                 chrome.hit("confirm yes", yes.rect);
                 if let Act::UseAnswer { name, text, .. } = &a {
-                    let drop = ui.add(egui::Button::new("Drop them, then open").min_size(tall));
+                    let drop = ui
+                        .add(egui::Button::new("Drop them, then open").min_size(tall))
+                        .tip("Opens the agent's code. The edits here are lost.");
                     chrome.hit("confirm drop", drop.rect);
                     if drop.clicked() {
                         out = Some(Act::UseAnswer {
@@ -602,7 +711,9 @@ impl FilesUi {
                         self.confirm = None;
                     }
                 }
-                let no = ui.add(egui::Button::new(stay).min_size(tall));
+                let no = ui
+                    .add(egui::Button::new(stay).min_size(tall))
+                    .tip("Leaves everything as it is (Escape).");
                 chrome.hit("confirm no", no.rect);
                 if yes.clicked() {
                     out = Some(a.clone());
@@ -629,7 +740,7 @@ pub fn diags_ui(ui: &mut egui::Ui, diags: &[Diag], chrome: &mut Chrome) -> Optio
             .add(
                 egui::Label::new(RichText::new(d.label()).monospace().color(RED)).sense(egui::Sense::click()),
             )
-            .on_hover_text("open the file at this line");
+            .tip("Opens the file at this line.");
         chrome.hit(format!("diag {k}"), r.rect);
         if r.clicked() {
             out = Some(d.clone());

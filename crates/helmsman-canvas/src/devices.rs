@@ -32,6 +32,7 @@ use serde_json::Value as Json;
 use crate::editor::Chrome;
 use crate::st_view::{TAP, show};
 use crate::theme::theme;
+use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
@@ -604,9 +605,17 @@ impl DevicesUi {
     }
 }
 
-fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enabled: bool) -> bool {
+/// A right-click menu's item; `tip` shows enabled or not (disabled: why).
+fn menu_item(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    text: &str,
+    enabled: bool,
+    tip: &str,
+) -> bool {
     let b = egui::Button::new(text).min_size(Vec2::new(110.0, TAP * 0.6));
-    let r = ui.add_enabled(enabled, b);
+    let r = ui.add_enabled(enabled, b).tip(tip);
     chrome.hit(key, r.rect);
     if r.clicked() {
         ui.close();
@@ -628,8 +637,8 @@ fn row(ui: &mut egui::Ui, text: RichText, indent: f32) -> egui::Response {
 
 impl DevicesUi {
     /// The tree, then the blank space whose right-click adds a device.
-    /// `write`: why a device cannot be added, if it cannot. `source`: a
-    /// line over the tree saying which map this is.
+    /// `write`: why a device cannot be added, if it cannot. `source`:
+    /// which map this is, in each device's tooltip.
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -641,17 +650,9 @@ impl DevicesUi {
         let t = theme(ui);
         let mut act = None;
         ui.set_max_width(ui.available_width());
-        if !source.is_empty() {
-            ui.add(egui::Label::new(RichText::new(source).small().color(t.muted)).truncate());
-        }
         if nodes.is_empty() {
-            ui.add(
-                egui::Label::new(
-                    RichText::new("No devices in the I/O map yet. Right-click here to add one.")
-                        .color(t.muted),
-                )
-                .wrap(),
-            );
+            ui.add(egui::Label::new(RichText::new("No devices in the I/O map yet.").color(t.muted)).wrap())
+                .tip("Right-click the empty space below to add one, or Scan the network.");
         }
         let mut flip = None;
         for n in nodes {
@@ -683,8 +684,8 @@ impl DevicesUi {
             let r = r.inner;
             chrome.hit(format!("device {}", n.name), r.rect);
             let params: Vec<String> = n.params.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            let hover = format!(
-                "{}\n{}\n{} point(s)",
+            let mut hover = format!(
+                "{}\n{}\n{} point(s). Click to fold or unfold them.",
                 state_text(&n.state),
                 if params.is_empty() {
                     "no settings".to_string()
@@ -693,7 +694,10 @@ impl DevicesUi {
                 },
                 n.points.len()
             );
-            if r.on_hover_text(hover).clicked() {
+            if !source.is_empty() {
+                let _ = write!(hover, "\nFrom {source}.");
+            }
+            if r.tip(hover).clicked() {
                 flip = Some(n.name.clone());
             }
             if folded {
@@ -720,7 +724,7 @@ impl DevicesUi {
                 if p.forced {
                     hover.push_str("\nforced by an engineer");
                 }
-                r.on_hover_text(hover);
+                r.tip(hover);
             }
         }
         if let Some(name) = flip
@@ -732,27 +736,22 @@ impl DevicesUi {
         ui.add_space(6.0);
         ui.separator();
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("On the network").strong().color(t.muted));
+            ui.label(RichText::new("On the network").strong().color(t.muted))
+                .tip("The EtherNet/IP devices that answered the last scan. Right-click one to add it to the map.");
             let busy = self.scan == Scan::Running;
-            let b = ui.add_enabled(!busy, egui::Button::new(if busy { "Scanning…" } else { "Scan" }));
+            let b = ui
+                .add_enabled(!busy, egui::Button::new(if busy { "Scanning…" } else { "Scan" }))
+                .tip(if busy {
+                    "Waiting for the devices to answer."
+                } else {
+                    "Lists the devices that answer: one ListIdentity on the LAN, which every EtherNet/IP device answers."
+                });
             chrome.hit("devices scan", b.rect);
-            if b.on_hover_text("One ListIdentity on the LAN: every EtherNet/IP device answers")
-                .clicked()
-            {
+            if b.clicked() {
                 act = Some(DeviceAct::Scan);
             }
         });
         match &self.scan {
-            Scan::Idle => {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new("Scan to list the devices that answer.")
-                            .small()
-                            .color(t.muted),
-                    )
-                    .wrap(),
-                );
-            }
             Scan::Done if self.found.is_empty() => {
                 ui.add(
                     egui::Label::new(
@@ -763,7 +762,7 @@ impl DevicesUi {
                     .wrap(),
                 );
             }
-            Scan::Running | Scan::Done => {}
+            Scan::Idle | Scan::Running | Scan::Done => {}
             Scan::Failed(why) => {
                 ui.add(egui::Label::new(RichText::new(why).small().color(RED)).wrap());
             }
@@ -806,19 +805,24 @@ impl DevicesUi {
             if let Some(n) = &self.library_note {
                 let _ = write!(hover, "\n{n}");
             }
+            hover.push_str("\nRight-click to add it to the map.");
             let can_add = write.is_ok() && f.mapped.is_none();
-            r.on_hover_text(hover).context_menu(|ui| {
-                if menu_item(ui, chrome, "menu add network", "Add to the map…", can_add) {
+            // Why Add is off, in its tooltip (it was a note under it).
+            let add_tip = match (&f.mapped, write) {
+                (Some(n), _) => format!("Already in the map as {n}."),
+                (None, Err(why)) => why.clone(),
+                (None, Ok(())) => "Adds this device to the I/O map, its address filled in.".to_string(),
+            };
+            r.tip(hover).context_menu(|ui| {
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu add network",
+                    "Add to the map…",
+                    can_add,
+                    &add_tip,
+                ) {
                     add = Some(NewDevice::from_found(f));
-                }
-                if let Some(n) = &f.mapped {
-                    ui.label(
-                        RichText::new(format!("already in the map as {n}"))
-                            .small()
-                            .color(t.muted),
-                    );
-                } else if let Err(why) = write {
-                    ui.label(RichText::new(why).small().color(t.muted));
                 }
             });
         }
@@ -832,15 +836,27 @@ impl DevicesUi {
         let size = Vec2::new(ui.available_width(), left);
         let r = ui.allocate_response(size, Sense::click());
         chrome.hit("devices blank", r.rect);
+        let or_why = |tip: &'static str| write.as_ref().err().map_or(tip, String::as_str);
         r.context_menu(|ui| {
-            if menu_item(ui, chrome, "menu new device", "New device…", write.is_ok()) {
+            if menu_item(
+                ui,
+                chrome,
+                "menu new device",
+                "New device…",
+                write.is_ok(),
+                or_why("Adds a device to the I/O map: its name, protocol and address."),
+            ) {
                 self.adding = Some(NewDevice::default());
             }
-            if menu_item(ui, chrome, "menu import device", "Import device…", write.is_ok()) {
+            if menu_item(
+                ui,
+                chrome,
+                "menu import device",
+                "Import device…",
+                write.is_ok(),
+                or_why("Adds a device from its EDS file."),
+            ) {
                 self.import = true;
-            }
-            if let Err(why) = write {
-                ui.label(RichText::new(why).small().color(t.muted));
             }
         });
         act
@@ -867,18 +883,24 @@ impl DevicesUi {
             };
             ui.label(RichText::new(title).strong().size(16.0));
             ui.add_space(8.0);
-            ui.label("Name (what the program's I/O map calls it)");
-            let n = ui.add(
-                egui::TextEdit::singleline(&mut d.name)
-                    .hint_text("rio")
-                    .desired_width(f32::INFINITY),
-            );
+            let name_tip = "What the program's I/O map calls the device.";
+            ui.label("Name").tip(name_tip);
+            let n = ui
+                .add(
+                    egui::TextEdit::singleline(&mut d.name)
+                        .hint_text("rio")
+                        .desired_width(f32::INFINITY),
+                )
+                .tip(name_tip);
             chrome.hit("device name", n.rect);
             ui.add_space(6.0);
-            ui.label("Protocol");
+            ui.label("Protocol")
+                .tip("How the controller talks to the device.");
             ui.horizontal_wrapped(|ui| {
                 for (k, (driver, title, _, defaults)) in PROTOCOLS.iter().enumerate() {
-                    let r = ui.add(egui::Button::selectable(d.protocol == k, *title));
+                    let r = ui
+                        .add(egui::Button::selectable(d.protocol == k, *title))
+                        .tip(format!("{title}, over Ethernet. Fills in its usual settings."));
                     chrome.hit(format!("device {driver}"), r.rect);
                     if r.clicked() && d.protocol != k {
                         d.protocol = k;
@@ -887,17 +909,23 @@ impl DevicesUi {
                 }
             });
             ui.add_space(6.0);
-            ui.label("Address");
             let hint = PROTOCOLS.get(d.protocol).map_or("", |p| p.2);
-            let e = ui.add(
-                egui::TextEdit::singleline(&mut d.endpoint)
-                    .hint_text(hint)
-                    .desired_width(f32::INFINITY),
-            );
+            let addr_tip = format!("The device's IP address, e.g. {hint}.");
+            ui.label("Address").tip(&addr_tip);
+            let e = ui
+                .add(
+                    egui::TextEdit::singleline(&mut d.endpoint)
+                        .hint_text(hint)
+                        .desired_width(f32::INFINITY),
+                )
+                .tip(&addr_tip);
             chrome.hit("device endpoint", e.rect);
             ui.add_space(6.0);
-            ui.label("Settings (KEY=VALUE, the driver's)");
-            let p = ui.add(egui::TextEdit::singleline(&mut d.params).desired_width(f32::INFINITY));
+            let params_tip = "The driver's settings, KEY=VALUE separated by spaces.";
+            ui.label("Settings").tip(params_tip);
+            let p = ui
+                .add(egui::TextEdit::singleline(&mut d.params).desired_width(f32::INFINITY))
+                .tip(params_tip);
             chrome.hit("device params", p.rect);
             if let Some(err) = &d.error {
                 ui.add_space(4.0);
@@ -906,9 +934,13 @@ impl DevicesUi {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
-                let ok = ui.add(egui::Button::new(RichText::new("Add").strong()).min_size(tall));
+                let ok = ui
+                    .add(egui::Button::new(RichText::new("Add").strong()).min_size(tall))
+                    .tip("Adds the device's line to the I/O map.");
                 chrome.hit("device ok", ok.rect);
-                let no = ui.add(egui::Button::new("Cancel").min_size(tall));
+                let no = ui
+                    .add(egui::Button::new("Cancel").min_size(tall))
+                    .tip("Closes the form. Nothing is added.");
                 chrome.hit("device cancel", no.rect);
                 if ok.clicked() {
                     match d.line() {
