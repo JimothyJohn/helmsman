@@ -439,6 +439,25 @@ impl App {
                     w.cross_references();
                 }
             }
+            Action::Force => {
+                if let Some(w) = self.workspace() {
+                    w.force_picked(ctx);
+                }
+            }
+            Action::StepInto | Action::StepOut => {
+                if let Some(w) = self.workspace() {
+                    if a == Action::StepInto {
+                        w.step_into();
+                    } else {
+                        w.step_out();
+                    }
+                }
+            }
+            Action::ReleaseAll => {
+                if let Some(w) = self.workspace() {
+                    w.release_all();
+                }
+            }
             Action::Breakpoint => {
                 if self.source == Source::Sim
                     && let Some(w) = self.workspace()
@@ -974,6 +993,33 @@ impl App {
                 ) && let Some(w) = self.workspace()
                 {
                     w.cross_references();
+                }
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit force",
+                    "Force input",
+                    false,
+                    &k(Action::Force),
+                    "Forces the input the picked block reads: a switch flips, a number's field opens. \
+                     On a box only an engineer forces, and every force is recorded.",
+                ) && let Some(w) = self.workspace()
+                {
+                    w.force_picked(&ctx);
+                }
+                if self.source == Source::Box
+                    && menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "edit release",
+                        "Release all forces",
+                        false,
+                        &k(Action::ReleaseAll),
+                        "Releases every force on the box: each input reads its module again.",
+                    )
+                    && let Some(w) = self.workspace()
+                {
+                    w.release_all();
                 }
                 if self.source == Source::Sim
                     && menu_item_keyed(

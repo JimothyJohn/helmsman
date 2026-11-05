@@ -591,13 +591,17 @@ impl Harness {
     }
 
     fn key(&mut self, key: egui::Key) {
+        self.chord(Modifiers::NONE, key);
+    }
+
+    fn chord(&mut self, modifiers: Modifiers, key: egui::Key) {
         for pressed in [true, false] {
             self.frame(vec![Event::Key {
                 key,
                 physical_key: None,
                 pressed,
                 repeat: false,
-                modifiers: Modifiers::NONE,
+                modifiers,
             }]);
         }
     }
@@ -1159,19 +1163,17 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
     assert!(sent.iter().any(|q| q.method == "PUT"), "{sent:?}");
 }
 
-#[test]
-fn an_engineer_forces_an_input_from_the_diagram_and_releases_all() {
-    let b = Bench::new();
-    let jar = Jar::default();
+/// Alice's page on the bench box, watched until the running module is
+/// drawn with a scan.
+fn drawn(b: &Bench, jar: &Jar) -> BoxView {
     let ctx = egui::Context::default();
-    let mut v = page(&b, &jar, Some(("alice", ALICE)));
-    // Watch the box until the running module is drawn with a scan.
+    let mut v = page(b, jar, Some(("alice", ALICE)));
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut now = 0.0;
     while v.view.is_none() || v.state.scan.is_none() {
         assert!(Instant::now() < deadline, "never drawn: {:?}", v.state.problem);
         v.step_all(&ctx, vec![], vec![], now);
-        pump(&b, &jar, &mut v, &ctx, now);
+        pump(b, jar, &mut v, &ctx, now);
         if let Some(name) = v.state.selected.clone() {
             for (ev, data) in b.events(&crate::remote::trace_url(&name), 1) {
                 v.state.apply(Msg::Event(Stream::Trace, ev, data), now);
@@ -1179,6 +1181,14 @@ fn an_engineer_forces_an_input_from_the_diagram_and_releases_all() {
         }
         now += 0.1;
     }
+    v
+}
+
+#[test]
+fn an_engineer_forces_an_input_from_the_diagram_and_releases_all() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let v = drawn(&b, &jar);
     let start = |v: &BoxView| {
         v.state
             .signals
@@ -1252,6 +1262,77 @@ fn an_engineer_forces_an_input_from_the_diagram_and_releases_all() {
     h.frame(vec![]);
     assert!(h.app.chrome.rect("forced start").is_none());
     assert!(h.app.chrome.rect("forces").is_none());
+}
+
+#[test]
+fn ctrl_shift_f_forces_the_picked_input_and_ctrl_shift_u_releases_all() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = drawn(&b, &jar);
+    let view = v.view.as_mut().expect("drawn");
+    let read = view
+        .diagram()
+        .nodes
+        .iter()
+        .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Read { path } if path.eq_ignore_ascii_case("start")))
+        .expect("a read of start")
+        .id;
+    view.pick = Some(crate::st_view::Pick::Node(read));
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.frame(vec![]);
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::F);
+    let reqs = h.sent();
+    let post = reqs
+        .iter()
+        .find(|q| q.url == "/api/forces" && q.method == "POST")
+        .unwrap_or_else(|| panic!("{reqs:?}"));
+    let body = String::from_utf8_lossy(post.body.as_deref().unwrap_or_default()).into_owned();
+    assert!(body.contains("false"), "start (on) flips to FALSE: {body}");
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        h.bv().projects.answer(q.call, &a);
+    }
+    settle(&b, &jar, &mut h.bv().projects);
+    h.frame(vec![]);
+    assert_eq!(h.bv().state.forces.len(), 1);
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::U);
+    let reqs = h.sent();
+    assert!(
+        reqs.iter()
+            .any(|q| q.url == "/api/forces" && q.method == "DELETE"),
+        "{reqs:?}"
+    );
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        h.bv().projects.answer(q.call, &a);
+    }
+    settle(&b, &jar, &mut h.bv().projects);
+    assert_eq!(b.json("/api/forces")["forces"], serde_json::json!([]));
+}
+
+#[test]
+fn ctrl_shift_f_sends_nothing_without_an_engineer_signed_in() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = drawn(&b, &jar);
+    let view = v.view.as_mut().expect("drawn");
+    let read = view
+        .diagram()
+        .nodes
+        .iter()
+        .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Read { path } if path.eq_ignore_ascii_case("start")))
+        .expect("a read of start")
+        .id;
+    view.pick = Some(crate::st_view::Pick::Node(read));
+    v.session = None;
+    let mut h = Harness::new(v, None);
+    h.frame(vec![]);
+    h.sent();
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::F);
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::U);
+    let reqs = h.sent();
+    assert!(!reqs.iter().any(|q| q.url.starts_with("/api/forces")), "{reqs:?}");
 }
 
 #[test]

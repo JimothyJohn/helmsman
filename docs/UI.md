@@ -241,11 +241,14 @@ The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
 | Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
 | Ctrl Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References |
 | Ctrl B | Breakpoint on the picked block (simulation): the scan stops before it, framed in orange; Ctrl Enter goes on to the next stop | (Toggle Breakpoint is F9) |
+| Ctrl Shift F | Force the picked input: a switch flips, a number's field opens (on a box an engineer's audited force) | |
+| Ctrl Shift U | Release every force (box, engineer) | |
+| Ctrl ] | Into the picked block instance's diagram; a stopped simulation steps one scan | |
+| Ctrl [ | Out to the caller's diagram, the instance left picked; a stopped simulation steps one scan | |
 | Alt ↑ | Up one level in the diagram | |
 
 Each menu item prints its key. Reserved, not built (TODO cards
-`hotkey-*`), on chords rather than F keys: Ctrl ] / Ctrl [ step into / out of an instance,
-Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F
+`hotkey-*`), on chords rather than F keys: Ctrl F
 find in the ST with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2
 the Agent.
 
