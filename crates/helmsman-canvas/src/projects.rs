@@ -846,6 +846,16 @@ pub trait Workspace {
     fn force_picked(&mut self, _ctx: &egui::Context) -> bool {
         false
     }
+    /// Opens the picked block instance's diagram (Ctrl ]); a stopped
+    /// simulation then steps one scan. Whether it opened one.
+    fn step_into(&mut self) -> bool {
+        false
+    }
+    /// Up one level of the diagram (Ctrl [); a stopped simulation then
+    /// steps one scan. Whether there was a level up.
+    fn step_out(&mut self) -> bool {
+        false
+    }
     /// Releases every force (Ctrl Shift U); whether there were any.
     fn release_all(&mut self) -> bool {
         false

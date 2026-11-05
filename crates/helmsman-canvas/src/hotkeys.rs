@@ -24,6 +24,8 @@
 //! | Breakpoint on the picked block (simulation) | Ctrl/⌘ B | (Toggle Breakpoint is F9 there) |
 //! | Force the picked input | Ctrl/⌘ Shift F | (a key of our own) |
 //! | Release every force (box) | Ctrl/⌘ Shift U | (a key of our own) |
+//! | Into the picked instance's diagram, one scan (stopped) | Ctrl/⌘ ] | (a key of our own) |
+//! | Out to the caller's diagram, one scan (stopped) | Ctrl/⌘ [ | (a key of our own) |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
 //!
 //! The shortcuts are read at the end of the frame, after every widget
@@ -55,6 +57,8 @@ pub enum Action {
     Breakpoint,
     Force,
     ReleaseAll,
+    StepInto,
+    StepOut,
     /// Cold restart of the simulation (a glyph; no key).
     Restart,
     Upload,
@@ -123,6 +127,8 @@ pub const TABLE: &[Hotkey] = &[
         Key::U,
         "",
     ),
+    key(Action::StepInto, Modifiers::COMMAND, Key::CloseBracket, ""),
+    key(Action::StepOut, Modifiers::COMMAND, Key::OpenBracket, ""),
     key(Action::Files, Modifiers::ALT, Key::Num0, "Devices"),
     key(Action::St, Modifiers::ALT, Key::Num1, "POUs"),
     key(Action::Trend, Modifiers::ALT, Key::Num2, "Modules"),
@@ -159,6 +165,8 @@ const fn does(action: Action) -> &'static str {
              audited force)"
         }
         Action::ReleaseAll => "Release every force on the box",
+        Action::StepInto => "Into the picked block instance's diagram; a stopped simulation steps one scan",
+        Action::StepOut => "Out to the caller's diagram; a stopped simulation steps one scan",
         Action::Restart | Action::Upload | Action::Download => "",
     }
 }
@@ -210,8 +218,7 @@ pub fn markdown() -> String {
     }
     out.push_str("| Alt ↑ | Up one level in the diagram | |\n");
     out.push_str(
-        "\nReserved, not built yet, on chords rather than function keys: \
-         Ctrl ] / Ctrl [ step into / out of an instance, Ctrl F find in \
+        "\nReserved, not built yet, on chords rather than function keys: Ctrl F find in \
          the Structured Text with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2 the Agent.\n",
     );
     out
@@ -318,6 +325,9 @@ mod tests {
         assert!(wants(&down(Modifiers::SHIFT, Key::F8)));
         assert!(wants(&down(Modifiers::ALT, Key::F8)));
         assert!(wants(&down(Modifiers::NONE, Key::F10)));
+        // Back and Forward on a Mac: ours while the page has the keyboard.
+        assert!(wants(&down(Modifiers::COMMAND, Key::OpenBracket)));
+        assert!(wants(&down(Modifiers::COMMAND, Key::CloseBracket)));
         for (m, k) in [
             (Modifiers::NONE, Key::F5),
             (Modifiers::NONE, Key::F11),

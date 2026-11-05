@@ -1027,6 +1027,14 @@ impl Workspace for BoxView {
         true
     }
 
+    fn step_into(&mut self) -> bool {
+        self.view.as_mut().is_some_and(Viewer::step_into)
+    }
+
+    fn step_out(&mut self) -> bool {
+        self.view.as_mut().is_some_and(Viewer::step_out)
+    }
+
     fn release_all(&mut self) -> bool {
         if is_engineer(self.session.as_ref()).is_err() || self.state.forces.is_empty() {
             return false;

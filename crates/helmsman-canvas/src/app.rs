@@ -444,6 +444,15 @@ impl App {
                     w.force_picked(ctx);
                 }
             }
+            Action::StepInto | Action::StepOut => {
+                if let Some(w) = self.workspace() {
+                    if a == Action::StepInto {
+                        w.step_into();
+                    } else {
+                        w.step_out();
+                    }
+                }
+            }
             Action::ReleaseAll => {
                 if let Some(w) = self.workspace() {
                     w.release_all();

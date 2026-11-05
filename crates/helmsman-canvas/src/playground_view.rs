@@ -2593,6 +2593,22 @@ impl Workspace for PlaygroundView {
         }
     }
 
+    fn step_into(&mut self) -> bool {
+        let opened = self.viewer.as_mut().is_some_and(Viewer::step_into);
+        if opened && !self.session.running {
+            self.session.step();
+        }
+        opened
+    }
+
+    fn step_out(&mut self) -> bool {
+        let up = self.viewer.as_mut().is_some_and(Viewer::step_out);
+        if up && !self.session.running {
+            self.session.step();
+        }
+        up
+    }
+
     fn toggle_breakpoint(&mut self) -> bool {
         let Some(id) = self.viewer.as_ref().and_then(Viewer::picked_stmt) else {
             return false;
