@@ -620,6 +620,64 @@ time), or the test holds no `ASSERT` at all. The test's first comment is
 the requirement in the engineer's words. Deterministic: no wall clock, no
 I/O.
 
+**Untested** (Nick, 2026-11-05). A test file that states its requirement
+(a first comment) but declares no `ASSERT`, or whose PROGRAM has an empty
+body, is a third state, `Outcome::Untested`: the requirement is written
+down and nothing checks it yet. It is neither green nor red: `spec::red`
+leaves it out, so it never refuses a deploy or a "Use this code".
+`POST /api/projects/{p}/tests` gives each test a `state` (`passed`,
+`failed`, `untested`) beside the old fields (`passed` stays true only when
+green, so an older client reads an untested one as not passed) and an
+`untested` count; `ok` and `red` count only the red ones. A file with no
+comment, a body and no `ASSERT` is still red.
+
+**Writing a requirement** (`POST /api/projects/{p}/requirements`,
+`api::requirements`). The Requirements tab becomes a list of plain-words
+requirements; typing one has the agent write the test behind it. The
+request is `{text, name?}`: one line (no control characters), 1 to 500
+characters trimmed; `name` is snake case (`spec::name_ok`, 1 to 48 of
+`a-z 0-9 _`, starting with a letter), else the box slugs the words
+(`spec::slug`), unique in the project (`_2` to `_99`). A name whose file
+states another requirement is 409; the same words again are the same
+requirement and its file. Engineer only, exactly as a file save: an
+engineer (or above) login session, as a bearer or the page's cookie with
+its same-origin proof; the box token alone is 403. The response streams:
+
+```text
+event: requirement  {"name", "text"}
+event: text         {"delta"}
+event: tool_call    {"id", "name", "input"}
+event: tool_result  {"id", "name", "ok", "summary"}
+event: retrying     {"error", "after_ms"}
+event: test         {"name", "file", "state": "passed"|"failed"|"untested", "why", "revision"}
+event: done         {"stop": "end_turn"|"budget"|"refusal"|"offline", "why", "steps", "output_tokens"}
+event: error        {"kind", "message", "retryable"}
+```
+
+The box asks the relay for the tests profile (`--relay-tests-agent V`,
+default `tests-v1`), whose one tool is `submit_test {name, source}`. The
+agent loop runs it in process (`Agent::chat_local` with a `Local` runner)
+and nothing else: any other name, the box API's tools included, is
+answered "not available", unrun. One user message: fixed words outside
+the envelope, then the requirement, the name and the project's built
+program files (no tests, no `vN.st` iterations) inside `<box-data>`. On
+`submit_test` the box checks the name is the one it gave and that the
+source declares exactly one PROGRAM, `test_NAME`; writes the requirement
+as the first line (`spec::header`, every `(*` and `*)` in the words
+broken with a space so nothing escapes the comment); and runs it with the
+spec runner against the project. A test that does not compile or checks
+nothing (no `ASSERT`) is answered with why and nothing is written; the
+model may resubmit while its budget lasts (8 turns, 2 calls a turn, 64k
+output tokens, 5 min). One that compiles is saved as a normal project save
+(version-checked, a revision by the session's person, audited), passed
+or failed (a failing test is a correct test of a program that does not
+meet it yet). Offline, with no relay, or when the agent wrote nothing,
+the requirement is written down untested (`spec::placeholder`: the
+comment and an empty `PROGRAM test_NAME END_PROGRAM`) unless its file is
+already there, and `done` says `stop: "offline"` when the agent was not
+reached. `test` comes once, after the agent's events and before `done`
+or `error`: the file as it now is on the box, run.
+
 Test files never deploy: the project build (`project::build`) and the
 page's build both skip `spec::is_test` files. The page runs the tests
 after every build change and before Deploy and "Use this code" (a block
@@ -1224,6 +1282,8 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
 | `DELETE /api/projects/{p}/files/{f}` | engineer | |
 | `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval}`, or 422 `{diagnostics: [{file, line, col, message}]}` |
+| `POST /api/projects/{p}/tests` | token or session | `{ok, red: [line], untested, tests: [{file, requirement, state, passed, why, scans, elapsed_ms}]}`; `state` is `passed`, `failed` or `untested` (never red) |
+| `POST /api/projects/{p}/requirements` | engineer | `{text, name?}`; an event stream: the agent writes the requirement's test (see Requirement tests) |
 | `POST /api/projects/{p}/replay` | engineer | sim replay evidence, as `POST /api/proposals/{id}/replay` |
 | `POST /api/projects/{p}/deploy` | engineer | `{replay?}`; as apply, plus `project: {name, recorded}` |
 | `GET /api/projects/{p}/zip` | open | `application/zip` |
@@ -2132,7 +2192,9 @@ path that drives an output).
   budget (6 turns, 32k output tokens, 3 min); the chat's running slots.
   `--relay-explain-agent V` asks the relay for an explain profile
   (default `explain-v2`: the relay's read-only, floor-language profile;
-  the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
+  the chat defaults to agent `v3`, which adds the drop-in tools;
+  `--relay-tests-agent V`, default `tests-v1`, is the requirement
+  route's profile, see Requirement tests). `GET /api` says whether the box has an
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.
 

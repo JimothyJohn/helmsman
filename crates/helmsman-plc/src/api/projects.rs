@@ -12,6 +12,7 @@
 //! DELETE /api/projects/{p}/files/{f}          engineer
 //! POST   /api/projects/{p}/check              token or session: build it as a deploy would; nothing changes
 //! POST   /api/projects/{p}/tests              token or session: run its requirement tests (test_*.st) in the simulation; nothing changes
+//! POST   /api/projects/{p}/requirements       engineer: {text, name?}: one requirement; the agent writes its test (an event stream, see [`super::requirements`])
 //! POST   /api/projects/{p}/replay             engineer: sim replay of deploying it (evidence a deploy can cite)
 //! POST   /api/projects/{p}/deploy             engineer: {replay?}: tests, build, apply through the approval policy, commit, hot-swap; a red test refuses (409)
 //! GET    /api/projects/{p}/zip                the project as a .zip
@@ -170,7 +171,7 @@ pub(super) fn allowed(path: &[&str]) -> Option<&'static str> {
             "api",
             "projects",
             _,
-            "rename" | "check" | "tests" | "replay" | "deploy" | "import",
+            "rename" | "check" | "tests" | "requirements" | "replay" | "deploy" | "import",
         ]
         | ["api", "projects", _, "history", _, "restore"] => Some("POST"),
         ["api", "running"] | ["api", "projects", _, "history"] | ["api", "projects", _, "history", _] => {
@@ -182,7 +183,7 @@ pub(super) fn allowed(path: &[&str]) -> Option<&'static str> {
 
 /// Refused unless the call carries a login session of an engineer or
 /// above.
-fn engineer(ctx: &Ctx, req: &Request, what: &str) -> Result<(), Response> {
+pub(super) fn engineer(ctx: &Ctx, req: &Request, what: &str) -> Result<(), Response> {
     let why = match &req.session {
         Some(p) if p.role >= Role::Engineer => return Ok(()),
         Some(p) => format!("{what} needs an engineer login; this session is {}", p.label()),
@@ -199,7 +200,7 @@ fn engineer(ctx: &Ctx, req: &Request, what: &str) -> Result<(), Response> {
     ))
 }
 
-fn json_body(req: &Request) -> Result<serde_json::Map<String, Json>, &'static str> {
+pub(super) fn json_body(req: &Request) -> Result<serde_json::Map<String, Json>, &'static str> {
     if !is_json(req) {
         return Err("Content-Type must be application/json");
     }
@@ -471,7 +472,7 @@ fn upload(
 }
 
 /// Who a change is recorded as: the session's label, else the box.
-fn by(req: &Request) -> String {
+pub(super) fn by(req: &Request) -> String {
     req.session
         .as_ref()
         .map_or_else(|| "box".to_string(), crate::policy::account::Principal::label)
@@ -665,7 +666,7 @@ fn shape(appr: &Approval) -> Shape {
 
 /// How this box runs a project's requirement tests: its scan period and
 /// image sizes (the simulation's defaults on a box with no approval path).
-fn test_settings(ctx: &Ctx) -> spec::Settings {
+pub(super) fn test_settings(ctx: &Ctx) -> spec::Settings {
     match &ctx.approval {
         Some(appr) => spec::Settings::new(ImageSizes {
             i: appr.plant.i_len,
@@ -698,10 +699,15 @@ fn run_tests(ctx: &Ctx, name: &str) -> Result<Vec<spec::Verdict>, (u16, Json, St
     Ok(spec::run_all(&plan, test_settings(ctx)))
 }
 
-fn verdict_json(v: &spec::Verdict) -> Json {
+/// One test's result. `state` is `passed`, `failed` or `untested` (no
+/// test yet: the requirement is written down and nothing checks it; not
+/// red). `passed` is kept for older clients: true only when green, so an
+/// untested one reads `passed: false` there.
+pub(super) fn verdict_json(v: &spec::Verdict) -> Json {
     json!({
         "file": v.file,
         "requirement": v.requirement,
+        "state": v.state(),
         "passed": v.passed(),
         "why": v.why(),
         "scans": v.scans,
@@ -710,18 +716,25 @@ fn verdict_json(v: &spec::Verdict) -> Json {
 }
 
 /// `POST /api/projects/{p}/tests`: every requirement test of the project,
-/// green or red, with why. Nothing changes.
+/// green, red or untested, with why. `ok` and `red` count only the red
+/// ones: an untested requirement never refuses a deploy. Nothing changes.
 fn tests(req: &Request, ctx: &Ctx, name: &str) -> Response {
     let what = format!("project {}", clean(name));
     match run_tests(ctx, name) {
         Ok(v) => {
             let red = spec::red(&v);
+            let untested = v.iter().filter(|v| v.untested()).count();
             let body = json!({
                 "ok": red.is_empty(),
                 "tests": v.iter().map(verdict_json).collect::<Vec<_>>(),
                 "red": red,
+                "untested": untested,
             });
-            let detail = format!("{what}: {} test(s), {} red", v.len(), red.len());
+            let detail = format!(
+                "{what}: {} test(s), {} red, {untested} untested",
+                v.len(),
+                red.len()
+            );
             audited(ctx, req, 200, &body, &detail)
         }
         Err((status, body, why)) => audited(ctx, req, status, &body, &format!("{what}: tests: {why}")),
@@ -729,7 +742,8 @@ fn tests(req: &Request, ctx: &Ctx, name: &str) -> Response {
 }
 
 /// The deploy gate: `Ok` when every requirement test of project `name` is
-/// green (or it has none); else 409 naming each red one, nothing changed.
+/// green or untested (or it has none); else 409 naming each red one,
+/// nothing changed.
 pub(super) fn red_tests(ctx: &Ctx, name: &str) -> Result<(), (u16, Json, String)> {
     let v = run_tests(ctx, name)?;
     let red = spec::red(&v);

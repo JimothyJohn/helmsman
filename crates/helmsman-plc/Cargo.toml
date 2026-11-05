@@ -169,6 +169,10 @@ name = "projects"
 required-features = ["box"]
 
 [[test]]
+name = "requirements"
+required-features = ["box"]
+
+[[test]]
 name = "trend"
 required-features = ["box"]
 

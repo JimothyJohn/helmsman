@@ -22,5 +22,5 @@ pub mod sse;
 pub mod tools;
 pub mod turn;
 
-pub use agent::{Agent, Budget, Conversation, Limits, Outcome, Progress, Retry, Stop};
+pub use agent::{Agent, Budget, Conversation, Limits, Local, Outcome, Progress, Retry, Stop};
 pub use tools::{BoxApi, Caller};
