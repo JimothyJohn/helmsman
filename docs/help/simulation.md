@@ -46,6 +46,15 @@ and the last good program keeps running.
 Undo and Redo (<kbd>Ctrl</kbd> <kbd>Z</kbd>, <kbd>Ctrl</kbd> <kbd>Y</kbd>)
 work in the editor and from the Edit menu.
 
+<kbd>Ctrl</kbd> <kbd>F</kbd> opens a find box over the Structured Text.
+Every match is marked in yellow, the current one brighter, and the pane
+scrolls to it; the box counts them. <kbd>Enter</kbd> or
+<kbd>Ctrl</kbd> <kbd>G</kbd> goes to the next match,
+<kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Shift</kbd>
+<kbd>G</kbd> to the previous one, and letters match in either case, as
+Structured Text does. <kbd>Esc</kbd> closes the box and leaves the match
+selected in the editor. It works the same on a box's code.
+
 ## Inputs
 
 Every input of the program has a control: on the diagram, where the
