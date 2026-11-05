@@ -840,6 +840,16 @@ pub trait Workspace {
     fn toggle_breakpoint(&mut self) -> bool {
         false
     }
+    /// Forces the input the picked block reads (Ctrl Shift F): a BOOL
+    /// flips, a number's field takes the keyboard. On a box an engineer's
+    /// force; in the simulation the input's switch. Whether it did.
+    fn force_picked(&mut self, _ctx: &egui::Context) -> bool {
+        false
+    }
+    /// Releases every force (Ctrl Shift U); whether there were any.
+    fn release_all(&mut self) -> bool {
+        false
+    }
 }
 
 /// The file and line a line of a project build is from: the build is every

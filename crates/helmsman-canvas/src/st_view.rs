@@ -353,6 +353,25 @@ impl Viewer {
         }
     }
 
+    /// The picked block if it reads a variable: its path and its index
+    /// among the diagram's reads (the order [`Self::reads_on_screen`]
+    /// lists them in, which keys the controls drawn over them).
+    #[must_use]
+    pub fn picked_read(&self) -> Option<(usize, String)> {
+        let Some(Pick::Node(n)) = self.pick else {
+            return None;
+        };
+        let reads = self
+            .diagram()
+            .nodes
+            .iter()
+            .filter(|m| matches!(m.kind, NodeKind::Read { .. }));
+        reads.enumerate().find_map(|(k, m)| match &m.kind {
+            NodeKind::Read { path } if m.id == n => Some((k, path.clone())),
+            _ => None,
+        })
+    }
+
     /// The statement the picked block or region was lowered from: what a
     /// breakpoint (Ctrl B) goes on.
     #[must_use]

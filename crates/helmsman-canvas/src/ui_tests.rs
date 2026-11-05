@@ -478,6 +478,58 @@ mod polish {
     }
 
     #[test]
+    fn ctrl_shift_f_flips_the_picked_switch_and_opens_a_number_field() {
+        use helmsman_iec::Value;
+        let mut h = Harness::new(App::sim());
+        h.app.sim.as_mut().unwrap().load(
+            "PROGRAM t
+VAR_INPUT enable : BOOL := TRUE; speed : INT; END_VAR
+VAR_OUTPUT lamp : BOOL; out : INT; END_VAR
+lamp := enable;
+out := speed * 2;
+END_PROGRAM",
+            "force test",
+        );
+        h.wait(0.1);
+        let pick = |h: &mut Harness, name: &str| {
+            let v = h.app.sim.as_mut().unwrap().viewer.as_mut().unwrap();
+            let n = v
+                .diagram()
+                .nodes
+                .iter()
+                .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Read { path } if path.eq_ignore_ascii_case(name)))
+                .expect("a read")
+                .id;
+            v.pick = Some(crate::st_view::Pick::Node(n));
+            v.picked_read().expect("a read picked").0
+        };
+        let value = |h: &Harness, name: &str| h.app.sim.as_ref().unwrap().session.value(name);
+        pick(&mut h, "enable");
+        assert_eq!(value(&h, "enable"), Some(Value::Bool(true)));
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
+        assert_eq!(
+            value(&h, "enable"),
+            Some(Value::Bool(false)),
+            "the switch flipped"
+        );
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
+        assert_eq!(value(&h, "enable"), Some(Value::Bool(true)), "and back");
+        let k = pick(&mut h, "speed");
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
+        h.frame(vec![]);
+        let field = egui::Id::unique(("pg-map-number", k));
+        assert!(
+            h.ctx.memory(|m| m.has_focus(field)),
+            "the speed's field has the keyboard"
+        );
+        // Nothing to release in the simulation; the key does nothing.
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::U);
+        h.press("bar edit");
+        assert!(h.has("edit force"));
+        assert!(!h.has("edit release"), "release all is a box's");
+    }
+
+    #[test]
     fn alt_f8_opens_sign_in_and_ctrl_f8_signs_out_on_a_box() {
         let mut h = Harness::new(App::boxed());
         assert!(!h.app.login);

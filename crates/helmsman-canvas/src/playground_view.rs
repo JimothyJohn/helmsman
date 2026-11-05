@@ -2570,6 +2570,29 @@ impl Workspace for PlaygroundView {
         self.viewer.as_mut().is_some_and(Viewer::cross_references)
     }
 
+    fn force_picked(&mut self, ctx: &egui::Context) -> bool {
+        let Some((k, path)) = self.viewer.as_ref().and_then(Viewer::picked_read) else {
+            return false;
+        };
+        let Some(p) = self
+            .session
+            .inputs()
+            .find(|p| p.name.eq_ignore_ascii_case(&path))
+            .cloned()
+        else {
+            return false;
+        };
+        match (p.widget, p.value) {
+            (Some(Widget::Toggle), Value::Bool(on)) => self.session.set_input(&p.name, Value::Bool(!on)),
+            // A push button is on only while held.
+            (Some(Widget::Push) | None, _) => false,
+            _ => {
+                ctx.memory_mut(|m| m.request_focus(egui::Id::unique(("pg-map-number", k))));
+                true
+            }
+        }
+    }
+
     fn toggle_breakpoint(&mut self) -> bool {
         let Some(id) = self.viewer.as_ref().and_then(Viewer::picked_stmt) else {
             return false;
