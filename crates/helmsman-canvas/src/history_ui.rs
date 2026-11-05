@@ -15,6 +15,7 @@ use eframe::egui::{self, Color32, RichText, Vec2};
 use crate::editor::Chrome;
 use crate::st_view::TAP;
 use crate::theme::theme;
+use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 const GREEN: Color32 = Color32::from_rgb(90, 200, 120);
@@ -154,7 +155,7 @@ pub fn rows_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], ope
             .color(t.muted),
     );
     chrome.hit("history", r.rect);
-    if r.on_hover_text("every save, as it was: who, when, what")
+    if r.tip("Every save, as it was: who, when and what. Click to show or hide them.")
         .clicked()
     {
         *open = !*open;
@@ -177,7 +178,9 @@ pub fn rows_ui(ui: &mut egui::Ui, chrome: &mut Chrome, rows: &[RevisionRow], ope
             when(row.at_ms),
             if row.page { " · from an Agent page" } else { "" }
         );
-        if r.on_hover_text(hover).clicked() {
+        if r.tip(format!("{hover}. Click to see what changed since."))
+            .clicked()
+        {
             picked = Some(row.n);
         }
     }
@@ -268,14 +271,16 @@ pub fn modal(
             let r = match restore {
                 Ok(()) => ui
                     .add(b)
-                    .on_hover_text("the project's files back to this revision, as a new revision"),
-                Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
+                    .tip("Puts the project's files back as they were here, saved as a new revision."),
+                Err(why) => ui.add_enabled(false, b).tip(why),
             };
             chrome.hit("revision restore", r.rect);
             if r.clicked() {
                 out = Some(HistoryAct::Restore(view.row.n));
             }
-            let c = ui.add(egui::Button::new("Close").min_size(tall));
+            let c = ui
+                .add(egui::Button::new("Close").min_size(tall))
+                .tip("Closes the revision. Nothing changes (Escape).");
             chrome.hit("revision close", c.rect);
             if c.clicked() {
                 out = Some(HistoryAct::Close);

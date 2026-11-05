@@ -40,6 +40,7 @@ pub mod brand {
 use brand::{BLACK, STEEL, YELLOW};
 
 use crate::theme::{Theme, theme};
+use crate::tips::Tip;
 
 /// How much of the diagram a pan must leave in view, points.
 pub const KEEP: f32 = 120.0;
@@ -652,7 +653,15 @@ impl Viewer {
                 #[allow(clippy::cast_precision_loss)]
                 ui.add_space(row.depth as f32 * 14.0);
                 if row.has_kids {
-                    if ui.small_button(if row.folded { "▸" } else { "▾" }).clicked() {
+                    if ui
+                        .small_button(if row.folded { "▸" } else { "▾" })
+                        .tip(if row.folded {
+                            "Shows the instances it calls."
+                        } else {
+                            "Hides the instances it calls."
+                        })
+                        .clicked()
+                    {
                         fold = Some(row.scope);
                     }
                 } else {
@@ -661,7 +670,7 @@ impl Viewer {
                 let text = RichText::new(&s.label).monospace();
                 if ui
                     .selectable_label(row.scope == self.scope, text)
-                    .on_hover_text("show this one's diagram")
+                    .tip("Shows this one's diagram.")
                     .clicked()
                 {
                     chosen = Some(row.scope);
@@ -733,13 +742,21 @@ impl Viewer {
             let up = self.parent();
             if ui
                 .add_enabled(up.is_some(), egui::Button::new("↑"))
-                .on_hover_text("up one level (Alt+↑)")
+                .tip(if up.is_some() {
+                    "Up one level (Alt+↑)."
+                } else {
+                    "Up one level (Alt+↑): this is the program, the top."
+                })
                 .clicked()
             {
                 go = up;
             }
             for (i, o) in outer.iter().enumerate() {
-                if ui.link(RichText::new(o).color(t.muted)).clicked() {
+                if ui
+                    .link(RichText::new(o).color(t.muted))
+                    .tip(format!("Goes to {o}."))
+                    .clicked()
+                {
                     hit = Some(i);
                 }
                 ui.label(RichText::new("›").color(t.muted));
@@ -752,7 +769,12 @@ impl Viewer {
                 let last = j + 1 == trail.len();
                 let text = RichText::new(&self.scopes[k].label).monospace();
                 let text = if last { text.strong().color(t.accent) } else { text };
-                if ui.link(text).clicked() {
+                let tip = if last {
+                    "The diagram shown now."
+                } else {
+                    "Shows this level's diagram."
+                };
+                if ui.link(text).tip(tip).clicked() {
                     go = Some(k);
                 }
             }
@@ -769,7 +791,7 @@ impl Viewer {
     /// The outputs with their values; a click picks one.
     pub fn outputs_ui(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         ui.label(RichText::new("Outputs").strong())
-            .on_hover_text("click: pick it");
+            .tip("Click an output to light the path that sets it in the diagram.");
         let t = theme(ui);
         for path in self.outputs() {
             let value = scan.and_then(|s| s.get(&path));
@@ -779,7 +801,11 @@ impl Viewer {
                 .color(if on { t.accent } else { t.fg });
             let row = egui::Button::selectable(self.because.as_deref() == Some(path.as_str()), text)
                 .min_size(Vec2::new(ui.available_width(), TAP));
-            if ui.add(row).clicked() {
+            if ui
+                .add(row)
+                .tip("Click to light why it has this value in the diagram.")
+                .clicked()
+            {
                 self.because = Some(path);
             }
         }

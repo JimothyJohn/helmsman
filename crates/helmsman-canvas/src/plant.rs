@@ -17,6 +17,7 @@ use helmsman_project::plant;
 use crate::editor::Chrome;
 use crate::st_view::{TAP, show};
 use crate::theme::theme;
+use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
@@ -386,9 +387,17 @@ pub struct PlantUi {
     pub simulated: bool,
 }
 
-fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enabled: bool) -> bool {
+/// A right-click menu's item; `tip` shows enabled or not (disabled: why).
+fn menu_item(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    text: &str,
+    enabled: bool,
+    tip: &str,
+) -> bool {
     let b = egui::Button::new(text).min_size(Vec2::new(110.0, TAP * 0.6));
-    let r = ui.add_enabled(enabled, b);
+    let r = ui.add_enabled(enabled, b).tip(tip);
     chrome.hit(key, r.rect);
     if r.clicked() {
         ui.close();
@@ -423,7 +432,7 @@ impl PlantUi {
         } else {
             "The project's plant model (simulated only on a box): each quantity and the sensor that measures it on this machine."
         };
-        if head.on_hover_text(hover).clicked() {
+        if head.tip(format!("{hover} Click to fold or unfold.")).clicked() {
             self.folded = !self.folded;
         }
         if self.folded {
@@ -489,14 +498,15 @@ impl PlantUi {
                 hover.push_str("\nsimulated only: no plant model runs on a box");
             }
             let can_add = write.is_ok() && s.measured_by.is_none();
-            r.on_hover_text(hover).context_menu(|ui| {
-                if menu_item(ui, chrome, "menu add sensor", "Add a sensor…", can_add) {
+            // Why Add is off, in its tooltip (it was a note under it).
+            let add_tip = match (&s.measured_by, write) {
+                (Some(m), _) => format!("Already measured by {}.", m.signal),
+                (None, Err(why)) => why.clone(),
+                (None, Ok(())) => format!("Adds an in signal that measures {}.", s.name),
+            };
+            r.tip(hover).context_menu(|ui| {
+                if menu_item(ui, chrome, "menu add sensor", "Add a sensor…", can_add, &add_tip) {
                     add = Some(NewSignal::for_state(s, &self.devices));
-                }
-                if s.measured_by.is_some() {
-                    ui.label(RichText::new("already measured").small().color(t.muted));
-                } else if let Err(why) = write {
-                    ui.label(RichText::new(why).small().color(t.muted));
                 }
             });
         }
@@ -520,15 +530,21 @@ impl PlantUi {
                     .size(16.0),
             );
             ui.add_space(8.0);
-            ui.label("Signal name (the program reads it under this name)");
-            let n = ui.add(egui::TextEdit::singleline(&mut f.name).desired_width(f32::INFINITY));
+            let name_tip = "The program reads the sensor under this name.";
+            ui.label("Signal name").tip(name_tip);
+            let n = ui
+                .add(egui::TextEdit::singleline(&mut f.name).desired_width(f32::INFINITY))
+                .tip(name_tip);
             chrome.hit("sensor name", n.rect);
             ui.add_space(6.0);
-            ui.label("Device");
+            ui.label("Device")
+                .tip("The I/O map's device the sensor is wired to.");
             ui.horizontal_wrapped(|ui| {
                 let choices = f.devices.clone();
                 for d in &choices {
-                    let r = ui.add(egui::Button::selectable(f.device == d.name, &d.name));
+                    let r = ui
+                        .add(egui::Button::selectable(f.device == d.name, &d.name))
+                        .tip(format!("The sensor is on {} ({}).", d.name, d.driver));
                     chrome.hit(format!("sensor device {}", d.name), r.rect);
                     if r.clicked() && f.device != d.name {
                         f.device.clone_from(&d.name);
@@ -537,16 +553,26 @@ impl PlantUi {
                 }
             });
             ui.add_space(6.0);
-            ui.label(format!("Point ({} syntax; a {} signal)", f.driver(), f.ty));
-            let p = ui.add(egui::TextEdit::singleline(&mut f.point).desired_width(f32::INFINITY));
+            let point_tip = format!(
+                "Where on the device the sensor is wired, in {} syntax: a {} signal.",
+                f.driver(),
+                f.ty
+            );
+            ui.label("Point").tip(&point_tip);
+            let p = ui
+                .add(egui::TextEdit::singleline(&mut f.point).desired_width(f32::INFINITY))
+                .tip(&point_tip);
             chrome.hit("sensor point", p.rect);
             ui.add_space(6.0);
-            ui.label("Unit (optional)");
-            let u = ui.add(
-                egui::TextEdit::singleline(&mut f.unit)
-                    .hint_text("m")
-                    .desired_width(f32::INFINITY),
-            );
+            let unit_tip = "The unit the sensor reads in, e.g. m. Optional.";
+            ui.label("Unit").tip(unit_tip);
+            let u = ui
+                .add(
+                    egui::TextEdit::singleline(&mut f.unit)
+                        .hint_text("m")
+                        .desired_width(f32::INFINITY),
+                )
+                .tip(unit_tip);
             chrome.hit("sensor unit", u.rect);
             if let Some(err) = &f.error {
                 ui.add_space(4.0);
@@ -555,9 +581,13 @@ impl PlantUi {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
-                let ok = ui.add(egui::Button::new(RichText::new("Add").strong()).min_size(tall));
+                let ok = ui
+                    .add(egui::Button::new(RichText::new("Add").strong()).min_size(tall))
+                    .tip("Adds the sensor's in line to the I/O map.");
                 chrome.hit("sensor ok", ok.rect);
-                let no = ui.add(egui::Button::new("Cancel").min_size(tall));
+                let no = ui
+                    .add(egui::Button::new("Cancel").min_size(tall))
+                    .tip("Closes the form. Nothing is added.");
                 chrome.hit("sensor cancel", no.rect);
                 if ok.clicked() {
                     match f.line() {
