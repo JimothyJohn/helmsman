@@ -52,6 +52,10 @@ impl Files {
                     thread::sleep(Duration::from_millis(5));
                     continue;
                 };
+                // An accepted socket inherits the listener's non-blocking
+                // mode on macOS: a read before the request arrives would
+                // return at once and serve `/` (404).
+                c.set_nonblocking(false).unwrap();
                 c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
                 let mut buf = [0u8; 4096];
                 let n = c.read(&mut buf).unwrap_or(0);
