@@ -546,6 +546,9 @@ impl BoxView {
             self.add_device_line(&line);
         }
         self.revision_ui(&ui.ctx().clone(), chrome);
+        if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
+            self.project_act(a);
+        }
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.project_act(a);
         }

@@ -935,6 +935,8 @@ mod chrome {
         let mut h = Harness::new(App::sim());
         h.press("bar file");
         h.press("file copy");
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
         h.press("name ok");
         h.wait(0.3);
         assert_eq!(h.app.sim.as_ref().unwrap().proj.open, "blink-copy");
@@ -960,6 +962,8 @@ mod chrome {
         let mut h = Harness::new(App::sim());
         h.press("bar file");
         h.press("file copy");
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
         h.press("name ok");
         h.wait(0.3);
         assert_eq!(h.app.sim.as_ref().unwrap().proj.open, "blink-copy");
@@ -969,8 +973,8 @@ mod chrome {
         assert!(h.has("new file"), "New file stays a button");
         // Delete from the file's menu: asked in the centre, Keep says no.
         h.press("new file");
-        // The name field is drawn under the button, so a frame later.
-        h.frame(vec![]);
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
         h.press("name");
         h.key(Modifiers::COMMAND, Key::A);
         h.frame(vec![Event::Text("two.st".into())]);
@@ -1647,7 +1651,9 @@ mod chrome {
         // tab asking for the name.
         h.press("bar file");
         h.press("file copy");
-        assert!(h.app.chrome.files_open(), "the name is asked on the Files tab");
+        assert!(h.app.chrome.files_open(), "it lands on the Files tab");
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
         h.press("name ok");
         h.wait(0.3);
         assert!(h.has("file blink.st"), "blink-copy open with its file");
@@ -1702,8 +1708,15 @@ mod chrome {
         // New project from a right-click on the pane's blank space.
         h.right_click(h.rect("files blank").center());
         h.press("menu new project");
-        // The name field is drawn above the blank space, so a frame later.
-        h.frame(vec![]);
+        // The name popup settles into the centre on its second frame.
+        h.wait(0.2);
+        // A popup in the middle of the screen, not a field in the side
+        // panel (Nick, 2026-11-05).
+        let form = h.rect("name form");
+        assert!(
+            form.center().x > h.rect("left").right(),
+            "the name is asked in the centre: {form:?}"
+        );
         h.press("name");
         h.frame(vec![Event::Text("mine".into())]);
         h.press("name ok");

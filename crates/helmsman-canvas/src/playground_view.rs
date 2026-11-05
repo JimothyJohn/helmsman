@@ -1194,6 +1194,9 @@ impl PlaygroundView {
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
         }
+        if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
+            self.act(a);
+        }
         if let Some(a) = self.files_ui.confirm_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
         }
