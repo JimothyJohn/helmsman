@@ -818,7 +818,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
         Pos2::new(r.min.x + pad, y),
         egui::Align2::LEFT_TOP,
         &t.sub,
-        FontId::monospace(14.0 * k),
+        FontId::monospace((14.0 * k).max(crate::theme::MIN_TEXT)),
         th.muted,
     );
     y += 26.0 * k;
@@ -845,7 +845,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                     Pos2::new(r.min.x + pad, y),
                     egui::Align2::LEFT_TOP,
                     f,
-                    FontId::proportional(14.0 * k),
+                    FontId::proportional((14.0 * k).max(crate::theme::MIN_TEXT)),
                     ink,
                 );
                 y += 22.0 * k;
@@ -857,7 +857,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                     Pos2::new(r.min.x + pad, y),
                     egui::Align2::LEFT_TOP,
                     "no outputs",
-                    FontId::proportional(16.0 * k),
+                    FontId::proportional((16.0 * k).max(crate::theme::MIN_TEXT)),
                     th.muted,
                 );
                 y += 30.0 * k;
@@ -888,7 +888,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                     Pos2::new(x, mid),
                     egui::Align2::LEFT_CENTER,
                     &l.name,
-                    FontId::proportional(18.0 * k),
+                    FontId::proportional((18.0 * k).max(crate::theme::MIN_TEXT)),
                     ink,
                 );
                 if let Some(v) = text {
@@ -896,7 +896,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                         Pos2::new(r.max.x - pad, mid),
                         egui::Align2::RIGHT_CENTER,
                         v,
-                        FontId::monospace(18.0 * k),
+                        FontId::monospace((18.0 * k).max(crate::theme::MIN_TEXT)),
                         if stale { th.muted } else { th.accent },
                     );
                 }
@@ -909,7 +909,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
             Pos2::new(r.min.x + pad, y + 4.0 * k),
             egui::Align2::LEFT_TOP,
             s,
-            FontId::proportional(15.0 * k),
+            FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT)),
             th.muted,
         );
     }

@@ -110,8 +110,34 @@ pub fn theme(ui: &egui::Ui) -> Theme {
     Theme::of(ui)
 }
 
+/// The smallest text anywhere around the diagram, in points (Nick,
+/// 2026-11-05: "I can't see shit"). `ui_tests` reads every glyph drawn on
+/// every screen and tab and refuses one below it. The diagram itself
+/// zooms, so its labels follow the zoom.
+pub const MIN_TEXT: f32 = 16.0;
+/// Body text, buttons and fields.
+pub const BODY: f32 = 18.0;
+/// Code (the ST pane, values) and headings.
+pub const MONO: f32 = 17.0;
+pub const HEADING: f32 = 22.0;
+
+/// egui's text styles at the sizes above: `Small` is never below
+/// [`MIN_TEXT`], so a `.small()` label stays legible.
+fn text_styles() -> std::collections::BTreeMap<egui::TextStyle, egui::FontId> {
+    use egui::{FontFamily, FontId, TextStyle};
+    [
+        (TextStyle::Small, FontId::new(MIN_TEXT, FontFamily::Proportional)),
+        (TextStyle::Body, FontId::new(BODY, FontFamily::Proportional)),
+        (TextStyle::Button, FontId::new(BODY, FontFamily::Proportional)),
+        (TextStyle::Monospace, FontId::new(MONO, FontFamily::Monospace)),
+        (TextStyle::Heading, FontId::new(HEADING, FontFamily::Proportional)),
+    ]
+    .into()
+}
+
 /// Keeps egui's theme on the one the layout asks for (`light`), so the
-/// page, its widgets and [`Theme`] agree from the first frame.
+/// page, its widgets and [`Theme`] agree from the first frame, and the
+/// text at the sizes above in both.
 pub fn apply(ctx: &egui::Context, light: bool) {
     let want = if light {
         egui::Theme::Light
@@ -120,6 +146,9 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     };
     if ctx.theme() != want {
         ctx.set_theme(want);
+    }
+    if ctx.style_of(ctx.theme()).text_styles.get(&egui::TextStyle::Body).map(|f| f.size) != Some(BODY) {
+        ctx.all_styles_mut(|s| s.text_styles = text_styles());
     }
 }
 

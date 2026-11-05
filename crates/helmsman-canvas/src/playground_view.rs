@@ -1482,7 +1482,7 @@ impl Body for PlaygroundView {
             rect.center(),
             egui::Align2::CENTER_CENTER,
             why,
-            FontId::proportional(14.0),
+            FontId::proportional(crate::theme::BODY),
             t.muted,
         );
     }
@@ -1888,7 +1888,7 @@ impl PlaygroundView {
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Pick signals to trend above",
-                FontId::proportional(13.0),
+                FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );
             return;
@@ -1926,7 +1926,7 @@ impl PlaygroundView {
                     last.filter(|v| v.is_finite())
                         .map_or("–".into(), |v| format!("{v}"))
                 ),
-                FontId::monospace(10.5),
+                FontId::monospace(crate::theme::MIN_TEXT),
                 color,
             );
             painter.line_segment(
@@ -2053,7 +2053,7 @@ pub fn scale_labels(
             Pos2::new(x, y),
             align,
             tick_label(v, step),
-            FontId::monospace(9.5),
+            FontId::monospace(crate::theme::MIN_TEXT),
             t.muted,
         );
     }
@@ -2573,7 +2573,7 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
         egui::Button::new(
             RichText::new(text)
                 .monospace()
-                .size(15.0)
+                .size(crate::theme::MIN_TEXT)
                 .color(if on { t.accent } else { t.fg }),
         )
         .wrap_mode(egui::TextWrapMode::Truncate)

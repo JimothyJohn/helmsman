@@ -1119,7 +1119,7 @@ fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
                 rect.right_top() + Vec2::new(-4.0, 2.0),
                 Align2::RIGHT_TOP,
                 "chart cut short; counts are exact",
-                FontId::proportional(10.0),
+                FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );
         }
@@ -1129,14 +1129,14 @@ fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
             inner.left_top(),
             Align2::LEFT_TOP,
             format!("{:.3}", range.1),
-            FontId::monospace(10.0),
+            FontId::monospace(crate::theme::MIN_TEXT),
             t.muted,
         );
         p.text(
             inner.left_bottom(),
             Align2::LEFT_BOTTOM,
             format!("{:.3}", range.0),
-            FontId::monospace(10.0),
+            FontId::monospace(crate::theme::MIN_TEXT),
             t.muted,
         );
     }

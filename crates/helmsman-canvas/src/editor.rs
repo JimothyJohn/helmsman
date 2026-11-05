@@ -696,7 +696,7 @@ pub fn st_editor(
     limit: usize,
     chrome: &mut Chrome,
 ) -> egui::Response {
-    let font = FontId::monospace(13.0);
+    let font = FontId::monospace(crate::theme::MONO);
     let row = ui.fonts_mut(|f| f.row_height(&font));
     let mut scroll = egui::ScrollArea::vertical().id_salt(id.with("scroll"));
     if let Some(line) = chrome.jump.take() {

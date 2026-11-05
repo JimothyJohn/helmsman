@@ -689,7 +689,7 @@ impl BoxView {
                     tag.center(),
                     egui::Align2::CENTER_CENTER,
                     "FORCED",
-                    egui::FontId::monospace(11.0),
+                    egui::FontId::monospace(crate::theme::MIN_TEXT),
                     BLACK,
                 );
                 chrome.hit(format!("forced {}", sig.name), tag);

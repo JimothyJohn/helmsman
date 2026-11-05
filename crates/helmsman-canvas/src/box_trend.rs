@@ -324,7 +324,7 @@ impl BoxTrend {
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Pick signals to trend above",
-                FontId::proportional(13.0),
+                FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );
             return;
@@ -366,7 +366,7 @@ impl BoxTrend {
                     name.to_ascii_lowercase(),
                     last.map_or("–".into(), |v| format!("{v}"))
                 ),
-                FontId::monospace(10.5),
+                FontId::monospace(crate::theme::MIN_TEXT),
                 color,
             );
             painter.line_segment(

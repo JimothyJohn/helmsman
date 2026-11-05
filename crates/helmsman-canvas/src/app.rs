@@ -588,7 +588,7 @@ impl App {
                 r.center(),
                 egui::Align2::CENTER_CENTER,
                 label,
-                egui::FontId::proportional(14.0),
+                egui::FontId::proportional(crate::theme::BODY),
                 if on { BLACK } else { t.fg },
             );
             hits.push((key.to_string(), r));
