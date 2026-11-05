@@ -27,7 +27,8 @@
 //! simulate and propose a module or a param change, read drop-ins and PLC
 //! programs. There is no tool that applies, rolls back or takes a PIN, and
 //! the executor's calls go through [`InProcess`], which reaches only the
-//! read routes and the four draft routes ([`reachable`]): approval stays a
+//! read routes (devices and the library included), the read-only network
+//! scan and the four draft routes ([`reachable`]): approval stays a
 //! person with a role PIN on the canvas. Every result goes back inside the
 //! agent's `<box-data>` envelope ([`helmsman_agent::tools::envelope`]) as
 //! text, never as `structuredContent`, so plant text (tag names, ST
@@ -586,7 +587,8 @@ fn call(ctx: &Ctx, era: Era, id: &Json, params: &Map<String, Json>) -> Answer {
     Answer::new(200, result(era, id, r), detail)
 }
 
-/// The routes a tool may reach: the reads the tools make and the four
+/// The routes a tool may reach: the reads the tools make (the devices
+/// and the library among them), the read-only network scan, and the four
 /// draft routes. Nothing that applies, rolls back, imports, chats or
 /// streams; checked before every in-process call, whatever the executor
 /// asks.
@@ -598,7 +600,8 @@ pub fn reachable(method: &str, path: &str) -> bool {
         (method, segs.as_slice()),
         (
             "GET",
-            ["", "api", "signals" | "modules" | "io_map"]
+            ["", "api", "signals" | "modules" | "io_map" | "devices"]
+                | ["", "api", "devices", "library"]
                 | ["", "api", "modules" | "dropins", _]
                 | ["", "api", "modules", _, "trace"]
                 | ["", "api", "dropins", _, "plc"],
@@ -607,6 +610,8 @@ pub fn reachable(method: &str, path: &str) -> bool {
             // `dropins`: a fetched document stored as a drop-in (`fetch_document`).
             ["", "api", "proposals" | "dropins"]
                 | ["", "api", "proposals", "check" | "replay"]
+                // A read-only scan of the network (`list_devices`).
+                | ["", "api", "devices", "discover"]
                 | ["", "api", "devices", _, "browse"],
         )
     )
@@ -949,6 +954,9 @@ mod tests {
             ("DELETE", "/api/proposals"),
             ("POST", "/api/proposals/check/apply"),
             ("POST", "/api/devices/x/browse/apply"),
+            ("POST", "/api/devices"),
+            ("POST", "/api/devices/library"),
+            ("GET", "/api/devices/discover/x"),
         ] {
             assert!(!reachable(m, p), "{m} {p}");
         }
@@ -963,6 +971,9 @@ mod tests {
             ("POST", "/api/proposals/check"),
             ("POST", "/api/proposals/replay"),
             ("POST", "/api/devices/plc1/browse"),
+            ("GET", "/api/devices"),
+            ("GET", "/api/devices/library?vendor=991&product=515"),
+            ("POST", "/api/devices/discover"),
             // A fetched document stored as a drop-in (fetch_document).
             ("POST", "/api/dropins?name=manual.pdf&kind=pdf"),
         ] {
