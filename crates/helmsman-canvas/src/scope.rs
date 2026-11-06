@@ -143,7 +143,8 @@ impl Scope {
     }
 
     /// The `<edit_scope>` envelope's content for project `project`: the
-    /// scope, its rule, and its text as it is now (the claude module
+    /// scope, its rule, and the whole file as it is now, after the lines
+    /// of a selection or a block as `section:` (the claude module
     /// neutralizes it). [`from_asked`] reads it back from a kept page.
     #[must_use]
     pub fn envelope(&self, project: &str, files: &Files) -> String {
@@ -153,7 +154,16 @@ impl Scope {
                 m.push_str("new project: answer with one complete PROGRAM");
             }
             Self::File(f) => {
-                m.push_str(&["file: ", f, "\nanswer with the whole new ", f, "\ntext:\n"].concat());
+                m.push_str(
+                    &[
+                        "file: ",
+                        f,
+                        "\nanswer with the whole of ",
+                        f,
+                        ", every line of it, with the edits made in it\ntext:\n",
+                    ]
+                    .concat(),
+                );
                 m.push_str(files.get(f).map_or("", String::as_str));
             }
             Self::Lines { file, from, to } | Self::Block { file, from, to, .. } => {
@@ -172,7 +182,21 @@ impl Scope {
                 if let Self::Block { name, .. } = self {
                     m.push_str(&["block: ", name, "\n"].concat());
                 }
-                m.push_str("answer with the new text of these lines only\ntext:\n");
+                // The whole file goes, the section beside it (Nick,
+                // 2026-11-05: "send and receive the whole file so nothing
+                // is missed"); only the section may change.
+                m.push_str(
+                    &[
+                        "answer with the whole of ",
+                        file,
+                        ", every line of it, changed only in lines ",
+                        &from.to_string(),
+                        "-",
+                        &to.to_string(),
+                        "\nsection:\n",
+                    ]
+                    .concat(),
+                );
                 let text = files.get(file).map_or("", String::as_str);
                 for l in text
                     .split_inclusive('\n')
@@ -181,6 +205,11 @@ impl Scope {
                 {
                     m.push_str(l);
                 }
+                if !m.ends_with('\n') {
+                    m.push('\n');
+                }
+                m.push_str("text:\n");
+                m.push_str(text);
             }
         }
         m
@@ -196,7 +225,7 @@ pub fn from_asked(asked: &str) -> Option<(String, Scope)> {
     let body = &asked[at + "<edit_scope>\n".len()..];
     let field = |key: &str| {
         body.lines()
-            .take_while(|l| *l != "text:")
+            .take_while(|l| *l != "text:" && *l != "section:")
             .find_map(|l| l.strip_prefix(key))
             .map(str::trim)
     };
@@ -276,6 +305,8 @@ pub fn apply(scope: &Scope, files: &Files, answer: &str) -> Result<Files, Refusa
             "The answer carries the page's own <{tag}> markers, so none of it was taken."
         )));
     }
+    // Scenario blocks are checks, not the change (`crate::verify`).
+    let answer = &crate::verify::code_part(answer);
     if *scope == Scope::NewProject {
         let code = crate::claude::extract_program(answer)
             .ok_or_else(|| Refusal::new("The answer has no whole PROGRAM to start a project from."))?;

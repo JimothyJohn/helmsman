@@ -83,6 +83,9 @@ mod tips;
 mod tips_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod ui_tests;
+mod verify;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod verify_tests;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

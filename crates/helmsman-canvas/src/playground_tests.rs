@@ -2066,7 +2066,19 @@ fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
     });
     s.view.link.inbox.push(Incoming::End { seq });
     s.wait(0.1);
+    // Code with no scenario is asked for one, once; the same answer again
+    // is shown, not checked by a scenario (`crate::verify`).
+    assert_eq!(s.view.link.sent.len(), 3, "asked once for a scenario");
+    let (seq, _) = s.view.link.sent[2].clone();
+    s.view.link.inbox.push(Incoming::Chunk {
+        seq,
+        text: STREAM.replace("PROGRAM p\\nEND_PROGRAM", &example("latch").replace('\n', "\\n")),
+    });
+    s.view.link.inbox.push(Incoming::End { seq });
+    s.wait(0.1);
+    assert_eq!(s.view.link.sent.len(), 3);
     assert_eq!(s.view.chat.answer.as_ref().unwrap().phase, Phase::Done);
+    assert!(s.view.live_check.as_ref().is_some_and(|(c, _)| c.unchecked()));
     assert!(s.view.session.running, "the example was running");
     assert!(s.view.use_answer());
     assert!(

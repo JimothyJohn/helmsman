@@ -689,6 +689,19 @@ The Requirements tab of the right panel shows one row per test, green or
 red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
 same gate.
 
+In the simulation the Agent's answer is also checked before it is shown
+(`agent-scenarios`, crates/helmsman-canvas/src/verify.rs). An answer with
+code carries scenarios, requirement tests in the same format, in
+```` ```st scenario ```` blocks. The page takes the code into a copy of
+the project through `scope::apply`, adds the scenarios, compiles it and
+runs the scenarios with the project's own tests. The code must be the
+whole open file, changed only inside the selection or block
+(`verify::full_copy`: no elision markers, every POU with its header and
+END_ line, the landed file equal to the code). A failure goes back to the
+model with what failed, up to two retries; still red, "Use this code"
+refuses it. A green answer's scenarios are kept as requirement tests when
+it is used.
+
 ## Sim replay (`sim-replay`, built)
 
 The evidence an engineer approves an output change on: what a proposed
