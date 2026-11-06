@@ -1696,6 +1696,16 @@ impl Body for PlaygroundView {
                         self.req_ui.open = None;
                         self.run_tests();
                     }
+                    Some(crate::requirements::Act::Reword { file, text }) => {
+                        self.proj.files.insert(file, text);
+                        self.proj.save();
+                        self.run_tests();
+                    }
+                    Some(crate::requirements::Act::Rewrite { file, requirement }) => {
+                        self.proj.delete_file(&file);
+                        self.req_ui.open = None;
+                        self.add_requirement(&requirement, &ctx);
+                    }
                     None => {}
                 }
             }

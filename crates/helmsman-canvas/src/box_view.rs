@@ -386,6 +386,14 @@ impl BoxView {
                 crate::requirements::ui(ui, chrome, &view, &mut self.req_ui)
             })
             .inner;
+        let act = match act {
+            Some(Act::Rewrite { file, requirement }) if cannot_add.is_none() => {
+                self.projects.delete_file(&file);
+                self.req_ui.open = None;
+                Some(Act::Add(requirement))
+            }
+            a => a,
+        };
         match act {
             Some(Act::Add(text)) if cannot_add.is_none() => {
                 let Some(o) = &self.projects.open else { return };
@@ -414,6 +422,12 @@ impl BoxView {
             Some(Act::Delete(f)) if cannot_add.is_none() => {
                 self.projects.delete_file(&f);
                 self.req_ui.open = None;
+            }
+            Some(Act::Reword { file, text }) if cannot_add.is_none() => {
+                if let Some(b) = self.projects.open.as_mut().and_then(|o| o.bufs.get_mut(&file)) {
+                    b.text = text;
+                }
+                self.save();
             }
             _ => {}
         }

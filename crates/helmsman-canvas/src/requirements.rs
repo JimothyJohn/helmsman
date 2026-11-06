@@ -442,6 +442,11 @@ pub struct ReqUi {
     pub draft: String,
     /// The open row's file.
     pub open: Option<String>,
+    /// The Edit question: the file, the wording typed, whether the agent
+    /// rewrites the test for it.
+    pub editing: Option<(String, String, bool)>,
+    /// The Delete question: the file.
+    pub deleting: Option<String>,
 }
 
 /// What the tab asks its owner to do.
@@ -453,6 +458,33 @@ pub enum Act {
     /// Open this test file in the Code tab.
     Edit(String),
     Delete(String),
+    /// New wording for a requirement, its test kept: the file and the
+    /// whole new text of it.
+    Reword {
+        file: String,
+        text: String,
+    },
+    /// New wording, and a new test from the agent: delete the file, then
+    /// add the requirement as [`Act::Add`] does.
+    Rewrite {
+        file: String,
+        requirement: String,
+    },
+}
+
+/// `test` (a requirement test's text) stating `requirement` instead: its
+/// first comment replaced, or the requirement put first when it has none.
+/// The rest of the file is kept byte for byte.
+#[must_use]
+pub fn reword(test: &str, requirement: &str) -> String {
+    let header = helmsman_iec::spec::header(requirement);
+    let found = test
+        .find("(*")
+        .and_then(|s| test[s + 2..].find("*)").map(|e| (s, s + 2 + e + 2)));
+    match found {
+        Some((s, e)) => format!("{}{}{}", &test[..s], header.trim_end(), &test[e..]),
+        None => format!("{header}{test}"),
+    }
 }
 
 /// What the tab draws from.
@@ -593,16 +625,36 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi)
             State::Untested => ("○", t.muted, "no test yet"),
         };
         let open = rui.open.as_deref() == Some(row.file.as_str());
+        let mut asked = (false, false);
         let r = ui
             .horizontal_wrapped(|ui| {
                 ui.label(RichText::new(mark).strong().color(color));
-                ui.add(
+                let l = ui.add(
                     egui::Label::new(RichText::new(row.words()).color(t.fg))
                         .wrap()
                         .sense(Sense::click()),
-                )
+                );
+                let why = v.cannot_add.clone();
+                let e = ui
+                    .add_enabled(why.is_none(), egui::Button::new("Edit").small())
+                    .tip(why.clone().unwrap_or_else(|| {
+                        "Changes the requirement's wording; the agent can rewrite its test to match.".into()
+                    }));
+                chrome.hit(format!("req edit {}", row.name()), e.rect);
+                let d = ui
+                    .add_enabled(why.is_none(), egui::Button::new("Delete").small())
+                    .tip(why.unwrap_or_else(|| "Removes this requirement and its test. Asks first.".into()));
+                chrome.hit(format!("req delete {}", row.name()), d.rect);
+                asked = (e.clicked(), d.clicked());
+                l
             })
             .inner;
+        if asked.0 {
+            rui.editing = Some((row.file.clone(), row.requirement.clone(), true));
+        }
+        if asked.1 {
+            rui.deleting = Some(row.file.clone());
+        }
         let tip = match row.state {
             State::Passed => format!(
                 "{state_words}: its test passed after {} scans ({:.2} s). Click to see the test.",
@@ -629,7 +681,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi)
             }
             ui.horizontal_wrapped(|ui| {
                 let e = ui
-                    .button("Edit test")
+                    .button("Edit test by hand")
                     .tip("Opens this test in the Code tab to change it by hand.");
                 chrome.hit(format!("test edit {}", row.name()), e.rect);
                 if e.clicked() {
@@ -644,11 +696,182 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi)
                     );
                 chrome.hit(format!("test delete {}", row.name()), d.rect);
                 if d.clicked() {
-                    act = Some(Act::Delete(row.file.clone()));
+                    rui.deleting = Some(row.file.clone());
                 }
             });
         }
         ui.add_space(4.0);
     }
+    if let Some(a) = edit_ui(ui.ctx(), chrome, v, rui) {
+        act = Some(a);
+    }
+    if let Some(a) = delete_ui(ui.ctx(), chrome, v, rui) {
+        act = Some(a);
+    }
     act
+}
+
+/// The Edit question: the wording, whether the agent rewrites the test.
+fn edit_ui(ctx: &egui::Context, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi) -> Option<Act> {
+    let (file, mut text, mut rewrite) = rui.editing.clone()?;
+    let old = v
+        .results
+        .rows
+        .iter()
+        .find(|r| r.file == file)
+        .map(|r| r.requirement.clone())
+        .unwrap_or_default();
+    let mut out = None;
+    let mut done = false;
+    let m = egui::Modal::new(egui::Id::unique("req-edit")).show(ctx, |ui| {
+        ui.set_min_width(480.0);
+        ui.set_max_width(480.0);
+        let t = theme(ui);
+        ui.label(RichText::new("Edit the requirement").strong().size(20.0));
+        ui.add_space(8.0);
+        let tip = "The requirement in plain words: what the program must do, and when.";
+        let f = ui
+            .add(
+                egui::TextEdit::multiline(&mut text)
+                    .id_salt("req-edit-text")
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY),
+            )
+            .tip(tip);
+        chrome.hit("req edit text", f.rect);
+        let c = ui
+            .checkbox(&mut rewrite, format!("Have {} rewrite its test for the new words", v.agent))
+            .tip("On: the old test goes and the agent writes one that checks the new wording. Off: only the words change; the test stays as it is.");
+        chrome.hit("req edit rewrite", c.rect);
+        let why = refusal(&text).or_else(|| v.cannot_add.clone());
+        let same = text.trim() == old.trim() && !rewrite;
+        if let Some(w) = &why {
+            ui.add(egui::Label::new(RichText::new(w).color(RED)).wrap());
+        } else if same {
+            ui.label(RichText::new("Nothing to change yet.").color(t.muted));
+        }
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            let tall = egui::vec2(0.0, TAP * 0.7);
+            let ok = ui
+                .add_enabled(why.is_none() && !same, egui::Button::new(RichText::new("Save").strong()).min_size(tall))
+                .tip(if rewrite {
+                    "Replaces the requirement and asks the agent for its new test."
+                } else {
+                    "Changes the requirement's words in its test file."
+                });
+            chrome.hit("req edit ok", ok.rect);
+            let hand = ui
+                .add(egui::Button::new("Edit test by hand").min_size(tall))
+                .tip("Opens the test in the Code tab instead.");
+            chrome.hit("req edit hand", hand.rect);
+            let no = ui
+                .add(egui::Button::new("Cancel").min_size(tall))
+                .tip("Leaves the requirement as it is.");
+            chrome.hit("req edit cancel", no.rect);
+            if ok.clicked() {
+                let requirement = text.trim().to_string();
+                out = Some(if rewrite {
+                    Act::Rewrite {
+                        file: file.clone(),
+                        requirement,
+                    }
+                } else {
+                    let src = (v.source)(&file).unwrap_or_default();
+                    Act::Reword {
+                        file: file.clone(),
+                        text: reword(&src, &requirement),
+                    }
+                });
+                done = true;
+            } else if hand.clicked() {
+                out = Some(Act::Edit(file.clone()));
+                done = true;
+            } else if no.clicked() {
+                done = true;
+            }
+        });
+    });
+    chrome.hit("req edit form", m.response.rect);
+    if done || m.should_close() {
+        rui.editing = None;
+    } else {
+        rui.editing = Some((file, text, rewrite));
+    }
+    out
+}
+
+/// The Delete question.
+fn delete_ui(ctx: &egui::Context, chrome: &mut Chrome, v: &View<'_>, rui: &mut ReqUi) -> Option<Act> {
+    let file = rui.deleting.clone()?;
+    let words = v
+        .results
+        .rows
+        .iter()
+        .find(|r| r.file == file)
+        .map_or_else(|| file.clone(), |r| r.words().to_string());
+    let mut out = None;
+    let mut done = false;
+    let m = egui::Modal::new(egui::Id::unique("req-delete")).show(ctx, |ui| {
+        ui.set_max_width(460.0);
+        ui.label(RichText::new("Delete this requirement?").strong().size(20.0));
+        ui.add_space(8.0);
+        ui.add(
+            egui::Label::new(format!(
+                "\u{201c}{words}\u{201d} and its test ({file}) are removed."
+            ))
+            .wrap(),
+        );
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            let tall = egui::vec2(0.0, TAP * 0.7);
+            let ok = ui
+                .add(egui::Button::new(RichText::new("Delete").strong().color(RED)).min_size(tall))
+                .tip("Removes the requirement and its test.");
+            chrome.hit("req delete ok", ok.rect);
+            let no = ui
+                .add(egui::Button::new("Cancel").min_size(tall))
+                .tip("Keeps it.");
+            chrome.hit("req delete cancel", no.rect);
+            if ok.clicked() {
+                out = Some(Act::Delete(file.clone()));
+                done = true;
+            } else if no.clicked() {
+                done = true;
+            }
+        });
+    });
+    chrome.hit("req delete form", m.response.rect);
+    if done || m.should_close() {
+        rui.deleting = None;
+    }
+    out
+}
+
+#[cfg(test)]
+mod reword_tests {
+    use super::reword;
+
+    #[test]
+    fn reword_replaces_the_first_comment_only() {
+        let t = "(* The lamp is on within 2 s of start *)\nPROGRAM test_lamp\n(* step 1 *)\nEND_PROGRAM\n";
+        let out = reword(t, "The lamp is on within 1 s of start");
+        assert_eq!(
+            out,
+            "(* The lamp is on within 1 s of start *)\nPROGRAM test_lamp\n(* step 1 *)\nEND_PROGRAM\n"
+        );
+        assert_eq!(
+            helmsman_iec::spec::stated(&out).as_deref(),
+            Some("The lamp is on within 1 s of start")
+        );
+        // A comment closer in the words cannot end the comment early.
+        let out = reword(t, "a *) b");
+        assert_eq!(helmsman_iec::spec::stated(&out).as_deref(), Some("a * ) b"));
+        assert!(out.ends_with("PROGRAM test_lamp\n(* step 1 *)\nEND_PROGRAM\n"));
+        // None yet: put first.
+        assert_eq!(
+            reword("PROGRAM p\nEND_PROGRAM\n", "x"),
+            "(* x *)\nPROGRAM p\nEND_PROGRAM\n"
+        );
+    }
 }
