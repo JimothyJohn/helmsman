@@ -2,8 +2,94 @@
 
 The Agent is the way you program by describing the machine. Open the
 **Agent** tab in the side panel (<kbd>Alt</kbd> <kbd>3</kbd>, then the
-tab), say what you want, and it answers with Structured Text and an
-explanation.
+tab), type what the open Structured Text file should do, and press
+**Send**. The file is updated in place and the editor shows it; there is
+no conversation to read through.
+
+<img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
+
+An instruction can be a new behaviour ("the lamp latches until stop is
+pressed"), a change ("add a two-second delay before the belt starts") or
+a fix for the errors under the editor. When the Agent is done, the tab
+shows one status line and the Agent's reason for the change, for
+example:
+
+> Updated lamp.st: 2 scenarios passed, kept as tests.
+> Why: the lamp now latches until stop is pressed.
+
+Nothing runs until you deploy it, as with any edit of your own.
+
+## Checked before it is written
+
+With every change the Agent writes one or more scenarios: short
+requirement tests, each stating in plain words what it checks, such as
+"the lamp stays off while start is not pressed". Before anything is
+written, the change is taken into a copy of the project, compiled, and
+the scenarios run together with the project's own requirement tests.
+
+If anything fails (a scenario, a requirement test, the compile, or the
+whole-file rule below), the Agent is sent what failed and fixes the
+answer, up to two more tries. An answer that still fails is never
+written: the file stays as it was and the tab says why, one line per
+failure. A change that comes without a scenario is asked for one once;
+if none comes, it is written and the status line says no scenario checks
+it. When the Agent answers without code (it cannot do what was asked, or
+it needs one fact from you), the tab shows its words and the file is not
+touched.
+
+The scenarios of a change that is written are kept as requirement tests
+and appear in the Requirements tab, each under its own words.
+
+When an instruction changes behaviour that an existing requirement test
+checks ("the motor runs only while start is held" against a test that
+says it latches), the Agent replaces that test with one stating the new
+requirement. The replacement has to pass like any scenario, every other
+test still has to, and the status line names it:
+
+> Updated main.st: 1 scenario passed, kept as a test; changed requirement
+> test_latch: the motor runs while start is held.
+
+The test as it was stays in History, and Undo puts both back.
+
+## History and Undo
+
+Every change the Agent writes is saved as one revision in the project's
+History (the Files tab), named after the instruction. Its entry holds the
+instruction, the Agent's reason, the scenarios that passed, the answers
+that failed and were sent back, and the Agent's words. Edits of your own
+you had not saved are saved first, as their own revision, so the version
+before the change is always there.
+
+**Undo** in the Agent tab puts the file back as it was before the last
+change (a new revision; the change stays in History). It is offered while
+the file is still as the Agent left it; after an edit of your own, go
+back through History instead.
+
+## Follow-ups
+
+Each instruction goes to the Agent with the whole file and the last five
+instructions carried out on that file, read from History. So "now make it
+blink faster" works: the Agent knows what "it" is, even after a reload.
+To start over, describe the whole behaviour in the instruction.
+
+## What the Agent may change
+
+The Agent edits what you have in focus and nothing else: the file open
+in the Code tab, by default. When you select lines in the Code tab or
+pick a block in the diagram, a line above the instruction box says so:
+
+- **Editing: lines 12–30 of main.st**: the lines you selected.
+- **Editing: block Motor1**: the statement of the block you picked.
+
+**Whole file** next to it drops the selection or the pick. A change to
+anything outside the scope (another file, lines outside the selection,
+anything beside the block) is refused, and the rest of the project stays
+exactly as it was.
+
+The code always comes back as the whole open file with the change made
+in it, even for a few selected lines or a block. Nothing may be left
+out: an answer that skips part of the file, or writes "rest unchanged"
+where code should be, is sent back.
 
 ## In the simulation
 
@@ -14,95 +100,28 @@ playground from your own machine with a local proxy, or natively with
 the key in the environment, the tab says the key is preloaded so you are
 not left wondering.
 
-<img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the question and Ask." width="300">
-
-Ask for a program ("a conveyor with a photo eye that stops after three
-parts"), for a change to the open one ("add a two-second delay before the
-belt starts"), or for an explanation ("why does the lamp blink?"). The
-answer's code goes into the project with **Use this code**; nothing runs
-until you deploy it, and the editor marks any error first.
-
-## What the Agent may change
-
-The Agent edits what you have in focus and nothing else. The line above
-the question says what that is before you ask, and why:
-
-- **Editing: main.st**: the file open in the Code tab, by default.
-- **Editing: lines 12–30 of main.st**: the lines you selected in the
-  Code tab.
-- **Editing: block Motor1**: the statement of the block you picked in the
-  diagram.
-
-**Whole file** next to it drops the selection or the pick. The question
-goes to the Agent with that scope, and **Use this code** holds it to it:
-an answer that would change another file, lines outside the selection or
-anything beside the block is refused, and the tab says what it tried to
-touch. The rest of the project stays exactly as it was. A change that is
-taken has to pass the project's requirement tests first, and it is saved
-as one revision in the project's History together with the page it came
-from, after any edits of your own you had not saved (those are their own
-revision).
-
-## Checked before you see it
-
-In the simulation, when the Agent gives code it also writes one or more
-scenarios: short requirement tests, each stating in plain words what it
-checks, such as "the lamp stays off while start is not pressed". Before
-the answer is shown, the page takes the code into a copy of the project,
-compiles it, and runs the scenarios together with the project's own
-requirement tests. Under the answer each scenario is listed as passed.
-
-The code always comes back as the whole open file with the change made
-in it, even when you selected a few lines or picked a block. Nothing may
-be left out: an answer that skips part of the file, or writes "rest
-unchanged" where code should be, is not taken. Your selection still
-decides what may change, and a change to any line outside it is refused.
-
-If anything fails (a scenario, a requirement test, the compile, or the
-whole-file rule), the page sends the Agent what failed and lets it fix
-the answer, up to two more tries. An answer that still fails is shown in
-red with the reasons, and **Use this code** refuses it. An answer whose
-code comes without a scenario is asked for one once; if none comes it is
-shown with the note "Not checked by a scenario", and you may still use
-it. An explanation with no code needs no scenario.
-
-When you use a checked answer, its scenarios are kept as requirement
-tests and appear in the Requirements tab, each under its own words.
-
-## One program, many iterations
-
-With a built-in example open (they are read-only), a program the Agent
+With a built-in example open (they are read-only), the program the Agent
 writes becomes a project of its own: the first time, it asks what the
-program is called. From then on the whole of `main.st` is the scope, and
-each answer you take becomes `main.st` while the one it replaced is kept
-beside it as `v1.st`, `v2.st`, and so on, as many as you like. A change
-to selected lines or a block is made in place instead. Only `main.st`
-builds and runs; the earlier ones sit folded under **earlier** in the
-Files tab for you to read or copy. A new conversation asks for a name
-again.
-
-## Pages
-
-Every question and its answer is kept as a page of the conversation,
-with the project: reload the page or download the project and they are
-still there (the file is `agent.md`; the build ignores it). The ‹ and ›
-buttons walk the pages, **Delete page** drops the one you are reading,
-and **New conversation** drops them all. Every page you keep goes back to
-the Agent with your next question, so pruning the pages is how you shape
-what it sees. An earlier page's code has its own **Use this code**.
+program is called, and later new programs land in the same project as
+`main.st`, the one before kept beside it as `v1.st`, `v2.st` and so on.
 
 ## On a box
 
-On a box the Agent goes through a relay that holds the key, so no box
-and no browser holds it. What the Agent proposes becomes a **proposal**
-on the box, with a diff and a replay in the simulation, that an approver
-signs off under the box's policy before it runs. The Agent tab on a box
-is still to come; proposals already arrive and are reviewed from the
-Proposals screen (the header's **waiting** badge).
+On a box the Agent goes through the box's relay, which holds the key, so
+no box and no browser holds it. The tab works the same way: sign in as an
+engineer, open a program file, type the instruction and press **Send**.
+The checked change is saved on the box as a revision with its History
+entry, by you, and **Undo** asks the box to restore the revision before
+it. The line at the top of the tab says whether the agent is online.
+
+If the agent stores a **proposal** for review instead of sending the file
+back, the file is not touched and the tab offers **Review** to open it on
+the Proposals screen, where an approver signs it off under the box's
+policy.
 
 ## What it will not do
 
-The Agent writes and explains; it never deploys. It cannot force an
+The Agent changes the open file; it never deploys. It cannot force an
 input, change the I/O map on a box, or approve anything. Its code is
 checked like yours: an error is marked, a deploy that does not compile
 is refused.

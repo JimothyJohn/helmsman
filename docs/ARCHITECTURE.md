@@ -689,18 +689,36 @@ The Requirements tab of the right panel shows one row per test, green or
 red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
 same gate.
 
-In the simulation the Agent's answer is also checked before it is shown
-(`agent-scenarios`, crates/helmsman-canvas/src/verify.rs). An answer with
-code carries scenarios, requirement tests in the same format, in
-```` ```st scenario ```` blocks. The page takes the code into a copy of
-the project through `scope::apply`, adds the scenarios, compiles it and
-runs the scenarios with the project's own tests. The code must be the
-whole open file, changed only inside the selection or block
-(`verify::full_copy`: no elision markers, every POU with its header and
-END_ line, the landed file equal to the code). A failure goes back to the
-model with what failed, up to two retries; still red, "Use this code"
-refuses it. A green answer's scenarios are kept as requirement tests when
-it is used.
+The Agent tab is one path in the page and on a box (`agent-instruct`,
+crates/helmsman-canvas/src/instruct.rs; Nick 2026-11-05: no chat). The
+engineer types an instruction; the request carries the whole file in its
+scope (`scope::Scope::envelope`), the program and its errors, and the
+last five instructions carried out on that file, read back from the
+project's History (`instruct::recent` over the revisions' Agent pages,
+`<earlier_instructions>`). The answer is a `Why:` line, the whole file in
+one ```` ```st ```` block and ```` ```st scenario ```` blocks
+(requirement tests in the same format). It is checked before anything is
+written (`verify::check`): the code taken into a copy through
+`scope::apply`, the scenarios added, compiled, the scenarios run with
+the project's own tests, and the whole-file rule (`verify::full_copy`: no
+elision markers, every POU with its header and END_ line, the landed file
+equal to the code). A failure goes back with what failed, up to two
+retries (`verify::next`); still red, nothing is written and the tab says
+why. Green is written into the file at once and saved as one revision
+whose Agent page is `instruct::record` (instruction, reason, scenarios,
+failed attempts, the Agent's words), the scenarios kept as test files;
+Undo restores the revision before it. The tab shows only the instruction
+box, Send or Stop, Undo, and a status line with the reason.
+
+The transports differ. In the page, `claude.rs` sends it to the Messages
+API with the playground's system prompt, the failed answers of the same
+instruction as earlier turns. On a box, `box_agent.rs` sends it as one
+`POST /api/chat` message, the answer format (`instruct::BOX_RULES`) in
+front because the relay profile's prompt is the box's own, in a new
+conversation per instruction (a retry continues it); the change is saved
+through `PUT .../files/{f}` with `page`, and Undo is the box's restore.
+A proposal the box's agent stores instead is offered for review and
+nothing is written.
 
 ## Sim replay (`sim-replay`, built)
 
@@ -2351,14 +2369,14 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   streamed, API version `2026-10-21`, `max_tokens` 16000, effort medium,
   the fixed system prompt (the playground's dialect: what helmsman-iec
   supports and does not, how ports and `%IX`/`%QX` become I/O, "answer
-  with one complete program in a ```st block") cached with
+  with a Why line, the whole file in a ```st block and scenarios") cached with
   `cache_control`, and `fallbacks: "default"` (beta
-  `server-side-fallback-2026-07-01`; not for Haiku). Each question
+  `server-side-fallback-2026-07-01`; not for Haiku). Each instruction
   carries the editor's source and compile errors inside
   `<current_program>`/`<compile_errors>` tags the source cannot close,
-  plus the last six exchanges. "Use this code" loads the last closed
-  fenced block holding a whole `PROGRAM … END_PROGRAM` (ST-tagged first;
-  64 KiB at most; no control characters) and never runs it.
+  its scope and the earlier instructions for the file (`instruct.rs`,
+  above); a checked answer is written into the file and never run. On a
+  built-in example the program becomes a project of its own, named once.
 - **The key.** Pasted into a password field, held in page memory; an
   explicit "Remember on this device" (off by default, with a warning)
   keeps it in `localStorage`, and unticking or Forget removes it. It goes

@@ -18,6 +18,13 @@
 //! would splice in is refused). The selection still bounds what may
 //! change: [`crate::scope::apply`] refuses a change outside it.
 //!
+//! **A test the instruction contradicts is replaced** (Nick, 2026-11-05):
+//! a scenario marked ```` ```st scenario replaces test_NAME ```` takes
+//! the place of that requirement test (kept scenarios are tests too, so
+//! the next instruction that changes their behaviour could never pass
+//! otherwise). It must pass like any scenario, every other test still
+//! must, and the status line names it ([`Check::replaced`]).
+//!
 //! Plain data and text, so it is tested natively and runs in the page.
 
 use std::collections::BTreeSet;
@@ -37,6 +44,17 @@ pub const MAX_SCENARIOS: usize = 8;
 pub fn is_scenario(info: &str) -> bool {
     info.split_whitespace()
         .any(|w| w.eq_ignore_ascii_case("scenario"))
+}
+
+/// The test file a scenario fence replaces (```` ```st scenario
+/// replaces test_lamp ````): `test_lamp.st`.
+#[must_use]
+pub fn replaces(info: &str) -> Option<String> {
+    let mut w = info.split_whitespace();
+    w.find(|w| w.eq_ignore_ascii_case("replaces"))?;
+    let name = w.next()?.trim_end_matches(".st").to_ascii_lowercase();
+    let bare = name.strip_prefix(spec::TEST_PREFIX)?;
+    spec::name_ok(bare).then(|| format!("{name}.st"))
 }
 
 /// The answer without its scenario blocks: what the scope rules read as
@@ -79,6 +97,8 @@ pub struct Scenario {
     /// The file: the requirement as its first comment ([`spec::header`]),
     /// then the test's PROGRAM.
     pub text: String,
+    /// It takes the place of this existing test (`file` is that name).
+    pub replaces: bool,
 }
 
 fn first_word(line: &str) -> &str {
@@ -150,18 +170,33 @@ pub fn scenarios(answer: &str, taken: &[String]) -> (Vec<Scenario>, Vec<String>)
             ));
             continue;
         };
-        if !names.insert(name.clone()) {
+        let replaced = replaces(&f.info);
+        let key = replaced.clone().unwrap_or_else(|| format!("test_{name}.st"));
+        if !names.insert(key) {
             problems.push(format!("Two scenarios are both named test_{name}."));
             continue;
         }
-        let free = crate::requirements::name_for(&name, &taken);
-        let file = format!("test_{free}.st");
-        taken.push(file.clone());
+        let file = if let Some(old) = &replaced {
+            if !taken.contains(old) {
+                problems.push(format!(
+                    "Scenario {k} replaces {}, which the project does not have.",
+                    old.trim_end_matches(".st")
+                ));
+                continue;
+            }
+            old.clone()
+        } else {
+            let free = crate::requirements::name_for(&name, &taken);
+            let file = format!("test_{free}.st");
+            taken.push(file.clone());
+            file
+        };
         let text = format!("{}{}\n", spec::header(&requirement), lines[at..].join("\n"));
         out.push(Scenario {
             file,
             requirement,
             text,
+            replaces: replaced.is_some(),
         });
     }
     (out, problems)
@@ -339,6 +374,8 @@ pub struct Check {
     pub add: Vec<(String, String)>,
     /// How many of the project's own requirement tests ran green with it.
     pub tests_green: usize,
+    /// Requirement tests a scenario replaces: (file, its new requirement).
+    pub replaced: Vec<(String, String)>,
 }
 
 impl Check {
@@ -371,17 +408,6 @@ impl Check {
                 .map(|s| format!("Scenario {} ({}) failed: {}", s.requirement, s.file, s.why)),
         );
         out
-    }
-
-    /// Why "Use this code" refuses it, if it does.
-    #[must_use]
-    pub fn refusal(&self) -> Option<String> {
-        self.red().then(|| {
-            format!(
-                "The answer did not pass the page's checks: {}",
-                self.problems().join(" ")
-            )
-        })
     }
 }
 
@@ -467,15 +493,20 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
                 },
             });
         } else if v.red() {
+            let name = v.file.trim_end_matches(".st");
             c.failures.push(format!(
-                "Requirement test {} is red with this code: {}",
-                v.file.trim_end_matches(".st"),
+                "Requirement test {name} is red with this code: {}. If the instruction changes what it checks, send its replacement in a block marked ```st scenario replaces {name}; else keep it passing.",
                 v.why()
             ));
         } else if v.passed() {
             c.tests_green += 1;
         }
     }
+    c.replaced = scen
+        .iter()
+        .filter(|s| s.replaces)
+        .map(|s| (s.file.clone(), s.requirement.clone()))
+        .collect();
     c.add = scen.into_iter().map(|s| (s.file, s.text)).collect();
     c
 }
