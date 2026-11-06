@@ -21,7 +21,13 @@ pub type Files = BTreeMap<String, String>;
 
 /// The tags the page wraps the model's context in; an answer that
 /// carries one is refused.
-pub const ENVELOPES: [&str; 4] = ["edit_scope", "current_program", "compile_errors", "io_devices"];
+pub const ENVELOPES: [&str; 5] = [
+    "edit_scope",
+    "current_program",
+    "compile_errors",
+    "io_devices",
+    "earlier_instructions",
+];
 
 /// What one answer may change.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,7 +151,7 @@ impl Scope {
     /// The `<edit_scope>` envelope's content for project `project`: the
     /// scope, its rule, and the whole file as it is now, after the lines
     /// of a selection or a block as `section:` (the claude module
-    /// neutralizes it). [`from_asked`] reads it back from a kept page.
+    /// neutralizes it).
     #[must_use]
     pub fn envelope(&self, project: &str, files: &Files) -> String {
         let mut m = format!("{} ({})\nproject: {project}\n", self.label(), self.rule());
@@ -214,44 +220,6 @@ impl Scope {
         }
         m
     }
-}
-
-/// The project and scope a kept page's question went with: read from the
-/// last `<edit_scope>` of its user message ([`Scope::envelope`]); `None`
-/// for a page asked before scopes, or one whose envelope does not parse.
-#[must_use]
-pub fn from_asked(asked: &str) -> Option<(String, Scope)> {
-    let at = asked.rfind("<edit_scope>\n")?;
-    let body = &asked[at + "<edit_scope>\n".len()..];
-    let field = |key: &str| {
-        body.lines()
-            .take_while(|l| *l != "text:" && *l != "section:")
-            .find_map(|l| l.strip_prefix(key))
-            .map(str::trim)
-    };
-    let project = field("project: ")?.to_string();
-    let Some(file) = field("file: ") else {
-        return field("new project:").map(|_| (project, Scope::NewProject));
-    };
-    let file = file.to_string();
-    let Some(lines) = field("lines: ") else {
-        return Some((project, Scope::File(file)));
-    };
-    let (a, b) = lines.split_once('-')?;
-    let (from, to): (u32, u32) = (a.trim().parse().ok()?, b.trim().parse().ok()?);
-    if from == 0 || to < from {
-        return None;
-    }
-    let scope = match field("block: ") {
-        Some(name) => Scope::Block {
-            file,
-            name: name.to_string(),
-            from,
-            to,
-        },
-        None => Scope::Lines { file, from, to },
-    };
-    Some((project, scope))
 }
 
 fn span(file: &str, from: u32, to: u32) -> String {

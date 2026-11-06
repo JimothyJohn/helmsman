@@ -50,6 +50,9 @@ mod glyphs;
 mod history_ui;
 mod hotkeys;
 mod icons;
+mod instruct;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod instruct_tests;
 mod messages;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]

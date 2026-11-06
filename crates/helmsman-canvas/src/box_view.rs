@@ -61,8 +61,14 @@ pub struct BoxView {
     pub view: Option<Viewer>,
     /// The Trend tab: pinned signals from the box's history.
     pub trend: BoxTrend,
-    /// The Agent tab: the conversation with the agent the box runs.
+    /// The way to the agent the box runs (`POST /api/chat`).
     pub agent: crate::box_agent::BoxAgent,
+    /// The Agent tab (`crate::instruct`, as in the page).
+    pub instruct: crate::instruct::Instruct,
+    /// The agent turn [`Self::settle_agent`] last took.
+    answered_seq: u64,
+    /// Page time of the last frame, s (for Messages).
+    agent_at: f64,
     /// A proposal the Agent tab asked to open under Proposals; the app
     /// takes it.
     pub wants_review: Option<u64>,
@@ -172,6 +178,9 @@ impl BoxView {
             #[cfg(not(target_arch = "wasm32"))]
             chat_sent: Vec::new(),
             agent: crate::box_agent::BoxAgent::new(),
+            instruct: crate::instruct::Instruct::default(),
+            answered_seq: 0,
+            agent_at: 0.0,
             wants_review: None,
             req_ui: crate::requirements::ReqUi::default(),
             adding: None,
@@ -327,6 +336,8 @@ impl BoxView {
         let (msgs, answers) = self.inbox();
         self.step_all(ctx, msgs, answers, now);
         self.chat_inbox();
+        self.agent_at = now;
+        self.settle_agent(ctx);
         self.watch(now);
     }
 
@@ -463,36 +474,280 @@ impl BoxView {
         }
     }
 
-    /// The Agent tab: drawn, and what it asked for carried out.
+    /// The project as the agent sees it, in the scope of an instruction:
+    /// the open file (else its first program file), every file as read,
+    /// the program as it builds, and its compile errors.
+    fn agent_files(&self) -> Option<(String, crate::scope::Scope, crate::scope::Files)> {
+        let o = self.projects.open.as_ref().filter(|_| self.has_projects())?;
+        let files: crate::scope::Files = o
+            .bufs
+            .iter()
+            .filter(|(n, b)| b.loaded && !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, b)| (n.clone(), b.text.clone()))
+            .collect();
+        let is_program = |f: &str| {
+            helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
+                && !helmsman_iec::spec::is_test(f)
+        };
+        let file = o
+            .current
+            .clone()
+            .filter(|f| is_program(f) && files.contains_key(f))
+            .or_else(|| files.keys().find(|f| is_program(f)).cloned())?;
+        Some((o.name.clone(), crate::scope::Scope::File(file), files))
+    }
+
+    /// Why an instruction cannot go to the box's agent now, if it cannot.
+    fn agent_blocked(&self) -> Option<String> {
+        if let Err(why) = self.writable() {
+            return Some(why);
+        }
+        if !self.agent.status.can_send() {
+            return Some(self.agent.status.line());
+        }
+        if self.agent_files().is_none() {
+            return Some(
+                "Open a program file first: the Agent changes the file open in the Code tab.".into(),
+            );
+        }
+        None
+    }
+
+    /// Runs `f` on the project as the agent sees it, in `scope`.
+    fn with_env<R>(
+        &mut self,
+        scope: Option<crate::scope::Scope>,
+        f: impl FnOnce(&mut crate::instruct::Instruct, &crate::instruct::Env<'_>) -> R,
+    ) -> Option<R> {
+        let (project, open_scope, files) = self.agent_files()?;
+        let plan = helmsman_iec::spec::plan(
+            files
+                .iter()
+                .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
+        let diags: Vec<String> = helmsman_iec::compile(&plan.main, crate::playground::SIZES)
+            .err()
+            .map(|d| d.iter().map(ToString::to_string).collect())
+            .unwrap_or_default();
+        // The box's agent reads the devices with its own tools.
+        let devices = String::new();
+        let env = crate::instruct::Env {
+            project: &project,
+            scope: scope.unwrap_or(open_scope),
+            files: &files,
+            source: &plan.main,
+            diagnostics: &diags,
+            devices: &devices,
+            settings: helmsman_iec::spec::Settings::new(crate::playground::SIZES),
+        };
+        Some(f(&mut self.instruct, &env))
+    }
+
+    /// Sends the typed instruction to the box's agent: the answer format
+    /// ([`crate::instruct::BOX_RULES`]) and then the same message the page
+    /// sends, in a new conversation on the box.
+    pub fn send_instruction(&mut self, ctx: &egui::Context) {
+        if let Some(why) = self.agent_blocked() {
+            self.instruct.failed(&why);
+            return;
+        }
+        let pages: Vec<String> = self
+            .projects
+            .agent_pages()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        let started = self.with_env(None, |i, env| {
+            let file = crate::instruct::target(&env.scope);
+            let earlier = crate::instruct::recent(pages.iter().map(String::as_str), &file);
+            i.start(env, &earlier)
+        });
+        match started {
+            Some(Ok(ask)) => {
+                let message = format!("{}\n\n{}", crate::instruct::BOX_RULES, ask.message);
+                self.agent_send(&message, true, ctx);
+            }
+            Some(Err(why)) => self.instruct.failed(&why),
+            None => {}
+        }
+    }
+
+    /// One message of the instruction under way to the box; `fresh` opens
+    /// a new conversation there.
+    fn agent_send(&mut self, message: &str, fresh: bool, ctx: &egui::Context) {
+        match self.agent.send(message, fresh) {
+            Ok(req) => {
+                #[cfg(target_arch = "wasm32")]
+                self.chat.send(req, ctx);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let _ = ctx;
+                    self.chat_sent.push(req);
+                }
+            }
+            Err(why) => self.instruct.failed(&why),
+        }
+    }
+
+    /// A turn of the box's agent that ended goes through
+    /// [`crate::instruct::Instruct::answered`], as in the page: a retry
+    /// continues the conversation on the box with what failed; a green
+    /// answer is saved into the file; proposals the agent stored instead
+    /// are offered for review.
+    fn settle_agent(&mut self, ctx: &egui::Context) {
+        use crate::box_agent::End;
+        use crate::instruct::Step;
+        if !self.instruct.busy() || self.agent.seq() == self.answered_seq {
+            return;
+        }
+        let Some(turn) = self.agent.turns.last().filter(|t| t.end.is_some()).cloned() else {
+            return;
+        };
+        self.answered_seq = self.agent.seq();
+        let proposals = turn.proposals();
+        match turn.end {
+            Some(End::Done { stop, why }) if stop == "end_turn" || !turn.text.trim().is_empty() => {
+                let _ = why;
+            }
+            Some(End::Done { why, stop }) => {
+                self.instruct
+                    .failed(&why.unwrap_or_else(|| format!("the agent stopped ({stop})")));
+                self.instruct.proposed(&proposals);
+                return;
+            }
+            Some(End::Failed(why)) => {
+                self.instruct.failed(&why);
+                self.instruct.proposed(&proposals);
+                return;
+            }
+            Some(End::Stopped) | None => {
+                self.instruct.failed("stopped");
+                return;
+            }
+        }
+        let scope = self.instruct.run.as_ref().map(|r| r.scope.clone());
+        let step = self.with_env(scope, |i, env| i.answered(&turn.text, env));
+        match step {
+            Some(Step::Ask(ask)) => self.agent_send(&ask.text, false, ctx),
+            Some(Step::Apply(apply)) => self.agent_write(&apply),
+            Some(Step::Done) => {
+                self.instruct.proposed(&proposals);
+                self.log_agent();
+            }
+            None => self.instruct.failed("the project is no longer open"),
+        }
+    }
+
+    /// A checked answer saved into the box's project: the file with the
+    /// change's History entry, then its scenarios as requirement tests.
+    fn agent_write(&mut self, apply: &crate::instruct::Apply) {
+        if self
+            .projects
+            .open
+            .as_ref()
+            .is_none_or(|o| o.name != apply.project)
+        {
+            let why = format!("{} is no longer open.", apply.project);
+            self.instruct.not_written(&apply.file, &why);
+            return self.log_agent();
+        }
+        let before = self.projects.history.last().map(|r| r.n);
+        self.projects
+            .save_agent(&apply.file, &apply.text, &apply.record, &apply.tests);
+        let undo = before.map(|revision| crate::instruct::Undo {
+            project: apply.project.clone(),
+            file: apply.file.clone(),
+            revision,
+            text: apply.text.clone(),
+        });
+        self.instruct.applied(apply, undo);
+        self.log_agent();
+    }
+
+    /// The outcome of the last instruction, in Messages.
+    fn log_agent(&mut self) {
+        use crate::instruct::Kind;
+        let Some(o) = &self.instruct.outcome else { return };
+        let mut line = o.status.clone();
+        for p in &o.problems {
+            line.push(' ');
+            line.push_str(p);
+        }
+        let at = self.agent_at;
+        match o.kind {
+            Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
+            Kind::Refused | Kind::Failed => self.log.warning(at, line),
+        }
+    }
+
+    /// Why Undo is off now, if it is.
+    fn undo_blocked(&self) -> Option<String> {
+        let u = self.instruct.undo()?;
+        if let Err(why) = is_engineer(self.session.as_ref()) {
+            return Some(why);
+        }
+        let o = self.projects.open.as_ref().filter(|o| o.name == u.project)?;
+        let current = o.bufs.get(&u.file).map(|b| b.text.as_str());
+        self.instruct.undo_refusal(current, self.projects.dirty())
+    }
+
+    /// Undo: the box restores the revision before the Agent's change (as
+    /// a new revision; the change stays in History).
+    pub fn undo_change(&mut self) {
+        let Some(u) = self.instruct.undo().cloned() else {
+            return;
+        };
+        if self.undo_blocked().is_some() || self.projects.open.as_ref().is_none_or(|o| o.name != u.project) {
+            return;
+        }
+        self.projects.restore(&u.project, u.revision);
+        self.instruct.undone(&u);
+        self.log_agent();
+    }
+
+    /// The Agent tab: the agent's state on one line, then the shared tab.
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        use crate::box_agent::{Act, Status};
+        use crate::box_agent::Status;
+        use crate::instruct::Act;
 
         if self.agent.status == Status::Unread && !self.agent.status_asked {
             self.agent.status_asked = true;
             #[cfg(target_arch = "wasm32")]
             self.chat.status(ui.ctx());
         }
-        let who = match &self.session {
-            None => Some("Sign in (top right) to talk to the agent".to_string()),
-            Some(_) => None,
+        let ctx = ui.ctx().clone();
+        let t = theme(ui);
+        let view = crate::instruct::View {
+            target: self
+                .agent_files()
+                .map_or_else(|| "the open file".into(), |(_, s, _)| crate::instruct::target(&s)),
+            blocked: self.agent_blocked(),
+            undo_blocked: self.undo_blocked(),
         };
-        match crate::box_agent::ui(ui, chrome, &mut self.agent, who.as_deref()) {
-            Some(Act::Send) => {
-                if let Some(req) = self.agent.send() {
-                    #[cfg(target_arch = "wasm32")]
-                    self.chat.send(req, ui.ctx());
-                    #[cfg(not(target_arch = "wasm32"))]
-                    self.chat_sent.push(req);
-                }
-            }
+        let act = egui::ScrollArea::vertical()
+            .id_salt("box-agent")
+            .show(ui, |ui| {
+                // Room for the scroll bar (a resizable panel grows to any
+                // row that overflows it).
+                ui.set_max_width(ui.available_width() - 12.0);
+                let l = ui
+                    .label(RichText::new(self.agent.status.short()).color(t.muted))
+                    .tip(self.agent.status.line());
+                chrome.hit("agent status", l.rect);
+                ui.add_space(4.0);
+                crate::instruct::ui(ui, chrome, &mut self.instruct, &view)
+            })
+            .inner;
+        match act {
+            Some(Act::Send) => self.send_instruction(&ctx),
             Some(Act::Stop) => {
                 self.agent.stop();
                 #[cfg(target_arch = "wasm32")]
                 self.chat.abort();
+                self.instruct.failed("stopped");
             }
-            Some(Act::New) => {
-                self.agent.new_conversation();
-            }
+            Some(Act::Undo) => self.undo_change(),
             Some(Act::Review(id)) => self.wants_review = Some(id),
             None => {}
         }

@@ -12,7 +12,8 @@
 //! into the program's `VAR_INPUT`s of the same name (the test drives the
 //! inputs), the program runs, and its `VAR_OUTPUT`s are copied into the
 //! test's `VAR_INPUT`s of the same name (the test reads the outputs). The
-//! test ends when its `DONE` output goes TRUE; it fails when any of its
+//! test ends when its `DONE` output goes TRUE (`TEST_DONE` when it
+//! declares one, for a program with a `done` of its own); it fails when any of its
 //! `ASSERT` instances has `FAILED`, when either program faults, when it
 //! never sets `DONE` within the limit, or when it holds no `ASSERT` at all
 //! (a test that checks nothing is not green). Deterministic: no wall
@@ -65,6 +66,11 @@ pub const TEST_PREFIX: &str = "test_";
 
 /// The output a test sets TRUE when it is done.
 pub const DONE: &str = "DONE";
+
+/// The same, for a test of a program that has a `done` of its own (the
+/// test reads that one as a `VAR_INPUT done`): a test that declares
+/// `TEST_DONE` ends on it instead of [`DONE`].
+pub const TEST_DONE: &str = "TEST_DONE";
 
 /// The standard block a test checks with.
 pub const ASSERT: &str = "ASSERT";
@@ -400,6 +406,15 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
             }
         }
     }
+    let end = if t
+        .ports()
+        .iter()
+        .any(|p| p.name == TEST_DONE && p.dir == PortDir::Output)
+    {
+        TEST_DONE
+    } else {
+        DONE
+    };
     let period = settings.period.max(Duration::from_millis(1));
     let max = u32::try_from(settings.limit.as_nanos() / period.as_nanos().max(1)).unwrap_or(u32::MAX);
     let mut ti = Image::new(settings.sizes);
@@ -437,7 +452,7 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
                 return verdict(Outcome::Failed { check, at }, scans, now);
             }
         }
-        if t.get(DONE) == Some(Value::Bool(true)) {
+        if t.get(end) == Some(Value::Bool(true)) {
             return verdict(Outcome::Passed, scans, now);
         }
     }
@@ -586,6 +601,38 @@ END_PROGRAM
         let plan = plan([("main.st", main), ("test_x.st", test)]);
         assert_eq!(plan.tests.len(), 1);
         run(&plan.main, &plan.tests[0], settings())
+    }
+
+    /// A program with a `done` output of its own (the Counter example):
+    /// the test reads it as an input and ends on `test_done` instead.
+    #[test]
+    fn a_program_with_its_own_done_is_tested_with_test_done() {
+        const COUNTER: &str = "PROGRAM counter
+VAR_INPUT pulse : BOOL; END_VAR
+VAR_OUTPUT done : BOOL; END_VAR
+VAR c : CTU; END_VAR
+c(CU := pulse, R := FALSE, PV := 3);
+done := c.Q;
+END_PROGRAM
+";
+        let test = "(* done comes on at the third pulse. *)
+PROGRAM test_x
+VAR_INPUT done : BOOL; END_VAR
+VAR_OUTPUT pulse : BOOL; test_done : BOOL; END_VAR
+VAR n : INT; on_at_3 : ASSERT; END_VAR
+n := n + 1;
+pulse := (n MOD 2) = 1;
+IF n > 8 THEN on_at_3(COND := done); test_done := TRUE; END_IF;
+END_PROGRAM
+";
+        assert_eq!(one(COUNTER, test).outcome, Outcome::Passed);
+        // It checks what it says: two pulses only, and it is red.
+        let short = test
+            .replace("n > 8", "n > 4")
+            .replace("(n MOD 2) = 1", "(n MOD 2) = 1 AND n < 4");
+        assert!(one(COUNTER, &short).red());
+        // A test that declares no test_done still ends on done.
+        assert_eq!(one(LAMP, TEST_OK).outcome, Outcome::Passed);
     }
 
     #[test]

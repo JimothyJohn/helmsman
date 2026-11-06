@@ -1,20 +1,20 @@
-//! The Agent's answer checked before it is shown (card `agent-scenarios`):
-//! its scenarios read and run, the whole-file rule held against fragments,
-//! the retry decision, and the Agent tab's flow with scripted answers (no
-//! network, no sleeps: `link.sent` and `link.inbox`).
+//! The Agent's answer checked before it is written (card
+//! `agent-scenarios`): its scenarios read and run, the whole-file rule
+//! held against fragments, and the retry decision. The tab's flow with
+//! scripted answers is `instruct_tests.rs`.
 
 use std::fmt::Write as _;
 
 use crate::scope::{Files, Scope};
 use crate::verify::{Check, Next, RETRIES, check, code_part, elision, full_copy, has_code, next, scenarios};
 
-const LAMP: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
+pub(crate) const LAMP: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
 /// The project's own test: green while the lamp follows start.
-const FOLLOWS: &str = "(* The lamp comes on with start. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_follows : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_follows(COND := lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
+pub(crate) const FOLLOWS: &str = "(* The lamp comes on with start. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_follows : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_follows(COND := lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
 
 /// A scenario: the lamp stays off without start (`holds` FALSE makes
 /// it expect the lamp on, so it fails against `LAMP`).
-fn off(name: &str, holds: bool) -> String {
+pub(crate) fn off(name: &str, holds: bool) -> String {
     let cond = if holds { "NOT lamp" } else { "lamp" };
     format!(
         "(* The lamp stays off while start is not pressed. *)\nPROGRAM test_{name}\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_off : ASSERT; END_VAR\nstart := FALSE;\nn := n + 1;\nIF n > 3 THEN lamp_off(COND := {cond}); done := TRUE; END_IF;\nEND_PROGRAM"
@@ -22,7 +22,7 @@ fn off(name: &str, holds: bool) -> String {
 }
 
 /// An answer: a few words, the code, then the scenarios.
-fn answer_with(code: &str, scen: &[String]) -> String {
+pub(crate) fn answer_with(code: &str, scen: &[String]) -> String {
     let mut a = format!("It now says why.\n\n```st\n{}\n```\n", code.trim_end());
     for s in scen {
         let _ = write!(a, "\n```st scenario\n{s}\n```\n");
@@ -30,7 +30,7 @@ fn answer_with(code: &str, scen: &[String]) -> String {
     a
 }
 
-fn commented() -> String {
+pub(crate) fn commented() -> String {
     LAMP.replace("lamp := start;", "lamp := start; (* follows start *)")
 }
 
@@ -240,7 +240,6 @@ fn the_check_runs_the_scenarios_and_the_projects_tests_on_a_copy() {
     assert_eq!(c.tests_green, 1, "test_lamp ran too");
     assert_eq!(c.add.len(), 1);
     assert_eq!(c.add[0].0, "test_lamp_off.st");
-    assert_eq!(c.refusal(), None);
     // A red scenario, named in its words.
     let red = answer_with(&commented(), &[off("lamp_off", false)]);
     let c = check(&file(), &files, &red, settings());
@@ -250,7 +249,6 @@ fn the_check_runs_the_scenarios_and_the_projects_tests_on_a_copy() {
         p.contains("Scenario The lamp stays off while start is not pressed. (test_lamp_off.st) failed: lamp off failed"),
         "{p}"
     );
-    assert!(c.refusal().is_some_and(|r| r.contains("did not pass")));
     // A scenario with no ASSERT checks nothing: red.
     let idle =
         "(* Nothing. *)\nPROGRAM test_idle\nVAR_OUTPUT done : BOOL; END_VAR\ndone := TRUE;\nEND_PROGRAM"
@@ -326,263 +324,89 @@ fn a_red_answer_goes_back_twice_and_code_without_a_scenario_once() {
     assert_eq!(next(&green, 0, false), Next::Show);
 }
 
-// ---- the Agent tab ----
+/// The project's test, with the change that contradicts it: the lamp is
+/// now off while start is on.
+const INVERTED: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := NOT start;\nEND_PROGRAM\n";
 
-mod in_the_page {
-    use eframe::egui;
-    use serde_json::json;
+fn inverted_test() -> String {
+    "(* The lamp is off while start is on. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_off : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_off(COND := NOT lamp); done := TRUE; END_IF;\nEND_PROGRAM".into()
+}
 
-    use super::{FOLLOWS, LAMP, answer_with, commented, off};
-    use crate::claude::{Incoming, Phase};
-    use crate::playground_view::PlaygroundView;
+fn replacing(code: &str, block: &str, scen: &str) -> String {
+    format!(
+        "Why: the lamp is now off while start is on.\n\n```st\n{}\n```\n\n```{block}\n{scen}\n```\n",
+        code.trim_end()
+    )
+}
 
-    /// Project `mine`: `LAMP` and its green test, on the local proxy.
-    fn mine() -> PlaygroundView {
-        let mut v = PlaygroundView::with_storage(Box::new(crate::sim_projects::MemStorage::default()));
-        v.proj.create("mine", None);
-        v.proj.files.insert("main.st".into(), LAMP.into());
-        v.proj.add_file("test_lamp.st", FOLLOWS.into());
-        v.proj.save();
-        v.open_project("mine");
-        v.proj.open_file("main.st");
-        // The first tick settles the proxy check (none natively); then the
-        // proxy is there.
-        v.tick(&egui::Context::default());
-        v.chat.receive(Incoming::Proxy(true));
-        v
-    }
+#[test]
+fn a_scenario_marked_replaces_names_the_test_it_takes_the_place_of() {
+    use crate::verify::replaces;
+    assert_eq!(
+        replaces("st scenario replaces test_lamp").as_deref(),
+        Some("test_lamp.st")
+    );
+    assert_eq!(
+        replaces("st scenario replaces test_lamp.st").as_deref(),
+        Some("test_lamp.st")
+    );
+    assert_eq!(
+        replaces("st scenario REPLACES TEST_Lamp").as_deref(),
+        Some("test_lamp.st")
+    );
+    assert_eq!(replaces("st scenario"), None);
+    assert_eq!(replaces("st scenario replaces"), None);
+    // Only a test file name: never main.st or a path.
+    assert_eq!(replaces("st scenario replaces main"), None);
+    assert_eq!(replaces("st scenario replaces test_../main"), None);
+}
 
-    /// A Messages API stream whose one text block is `text`.
-    fn stream(text: &str) -> String {
-        let ev = |name: &str, data: serde_json::Value| format!("event: {name}\ndata: {data}\n\n");
-        [
-            ev("message_start", json!({"type":"message_start","message":{"model":"claude-sonnet-5-5","id":"m","type":"message","role":"assistant","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}})),
-            ev("content_block_start", json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})),
-            ev("content_block_delta", json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":text}})),
-            ev("content_block_stop", json!({"type":"content_block_stop","index":0})),
-            ev("message_delta", json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":40}})),
-            ev("message_stop", json!({"type":"message_stop"})),
-        ]
-        .concat()
-    }
+/// Nick, 2026-11-05: kept scenarios are tests, so an instruction that
+/// changes their behaviour could never pass. The answer replaces the test
+/// it contradicts; it must pass, and the status line names it.
+#[test]
+fn a_test_the_instruction_contradicts_is_replaced_and_said_so() {
+    // Without the replacement: red, and the failure says how to replace it.
+    let plain = answer_with(INVERTED, &[inverted_test().replace("test_lamp", "test_inverted")]);
+    let c = check(&file(), &project(), &plain, settings());
+    assert!(c.red());
+    let p = c.problems().join("\n");
+    assert!(p.contains("Requirement test test_lamp is red"), "{p}");
+    assert!(p.contains("```st scenario replaces test_lamp"), "{p}");
 
-    /// The Agent answers the request in flight with `text`.
-    fn reply(v: &mut PlaygroundView, text: &str) {
-        let (seq, _) = v.link.sent.last().cloned().expect("a request");
-        v.link.inbox.push(Incoming::Chunk {
-            seq,
-            text: stream(text),
-        });
-        v.link.inbox.push(Incoming::End { seq });
-        v.tick(&egui::Context::default());
-    }
+    // With it: green, the old test's file takes the new text.
+    let a = replacing(INVERTED, "st scenario replaces test_lamp", &inverted_test());
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.green(), "{:?}", c.problems());
+    assert_eq!(
+        c.replaced,
+        vec![(
+            "test_lamp.st".to_string(),
+            "The lamp is off while start is on.".to_string()
+        )]
+    );
+    assert_eq!(c.add.len(), 1);
+    assert_eq!(c.add[0].0, "test_lamp.st");
+    assert!(c.add[0].1.contains("NOT lamp"));
+    let s = crate::instruct::status("main.st", &c);
+    assert!(
+        s.contains("changed requirement test_lamp: The lamp is off while start is on."),
+        "{s}"
+    );
 
-    fn ask(v: &mut PlaygroundView, q: &str) {
-        v.chat.question = q.into();
-        v.ask(&egui::Context::default());
-        assert_eq!(v.ask_error, None);
-    }
+    // The replacement must itself pass: one that checks the old behaviour
+    // against the new code is red.
+    let wrong = replacing(INVERTED, "st scenario replaces test_lamp", FOLLOWS.trim_end());
+    assert!(check(&file(), &project(), &wrong, settings()).red());
 
-    /// The last request's messages.
-    fn messages(v: &PlaygroundView) -> Vec<serde_json::Value> {
-        let (_, req) = v.link.sent.last().unwrap();
-        let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
-        body["messages"].as_array().unwrap().clone()
-    }
-
-    #[test]
-    fn a_green_answer_shows_its_scenarios_and_use_keeps_them_as_tests() {
-        let mut v = mine();
-        ask(&mut v, "say why the lamp is on");
-        reply(&mut v, &answer_with(&commented(), &[off("lamp_off", true)]));
-        assert_eq!(v.link.sent.len(), 1, "green the first time: no retry");
-        assert!(v.chain.is_none());
-        let (c, tries) = v.live_check.clone().expect("checked");
-        assert!(c.green() && c.scenarios.len() == 1 && tries == 0, "{c:?}");
-        assert_eq!(v.chat.history.len(), 1);
-        assert_eq!(v.chat.history[0].question, "say why the lamp is on");
-        assert!(v.use_answer());
-        assert_eq!(v.use_error, None, "{:?}", v.notice);
-        assert_eq!(v.proj.files["main.st"], commented());
-        let t = &v.proj.files["test_lamp_off.st"];
-        assert!(
-            t.starts_with("(* The lamp stays off while start is not pressed. *)\nPROGRAM test_lamp_off"),
-            "{t}"
-        );
-        assert!(
-            v.notice
-                .as_deref()
-                .is_some_and(|n| n.contains("scenario is kept")),
-            "{:?}",
-            v.notice
-        );
-        let row = v
-            .tests
-            .rows
+    // A test the project does not have cannot be replaced.
+    let none = replacing(INVERTED, "st scenario replaces test_nope", &inverted_test());
+    let c = check(&file(), &project(), &none, settings());
+    assert!(
+        c.problems()
             .iter()
-            .find(|r| r.file == "test_lamp_off.st")
-            .expect("its row");
-        assert!(row.passed(), "{row:?}");
-        assert_eq!(row.requirement, "The lamp stays off while start is not pressed.");
-    }
-
-    #[test]
-    fn a_red_answer_goes_back_with_what_failed_and_the_fix_is_shown() {
-        let mut v = mine();
-        ask(&mut v, "say why the lamp is on");
-        let first = answer_with(&commented(), &[off("lamp_off", false)]);
-        reply(&mut v, &first);
-        assert_eq!(v.link.sent.len(), 2, "sent back on its own");
-        let c = v.chain.as_ref().expect("retrying");
-        assert_eq!(c.retries, 1);
-        assert!(
-            c.problems.iter().any(|p| p.contains("lamp off failed")),
-            "{:?}",
-            c.problems
-        );
-        assert!(v.chat.busy());
-        assert!(v.chat.history.is_empty(), "the failed answer is no page");
-        let m = messages(&v);
-        assert_eq!(m.len(), 3, "the question, the failed answer, what failed");
-        assert!(
-            m[0]["content"]
-                .as_str()
-                .unwrap()
-                .starts_with("say why the lamp is on")
-        );
-        assert_eq!(m[1]["content"], first.as_str());
-        let back = m[2]["content"].as_str().unwrap();
-        assert!(
-            back.starts_with("The page checked your answer before showing it"),
-            "{back}"
-        );
-        assert!(
-            back.contains("test_lamp_off.st) failed: lamp off failed"),
-            "{back}"
-        );
-        assert!(back.contains("<edit_scope>"), "the same envelopes: {back}");
-        // The fix passes: shown, as the page of the first question.
-        reply(&mut v, &answer_with(&commented(), &[off("lamp_off", true)]));
-        assert_eq!(v.link.sent.len(), 2);
-        assert!(v.chain.is_none());
-        let (c, tries) = v.live_check.clone().unwrap();
-        assert!(c.green() && tries == 1, "{c:?}");
-        assert_eq!(v.chat.history.len(), 1);
-        assert_eq!(v.chat.history[0].question, "say why the lamp is on");
-        assert!(v.chat.history[0].asked.starts_with("say why the lamp is on"));
-        assert!(v.use_answer());
-        assert_eq!(v.use_error, None, "{:?}", v.notice);
-    }
-
-    #[test]
-    fn still_red_after_two_retries_it_is_shown_red_and_refused() {
-        let mut v = mine();
-        let before = v.proj.files.clone();
-        ask(&mut v, "say why the lamp is on");
-        let red = answer_with(&commented(), &[off("lamp_off", false)]);
-        for k in 0..3 {
-            assert_eq!(v.link.sent.len(), k + 1);
-            reply(&mut v, &red);
-        }
-        assert_eq!(v.link.sent.len(), 3, "two retries, no more");
-        assert_eq!(messages(&v).len(), 5, "both failed answers went back");
-        assert!(v.chain.is_none());
-        let (c, tries) = v.live_check.clone().unwrap();
-        assert!(c.red() && tries == 2, "{c:?}");
-        assert_eq!(v.chat.history.len(), 1);
-        assert!(v.use_answer());
-        let why = v.use_error.clone().expect("refused");
-        assert!(
-            why.contains("did not pass") && why.contains("lamp off failed"),
-            "{why}"
-        );
-        assert_eq!(v.proj.files["main.st"], before["main.st"]);
-        assert!(!v.proj.files.contains_key("test_lamp_off.st"), "no scenario kept");
-    }
-
-    #[test]
-    fn a_fragment_of_the_selection_goes_back_and_the_whole_file_is_taken() {
-        let mut v = mine();
-        v.selection = Some(("main.st".into(), 4, 4));
-        ask(&mut v, "comment line 4");
-        let asked = messages(&v)[0]["content"].as_str().unwrap().to_string();
-        assert!(
-            asked.contains(&format!("section:\nlamp := start;\ntext:\n{LAMP}")),
-            "{asked}"
-        );
-        reply(
-            &mut v,
-            &answer_with("lamp := start; (* follows start *)", &[off("lamp_off", true)]),
-        );
-        assert_eq!(v.link.sent.len(), 2, "a fragment goes back");
-        let back = messages(&v).last().unwrap()["content"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(back.contains("not the whole of main.st"), "{back}");
-        reply(&mut v, &answer_with(&commented(), &[off("lamp_off", true)]));
-        let (c, _) = v.live_check.clone().unwrap();
-        assert!(c.green(), "{c:?}");
-        v.selection = None;
-        assert!(v.use_answer());
-        assert_eq!(v.use_error, None, "{:?}", v.notice);
-        assert_eq!(v.proj.files["main.st"], commented());
-    }
-
-    #[test]
-    fn an_answer_with_no_code_needs_no_scenario() {
-        let mut v = mine();
-        ask(&mut v, "what does the lamp do?");
-        reply(&mut v, "It follows start.");
-        assert_eq!(v.link.sent.len(), 1);
-        assert!(v.chain.is_none());
-        assert_eq!(v.live_check.as_ref().map(|(c, _)| c.code), Some(false));
-        assert!(!v.use_answer());
-    }
-
-    #[test]
-    fn code_with_no_scenario_is_asked_for_one_once_then_shown_unchecked() {
-        let mut v = mine();
-        ask(&mut v, "comment it");
-        reply(&mut v, &answer_with(&commented(), &[]));
-        assert_eq!(v.link.sent.len(), 2);
-        let back = messages(&v).last().unwrap()["content"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(back.contains("no scenario"), "{back}");
-        reply(&mut v, &answer_with(&commented(), &[]));
-        assert_eq!(v.link.sent.len(), 2, "asked once");
-        let (c, _) = v.live_check.clone().unwrap();
-        assert!(c.unchecked(), "{c:?}");
-        assert!(v.use_answer());
-        assert_eq!(v.use_error, None, "not refused: {:?}", v.notice);
-        assert_eq!(v.proj.files["main.st"], commented());
-    }
-
-    #[test]
-    fn a_retry_stopped_brings_the_last_answer_back_as_the_page() {
-        let mut v = mine();
-        ask(&mut v, "comment it");
-        let red = answer_with(&commented(), &[off("lamp_off", false)]);
-        reply(&mut v, &red);
-        assert!(v.chat.busy());
-        v.stop_answer();
-        v.tick(&egui::Context::default());
-        assert!(v.chain.is_none());
-        assert_eq!(v.chat.history.len(), 1);
-        assert_eq!(v.chat.history[0].question, "comment it");
-        assert_eq!(v.chat.history[0].answer, red);
-        assert_eq!(v.chat.page, Some(0), "on view as a page");
-        assert!(matches!(
-            v.chat.answer.as_ref().map(|a| &a.phase),
-            Some(Phase::Failed(_))
-        ));
-        let (c, _) = v.live_check.clone().unwrap();
-        assert!(c.red());
-        // An earlier page with code is checked too: Use this code refuses it.
-        let page = v.chat.history[0].clone();
-        v.use_page(&page);
-        assert!(v.use_error.as_deref().is_some_and(|e| e.contains("did not pass")));
-    }
+            .any(|p| p.contains("replaces test_nope, which the project does not have")),
+        "{:?}",
+        c.problems()
+    );
 }
