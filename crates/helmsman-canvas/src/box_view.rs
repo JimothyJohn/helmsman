@@ -1084,10 +1084,19 @@ impl BoxView {
         }
         let can = is_engineer(self.session.as_ref());
         let mut release = None;
+        // The glyph strip floats over the diagram's top right, 8 pt in: the
+        // banner wraps short of it, or the strip would cover its buttons
+        // and take their clicks. Its width is last frame's (its place lags
+        // a frame when a panel opens; its width does not).
+        let strip = ui.ctx().memory(|m| m.area_rect(egui::Id::unique("glyphs")));
         egui::Frame::new()
             .fill(WARN)
             .inner_margin(egui::Margin::symmetric(8, 4))
             .show(ui, |ui| {
+                if let Some(s) = strip {
+                    let left = ui.max_rect().right() - 8.0 - s.width() - 16.0;
+                    ui.set_max_width((left - ui.min_rect().left()).max(160.0));
+                }
                 ui.horizontal_wrapped(|ui| {
                     let r = ui.label(RichText::new("FORCED").strong().color(BLACK)).tip(
                         "These inputs hold the value an engineer forced, whatever the module reads. \

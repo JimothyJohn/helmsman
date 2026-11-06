@@ -121,6 +121,13 @@ pub const BODY: f32 = 18.0;
 pub const MONO: f32 = 17.0;
 pub const HEADING: f32 = 22.0;
 
+/// The text face: Inter, subset to Latin, punctuation, arrows and the
+/// shapes the app draws (`assets/fonts`, OFL). A glyph it lacks falls back
+/// to egui's own fonts, which stay behind it in the list.
+const TEXT_FONT: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+/// Code and values: IBM Plex Mono, subset the same way (OFL).
+const MONO_FONT: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Regular.ttf");
+
 /// egui's text styles at the sizes above: `Small` is never below
 /// [`MIN_TEXT`], so a `.small()` label stays legible.
 fn text_styles() -> std::collections::BTreeMap<egui::TextStyle, egui::FontId> {
@@ -135,9 +142,169 @@ fn text_styles() -> std::collections::BTreeMap<egui::TextStyle, egui::FontId> {
     .into()
 }
 
+/// egui's fonts with Inter and Plex Mono in front.
+fn fonts() -> egui::FontDefinitions {
+    use egui::{FontData, FontFamily};
+    use std::sync::Arc;
+    let mut f = egui::FontDefinitions::default();
+    for (name, data, family) in [
+        ("inter", TEXT_FONT, FontFamily::Proportional),
+        ("plex-mono", MONO_FONT, FontFamily::Monospace),
+    ] {
+        f.font_data
+            .insert(name.to_owned(), Arc::new(FontData::from_static(data)));
+        f.families.entry(family).or_default().insert(0, name.to_owned());
+    }
+    f
+}
+
+/// Corners on every widget, popup and window.
+const RADIUS: u8 = 6;
+
+/// The tones a widget steps through: at rest, under the pointer, pressed.
+/// Fills only; a widget has no outline (a field keeps a faint one on the
+/// light page, where its white would vanish on the panel).
+struct Tones {
+    rest: Color32,
+    hover: Color32,
+    press: Color32,
+    raised: Color32,
+    hairline: Color32,
+    field_edge: Color32,
+    ink: Color32,
+    shadow: u8,
+}
+
+fn tones(dark: bool) -> Tones {
+    if dark {
+        Tones {
+            rest: Color32::from_gray(0x26),
+            hover: Color32::from_gray(0x30),
+            press: Color32::from_gray(0x3A),
+            raised: Color32::from_gray(0x20),
+            hairline: Color32::from_gray(0x2C),
+            field_edge: Color32::TRANSPARENT,
+            ink: Color32::from_gray(0xE6),
+            shadow: 120,
+        }
+    } else {
+        Tones {
+            rest: Color32::from_gray(0xEB),
+            hover: Color32::from_gray(0xE1),
+            press: Color32::from_gray(0xD4),
+            raised: WHITE,
+            hairline: Color32::from_gray(0xE2),
+            field_edge: Color32::from_gray(0xDA),
+            ink: Color32::from_gray(0x1A),
+            shadow: 30,
+        }
+    }
+}
+
+/// The widgets, panels, popups and spacing of one theme: tonal surfaces
+/// and no outlines, the yellow (ochre on the light page) as the only
+/// colour a control takes, soft small shadows.
+fn style(s: &mut egui::Style, dark: bool) {
+    use egui::{CornerRadius, Margin, Shadow, Stroke, vec2};
+    let t = Theme::for_mode(dark);
+    let k = tones(dark);
+    let r = CornerRadius::same(RADIUS);
+    let none = Stroke::NONE;
+    let v = &mut s.visuals;
+    v.panel_fill = if dark {
+        Color32::from_gray(0x1A)
+    } else {
+        Color32::from_gray(0xF7)
+    };
+    v.window_fill = k.raised;
+    v.window_stroke = Stroke::new(1.0, k.hairline);
+    v.window_corner_radius = CornerRadius::same(RADIUS + 2);
+    v.menu_corner_radius = CornerRadius::same(RADIUS + 2);
+    let shadow = Shadow {
+        offset: [0, 6],
+        blur: 20,
+        spread: 0,
+        color: Color32::from_black_alpha(k.shadow),
+    };
+    v.window_shadow = shadow;
+    v.popup_shadow = shadow;
+    v.extreme_bg_color = if dark { Color32::from_gray(0x10) } else { WHITE };
+    v.faint_bg_color = k.raised;
+    v.code_bg_color = k.rest;
+    v.hyperlink_color = t.accent;
+    v.warn_fg_color = crate::st_view::brand::WARN;
+    v.error_fg_color = crate::st_view::brand::RED;
+    v.selection.bg_fill = k.hover;
+    v.selection.stroke = Stroke::new(1.0, t.accent);
+    v.indent_has_left_vline = false;
+
+    let w = &mut v.widgets;
+    w.noninteractive.bg_fill = v.panel_fill;
+    w.noninteractive.weak_bg_fill = v.panel_fill;
+    w.noninteractive.bg_stroke = Stroke::new(1.0, k.hairline);
+    w.noninteractive.fg_stroke = Stroke::new(1.0, k.ink);
+    w.noninteractive.corner_radius = r;
+    for (wv, fill, edge) in [
+        (&mut w.inactive, k.rest, Stroke::new(1.0, k.field_edge)),
+        (&mut w.hovered, k.hover, none),
+        (&mut w.active, k.press, none),
+        (&mut w.open, k.hover, none),
+    ] {
+        wv.bg_fill = fill;
+        wv.weak_bg_fill = fill;
+        wv.bg_stroke = edge;
+        wv.corner_radius = r;
+        wv.expansion = 0.0;
+    }
+    w.inactive.fg_stroke = Stroke::new(1.0, k.ink);
+    w.hovered.fg_stroke = Stroke::new(1.5, t.fg);
+    w.active.fg_stroke = Stroke::new(2.0, t.fg);
+    w.open.fg_stroke = Stroke::new(1.0, t.fg);
+
+    let sp = &mut s.spacing;
+    sp.item_spacing = vec2(8.0, 6.0);
+    sp.button_padding = vec2(10.0, 4.0);
+    sp.window_margin = Margin::same(12);
+    sp.menu_margin = Margin::same(8);
+    sp.menu_spacing = 4.0;
+    s.text_styles = text_styles();
+}
+
+/// A tab (or a toggle chip): its label, muted until it is the one on,
+/// which gets a 2 pt accent bar under it. Frameless until the pointer is
+/// on it, and padded less than a button so a row of tabs stays narrow.
+/// `min` is its least size.
+pub fn tab(ui: &mut egui::Ui, on: bool, text: &str, min: egui::Vec2) -> egui::Response {
+    let t = theme(ui);
+    let label = egui::RichText::new(text).color(if on { t.fg } else { t.muted });
+    let pad = TAB_PAD;
+    let r = ui
+        .scope(|ui| {
+            ui.spacing_mut().button_padding.x = pad;
+            ui.add(
+                egui::Button::new(label) // tip: exempt (the caller tips the tab)
+                    .selected(on)
+                    .frame_when_inactive(false)
+                    .min_size(min),
+            )
+        })
+        .inner;
+    if on {
+        ui.painter().hline(
+            (r.rect.left() + pad)..=(r.rect.right() - pad),
+            r.rect.bottom() - 1.0,
+            egui::Stroke::new(2.0, t.accent),
+        );
+    }
+    r
+}
+
+/// A tab's padding either side of its label.
+const TAB_PAD: f32 = 6.0;
+
 /// Keeps egui's theme on the one the layout asks for (`light`), so the
-/// page, its widgets and [`Theme`] agree from the first frame, and the
-/// text at the sizes above in both.
+/// page, its widgets and [`Theme`] agree from the first frame, with the
+/// fonts, widgets and text sizes above in both.
 pub fn apply(ctx: &egui::Context, light: bool) {
     let want = if light {
         egui::Theme::Light
@@ -147,14 +314,12 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     if ctx.theme() != want {
         ctx.set_theme(want);
     }
-    if ctx
-        .style_of(ctx.theme())
-        .text_styles
-        .get(&egui::TextStyle::Body)
-        .map(|f| f.size)
-        != Some(BODY)
-    {
-        ctx.all_styles_mut(|s| s.text_styles = text_styles());
+    let id = egui::Id::unique("helmsman-theme-styled");
+    if !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
+        ctx.set_fonts(fonts());
+        ctx.style_mut_of(egui::Theme::Dark, |s| style(s, true));
+        ctx.style_mut_of(egui::Theme::Light, |s| style(s, false));
+        ctx.data_mut(|d| d.insert_temp(id, true));
     }
     // Nick, 2026-11-05: a title or a row is not text to select, and a
     // control shows the finger. Labels are not selectable (the Agent's

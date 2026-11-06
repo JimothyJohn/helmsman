@@ -6,7 +6,7 @@ tab), type what the open Structured Text file should do, and press
 **Send**. The file is updated in place and the editor shows it; there is
 no conversation to read through.
 
-<img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="240">
+<img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the instruction box and Send." width="300">
 
 An instruction can be a new behaviour ("the lamp latches until stop is
 pressed"), a change ("add a two-second delay before the belt starts") or

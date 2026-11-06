@@ -1920,8 +1920,7 @@ impl PlaygroundView {
                 } else {
                     "Click to pin it to the trend."
                 };
-                if ui
-                    .selectable_label(on, name.to_ascii_lowercase())
+                if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
                     .tip(tip)
                     .clicked()
                 {

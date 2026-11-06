@@ -603,17 +603,21 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 // Tabs: Files | Devices | Code, the hide chevron at the right.
                 ui.horizontal(|ui| {
                     for p in Pane::ALL {
-                        let b = egui::Button::selectable(pane == p, RichText::new(p.label()).strong())
-                            .min_size(Vec2::new(0.0, TAP * 0.75));
-                        let r = ui.add(b).tip(p.tip());
+                        let r = crate::theme::tab(ui, pane == p, p.label(), Vec2::new(0.0, TAP * 0.75))
+                            .tip(p.tip());
                         hits.push((format!("pane {}", p.key()), r.rect));
                         if r.clicked() {
                             pane = p;
                         }
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        t = Some(header_toggle(ui, true, "Hides the pane."));
-                    });
+                    // The chevron at the right edge, or right after the
+                    // tabs when they fill the row: a right-to-left layout
+                    // with no room left would draw it over the last tab.
+                    // The gap leaves the item spacing before the chevron,
+                    // or the row overflows and the panel grows every frame.
+                    let gap = ui.available_width() - TAP * 0.75 - ui.spacing().item_spacing.x;
+                    ui.add_space(gap.max(0.0));
+                    t = Some(header_toggle(ui, true, "Hides the pane."));
                 });
                 ui.separator();
                 match pane {
@@ -675,9 +679,8 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 ui.horizontal(|ui| {
                     t = Some(header_toggle(ui, false, "Hides the panel (Alt+3)."));
                     for &k in tabs {
-                        let b = egui::Button::selectable(tab == k, RichText::new(k.label()).strong())
-                            .min_size(Vec2::new(0.0, TAP * 0.75));
-                        let r = ui.add(b).tip(k.tip());
+                        let r = crate::theme::tab(ui, tab == k, k.label(), Vec2::new(0.0, TAP * 0.75))
+                            .tip(k.tip());
                         hits.push((format!("tab {}", k.key()), r.rect));
                         if r.clicked() {
                             tab = k;
@@ -728,12 +731,8 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                         "What happened: connections, deploys, faults and errors, newest last.",
                     ),
                 ] {
-                    let r = ui
-                        .add(
-                            egui::Button::selectable(chrome.bottom == b, RichText::new(text).strong())
-                                .min_size(Vec2::new(64.0, TAP * 0.6)),
-                        )
-                        .tip(tip);
+                    let r =
+                        crate::theme::tab(ui, chrome.bottom == b, &text, Vec2::new(64.0, TAP * 0.6)).tip(tip);
                     chrome.hit(key, r.rect);
                     if r.clicked() {
                         chrome.bottom = b;

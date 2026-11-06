@@ -2375,9 +2375,13 @@ mod chrome {
         assert!(h.app.chrome.code_open());
         h.wait(0.5);
         let r = h.ctx.read_response(editor()).expect("open again");
-        // The pane opens at 160 pt; the editor is what is left of it
-        // beside the gutter.
-        assert!((50.0..160.0).contains(&r.rect.width()), "{:?}", r.rect);
+        // The pane opens at its default width; the editor is what is
+        // left of it beside the gutter.
+        assert!(
+            (50.0..crate::editor::LEFT_W).contains(&r.rect.width()),
+            "{:?}",
+            r.rect
+        );
 
         // Click the lamp's assignment: the ST goes to its line.
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
