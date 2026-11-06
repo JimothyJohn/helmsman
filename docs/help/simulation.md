@@ -4,6 +4,10 @@ The simulation runs the controller inside the page, scan by scan, against
 inputs you set yourself. It is what the playground is, and what a box's
 page falls back to when no box answers.
 
+New to it? The [guided tour](https://helmsman.advin.io/playground/?tour)
+copies the Blink example, changes it, deploys it and reads its trend,
+with each step pointing at the control it is about.
+
 ## Running
 
 A project opens running. The glyphs over the diagram run or stop it

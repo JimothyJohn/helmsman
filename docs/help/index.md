@@ -17,7 +17,12 @@ Text, or <kbd>Alt</kbd> <kbd>1</kbd>).
 
 ![The playground as it opens: the blink example running, its diagram in the middle, the Structured Text on the left, the I/O panel on the right and the trend along the bottom.](img/editor.png)
 
-Things to try, in order:
+The [guided tour](https://helmsman.advin.io/playground/?tour) walks you
+through it in the playground itself: each step points at the control it
+is about and moves on when you use it. It takes a few minutes, and Help ›
+Take the tour starts it again any time.
+
+Or try these yourself, in order:
 
 1. Watch the lamp on the diagram: Blink's timer flips it every 500 ms.
 2. Open **Files** on the left and click **Read and write**. Give it a
