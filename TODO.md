@@ -27,6 +27,7 @@
   id: e1213-address
   answer: DHCP reservation on the router (recommended)
   notes: interview 2026-11-02: Nick changed to "find it by identity instead, skip the reservation": card `device-by-identity`; the maps keep 10.0.0.57 until that lands.
+  notes: 2026-11-06 (Nick, in session): the unit goes on the device link at a fixed 192.168.3.60, wired, so the bench Pi's eth0 and the Studio's en0 both reach it (it had moved to the office LAN, which the Pi reaches only by Wi-Fi). The maps find it by MAC, so none changes; the Pi's firewall now accepts ListIdentity answers from 192.168.3.0/24 (fix/pi-scan-replies).
 
 - [x] **MCP clients cannot read /api/devices: allow it?** — found by the plant-states worker (2026-11-03): `mcp::reachable` lacks GET /api/devices, so `list_devices` fails over MCP (it always did) while it works for the relay agent. Allowing it widens what an engineer's own MCP client reads on the box (device names, addresses, link errors); read-only, no secrets.
   needs: your call

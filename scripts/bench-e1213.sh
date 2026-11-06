@@ -33,7 +33,7 @@
 #
 # Usage: scripts/bench-e1213.sh IP
 set -euo pipefail
-host="${1:?usage: $0 IP (the E1213; 10.0.0.57 on the bench)}"
+host="${1:?usage: $0 IP (the E1213; 192.168.3.60 on the device link since 2026-11-06)}"
 loops="${LOOPS:-do:0=di:0 do:1=di:1 do:2=di:2}"
 cd "$(dirname "$0")/.."
 

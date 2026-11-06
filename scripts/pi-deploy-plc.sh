@@ -201,6 +201,16 @@ if sudo nft list table inet perceptronics >/dev/null 2>&1; then
         sudo nft add rule inet perceptronics input ip saddr $allow udp dport '{ 44818, 2222 }' accept comment '\"helmsman-plc\"'
         echo 'opened 44818 tcp+udp, 2222 udp from $allow'
     fi
+    # The Devices scan broadcasts ListIdentity and each device answers to
+    # the scan's own port from its 44818: conntrack cannot tie a unicast
+    # answer to a broadcast, so policy drop ate every reply (the Pi saw no
+    # ioLogik, 2026-11-06). Accept them from \$allow only.
+    if sudo nft list chain inet perceptronics input | grep -q 'comment \"helmsman-plc-scan\"'; then
+        echo 'scan rule already present'
+    else
+        sudo nft add rule inet perceptronics input ip saddr $allow udp sport 44818 accept comment '\"helmsman-plc-scan\"'
+        echo 'accepting ListIdentity answers (udp from port 44818) from $allow'
+    fi
     case '$api' in
         127.*) ;;
         *)
