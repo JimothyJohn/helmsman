@@ -1775,3 +1775,152 @@ fn a_requirement_added_on_a_box_without_an_agent_is_listed_with_no_test_yet() {
         a.phase
     );
 }
+
+/// The box's Agent tab takes the page's path (`crate::instruct`, Nick
+/// 2026-11-05): the instruction goes to `POST /api/chat` with the answer
+/// format and the whole file in a new conversation; a checked answer is
+/// saved on the box with its History entry and its scenario as a test;
+/// Undo restores the revision before it; a follow-up carries the earlier
+/// instruction, read back from the box's History; a red answer is sent
+/// back in the same conversation and, still red, never written.
+#[test]
+fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_it() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::{BOX_RULES, Kind};
+    use crate::instruct_tests::{LAMP, st};
+    use serde_json::json;
+
+    /// The agent's turn for the last message: its words, then done.
+    fn answer(v: &mut BoxView, text: &str) {
+        let seq = v.chat_sent.last().expect("a message").seq;
+        let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+        let body = [
+            ev("session", json!({"id": "s1"})),
+            ev("text", json!({ "delta": text })),
+            ev("done", json!({"stop": "end_turn", "why": null})),
+        ]
+        .concat();
+        v.agent.apply(Incoming::Chunk { seq, text: body });
+        v.agent.apply(Incoming::End { seq });
+    }
+    /// A frame, then the box's answers carried out until quiet.
+    fn run(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context) {
+        v.tick(ctx);
+        for _ in 0..20 {
+            pump(b, jar, v, ctx, 1.0);
+            if v.psent.is_empty() {
+                return;
+            }
+        }
+        panic!("the box never went quiet");
+    }
+    fn body(v: &BoxView, k: usize) -> Json {
+        serde_json::from_str(&v.chat_sent[k].body).unwrap()
+    }
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    run(&b, &jar, &mut v, &ctx);
+    let before = v.projects.history.last().map(|r| r.n).expect("revisions");
+
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let m = body(&v, 0);
+    assert_eq!(m["session"], Json::Null);
+    let message = m["message"].as_str().unwrap();
+    assert!(message.starts_with(BOX_RULES));
+    assert!(
+        message.contains("\n\ncomment it\n\n<current_program>"),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("text:\n{LAMP}</edit_scope>")),
+        "{message}"
+    );
+    let new = LAMP.replace("lamp := start;", "lamp := start; (* follows start *)");
+    answer(&mut v, &st(&new));
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(o.status, "Updated main.st: 1 scenario passed, kept as a test.");
+    assert_eq!(o.why.as_deref(), Some("it says so."));
+    assert_eq!(o.undo.as_ref().map(|u| u.revision), Some(before));
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], new.as_str());
+    assert!(
+        b.json("/api/projects/line/files/test_lamp_follows.st")["text"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("(* The lamp follows start. *)")),
+        "the scenario is a test on the box"
+    );
+    let saved = v
+        .projects
+        .history
+        .iter()
+        .find(|r| r.what == "took the Agent's answer into main.st")
+        .cloned()
+        .expect("the change's revision");
+    assert!(saved.page);
+    let page = b.json(&format!("/api/projects/line/history/{}", saved.n));
+    assert!(
+        page["page"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("Instruction: comment it\nFile: main.st\nWhy: it says so.\n")),
+        "{page}"
+    );
+    assert_eq!(v.projects.current().unwrap().text, new, "the editor shows it");
+
+    // Undo: the box restores the revision before it.
+    v.undo_change();
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], LAMP);
+    assert_eq!(
+        v.projects.history.last().map(|r| r.what.clone()),
+        Some(format!("restored revision {before}"))
+    );
+
+    // A follow-up: the earlier instruction comes from the box's History;
+    // a red answer goes back in the same conversation, then is refused.
+    run(&b, &jar, &mut v, &ctx);
+    v.instruct.draft = "now invert it".into();
+    v.send_instruction(&ctx);
+    let m = body(&v, 1);
+    assert_eq!(m["session"], Json::Null, "a new conversation per instruction");
+    assert!(
+        m["message"]
+            .as_str()
+            .unwrap()
+            .contains("<earlier_instructions>\n- comment it\n</earlier_instructions>"),
+        "{m}"
+    );
+    let red = st(&LAMP.replace("lamp := start;", "lamp := NOT start;"));
+    answer(&mut v, &red);
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(v.chat_sent.len(), 3);
+    let m = body(&v, 2);
+    assert_eq!(m["session"], "s1", "the retry continues the conversation");
+    assert!(
+        m["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("The page checked your answer before showing it"),
+        "{m}"
+    );
+    answer(&mut v, &red);
+    run(&b, &jar, &mut v, &ctx);
+    answer(&mut v, &red);
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Refused, "{o:?}");
+    assert!(o.problems.iter().any(|p| p.contains("lamp on failed")), "{o:?}");
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "never written"
+    );
+}

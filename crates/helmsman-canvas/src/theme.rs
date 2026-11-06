@@ -202,18 +202,6 @@ pub fn near_pointer(ctx: &egui::Context, key: &str) -> egui::Modal {
     egui::Modal::new(egui::Id::unique(key)).area(area)
 }
 
-/// "Copy" under an Agent's answer: the whole text to the clipboard
-/// (Nick, 2026-11-05: selecting in the page's canvas is not enough).
-pub fn copy_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let r = ui
-        .small_button("Copy")
-        .on_hover_text("Copies the whole answer to the clipboard.");
-    if r.clicked() {
-        ui.ctx().copy_text(text.to_string());
-    }
-    r
-}
-
 /// Last in a frame: the finger over any enabled widget the pointer is on
 /// that takes a click and is not dragged (a row, a checkbox, a combo box,
 /// a tab, a fold arrow), unless a widget chose its own cursor (a text

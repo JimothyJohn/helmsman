@@ -191,11 +191,11 @@ fn get(addr: SocketAddr, path: &str) -> (u16, String) {
     (head.split(' ').nth(1).unwrap().parse().unwrap(), body.to_string())
 }
 
-/// Sends the agent's draft to the box and feeds the answer back in
-/// `piece`-byte chunks (whole characters), as `web.rs` would.
+/// Sends `message` to the box (continuing the conversation, if any) and
+/// feeds the answer back in `piece`-byte chunks (whole characters), as
+/// `web.rs` would.
 fn turn(a: &mut BoxAgent, b: &Bench, message: &str, piece: usize, token: Option<&str>) {
-    a.draft = message.into();
-    let req = a.send().expect("the draft is sendable");
+    let req = a.send(message, false).expect("the message is sendable");
     assert_eq!(req.url, "/api/chat");
     let (status, body) = post(b.addr, &req.url, &req.body, token);
     let seq = req.seq;
@@ -278,21 +278,22 @@ fn a_tool_round_shows_the_tool_and_its_result_then_the_answer() {
 }
 
 #[test]
-fn the_next_message_continues_the_same_conversation_on_the_box() {
+fn a_retry_continues_the_conversation_and_a_new_instruction_starts_one() {
     let relay = Relay::start(vec![fixture("text-only.sse"), fixture("text-only.sse")]);
     let b = Bench::with_chat(&[("cell", DEMO)], Some(relay.setup()));
     let mut a = BoxAgent::new();
     turn(&mut a, &b, "one", 64, Some(API_TOKEN));
     let first = a.session.clone().unwrap();
-    a.draft = "two".into();
-    let req = a.send().unwrap();
+    let req = a.send("two", false).unwrap();
     let body: Json = serde_json::from_str(&req.body).unwrap();
     assert_eq!(body, json!({ "message": "two", "session": first }));
     a.stop();
-    // A new conversation forgets the session; the box starts another.
-    assert!(a.new_conversation());
-    assert_eq!(a.turns.len(), 0);
-    turn(&mut a, &b, "three", 64, Some(API_TOKEN));
+    // Fresh forgets the session; the box starts another.
+    let req = a.send("three", true).unwrap();
+    let body: Json = serde_json::from_str(&req.body).unwrap();
+    assert_eq!(body, json!({ "message": "three", "session": null }));
+    a.stop();
+    turn(&mut a, &b, "four", 64, Some(API_TOKEN));
     assert!(a.session.is_some());
 }
 
@@ -318,9 +319,9 @@ fn a_box_without_a_relay_says_so_and_the_tab_stops_sending() {
     let mut a = BoxAgent::new();
     status(&mut a, &b);
     assert!(matches!(a.status, Status::Unconfigured(_)), "{:?}", a.status);
-    a.draft = "hello".into();
-    assert!(a.send().is_none());
-    assert!(a.refusal().unwrap().contains("no relay"), "{:?}", a.refusal());
+    assert!(a.send("hello", true).is_err());
+    let why = a.refusal("hello").unwrap();
+    assert!(why.contains("no relay"), "{why}");
     // Even when the page had not asked first: the 503 teaches it.
     let mut a = BoxAgent::new();
     turn(&mut a, &b, "hello", 64, Some(API_TOKEN));
@@ -386,8 +387,7 @@ fn ev(name: &str, data: &Json) -> String {
 fn started() -> (BoxAgent, u64) {
     let mut a = BoxAgent::new();
     a.status = Status::Online;
-    a.draft = "go".into();
-    let seq = a.send().unwrap().seq;
+    let seq = a.send("go", true).unwrap().seq;
     (a, seq)
 }
 
@@ -481,16 +481,13 @@ fn stop_drops_whatever_the_stopped_turn_sends_later() {
 fn messages_are_held_to_what_the_box_takes() {
     let mut a = BoxAgent::new();
     a.status = Status::Online;
-    a.draft = "   ".into();
-    assert!(a.send().is_none());
-    a.draft = "é".repeat(MAX_MESSAGE + 1);
-    assert!(a.send().is_none());
-    a.draft = "é".repeat(MAX_MESSAGE);
-    assert!(a.send().is_some());
+    assert!(a.send("   ", true).is_err());
+    let long = "é".repeat(MAX_MESSAGE + 1);
+    let why = a.send(&long, true).unwrap_err();
+    assert!(why.contains(&format!("at most {MAX_MESSAGE}")), "{why}");
+    assert!(a.send(&"é".repeat(MAX_MESSAGE), true).is_ok());
     // One turn at a time.
-    a.draft = "again".into();
-    assert!(a.send().is_none());
-    assert!(!a.new_conversation());
+    assert!(a.send("again", true).is_err());
 }
 
 #[test]
@@ -508,8 +505,7 @@ fn a_runaway_answer_and_a_long_conversation_stay_bounded() {
     let mut a = BoxAgent::new();
     a.status = Status::Online;
     for k in 0..MAX_TURNS + 5 {
-        a.draft = format!("m{k}");
-        a.send().unwrap();
+        a.send(&format!("m{k}"), true).unwrap();
         a.stop();
     }
     assert_eq!(a.turns.len(), MAX_TURNS);

@@ -372,17 +372,6 @@ impl Check {
         );
         out
     }
-
-    /// Why "Use this code" refuses it, if it does.
-    #[must_use]
-    pub fn refusal(&self) -> Option<String> {
-        self.red().then(|| {
-            format!(
-                "The answer did not pass the page's checks: {}",
-                self.problems().join(" ")
-            )
-        })
-    }
 }
 
 /// The answer's code block: the whole PROGRAM for a new project, else its

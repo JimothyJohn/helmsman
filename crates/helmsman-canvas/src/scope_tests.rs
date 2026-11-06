@@ -2,7 +2,7 @@
 //! envelope, and `apply`'s refusals. Whatever `apply` returns differs
 //! from the project only inside the scope, byte for byte.
 
-use crate::scope::{Files, Focus, Scope, apply, detect, from_asked, selected_lines, statement_end};
+use crate::scope::{Files, Focus, Scope, apply, detect, selected_lines, statement_end};
 
 const MAIN: &str = "PROGRAM main
 VAR
@@ -190,7 +190,7 @@ fn a_blocks_statement_runs_to_its_semicolon_past_comments_strings_and_bodies() {
 // ---- the envelope ----
 
 #[test]
-fn the_envelope_carries_the_scope_its_text_and_reads_back_from_a_page() {
+fn the_envelope_carries_the_scope_and_its_text() {
     let files = project();
     let s = Scope::Lines {
         file: "main.st".into(),
@@ -208,38 +208,20 @@ fn the_envelope_carries_the_scope_its_text_and_reads_back_from_a_page() {
         "{e}"
     );
     assert!(e.ends_with(&format!("text:\n{MAIN}")), "the whole file: {e}");
-    let asked = format!(
-        "make it latch\n\n<current_program>\nx\n</current_program>\n<edit_scope>\n{e}\n</edit_scope>"
-    );
-    assert_eq!(from_asked(&asked), Some(("line3".into(), s)));
     let b = Scope::Block {
         file: "main.st".into(),
         name: "m1".into(),
         from: 9,
         to: 9,
     };
-    let asked = format!("<edit_scope>\n{}\n</edit_scope>", b.envelope("p", &files));
-    assert_eq!(from_asked(&asked), Some(("p".into(), b)));
+    assert!(b.envelope("p", &files).contains("lines: 9-9\nblock: m1\n"));
     let f = Scope::File("motor.st".into());
     let e = f.envelope("p", &files);
     assert!(e.ends_with(MOTOR));
-    assert_eq!(
-        from_asked(&format!("<edit_scope>\n{e}\n</edit_scope>")),
-        Some(("p".into(), f))
-    );
     let n = Scope::NewProject.envelope("blink", &files);
-    assert_eq!(
-        from_asked(&format!("<edit_scope>\n{n}\n</edit_scope>")),
-        Some(("blink".into(), Scope::NewProject))
-    );
-    assert_eq!(from_asked("a page from before scopes"), None);
-    // A file line in the text does not count: fields end at "text:".
-    let mut g = project();
-    g.insert("x.st".into(), "lines: 1-2\n".into());
-    let e = Scope::File("x.st".into()).envelope("p", &g);
-    assert_eq!(
-        from_asked(&format!("<edit_scope>\n{e}\n</edit_scope>")),
-        Some(("p".into(), Scope::File("x.st".into())))
+    assert!(
+        n.ends_with("new project: answer with one complete PROGRAM"),
+        "{n}"
     );
 }
 
@@ -256,6 +238,7 @@ fn the_envelope_cannot_be_closed_by_the_text_in_it() {
         diagnostics: &[],
         devices: "",
         scope: &Scope::File("main.st".into()).envelope("p", &files),
+        earlier: &[],
     };
     let m = crate::claude::user_message(&ctx);
     assert_eq!(m.matches("</edit_scope>").count(), 1, "{m}");
@@ -543,61 +526,22 @@ fn every_accepted_lines_answer_leaves_the_rest_byte_for_byte() {
 mod in_the_page {
     use eframe::egui;
 
-    use crate::claude::Incoming;
-    use crate::playground_view::PlaygroundView;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::{FOLLOWS, LAMP, follows, instruct, mine, st};
     use crate::scope::Scope;
     use crate::st_view::Pick;
 
-    const LAMP: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
-    /// Green while the lamp follows start.
-    const FOLLOWS: &str = "(* The lamp comes on with start. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_follows : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_follows(COND := lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
-
-    /// The simulation with project `mine` open: `LAMP` and its green test.
-    fn mine() -> PlaygroundView {
-        let mut v = PlaygroundView::with_storage(Box::new(crate::sim_projects::MemStorage::default()));
-        v.proj.create("mine", None);
-        v.proj.files.insert("main.st".into(), LAMP.into());
-        v.proj.add_file("test_lamp.st", FOLLOWS.into());
-        v.proj.save();
-        v.open_project("mine");
-        v.proj.open_file("main.st");
-        v.chat.receive(Incoming::Proxy(true));
-        v
-    }
-
-    /// Asks `question` the way the Ask button does and answers with
-    /// `answer` as the API would stream it; the request's body.
-    fn ask(v: &mut PlaygroundView, question: &str, answer: &str) -> String {
-        v.chat.question = question.into();
-        v.ask(&egui::Context::default());
-        let (seq, req) = v.link.sent.last().cloned().expect("sent");
-        let text = serde_json::to_string(answer).unwrap();
-        let text = &text[1..text.len() - 1];
-        v.chat.receive(Incoming::Chunk {
-            seq,
-            text: crate::playground_tests::STREAM
-                .replace("Here:\\n```st\\nPROGRAM p\\nEND_PROGRAM\\n```", text)
-                .replace("\\nDone, ü.", ""),
-        });
-        v.chat.receive(Incoming::End { seq });
-        assert_eq!(v.chat.history.last().map(|p| p.answer.as_str()), Some(answer));
-        req.body
-    }
-
-    fn st(code: &str) -> String {
-        format!("Here:\n```st\n{code}```\n")
-    }
-
     #[test]
-    fn the_question_goes_with_its_scope_in_an_envelope() {
+    fn the_instruction_goes_with_its_scope_in_an_envelope() {
         let mut v = mine();
         assert_eq!(v.scope(), Scope::File("main.st".into()));
-        let body = ask(&mut v, "latch it", "No code.");
-        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let bodies = instruct(&mut v, "latch it", &["No code."]);
+        let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
         let user = body["messages"].as_array().unwrap().last().unwrap()["content"]
             .as_str()
             .unwrap()
             .to_string();
+        assert!(user.starts_with("latch it\n\n<current_program>"), "{user}");
         assert!(
             user.contains(
                 "<edit_scope>\nEditing: main.st (the file open in the Code tab)\nproject: mine\nfile: main.st\n"
@@ -606,43 +550,49 @@ mod in_the_page {
         );
         assert!(user.ends_with(&format!("text:\n{LAMP}</edit_scope>")), "{user}");
         assert!(crate::claude::SYSTEM.contains("<edit_scope>"));
+        let o = v.instruct.outcome.clone().unwrap();
+        assert_eq!(o.kind, Kind::Said);
+        assert_eq!(o.status, "main.st is unchanged. The Agent says: No code.");
         // A built-in example: a new project.
         v.open_project("blink");
         assert_eq!(v.scope(), Scope::NewProject);
     }
 
-    /// The accept path: a whole main.st with its PROGRAM is the next
-    /// iteration; a selection is edited in place; each is one revision
-    /// with its page, and the requirement tests are green with it.
+    /// A checked change is written in place (no vN.st: the version before
+    /// it is a revision), one revision with its record; a selection is
+    /// edited in its lines; unsaved edits are saved first as their own
+    /// revision.
     #[test]
-    fn an_accepted_change_is_an_iteration_or_an_edit_in_place_with_a_revision_and_green_tests() {
+    fn a_checked_change_is_written_in_place_with_a_revision_and_green_tests() {
         let mut v = mine();
         let revs = v.proj.revisions().len();
         let new = LAMP.replace("lamp := start;", "lamp := start; (* same *)");
-        ask(&mut v, "comment it", &st(&new));
-        assert!(v.use_answer());
-        assert_eq!(v.use_error, None, "{:?}", v.notice);
+        instruct(&mut v, "comment it", &[&st(&new)]);
+        let o = v.instruct.outcome.clone().unwrap();
+        assert_eq!(o.kind, Kind::Applied, "{o:?}");
         assert_eq!(v.proj.files["main.st"], new);
-        assert_eq!(v.proj.files["v1.st"], LAMP, "the one before, kept");
+        assert!(
+            !v.proj.files.contains_key("v1.st"),
+            "History holds the one before"
+        );
         assert!(!v.proj.dirty(), "saved");
         let r = v.proj.revisions().last().unwrap();
         assert_eq!(v.proj.revisions().len(), revs + 1, "one revision");
-        assert_eq!(
-            r.what,
-            "took the Agent's answer into main.st as its next iteration"
-        );
+        assert_eq!(r.what, "Agent: comment it");
         assert!(
-            r.page.as_deref().is_some_and(|p| p.starts_with("comment it")),
+            r.page
+                .as_deref()
+                .is_some_and(|p| p.starts_with("Instruction: comment it\nFile: main.st\n")),
             "{:?}",
             r.page
         );
+        assert!(r.files.contains_key("test_lamp_follows.st"), "its scenario, kept");
         assert!(
             v.tests.ran && v.tests.rows.iter().all(crate::requirements::Row::passed),
             "{:?}",
             v.tests
         );
-        assert!(v.notice.as_deref().is_some_and(|n| n.contains("Deploy runs it")));
-        // Line 4 selected: edited in place, no new iteration.
+        // Line 4 selected: edited in place.
         v.selection = Some(("main.st".into(), 4, 4));
         assert_eq!(
             v.scope(),
@@ -652,31 +602,22 @@ mod in_the_page {
                 to: 4
             }
         );
-        // The whole file comes back, changed only in line 4.
-        ask(
-            &mut v,
-            "say why",
-            &st(&new.replace("lamp := start; (* same *)", "lamp := start; (* follows start *)")),
-        );
-        // Clicked elsewhere since: the scope the page was asked with holds.
+        let said = new.replace("lamp := start; (* same *)", "lamp := start; (* follows start *)");
+        v.instruct.draft = "say why".into();
+        v.send_instruction(&egui::Context::default());
+        // Clicked elsewhere since: the scope it was sent with holds.
         v.selection = None;
-        assert!(v.use_answer());
-        assert_eq!(v.use_error, None, "{:?}", v.notice);
-        assert_eq!(
-            v.proj.files["main.st"],
-            new.replace("lamp := start; (* same *)", "lamp := start; (* follows start *)")
-        );
-        assert!(!v.proj.files.contains_key("v2.st"));
+        crate::instruct_tests::reply(&mut v, &st(&said));
+        assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
+        assert_eq!(v.proj.files["main.st"], said);
         let r = v.proj.revisions().last().unwrap();
-        assert_eq!(r.what, "took the Agent's answer into line 4 of main.st");
-        assert!(r.page.as_deref().is_some_and(|p| p.starts_with("say why")));
+        assert_eq!(r.what, "Agent: say why");
         assert_eq!(v.proj.revisions().len(), revs + 2);
         // Unsaved edits are saved first, as their own revision.
         v.proj.current_text_mut().unwrap().push_str("(* mine *)\n");
         let theirs = v.proj.files["main.st"].replace("(* mine *)", "(* theirs *)");
-        ask(&mut v, "again", &st(&theirs));
-        assert!(v.use_answer());
-        assert_eq!(v.use_error, None, "{:?}", v.notice);
+        instruct(&mut v, "again", &[&st(&theirs)]);
+        assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
         let all = v.proj.revisions();
         assert_eq!(all.len(), revs + 4);
         assert_eq!(all[all.len() - 2].what, "saved");
@@ -688,39 +629,42 @@ mod in_the_page {
         let mut v = mine();
         let before = v.proj.files.clone();
         let revs = v.proj.revisions().len();
-        ask(&mut v, "map it", "```st io.map\nin start bool box di:0\n```\n");
-        assert!(v.use_answer());
-        let why = v.use_error.clone().expect("refused");
+        let map = format!("```st io.map\nin start bool box di:0\n```\n{}", follows());
+        instruct(&mut v, "map it", &[&map]);
+        let o = v.instruct.outcome.clone().unwrap();
+        assert_eq!(o.kind, Kind::Refused);
+        let why = o.problems.join(" ");
         assert!(why.contains("io.map") && why.contains("outside main.st"), "{why}");
-        assert!(
-            v.notice
-                .as_deref()
-                .is_some_and(|n| n.starts_with("Use this code refused:"))
-        );
-        assert!(v.log.iter().any(|m| m.text.contains("Use this code refused")));
+        assert!(v.log.iter().any(|m| m.text.contains("main.st is unchanged")));
         assert_eq!(v.proj.files, before);
         assert_eq!(v.proj.revisions().len(), revs);
         // A red requirement test refuses it too, naming the test.
-        ask(
+        instruct(
             &mut v,
             "invert",
-            &st(&LAMP.replace("lamp := start;", "lamp := NOT start;")),
+            &[&st(&LAMP.replace("lamp := start;", "lamp := NOT start;"))],
         );
-        assert!(v.use_answer());
-        let why = v.use_error.clone().expect("refused");
-        assert!(why.contains("test_lamp"), "{why}");
+        let o = v.instruct.outcome.clone().unwrap();
+        assert_eq!(o.kind, Kind::Refused);
+        assert!(o.problems.join(" ").contains("test_lamp"), "{o:?}");
         assert_eq!(v.proj.files, before);
         assert_eq!(v.proj.revisions().len(), revs);
-        // A page asked in another project is not taken here.
-        let page = v.chat.history.last().cloned().unwrap();
+        // Another project opened while the Agent worked: not written there.
+        v.instruct.draft = "comment it".into();
+        v.send_instruction(&egui::Context::default());
         v.proj.create("other", None);
         v.open_project("other");
-        v.use_page(&page);
-        assert!(
-            v.use_error.as_deref().is_some_and(|e| e.contains("for mine")),
-            "{:?}",
-            v.use_error
+        v.proj.files.insert("main.st".into(), LAMP.into());
+        v.proj.add_file("test_lamp.st", FOLLOWS.into());
+        let other = v.proj.files.clone();
+        crate::instruct_tests::reply(
+            &mut v,
+            &st(&LAMP.replace("lamp := start;", "lamp := start; (* x *)")),
         );
+        let o = v.instruct.outcome.clone().unwrap();
+        assert_eq!(o.kind, Kind::Refused, "{o:?}");
+        assert!(o.problems[0].contains("mine is no longer open"), "{o:?}");
+        assert_eq!(v.proj.files, other);
     }
 
     /// The block picked in the diagram is the scope while the diagram is
@@ -746,13 +690,12 @@ mod in_the_page {
         );
         assert!(s.label().starts_with("Editing: block "), "{}", s.label());
         // The block's answer lands in its lines.
-        ask(
+        instruct(
             &mut v,
             "debounce",
-            &st(&LAMP.replace("lamp := start;", "lamp := start AND start;")),
+            &[&st(&LAMP.replace("lamp := start;", "lamp := start AND start;"))],
         );
-        assert!(v.use_answer());
-        assert_eq!(v.use_error, None, "{:?}", v.notice);
+        assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
         assert!(v.proj.files["main.st"].contains("lamp := start AND start;\nEND_PROGRAM"));
         // An edit not deployed: the diagram's lines no longer hold.
         v.proj.current_text_mut().unwrap().insert_str(0, "(* moved *)\n");
