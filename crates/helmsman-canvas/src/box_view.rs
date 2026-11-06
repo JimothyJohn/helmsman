@@ -386,6 +386,14 @@ impl BoxView {
                 crate::requirements::ui(ui, chrome, &view, &mut self.req_ui)
             })
             .inner;
+        let act = match act {
+            Some(Act::Rewrite { file, requirement }) if cannot_add.is_none() => {
+                self.projects.delete_file(&file);
+                self.req_ui.open = None;
+                Some(Act::Add(requirement))
+            }
+            a => a,
+        };
         match act {
             Some(Act::Add(text)) if cannot_add.is_none() => {
                 let Some(o) = &self.projects.open else { return };
@@ -414,6 +422,12 @@ impl BoxView {
             Some(Act::Delete(f)) if cannot_add.is_none() => {
                 self.projects.delete_file(&f);
                 self.req_ui.open = None;
+            }
+            Some(Act::Reword { file, text }) if cannot_add.is_none() => {
+                if let Some(b) = self.projects.open.as_mut().and_then(|o| o.bufs.get_mut(&file)) {
+                    b.text = text;
+                }
+                self.save();
             }
             _ => {}
         }
@@ -538,9 +552,33 @@ impl BoxView {
             #[cfg(target_arch = "wasm32")]
             crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
         }
-        if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
+            self.apply_wiring(&w);
+        }
+        if self.devices_ui.renaming.is_some() {
+            let files = self.loaded_files();
+            self.devices_ui.plan_rename(&files);
+        }
+        if let Some(crate::devices::DeviceAct::Delete(name)) =
+            self.devices_ui.delete_ui(&ui.ctx().clone(), chrome)
+            && let Some(b) = self
+                .projects
+                .open
+                .as_mut()
+                .and_then(|o| o.bufs.get_mut(helmsman_project::IO_MAP))
+                .filter(|b| b.loaded)
         {
-            self.add_device_line(&line);
+            b.text = crate::device_form::remove_device(&b.text, &name);
+        }
+        if let Some(crate::devices::DeviceAct::Rename(plan)) =
+            self.devices_ui.rename_ui(&ui.ctx().clone(), chrome)
+            && let Some(o) = &mut self.projects.open
+        {
+            for (f, text, _) in plan.files {
+                if let Some(b) = o.bufs.get_mut(&f).filter(|b| b.loaded) {
+                    b.text = text;
+                }
+            }
         }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
@@ -623,6 +661,67 @@ impl BoxView {
 
     /// The Devices tab's Add: one `device` line onto the open project's
     /// `io.map`, made if the project has none (a draft; Save writes it).
+    /// The open project's files that are loaded, name and text.
+    fn loaded_files(&self) -> Vec<(String, String)> {
+        self.projects
+            .open
+            .as_ref()
+            .map(|o| {
+                o.bufs
+                    .iter()
+                    .filter(|(_, b)| b.loaded)
+                    .map(|(n, b)| (n.clone(), b.text.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The form's Add: new variables into the program file (refused, with
+    /// nothing changed, if it would not read after), then the device and
+    /// its signals into io.map.
+    fn apply_wiring(&mut self, w: &crate::device_form::Wiring) {
+        match self.wire_in(w) {
+            Ok(()) => self.projects.note(w.summary(), false),
+            Err(e) => self.projects.note(e, true),
+        }
+    }
+
+    fn wire_in(&mut self, w: &crate::device_form::Wiring) -> Result<(), String> {
+        let files = self.loaded_files();
+        let Some(o) = &mut self.projects.open else {
+            return Err("Open a project first.".into());
+        };
+        if !w.declare.is_empty() {
+            let Some(file) =
+                crate::device_form::program_file(files.iter().map(|(n, t)| (n.as_str(), t.as_str())))
+            else {
+                return Err("No PROGRAM in this project to add the new variables to.".into());
+            };
+            let Some(b) = o.bufs.get_mut(&file) else {
+                return Err(format!("{file} is not loaded yet."));
+            };
+            let mut src = b.text.clone();
+            for (dir, name, ty) in &w.declare {
+                match crate::device_form::declare_var(&src, *dir, name, *ty) {
+                    Some(s) => src = s,
+                    None => return Err(format!("{file} has no PROGRAM to add {name} to.")),
+                }
+            }
+            if helmsman_iec::ast::parse(&b.text).is_ok() && helmsman_iec::ast::parse(&src).is_err() {
+                return Err("A new variable's name is an ST keyword: rename it and Add again.".into());
+            }
+            b.text = src;
+        }
+        match o.bufs.get_mut(helmsman_project::IO_MAP) {
+            Some(b) if b.loaded => b.text = crate::device_form::apply_map(&b.text, w),
+            Some(_) => {}
+            None => self
+                .projects
+                .new_file_with(helmsman_project::IO_MAP, &crate::device_form::apply_map("", w)),
+        }
+        Ok(())
+    }
+
     fn add_device_line(&mut self, line: &str) {
         let Some(o) = &mut self.projects.open else { return };
         match o.bufs.get_mut(helmsman_project::IO_MAP) {
@@ -1353,10 +1452,33 @@ impl Body for BoxView {
         self.devices_ui.plant.states = crate::plant::states(&refs, &map, &|_| None, &signal_value);
         self.devices_ui.plant.devices = crate::plant::device_choices(&map);
         self.devices_ui.plant.simulated = false;
-        if self.devices_ui.show(ui, &nodes, &source, chrome, &write) == Some(crate::devices::DeviceAct::Scan)
-        {
-            self.devices_ui.scan = crate::devices::Scan::Running;
-            self.projects.discover();
+        self.devices_ui.copy_first = false;
+        let program = crate::device_form::program_file(refs.iter().copied())
+            .and_then(|f| files.iter().find(|(n, _)| *n == f).map(|(_, t)| t.clone()))
+            .unwrap_or_default();
+        self.devices_ui.program = crate::device_form::ports_of(&program);
+        self.devices_ui.map = map.clone();
+        self.devices_ui.eds_files = files
+            .iter()
+            .map(|(n, _)| n.clone())
+            .filter(|n| crate::devices::is_eds(n))
+            .collect();
+        match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
+            Some(crate::devices::DeviceAct::Scan) => {
+                self.devices_ui.scan = crate::devices::Scan::Running;
+                self.projects.discover();
+            }
+            Some(crate::devices::DeviceAct::Use(d)) => self.devices_ui.open(d),
+            Some(crate::devices::DeviceAct::OpenMap) => {
+                self.projects.open_file(helmsman_project::IO_MAP);
+                chrome.show_code();
+            }
+            Some(
+                crate::devices::DeviceAct::Add(_)
+                | crate::devices::DeviceAct::Rename(_)
+                | crate::devices::DeviceAct::Delete(_),
+            )
+            | None => {}
         }
     }
 

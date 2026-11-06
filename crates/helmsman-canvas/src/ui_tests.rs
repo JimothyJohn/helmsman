@@ -16,6 +16,8 @@ struct Harness {
     size: Vec2,
     /// What the last frame drew.
     shapes: Vec<egui::epaint::ClippedShape>,
+    /// The pointer the last frame asked for.
+    cursor: egui::CursorIcon,
 }
 
 impl Harness {
@@ -26,6 +28,7 @@ impl Harness {
             time: 0.0,
             size: Vec2::new(1400.0, 860.0),
             shapes: Vec::new(),
+            cursor: egui::CursorIcon::Default,
         };
         // Two frames: panels settle their sizes, the view fits the graph.
         h.frame(vec![]);
@@ -46,6 +49,7 @@ impl Harness {
         // No renderer here to upload textures to.
         out.textures_delta.clear();
         self.shapes = out.shapes;
+        self.cursor = out.platform_output.cursor_icon;
     }
 
     /// Every piece of text the last frame drew outside the diagram (which
@@ -737,6 +741,84 @@ END_PROGRAM",
         assert!(h.app.sim.as_ref().unwrap().chat.viewing().is_none());
     }
 
+    /// The answer's checks (`crate::verify`) in the Agent tab: green, red
+    /// with long reasons, and while a retry runs; the panels keep their
+    /// width throughout.
+    #[test]
+    fn the_answers_checks_show_in_the_agent_tab_and_leave_the_panels_their_width() {
+        use crate::claude::{Answer, Phase};
+        use crate::verify::{Check, Ran};
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        let code = "Here:\n```st\nPROGRAM p\nEND_PROGRAM\n```\n".to_string();
+        let long = "Scenario The lamp stays off while start is not pressed and the conveyor_infeed_photo_eye_blocked_for_too_long_alarm holds (test_lamp_off_while_start_is_not_pressed.st) failed: lamp off failed at 0.04 s".to_string();
+        let ran = |passed: bool| Ran {
+            file: "test_lamp_off.st".into(),
+            requirement: "The lamp stays off while start is not pressed.".into(),
+            passed,
+            why: String::new(),
+        };
+        let states = [
+            (
+                Check {
+                    code: true,
+                    scenarios: vec![ran(true)],
+                    tests_green: 1,
+                    ..Check::default()
+                },
+                "answer green",
+            ),
+            (
+                Check {
+                    code: true,
+                    failures: vec![long.clone(), long],
+                    ..Check::default()
+                },
+                "answer red",
+            ),
+            (
+                Check {
+                    code: true,
+                    ..Check::default()
+                },
+                "answer unchecked",
+            ),
+        ];
+        for (check, key) in states {
+            {
+                let v = h.app.sim.as_mut().unwrap();
+                let mut a = Answer::default();
+                a.text.clone_from(&code);
+                a.phase = Phase::Done;
+                v.chat.answer = Some(a);
+                v.chain = None;
+                v.live_check = Some((check, 2));
+            }
+            h.wait(0.2);
+            assert!(h.has(key), "{key}");
+            assert!(h.has("use code"));
+            assert!((h.rect("left").right() - left.right()).abs() <= 8.0, "{key}");
+            assert!((right.left() - h.rect("right").left()).abs() <= 8.0, "{key}");
+        }
+        // A retry under way: what failed, not the failed answer.
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.answer = Some(Answer::default());
+            v.chain = Some(crate::playground_view::Chain {
+                retries: 1,
+                problems: vec!["The code does not compile: 4:9: unknown variable STRAT".into()],
+                ..Default::default()
+            });
+        }
+        h.wait(0.2);
+        assert!(h.has("answer retrying"));
+        assert!(!h.has("use code"));
+        assert!((right.left() - h.rect("right").left()).abs() <= 8.0);
+    }
+
     #[test]
     fn the_third_tab_reads_agent() {
         assert_eq!(Tab::Claude.label(), "Agent");
@@ -1051,7 +1133,7 @@ mod chrome {
     /// not buttons under the lists; the question is asked in the middle
     /// of the screen (Nick, 2026-11-02).
     #[test]
-    fn rename_and_delete_are_the_menus_and_the_delete_key_and_ask_in_the_centre() {
+    fn rename_and_delete_are_the_menus_and_the_delete_key_and_ask_by_the_click() {
         let mut h = Harness::new(App::sim());
         h.press("bar file");
         h.press("file copy");
@@ -1075,15 +1157,17 @@ mod chrome {
         h.wait(0.3);
         assert!(h.has("file two.st"));
         h.right_click(h.rect("file two.st").center());
+        let at = h.rect("menu delete").center();
         h.press("menu delete");
         h.frame(vec![]);
         let v = h.app.sim.as_ref().unwrap();
         assert_eq!(v.files_ui.confirm, Some(Act::DeleteFile("two.st".into())));
-        let c = h.rect("confirm").center();
-        let mid = Pos2::new(h.size.x / 2.0, h.size.y / 2.0);
+        // By the click, not across the screen (Nick, 2026-11-05: "going
+        // all the way back and forth is very annoying").
+        let c = h.rect("confirm");
         assert!(
-            (c - mid).length() < 40.0,
-            "the question sits in the middle of the screen, not at {c:?}"
+            (c.top() - at.y).abs() < 60.0 && c.x_range().contains(at.x),
+            "the question sits by the click at {at:?}, not at {c:?}"
         );
         h.press("confirm no");
         h.frame(vec![]);
@@ -1182,6 +1266,8 @@ mod chrome {
         h.press("device name");
         h.frame(vec![Event::Text("rio".into())]);
         h.press("device enip-io");
+        // The centred form changes height with the protocol's settings.
+        h.wait(0.2);
         h.press("device endpoint");
         h.frame(vec![Event::Text("10.0.0.60".into())]);
         h.press("device ok");
@@ -1365,14 +1451,34 @@ mod chrome {
         assert_eq!(d.name, "e1213");
         assert_eq!(d.endpoint, "cip=991:515:0x00e12130");
         assert_eq!(d.protocol, 1, "EtherNet/IP");
+        // The E1213's channels are listed; the program's lamp (on the box's
+        // own channel) is bound to the first output already.
+        assert_eq!(d.points.len(), 20, "12 inputs, 8 outputs");
+        let on: Vec<(&str, &str)> = d
+            .points
+            .iter()
+            .filter(|r| r.on)
+            .map(|r| (r.name.as_str(), r.point.as_str()))
+            .collect();
+        assert_eq!(on, [("run", "di:0"), ("lamp", "do:0")]);
         h.press("device ok");
         h.wait(0.3);
         let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(map.contains("out lamp bool e1213 do:0 safe=false"), "{map}");
+        assert!(!map.contains(" box do:0"), "moved, not doubled: {map}");
         assert!(
-            map.contains("device e1213 enip-io cip=991:515:0x00e12130 rpi_ms=100 poll_ms=20\n"),
+            map.contains(
+                "device e1213 enip-io cip=991:515:0x00e12130 profile=moxa-e1213 rpi_ms=100 poll_ms=20\n"
+            ),
             "{map}"
         );
-        // Scan again: now the map binds it.
+        // Wired at once, with no second scan (it offered Use this device
+        // again until a rescan, 2026-11-05).
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
+            Some("e1213")
+        );
+        assert!(!h.has("use network 192.168.127.254"));
         h.press("devices scan");
         h.wait(0.3);
         assert_eq!(
@@ -1383,6 +1489,418 @@ mod chrome {
         h.press("menu add network");
         h.wait(0.2);
         assert!(!h.has("device form"), "already in the map: nothing to add");
+        assert!(
+            !h.has("use network 192.168.127.254"),
+            "a wired device has no Use button"
+        );
+    }
+
+    /// Nick, 2026-11-05: "It says it's not in the map but I don't even
+    /// know where the map is". On a read-only example, "Use this device"
+    /// copies the project, gives it the io.map its program implies, opens
+    /// the form with the E1213's channels, the program's I/O bound to
+    /// them; a channel ticked and named becomes a new variable; the I/O
+    /// wiring link opens io.map; a wired signal renames in io.map and the
+    /// ST together.
+    #[test]
+    fn use_this_device_copies_an_example_and_wires_its_io() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            // The start/stop latch: two BOOL inputs, a BOOL output.
+            let ex = crate::playground::EXAMPLES
+                .iter()
+                .map(|e| e.src)
+                .find(|src| src.contains("PROGRAM latch"))
+                .map(|src| crate::sim_projects::example_project(src).0)
+                .expect("the latch example");
+            sim.open_project(&ex);
+            assert!(sim.proj.is_example());
+        }
+        h.press("pane devices");
+        h.press("devices scan");
+        h.wait(0.3);
+        assert!(
+            h.has("use network 192.168.127.254"),
+            "a visible button, not only a right-click"
+        );
+        let found = &h.app.sim.as_ref().unwrap().devices_ui.found[0];
+        assert!(found.simulated, "the playground's E1213 says it is simulated");
+        h.press("use network 192.168.127.254");
+        h.wait(0.3);
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert!(
+                !sim.proj.is_example(),
+                "copied into a project of the visitor's own"
+            );
+            assert!(sim.proj.open.starts_with("my-"), "{}", sim.proj.open);
+            let map = &sim.proj.files["io.map"];
+            assert!(map.contains(" bool box di:0"), "{map}");
+        }
+        assert!(h.has("device form"));
+        // Start and stop on DI-00/01, the motor on DO-00, from the program.
+        let rows = h
+            .app
+            .sim
+            .as_ref()
+            .unwrap()
+            .devices_ui
+            .adding
+            .clone()
+            .unwrap()
+            .points;
+        let on: Vec<(&str, &str)> = rows
+            .iter()
+            .filter(|r| r.on)
+            .map(|r| (r.name.as_str(), r.point.as_str()))
+            .collect();
+        assert_eq!(on, [("start", "di:0"), ("stop", "di:1"), ("motor", "do:0")]);
+        // Tick DI-05 and name it: a new variable.
+        h.press("point 5 on");
+        h.press("point 5 name");
+        h.frame(vec![Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }]);
+        h.frame(vec![Event::Text("door".into())]);
+        h.wait(0.2);
+        let r5 = h
+            .app
+            .sim
+            .as_ref()
+            .unwrap()
+            .devices_ui
+            .adding
+            .clone()
+            .unwrap()
+            .points[5]
+            .clone();
+        assert!(r5.on && r5.name == "door", "{r5:?}");
+        h.press("device ok");
+        h.wait(0.3);
+        assert!(
+            !h.has("device form"),
+            "{:?}",
+            h.app.sim.as_ref().unwrap().devices_ui.adding
+        );
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            let map = &sim.proj.files["io.map"];
+            assert!(!map.contains(" box di:") && !map.contains(" box do:"), "{map}");
+            assert!(map.contains("in  start bool e1213 di:0\n"), "{map}");
+            assert!(map.contains("in  door bool e1213 di:5\n"), "{map}");
+            let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
+            assert!(st.contains("  door : BOOL;"), "{st}");
+            assert!(helmsman_iec::ast::parse(st).is_ok(), "{st}");
+        }
+        // The I/O wiring link opens the file in the editor.
+        h.press("devices open map");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.current, "io.map");
+        // Rename start: the wiring line and the program together.
+        h.press("pane devices");
+        h.wait(0.2);
+        h.right_click(h.rect("point start").center());
+        h.press("menu rename point");
+        h.wait(0.2);
+        assert!(h.has("rename form"));
+        h.press("rename name");
+        h.frame(vec![Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }]);
+        h.frame(vec![Event::Text("go_button".into())]);
+        h.wait(0.2);
+        h.press("rename ok");
+        h.wait(0.3);
+        assert!(!h.has("rename form"));
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.proj.files["io.map"].contains("in  go_button bool e1213 di:0\n"));
+        let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
+        assert!(
+            st.contains("go_button : BOOL;") && st.contains("(go_button OR motor)"),
+            "{st}"
+        );
+        assert!(!st.to_ascii_lowercase().contains("start :"), "{st}");
+    }
+
+    /// Nick, 2026-11-05: the fold arrow on a device showed the typing
+    /// cursor. Every control shows the finger, a text field the I-beam, and
+    /// a label is not text to select.
+    #[test]
+    fn controls_show_the_finger_and_text_fields_the_i_beam() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj.add_file(
+                "io.map",
+                "device e1213 enip-io 10.0.0.57 profile=moxa-e1213\nin  di0 bool e1213 di:0\n".into(),
+            );
+        }
+        h.press("pane devices");
+        h.wait(0.2);
+        let hover = |h: &mut Harness, key: &str| {
+            let at = h.rect(key).center();
+            h.frame(vec![Event::PointerMoved(at)]);
+            h.frame(vec![]);
+            h.cursor
+        };
+        assert_eq!(
+            hover(&mut h, "device e1213"),
+            egui::CursorIcon::PointingHand,
+            "the fold row"
+        );
+        assert_eq!(
+            hover(&mut h, "point di0"),
+            egui::CursorIcon::PointingHand,
+            "a point row"
+        );
+        assert_eq!(
+            hover(&mut h, "pane files"),
+            egui::CursorIcon::PointingHand,
+            "a tab"
+        );
+        assert_eq!(
+            hover(&mut h, "devices scan"),
+            egui::CursorIcon::PointingHand,
+            "a button"
+        );
+        h.right_click(h.rect("devices blank").center());
+        h.press("menu new device");
+        h.wait(0.2);
+        assert_eq!(
+            hover(&mut h, "device name"),
+            egui::CursorIcon::Text,
+            "a text field"
+        );
+        assert_eq!(
+            hover(&mut h, "device enip-io"),
+            egui::CursorIcon::PointingHand,
+            "a choice"
+        );
+        assert!(
+            !h.ctx.style_of(h.ctx.theme()).interaction.selectable_labels,
+            "labels are not selectable"
+        );
+    }
+
+    /// Nick, 2026-11-05: "I need the ability to delete devices. The one on
+    /// there is the old version and I can't seem to edit it." Edit opens a
+    /// device's form from its line (an old E1213 gets its profile) and
+    /// Save replaces it in place; Delete asks, then takes the device and
+    /// its signals out, the program's other lines kept.
+    #[test]
+    fn a_device_is_edited_in_its_form_and_deleted_after_a_question() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj.add_file(
+                "io.map",
+                "out lamp bool box do:0 safe=false\ndevice e1213 enip-io cip=991:515:0x00e12130 rpi_ms=100 poll_ms=20\nin  run bool e1213 di:0\n"
+                    .into(),
+            );
+        }
+        h.press("pane devices");
+        h.wait(0.2);
+        assert!(
+            h.has("edit device e1213") && h.has("delete device e1213"),
+            "visible, not only a right-click"
+        );
+        assert!(
+            !h.has("edit device box"),
+            "the box's own channels are not a device to edit"
+        );
+        h.press("edit device e1213");
+        h.wait(0.3);
+        assert!(h.has("device form"));
+        let d = h.app.sim.as_ref().unwrap().devices_ui.adding.clone().unwrap();
+        assert_eq!(d.editing.as_deref(), Some("e1213"));
+        assert!(d.params.contains("profile=moxa-e1213"), "{}", d.params);
+        assert_eq!(d.points.iter().filter(|r| r.on).count(), 1, "run on DI-00");
+        // Tick DO-00 for the lamp (the program's own), then Save.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .devices_ui
+            .adding
+            .as_mut()
+            .unwrap()
+            .points[12]
+            .use_ = crate::device_form::Use::Existing("lamp".into());
+        {
+            let r = &mut h
+                .app
+                .sim
+                .as_mut()
+                .unwrap()
+                .devices_ui
+                .adding
+                .as_mut()
+                .unwrap()
+                .points[12];
+            r.on = true;
+            r.name = "lamp".into();
+        }
+        h.wait(0.2);
+        h.press("device ok");
+        h.wait(0.3);
+        assert!(
+            !h.has("device form"),
+            "{:?}",
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .devices_ui
+                .adding
+                .as_ref()
+                .map(|d| &d.error)
+        );
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert_eq!(
+            map.matches("device e1213").count(),
+            1,
+            "replaced, not added again: {map}"
+        );
+        assert!(
+            map.contains(
+                "device e1213 enip-io cip=991:515:0x00e12130 rpi_ms=100 poll_ms=20 profile=moxa-e1213\n"
+            ),
+            "{map}"
+        );
+        assert!(
+            map.contains("in  run bool e1213 di:0\n")
+                && map.contains("out lamp bool e1213 do:0 safe=false\n"),
+            "{map}"
+        );
+        assert!(!map.contains("box do:0"), "{map}");
+        // Delete: asks, then the device and its lines are gone.
+        h.press("delete device e1213");
+        h.wait(0.2);
+        assert!(h.has("delete form"));
+        h.press("delete cancel");
+        h.wait(0.2);
+        assert!(
+            h.app.sim.as_ref().unwrap().proj.files["io.map"].contains("device e1213"),
+            "Cancel keeps it"
+        );
+        h.right_click(h.rect("device e1213").center());
+        h.press("menu delete device");
+        h.wait(0.2);
+        h.press("delete ok");
+        h.wait(0.3);
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(!map.contains("e1213"), "{map}");
+        assert!(!h.has("device e1213"));
+    }
+
+    /// Nick, 2026-11-05: "I need to be able to edit and delete
+    /// requirements as well". Each row has Edit and Delete; Edit with the
+    /// rewrite off changes only the words in the test's first comment,
+    /// with it on the old test goes and the requirement is added afresh;
+    /// Delete asks first.
+    #[test]
+    fn a_requirement_is_reworded_rewritten_and_deleted_from_its_row() {
+        let mut h = Harness::new(App::sim());
+        let ctx = h.ctx.clone();
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", Some("latch"));
+            sim.open_project("mine");
+            sim.add_requirement("The motor runs once start is pressed", &ctx);
+        }
+        let file = "test_the_motor_runs_once_start_is_pressed.st";
+        assert!(
+            h.app.sim.as_ref().unwrap().proj.files.contains_key(file),
+            "no agent here: a placeholder"
+        );
+        h.press("tab tests");
+        h.wait(0.3);
+        let name = "test_the_motor_runs_once_start_is_pressed";
+        assert!(
+            h.has(&format!("req edit {name}")) && h.has(&format!("req delete {name}")),
+            "on the row, not behind it"
+        );
+        // Reword, the test kept.
+        h.press(&format!("req edit {name}"));
+        h.wait(0.2);
+        assert!(h.has("req edit form"));
+        h.press("req edit rewrite");
+        h.press("req edit text");
+        h.frame(vec![Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }]);
+        h.frame(vec![Event::Text("The motor runs within 1 s of start".into())]);
+        h.wait(0.2);
+        h.press("req edit ok");
+        h.wait(0.3);
+        assert!(!h.has("req edit form"));
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            let text = &sim.proj.files[file];
+            assert!(
+                text.starts_with("(* The motor runs within 1 s of start *)\n"),
+                "{text}"
+            );
+            let row = sim.tests.rows.iter().find(|r| r.file == file).expect("its row");
+            assert_eq!(row.requirement, "The motor runs within 1 s of start");
+        }
+        // Rewrite: the old file goes, the requirement is added afresh.
+        h.press(&format!("req edit {name}"));
+        h.wait(0.2);
+        h.press("req edit text");
+        h.frame(vec![Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }]);
+        h.frame(vec![Event::Text("The lamp is on while the motor runs".into())]);
+        h.wait(0.2);
+        h.press("req edit ok");
+        h.wait(0.3);
+        let new_file = "test_the_lamp_is_on_while_the_motor_runs.st";
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert!(!sim.proj.files.contains_key(file), "the old test is gone");
+            assert!(
+                sim.proj.files.contains_key(new_file),
+                "{:?}",
+                sim.proj.files.keys().collect::<Vec<_>>()
+            );
+        }
+        // Delete: asks, Cancel keeps it, Delete removes it.
+        let new_name = "test_the_lamp_is_on_while_the_motor_runs";
+        h.press(&format!("req delete {new_name}"));
+        h.wait(0.2);
+        assert!(h.has("req delete form"));
+        h.press("req delete cancel");
+        h.wait(0.2);
+        assert!(
+            h.app.sim.as_ref().unwrap().proj.files.contains_key(new_file),
+            "Cancel keeps it"
+        );
+        h.press(&format!("req delete {new_name}"));
+        h.wait(0.2);
+        h.press("req delete ok");
+        h.wait(0.3);
+        assert!(!h.app.sim.as_ref().unwrap().proj.files.contains_key(new_file));
+        assert!(!h.has(&format!("req edit {new_name}")));
     }
 
     /// The library's match fills the form's name and profile in.
@@ -1800,15 +2318,18 @@ mod chrome {
         // The clipboard crosses projects: a new, empty one takes the paste.
         // New project from a right-click on the pane's blank space.
         h.right_click(h.rect("files blank").center());
+        let at = h.rect("menu new project").center();
         h.press("menu new project");
-        // The name popup settles into the centre on its second frame.
         h.wait(0.2);
-        // A popup in the middle of the screen, not a field in the side
-        // panel (Nick, 2026-11-05).
+        // A popup by the click (Nick, 2026-11-05), held on the screen.
         let form = h.rect("name form");
         assert!(
-            form.center().x > h.rect("left").right(),
-            "the name is asked in the centre: {form:?}"
+            (form.top() - at.y).abs() < 60.0 || form.bottom() >= h.size.y - 1.0,
+            "the name is asked by the click at {at:?}: {form:?}"
+        );
+        assert!(
+            form.left() >= 0.0 && form.right() <= h.size.x,
+            "on the screen: {form:?}"
         );
         h.press("name");
         h.frame(vec![Event::Text("mine".into())]);

@@ -321,6 +321,81 @@ pub fn apply(ctx: &egui::Context, light: bool) {
         ctx.style_mut_of(egui::Theme::Light, |s| style(s, false));
         ctx.data_mut(|d| d.insert_temp(id, true));
     }
+    // Nick, 2026-11-05: a title or a row is not text to select, and a
+    // control shows the finger. Labels are not selectable (the Agent's
+    // answers opt back in); buttons take the finger here, every other
+    // clickable widget in [`pointer_cursor`].
+    if ctx.style_of(ctx.theme()).interaction.selectable_labels {
+        ctx.all_styles_mut(|s| {
+            s.interaction.selectable_labels = false;
+            s.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
+        });
+    }
+}
+
+/// A popup that opens where it was asked for (Nick, 2026-11-05: "going
+/// all the way back and forth is very annoying, especially for bulk
+/// deletes"): its top centre just under the pointer as it was when the
+/// popup appeared, kept there while it stays open, held on the screen.
+/// It is still a modal: the page behind is dimmed and takes no input.
+#[must_use]
+pub fn near_pointer(ctx: &egui::Context, key: &str) -> egui::Modal {
+    let id = egui::Id::unique(("near-pointer", key));
+    let pass = ctx.cumulative_pass_nr();
+    let screen = ctx.content_rect();
+    let pointer = ctx
+        .input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()))
+        .unwrap_or(screen.center());
+    let at = ctx.data_mut(|d| {
+        let seen: &mut (u64, egui::Pos2) = d.get_temp_mut_or_insert_with(id, || (0, pointer));
+        // Not drawn last pass: this is a new opening, at the pointer now.
+        if seen.0 + 1 < pass {
+            seen.1 = pointer;
+        }
+        seen.0 = pass;
+        seen.1
+    });
+    // egui's modal area, less its anchor (an anchor pins it to the centre).
+    let area = egui::Area::new(egui::Id::unique(key))
+        .kind(egui::UiKind::Modal)
+        .sense(egui::Sense::hover())
+        .order(egui::Order::Foreground)
+        .interactable(true)
+        .pivot(egui::Align2::CENTER_TOP)
+        .fixed_pos(at + egui::vec2(0.0, 14.0))
+        .constrain(true);
+    egui::Modal::new(egui::Id::unique(key)).area(area)
+}
+
+/// "Copy" under an Agent's answer: the whole text to the clipboard
+/// (Nick, 2026-11-05: selecting in the page's canvas is not enough).
+pub fn copy_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let r = ui
+        .small_button("Copy")
+        .on_hover_text("Copies the whole answer to the clipboard.");
+    if r.clicked() {
+        ui.ctx().copy_text(text.to_string());
+    }
+    r
+}
+
+/// Last in a frame: the finger over any enabled widget the pointer is on
+/// that takes a click and is not dragged (a row, a checkbox, a combo box,
+/// a tab, a fold arrow), unless a widget chose its own cursor (a text
+/// field's I-beam, a slider's arrows, a panel edge's resize). A widget
+/// that drags (the diagram, a slider) keeps its own.
+pub fn pointer_cursor(ctx: &egui::Context) {
+    let clickable = ctx.viewport(|vp| {
+        vp.interact_widgets.hovered.iter().any(|id| {
+            vp.this_pass
+                .widgets
+                .get(*id)
+                .is_some_and(|w| w.enabled && w.sense.senses_click() && !w.sense.senses_drag())
+        })
+    });
+    if clickable && ctx.output(|o| o.cursor_icon) == egui::CursorIcon::Default {
+        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
 }
 
 #[cfg(test)]

@@ -105,6 +105,30 @@ project stays exactly as it was. A change that is taken has to pass the
 project's requirement tests first, and it is saved as one revision in
 the project's History together with the page it came from, after any
 edits of your own you had not saved (those are their own revision).</p>
+<h2 id="checked-before-you-see-it">Checked before you see it</h2>
+<p>In the simulation, when the Agent gives code it also writes one or
+more scenarios: short requirement tests, each stating in plain words
+what it checks, such as "the lamp stays off while start is not pressed".
+Before the answer is shown, the page takes the code into a copy of the
+project, compiles it, and runs the scenarios together with the project's
+own requirement tests. Under the answer each scenario is listed as
+passed.</p>
+<p>The code always comes back as the whole open file with the change
+made in it, even when you selected a few lines or picked a block.
+Nothing may be left out: an answer that skips part of the file, or
+writes "rest unchanged" where code should be, is not taken. Your
+selection still decides what may change, and a change to any line
+outside it is refused.</p>
+<p>If anything fails (a scenario, a requirement test, the compile, or
+the whole-file rule), the page sends the Agent what failed and lets it
+fix the answer, up to two more tries. An answer that still fails is
+shown in red with the reasons, and <strong>Use this code</strong>
+refuses it. An answer whose code comes without a scenario is asked for
+one once; if none comes it is shown with the note "Not checked by a
+scenario", and you may still use it. An explanation with no code needs
+no scenario.</p>
+<p>When you use a checked answer, its scenarios are kept as requirement
+tests and appear in the Requirements tab, each under its own words.</p>
 <h2 id="one-program-many-iterations">One program, many iterations</h2>
 <p>With a built-in example open (they are read-only), a program the
 Agent writes becomes a project of its own: the first time, it asks what
