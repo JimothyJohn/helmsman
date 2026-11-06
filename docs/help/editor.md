@@ -121,9 +121,22 @@ label is drawn, the icon stands alone at a readable size.
   device library knows of it (in the simulation, one simulated E1213).
   **Use this device** under one opens the form filled in, the device
   named by its identity so a changed address never loses it; on a
-  read-only example it copies the project first. After Add, it offers to
-  move the program's inputs and outputs off the box's own channels onto
-  the device's points, showing each line before it changes. One map may mix Modbus
+  read-only example it copies the project first. The form has a field
+  for each of the protocol's settings, filled in with the usual values
+  and checked against the driver's ranges, with the device's io.map line
+  under them. Below that are its inputs and outputs: a known device (the
+  ioLogik E1213) lists every channel, and the program's inputs and
+  outputs that were on the box's own channels are already ticked on the
+  first free ones. Tick any other channel and name it, or add rows with
+  + Input and + Output for any other device. For each row, Program picks
+  what the program does with it: one of its own variables, a new
+  variable (declared in the program's `VAR_INPUT` or `VAR_OUTPUT`), or
+  wiring only. **Edit** beside a device opens the same form on it, its
+  settings and wired points filled in, and Save replaces it in io.map;
+  **Delete** asks, then takes the device and its inputs and outputs out
+  (the program's variables stay). Double-click or right-click a wired signal to rename it:
+  the io.map line and every use in the program change together, listed
+  before you confirm. One map may mix Modbus
   TCP and EtherNet/IP devices. The agent reads the same listing, network
   included. Under that, **Plant states**: the quantities a project's
   plant model keeps for the machine it stands in for (mark a variable
@@ -142,7 +155,9 @@ label is drawn, the icon stands alone at a readable size.
 - **The side panel**, on the right (<kbd>Alt</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
   diagram does not show; **Requirements**, the project's requirement tests,
-  one row each, green or red with why (see [Requirement tests](projects.html#requirement-tests));
+  one row each, green or red with why, with **Edit** (new words; the
+  agent rewrites the test for them, or only the words change) and
+  **Delete** (asks first) on every row (see [Requirement tests](projects.html#requirement-tests));
   and **Agent**, where you describe what you want.
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
