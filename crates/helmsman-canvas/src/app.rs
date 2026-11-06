@@ -364,6 +364,7 @@ impl App {
         for a in hotkeys::pressed(&ctx) {
             self.act(a, &ctx);
         }
+        theme::pointer_cursor(&ctx);
     }
 
     /// Does what a shortcut (or its menu item) asks; nothing where it

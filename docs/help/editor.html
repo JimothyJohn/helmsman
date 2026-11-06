@@ -182,22 +182,34 @@ the LAN, says whether the map already has it, and shows what the public
 device library knows of it (in the simulation, one simulated E1213).
 <strong>Use this device</strong> under one opens the form filled in, the
 device named by its identity so a changed address never loses it; on a
-read-only example it copies the project first. After Add, it offers to
-move the program's inputs and outputs off the box's own channels onto
-the device's points, showing each line before it changes. One map may
-mix Modbus TCP and EtherNet/IP devices. The agent reads the same
-listing, network included. Under that, <strong>Plant states</strong>:
-the quantities a project's plant model keeps for the machine it stands
-in for (mark a variable with <code>{state unit=m}</code> on its line),
-each with the simulation's value and the sensor that measures it on the
-real machine, or the kind of sensor that would; right-click one and Add
-a sensor… writes that signal into the map. When that signal is one of
-the program's inputs, in the same unit, the simulation runs the model
-from it: set it in the I/O tab and the plant follows the sensor.
+read-only example it copies the project first. The form has a field for
+each of the protocol's settings, filled in with the usual values and
+checked against the driver's ranges, with the device's io.map line under
+them. Below that are its inputs and outputs: a known device (the ioLogik
+E1213) lists every channel, and the program's inputs and outputs that
+were on the box's own channels are already ticked on the first free
+ones. Tick any other channel and name it, or add rows with
+<ul>
+<li>Input and + Output for any other device. For each row, Program picks
+what the program does with it: one of its own variables, a new variable
+(declared in the program's <code>VAR_INPUT</code> or
+<code>VAR_OUTPUT</code>), or wiring only. Double-click or right-click a
+wired signal to rename it: the io.map line and every use in the program
+change together, listed before you confirm. One map may mix Modbus TCP
+and EtherNet/IP devices. The agent reads the same listing, network
+included. Under that, <strong>Plant states</strong>: the quantities a
+project's plant model keeps for the machine it stands in for (mark a
+variable with <code>{state unit=m}</code> on its line), each with the
+simulation's value and the sensor that measures it on the real machine,
+or the kind of sensor that would; right-click one and Add a sensor…
+writes that signal into the map. When that signal is one of the
+program's inputs, in the same unit, the simulation runs the model from
+it: set it in the I/O tab and the plant follows the sensor.
 <strong>Code</strong> (<kbd>Alt</kbd> <kbd>1</kbd>): the Structured Text
 editor. Errors are marked on the line as you type; the program running
 does not change until you deploy. The key for a tab opens the pane on
 it, or shuts the pane when that tab already shows.</li>
+</ul></li>
 <li><strong>The bottom panel</strong> (<kbd>Alt</kbd> <kbd>2</kbd>): the
 <strong>Trend</strong> of the signals you pin, with a long time axis,
 and <strong>Messages</strong>, the last two hundred things the page had

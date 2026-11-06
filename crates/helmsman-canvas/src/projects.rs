@@ -598,6 +598,10 @@ impl FilesUi {
         let size = Vec2::new(ui.available_width(), left);
         let r = ui.allocate_response(size, egui::Sense::click());
         chrome.hit("files blank", r.rect);
+        // Space to right-click, not a button: the menu pointer, not the finger.
+        if r.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ContextMenu);
+        }
         let mut act = None;
         r.context_menu(|ui| {
             if menu_item(

@@ -16,6 +16,8 @@ struct Harness {
     size: Vec2,
     /// What the last frame drew.
     shapes: Vec<egui::epaint::ClippedShape>,
+    /// The pointer the last frame asked for.
+    cursor: egui::CursorIcon,
 }
 
 impl Harness {
@@ -26,6 +28,7 @@ impl Harness {
             time: 0.0,
             size: Vec2::new(1400.0, 860.0),
             shapes: Vec::new(),
+            cursor: egui::CursorIcon::Default,
         };
         // Two frames: panels settle their sizes, the view fits the graph.
         h.frame(vec![]);
@@ -46,6 +49,7 @@ impl Harness {
         // No renderer here to upload textures to.
         out.textures_delta.clear();
         self.shapes = out.shapes;
+        self.cursor = out.platform_output.cursor_icon;
     }
 
     /// Every piece of text the last frame drew outside the diagram (which
@@ -1182,6 +1186,8 @@ mod chrome {
         h.press("device name");
         h.frame(vec![Event::Text("rio".into())]);
         h.press("device enip-io");
+        // The centred form changes height with the protocol's settings.
+        h.wait(0.2);
         h.press("device endpoint");
         h.frame(vec![Event::Text("10.0.0.60".into())]);
         h.press("device ok");
@@ -1365,14 +1371,21 @@ mod chrome {
         assert_eq!(d.name, "e1213");
         assert_eq!(d.endpoint, "cip=991:515:0x00e12130");
         assert_eq!(d.protocol, 1, "EtherNet/IP");
+        // The E1213's channels are listed; the program's lamp (on the box's
+        // own channel) is bound to the first output already.
+        assert_eq!(d.points.len(), 20, "12 inputs, 8 outputs");
+        let on: Vec<(&str, &str)> = d
+            .points
+            .iter()
+            .filter(|r| r.on)
+            .map(|r| (r.name.as_str(), r.point.as_str()))
+            .collect();
+        assert_eq!(on, [("run", "di:0"), ("lamp", "do:0")]);
         h.press("device ok");
         h.wait(0.3);
-        // The program's lamp was on the box's channel: asked, left there.
-        assert!(h.has("rewire form"));
-        h.press("rewire cancel");
-        h.wait(0.2);
         let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
-        assert!(map.contains("out lamp bool box do:0"), "Not now leaves it: {map}");
+        assert!(map.contains("out lamp bool e1213 do:0 safe=false"), "{map}");
+        assert!(!map.contains(" box do:0"), "moved, not doubled: {map}");
         assert!(
             map.contains(
                 "device e1213 enip-io cip=991:515:0x00e12130 profile=moxa-e1213 rpi_ms=100 poll_ms=20\n"
@@ -1399,23 +1412,22 @@ mod chrome {
     /// Nick, 2026-11-05: "It says it's not in the map but I don't even
     /// know where the map is". On a read-only example, "Use this device"
     /// copies the project, gives it the io.map its program implies, opens
-    /// the form; after Add, a question moves the box channels onto the
-    /// device, showing the lines; the I/O wiring link opens io.map.
+    /// the form with the E1213's channels, the program's I/O bound to
+    /// them; a channel ticked and named becomes a new variable; the I/O
+    /// wiring link opens io.map; a wired signal renames in io.map and the
+    /// ST together.
     #[test]
-    fn use_this_device_copies_an_example_and_rewires_its_io() {
+    fn use_this_device_copies_an_example_and_wires_its_io() {
         let mut h = Harness::new(App::sim());
         {
             let sim = h.app.sim.as_mut().unwrap();
-            // An example with a BOOL input and output (Latch).
+            // The start/stop latch: two BOOL inputs, a BOOL output.
             let ex = crate::playground::EXAMPLES
                 .iter()
                 .map(|e| e.src)
-                .find(|src| {
-                    let m = crate::sim_projects::example_io_map(src);
-                    m.contains(" box di:0") && m.contains(" box do:0")
-                })
+                .find(|src| src.contains("PROGRAM latch"))
                 .map(|src| crate::sim_projects::example_project(src).0)
-                .expect("an example with BOOL I/O");
+                .expect("the latch example");
             sim.open_project(&ex);
             assert!(sim.proj.is_example());
         }
@@ -1441,19 +1453,157 @@ mod chrome {
             assert!(map.contains(" bool box di:0"), "{map}");
         }
         assert!(h.has("device form"));
+        // Start and stop on DI-00/01, the motor on DO-00, from the program.
+        let rows = h
+            .app
+            .sim
+            .as_ref()
+            .unwrap()
+            .devices_ui
+            .adding
+            .clone()
+            .unwrap()
+            .points;
+        let on: Vec<(&str, &str)> = rows
+            .iter()
+            .filter(|r| r.on)
+            .map(|r| (r.name.as_str(), r.point.as_str()))
+            .collect();
+        assert_eq!(on, [("start", "di:0"), ("stop", "di:1"), ("motor", "do:0")]);
+        // Tick DI-05 and name it: a new variable.
+        h.press("point 5 on");
+        h.press("point 5 name");
+        h.frame(vec![Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }]);
+        h.frame(vec![Event::Text("door".into())]);
+        h.wait(0.2);
+        let r5 = h
+            .app
+            .sim
+            .as_ref()
+            .unwrap()
+            .devices_ui
+            .adding
+            .clone()
+            .unwrap()
+            .points[5]
+            .clone();
+        assert!(r5.on && r5.name == "door", "{r5:?}");
         h.press("device ok");
         h.wait(0.3);
-        assert!(h.has("rewire form"), "asks before moving the lines");
-        h.press("rewire ok");
-        h.wait(0.3);
-        assert!(!h.has("rewire form"));
-        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
-        assert!(!map.contains(" box di:") && !map.contains(" box do:"), "{map}");
-        assert!(map.contains(" bool e1213 di:0"), "{map}");
+        assert!(
+            !h.has("device form"),
+            "{:?}",
+            h.app.sim.as_ref().unwrap().devices_ui.adding
+        );
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            let map = &sim.proj.files["io.map"];
+            assert!(!map.contains(" box di:") && !map.contains(" box do:"), "{map}");
+            assert!(map.contains("in  start bool e1213 di:0\n"), "{map}");
+            assert!(map.contains("in  door bool e1213 di:5\n"), "{map}");
+            let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
+            assert!(st.contains("  door : BOOL;"), "{st}");
+            assert!(helmsman_iec::ast::parse(st).is_ok(), "{st}");
+        }
         // The I/O wiring link opens the file in the editor.
         h.press("devices open map");
         h.wait(0.2);
         assert_eq!(h.app.sim.as_ref().unwrap().proj.current, "io.map");
+        // Rename start: the wiring line and the program together.
+        h.press("pane devices");
+        h.wait(0.2);
+        h.right_click(h.rect("point start").center());
+        h.press("menu rename point");
+        h.wait(0.2);
+        assert!(h.has("rename form"));
+        h.press("rename name");
+        h.frame(vec![Event::Key {
+            key: egui::Key::A,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        }]);
+        h.frame(vec![Event::Text("go_button".into())]);
+        h.wait(0.2);
+        h.press("rename ok");
+        h.wait(0.3);
+        assert!(!h.has("rename form"));
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.proj.files["io.map"].contains("in  go_button bool e1213 di:0\n"));
+        let st = sim.proj.files.values().find(|t| t.contains("PROGRAM")).unwrap();
+        assert!(
+            st.contains("go_button : BOOL;") && st.contains("(go_button OR motor)"),
+            "{st}"
+        );
+        assert!(!st.to_ascii_lowercase().contains("start :"), "{st}");
+    }
+
+    /// Nick, 2026-11-05: the fold arrow on a device showed the typing
+    /// cursor. Every control shows the finger, a text field the I-beam, and
+    /// a label is not text to select.
+    #[test]
+    fn controls_show_the_finger_and_text_fields_the_i_beam() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj.add_file(
+                "io.map",
+                "device e1213 enip-io 10.0.0.57 profile=moxa-e1213\nin  di0 bool e1213 di:0\n".into(),
+            );
+        }
+        h.press("pane devices");
+        h.wait(0.2);
+        let hover = |h: &mut Harness, key: &str| {
+            let at = h.rect(key).center();
+            h.frame(vec![Event::PointerMoved(at)]);
+            h.frame(vec![]);
+            h.cursor
+        };
+        assert_eq!(
+            hover(&mut h, "device e1213"),
+            egui::CursorIcon::PointingHand,
+            "the fold row"
+        );
+        assert_eq!(
+            hover(&mut h, "point di0"),
+            egui::CursorIcon::PointingHand,
+            "a point row"
+        );
+        assert_eq!(
+            hover(&mut h, "pane files"),
+            egui::CursorIcon::PointingHand,
+            "a tab"
+        );
+        assert_eq!(
+            hover(&mut h, "devices scan"),
+            egui::CursorIcon::PointingHand,
+            "a button"
+        );
+        h.right_click(h.rect("devices blank").center());
+        h.press("menu new device");
+        h.wait(0.2);
+        assert_eq!(
+            hover(&mut h, "device name"),
+            egui::CursorIcon::Text,
+            "a text field"
+        );
+        assert_eq!(
+            hover(&mut h, "device enip-io"),
+            egui::CursorIcon::PointingHand,
+            "a choice"
+        );
+        assert!(
+            !h.ctx.style_of(h.ctx.theme()).interaction.selectable_labels,
+            "labels are not selectable"
+        );
     }
 
     /// The library's match fills the form's name and profile in.

@@ -41,6 +41,8 @@ mod claude;
 mod commit;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod debugger_tests;
+mod device_form;
+mod device_form_ui;
 mod devices;
 mod editor;
 mod find;

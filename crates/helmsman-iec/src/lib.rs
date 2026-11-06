@@ -101,6 +101,7 @@ mod lexer;
 mod once;
 mod parser;
 pub mod plcopen;
+mod rename;
 pub mod spec;
 mod state;
 pub mod trace;
@@ -119,6 +120,7 @@ use once::Once;
 pub use check::{Area, Diagnostic, ImageSizes};
 pub use interp::{BadParam, Fault, FaultKind, Image};
 pub use lexer::Pos;
+pub use rename::rename_ident;
 pub use state::{Carry, State};
 pub use types::{Ty, Value};
 

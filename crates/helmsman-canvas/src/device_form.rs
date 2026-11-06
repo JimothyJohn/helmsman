@@ -1,0 +1,942 @@
+//! The "New device" form's model (Nick, 2026-11-05): typed settings for
+//! each protocol in place of one `KEY=VALUE` line, the device's inputs and
+//! outputs as rows to tick and name (a known device lists its channels),
+//! each bound to the program (a variable it has, a new one, or wiring
+//! only), and renaming a wired signal in `io.map` and the ST together.
+//! The form's drawing is in `device_form_ui.rs`; everything here is pure.
+
+use std::fmt::Write as _;
+
+use helmsman_project::iomap::MapText;
+
+/// An input or an output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dir {
+    In,
+    Out,
+}
+
+impl Dir {
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::In => "in",
+            Self::Out => "out",
+        }
+    }
+
+    /// The ST section a variable of this direction is declared in.
+    #[must_use]
+    pub fn section(self) -> &'static str {
+        match self {
+            Self::In => "VAR_INPUT",
+            Self::Out => "VAR_OUTPUT",
+        }
+    }
+}
+
+/// A signal's type in the map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigTy {
+    Bool,
+    Int,
+    Real,
+}
+
+impl SigTy {
+    pub const ALL: [Self; 3] = [Self::Bool, Self::Int, Self::Real];
+
+    #[must_use]
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Bool => "bool",
+            Self::Int => "int",
+            Self::Real => "real",
+        }
+    }
+
+    /// The ST type a new variable is declared with.
+    #[must_use]
+    pub fn st(self) -> &'static str {
+        match self {
+            Self::Bool => "BOOL",
+            Self::Int => "INT",
+            Self::Real => "REAL",
+        }
+    }
+
+    /// What an output is driven to when nothing healthy drives it.
+    #[must_use]
+    pub fn safe(self) -> &'static str {
+        match self {
+            Self::Bool => "safe=false",
+            Self::Int | Self::Real => "safe=0",
+        }
+    }
+
+    #[must_use]
+    pub fn of(ty: helmsman_iec::Ty) -> Option<Self> {
+        use helmsman_iec::Ty;
+        match ty {
+            Ty::Bool => Some(Self::Bool),
+            Ty::Real | Ty::LReal => Some(Self::Real),
+            Ty::SInt | Ty::Int | Ty::DInt | Ty::LInt | Ty::USInt | Ty::UInt | Ty::UDInt | Ty::ULInt => {
+                Some(Self::Int)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// One of the program's `VAR_INPUT`s or `VAR_OUTPUT`s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Port {
+    pub dir: Dir,
+    /// Lower case, as the map writes it (ST names ignore case).
+    pub name: String,
+    pub ty: SigTy,
+}
+
+/// The program's inputs and outputs a map signal can bind, from its ST.
+#[must_use]
+pub fn ports_of(src: &str) -> Vec<Port> {
+    use crate::playground::{Dir as PDir, Place};
+    let s = crate::playground::Session::new(src);
+    s.inputs()
+        .chain(s.outputs())
+        .filter(|p| p.place == Place::Port)
+        .filter_map(|p| {
+            Some(Port {
+                dir: if p.dir == PDir::In { Dir::In } else { Dir::Out },
+                name: p.name.to_ascii_lowercase(),
+                ty: SigTy::of(p.ty)?,
+            })
+        })
+        .collect()
+}
+
+/// What a point row does in the program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Use {
+    /// A line in io.map only; the program does not read or drive it yet.
+    Wiring,
+    /// The program gets a new variable of the row's name.
+    Declare,
+    /// One of the program's own variables (moved off where it was wired).
+    Existing(String),
+}
+
+/// One input or output in the form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PointRow {
+    pub on: bool,
+    pub dir: Dir,
+    pub name: String,
+    pub ty: SigTy,
+    /// In the driver's syntax: `di:0`, `coil:3`, `hr:5:i16`.
+    pub point: String,
+    pub use_: Use,
+    /// A known device's channel: its type and point are fixed.
+    pub fixed: bool,
+}
+
+impl PointRow {
+    /// A row the visitor adds by hand.
+    #[must_use]
+    pub fn custom(dir: Dir, n: usize) -> Self {
+        Self {
+            on: true,
+            dir,
+            name: format!("{}{n}", if dir == Dir::In { "in" } else { "out" }),
+            ty: SigTy::Bool,
+            point: String::new(),
+            use_: Use::Declare,
+            fixed: false,
+        }
+    }
+
+    /// The `in`/`out` line on `device`.
+    #[must_use]
+    pub fn line(&self, device: &str) -> String {
+        let mut l = format!(
+            "{:<3} {} {} {device} {}",
+            self.dir.word(),
+            self.name,
+            self.ty.word(),
+            self.point
+        );
+        if self.dir == Dir::Out {
+            l.push(' ');
+            l.push_str(self.ty.safe());
+        }
+        l
+    }
+}
+
+/// A device the form knows the channels of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Catalog {
+    /// Moxa ioLogik E1213: DI-00..11, DO-00..07 (the four DIO as DO, the
+    /// factory jumper); docs/devices/moxa-iologik-e1213.md.
+    E1213,
+}
+
+impl Catalog {
+    /// Moxa's vendor 991, product 515, or a product name with E1213 in it.
+    #[must_use]
+    pub fn identify(vendor: u16, product: u16, name: &str) -> Option<Self> {
+        ((vendor, product) == (991, 515) || name.to_ascii_uppercase().contains("E1213"))
+            .then_some(Self::E1213)
+    }
+
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::E1213 => "ioLogik E1213: 12 inputs (DI-00..11) and 8 outputs (DO-00..07)",
+        }
+    }
+
+    /// Every channel as a row, off, named `di0`.., `do0`.., on `driver`.
+    #[must_use]
+    pub fn rows(self, driver: &str) -> Vec<PointRow> {
+        let Self::E1213 = self;
+        let row = |dir, name: String, point: String| PointRow {
+            on: false,
+            dir,
+            name,
+            ty: SigTy::Bool,
+            point,
+            use_: Use::Declare,
+            fixed: true,
+        };
+        let out_kind = out_bit(driver);
+        (0..12)
+            .map(|n| row(Dir::In, format!("di{n}"), format!("di:{n}")))
+            .chain((0..8).map(|n| row(Dir::Out, format!("do{n}"), format!("{out_kind}:{n}"))))
+            .collect()
+    }
+}
+
+/// An output bit's point kind: `coil` on Modbus, `do` on EtherNet/IP.
+#[must_use]
+pub fn out_bit(driver: &str) -> &'static str {
+    if driver.starts_with("modbus") {
+        "coil"
+    } else {
+        "do"
+    }
+}
+
+/// A setting's input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A whole number in a range, with its unit.
+    Num { min: u64, max: u64, unit: &'static str },
+    /// One of [`PROFILES`], or none.
+    Profile,
+    /// One of the project's `.eds` files, or none.
+    Eds,
+}
+
+/// One setting of a driver (the keys and ranges are the drivers' own:
+/// helmsman-io's modbus.rs `from_params`, enip.rs `Params::parse`,
+/// helmsman-plc's link.rs `poll_ms`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Setting {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub tip: &'static str,
+    pub kind: Kind,
+}
+
+const POLL: Setting = Setting {
+    key: "poll_ms",
+    label: "Poll every",
+    tip: "How often the controller reads the device's inputs, in ms (1 to 60000).",
+    kind: Kind::Num {
+        min: 1,
+        max: 60_000,
+        unit: "ms",
+    },
+};
+
+const MODBUS: [Setting; 3] = [
+    Setting {
+        key: "unit",
+        label: "Unit id",
+        tip: "The Modbus unit (slave) id the device answers to, 1 to 247. Most Ethernet devices use 1.",
+        kind: Kind::Num {
+            min: 1,
+            max: 247,
+            unit: "",
+        },
+    },
+    Setting {
+        key: "timeout_ms",
+        label: "Timeout",
+        tip: "How long to wait for an answer before the link counts as down, in ms (1 to 60000).",
+        kind: Kind::Num {
+            min: 1,
+            max: 60_000,
+            unit: "ms",
+        },
+    },
+    POLL,
+];
+
+const ENIP: [Setting; 4] = [
+    Setting {
+        key: "profile",
+        label: "Profile",
+        tip: "A device this controller knows the connection of. Pick one, or the device's EDS file below.",
+        kind: Kind::Profile,
+    },
+    Setting {
+        key: "eds",
+        label: "EDS file",
+        tip: "The vendor's EDS file in this project (Import device… adds one). Use it when no profile fits.",
+        kind: Kind::Eds,
+    },
+    Setting {
+        key: "rpi_ms",
+        label: "Update every",
+        tip: "The requested packet interval: how often the device and the controller exchange I/O, in ms. The E1213 takes 100 to 3000.",
+        kind: Kind::Num {
+            min: 1,
+            max: 3_600_000,
+            unit: "ms",
+        },
+    },
+    POLL,
+];
+
+/// The EtherNet/IP profiles the controller has (enip.rs `Params::parse`).
+pub const PROFILES: [&str; 1] = ["moxa-e1213"];
+
+/// The settings `driver` takes, in the order the form shows them.
+#[must_use]
+pub fn schema(driver: &str) -> &'static [Setting] {
+    match driver {
+        "modbus-tcp" => &MODBUS,
+        "enip-io" => &ENIP,
+        _ => &[],
+    }
+}
+
+/// The value of `key` in a `KEY=VALUE ...` string.
+#[must_use]
+pub fn param<'a>(params: &'a str, key: &str) -> Option<&'a str> {
+    params
+        .split_whitespace()
+        .filter_map(|t| t.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v)
+}
+
+/// `params` with `key` set to `value` where it was (else at the end), or
+/// taken out when `value` is empty. Every other token stays as it was.
+#[must_use]
+pub fn set_param(params: &str, key: &str, value: &str) -> String {
+    let value: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut out: Vec<String> = Vec::new();
+    let mut done = false;
+    for t in params.split_whitespace() {
+        if t.split_once('=').is_some_and(|(k, _)| k == key) {
+            if !done && !value.is_empty() {
+                out.push(format!("{key}={value}"));
+            }
+            done = true;
+        } else {
+            out.push(t.to_string());
+        }
+    }
+    if !done && !value.is_empty() {
+        out.push(format!("{key}={value}"));
+    }
+    out.join(" ")
+}
+
+/// Why `params` will not do for `driver`, if they will not.
+///
+/// # Errors
+/// The first setting out of range, an unknown profile, or EtherNet/IP
+/// with neither (or both) of a profile and an EDS.
+pub fn check_settings(driver: &str, params: &str) -> Result<(), String> {
+    for s in schema(driver) {
+        let Some(v) = param(params, s.key) else { continue };
+        match s.kind {
+            Kind::Num { min, max, unit } => {
+                if !v.parse::<u64>().is_ok_and(|n| (min..=max).contains(&n)) {
+                    return Err(format!(
+                        "{}: a whole number from {min} to {max}{}",
+                        s.label,
+                        unit_suffix(unit)
+                    ));
+                }
+            }
+            Kind::Profile => {
+                if !PROFILES.contains(&v) {
+                    return Err(format!("Profile: one of {}", PROFILES.join(", ")));
+                }
+            }
+            Kind::Eds => {}
+        }
+    }
+    if driver == "enip-io" {
+        match (param(params, "profile"), param(params, "eds")) {
+            (None, None) => return Err("EtherNet/IP needs a profile or the device's EDS file.".into()),
+            (Some(_), Some(_)) => return Err("A profile or an EDS file, not both.".into()),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn unit_suffix(unit: &str) -> String {
+    if unit.is_empty() {
+        String::new()
+    } else {
+        format!(" {unit}")
+    }
+}
+
+/// A signal name: a letter, then letters, digits or `_`, at most 48.
+#[must_use]
+pub fn name_ok(s: &str) -> bool {
+    let mut c = s.chars();
+    c.next().is_some_and(|f| f.is_ascii_alphabetic())
+        && c.all(|x| x.is_ascii_alphanumeric() || x == '_')
+        && !s.contains("__")
+        && s.len() <= 48
+}
+
+/// Binds the program's inputs and outputs to a known device's channels,
+/// in order: a BOOL port that the map has nowhere, or on the box's own
+/// channels, takes the next free channel of its direction (the program
+/// moves onto the device as a whole; the visitor can untick any).
+pub fn prebind(rows: &mut [PointRow], ports: &[Port], map: &MapText) {
+    for p in ports.iter().filter(|p| p.ty == SigTy::Bool) {
+        let wired = map.signals.iter().find(|s| s.name.eq_ignore_ascii_case(&p.name));
+        if wired.is_some_and(|s| s.device != "box") {
+            continue;
+        }
+        if let Some(r) = rows
+            .iter_mut()
+            .find(|r| r.fixed && !r.on && r.dir == p.dir && r.ty == SigTy::Bool)
+        {
+            r.on = true;
+            r.name.clone_from(&p.name);
+            r.use_ = Use::Existing(p.name.clone());
+        }
+    }
+}
+
+/// What Add does: the device and its signals into io.map, the lines of
+/// the program's variables taken from where they were, new variables
+/// declared in the program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wiring {
+    pub device: String,
+    pub device_line: String,
+    pub signals: Vec<String>,
+    /// Signal names whose old lines go (they are on the device now).
+    pub replace: Vec<String>,
+    /// New variables: direction, name, type.
+    pub declare: Vec<(Dir, String, SigTy)>,
+}
+
+impl Wiring {
+    /// What it changes, in a line, for the notice.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let mut s = format!("{} added with {} point(s)", self.device, self.signals.len());
+        if !self.replace.is_empty() {
+            let _ = write!(s, "; {} moved onto it", self.replace.join(", "));
+        }
+        if !self.declare.is_empty() {
+            let names: Vec<&str> = self.declare.iter().map(|(_, n, _)| n.as_str()).collect();
+            let _ = write!(s, "; new variable(s) {}", names.join(", "));
+        }
+        s.push('.');
+        s
+    }
+}
+
+/// The rows ticked, checked: each a good name, used once, not wired
+/// already (but for a variable that moves), a new variable's name not the
+/// program's already, a point given. Then the [`Wiring`].
+///
+/// # Errors
+/// The first row that will not do, named.
+pub fn wiring(
+    device: &str,
+    device_line: String,
+    rows: &[PointRow],
+    ports: &[Port],
+    map: &MapText,
+) -> Result<Wiring, String> {
+    let mut w = Wiring {
+        device: device.to_string(),
+        device_line,
+        signals: Vec::new(),
+        replace: Vec::new(),
+        declare: Vec::new(),
+    };
+    let mut seen: Vec<String> = Vec::new();
+    for r in rows.iter().filter(|r| r.on) {
+        let what = format!("{} {}", r.dir.word(), r.point);
+        if !name_ok(&r.name) {
+            return Err(format!(
+                "{what}: {:?} is not a name (a letter, then letters, digits or _).",
+                r.name
+            ));
+        }
+        let low = r.name.to_ascii_lowercase();
+        if seen.contains(&low) {
+            return Err(format!("{} is used twice.", r.name));
+        }
+        seen.push(low.clone());
+        if r.point.trim().is_empty() || r.point.contains(char::is_whitespace) {
+            return Err(format!("{}: give its point, e.g. di:0.", r.name));
+        }
+        let wired = map.signals.iter().any(|s| s.name.eq_ignore_ascii_case(&r.name));
+        let port = ports.iter().find(|p| p.name.eq_ignore_ascii_case(&r.name));
+        match &r.use_ {
+            Use::Existing(v) => {
+                let Some(p) = ports.iter().find(|p| p.name.eq_ignore_ascii_case(v)) else {
+                    return Err(format!("The program has no variable {v}."));
+                };
+                if p.dir != r.dir || p.ty != r.ty {
+                    return Err(format!(
+                        "{v} is a {} {}, not a {} {}.",
+                        p.ty.word(),
+                        p.dir.word(),
+                        r.ty.word(),
+                        r.dir.word()
+                    ));
+                }
+                if wired {
+                    w.replace.push(low);
+                }
+            }
+            Use::Declare => {
+                if port.is_some() {
+                    return Err(format!(
+                        "The program already has {}: pick it in the Program list.",
+                        r.name
+                    ));
+                }
+                if wired {
+                    return Err(format!("{} is wired already in io.map.", r.name));
+                }
+                w.declare.push((r.dir, r.name.clone(), r.ty));
+            }
+            Use::Wiring => {
+                if wired {
+                    return Err(format!("{} is wired already in io.map.", r.name));
+                }
+            }
+        }
+        w.signals.push(r.line(device));
+    }
+    Ok(w)
+}
+
+/// `map` with the replaced signals' lines taken out and the device and
+/// its signals added at the end.
+#[must_use]
+pub fn apply_map(map: &str, w: &Wiring) -> String {
+    let mut out = String::new();
+    for line in map.lines() {
+        let t: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        let gone = matches!(t.as_slice(), [d, name, ..] if (*d == "in" || *d == "out") && w.replace.iter().any(|r| r.eq_ignore_ascii_case(name)));
+        if !gone {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    if !out.is_empty() && !out.ends_with("\n\n") {
+        out.push('\n');
+    }
+    out.push_str(w.device_line.trim_end());
+    out.push('\n');
+    for s in &w.signals {
+        out.push_str(s);
+        out.push('\n');
+    }
+    out
+}
+
+/// `src` with `name : TYPE;` declared in its program's first section for
+/// `dir` (`VAR_INPUT` / `VAR_OUTPUT`), or a new section after the
+/// `PROGRAM` line when it has none. `None` when there is no program.
+#[must_use]
+pub fn declare_var(src: &str, dir: Dir, name: &str, ty: SigTy) -> Option<String> {
+    let decl = format!("  {name} : {};\n", ty.st());
+    let first_word = |l: &str| {
+        l.split(|c: char| c.is_whitespace() || c == '(')
+            .find(|w| !w.is_empty())
+            .map(str::to_ascii_uppercase)
+    };
+    let mut out = String::with_capacity(src.len() + decl.len() + 24);
+    let mut done = false;
+    let mut program_at = None;
+    for line in src.split_inclusive('\n') {
+        out.push_str(line);
+        if !line.ends_with('\n') {
+            out.push('\n');
+        }
+        let w = first_word(line);
+        if !done && w.as_deref() == Some(dir.section()) {
+            out.push_str(&decl);
+            done = true;
+        }
+        if program_at.is_none() && w.as_deref() == Some("PROGRAM") {
+            program_at = Some(out.len());
+        }
+    }
+    if done {
+        if !src.ends_with('\n') {
+            out.pop();
+        }
+        return Some(out);
+    }
+    let at = program_at?;
+    out.insert_str(at, &format!("{}\n{decl}END_VAR\n", dir.section()));
+    if !src.ends_with('\n') {
+        out.pop();
+    }
+    Some(out)
+}
+
+fn is_st(file: &str) -> bool {
+    std::path::Path::new(file)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("st"))
+}
+
+/// The project's file with the `PROGRAM` in it: a `.st` that is not a
+/// requirement test (`test_*.st`).
+#[must_use]
+pub fn program_file<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<String> {
+    files
+        .into_iter()
+        .filter(|(n, _)| is_st(n) && !n.starts_with("test_"))
+        .find(|(_, t)| {
+            t.lines()
+                .any(|l| l.trim_start().to_ascii_uppercase().starts_with("PROGRAM "))
+        })
+        .map(|(n, _)| n.to_string())
+}
+
+/// Renaming a wired signal: its io.map line and the variable everywhere
+/// in the ST, file by file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenamePlan {
+    pub old: String,
+    pub new: String,
+    /// Each file that changes: name, new text, how many uses.
+    pub files: Vec<(String, String, usize)>,
+}
+
+impl RenamePlan {
+    /// What changes, a line a file.
+    #[must_use]
+    pub fn lines(&self) -> Vec<String> {
+        self.files
+            .iter()
+            .map(|(f, _, n)| {
+                if f == helmsman_project::IO_MAP {
+                    format!("{f}: the wiring line")
+                } else {
+                    format!("{f}: {n} use(s)")
+                }
+            })
+            .collect()
+    }
+}
+
+/// The plan to rename signal `old` to `new` across `files` (io.map and
+/// every `.st`, the requirement tests too).
+///
+/// # Errors
+/// A bad or taken name, or an ST file that does not read (fix it first).
+pub fn rename_plan(files: &[(String, String)], old: &str, new: &str) -> Result<RenamePlan, String> {
+    if !name_ok(new) {
+        return Err(format!(
+            "{new:?} is not a name: a letter, then letters, digits or _."
+        ));
+    }
+    if new.eq_ignore_ascii_case(old) && new != old {
+        // Only the case changes: allowed, ST ignores it.
+    } else if new == old {
+        return Err("That is its name already.".into());
+    }
+    let mut plan = RenamePlan {
+        old: old.to_string(),
+        new: new.to_string(),
+        files: Vec::new(),
+    };
+    for (f, text) in files {
+        if f == helmsman_project::IO_MAP {
+            let mut n = 0;
+            let mut out = String::with_capacity(text.len());
+            for line in text.split_inclusive('\n') {
+                let body = line.split('#').next().unwrap_or("");
+                let t: Vec<&str> = body.split_whitespace().collect();
+                match t.as_slice() {
+                    [d, name, ..] if (*d == "in" || *d == "out") && name.eq_ignore_ascii_case(old) => {
+                        // Swap the name token in place, spacing kept.
+                        let lead = line.len() - line.trim_start().len();
+                        let after = lead + d.len();
+                        let off = after + (line[after..].len() - line[after..].trim_start().len());
+                        out.push_str(&line[..off]);
+                        out.push_str(new);
+                        out.push_str(&line[off + name.len()..]);
+                        n += 1;
+                    }
+                    [d, name, ..]
+                        if (*d == "in" || *d == "out")
+                            && name.eq_ignore_ascii_case(new)
+                            && !new.eq_ignore_ascii_case(old) =>
+                    {
+                        return Err(format!("{new} is wired already in io.map."));
+                    }
+                    _ => out.push_str(line),
+                }
+            }
+            if n > 0 {
+                plan.files.push((f.clone(), out, n));
+            }
+        } else if is_st(f) {
+            if !new.eq_ignore_ascii_case(old)
+                && ports_of(text).iter().any(|p| p.name.eq_ignore_ascii_case(new))
+            {
+                return Err(format!("The program already has a variable {new}."));
+            }
+            let (out, n) = helmsman_iec::rename_ident(text, old, new)
+                .map_err(|_| format!("{f} does not read as ST: fix it first, then rename."))?;
+            if n == 0 {
+                continue;
+            }
+            if helmsman_iec::ast::parse(text).is_ok() && helmsman_iec::ast::parse(&out).is_err() {
+                return Err(format!("{new} cannot be a variable's name (an ST keyword?)."));
+            }
+            plan.files.push((f.clone(), out, n));
+        }
+    }
+    if plan.files.is_empty() {
+        return Err(format!("{old} is nowhere to rename."));
+    }
+    Ok(plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use helmsman_project::iomap::skim;
+
+    const LATCH: &str = "PROGRAM latch\nVAR_INPUT\n  start : BOOL;\n  stop : BOOL;\nEND_VAR\nVAR_OUTPUT\n  motor : BOOL;\nEND_VAR\nmotor := (start OR motor) AND NOT stop;\nEND_PROGRAM\n";
+    const BOX_MAP: &str = "# the example's\nin  start bool box di:0\nin  stop bool box di:1\nout motor bool box do:0 safe=false\n";
+
+    #[test]
+    fn settings_are_set_in_place_and_checked_against_the_drivers_ranges() {
+        let p = "unit=1 timeout_ms=300 poll_ms=20 extra=x";
+        assert_eq!(param(p, "timeout_ms"), Some("300"));
+        assert_eq!(
+            set_param(p, "timeout_ms", "500"),
+            "unit=1 timeout_ms=500 poll_ms=20 extra=x"
+        );
+        assert_eq!(set_param(p, "unit", ""), "timeout_ms=300 poll_ms=20 extra=x");
+        assert_eq!(
+            set_param(p, "new", "a b"),
+            "unit=1 timeout_ms=300 poll_ms=20 extra=x new=ab"
+        );
+        assert_eq!(check_settings("modbus-tcp", p), Ok(()));
+        assert!(
+            check_settings("modbus-tcp", "unit=0")
+                .unwrap_err()
+                .contains("1 to 247")
+        );
+        assert!(check_settings("modbus-tcp", "poll_ms=abc").is_err());
+        assert!(check_settings("modbus-tcp", "timeout_ms=60001").is_err());
+        assert_eq!(check_settings("enip-io", "profile=moxa-e1213 rpi_ms=100"), Ok(()));
+        assert!(
+            check_settings("enip-io", "rpi_ms=100")
+                .unwrap_err()
+                .contains("profile or")
+        );
+        assert!(
+            check_settings("enip-io", "profile=moxa-e1213 eds=a.eds")
+                .unwrap_err()
+                .contains("not both")
+        );
+        assert!(check_settings("enip-io", "profile=other").is_err());
+        assert_eq!(check_settings("enip-io", "eds=moxa.eds"), Ok(()));
+    }
+
+    #[test]
+    fn the_e1213_lists_its_channels_and_takes_the_programs_box_io() {
+        let mut rows = Catalog::E1213.rows("enip-io");
+        assert_eq!(rows.iter().filter(|r| r.dir == Dir::In).count(), 12);
+        assert_eq!(rows.iter().filter(|r| r.dir == Dir::Out).count(), 8);
+        assert_eq!(Catalog::E1213.rows("modbus-tcp")[12].point, "coil:0");
+        let ports = ports_of(LATCH);
+        assert_eq!(ports.len(), 3, "{ports:?}");
+        prebind(&mut rows, &ports, &skim(BOX_MAP));
+        let on: Vec<(&str, &str)> = rows
+            .iter()
+            .filter(|r| r.on)
+            .map(|r| (r.name.as_str(), r.point.as_str()))
+            .collect();
+        assert_eq!(on, [("start", "di:0"), ("stop", "di:1"), ("motor", "do:0")]);
+        let w = wiring(
+            "e1213",
+            "device e1213 enip-io cip=991:515 profile=moxa-e1213\n".into(),
+            &rows,
+            &ports,
+            &skim(BOX_MAP),
+        )
+        .unwrap();
+        assert_eq!(w.replace, ["start", "stop", "motor"]);
+        assert_eq!(w.declare, []);
+        let map = apply_map(BOX_MAP, &w);
+        assert!(!map.contains(" box "), "{map}");
+        assert!(
+            map.contains("device e1213 enip-io cip=991:515 profile=moxa-e1213\nin  start bool e1213 di:0\n"),
+            "{map}"
+        );
+        assert!(map.contains("out motor bool e1213 do:0 safe=false\n"), "{map}");
+        assert_eq!(skim(&map).odd, 0, "{map}");
+    }
+
+    #[test]
+    fn a_program_wired_elsewhere_is_left_where_it_is() {
+        let mut rows = Catalog::E1213.rows("enip-io");
+        prebind(&mut rows, &ports_of(LATCH), &skim("in start bool rio di:4\n"));
+        let on: Vec<&str> = rows.iter().filter(|r| r.on).map(|r| r.name.as_str()).collect();
+        assert_eq!(on, ["stop", "motor"]);
+    }
+
+    #[test]
+    fn rows_that_will_not_do_are_refused_by_name() {
+        let ports = ports_of(LATCH);
+        let map = skim(BOX_MAP);
+        let w = |rows: &[PointRow]| {
+            wiring(
+                "d",
+                "device d enip-io 1.2.3.4 profile=moxa-e1213\n".into(),
+                rows,
+                &ports,
+                &map,
+            )
+        };
+        let mut r = PointRow::custom(Dir::In, 0);
+        r.point = "di:3".into();
+        r.name = "2x".into();
+        assert!(w(&[r.clone()]).unwrap_err().contains("not a name"));
+        r.name = "start".into();
+        assert!(
+            w(&[r.clone()])
+                .unwrap_err()
+                .contains("pick it in the Program list")
+        );
+        r.name = "level".into();
+        r.point = String::new();
+        assert!(w(&[r.clone()]).unwrap_err().contains("give its point"));
+        r.point = "di:3".into();
+        assert!(w(&[r.clone(), r.clone()]).unwrap_err().contains("used twice"));
+        let mut e = r.clone();
+        e.use_ = Use::Existing("motor".into());
+        e.name = "motor".into();
+        assert!(w(&[e]).unwrap_err().contains("not a bool in"));
+        let ok = w(&[r]).unwrap();
+        assert_eq!(ok.declare, [(Dir::In, "level".to_string(), SigTy::Bool)]);
+        assert_eq!(ok.signals, ["in  level bool d di:3"]);
+    }
+
+    #[test]
+    fn a_new_variable_is_declared_in_its_section_or_a_new_one() {
+        let out = declare_var(LATCH, Dir::In, "door", SigTy::Bool).unwrap();
+        assert!(
+            out.contains("VAR_INPUT\n  door : BOOL;\n  start : BOOL;"),
+            "{out}"
+        );
+        assert!(helmsman_iec::ast::parse(&out).is_ok());
+        let bare = "PROGRAM p\nVAR\n  n : INT;\nEND_VAR\nn := n + 1;\nEND_PROGRAM";
+        let out = declare_var(bare, Dir::Out, "lamp", SigTy::Bool).unwrap();
+        assert!(
+            out.starts_with("PROGRAM p\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nVAR\n"),
+            "{out}"
+        );
+        assert!(!out.ends_with('\n'), "the file's last line kept as it was");
+        assert!(helmsman_iec::ast::parse(&out).is_ok(), "{out}");
+        assert_eq!(
+            declare_var("FUNCTION_BLOCK f\nEND_FUNCTION_BLOCK\n", Dir::In, "x", SigTy::Int),
+            None
+        );
+        // VAR_IN_OUT is not VAR_INPUT.
+        let io = "PROGRAM p\nVAR_IN_OUT\n  a : INT;\nEND_VAR\nEND_PROGRAM\n";
+        assert!(
+            declare_var(io, Dir::In, "x", SigTy::Int)
+                .unwrap()
+                .contains("PROGRAM p\nVAR_INPUT\n  x : INT;\nEND_VAR\nVAR_IN_OUT")
+        );
+    }
+
+    #[test]
+    fn rename_changes_the_wiring_and_the_st_together() {
+        let files = vec![
+            (
+                "io.map".to_string(),
+                "in  start bool e1213 di:0 # the green one\nout motor bool e1213 do:0 safe=false\n"
+                    .to_string(),
+            ),
+            ("main.st".to_string(), LATCH.to_string()),
+            ("test_start.st".to_string(), "(* start starts it *)\n".to_string()),
+        ];
+        let plan = rename_plan(&files, "start", "green_button").unwrap();
+        assert_eq!(plan.lines(), ["io.map: the wiring line", "main.st: 2 use(s)"]);
+        assert_eq!(
+            plan.files[0].1,
+            "in  green_button bool e1213 di:0 # the green one\nout motor bool e1213 do:0 safe=false\n"
+        );
+        assert!(
+            plan.files[1]
+                .1
+                .contains("motor := (green_button OR motor) AND NOT stop;")
+        );
+        assert!(
+            rename_plan(&files, "start", "motor")
+                .unwrap_err()
+                .contains("wired already")
+        );
+        assert!(
+            rename_plan(&files, "start", "stop")
+                .unwrap_err()
+                .contains("already has")
+        );
+        assert!(rename_plan(&files, "start", "start").is_err());
+        assert!(rename_plan(&files, "start", "9lives").is_err());
+        assert!(
+            rename_plan(&files, "start", "END_VAR").is_err(),
+            "a keyword breaks the program"
+        );
+        assert!(rename_plan(&files, "nothing", "x").is_err());
+        // Only the case: allowed.
+        assert!(rename_plan(&files, "start", "Start").is_ok());
+    }
+
+    #[test]
+    fn rename_in_the_map_keeps_the_spacing_and_a_name_inside_another_token() {
+        let files = vec![(
+            "io.map".to_string(),
+            "in   st bool box di:0 unit=st\nin start bool box di:1\n".to_string(),
+        )];
+        let plan = rename_plan(&files, "st", "go").unwrap();
+        assert_eq!(
+            plan.files[0].1,
+            "in   go bool box di:0 unit=st\nin start bool box di:1\n"
+        );
+    }
+}

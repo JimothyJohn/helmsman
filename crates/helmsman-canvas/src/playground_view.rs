@@ -1198,24 +1198,32 @@ impl PlaygroundView {
             #[cfg(target_arch = "wasm32")]
             crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
         }
-        if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
-        {
-            self.add_device_line(&line);
-            let map = self
-                .proj
-                .files
-                .get(helmsman_project::IO_MAP)
-                .cloned()
-                .unwrap_or_default();
-            self.devices_ui.offer_rewire(&map, &line);
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
+            self.apply_wiring(&w);
         }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
         }
-        if let Some(changes) = self.devices_ui.rewire_ui(&ui.ctx().clone(), chrome)
-            && let Some(text) = self.proj.files.get_mut(helmsman_project::IO_MAP)
+        if self.devices_ui.renaming.is_some() {
+            let files: Vec<(String, String)> = self
+                .proj
+                .files
+                .iter()
+                .map(|(n, t)| (n.clone(), t.clone()))
+                .collect();
+            self.devices_ui.plan_rename(&files);
+        }
+        if let Some(crate::devices::DeviceAct::Rename(plan)) =
+            self.devices_ui.rename_ui(&ui.ctx().clone(), chrome)
         {
-            *text = crate::devices::apply_rewire(text, &changes);
+            for (f, text, _) in plan.files {
+                if let Some(t) = self.proj.files.get_mut(&f) {
+                    *t = text;
+                }
+            }
+            self.proj
+                .note(format!("Renamed {} to {}.", plan.old, plan.new), false);
+            self.edited(f64::NEG_INFINITY);
         }
         if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
@@ -1601,6 +1609,15 @@ impl Body for PlaygroundView {
         self.devices_ui.plant.devices = crate::plant::device_choices(&map);
         self.devices_ui.plant.simulated = true;
         self.devices_ui.copy_first = self.proj.is_example();
+        self.devices_ui.program = crate::device_form::ports_of(&self.proj.build_src());
+        self.devices_ui.map = map.clone();
+        self.devices_ui.eds_files = self
+            .proj
+            .files
+            .keys()
+            .filter(|f| crate::devices::is_eds(f))
+            .cloned()
+            .collect();
         match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
             Some(crate::devices::DeviceAct::Scan) => {
                 self.devices_ui.simulated_scan(&map);
@@ -1613,7 +1630,7 @@ impl Body for PlaygroundView {
                 self.proj.open_file(helmsman_project::IO_MAP);
                 chrome.show_code();
             }
-            Some(crate::devices::DeviceAct::Add(_)) | None => {}
+            Some(crate::devices::DeviceAct::Add(_) | crate::devices::DeviceAct::Rename(_)) | None => {}
         }
     }
 
@@ -2429,10 +2446,67 @@ impl PlaygroundView {
             );
         }
         if !self.proj.files.contains_key(helmsman_project::IO_MAP) {
-            let map = crate::sim_projects::example_io_map(&self.session.src);
+            let map = crate::sim_projects::example_io_map(&self.proj.build_src());
             self.proj.add_file(helmsman_project::IO_MAP, map);
         }
-        self.devices_ui.adding = Some(d);
+        // The copy's program and map, for the form's channels.
+        let map = self
+            .proj
+            .files
+            .get(helmsman_project::IO_MAP)
+            .cloned()
+            .unwrap_or_default();
+        self.devices_ui.map = helmsman_project::iomap::skim(&map);
+        self.devices_ui.program = crate::device_form::ports_of(&self.proj.build_src());
+        self.devices_ui.open(d);
+    }
+
+    /// The form's Add: new variables into the program file (refused, with
+    /// nothing changed, if the program would not read after), then the
+    /// device and its signals into io.map.
+    fn apply_wiring(&mut self, w: &crate::device_form::Wiring) {
+        if !w.declare.is_empty() {
+            let Some(file) = crate::device_form::program_file(
+                self.proj.files.iter().map(|(n, t)| (n.as_str(), t.as_str())),
+            ) else {
+                self.proj.note("No PROGRAM to add the new variables to.", true);
+                return;
+            };
+            let mut src = self.proj.files[&file].clone();
+            for (dir, name, ty) in &w.declare {
+                let Some(s) = crate::device_form::declare_var(&src, *dir, name, *ty) else {
+                    self.proj
+                        .note(format!("{file} has no PROGRAM to add {name} to."), true);
+                    return;
+                };
+                src = s;
+            }
+            if helmsman_iec::ast::parse(&self.proj.files[&file]).is_ok()
+                && helmsman_iec::ast::parse(&src).is_err()
+            {
+                self.proj.note(
+                    "A new variable's name is an ST keyword: rename it and Add again.",
+                    true,
+                );
+                return;
+            }
+            if let Some(t) = self.proj.files.get_mut(&file) {
+                *t = src;
+            }
+        }
+        let map = self
+            .proj
+            .files
+            .get(helmsman_project::IO_MAP)
+            .cloned()
+            .unwrap_or_default();
+        let map = crate::device_form::apply_map(&map, w);
+        match self.proj.files.get_mut(helmsman_project::IO_MAP) {
+            Some(t) => *t = map,
+            None => self.proj.add_file(helmsman_project::IO_MAP, map),
+        }
+        self.proj.note(w.summary(), false);
+        self.edited(f64::NEG_INFINITY);
     }
 
     /// The inputs the diagram shows a control for.
@@ -2944,12 +3018,17 @@ pub fn show(ty: Ty, v: Value) -> String {
 /// Answer text: paragraphs as labels, fenced code in monospace blocks.
 fn markdown(ui: &mut egui::Ui, text: &str) {
     let t = theme(ui);
+    if !text.trim().is_empty() {
+        crate::theme::copy_button(ui, text);
+    }
     for (k, s) in segments(text).into_iter().enumerate() {
         match s {
             Segment::Prose(p) => {
                 let para = p.trim();
                 if !para.is_empty() {
-                    ui.label(RichText::new(para).color(t.fg));
+                    // The Agent's words stay selectable (labels are not,
+                    // theme::apply): an engineer copies from them.
+                    ui.add(egui::Label::new(RichText::new(para).color(t.fg)).selectable(true));
                 }
             }
             Segment::Code { body, .. } => {
@@ -2968,7 +3047,8 @@ fn markdown(ui: &mut egui::Ui, text: &str) {
                             .show(ui, |ui| {
                                 ui.add(
                                     egui::Label::new(RichText::new(body).monospace().size(12.0))
-                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                        .wrap_mode(egui::TextWrapMode::Extend)
+                                        .selectable(true),
                                 );
                             });
                     });

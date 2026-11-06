@@ -29,6 +29,7 @@ use helmsman_project::devlib::Index;
 use helmsman_project::iomap::{self, MapText};
 use serde_json::Value as Json;
 
+use crate::device_form::{Catalog, PointRow, Port, RenamePlan, Wiring};
 use crate::editor::Chrome;
 use crate::st_view::{TAP, show};
 use crate::theme::theme;
@@ -216,6 +217,11 @@ pub struct NewDevice {
     pub error: Option<String>,
     /// The project's EDS file this device comes from (Import device…).
     pub eds: Option<String>,
+    /// The inputs and outputs to wire: a known device's channels, or the
+    /// ones added by hand.
+    pub points: Vec<PointRow>,
+    /// A device the form knows the channels of.
+    pub catalog: Option<Catalog>,
 }
 
 impl Default for NewDevice {
@@ -227,6 +233,8 @@ impl Default for NewDevice {
             params: PROTOCOLS[0].3.to_string(),
             error: None,
             eds: None,
+            points: Vec::new(),
+            catalog: None,
         }
     }
 }
@@ -272,10 +280,13 @@ impl NewDevice {
     #[must_use]
     pub fn from_eds(file: &str, text: &str) -> Self {
         let stem = file.strip_suffix(".eds").unwrap_or(file);
-        let name = eds_product(text)
-            .map(|p| slug(&p))
+        let product = eds_product(text);
+        let name = product
+            .as_deref()
+            .map(slug)
             .filter(|s| iomap::device_name_ok(s))
             .unwrap_or_else(|| slug(stem));
+        let catalog = product.as_deref().and_then(|p| Catalog::identify(0, 0, p));
         Self {
             name,
             protocol: 1,
@@ -283,6 +294,8 @@ impl NewDevice {
             params: format!("eds={file} rpi_ms=100 poll_ms=20"),
             error: None,
             eds: Some(file.to_string()),
+            points: catalog.map(|c| c.rows("enip-io")).unwrap_or_default(),
+            catalog,
         }
     }
 
@@ -291,8 +304,33 @@ impl NewDevice {
     /// # Errors
     /// As [`iomap::device_line`].
     pub fn line(&self) -> Result<String, String> {
-        let driver = PROTOCOLS.get(self.protocol).map_or("", |p| p.0);
-        iomap::device_line(&self.name, driver, &self.endpoint, &self.params)
+        iomap::device_line(&self.name, self.driver(), &self.endpoint, &self.params)
+    }
+
+    /// The chosen protocol's driver.
+    #[must_use]
+    pub fn driver(&self) -> &'static str {
+        PROTOCOLS.get(self.protocol).map_or("", |p| p.0)
+    }
+
+    /// The protocol changed: its usual settings, and the known channels'
+    /// output points in its syntax (`do:N` or `coil:N`).
+    pub fn set_protocol(&mut self, k: usize) {
+        if k == self.protocol || k >= PROTOCOLS.len() {
+            return;
+        }
+        self.protocol = k;
+        PROTOCOLS[k].3.clone_into(&mut self.params);
+        let kind = crate::device_form::out_bit(self.driver());
+        for r in &mut self.points {
+            if r.dir == crate::device_form::Dir::Out
+                && let Some((k0, n)) = r.point.split_once(':')
+                && (k0 == "do" || k0 == "coil")
+                && n.parse::<u16>().is_ok()
+            {
+                r.point = format!("{kind}:{n}");
+            }
+        }
     }
 }
 
@@ -322,8 +360,11 @@ pub fn slug(s: &str) -> String {
 /// What the tab asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceAct {
-    /// Append this `device` line to the map (`io.map`, made if missing).
-    Add(String),
+    /// The form's Add: the device and its signals into the map (`io.map`,
+    /// made if missing), new variables into the program.
+    Add(Wiring),
+    /// Rename a wired signal in io.map and the ST.
+    Rename(RenamePlan),
     /// Scan the network (the box: one `ListIdentity` sweep; the
     /// simulation: its simulated E1213).
     Scan,
@@ -503,12 +544,14 @@ impl NewDevice {
         let name = Some(slug(model))
             .filter(|s| iomap::device_name_ok(s))
             .unwrap_or_else(|| format!("device_{}_{}", f.vendor_id, f.product_code));
-        // The simulated E1213 is helmsman-adapter's `moxa-e1213` profile.
+        // An E1213 (the simulation's too: helmsman-adapter's) has the
+        // controller's `moxa-e1213` profile.
+        let catalog = Catalog::identify(f.vendor_id, f.product_code, &f.product_name);
         let profile = f
             .library
             .as_ref()
             .and_then(|l| l.profile.as_deref())
-            .or(f.simulated.then_some("moxa-e1213"));
+            .or(catalog.map(|Catalog::E1213| "moxa-e1213"));
         let params = match profile {
             Some(p) => format!("profile={p} rpi_ms=100 poll_ms=20"),
             None => "rpi_ms=100 poll_ms=20".to_string(),
@@ -520,6 +563,8 @@ impl NewDevice {
             params,
             error: None,
             eds: None,
+            points: catalog.map(|c| c.rows("enip-io")).unwrap_or_default(),
+            catalog,
         }
     }
 }
@@ -580,9 +625,15 @@ pub struct DevicesUi {
     /// The map cannot be written but the project can be copied first (a
     /// built-in example in the playground): "Use this device" stays on.
     pub copy_first: bool,
-    /// The question after a device is added: move the program's I/O off
-    /// the box's own channels onto it.
-    pub rewire: Option<Rewire>,
+    /// The program's inputs and outputs, the map as it is, the project's
+    /// EDS files: the view fills them in each frame for the form.
+    pub program: Vec<Port>,
+    pub map: MapText,
+    pub eds_files: Vec<String>,
+    /// The Rename question on a wired signal: its name, the text typed.
+    pub renaming: Option<(String, String)>,
+    /// What that rename changes (the view works it out each frame).
+    pub rename_plan: Option<Result<RenamePlan, String>>,
 }
 
 impl DevicesUi {
@@ -753,6 +804,26 @@ impl DevicesUi {
                 };
                 let r = row(ui, RichText::new(text).monospace().color(color), 22.0);
                 chrome.hit(format!("point {}", p.signal), r.rect);
+                if write.is_ok() && r.double_clicked() {
+                    self.renaming = Some((p.signal.clone(), p.signal.clone()));
+                }
+                let mut renamed = false;
+                r.context_menu(|ui| {
+                    renamed = menu_item(
+                        ui,
+                        chrome,
+                        "menu rename point",
+                        "Rename…",
+                        write.is_ok(),
+                        write.as_ref().err().map_or(
+                            "Renames this signal in io.map and the variable everywhere in the program.",
+                            String::as_str,
+                        ),
+                    );
+                });
+                if renamed {
+                    self.renaming = Some((p.signal.clone(), p.signal.clone()));
+                }
                 let mut hover = format!("{} {}", p.ty, p.point);
                 if let Some(u) = &p.unit {
                     let _ = write!(hover, " in {u}");
@@ -763,6 +834,7 @@ impl DevicesUi {
                 if p.forced {
                     hover.push_str("\nforced by an engineer");
                 }
+                hover.push_str("\nDouble-click or right-click to rename it.");
                 r.tip(hover);
             }
         }
@@ -891,6 +963,10 @@ impl DevicesUi {
         let size = Vec2::new(ui.available_width(), left);
         let r = ui.allocate_response(size, Sense::click());
         chrome.hit("devices blank", r.rect);
+        // Space to right-click, not a button: the menu pointer, not the finger.
+        if r.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ContextMenu);
+        }
         let or_why = |tip: &'static str| write.as_ref().err().map_or(tip, String::as_str);
         r.context_menu(|ui| {
             if menu_item(
@@ -921,254 +997,7 @@ impl DevicesUi {
     pub fn take_import(&mut self) -> bool {
         std::mem::take(&mut self.import)
     }
-
-    /// The "New device" form as a box in the middle of the screen,
-    /// whichever tab is up (the view draws it each frame after the
-    /// Editor, as the Files tab's confirmations are). Returns the line to
-    /// add once Add is pressed with fields that pass.
-    pub fn form_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
-        let mut d = self.adding.clone()?;
-        let mut out = None;
-        let mut done = false;
-        let m = egui::Modal::new(egui::Id::unique("device-new")).show(ctx, |ui| {
-            ui.set_max_width(420.0);
-            let title = match &d.eds {
-                Some(f) => format!("New device from {f}"),
-                None => "New device".to_string(),
-            };
-            ui.label(RichText::new(title).strong().size(16.0));
-            ui.add_space(8.0);
-            let name_tip = "What the program's I/O map calls the device.";
-            ui.label("Name").tip(name_tip);
-            let n = ui
-                .add(
-                    egui::TextEdit::singleline(&mut d.name)
-                        .hint_text("rio")
-                        .desired_width(f32::INFINITY),
-                )
-                .tip(name_tip);
-            chrome.hit("device name", n.rect);
-            ui.add_space(6.0);
-            ui.label("Protocol")
-                .tip("How the controller talks to the device.");
-            ui.horizontal_wrapped(|ui| {
-                for (k, (driver, title, _, defaults)) in PROTOCOLS.iter().enumerate() {
-                    let r = ui
-                        .add(egui::Button::selectable(d.protocol == k, *title))
-                        .tip(format!("{title}, over Ethernet. Fills in its usual settings."));
-                    chrome.hit(format!("device {driver}"), r.rect);
-                    if r.clicked() && d.protocol != k {
-                        d.protocol = k;
-                        d.params = (*defaults).to_string();
-                    }
-                }
-            });
-            ui.add_space(6.0);
-            let hint = PROTOCOLS.get(d.protocol).map_or("", |p| p.2);
-            let addr_tip = format!("The device's IP address, e.g. {hint}.");
-            ui.label("Address").tip(&addr_tip);
-            let e = ui
-                .add(
-                    egui::TextEdit::singleline(&mut d.endpoint)
-                        .hint_text(hint)
-                        .desired_width(f32::INFINITY),
-                )
-                .tip(&addr_tip);
-            chrome.hit("device endpoint", e.rect);
-            ui.add_space(6.0);
-            let params_tip = "The driver's settings, KEY=VALUE separated by spaces.";
-            ui.label("Settings").tip(params_tip);
-            let p = ui
-                .add(egui::TextEdit::singleline(&mut d.params).desired_width(f32::INFINITY))
-                .tip(params_tip);
-            chrome.hit("device params", p.rect);
-            if let Some(err) = &d.error {
-                ui.add_space(4.0);
-                ui.label(RichText::new(err).color(RED));
-            }
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                let tall = Vec2::new(0.0, TAP * 0.7);
-                let ok = ui
-                    .add(egui::Button::new(RichText::new("Add").strong()).min_size(tall))
-                    .tip("Adds the device's line to the I/O map.");
-                chrome.hit("device ok", ok.rect);
-                let no = ui
-                    .add(egui::Button::new("Cancel").min_size(tall))
-                    .tip("Closes the form. Nothing is added.");
-                chrome.hit("device cancel", no.rect);
-                if ok.clicked() {
-                    match d.line() {
-                        Ok(line) => {
-                            out = Some(DeviceAct::Add(line));
-                            done = true;
-                        }
-                        Err(e) => d.error = Some(e),
-                    }
-                } else if no.clicked() {
-                    done = true;
-                }
-            });
-        });
-        chrome.hit("device form", m.response.rect);
-        if done || m.should_close() {
-            self.adding = None;
-        } else {
-            self.adding = Some(d);
-        }
-        out
-    }
 }
-
-/// The question after a device is added: these map lines, off the box's
-/// own channels onto `device`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Rewire {
-    pub device: String,
-    /// `(old line, new line)`, in map order.
-    pub changes: Vec<(String, String)>,
-}
-
-/// The `name` and `driver` of a `device NAME DRIVER ...` line.
-#[must_use]
-pub fn device_of(line: &str) -> Option<(String, String)> {
-    let mut it = line.split_whitespace();
-    (it.next()? == "device").then_some(())?;
-    Some((it.next()?.to_string(), it.next()?.to_string()))
-}
-
-/// The BOOL lines on the box's own channels (`box di:N`, `box do:N`),
-/// moved onto `device`: inputs keep `di:N`; outputs become `do:N` on
-/// EtherNet/IP and `coil:N` on Modbus TCP. Other drivers (a Logix tag has
-/// no channel numbers) and every other line are left alone.
-#[must_use]
-pub fn rewire_changes(map: &str, device: &str, driver: &str) -> Vec<(String, String)> {
-    let out_kind = match driver {
-        "enip-io" => "do",
-        "modbus-tcp" => "coil",
-        _ => return Vec::new(),
-    };
-    let mut changes = Vec::new();
-    for line in map.lines() {
-        let body = line.split('#').next().unwrap_or("");
-        let t: Vec<&str> = body.split_whitespace().collect();
-        let [dir, name, ty, dev, point, rest @ ..] = t.as_slice() else {
-            continue;
-        };
-        if *dev != "box" || !ty.eq_ignore_ascii_case("bool") {
-            continue;
-        }
-        let point = match (*dir, point.split_once(':')) {
-            ("in", Some(("di", n))) if n.parse::<u16>().is_ok() => format!("di:{n}"),
-            ("out", Some(("do", n))) if n.parse::<u16>().is_ok() => format!("{out_kind}:{n}"),
-            _ => continue,
-        };
-        let mut new = format!("{dir:<3} {name} {ty} {device} {point}");
-        for r in rest {
-            new.push(' ');
-            new.push_str(r);
-        }
-        changes.push((line.to_string(), new));
-    }
-    changes
-}
-
-/// `map` with each change's old line replaced by its new one.
-#[must_use]
-pub fn apply_rewire(map: &str, changes: &[(String, String)]) -> String {
-    let mut out = String::with_capacity(map.len());
-    for line in map.split_inclusive('\n') {
-        let (body, nl) = match line.strip_suffix("\r\n") {
-            Some(b) => (b, "\r\n"),
-            None => line.strip_suffix('\n').map_or((line, ""), |b| (b, "\n")),
-        };
-        match changes.iter().find(|(old, _)| old == body) {
-            Some((_, new)) => out.push_str(new),
-            None => out.push_str(body),
-        }
-        out.push_str(nl);
-    }
-    out
-}
-
-impl DevicesUi {
-    /// After `line` (a `device` line) joined `map`: asks to move the
-    /// program's box channels onto it, when any are there to move.
-    pub fn offer_rewire(&mut self, map: &str, line: &str) {
-        let Some((device, driver)) = device_of(line) else {
-            return;
-        };
-        let changes = rewire_changes(map, &device, &driver);
-        if !changes.is_empty() {
-            self.rewire = Some(Rewire { device, changes });
-        }
-    }
-
-    /// The rewire question as a box in the middle of the screen. Returns
-    /// the changes once "Wire them" is pressed.
-    pub fn rewire_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<Vec<(String, String)>> {
-        let r = self.rewire.clone()?;
-        let mut out = None;
-        let mut done = false;
-        let m = egui::Modal::new(egui::Id::unique("device-rewire")).show(ctx, |ui| {
-            ui.set_max_width(520.0);
-            ui.label(
-                RichText::new(format!("Wire the program to {}?", r.device))
-                    .strong()
-                    .size(18.0),
-            );
-            ui.add_space(6.0);
-            ui.add(
-                egui::Label::new(format!(
-                    "These inputs and outputs are on the box's own channels. Move them onto {}'s points:",
-                    r.device
-                ))
-                .wrap(),
-            );
-            ui.add_space(6.0);
-            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                for (old, new) in &r.changes {
-                    ui.add(
-                        egui::Label::new(RichText::new(format!("- {}", old.trim())).monospace().color(RED))
-                            .wrap(),
-                    );
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("+ {}", new.trim()))
-                                .monospace()
-                                .color(theme(ui).accent),
-                        )
-                        .wrap(),
-                    );
-                }
-            });
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                let tall = Vec2::new(0.0, TAP * 0.7);
-                let ok = ui
-                    .add(egui::Button::new(RichText::new("Wire them").strong()).min_size(tall))
-                    .tip("Changes these lines in io.map. Save keeps them; Deploy runs them.");
-                chrome.hit("rewire ok", ok.rect);
-                let no = ui
-                    .add(egui::Button::new("Not now").min_size(tall))
-                    .tip("Leaves the lines on the box's channels. The device stays in io.map.");
-                chrome.hit("rewire cancel", no.rect);
-                if ok.clicked() {
-                    out = Some(r.changes.clone());
-                    done = true;
-                } else if no.clicked() {
-                    done = true;
-                }
-            });
-        });
-        chrome.hit("rewire form", m.response.rect);
-        if done || m.should_close() {
-            self.rewire = None;
-        }
-        out
-    }
-}
-
 /// `line` appended to a map's text: on a line of its own, after a trailing
 /// newline the text may lack.
 #[must_use]
@@ -1184,73 +1013,6 @@ pub fn appended(map: &str, line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const BOX_MAP: &str = "# comment\n\
-        in  start bool box di:0\n\
-        in  stop  bool box di:1   # a note\n\
-        out lamp bool box do:0 safe=false\n\
-        out count int screen count safe=0\n\
-        in  level real box ai:0\n";
-
-    #[test]
-    fn rewire_moves_box_bools_onto_an_enip_device() {
-        let c = rewire_changes(BOX_MAP, "e1213", "enip-io");
-        let new: Vec<&str> = c.iter().map(|(_, n)| n.as_str()).collect();
-        assert_eq!(
-            new,
-            [
-                "in  start bool e1213 di:0",
-                "in  stop bool e1213 di:1",
-                "out lamp bool e1213 do:0 safe=false"
-            ]
-        );
-        let out = apply_rewire(BOX_MAP, &c);
-        assert!(out.starts_with("# comment\nin  start bool e1213 di:0\n"), "{out}");
-        assert!(out.contains("out count int screen count safe=0\n"), "{out}");
-        assert!(out.contains("in  level real box ai:0\n"), "{out}");
-        assert!(out.ends_with('\n'));
-        // The result still reads as a map, the moved lines on the device.
-        let m = iomap::skim(&out);
-        assert_eq!(m.odd, 0, "{out}");
-        assert_eq!(m.signals.iter().filter(|s| s.device == "e1213").count(), 3);
-    }
-
-    #[test]
-    fn rewire_on_modbus_uses_coils_and_skips_other_drivers() {
-        let c = rewire_changes(BOX_MAP, "rio", "modbus-tcp");
-        assert_eq!(c[2].1, "out lamp bool rio coil:0 safe=false");
-        assert_eq!(rewire_changes(BOX_MAP, "plc", "logix-tag"), []);
-        assert_eq!(
-            rewire_changes("in x bool other di:0\nout y bool box do:x\n", "d", "enip-io"),
-            []
-        );
-    }
-
-    #[test]
-    fn rewire_offers_only_with_something_to_move() {
-        let mut ui = DevicesUi::default();
-        ui.offer_rewire("in x int screen x\n", "device d enip-io 10.0.0.5");
-        assert!(ui.rewire.is_none());
-        ui.offer_rewire(BOX_MAP, "device d enip-io 10.0.0.5 rpi_ms=100");
-        assert_eq!(
-            ui.rewire.as_ref().map(|r| (r.device.as_str(), r.changes.len())),
-            Some(("d", 3))
-        );
-        assert_eq!(device_of("in x bool box di:0"), None);
-    }
-
-    /// Adversarial map text: whatever comes in, the rewrite only touches
-    /// the lines it reports, and never panics.
-    #[test]
-    fn rewire_leaves_unreported_lines_byte_for_byte() {
-        let odd = "in\nout a\nin  a bool box di:\nin  b bool box di:99999999\n\u{0}box di:0\r\nin  c BOOL box di:2\r\n";
-        let c = rewire_changes(odd, "d", "enip-io");
-        assert_eq!(c.len(), 1, "{c:?}");
-        let out = apply_rewire(odd, &c);
-        assert_eq!(out.lines().count(), odd.lines().count());
-        assert!(out.contains("in\nout a\nin  a bool box di:\n"));
-        assert!(out.ends_with("in  c BOOL d di:2\r\n"), "{out:?}");
-    }
 
     const EDS: &str = "$ a test EDS\r\n[File]\r\n    DescText = \"x\";\r\n[Device]\r\n    VendCode = 991;   $ Moxa\r\n    ProdName = \"E1213\";\r\n[Params]\r\n";
 

@@ -156,6 +156,47 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     {
         ctx.all_styles_mut(|s| s.text_styles = text_styles());
     }
+    // Nick, 2026-11-05: a title or a row is not text to select, and a
+    // control shows the finger. Labels are not selectable (the Agent's
+    // answers opt back in); buttons take the finger here, every other
+    // clickable widget in [`pointer_cursor`].
+    if ctx.style_of(ctx.theme()).interaction.selectable_labels {
+        ctx.all_styles_mut(|s| {
+            s.interaction.selectable_labels = false;
+            s.visuals.interact_cursor = Some(egui::CursorIcon::PointingHand);
+        });
+    }
+}
+
+/// "Copy" under an Agent's answer: the whole text to the clipboard
+/// (Nick, 2026-11-05: selecting in the page's canvas is not enough).
+pub fn copy_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let r = ui
+        .small_button("Copy")
+        .on_hover_text("Copies the whole answer to the clipboard.");
+    if r.clicked() {
+        ui.ctx().copy_text(text.to_string());
+    }
+    r
+}
+
+/// Last in a frame: the finger over any enabled widget the pointer is on
+/// that takes a click and is not dragged (a row, a checkbox, a combo box,
+/// a tab, a fold arrow), unless a widget chose its own cursor (a text
+/// field's I-beam, a slider's arrows, a panel edge's resize). A widget
+/// that drags (the diagram, a slider) keeps its own.
+pub fn pointer_cursor(ctx: &egui::Context) {
+    let clickable = ctx.viewport(|vp| {
+        vp.interact_widgets.hovered.iter().any(|id| {
+            vp.this_pass
+                .widgets
+                .get(*id)
+                .is_some_and(|w| w.enabled && w.sense.senses_click() && !w.sense.senses_drag())
+        })
+    });
+    if clickable && ctx.output(|o| o.cursor_icon) == egui::CursorIcon::Default {
+        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
 }
 
 #[cfg(test)]
