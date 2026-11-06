@@ -43,6 +43,32 @@ as one revision in the project's History together with the page it came
 from, after any edits of your own you had not saved (those are their own
 revision).
 
+## Checked before you see it
+
+In the simulation, when the Agent gives code it also writes one or more
+scenarios: short requirement tests, each stating in plain words what it
+checks, such as "the lamp stays off while start is not pressed". Before
+the answer is shown, the page takes the code into a copy of the project,
+compiles it, and runs the scenarios together with the project's own
+requirement tests. Under the answer each scenario is listed as passed.
+
+The code always comes back as the whole open file with the change made
+in it, even when you selected a few lines or picked a block. Nothing may
+be left out: an answer that skips part of the file, or writes "rest
+unchanged" where code should be, is not taken. Your selection still
+decides what may change, and a change to any line outside it is refused.
+
+If anything fails (a scenario, a requirement test, the compile, or the
+whole-file rule), the page sends the Agent what failed and lets it fix
+the answer, up to two more tries. An answer that still fails is shown in
+red with the reasons, and **Use this code** refuses it. An answer whose
+code comes without a scenario is asked for one once; if none comes it is
+shown with the note "Not checked by a scenario", and you may still use
+it. An explanation with no code needs no scenario.
+
+When you use a checked answer, its scenarios are kept as requirement
+tests and appear in the Requirements tab, each under its own words.
+
 ## One program, many iterations
 
 With a built-in example open (they are read-only), a program the Agent

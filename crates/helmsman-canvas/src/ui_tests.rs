@@ -741,6 +741,84 @@ END_PROGRAM",
         assert!(h.app.sim.as_ref().unwrap().chat.viewing().is_none());
     }
 
+    /// The answer's checks (`crate::verify`) in the Agent tab: green, red
+    /// with long reasons, and while a retry runs; the panels keep their
+    /// width throughout.
+    #[test]
+    fn the_answers_checks_show_in_the_agent_tab_and_leave_the_panels_their_width() {
+        use crate::claude::{Answer, Phase};
+        use crate::verify::{Check, Ran};
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        let code = "Here:\n```st\nPROGRAM p\nEND_PROGRAM\n```\n".to_string();
+        let long = "Scenario The lamp stays off while start is not pressed and the conveyor_infeed_photo_eye_blocked_for_too_long_alarm holds (test_lamp_off_while_start_is_not_pressed.st) failed: lamp off failed at 0.04 s".to_string();
+        let ran = |passed: bool| Ran {
+            file: "test_lamp_off.st".into(),
+            requirement: "The lamp stays off while start is not pressed.".into(),
+            passed,
+            why: String::new(),
+        };
+        let states = [
+            (
+                Check {
+                    code: true,
+                    scenarios: vec![ran(true)],
+                    tests_green: 1,
+                    ..Check::default()
+                },
+                "answer green",
+            ),
+            (
+                Check {
+                    code: true,
+                    failures: vec![long.clone(), long],
+                    ..Check::default()
+                },
+                "answer red",
+            ),
+            (
+                Check {
+                    code: true,
+                    ..Check::default()
+                },
+                "answer unchecked",
+            ),
+        ];
+        for (check, key) in states {
+            {
+                let v = h.app.sim.as_mut().unwrap();
+                let mut a = Answer::default();
+                a.text.clone_from(&code);
+                a.phase = Phase::Done;
+                v.chat.answer = Some(a);
+                v.chain = None;
+                v.live_check = Some((check, 2));
+            }
+            h.wait(0.2);
+            assert!(h.has(key), "{key}");
+            assert!(h.has("use code"));
+            assert!((h.rect("left").right() - left.right()).abs() <= 8.0, "{key}");
+            assert!((right.left() - h.rect("right").left()).abs() <= 8.0, "{key}");
+        }
+        // A retry under way: what failed, not the failed answer.
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.answer = Some(Answer::default());
+            v.chain = Some(crate::playground_view::Chain {
+                retries: 1,
+                problems: vec!["The code does not compile: 4:9: unknown variable STRAT".into()],
+                ..Default::default()
+            });
+        }
+        h.wait(0.2);
+        assert!(h.has("answer retrying"));
+        assert!(!h.has("use code"));
+        assert!((right.left() - h.rect("right").left()).abs() <= 8.0);
+    }
+
     #[test]
     fn the_third_tab_reads_agent() {
         assert_eq!(Tab::Claude.label(), "Agent");
