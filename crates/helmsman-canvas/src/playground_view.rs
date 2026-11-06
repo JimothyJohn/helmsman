@@ -1213,6 +1213,14 @@ impl PlaygroundView {
                 .collect();
             self.devices_ui.plan_rename(&files);
         }
+        if let Some(crate::devices::DeviceAct::Delete(name)) =
+            self.devices_ui.delete_ui(&ui.ctx().clone(), chrome)
+            && let Some(t) = self.proj.files.get_mut(helmsman_project::IO_MAP)
+        {
+            *t = crate::device_form::remove_device(t, &name);
+            self.proj.note(format!("{name} deleted from io.map."), false);
+            self.edited(f64::NEG_INFINITY);
+        }
         if let Some(crate::devices::DeviceAct::Rename(plan)) =
             self.devices_ui.rename_ui(&ui.ctx().clone(), chrome)
         {
@@ -1630,7 +1638,12 @@ impl Body for PlaygroundView {
                 self.proj.open_file(helmsman_project::IO_MAP);
                 chrome.show_code();
             }
-            Some(crate::devices::DeviceAct::Add(_) | crate::devices::DeviceAct::Rename(_)) | None => {}
+            Some(
+                crate::devices::DeviceAct::Add(_)
+                | crate::devices::DeviceAct::Rename(_)
+                | crate::devices::DeviceAct::Delete(_),
+            )
+            | None => {}
         }
     }
 

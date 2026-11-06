@@ -131,7 +131,10 @@ label is drawn, the icon stands alone at a readable size.
   + Input and + Output for any other device. For each row, Program picks
   what the program does with it: one of its own variables, a new
   variable (declared in the program's `VAR_INPUT` or `VAR_OUTPUT`), or
-  wiring only. Double-click or right-click a wired signal to rename it:
+  wiring only. **Edit** beside a device opens the same form on it, its
+  settings and wired points filled in, and Save replaces it in io.map;
+  **Delete** asks, then takes the device and its inputs and outputs out
+  (the program's variables stay). Double-click or right-click a wired signal to rename it:
   the io.map line and every use in the program change together, listed
   before you confirm. One map may mix Modbus
   TCP and EtherNet/IP devices. The agent reads the same listing, network

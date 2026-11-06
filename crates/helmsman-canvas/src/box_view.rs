@@ -545,6 +545,17 @@ impl BoxView {
             let files = self.loaded_files();
             self.devices_ui.plan_rename(&files);
         }
+        if let Some(crate::devices::DeviceAct::Delete(name)) =
+            self.devices_ui.delete_ui(&ui.ctx().clone(), chrome)
+            && let Some(b) = self
+                .projects
+                .open
+                .as_mut()
+                .and_then(|o| o.bufs.get_mut(helmsman_project::IO_MAP))
+                .filter(|b| b.loaded)
+        {
+            b.text = crate::device_form::remove_device(&b.text, &name);
+        }
         if let Some(crate::devices::DeviceAct::Rename(plan)) =
             self.devices_ui.rename_ui(&ui.ctx().clone(), chrome)
             && let Some(o) = &mut self.projects.open
@@ -1439,7 +1450,12 @@ impl Body for BoxView {
                 self.projects.open_file(helmsman_project::IO_MAP);
                 chrome.show_code();
             }
-            Some(crate::devices::DeviceAct::Add(_) | crate::devices::DeviceAct::Rename(_)) | None => {}
+            Some(
+                crate::devices::DeviceAct::Add(_)
+                | crate::devices::DeviceAct::Rename(_)
+                | crate::devices::DeviceAct::Delete(_),
+            )
+            | None => {}
         }
     }
 

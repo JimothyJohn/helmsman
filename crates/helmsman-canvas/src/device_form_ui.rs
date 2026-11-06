@@ -38,9 +38,10 @@ impl DevicesUi {
             // its content moves Add under the pointer as fields change.
             ui.set_min_width(WIDTH);
             ui.set_max_width(WIDTH);
-            let title = match &d.eds {
-                Some(f) => format!("New device from {f}"),
-                None => "New device".to_string(),
+            let title = match (&d.editing, &d.eds) {
+                (Some(n), _) => format!("Edit {n}"),
+                (None, Some(f)) => format!("New device from {f}"),
+                (None, None) => "New device".to_string(),
             };
             ui.label(RichText::new(title).strong().size(20.0));
             ui.add_space(8.0);
@@ -55,18 +56,39 @@ impl DevicesUi {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
+                let (word, tip) = if d.editing.is_some() {
+                    ("Save", "Replaces the device's line and its inputs and outputs in io.map with these, and adds any new variables to the program.")
+                } else {
+                    ("Add", "Adds the device and the ticked inputs and outputs to io.map, and any new variables to the program.")
+                };
                 let ok = ui
-                    .add(egui::Button::new(RichText::new("Add").strong()).min_size(tall))
-                    .tip("Adds the device and the ticked inputs and outputs to io.map, and any new variables to the program.");
+                    .add(egui::Button::new(RichText::new(word).strong()).min_size(tall))
+                    .tip(tip);
                 chrome.hit("device ok", ok.rect);
                 let no = ui
                     .add(egui::Button::new("Cancel").min_size(tall))
                     .tip("Closes the form. Nothing is added.");
                 chrome.hit("device cancel", no.rect);
                 if ok.clicked() {
+                    // An edit's own lines are not "wired already".
+                    let map = match &d.editing {
+                        Some(old) => device_form::map_without(&self.map, old),
+                        None => self.map.clone(),
+                    };
+                    let taken = map.devices.iter().any(|x| x.name.eq_ignore_ascii_case(&d.name));
                     let w = check_settings(d.driver(), &d.params)
-                        .and_then(|()| d.line())
-                        .and_then(|line| device_form::wiring(&d.name, line, &d.points, &program, &self.map));
+                        .and_then(|()| {
+                            if taken {
+                                Err(format!("A device called {} is in io.map already.", d.name))
+                            } else {
+                                d.line()
+                            }
+                        })
+                        .and_then(|line| device_form::wiring(&d.name, line, &d.points, &program, &map))
+                        .map(|mut w| {
+                            w.replaces.clone_from(&d.editing);
+                            w
+                        });
                     match w {
                         Ok(w) => {
                             out = Some(DeviceAct::Add(w));
@@ -151,6 +173,49 @@ impl DevicesUi {
             self.rename_plan = None;
         } else {
             self.renaming = Some((old, text));
+        }
+        out
+    }
+
+    /// The Delete question on a device. Returns the device to delete once
+    /// Delete is pressed.
+    pub fn delete_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<DeviceAct> {
+        let name = self.deleting.clone()?;
+        let n = self.map.signals.iter().filter(|s| s.device == name).count();
+        let mut out = None;
+        let mut done = false;
+        let m = egui::Modal::new(egui::Id::unique("device-delete")).show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            ui.label(RichText::new(format!("Delete {name}?")).strong().size(20.0));
+            ui.add_space(8.0);
+            ui.add(
+                egui::Label::new(format!(
+                    "Takes its line and its {n} input and output line(s) out of io.map. The program's variables stay; wire them to another device or the box's own channels."
+                ))
+                .wrap(),
+            );
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let ok = ui
+                    .add(egui::Button::new(RichText::new("Delete").strong().color(RED)).min_size(tall))
+                    .tip("Deletes the lines. Save keeps the change; Deploy runs it.");
+                chrome.hit("delete ok", ok.rect);
+                let no = ui
+                    .add(egui::Button::new("Cancel").min_size(tall))
+                    .tip("Keeps the device.");
+                chrome.hit("delete cancel", no.rect);
+                if ok.clicked() {
+                    out = Some(DeviceAct::Delete(name.clone()));
+                    done = true;
+                } else if no.clicked() {
+                    done = true;
+                }
+            });
+        });
+        chrome.hit("delete form", m.response.rect);
+        if done || m.should_close() {
+            self.deleting = None;
         }
         out
     }

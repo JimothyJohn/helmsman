@@ -1606,6 +1606,118 @@ mod chrome {
         );
     }
 
+    /// Nick, 2026-11-05: "I need the ability to delete devices. The one on
+    /// there is the old version and I can't seem to edit it." Edit opens a
+    /// device's form from its line (an old E1213 gets its profile) and
+    /// Save replaces it in place; Delete asks, then takes the device and
+    /// its signals out, the program's other lines kept.
+    #[test]
+    fn a_device_is_edited_in_its_form_and_deleted_after_a_question() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("mine", None);
+            sim.proj.add_file(
+                "io.map",
+                "out lamp bool box do:0 safe=false\ndevice e1213 enip-io cip=991:515:0x00e12130 rpi_ms=100 poll_ms=20\nin  run bool e1213 di:0\n"
+                    .into(),
+            );
+        }
+        h.press("pane devices");
+        h.wait(0.2);
+        assert!(
+            h.has("edit device e1213") && h.has("delete device e1213"),
+            "visible, not only a right-click"
+        );
+        assert!(
+            !h.has("edit device box"),
+            "the box's own channels are not a device to edit"
+        );
+        h.press("edit device e1213");
+        h.wait(0.3);
+        assert!(h.has("device form"));
+        let d = h.app.sim.as_ref().unwrap().devices_ui.adding.clone().unwrap();
+        assert_eq!(d.editing.as_deref(), Some("e1213"));
+        assert!(d.params.contains("profile=moxa-e1213"), "{}", d.params);
+        assert_eq!(d.points.iter().filter(|r| r.on).count(), 1, "run on DI-00");
+        // Tick DO-00 for the lamp (the program's own), then Save.
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .devices_ui
+            .adding
+            .as_mut()
+            .unwrap()
+            .points[12]
+            .use_ = crate::device_form::Use::Existing("lamp".into());
+        {
+            let r = &mut h
+                .app
+                .sim
+                .as_mut()
+                .unwrap()
+                .devices_ui
+                .adding
+                .as_mut()
+                .unwrap()
+                .points[12];
+            r.on = true;
+            r.name = "lamp".into();
+        }
+        h.wait(0.2);
+        h.press("device ok");
+        h.wait(0.3);
+        assert!(
+            !h.has("device form"),
+            "{:?}",
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .devices_ui
+                .adding
+                .as_ref()
+                .map(|d| &d.error)
+        );
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert_eq!(
+            map.matches("device e1213").count(),
+            1,
+            "replaced, not added again: {map}"
+        );
+        assert!(
+            map.contains(
+                "device e1213 enip-io cip=991:515:0x00e12130 rpi_ms=100 poll_ms=20 profile=moxa-e1213\n"
+            ),
+            "{map}"
+        );
+        assert!(
+            map.contains("in  run bool e1213 di:0\n")
+                && map.contains("out lamp bool e1213 do:0 safe=false\n"),
+            "{map}"
+        );
+        assert!(!map.contains("box do:0"), "{map}");
+        // Delete: asks, then the device and its lines are gone.
+        h.press("delete device e1213");
+        h.wait(0.2);
+        assert!(h.has("delete form"));
+        h.press("delete cancel");
+        h.wait(0.2);
+        assert!(
+            h.app.sim.as_ref().unwrap().proj.files["io.map"].contains("device e1213"),
+            "Cancel keeps it"
+        );
+        h.right_click(h.rect("device e1213").center());
+        h.press("menu delete device");
+        h.wait(0.2);
+        h.press("delete ok");
+        h.wait(0.3);
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(!map.contains("e1213"), "{map}");
+        assert!(!h.has("device e1213"));
+    }
+
     /// The library's match fills the form's name and profile in.
     #[test]
     fn a_library_match_names_the_device_and_its_profile() {

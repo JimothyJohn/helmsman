@@ -443,6 +443,8 @@ pub struct Wiring {
     pub replace: Vec<String>,
     /// New variables: direction, name, type.
     pub declare: Vec<(Dir, String, SigTy)>,
+    /// Edit: the device this one replaces, its line and its signals'.
+    pub replaces: Option<String>,
 }
 
 impl Wiring {
@@ -481,6 +483,7 @@ pub fn wiring(
         signals: Vec::new(),
         replace: Vec::new(),
         declare: Vec::new(),
+        replaces: None,
     };
     let mut seen: Vec<String> = Vec::new();
     for r in rows.iter().filter(|r| r.on) {
@@ -546,6 +549,8 @@ pub fn wiring(
 /// its signals added at the end.
 #[must_use]
 pub fn apply_map(map: &str, w: &Wiring) -> String {
+    let edited = w.replaces.as_deref().map(|d| remove_device(map, d));
+    let map = edited.as_deref().unwrap_or(map);
     let mut out = String::new();
     for line in map.lines() {
         let t: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
@@ -565,6 +570,119 @@ pub fn apply_map(map: &str, w: &Wiring) -> String {
         out.push('\n');
     }
     out
+}
+
+/// `map` without device `name`: its `device` line and every signal on it.
+/// Comments, blank lines and everything else stay as they were.
+#[must_use]
+pub fn remove_device(map: &str, name: &str) -> String {
+    let mut out = String::with_capacity(map.len());
+    for line in map.split_inclusive('\n') {
+        let t: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        let gone = match t.as_slice() {
+            ["device", d, ..] => d.eq_ignore_ascii_case(name),
+            [dir, _, _, d, ..] if *dir == "in" || *dir == "out" => d.eq_ignore_ascii_case(name),
+            _ => false,
+        };
+        if !gone {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// The map without `device`'s signals, for checking an edit's rows (they
+/// are the device's own, not wired elsewhere), and without the device.
+#[must_use]
+pub fn map_without(map: &MapText, device: &str) -> MapText {
+    let mut m = map.clone();
+    m.devices.retain(|d| !d.name.eq_ignore_ascii_case(device));
+    m.signals.retain(|s| !s.device.eq_ignore_ascii_case(device));
+    m
+}
+
+impl crate::devices::NewDevice {
+    /// The form for device `name` as `map` has it, to edit: its settings,
+    /// and its signals as rows (on a known device, ticked on their
+    /// channels; else rows of their own), each the program's variable
+    /// when it has one of that name. `None` for a driver the form does not
+    /// offer (edit those in io.map) or a device the map does not declare.
+    #[must_use]
+    pub fn from_map(map: &MapText, name: &str, ports: &[Port]) -> Option<Self> {
+        use crate::devices::PROTOCOLS;
+        let dev = map.devices.iter().find(|d| d.name == name)?;
+        let protocol = PROTOCOLS.iter().position(|p| p.0 == dev.driver)?;
+        let mut params: String = dev
+            .params
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let (vendor, product) = dev
+            .endpoint
+            .strip_prefix("cip=")
+            .map(|c| {
+                let mut it = c.split(':').map(|x| x.parse::<u16>().unwrap_or(0));
+                (it.next().unwrap_or(0), it.next().unwrap_or(0))
+            })
+            .unwrap_or_default();
+        let known_profile = param(&params, "profile") == Some("moxa-e1213");
+        let catalog = if known_profile {
+            Some(Catalog::E1213)
+        } else {
+            Catalog::identify(vendor, product, &dev.name)
+        };
+        // An E1213 on EtherNet/IP added before the form knew profiles.
+        if catalog.is_some()
+            && dev.driver == "enip-io"
+            && param(&params, "profile").is_none()
+            && param(&params, "eds").is_none()
+        {
+            params = set_param(&params, "profile", "moxa-e1213");
+        }
+        let mut points = catalog.map(|c| c.rows(&dev.driver)).unwrap_or_default();
+        let mut extra = 0;
+        for s in map.signals.iter().filter(|s| s.device == dev.name) {
+            let dir = if s.dir == "out" { Dir::Out } else { Dir::In };
+            let ty = match s.ty.to_ascii_lowercase().as_str() {
+                "int" => SigTy::Int,
+                "real" => SigTy::Real,
+                _ => SigTy::Bool,
+            };
+            let use_ = if ports.iter().any(|p| p.name.eq_ignore_ascii_case(&s.name)) {
+                Use::Existing(s.name.to_ascii_lowercase())
+            } else {
+                Use::Wiring
+            };
+            if let Some(r) = points
+                .iter_mut()
+                .find(|r| r.fixed && !r.on && r.dir == dir && r.point == s.point)
+            {
+                r.on = true;
+                r.name.clone_from(&s.name);
+                r.use_ = use_;
+            } else {
+                let mut r = PointRow::custom(dir, extra);
+                extra += 1;
+                r.name.clone_from(&s.name);
+                r.ty = ty;
+                r.point.clone_from(&s.point);
+                r.use_ = use_;
+                points.push(r);
+            }
+        }
+        Some(Self {
+            name: dev.name.clone(),
+            protocol,
+            endpoint: dev.endpoint.clone(),
+            eds: param(&params, "eds").map(str::to_string),
+            params,
+            error: None,
+            points,
+            catalog,
+            editing: Some(dev.name.clone()),
+        })
+    }
 }
 
 /// `src` with `name : TYPE;` declared in its program's first section for
@@ -925,6 +1043,71 @@ mod tests {
         assert!(rename_plan(&files, "nothing", "x").is_err());
         // Only the case: allowed.
         assert!(rename_plan(&files, "start", "Start").is_ok());
+    }
+
+    #[test]
+    fn delete_takes_the_device_and_its_signals_and_nothing_else() {
+        let map = "# bench\ndevice e1213 enip-io 10.0.0.57 profile=moxa-e1213\nin  start bool e1213 di:0\nout lamp bool box do:0 safe=false\nout motor bool E1213 do:0 # caps\n\ndevice rio modbus-tcp 10.0.0.9 unit=1\nin  e1213x bool rio di:3\n";
+        let out = remove_device(map, "e1213");
+        assert_eq!(
+            out,
+            "# bench\nout lamp bool box do:0 safe=false\n\ndevice rio modbus-tcp 10.0.0.9 unit=1\nin  e1213x bool rio di:3\n"
+        );
+        assert_eq!(remove_device(map, "nothing"), map);
+        assert_eq!(remove_device("", "x"), "");
+    }
+
+    #[test]
+    fn edit_reads_an_old_e1213_back_into_the_form_and_saves_in_place() {
+        use crate::devices::NewDevice;
+        // As #237 wrote it: no profile, the program's start on DI-00, a
+        // hand-made counter row.
+        let text = "in  stop bool box di:1\ndevice e1213 enip-io cip=991:515:0x00e12130 rpi_ms=100 poll_ms=20\nin  start bool e1213 di:0\nin  parts int e1213 in:2:u32\n";
+        let map = skim(text);
+        let ports = ports_of(LATCH);
+        let d = NewDevice::from_map(&map, "e1213", &ports).unwrap();
+        assert_eq!(d.editing.as_deref(), Some("e1213"));
+        assert_eq!(d.catalog, Some(Catalog::E1213), "known by its identity");
+        assert_eq!(
+            d.params, "rpi_ms=100 poll_ms=20 profile=moxa-e1213",
+            "the profile it lacked"
+        );
+        assert_eq!(check_settings(d.driver(), &d.params), Ok(()));
+        let on: Vec<(&str, &str)> = d
+            .points
+            .iter()
+            .filter(|r| r.on)
+            .map(|r| (r.name.as_str(), r.point.as_str()))
+            .collect();
+        assert_eq!(on, [("start", "di:0"), ("parts", "in:2:u32")]);
+        assert_eq!(d.points[0].use_, Use::Existing("start".into()));
+        assert_eq!(
+            d.points.last().unwrap().use_,
+            Use::Wiring,
+            "parts is not a program variable"
+        );
+        // Save: rename it and add stop; the old lines go, the new ones come.
+        let mut rows = d.points.clone();
+        rows[1].on = true;
+        rows[1].name = "stop".into();
+        rows[1].use_ = Use::Existing("stop".into());
+        let mut w = wiring(
+            "rio",
+            "device rio enip-io 10.0.0.57 profile=moxa-e1213\n".into(),
+            &rows,
+            &ports,
+            &map_without(&map, "e1213"),
+        )
+        .unwrap();
+        w.replaces = Some("e1213".into());
+        let out = apply_map(text, &w);
+        assert!(!out.contains("device e1213") && !out.contains(" e1213 "), "{out}");
+        assert!(out.contains("device rio enip-io 10.0.0.57 profile=moxa-e1213\nin  start bool rio di:0\nin  stop bool rio di:1\n"), "{out}");
+        assert!(!out.contains("box di:1"), "stop moved off the box: {out}");
+        assert!(out.contains("in  parts int rio in:2:u32\n"), "{out}");
+        assert_eq!(skim(&out).odd, 0, "{out}");
+        // A driver the form does not offer is not edited here.
+        assert!(NewDevice::from_map(&skim("device plc logix-tag 10.0.0.2\n"), "plc", &ports).is_none());
     }
 
     #[test]

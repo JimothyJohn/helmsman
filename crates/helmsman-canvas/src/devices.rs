@@ -222,6 +222,8 @@ pub struct NewDevice {
     pub points: Vec<PointRow>,
     /// A device the form knows the channels of.
     pub catalog: Option<Catalog>,
+    /// Edit: the name the device has in the map now (Save replaces it).
+    pub editing: Option<String>,
 }
 
 impl Default for NewDevice {
@@ -235,6 +237,7 @@ impl Default for NewDevice {
             eds: None,
             points: Vec::new(),
             catalog: None,
+            editing: None,
         }
     }
 }
@@ -296,6 +299,7 @@ impl NewDevice {
             eds: Some(file.to_string()),
             points: catalog.map(|c| c.rows("enip-io")).unwrap_or_default(),
             catalog,
+            editing: None,
         }
     }
 
@@ -365,6 +369,8 @@ pub enum DeviceAct {
     Add(Wiring),
     /// Rename a wired signal in io.map and the ST.
     Rename(RenamePlan),
+    /// Take a device and its signals out of the map.
+    Delete(String),
     /// Scan the network (the box: one `ListIdentity` sweep; the
     /// simulation: its simulated E1213).
     Scan,
@@ -565,6 +571,7 @@ impl NewDevice {
             eds: None,
             points: catalog.map(|c| c.rows("enip-io")).unwrap_or_default(),
             catalog,
+            editing: None,
         }
     }
 }
@@ -634,6 +641,8 @@ pub struct DevicesUi {
     pub renaming: Option<(String, String)>,
     /// What that rename changes (the view works it out each frame).
     pub rename_plan: Option<Result<RenamePlan, String>>,
+    /// The Delete question on a device: its name.
+    pub deleting: Option<String>,
 }
 
 impl DevicesUi {
@@ -763,19 +772,82 @@ impl DevicesUi {
                 _ => String::new(),
             };
             let head = format!("{arrow} {}  {} {}{found}", n.name, n.driver, n.endpoint);
+            // A device the map declares: Edit and Delete beside its name
+            // (the box, the screen and other modules are not devices to edit).
+            let declared = self.map.devices.iter().any(|d| d.name == n.name);
+            let editable = crate::devices::NewDevice::from_map(&self.map, &n.name, &self.program);
+            let mut asked = (false, false);
             let r = ui.horizontal(|ui| {
                 ui.label(dot);
-                ui.add(
-                    egui::Label::new(RichText::new(head).monospace().strong())
-                        .truncate()
-                        .sense(Sense::click()),
-                )
+                let room = if declared {
+                    (ui.available_width() - 130.0).max(40.0)
+                } else {
+                    ui.available_width()
+                };
+                let l = ui
+                    .scope(|ui| {
+                        ui.set_max_width(room);
+                        ui.add(
+                            egui::Label::new(RichText::new(head).monospace().strong())
+                                .truncate()
+                                .sense(Sense::click()),
+                        )
+                    })
+                    .inner;
+                if declared {
+                    let edit_tip = match (write, &editable) {
+                        (Err(why), _) => why.clone(),
+                        (Ok(()), None) => "This form edits Modbus TCP and EtherNet/IP devices: change this one in io.map.".to_string(),
+                        (Ok(()), Some(_)) => "Opens the device's form: its settings, and its inputs and outputs to tick, name or add.".to_string(),
+                    };
+                    let e = ui
+                        .add_enabled(write.is_ok() && editable.is_some(), egui::Button::new("Edit").small())
+                        .tip(edit_tip);
+                    chrome.hit(format!("edit device {}", n.name), e.rect);
+                    let d = ui
+                        .add_enabled(write.is_ok(), egui::Button::new("Delete").small())
+                        .tip(write.as_ref().err().map_or(
+                            "Takes the device and its inputs and outputs out of io.map. Asks first.",
+                            String::as_str,
+                        ));
+                    chrome.hit(format!("delete device {}", n.name), d.rect);
+                    asked = (e.clicked(), d.clicked());
+                }
+                l
             });
             let r = r.inner;
             chrome.hit(format!("device {}", n.name), r.rect);
+            if declared {
+                r.context_menu(|ui| {
+                    asked.0 |= menu_item(
+                        ui,
+                        chrome,
+                        "menu edit device",
+                        "Edit device…",
+                        write.is_ok() && editable.is_some(),
+                        "Opens the device's form.",
+                    );
+                    asked.1 |= menu_item(
+                        ui,
+                        chrome,
+                        "menu delete device",
+                        "Delete device…",
+                        write.is_ok(),
+                        "Takes the device and its inputs and outputs out of io.map. Asks first.",
+                    );
+                });
+            }
+            if asked.0
+                && let Some(d) = editable
+            {
+                self.adding = Some(d);
+            }
+            if asked.1 && write.is_ok() {
+                self.deleting = Some(n.name.clone());
+            }
             let params: Vec<String> = n.params.iter().map(|(k, v)| format!("{k}={v}")).collect();
             let mut hover = format!(
-                "{}\n{}\n{} point(s). Click to fold or unfold them.",
+                "{}\n{}\n{} point(s). Click to fold or unfold them; right-click to edit or delete.",
                 state_text(&n.state),
                 if params.is_empty() {
                     "no settings".to_string()
