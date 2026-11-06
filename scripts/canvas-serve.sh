@@ -26,4 +26,15 @@ trap 'kill "$watch" 2>/dev/null; wait "$watch" 2>/dev/null || true' EXIT
 # The first build must land before the page is worth serving.
 until [ -f "$dist/index.html" ]; do sleep 1; done
 echo "serving $dist on http://0.0.0.0:$port/ (from the Air: http://10.0.0.41:$port/?playground)"
-exec /usr/bin/python3 -m http.server "$port" --bind 0.0.0.0 --directory "$dist"
+# No caching: http.server sends no Cache-Control, so a browser kept serving
+# an old index.html (and with it the old build) after a rebuild.
+exec /usr/bin/python3 -I -c '
+import functools, http.server, sys
+class NoStore(http.server.SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+port, root = int(sys.argv[1]), sys.argv[2]
+handler = functools.partial(NoStore, directory=root)
+http.server.ThreadingHTTPServer(("0.0.0.0", port), handler).serve_forever()
+' "$port" "$dist"
