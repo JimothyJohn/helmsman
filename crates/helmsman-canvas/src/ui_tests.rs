@@ -1466,7 +1466,13 @@ mod chrome {
             ),
             "{map}"
         );
-        // Scan again: now the map binds it.
+        // Wired at once, with no second scan (it offered Use this device
+        // again until a rescan, 2026-11-05).
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().devices_ui.found[0].mapped.as_deref(),
+            Some("e1213")
+        );
+        assert!(!h.has("use network 192.168.127.254"));
         h.press("devices scan");
         h.wait(0.3);
         assert_eq!(

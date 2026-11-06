@@ -426,6 +426,9 @@ pub struct Found {
     pub library: Option<LibraryHit>,
     /// The simulation's stand-in, not a device on the wire.
     pub simulated: bool,
+    /// The map device the box said binds it (its running map), when the
+    /// page's own map cannot tell.
+    pub reported: Option<String>,
 }
 
 impl Found {
@@ -445,6 +448,7 @@ impl Found {
             mapped: None,
             library: None,
             simulated: true,
+            reported: None,
         };
         f.mapped = mapped_in(map, &f);
         f
@@ -499,6 +503,7 @@ impl Found {
                 mapped: d.get("mapped").and_then(text),
                 library,
                 simulated: false,
+                reported: d.get("mapped").and_then(text),
             });
         }
         let note = j.get("library").and_then(|l| l.get("unavailable")).and_then(text);
@@ -731,6 +736,13 @@ impl DevicesUi {
         let t = theme(ui);
         let mut act = None;
         ui.set_max_width(ui.available_width());
+        // Whether the map wires each found device, against the map as it is
+        // now, not as it was at the scan (an Add or a Delete changes it).
+        for f in &mut self.found {
+            let names =
+                |n: &String| self.map.devices.is_empty() || self.map.devices.iter().any(|d| &d.name == n);
+            f.mapped = mapped_in(&self.map, f).or_else(|| f.reported.clone().filter(names));
+        }
         // Where the wiring lives: the project's io.map, one click away.
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("I/O wiring").strong().color(t.muted)).tip(
