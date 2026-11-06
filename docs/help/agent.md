@@ -40,6 +40,17 @@ touched.
 The scenarios of a change that is written are kept as requirement tests
 and appear in the Requirements tab, each under its own words.
 
+When an instruction changes behaviour that an existing requirement test
+checks ("the motor runs only while start is held" against a test that
+says it latches), the Agent replaces that test with one stating the new
+requirement. The replacement has to pass like any scenario, every other
+test still has to, and the status line names it:
+
+> Updated main.st: 1 scenario passed, kept as a test; changed requirement
+> test_latch: the motor runs while start is held.
+
+The test as it was stays in History, and Undo puts both back.
+
 ## History and Undo
 
 Every change the Agent writes is saved as one revision in the project's

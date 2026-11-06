@@ -579,8 +579,8 @@ impl BoxProjects {
 
     /// The Agent's checked change (`crate::instruct`): `text` into `file`,
     /// saved with the version it was read as and with `page`, the change's
-    /// History entry; then each scenario it passed as a new requirement
-    /// test file. The box makes each save a revision.
+    /// History entry; then each scenario it passed as a requirement test
+    /// file (new, or the test it replaces). The box makes each save a revision.
     pub fn save_agent(&mut self, file: &str, text: &str, page: &str, tests: &[(String, String)]) {
         let Some(o) = &mut self.open else { return };
         let project = o.name.clone();
@@ -605,6 +605,9 @@ impl BoxProjects {
         // that name is there), held here as it is sent, the editor left on
         // the file the Agent changed.
         for (f, t) in tests {
+            // A test the change replaces goes with the version it was read
+            // as; a new one only if no file of that name is there.
+            let version = o.bufs.get(f).filter(|b| b.loaded).and_then(|b| b.version.clone());
             o.bufs.insert(
                 f.clone(),
                 Buf {
@@ -621,7 +624,7 @@ impl BoxProjects {
                 },
                 "PUT",
                 file_url(&project, f),
-                &json!({ "text": t, "version": null }),
+                &json!({ "text": t, "version": version }),
             ));
         }
         self.conflict = None;

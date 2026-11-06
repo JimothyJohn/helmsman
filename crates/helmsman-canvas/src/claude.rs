@@ -245,6 +245,28 @@ pub fn user_message(ctx: &Context<'_>) -> String {
     m
 }
 
+/// The project's requirement tests as data for the Agent: each file's
+/// name and text in one `<requirement_tests>` envelope; empty when there
+/// are none.
+#[must_use]
+pub fn tests_envelope<'a>(tests: impl IntoIterator<Item = (&'a str, &'a str)>) -> String {
+    let mut body = String::new();
+    for (name, text) in tests {
+        body.push_str("=== ");
+        body.push_str(name);
+        body.push('\n');
+        body.push_str(text.trim_end());
+        body.push('\n');
+    }
+    if body.is_empty() {
+        return body;
+    }
+    format!(
+        "\n<requirement_tests>\n{}</requirement_tests>",
+        neutralize(&body, "requirement_tests")
+    )
+}
+
 /// `text` on one line: every run of white space one space.
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
@@ -790,8 +812,9 @@ How to answer:
 - Rule 1, the whole file: give the WHOLE file the scope names, every line of it, with your edits made in place, in the one ```st block. Never a fragment, and never leave anything out: no "...", no "(* rest unchanged *)", no "same as before". The page checks that every POU of the file is there with its header and its END_ line, and refuses code that is not the whole file.
 - Rule 2, edits only in the highlight: for lines or a block, the <edit_scope> gives those lines under "section:" and the whole file under "text:". Change only the section; every line outside it must come back exactly as it is, byte for byte.
 - For a new project, give one complete program (every declaration, from PROGRAM to END_PROGRAM, with any FUNCTION_BLOCKs it needs) in the ```st block.
-- Scenarios: give one or more scenarios that prove the change does what was asked, each in its own fenced block marked ```st scenario after the code. A scenario is a requirement test. Its first line is a comment that says in plain words what it checks, for the engineer to read (`(* The lamp comes on within 2 s of start. *)`); then one PROGRAM test_<name>, the name in lower case a-z, 0-9 and _. The test and the program are scanned in lockstep on one simulated clock at the project's scan period: each scan the test runs first, its VAR_OUTPUTs are copied into the program's VAR_INPUTs of the same name, the program runs, and its VAR_OUTPUTs are copied into the test's VAR_INPUTs of the same name, so the test drives inputs by declaring them as its VAR_OUTPUTs, reads outputs by declaring them as its VAR_INPUTs, and what it reads is one scan old. A shared name must have the same type in both. Check with the ASSERT block (COND : BOOL in): declare one instance per check in the test's plain VAR section, named for the check (`lamp_on_in_time : ASSERT;`), and call it where the check applies (`lamp_on_in_time(COND := lamp);`); a call with COND FALSE fails the scenario. Declare `done : BOOL;` in its VAR_OUTPUT and set it TRUE once everything is checked, well within 120 s of simulated time. Time comes only from the scan clock: use TON, TOF or TP, or count scans. A scenario cannot read the program's internal variables. Test what was asked, nothing more, and never weaken a check to make the code pass.
+- Scenarios: give one or more scenarios that prove the change does what was asked, each in its own fenced block marked ```st scenario after the code. A scenario is a requirement test. Its first line is a comment that says in plain words what it checks, for the engineer to read (`(* The lamp comes on within 2 s of start. *)`); then one PROGRAM test_<name>, the name in lower case a-z, 0-9 and _. The test and the program are scanned in lockstep on one simulated clock at the project's scan period: each scan the test runs first, its VAR_OUTPUTs are copied into the program's VAR_INPUTs of the same name, the program runs, and its VAR_OUTPUTs are copied into the test's VAR_INPUTs of the same name, so the test drives inputs by declaring them as its VAR_OUTPUTs, reads outputs by declaring them as its VAR_INPUTs, and what it reads is one scan old. A shared name must have the same type in both. Check with the ASSERT block (COND : BOOL in): declare one instance per check in the test's plain VAR section, named for the check (`lamp_on_in_time : ASSERT;`), and call it where the check applies (`lamp_on_in_time(COND := lamp);`); a call with COND FALSE fails the scenario. Declare `done : BOOL;` in its VAR_OUTPUT and set it TRUE once everything is checked, well within 120 s of simulated time; if the program has an output named done of its own, read that one as the test's VAR_INPUT `done` and end with `test_done : BOOL;` in VAR_OUTPUT instead. Time comes only from the scan clock: use TON, TOF or TP, or count scans. A scenario cannot read the program's internal variables. Test what was asked, nothing more, and never weaken a check to make the code pass.
 - Before anything is written, the page takes your code into a copy of the project, adds your scenarios, compiles it, and runs your scenarios and the project's own requirement tests. If anything fails it sends you what failed; then answer again in full: the Why line, the whole file and its scenarios. Only an answer that passes is written into the file, and every scenario that passes is kept with the project as a requirement test.
+- <requirement_tests> holds the project's requirement tests, each under its file name. Every one must still pass with your code. When the instruction changes behaviour one of them checks, replace that test: send a scenario in a block marked ```st scenario replaces test_<name> (its name as listed) that states the new requirement and checks it. Replace only a test the instruction changes; never replace one to get past a failure the instruction does not ask for.
 - <earlier_instructions> lists the last instructions already carried out on this file, oldest first. The file does them now; keep them working unless the new instruction changes them. Words like "it", "that" or "faster" in the new instruction refer to them.
 - If the instruction cannot be done in this dialect, or you need one fact you cannot find in the file, send no code: one or two plain sentences that say why, or the one question to answer. They are shown to the engineer as they are.
 - If the program has compile errors (they come with the instruction), fix them in the same change.

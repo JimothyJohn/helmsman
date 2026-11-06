@@ -323,3 +323,90 @@ fn a_red_answer_goes_back_twice_and_code_without_a_scenario_once() {
     };
     assert_eq!(next(&green, 0, false), Next::Show);
 }
+
+/// The project's test, with the change that contradicts it: the lamp is
+/// now off while start is on.
+const INVERTED: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := NOT start;\nEND_PROGRAM\n";
+
+fn inverted_test() -> String {
+    "(* The lamp is off while start is on. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_off : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_off(COND := NOT lamp); done := TRUE; END_IF;\nEND_PROGRAM".into()
+}
+
+fn replacing(code: &str, block: &str, scen: &str) -> String {
+    format!(
+        "Why: the lamp is now off while start is on.\n\n```st\n{}\n```\n\n```{block}\n{scen}\n```\n",
+        code.trim_end()
+    )
+}
+
+#[test]
+fn a_scenario_marked_replaces_names_the_test_it_takes_the_place_of() {
+    use crate::verify::replaces;
+    assert_eq!(
+        replaces("st scenario replaces test_lamp").as_deref(),
+        Some("test_lamp.st")
+    );
+    assert_eq!(
+        replaces("st scenario replaces test_lamp.st").as_deref(),
+        Some("test_lamp.st")
+    );
+    assert_eq!(
+        replaces("st scenario REPLACES TEST_Lamp").as_deref(),
+        Some("test_lamp.st")
+    );
+    assert_eq!(replaces("st scenario"), None);
+    assert_eq!(replaces("st scenario replaces"), None);
+    // Only a test file name: never main.st or a path.
+    assert_eq!(replaces("st scenario replaces main"), None);
+    assert_eq!(replaces("st scenario replaces test_../main"), None);
+}
+
+/// Nick, 2026-11-05: kept scenarios are tests, so an instruction that
+/// changes their behaviour could never pass. The answer replaces the test
+/// it contradicts; it must pass, and the status line names it.
+#[test]
+fn a_test_the_instruction_contradicts_is_replaced_and_said_so() {
+    // Without the replacement: red, and the failure says how to replace it.
+    let plain = answer_with(INVERTED, &[inverted_test().replace("test_lamp", "test_inverted")]);
+    let c = check(&file(), &project(), &plain, settings());
+    assert!(c.red());
+    let p = c.problems().join("\n");
+    assert!(p.contains("Requirement test test_lamp is red"), "{p}");
+    assert!(p.contains("```st scenario replaces test_lamp"), "{p}");
+
+    // With it: green, the old test's file takes the new text.
+    let a = replacing(INVERTED, "st scenario replaces test_lamp", &inverted_test());
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.green(), "{:?}", c.problems());
+    assert_eq!(
+        c.replaced,
+        vec![(
+            "test_lamp.st".to_string(),
+            "The lamp is off while start is on.".to_string()
+        )]
+    );
+    assert_eq!(c.add.len(), 1);
+    assert_eq!(c.add[0].0, "test_lamp.st");
+    assert!(c.add[0].1.contains("NOT lamp"));
+    let s = crate::instruct::status("main.st", &c);
+    assert!(
+        s.contains("changed requirement test_lamp: The lamp is off while start is on."),
+        "{s}"
+    );
+
+    // The replacement must itself pass: one that checks the old behaviour
+    // against the new code is red.
+    let wrong = replacing(INVERTED, "st scenario replaces test_lamp", FOLLOWS.trim_end());
+    assert!(check(&file(), &project(), &wrong, settings()).red());
+
+    // A test the project does not have cannot be replaced.
+    let none = replacing(INVERTED, "st scenario replaces test_nope", &inverted_test());
+    let c = check(&file(), &project(), &none, settings());
+    assert!(
+        c.problems()
+            .iter()
+            .any(|p| p.contains("replaces test_nope, which the project does not have")),
+        "{:?}",
+        c.problems()
+    );
+}

@@ -548,7 +548,15 @@ mod in_the_page {
             ),
             "{user}"
         );
-        assert!(user.ends_with(&format!("text:\n{LAMP}</edit_scope>")), "{user}");
+        assert!(user.contains(&format!("text:\n{LAMP}</edit_scope>")), "{user}");
+        // The project's requirement tests go with it, each under its name.
+        assert!(
+            user.ends_with(&format!(
+                "<requirement_tests>\n=== test_lamp.st\n{}\n</requirement_tests>",
+                FOLLOWS.trim_end()
+            )),
+            "{user}"
+        );
         assert!(crate::claude::SYSTEM.contains("<edit_scope>"));
         let o = v.instruct.outcome.clone().unwrap();
         assert_eq!(o.kind, Kind::Said);
