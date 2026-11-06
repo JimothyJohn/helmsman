@@ -75,6 +75,12 @@ pub enum PCall {
         project: String,
         n: u32,
     },
+    /// `GET .../history/{n}` for its Agent page alone (the Agent tab's
+    /// earlier instructions, `crate::instruct::recent`).
+    Page {
+        project: String,
+        n: u32,
+    },
     /// `POST .../history/{n}/restore`.
     Restore {
         project: String,
@@ -299,6 +305,9 @@ pub struct BoxProjects {
     pub history: Vec<crate::history_ui::RevisionRow>,
     /// The revision on view (the History modal).
     pub revision: Option<crate::history_ui::RevisionView>,
+    /// The Agent pages of the open project's latest revisions that carry
+    /// one, by revision, as read (`PCall::Page`).
+    pub pages: BTreeMap<u32, String>,
     /// The running project's shared diagram layout, once read.
     pub layout: Option<SharedLayout>,
     /// A layout this page saved as the default, for the view to adopt.
@@ -418,6 +427,7 @@ impl BoxProjects {
         self.conflict = None;
         self.history.clear();
         self.revision = None;
+        self.pages.clear();
         self.queue
             .push(PReq::get(PCall::Project(name.into()), project_url(name)));
         self.read_history(name);
@@ -565,6 +575,65 @@ impl BoxProjects {
             },
             file_url(&project, file),
         ));
+    }
+
+    /// The Agent's checked change (`crate::instruct`): `text` into `file`,
+    /// saved with the version it was read as and with `page`, the change's
+    /// History entry; then each scenario it passed as a requirement test
+    /// file (new, or the test it replaces). The box makes each save a revision.
+    pub fn save_agent(&mut self, file: &str, text: &str, page: &str, tests: &[(String, String)]) {
+        let Some(o) = &mut self.open else { return };
+        let project = o.name.clone();
+        let b = o.bufs.entry(file.to_string()).or_default();
+        b.text = text.to_string();
+        b.saving = Some(b.text.clone());
+        let version = b.version.clone();
+        if !b.loaded {
+            b.loaded = true;
+        }
+        self.queue.push(PReq::json(
+            PCall::Save {
+                project: project.clone(),
+                file: file.to_string(),
+            },
+            "PUT",
+            file_url(&project, file),
+            &json!({ "text": text, "version": version, "page": page }),
+        ));
+        o.current = Some(file.to_string());
+        // Each scenario a new file (`version: null`: only if no file of
+        // that name is there), held here as it is sent, the editor left on
+        // the file the Agent changed.
+        for (f, t) in tests {
+            // A test the change replaces goes with the version it was read
+            // as; a new one only if no file of that name is there.
+            let version = o.bufs.get(f).filter(|b| b.loaded).and_then(|b| b.version.clone());
+            o.bufs.insert(
+                f.clone(),
+                Buf {
+                    text: t.clone(),
+                    saving: Some(t.clone()),
+                    loaded: true,
+                    ..Buf::default()
+                },
+            );
+            self.queue.push(PReq::json(
+                PCall::Save {
+                    project: project.clone(),
+                    file: f.clone(),
+                },
+                "PUT",
+                file_url(&project, f),
+                &json!({ "text": t, "version": version }),
+            ));
+        }
+        self.conflict = None;
+    }
+
+    /// The open project's Agent pages, oldest first, as read so far.
+    #[must_use]
+    pub fn agent_pages(&self) -> Vec<&str> {
+        self.pages.values().map(String::as_str).collect()
     }
 
     /// Saves every edited file, each with the version it was read as.
@@ -972,6 +1041,38 @@ impl BoxProjects {
                         .as_array()
                         .map(|a| a.iter().filter_map(revision_row).collect())
                         .unwrap_or_default();
+                    // The latest Agent pages, for the next instruction's
+                    // earlier ones (twice as many as it takes: some are
+                    // for other files).
+                    let want: Vec<u32> = self
+                        .history
+                        .iter()
+                        .rev()
+                        .filter(|r| r.page)
+                        .take(2 * crate::instruct::RECENT)
+                        .map(|r| r.n)
+                        .filter(|n| !self.pages.contains_key(n))
+                        .collect();
+                    for n in want {
+                        self.queue.push(PReq::get(
+                            PCall::Page {
+                                project: project.clone(),
+                                n,
+                            },
+                            format!("{}/history/{n}", project_url(&project)),
+                        ));
+                    }
+                }
+            }
+            PCall::Page { project, n } => {
+                if ok
+                    && self.open.as_ref().is_some_and(|o| o.name == project)
+                    && let Some(page) = j["page"].as_str()
+                {
+                    self.pages.insert(n, page.to_string());
+                    while self.pages.len() > 4 * crate::instruct::RECENT {
+                        self.pages.pop_first();
+                    }
                 }
             }
             PCall::Revision { project, n } => {

@@ -299,11 +299,12 @@ impl BoxTrend {
         ui.horizontal_wrapped(|ui| {
             for s in &state.signals {
                 let on = self.pins.contains(&s.name);
-                let r = ui.selectable_label(on, s.name.to_ascii_lowercase()).tip(if on {
-                    "On the trend. Click to take it off."
-                } else {
-                    "Click to pin it to the trend."
-                });
+                let r =
+                    crate::theme::tab(ui, on, &s.name.to_ascii_lowercase(), egui::Vec2::ZERO).tip(if on {
+                        "On the trend. Click to take it off."
+                    } else {
+                        "Click to pin it to the trend."
+                    });
                 chrome.hit(format!("pin {}", s.name), r.rect);
                 if r.clicked() {
                     flip = Some(s.name.clone());

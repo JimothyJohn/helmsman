@@ -11,7 +11,7 @@ use helmsman_diagram::Scan;
 use helmsman_iec::{Ty, Value};
 
 use crate::arrange::Layers;
-use crate::claude::{Chat, Model, Phase, Proxy, Request, Segment, segments};
+use crate::claude::{Chat, Model, Phase, Proxy, Request};
 use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
@@ -116,8 +116,6 @@ pub struct PlaygroundView {
     library: crate::web::TextFetch,
     /// A one-line note under the top bar (loaded an example, …).
     pub notice: Option<String>,
-    /// Why the last "Ask" could not be sent.
-    pub ask_error: Option<String>,
     /// The projects, kept in the browser's storage.
     pub proj: SimProjects,
     pub files_ui: FilesUi,
@@ -125,9 +123,17 @@ pub struct PlaygroundView {
     /// What `session.sensors` was bound from: the program running and the
     /// project's files, so a frame rebinds only after a change.
     sensors_from: Option<(String, Vec<(String, String)>)>,
-    /// The question "what is this program called?", asked once per
-    /// conversation before its first PROGRAM answer lands.
+    /// The question "what is this program called?", asked before the
+    /// first program the Agent writes from a built-in example lands.
     pub program_name: Option<ProgramName>,
+    /// The project the Agent's new programs land in, once named.
+    pub new_program: Option<String>,
+    /// The Agent tab (`crate::instruct`).
+    pub instruct: crate::instruct::Instruct,
+    /// The Agent's answer [`Self::settle`] last took.
+    answered_seq: u64,
+    /// A checked new program waiting for its project's name.
+    to_name: Option<crate::instruct::Apply>,
     /// The revision on view (the History modal).
     pub revision: Option<crate::history_ui::RevisionView>,
     /// The project's requirement tests, as last run in this page
@@ -144,20 +150,6 @@ pub struct PlaygroundView {
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
-    /// Why the last "Use this code" was refused, shown under the answer.
-    pub use_error: Option<String>,
-    /// The answer being checked and, while it is retried, what failed
-    /// (`crate::verify`); `None` once it settles.
-    pub chain: Option<Chain>,
-    /// How the live answer came out of its checks, once settled, and how
-    /// many retries it took.
-    pub live_check: Option<(crate::verify::Check, u8)>,
-    /// The answer [`Self::settle`] last looked at.
-    checked_seq: u64,
-    /// Checks of pages on view, by answer, scope and project.
-    check_cache: Vec<(u64, crate::verify::Check)>,
-    /// The scenarios a new project's code takes with it, once named.
-    pending_tests: Vec<(String, String)>,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -209,54 +201,29 @@ impl PlaygroundView {
             log: crate::messages::Log::default(),
             seen: Seen::default(),
             notice: None,
-            ask_error: None,
             proj,
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
             sensors_from: None,
             program_name: None,
+            new_program: None,
+            instruct: crate::instruct::Instruct::default(),
+            answered_seq: 0,
+            to_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
             req_ui: crate::requirements::ReqUi::default(),
             adding: None,
             req_seq: 1 << 40,
             selection: None,
-            use_error: None,
-            chain: None,
-            live_check: None,
-            checked_seq: 0,
-            check_cache: Vec::new(),
-            pending_tests: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
         v.session.set_running(true);
         v.proj.running = Some(v.proj.open.clone());
-        v.load_pages();
         v.sync_viewer();
         v.run_tests();
         v
-    }
-
-    /// The open project's Agent pages into the chat (a project opened).
-    fn load_pages(&mut self) {
-        let pages = self
-            .proj
-            .agent_text()
-            .map(helmsman_project::agent::parse)
-            .unwrap_or_default();
-        self.chat.load_pages(pages);
-    }
-
-    /// The chat's pages into the open project, when they changed: written
-    /// as they come, so a reload finds them.
-    fn save_pages(&mut self) {
-        if !self.chat.pages_dirty {
-            return;
-        }
-        self.chat.pages_dirty = false;
-        let text = helmsman_project::agent::render(&self.chat.pages());
-        self.proj.set_agent_text(&text);
     }
 
     /// How this page runs the project's requirement tests: the session's
@@ -321,9 +288,7 @@ impl PlaygroundView {
     /// an example that opens stopped looks dead); an edit still waits for
     /// Deploy.
     pub fn open_project(&mut self, name: &str) {
-        self.save_pages();
         self.proj.open_project(name);
-        self.load_pages();
         self.reload();
         self.notice = None;
         if self.session.build.as_ref().is_some_and(|b| b.module.is_some()) {
@@ -397,26 +362,30 @@ impl PlaygroundView {
                 if text.to_ascii_uppercase().contains("PROGRAM ") {
                     dropped = self.land_program(&name, text);
                     // The scenarios its answer passed, kept as its tests.
-                    for (f, t) in std::mem::take(&mut self.pending_tests) {
+                    let tests = self.to_name.as_ref().map(|a| a.tests.clone()).unwrap_or_default();
+                    for (f, t) in tests {
                         self.proj.files.insert(f, t);
                     }
                 } else {
-                    self.pending_tests.clear();
                     let file = self.proj.free_file(&format!("{name}.st"));
                     self.proj.new_file(&file);
                     if let Some(t) = self.proj.current_text_mut() {
                         *t = text;
                     }
                 }
-                // Recorded with the page that produced it.
-                let page = self
-                    .chat
-                    .history
-                    .last()
-                    .map(|e| format!("{}\n\n{}", e.question, e.answer));
-                let what = format!("took the Agent's answer into {}", self.proj.current);
-                self.proj.save_as(&what, page.as_deref());
+                // Recorded with the instruction that produced it.
+                let apply = self.to_name.take();
+                let what = apply.as_ref().map_or_else(
+                    || format!("took the Agent's answer into {}", self.proj.current),
+                    |a| format!("Agent: {}", a.instruction).chars().take(120).collect(),
+                );
+                self.proj
+                    .save_as(&what, apply.as_ref().map(|a| a.record.as_str()));
                 self.reload();
+                if let Some(a) = &apply {
+                    self.instruct.applied(a, None);
+                    self.log_outcome();
+                }
                 let size = if dropped > 0 {
                     format!(" {dropped} oldest iteration(s) dropped: the project was past its size.")
                 } else {
@@ -644,20 +613,50 @@ impl PlaygroundView {
         self.sensors_from = Some((src, files));
     }
 
-    /// Sends the typed question about the editor's program.
-    pub fn ask(&mut self, ctx: &egui::Context) {
-        let diags = self.session.diag_lines();
-        let devices = self.devices_text();
-        self.chat.edit_scope = self.scope().envelope(&self.proj.open, &self.proj.files);
-        self.use_error = None;
-        match self.chat.ask(&self.session.src, &diags, &devices) {
-            Ok((seq, req)) => {
-                self.ask_error = None;
-                self.chain = Some(Chain::default());
-                self.live_check = None;
-                self.link.send(seq, req, ctx);
-            }
-            Err(e) => self.ask_error = Some(e),
+    /// The project as the Agent sees it, in `scope`: what
+    /// [`crate::instruct`] checks an answer against.
+    fn agent_env(&self) -> (Vec<String>, String, helmsman_iec::spec::Settings) {
+        (
+            self.session.diag_lines(),
+            self.devices_text(),
+            self.test_settings(),
+        )
+    }
+
+    /// Sends the typed instruction about the file in scope, with the last
+    /// instructions carried out on that file (read from History).
+    pub fn send_instruction(&mut self, ctx: &egui::Context) {
+        if let Err(why) = self.chat.route() {
+            self.instruct.failed(why);
+            return;
+        }
+        let scope = self.scope();
+        let file = crate::instruct::target(&scope);
+        let earlier = crate::instruct::recent(
+            self.proj.revisions().iter().filter_map(|r| r.page.as_deref()),
+            &file,
+        );
+        let (diags, devices, settings) = self.agent_env();
+        let env = crate::instruct::Env {
+            project: &self.proj.open,
+            scope,
+            files: &self.proj.files,
+            source: &self.session.src,
+            diagnostics: &diags,
+            devices: &devices,
+            settings,
+        };
+        match self.instruct.start(&env, &earlier) {
+            Ok(ask) => self.send_ask(&ask, ctx),
+            Err(why) => self.instruct.failed(&why),
+        }
+    }
+
+    /// One request of the instruction under way, to the Agent.
+    fn send_ask(&mut self, ask: &crate::instruct::Ask, ctx: &egui::Context) {
+        match self.chat.send(&ask.message, &ask.context) {
+            Ok((seq, req)) => self.link.send(seq, req, ctx),
+            Err(why) => self.instruct.failed(&why),
         }
     }
 
@@ -780,9 +779,13 @@ impl PlaygroundView {
         true
     }
 
+    /// Stop: the answer under way is dropped and nothing is written.
     pub fn stop_answer(&mut self) {
         self.chat.stop();
         self.link.abort();
+        if self.instruct.busy() {
+            self.instruct.failed("stopped");
+        }
     }
 
     /// Loads the program in Claude's answer (never runs it).
@@ -818,35 +821,13 @@ impl PlaygroundView {
         });
     }
 
-    /// "Use this code" on the live answer: [`Self::use_page`] on the page
-    /// it made (card agent-scoped-edits: into the scope it was asked
-    /// with). Nothing runs until Deploy. Whether the answer had code.
-    pub fn use_answer(&mut self) -> bool {
-        let Some(a) = self.chat.answer.as_ref().filter(|a| a.phase == Phase::Done) else {
-            return false;
-        };
-        if !crate::verify::has_code(&a.text) {
-            return false;
-        }
-        let page = match self.chat.history.last() {
-            Some(p) if p.answer == a.text => p.clone(),
-            _ => crate::claude::Exchange {
-                answer: a.text.clone(),
-                ..Default::default()
-            },
-        };
-        self.use_page(&page);
-        true
-    }
-
-    /// The code into a new project (a PROGRAM, from a built-in example)
-    /// as before scopes (Nick, 2026-11-01). A PROGRAM goes to
-    /// the conversation's program (Nick, 2026-11-01: named once, asked
-    /// here the first time, see [`ProgramName`]); a block goes into the
-    /// open project as a file.
+    /// The code into a new project (a PROGRAM, from a built-in example).
+    /// A PROGRAM goes to the project named for the Agent's programs
+    /// (Nick, 2026-11-01: named once, asked here the first time, see
+    /// [`ProgramName`]); a block goes into the open project as a file.
     pub fn take_code(&mut self, code: String) {
         let is_program = code.to_ascii_uppercase().contains("PROGRAM ");
-        let name = match (&self.chat.program, is_program) {
+        let name = match (&self.new_program, is_program) {
             (Some(p), true) => p.clone(),
             (None, true) => {
                 // The PROGRAM's name to start from; past a built-in example's
@@ -904,7 +885,7 @@ impl PlaygroundView {
             self.program_name = Some(p);
             return;
         }
-        self.chat.program = Some(name.clone());
+        self.new_program = Some(name.clone());
         self.use_named(name, p.text);
     }
 
@@ -1029,244 +1010,147 @@ impl PlaygroundView {
         }
     }
 
-    /// "Use this code" on `page` (the live answer's, or an earlier one):
-    /// the answer taken into the scope its question went with (the scope
-    /// now, for a page older than scopes), or refused with what it tried
-    /// to touch. A new project goes the way it always has (named once
-    /// per conversation); anything else lands in the open project
-    /// through [`Self::land_scoped`].
-    pub fn use_page(&mut self, page: &crate::claude::Exchange) {
-        let scope = match self.page_scope(page) {
-            Ok(s) => s,
-            Err(why) => return self.refuse(&why),
-        };
-        // The page's checks first (`crate::verify`): a red answer is
-        // refused, a green one brings its scenarios.
-        let check = self.check_in(&scope, &page.answer);
-        if let Some(why) = check.refusal() {
-            return self.refuse(&why);
-        }
-        match crate::scope::apply(&scope, &self.proj.files, &page.answer) {
-            Err(r) => self.refuse(&r.why),
-            Ok(files) if scope == crate::scope::Scope::NewProject => {
-                self.use_error = None;
-                self.pending_tests = check.add;
-                if let Some(code) = files.get(helmsman_project::MAIN) {
-                    self.take_code(code.clone());
-                }
-            }
-            Ok(files) => {
-                self.pending_tests.clear();
-                self.land_scoped(&scope, &files, page, &check.add);
-            }
-        }
-    }
-
-    /// The scope `page`'s question went with: the scope now for a page
-    /// older than scopes (or one asked of an example), and why not when
-    /// it was asked in another project.
-    fn page_scope(&self, page: &crate::claude::Exchange) -> Result<crate::scope::Scope, String> {
-        match crate::scope::from_asked(&page.asked) {
-            _ if self.proj.is_example() => Ok(crate::scope::Scope::NewProject),
-            Some((_, crate::scope::Scope::NewProject)) | None => Ok(self.scope()),
-            Some((project, _)) if project != self.proj.open => Err(format!(
-                "This answer is for {project}; open it first, then use the code."
-            )),
-            Some((_, s)) => Ok(s),
-        }
-    }
-
-    /// `answer` checked in `scope` against the open project
-    /// ([`crate::verify::check`]), from the cache while the answer, the
-    /// scope and the project are the same.
-    fn check_in(&mut self, scope: &crate::scope::Scope, answer: &str) -> crate::verify::Check {
-        use std::hash::{Hash, Hasher};
-        let settings = self.test_settings();
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        answer.hash(&mut h);
-        format!("{scope:?}").hash(&mut h);
-        self.proj.open.hash(&mut h);
-        self.proj.files.hash(&mut h);
-        settings.period.hash(&mut h);
-        let key = h.finish();
-        if let Some((_, c)) = self.check_cache.iter().find(|(k, _)| *k == key) {
-            return c.clone();
-        }
-        let c = crate::verify::check(scope, &self.proj.files, answer, settings);
-        self.check_cache.push((key, c.clone()));
-        if self.check_cache.len() > 8 {
-            self.check_cache.remove(0);
-        }
-        c
-    }
-
-    /// A finished answer is checked before it is shown
-    /// ([`crate::verify::next`]): green, or red after the retries, it
-    /// stays as the page of its question; red with retries left (or code
-    /// with no scenario, once) it goes back to the Agent with what failed,
-    /// and its answer takes its place. A retry stopped or broken brings
-    /// the last answer back as the page.
+    /// A finished answer to the instruction under way goes through
+    /// [`crate::instruct::Instruct::answered`]: back to the Agent while it
+    /// fails its checks, written when it passes, refused when it still
+    /// fails. A broken or stopped answer ends the instruction.
     fn settle(&mut self, ctx: &egui::Context) {
-        use crate::verify::Next;
+        use crate::instruct::Step;
+        if !self.instruct.busy() || self.to_name.is_some() {
+            return;
+        }
         let Some(a) = &self.chat.answer else { return };
-        if a.running() || self.chat.seq() == self.checked_seq {
+        if a.running() || self.chat.seq() == self.answered_seq {
             return;
         }
-        self.checked_seq = self.chat.seq();
-        // Only a question asked from the tab is checked ([`Self::ask`]).
-        let Some(mut chain) = self.chain.take() else {
-            self.live_check = None;
-            return;
-        };
-        if a.phase != Phase::Done {
-            if let Some(last) = chain.failed.pop() {
-                let page = crate::claude::Exchange {
-                    question: chain.question,
-                    asked: chain.asked,
-                    answer: last.answer,
-                };
-                self.chat.history.push(page.clone());
-                self.chat.pages_dirty = true;
-                // On view as a page: its check and its Use this code.
-                self.chat.page = Some(self.chat.history.len() - 1);
-                self.live_check = self
-                    .page_scope(&page)
-                    .ok()
-                    .map(|s| (self.check_in(&s, &page.answer), chain.retries));
+        self.answered_seq = self.chat.seq();
+        let text = match &a.phase {
+            Phase::Done => a.text.clone(),
+            Phase::Failed(why) => {
+                let why = why.clone();
+                self.instruct.failed(&why);
+                return self.log_outcome();
             }
-            return;
-        }
-        let text = a.text.clone();
-        let Some(last) = self.chat.history.last().cloned().filter(|p| p.answer == text) else {
-            return;
+            Phase::Waiting | Phase::Streaming => return,
         };
-        if chain.failed.is_empty() {
-            chain.question.clone_from(&last.question);
-            chain.asked.clone_from(&last.asked);
-        }
-        let page = crate::claude::Exchange {
-            question: chain.question.clone(),
-            asked: chain.asked.clone(),
-            answer: text,
-        };
-        let Ok(scope) = self.page_scope(&page) else {
+        let Some(scope) = self.instruct.run.as_ref().map(|r| r.scope.clone()) else {
             return;
         };
-        let check = self.check_in(&scope, &page.answer);
-        match crate::verify::next(&check, chain.retries, chain.asked_scenarios) {
-            Next::Show => {
-                if let Some(p) = self.chat.history.last_mut()
-                    && *p != page
-                {
-                    *p = page;
-                    self.chat.pages_dirty = true;
-                }
-                self.live_check = Some((check, chain.retries));
-            }
-            Next::Retry(msg) => {
-                let Some(failed) = self.chat.history.pop() else {
-                    return;
-                };
-                chain.failed.push(failed);
-                chain.retries += 1;
-                chain.asked_scenarios |= check.unchecked();
-                chain.problems = if check.unchecked() {
-                    vec!["The answer gave code but no scenario to check it.".into()]
-                } else {
-                    check.problems()
-                };
-                let diags = self.session.diag_lines();
-                let devices = self.devices_text();
-                let src = self.session.src.clone();
-                match self.chat.follow_up(&chain.failed, &msg, &src, &diags, &devices) {
-                    Ok((seq, req)) => {
-                        self.link.send(seq, req, ctx);
-                        self.chain = Some(chain);
-                    }
-                    Err(e) => {
-                        self.chat.history.push(page);
-                        self.live_check = Some((check, chain.retries - 1));
-                        self.ask_error = Some(e);
-                    }
-                }
-            }
+        let (diags, devices, settings) = self.agent_env();
+        let env = crate::instruct::Env {
+            project: &self.proj.open,
+            scope,
+            files: &self.proj.files,
+            source: &self.session.src,
+            diagnostics: &diags,
+            devices: &devices,
+            settings,
+        };
+        match self.instruct.answered(&text, &env) {
+            Step::Ask(ask) => self.send_ask(&ask, ctx),
+            Step::Apply(apply) => self.write(apply),
+            Step::Done => self.log_outcome(),
         }
     }
 
-    /// A refused "Use this code": said under the answer, on the line under
-    /// the header and in Messages.
-    fn refuse(&mut self, why: &str) {
-        self.use_error = Some(why.to_string());
-        self.notice = Some(format!("Use this code refused: {why}"));
-        self.log.error(
-            self.session.now_ms as f64 / 1000.0,
-            format!("Use this code refused: {why}"),
-        );
+    /// The outcome of the last instruction, in Messages.
+    fn log_outcome(&mut self) {
+        use crate::instruct::Kind;
+        let Some(o) = &self.instruct.outcome else { return };
+        let at = self.session.now_ms as f64 / 1000.0;
+        let mut line = o.status.clone();
+        for p in &o.problems {
+            line.push(' ');
+            line.push_str(p);
+        }
+        match o.kind {
+            Kind::Applied | Kind::Undone | Kind::Said => self.log.info(at, line),
+            Kind::Refused | Kind::Failed => self.log.warning(at, line),
+        }
     }
 
-    /// `files` (the project with the answer in its scope) lands, if the
-    /// requirement tests pass with it: unsaved edits are saved first as
-    /// their own revision; a whole `main.st` with its PROGRAM is the next
-    /// iteration (the one it replaces kept as `vN.st`), anything else the
-    /// file edited in place; then one revision with the page.
-    fn land_scoped(
-        &mut self,
-        scope: &crate::scope::Scope,
-        files: &crate::scope::Files,
-        page: &crate::claude::Exchange,
-        scenarios: &[(String, String)],
-    ) {
-        let Some(file) = scope.file().map(str::to_string) else {
+    /// A checked answer into the open project: unsaved edits are saved
+    /// first as their own revision, so the version before the change is
+    /// one; then the file (and the scenarios it passed, as requirement
+    /// tests) are saved as one revision whose History entry is the
+    /// instruction's record. A new program from a built-in example goes
+    /// the way it always has, into a project named once.
+    fn write(&mut self, apply: crate::instruct::Apply) {
+        if apply.scope == crate::scope::Scope::NewProject {
+            let code = apply.text.clone();
+            self.to_name = Some(apply);
+            self.take_code(code);
             return;
-        };
-        let Some(text) = files.get(&file).cloned() else {
-            return;
-        };
-        if let Some(why) = self.tests_refuse(Some((&file, &text))) {
-            return self.refuse(&why);
         }
-        self.use_error = None;
+        if self.proj.open != apply.project {
+            let why = format!("{} is no longer open.", apply.project);
+            self.instruct.not_written(&apply.file, &why);
+            return self.log_outcome();
+        }
         if self.proj.dirty() {
             self.proj.save();
         }
-        let iteration = matches!(scope, crate::scope::Scope::File(_))
-            && file == helmsman_project::MAIN
-            && !crate::scope::pous(&text).is_empty()
-            && text.to_ascii_uppercase().contains("PROGRAM ");
-        let open = self.proj.open.clone();
-        let dropped = if iteration {
-            self.land_program(&open, text)
-        } else {
-            self.proj.files.insert(file.clone(), text);
-            self.proj.current.clone_from(&file);
-            0
-        };
-        // The scenarios it passed, kept as requirement tests.
-        for (f, t) in scenarios {
+        let saved: std::collections::BTreeMap<String, String> = self
+            .proj
+            .files
+            .iter()
+            .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        if self.proj.revisions().last().is_none_or(|r| r.files != saved) {
+            self.proj.save_as("saved before the Agent's change", None);
+        }
+        let before = self.proj.revisions().last().map(|r| r.n);
+        self.proj.files.insert(apply.file.clone(), apply.text.clone());
+        for (f, t) in &apply.tests {
             self.proj.files.insert(f.clone(), t.clone());
         }
-        let into = scope.label().replacen("Editing: ", "", 1);
-        let what = if iteration {
-            format!("took the Agent's answer into {into} as its next iteration")
-        } else {
-            format!("took the Agent's answer into {into}")
-        };
-        let record = format!("{}\n\n{}", page.question, page.answer);
-        self.proj.save_as(&what, Some(&record));
+        self.proj.current.clone_from(&apply.file);
+        let what: String = format!("Agent: {}", apply.instruction)
+            .chars()
+            .take(120)
+            .collect();
+        self.proj.save_as(&what, Some(&apply.record));
         self.reload();
-        let size = if dropped > 0 {
-            format!(" {dropped} oldest iteration(s) dropped: the project was past its size.")
-        } else {
-            String::new()
+        let undo = before.map(|revision| crate::instruct::Undo {
+            project: apply.project.clone(),
+            file: apply.file.clone(),
+            revision,
+            text: apply.text.clone(),
+        });
+        self.instruct.applied(&apply, undo);
+        self.log_outcome();
+    }
+
+    /// Why Undo is off now, if it is.
+    fn undo_blocked(&self) -> Option<String> {
+        let u = self.instruct.undo()?;
+        if self.proj.open != u.project {
+            return Some(format!("Open {} first.", u.project));
+        }
+        self.instruct.undo_refusal(
+            self.proj.files.get(&u.file).map(String::as_str),
+            self.proj.dirty(),
+        )
+    }
+
+    /// Undo: the project back to the revision before the Agent's change,
+    /// saved as a new revision (the change stays in History).
+    pub fn undo_change(&mut self) {
+        let Some(u) = self.instruct.undo().cloned() else {
+            return;
         };
-        let kept = match scenarios.len() {
-            0 => String::new(),
-            1 => " Its scenario is kept as a requirement test.".into(),
-            n => format!(" Its {n} scenarios are kept as requirement tests."),
-        };
-        self.notice = Some(format!(
-            "The Agent's change is in {into}, saved, and the requirement tests pass; Deploy runs it.{kept}{size}"
-        ));
+        if self.undo_blocked().is_some() {
+            return;
+        }
+        if self.proj.restore(u.revision) {
+            if self.proj.files.contains_key(&u.file) {
+                self.proj.current.clone_from(&u.file);
+            }
+            self.reload();
+            self.instruct.undone(&u);
+            self.log_outcome();
+        }
     }
 
     /// The revision on view, in the middle of the screen, until Close or
@@ -1353,6 +1237,10 @@ impl PlaygroundView {
             self.confirm_program_name();
         } else if done || m.should_close() {
             self.program_name = None;
+            if let Some(a) = self.to_name.take() {
+                self.instruct
+                    .not_written(&a.file, "No name was given, so no project was made.");
+            }
         } else {
             self.program_name = Some(p);
         }
@@ -1437,14 +1325,13 @@ impl PlaygroundView {
             }
         }
         self.settle(ctx);
-        self.save_pages();
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
         self.arrange();
         self.bind_sensors();
         self.session.advance(t);
         self.watch(t);
-        if self.session.running || self.pending.is_some() || self.chat.busy() {
+        if self.session.running || self.pending.is_some() || self.chat.busy() || self.instruct.busy() {
             ctx.request_repaint();
         }
     }
@@ -2033,8 +1920,7 @@ impl PlaygroundView {
                 } else {
                     "Click to pin it to the trend."
                 };
-                if ui
-                    .selectable_label(on, name.to_ascii_lowercase())
+                if crate::theme::tab(ui, on, &name.to_ascii_lowercase(), egui::Vec2::ZERO)
                     .tip(tip)
                     .clicked()
                 {
@@ -2084,118 +1970,28 @@ impl PlaygroundView {
             });
             ui.add_space(4.0);
             self.scope_ui(ui, chrome);
-            ui.add(
-                egui::TextEdit::multiline(&mut self.chat.question)
-                    .id_salt("pg-question")
-                    .hint_text("e.g. Add a stop button that resets the counter")
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY),
-            )
-            .tip(
-                "Ask for a program (\"a conveyor that stops on a jam\"), a fix for the errors, or \
-                 what a line does. The Agent sees the editor's program and changes only what the \
-                 line above names.",
-            );
-            ui.horizontal(|ui| {
-                let busy = self.chat.busy();
-                let ask = egui::Button::new(RichText::new("Ask").strong().color(BLACK))
-                    .fill(YELLOW)
-                    .min_size(Vec2::new(TAP * 1.5, TAP * 0.75));
-                if ui
-                    .add_enabled(!busy, ask)
-                    .tip(if busy {
-                        "Wait for the answer, or Stop it."
-                    } else {
-                        "Sends the question with the editor's program and its errors."
-                    })
-                    .clicked()
-                {
-                    self.ask(&ctx);
-                }
-                if busy && ui.button("Stop").tip("Stops the answer under way.").clicked() {
-                    self.stop_answer();
-                }
-                if !self.chat.history.is_empty()
-                    && !busy
-                    && ui
-                        .button("New conversation")
-                        .tip("The next question starts a conversation of its own.")
-                        .clicked()
-                {
-                    self.chat.clear();
-                }
-            });
-            if let Some(e) = &self.ask_error {
-                ui.colored_label(RED, e);
-            }
-            ui.separator();
-            self.pages_ui(ui, chrome);
-            match self.chat.viewing().cloned() {
-                Some(page) => self.page_ui(ui, &page, chrome),
-                None => self.answer_ui(ui, chrome),
-            }
-        });
-    }
-
-    /// The page strip (Nick, 2026-11-01): ‹ › through the kept pages,
-    /// "page k of n", Delete for the one on view. Every kept page goes to
-    /// the model as context, so deleting one shapes what it sees.
-    fn pages_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let t = theme(ui);
-        let n = self.chat.history.len();
-        if n == 0 {
-            return;
-        }
-        let at = self.chat.page;
-        ui.horizontal_wrapped(|ui| {
-            let prev = ui
-                .add_enabled(at != Some(0), egui::Button::new("‹"))
-                .tip(if at == Some(0) {
-                    "This is the first page."
-                } else {
-                    "The page before."
-                });
-            chrome.hit("page prev", prev.rect);
-            if prev.clicked() {
-                self.chat.prev_page();
-            }
-            let next = ui
-                .add_enabled(at.is_some(), egui::Button::new("›"))
-                .tip(if at.is_some() {
-                    "The page after. Past the last, the new answer."
-                } else {
-                    "This is the newest answer."
-                });
-            chrome.hit("page next", next.rect);
-            if next.clicked() {
-                self.chat.next_page();
-            }
-            let where_ = match at {
-                Some(k) => format!("page {} of {n}", k + 1),
-                None => format!("{n} page(s) kept"),
+            let view = crate::instruct::View {
+                target: self.scope().label().replacen("Editing: ", "", 1),
+                blocked: self.chat.route().err().map(str::to_string),
+                undo_blocked: self.undo_blocked(),
             };
-            let l = ui
-                .label(RichText::new(where_).color(t.muted))
-                .tip("Every kept page goes to the model with the next question.");
-            chrome.hit("page where", l.rect);
-            if at.is_some() {
-                let del = ui
-                    .button("Delete page")
-                    .tip("Drops this page from the conversation and from what the model sees.");
-                chrome.hit("page delete", del.rect);
-                if del.clicked() {
-                    self.chat.delete_page();
-                }
+            match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
+                Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
+                Some(crate::instruct::Act::Stop) => self.stop_answer(),
+                Some(crate::instruct::Act::Undo) => self.undo_change(),
+                Some(crate::instruct::Act::Review(_)) | None => {}
             }
         });
-        ui.separator();
     }
 
-    /// The Agent tab's scope line (card agent-scoped-edits): what the
-    /// next question may change and which rule gave it, with Whole file
-    /// while a selection or a pick narrows it.
+    /// The Agent tab's scope line (card agent-scoped-edits), only while a
+    /// selection or a pick narrows it: what the next instruction may
+    /// change and which rule gave it, with Whole file.
     fn scope_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let scope = self.scope();
+        if scope.lines().is_none() {
+            return;
+        }
         let mut whole = false;
         // Wrapped: a long name in a plain row would widen the panel.
         ui.horizontal_wrapped(|ui| {
@@ -2213,42 +2009,6 @@ impl PlaygroundView {
             self.whole_file(&ui.ctx().clone());
         }
         ui.add_space(4.0);
-    }
-
-    /// "Use this code" and, under it, why the last one was refused.
-    fn use_button(&self, ui: &mut egui::Ui, chrome: &mut Chrome) -> bool {
-        let b = egui::Button::new(RichText::new("Use this code").strong().color(BLACK))
-            .fill(YELLOW)
-            .min_size(Vec2::new(TAP * 3.0, TAP * 0.8));
-        let r = ui.add(b).tip(
-            "Takes the code into what it was asked about, if the requirement tests pass, and saves \
-             it as a revision. Deploy runs it.",
-        );
-        chrome.hit("use code", r.rect);
-        if let Some(why) = &self.use_error {
-            let l = ui.colored_label(RED, why);
-            chrome.hit("use refused", l.rect);
-        }
-        r.clicked()
-    }
-
-    /// An earlier page: its question, its answer, and Use this code when
-    /// the answer holds code.
-    fn page_ui(&mut self, ui: &mut egui::Ui, page: &crate::claude::Exchange, chrome: &mut Chrome) {
-        let t = theme(ui);
-        ui.label(RichText::new(page.question.trim()).strong().color(t.fg));
-        ui.add_space(4.0);
-        markdown(ui, &page.answer);
-        if !crate::verify::has_code(&page.answer) {
-            return;
-        }
-        if let Ok(scope) = self.page_scope(page) {
-            let check = self.check_in(&scope, &page.answer);
-            check_ui(ui, &check, None, chrome);
-        }
-        if self.use_button(ui, chrome) {
-            self.use_page(page);
-        }
     }
 
     fn key_ui(&mut self, ui: &mut egui::Ui) {
@@ -2310,60 +2070,6 @@ impl PlaygroundView {
             }
         });
         ui.add_space(6.0);
-    }
-
-    fn answer_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        let t = theme(ui);
-        let Some(a) = &self.chat.answer else {
-            return;
-        };
-        if let Some(c) = self.chain.as_ref().filter(|c| c.retries > 0 && a.running()) {
-            retry_ui(ui, c, chrome);
-            return;
-        }
-        if let Some(m) = &a.model
-            && m != self.chat.model.id()
-        {
-            ui.label(RichText::new(format!("answered by {m}")).small().color(t.muted));
-        }
-        markdown(ui, &a.text);
-        if a.cut {
-            ui.label(RichText::new("(answer cut: too long)").small().color(t.muted));
-        }
-        match &a.phase {
-            Phase::Waiting => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(RichText::new("thinking…").color(t.muted));
-                });
-            }
-            Phase::Streaming => {
-                ui.spinner();
-            }
-            Phase::Failed(why) => {
-                ui.colored_label(RED, why);
-            }
-            Phase::Done => {}
-        }
-        if a.stop_reason.as_deref() == Some("max_tokens") {
-            ui.label(
-                RichText::new("(the answer hit its length limit)")
-                    .small()
-                    .color(t.muted),
-            );
-        }
-        let settled = a.phase == Phase::Done && self.chain.is_none();
-        if settled && crate::verify::has_code(&a.text) {
-            if let Some((c, tries)) = &self.live_check {
-                check_ui(ui, c, Some(*tries), chrome);
-            }
-            if self.use_button(ui, chrome) {
-                self.use_answer();
-            }
-        } else if a.phase == Phase::Done && crate::verify::has_code(&a.text) {
-            ui.label(RichText::new("Checking the answer…").color(t.muted))
-                .tip("The page runs its scenarios and the requirement tests before it shows the result.");
-        }
     }
 
     fn trend_plot(&self, ui: &mut egui::Ui) {
@@ -2743,106 +2449,6 @@ pub struct ProgramName {
     pub text: String,
     pub input: String,
     pub error: Option<String>,
-}
-
-/// The answer being checked (`crate::verify`): its question as asked,
-/// the retries so far, what the last one failed on, and the answers that
-/// failed (sent back as context).
-#[derive(Clone, Debug, Default)]
-pub struct Chain {
-    pub question: String,
-    pub asked: String,
-    pub retries: u8,
-    /// A retry asked for scenarios already.
-    pub asked_scenarios: bool,
-    pub problems: Vec<String>,
-    pub(crate) failed: Vec<crate::claude::Exchange>,
-}
-
-/// While a failed answer is retried: what failed, and that the Agent is
-/// fixing it.
-fn retry_ui(ui: &mut egui::Ui, c: &Chain, chrome: &mut Chrome) {
-    let t = theme(ui);
-    let r = ui
-        .label(
-            RichText::new(format!(
-                "The answer did not pass the page's checks, so the Agent is fixing it (try {} of {}).",
-                c.retries + 1,
-                crate::verify::RETRIES + 1
-            ))
-            .strong()
-            .color(WARN),
-        )
-        .tip("The page sent the Agent what failed. The fixed answer is checked again before it is shown.");
-    chrome.hit("answer retrying", r.rect);
-    for p in &c.problems {
-        ui.label(RichText::new(p).color(t.muted))
-            .tip("What the page found in the last answer.");
-    }
-    ui.horizontal_wrapped(|ui| {
-        ui.spinner();
-        ui.label(RichText::new("waiting for the fixed answer…").color(t.muted))
-            .tip("Stop keeps the last answer, with what it failed.");
-    });
-}
-
-/// How an answer's code came out of the page's checks: each scenario in
-/// plain words, green; or what failed, red; or that no scenario checks it.
-fn check_ui(ui: &mut egui::Ui, c: &crate::verify::Check, tries: Option<u8>, chrome: &mut Chrome) {
-    let t = theme(ui);
-    if !c.code {
-        return;
-    }
-    ui.add_space(4.0);
-    if c.red() {
-        let after = match tries {
-            Some(n) if n > 0 => format!(" after {n} more tries"),
-            _ => String::new(),
-        };
-        let r = ui
-            .label(
-                RichText::new(format!(
-                    "This answer did not pass the page's checks{after}, so Use this code is refused."
-                ))
-                .strong()
-                .color(RED),
-            )
-            .tip("The page took the code into a copy of the project and ran its scenarios and the requirement tests.");
-        chrome.hit("answer red", r.rect);
-        for p in c.problems() {
-            ui.label(RichText::new(p).color(RED)).tip("What failed.");
-        }
-        return;
-    }
-    if c.scenarios.is_empty() {
-        let r = ui
-            .label(RichText::new("Not checked by a scenario: the Agent gave none.").color(t.muted))
-            .tip("The code compiles and the requirement tests pass with it, but nothing checks this change.");
-        chrome.hit("answer unchecked", r.rect);
-        return;
-    }
-    let r = ui
-        .label(
-            RichText::new("Checked before it was shown:")
-                .strong()
-                .color(GREEN),
-        )
-        .tip("The page took the code into a copy of the project and ran these scenarios on it.");
-    chrome.hit("answer green", r.rect);
-    for s in &c.scenarios {
-        ui.label(RichText::new(format!("Passed: {}", s.requirement)).color(GREEN))
-            .tip("Kept as a requirement test when you use this code.");
-    }
-    if c.tests_green > 0 {
-        ui.label(
-            RichText::new(format!(
-                "The project's {} requirement test(s) pass with it.",
-                c.tests_green
-            ))
-            .color(t.muted),
-        )
-        .tip("The tests already in the Requirements tab.");
-    }
 }
 
 /// A name for the Agent's answer: the `PROGRAM`, `FUNCTION_BLOCK` or
@@ -3315,47 +2921,5 @@ pub fn show(ty: Ty, v: Value) -> String {
     match (ty, v) {
         (Ty::Time, Value::Int(ns)) => format!("{} ms", ns / 1_000_000),
         _ => v.to_string(),
-    }
-}
-
-/// Answer text: paragraphs as labels, fenced code in monospace blocks.
-fn markdown(ui: &mut egui::Ui, text: &str) {
-    let t = theme(ui);
-    if !text.trim().is_empty() {
-        crate::theme::copy_button(ui, text);
-    }
-    for (k, s) in segments(text).into_iter().enumerate() {
-        match s {
-            Segment::Prose(p) => {
-                let para = p.trim();
-                if !para.is_empty() {
-                    // The Agent's words stay selectable (labels are not,
-                    // theme::apply): an engineer copies from them.
-                    ui.add(egui::Label::new(RichText::new(para).color(t.fg)).selectable(true));
-                }
-            }
-            Segment::Code { body, .. } => {
-                // A long line scrolls inside the block: a label that
-                // extends past the panel widens it every frame (Nick,
-                // 2026-11-01), and wrapping code misreads.
-                let width = ui.available_width();
-                egui::Frame::new()
-                    .fill(t.bg)
-                    .stroke(Stroke::new(1.0, t.rule))
-                    .inner_margin(6.0)
-                    .show(ui, |ui| {
-                        ui.set_max_width(width - 12.0);
-                        egui::ScrollArea::horizontal()
-                            .id_salt(("pg-code", k))
-                            .show(ui, |ui| {
-                                ui.add(
-                                    egui::Label::new(RichText::new(body).monospace().size(12.0))
-                                        .wrap_mode(egui::TextWrapMode::Extend)
-                                        .selectable(true),
-                                );
-                            });
-                    });
-            }
-        }
     }
 }

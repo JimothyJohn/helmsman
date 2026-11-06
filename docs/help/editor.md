@@ -158,10 +158,11 @@ label is drawn, the icon stands alone at a readable size.
   one row each, green or red with why, with **Edit** (new words; the
   agent rewrites the test for them, or only the words change) and
   **Delete** (asks first) on every row (see [Requirement tests](projects.html#requirement-tests));
-  and **Agent**, where you describe what you want.
+  and **Agent**, where you type what the open file should do and it
+  is updated (see [The Agent](agent.html)).
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
 
-<img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="240">
+<img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">
 
 Each pane remembers whether it was open, per browser.

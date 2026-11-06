@@ -1,15 +1,18 @@
-//! The Agent tab on a box, free of I/O like [`crate::remote`]: the
-//! conversation the page shows, the `POST /api/chat` request it sends,
-//! and what it makes of the event stream the box answers with
-//! (`helmsman-plc`'s `api::chat`). The browser's `fetch` (`web.rs`)
-//! carries the request out and hands back [`Incoming`] pieces; tests
-//! carry it out natively against the real box API and a scripted relay.
+//! The way to the agent a box runs, free of I/O like [`crate::remote`]:
+//! the `POST /api/chat` request the Agent tab sends and what it makes of
+//! the event stream the box answers with (`helmsman-plc`'s `api::chat`).
+//! The browser's `fetch` (`web.rs`) carries the request out and hands back
+//! [`Incoming`] pieces; tests carry it out natively against the real box
+//! API and a scripted relay.
 //!
-//! The box runs the agent: the page sends one message (and the session
-//! it continues) and shows what streams back, the text, each tool the
-//! agent ran, each proposal it stored. Nothing here changes the box: a
-//! proposal is a draft that goes through the review and the approval
-//! policy like any other (the Proposals screen opens it).
+//! The tab itself is [`crate::instruct`], the same as in the page: an
+//! instruction goes out as one message carrying the whole file, a new
+//! conversation on the box each time ([`BoxAgent::send`] with
+//! `fresh`), and a retry of an answer that failed its checks continues
+//! that conversation. This module keeps the turn as it streams: the
+//! text, each tool the agent ran, each proposal it stored. Nothing here
+//! changes the box: a proposal is a draft that goes through the review
+//! and the approval policy like any other (the Proposals screen opens it).
 //!
 //! - `POST /api/chat` `{message, session}`: same-origin with the session
 //!   cookie and `X-Helmsman-Request: 1`, like every mutation the page
@@ -17,7 +20,7 @@
 //!   `tool_result`, `proposal`, `retrying`, `status`, `fallback`, `done`,
 //!   `error`).
 //! - `GET /api/chat/status`: online, offline since a time and why,
-//!   unknown, or no relay configured; shown above the conversation.
+//!   unknown, or no relay configured; shown at the top of the Agent tab.
 //!
 //! Bounded: a turn keeps at most [`MAX_TEXT`] bytes of text and
 //! [`MAX_ITEMS`] tool, proposal and notice rows; the conversation at most
@@ -27,11 +30,9 @@
 // Natively nothing carries the answers back but the tests.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
-use eframe::egui;
 use serde_json::{Value as Json, json};
 
 use crate::claude::{Event, Sse};
-use crate::tips::Tip;
 
 /// The box's longest message, in characters (`api::chat::MAX_MESSAGE`).
 pub const MAX_MESSAGE: usize = 8000;
@@ -195,7 +196,6 @@ impl Turn {
     }
 
     /// Every proposal id this turn stored, in order.
-    #[cfg(test)]
     #[must_use]
     pub fn proposals(&self) -> Vec<u64> {
         let mut ids = Vec::new();
@@ -250,12 +250,10 @@ impl Incoming {
 #[derive(Debug)]
 pub struct BoxAgent {
     pub status: Status,
-    /// The conversation the box holds for this page; `None` until the
-    /// first `session` event, and after "New conversation".
+    /// The conversation the box holds for the instruction under way;
+    /// `None` until its first `session` event.
     pub session: Option<String>,
     pub turns: Vec<Turn>,
-    /// The message being typed.
-    pub draft: String,
     seq: u64,
     sse: Option<Sse>,
     /// Asked for `GET /api/chat/status` and not answered yet.
@@ -275,7 +273,6 @@ impl BoxAgent {
             status: Status::Unread,
             session: None,
             turns: Vec::new(),
-            draft: String::new(),
             seq: 0,
             sse: None,
             status_asked: false,
@@ -290,10 +287,16 @@ impl BoxAgent {
         self.sse.is_some() && self.turns.last().is_some_and(|t| t.end.is_none())
     }
 
-    /// Why the draft cannot be sent now, if it cannot.
+    /// The request number of the latest turn.
     #[must_use]
-    pub fn refusal(&self) -> Option<String> {
-        let n = self.draft.trim().chars().count();
+    pub const fn seq(&self) -> u64 {
+        self.seq
+    }
+
+    /// Why `message` cannot be sent now, if it cannot.
+    #[must_use]
+    pub fn refusal(&self, message: &str) -> Option<String> {
+        let n = message.trim().chars().count();
         if self.busy() {
             Some("The agent is still answering.".into())
         } else if !self.status.can_send() {
@@ -302,42 +305,38 @@ impl BoxAgent {
             Some("Type a message first.".into())
         } else if n > MAX_MESSAGE {
             Some(format!(
-                "A message is at most {MAX_MESSAGE} characters ({n} now)."
+                "The message to the agent on this box would be {n} characters; the box takes at most {MAX_MESSAGE}."
             ))
         } else {
             None
         }
     }
 
-    /// Sends the draft: a new turn and the request to carry out, or
-    /// `None` (see [`Self::refusal`]). The draft is emptied.
-    pub fn send(&mut self) -> Option<Request> {
-        if self.refusal().is_some() {
-            return None;
+    /// Sends `message`: a new turn and the request to carry out. `fresh`
+    /// starts a new conversation on the box; else the turn continues the
+    /// one the last turn opened.
+    ///
+    /// # Errors
+    /// [`Self::refusal`].
+    pub fn send(&mut self, message: &str, fresh: bool) -> Result<Request, String> {
+        if let Some(why) = self.refusal(message) {
+            return Err(why);
         }
-        let message = std::mem::take(&mut self.draft).trim().to_string();
+        let message = message.trim().to_string();
+        if fresh {
+            self.session = None;
+        }
         self.seq += 1;
         self.sse = Some(Sse::default());
         if self.turns.len() >= MAX_TURNS {
             self.turns.remove(0);
         }
         self.turns.push(Turn::new(message.clone()));
-        Some(Request {
+        Ok(Request {
             seq: self.seq,
             url: CHAT_URL.to_string(),
             body: json!({ "message": message, "session": self.session }).to_string(),
         })
-    }
-
-    /// Starts over: the next message opens a new conversation on the box.
-    /// Refused while a turn streams.
-    pub fn new_conversation(&mut self) -> bool {
-        if self.busy() {
-            return false;
-        }
-        self.session = None;
-        self.turns.clear();
-        true
     }
 
     /// Stops the streaming turn on the page (the transport aborts the
@@ -517,174 +516,4 @@ fn clip(s: &str, n: usize) -> String {
         .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
         .take(n)
         .collect()
-}
-
-// ------------------------------------------------------------------ view
-
-/// What the tab asks its owner to do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Act {
-    Send,
-    Stop,
-    New,
-    /// Open this proposal on the Proposals screen.
-    Review(u64),
-}
-
-/// Draws the Agent tab; `who` is why this page may not send (not signed
-/// in), shown as the message field's hint and the Send button's tooltip.
-pub fn ui(
-    ui: &mut egui::Ui,
-    chrome: &mut crate::editor::Chrome,
-    a: &mut BoxAgent,
-    who: Option<&str>,
-) -> Option<Act> {
-    use egui::{RichText, Vec2};
-
-    use crate::st_view::TAP;
-    use crate::st_view::brand::{BLACK, RED, YELLOW};
-
-    let t = crate::theme::theme(ui);
-    let mut act = None;
-    egui::ScrollArea::vertical().id_salt("box-agent").show(ui, |ui| {
-        // Room for the scroll bar (a resizable panel grows to any row
-        // that overflows it).
-        ui.set_max_width(ui.available_width() - 12.0);
-        let l = ui
-            .label(RichText::new(a.status.short()).color(t.muted))
-            .tip(format!(
-                "{} Every change it makes is a proposal: you review and approve it under Proposals.",
-                a.status.line()
-            ));
-        chrome.hit("agent status", l.rect);
-        ui.add_space(4.0);
-        ui.add(
-            egui::TextEdit::multiline(&mut a.draft)
-                .id_salt("box-agent-message")
-                .hint_text(who.unwrap_or("e.g. Why does the conveyor stop after a jam clears?"))
-                .desired_rows(3)
-                .desired_width(f32::INFINITY),
-        )
-        .tip(format!(
-            "Your message to the agent on this box, at most {MAX_MESSAGE} characters."
-        ));
-        ui.horizontal_wrapped(|ui| {
-            let send = egui::Button::new(RichText::new("Send").strong().color(BLACK))
-                .fill(YELLOW)
-                .min_size(Vec2::new(TAP * 1.5, TAP * 0.75));
-            let why = who.map(str::to_string).or_else(|| a.refusal());
-            let r = ui
-                .add_enabled(why.is_none(), send)
-                .tip(why.unwrap_or_else(|| "Sends the message to the agent on this box.".to_string()));
-            chrome.hit("agent send", r.rect);
-            if r.clicked() {
-                act = Some(Act::Send);
-            }
-            if a.busy() {
-                let r = ui.button("Stop").tip("Stops the answer under way.");
-                chrome.hit("agent stop", r.rect);
-                if r.clicked() {
-                    act = Some(Act::Stop);
-                }
-            } else if !a.turns.is_empty() {
-                let r = ui
-                    .button("New conversation")
-                    .tip("The next message starts a conversation of its own.");
-                chrome.hit("agent new", r.rect);
-                if r.clicked() {
-                    act = Some(Act::New);
-                }
-            }
-        });
-        ui.separator();
-        for (k, turn) in a.turns.iter().enumerate().rev() {
-            ui.push_id(("box-agent-turn", k), |ui| {
-                ui.label(RichText::new(&turn.user).strong());
-                if !turn.text.is_empty() {
-                    let c = crate::theme::copy_button(ui, &turn.text);
-                    chrome.hit("agent copy", c.rect);
-                    // Selectable (labels are not, theme::apply): an
-                    // engineer copies from the agent's words.
-                    for seg in crate::claude::segments(&turn.text) {
-                        match seg {
-                            crate::claude::Segment::Prose(p) => {
-                                ui.add(egui::Label::new(p.trim()).selectable(true));
-                            }
-                            crate::claude::Segment::Code { body, .. } => {
-                                ui.add(
-                                    egui::Label::new(RichText::new(body.trim_end()).monospace())
-                                        .selectable(true),
-                                );
-                            }
-                        }
-                    }
-                }
-                for item in &turn.items {
-                    match item {
-                        Item::Tool { name, result, .. } => {
-                            let (mark, words) = match result {
-                                None => ("…", String::new()),
-                                Some((true, s)) => ("✓", s.clone()),
-                                Some((false, s)) => ("✗", s.clone()),
-                            };
-                            ui.label(
-                                RichText::new(format!("{mark} {name}  {words}"))
-                                    .small()
-                                    .color(t.muted),
-                            );
-                        }
-                        Item::Proposal { ids, summary } => {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(format!("Proposed: {summary}")).strong());
-                                for id in ids {
-                                    let r = ui
-                                        .small_button(format!("Review #{id}"))
-                                        .tip("Opens this proposal under Proposals.");
-                                    chrome.hit("agent review", r.rect);
-                                    if r.clicked() {
-                                        act = Some(Act::Review(*id));
-                                    }
-                                }
-                            });
-                        }
-                        Item::Retrying(e) => {
-                            ui.label(RichText::new(format!("retrying: {e}")).small().color(t.muted));
-                        }
-                        Item::Fallback { proposed, .. } => {
-                            if let Some(id) = proposed {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label("Read by rule: a param proposal.")
-                                        .tip("The agent was offline, so the box read the message by rule.");
-                                    let r = ui
-                                        .small_button(format!("Review #{id}"))
-                                        .tip("Opens this proposal under Proposals.");
-                                    chrome.hit("agent review", r.rect);
-                                    if r.clicked() {
-                                        act = Some(Act::Review(*id));
-                                    }
-                                });
-                            }
-                        }
-                    }
-                }
-                match &turn.end {
-                    None => {
-                        ui.label(RichText::new("answering…").color(t.muted));
-                    }
-                    Some(End::Done { why: Some(w), .. }) => {
-                        ui.label(RichText::new(w).small().color(t.muted));
-                    }
-                    Some(End::Done { .. }) => {}
-                    Some(End::Failed(w)) => {
-                        ui.colored_label(RED, w);
-                    }
-                    Some(End::Stopped) => {
-                        ui.label(RichText::new("stopped").small().color(t.muted));
-                    }
-                }
-                ui.separator();
-            });
-        }
-    });
-    act
 }

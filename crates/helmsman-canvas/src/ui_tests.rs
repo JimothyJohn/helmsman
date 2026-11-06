@@ -694,128 +694,122 @@ END_PROGRAM",
         assert!(!h.has("dirty"), "saved from the File menu");
     }
 
-    /// The hit stays "tab claude" (the stored key); only the label changed.
-    /// Nick, 2026-11-01: the conversation is pages with ‹ › and a
-    /// delete, in the Agent tab.
+    /// Nick, 2026-11-05: no chat. The Agent tab is the instruction box,
+    /// Send, and after an answer a status line with the reason and Undo;
+    /// an instruction typed and sent updates the file, and Undo from the
+    /// tab puts it back. The hit stays "tab claude" (the stored key).
     #[test]
-    fn the_agent_tab_pages_through_the_conversation() {
-        use crate::claude::Incoming;
+    fn the_agent_tab_is_an_instruction_box_a_status_line_and_undo() {
+        use crate::instruct::Kind;
+        use crate::instruct_tests::{LAMP, follows};
         let mut h = Harness::new(App::sim());
         h.press("tab claude");
         h.wait(0.2);
-        assert!(!h.has("page prev"), "no pages, no strip");
         {
-            let chat = &mut h.app.sim.as_mut().unwrap().chat;
-            chat.receive(Incoming::Proxy(true));
-            for q in ["first", "second"] {
-                chat.question = q.into();
-                let (seq, _) = chat.ask("x", &[], "").unwrap();
-                chat.receive(Incoming::Chunk {
-                    seq,
-                    text: crate::playground_tests::STREAM.into(),
-                });
-                chat.receive(Incoming::End { seq });
-            }
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(crate::claude::Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
         }
         h.wait(0.2);
-        assert!(h.has("page prev") && h.has("page next"), "the strip");
-        assert!(!h.has("page delete"), "the live answer is not a page to delete");
-        h.press("page prev");
-        h.wait(0.2);
-        assert_eq!(
-            h.app
-                .sim
-                .as_ref()
-                .unwrap()
-                .chat
-                .viewing()
-                .map(|e| e.question.clone()),
-            Some("second".into())
+        for gone in ["page prev", "use code", "agent new", "agent result", "agent undo"] {
+            assert!(!h.has(gone), "{gone}");
+        }
+        assert!(h.has("agent instruction") && h.has("agent send"));
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("comment it".into())]);
+        h.press("agent send");
+        h.frame(vec![]);
+        assert!(
+            h.has("agent stop") && h.has("agent working"),
+            "Stop while it works"
         );
-        assert!(h.has("page delete"));
-        h.press("page delete");
+        let new = LAMP.replace("lamp := start;", "lamp := start; (* follows start *)");
+        let answer = format!(
+            "Why: it says why the lamp is on.\n\n```st\n{new}```\n\n{}",
+            follows()
+        );
+        crate::instruct_tests::reply(h.app.sim.as_mut().unwrap(), &answer);
         h.wait(0.2);
-        assert_eq!(h.app.sim.as_ref().unwrap().chat.history.len(), 1);
-        h.press("page next");
+        assert!(h.has("agent result") && h.has("agent why") && h.has("agent undo"));
+        {
+            let v = h.app.sim.as_ref().unwrap();
+            assert_eq!(v.proj.files["main.st"], new);
+            assert_eq!(
+                v.instruct.outcome.as_ref().map(|o| o.status.as_str()),
+                Some("Updated main.st: 1 scenario passed, kept as a test.")
+            );
+        }
+        h.press("agent undo");
         h.wait(0.2);
-        assert!(h.app.sim.as_ref().unwrap().chat.viewing().is_none());
+        let v = h.app.sim.as_ref().unwrap();
+        assert_eq!(v.proj.files["main.st"], LAMP);
+        assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
+        assert!(!h.has("agent undo"));
     }
 
-    /// The answer's checks (`crate::verify`) in the Agent tab: green, red
-    /// with long reasons, and while a retry runs; the panels keep their
-    /// width throughout.
+    /// Every outcome the tab can show, with long words, and the tab while
+    /// the Agent fixes an answer: the panels keep their width throughout.
     #[test]
-    fn the_answers_checks_show_in_the_agent_tab_and_leave_the_panels_their_width() {
-        use crate::claude::{Answer, Phase};
-        use crate::verify::{Check, Ran};
+    fn the_agent_tabs_outcomes_leave_the_panels_their_width() {
+        use crate::instruct::{Attempt, Kind, Outcome, Run, Undo};
         let mut h = Harness::new(App::sim());
         h.press("tab claude");
         h.wait(0.2);
         let left = h.rect("left");
         let right = h.rect("right");
-        let code = "Here:\n```st\nPROGRAM p\nEND_PROGRAM\n```\n".to_string();
         let long = "Scenario The lamp stays off while start is not pressed and the conveyor_infeed_photo_eye_blocked_for_too_long_alarm holds (test_lamp_off_while_start_is_not_pressed.st) failed: lamp off failed at 0.04 s".to_string();
-        let ran = |passed: bool| Ran {
-            file: "test_lamp_off.st".into(),
-            requirement: "The lamp stays off while start is not pressed.".into(),
-            passed,
-            why: String::new(),
+        let word = "x".repeat(400);
+        let outcome = |kind, status: &str| Outcome {
+            kind,
+            status: status.into(),
+            why: Some(format!("the lamp now latches {word}")),
+            problems: vec![long.clone(), long.clone()],
+            undo: Some(Undo {
+                project: "p".into(),
+                file: "main.st".into(),
+                revision: 3,
+                text: String::new(),
+            }),
+            review: vec![3, 4],
         };
         let states = [
             (
-                Check {
-                    code: true,
-                    scenarios: vec![ran(true)],
-                    tests_green: 1,
-                    ..Check::default()
-                },
-                "answer green",
+                outcome(Kind::Applied, &format!("Updated {word}.st: 2 scenarios passed")),
+                "agent why",
             ),
-            (
-                Check {
-                    code: true,
-                    failures: vec![long.clone(), long],
-                    ..Check::default()
-                },
-                "answer red",
-            ),
-            (
-                Check {
-                    code: true,
-                    ..Check::default()
-                },
-                "answer unchecked",
-            ),
+            (outcome(Kind::Refused, &long), "agent result"),
+            (outcome(Kind::Said, &long), "agent review"),
+            (outcome(Kind::Failed, "stopped"), "agent result"),
+            (outcome(Kind::Undone, &long), "agent undo"),
         ];
-        for (check, key) in states {
-            {
-                let v = h.app.sim.as_mut().unwrap();
-                let mut a = Answer::default();
-                a.text.clone_from(&code);
-                a.phase = Phase::Done;
-                v.chat.answer = Some(a);
-                v.chain = None;
-                v.live_check = Some((check, 2));
-            }
+        for (o, key) in states {
+            h.app.sim.as_mut().unwrap().instruct.outcome = Some(o);
             h.wait(0.2);
             assert!(h.has(key), "{key}");
-            assert!(h.has("use code"));
             assert!((h.rect("left").right() - left.right()).abs() <= 8.0, "{key}");
             assert!((right.left() - h.rect("right").left()).abs() <= 8.0, "{key}");
         }
-        // A retry under way: what failed, not the failed answer.
-        {
-            let v = h.app.sim.as_mut().unwrap();
-            v.chat.answer = Some(Answer::default());
-            v.chain = Some(crate::playground_view::Chain {
-                retries: 1,
-                problems: vec!["The code does not compile: 4:9: unknown variable STRAT".into()],
-                ..Default::default()
-            });
-        }
+        // Fixing an answer: what failed is the tooltip, not a page of text.
+        h.app.sim.as_mut().unwrap().instruct.run = Some(Run {
+            instruction: word.clone(),
+            project: "p".into(),
+            scope: crate::scope::Scope::File(format!("{word}.st")),
+            earlier: Vec::new(),
+            asked: String::new(),
+            retries: 1,
+            asked_scenarios: false,
+            attempts: vec![Attempt {
+                asked: String::new(),
+                answer: String::new(),
+                problems: vec![long],
+            }],
+        });
         h.wait(0.2);
-        assert!(h.has("answer retrying"));
-        assert!(!h.has("use code"));
+        assert!(h.has("agent working") && h.has("agent stop"));
+        assert!(!h.has("agent send") && !h.has("agent result"));
         assert!((right.left() - h.rect("right").left()).abs() <= 8.0);
     }
 
@@ -2236,7 +2230,7 @@ mod chrome {
                 "the unsaved-edits question is pending: open={} dirty={} program={:?} files={:?}",
                 v.proj.open,
                 v.proj.dirty(),
-                v.chat.program,
+                v.new_program,
                 v.proj.files.keys().collect::<Vec<_>>()
             );
         }
@@ -2381,9 +2375,13 @@ mod chrome {
         assert!(h.app.chrome.code_open());
         h.wait(0.5);
         let r = h.ctx.read_response(editor()).expect("open again");
-        // The pane opens at 160 pt; the editor is what is left of it
-        // beside the gutter.
-        assert!((50.0..160.0).contains(&r.rect.width()), "{:?}", r.rect);
+        // The pane opens at its default width; the editor is what is
+        // left of it beside the gutter.
+        assert!(
+            (50.0..crate::editor::LEFT_W).contains(&r.rect.width()),
+            "{:?}",
+            r.rect
+        );
 
         // Click the lamp's assignment: the ST goes to its line.
         let (at, _) = node(sim_view(&h), write_to("LAMP"));
@@ -2650,34 +2648,13 @@ mod simulated {
         assert_eq!(window_label(600_000), "10 min");
     }
 
-    /// Nick, 2026-11-01: the Agent pane widened when an answer held long
-    /// code. A long line scrolls inside its block; the panel keeps the
-    /// width the user gave it.
+    /// Card agent-scoped-edits: the Agent tab says what the next
+    /// instruction may change before it is sent. A built-in example: a new
+    /// project; a project of one's own: the open file (both in the box's
+    /// hint); lines selected in the Code tab: a line of their own, with
+    /// Whole file to go back; the panels keep their width with it.
     #[test]
-    fn the_agent_tab_keeps_its_width_under_long_code() {
-        use crate::claude::{Answer, Phase};
-        let mut h = Harness::new(App::sim());
-        h.wait(0.3);
-        h.press("tab claude");
-        h.wait(0.3);
-        let right = h.rect("right");
-        let long = "x".repeat(400);
-        let mut a = Answer::default();
-        a.text = format!("Here it is:\n```st\nPROGRAM p\n  (* {long} *)\nEND_PROGRAM\n```\n");
-        a.phase = Phase::Done;
-        h.app.sim.as_mut().unwrap().chat.answer = Some(a);
-        h.wait(0.5);
-        let grew = right.left() - h.rect("right").left();
-        assert!((0.0..=8.0).contains(&grew), "the right panel grew {grew} pt");
-    }
-
-    /// Card agent-scoped-edits: the Agent tab says what the next question
-    /// may change before it is asked. A built-in example: a new project;
-    /// a project of one's own: the open file; lines selected in the Code
-    /// tab: those lines, with Whole file to go back; the panels keep
-    /// their width with the line in them.
-    #[test]
-    fn the_agent_tab_names_the_scope_before_the_question() {
+    fn the_agent_tab_names_the_scope_before_the_instruction() {
         use crate::scope::Scope;
         let mut h = Harness::new(App::sim());
         h.wait(0.3);
@@ -2685,7 +2662,7 @@ mod simulated {
         h.press("pane code");
         h.press("tab claude");
         h.wait(0.3);
-        assert!(h.has("agent scope"));
+        assert!(h.has("agent instruction") && !h.has("agent scope"));
         assert_eq!(h.app.sim.as_ref().unwrap().scope(), Scope::NewProject);
         assert!(!h.has("scope whole file"));
         {
@@ -2695,7 +2672,7 @@ mod simulated {
         }
         h.wait(0.3);
         assert_eq!(h.app.sim.as_ref().unwrap().scope(), Scope::File("main.st".into()));
-        assert!(h.has("agent scope") && !h.has("scope whole file"));
+        assert!(!h.has("agent scope") && !h.has("scope whole file"));
         // Lines 2 and 3 selected in the editor.
         let text = h.app.sim.as_ref().unwrap().proj.files["main.st"].clone();
         assert!(text.lines().count() >= 3, "{text}");
@@ -2719,7 +2696,7 @@ mod simulated {
             }
         );
         assert_eq!(scope.label(), "Editing: lines 2–3 of main.st");
-        assert!(h.has("scope whole file"));
+        assert!(h.has("agent scope") && h.has("scope whole file"));
         let r = right.left() - h.rect("right").left();
         assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
         h.press("scope whole file");
@@ -2938,27 +2915,52 @@ mod boxed {
         );
     }
 
-    /// The Agent tab on a box: signed out, Send stays off; signed in, the
-    /// message goes to `POST /api/chat` with no session yet; a proposal
-    /// the box streams back opens under Proposals from its Review button.
+    /// The Agent tab on a box is the page's tab: signed out, Send stays
+    /// off; signed in as an engineer with a program open, the instruction
+    /// goes to `POST /api/chat` with the answer format, the whole file and
+    /// no session yet; an agent that stores a proposal instead of sending
+    /// the file back changes nothing, and its Review button opens the
+    /// proposal under Proposals.
     #[test]
     fn the_agent_tab_on_a_box_sends_signed_in_and_opens_a_proposal_for_review() {
         use crate::app::Screen;
         use crate::box_agent::Incoming;
+        use crate::box_projects::{Buf, OpenProject};
+        use crate::instruct::Kind;
+        use crate::instruct_tests::LAMP;
         use crate::review::Session;
-        use serde_json::{Value as Json, json};
+        use serde_json::Value as Json;
 
         let bench = Bench::new();
         let (state, _) = watch(&bench);
         let mut h = Harness::new(App::boxed());
-        h.app.boxv.as_mut().unwrap().state = state;
+        {
+            let b = h.app.boxv.as_mut().unwrap();
+            b.state = state;
+            b.projects.available = Some(true);
+            b.projects.open = Some(OpenProject {
+                name: "line".into(),
+                bufs: [(
+                    "main.st".to_string(),
+                    Buf {
+                        text: LAMP.into(),
+                        base: LAMP.into(),
+                        version: Some("v1".into()),
+                        saving: None,
+                        loaded: true,
+                    },
+                )]
+                .into(),
+                current: Some("main.st".into()),
+            });
+        }
         h.frame(vec![]);
         h.frame(vec![]);
         h.press("tab claude");
         h.frame(vec![]);
-        assert!(h.has("agent status"));
+        assert!(h.has("agent status") && h.has("agent instruction"));
 
-        h.app.boxv.as_mut().unwrap().agent.draft = "why does the conveyor stop?".into();
+        h.app.boxv.as_mut().unwrap().instruct.draft = "why does the conveyor stop?".into();
         h.frame(vec![]);
         h.press("agent send");
         h.frame(vec![]);
@@ -2975,9 +2977,16 @@ mod boxed {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].url, "/api/chat");
         let body: Json = serde_json::from_str(&sent[0].body).unwrap();
-        assert_eq!(
-            body,
-            json!({ "message": "why does the conveyor stop?", "session": null })
+        assert_eq!(body["session"], Json::Null);
+        let message = body["message"].as_str().unwrap();
+        assert!(message.starts_with(crate::instruct::BOX_RULES), "{message}");
+        assert!(
+            message.contains("\n\nwhy does the conveyor stop?\n\n<current_program>"),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("text:\n{LAMP}</edit_scope>")),
+            "{message}"
         );
         assert!(h.has("agent stop"), "Stop while it answers");
 
@@ -2990,7 +2999,18 @@ mod boxed {
             text: stream.into(),
         });
         h.frame(vec![]);
-        assert!(h.has("agent new"), "the turn ended");
+        h.frame(vec![]);
+        {
+            let b = boxed(&h);
+            let o = b.instruct.outcome.clone().expect("settled");
+            assert_eq!(o.kind, Kind::Said, "{o:?}");
+            assert_eq!(o.review, [3]);
+            assert_eq!(
+                b.projects.open.as_ref().unwrap().bufs["main.st"].text,
+                LAMP,
+                "untouched"
+            );
+        }
         h.press("agent review");
         h.frame(vec![]);
         h.frame(vec![]);

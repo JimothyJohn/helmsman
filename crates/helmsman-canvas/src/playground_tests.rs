@@ -555,7 +555,13 @@ fn ctx<'a>(source: &'a str, diags: &'a [String]) -> Context<'a> {
         diagnostics: diags,
         devices: "",
         scope: "",
+        earlier: &[],
     }
+}
+
+/// The request for `c`'s user message, with no earlier turns.
+fn ask_for(route: &Route, model: Model, c: &Context<'_>) -> claude::Request {
+    request(route, model, &[], &claude::user_message(c))
 }
 
 fn header<'a>(r: &'a claude::Request, name: &str) -> Option<&'a str> {
@@ -569,10 +575,9 @@ fn header<'a>(r: &'a claude::Request, name: &str) -> Option<&'a str> {
 fn the_direct_request_carries_the_key_only_in_its_header_to_the_api() {
     let key = ApiKey::new(KEY).unwrap();
     let diags = vec!["3:7: unknown variable MOTR".to_string()];
-    let r = request(
+    let r = ask_for(
         &Route::Direct(key.clone()),
         Model::default(),
-        &[],
         &ctx("PROGRAM p END_PROGRAM", &diags),
     );
     assert_eq!(r.url, ANTHROPIC_URL);
@@ -624,6 +629,9 @@ fn the_system_prompt_is_long_enough_to_cache_and_names_the_dialect() {
         "```st",
         "END_PROGRAM",
         "<current_program>",
+        "Why: ",
+        "```st scenario",
+        "<earlier_instructions>",
     ] {
         assert!(claude::SYSTEM.contains(must), "{must}");
     }
@@ -631,7 +639,7 @@ fn the_system_prompt_is_long_enough_to_cache_and_names_the_dialect() {
 
 #[test]
 fn haiku_has_no_fallback_and_the_proxy_route_has_no_key() {
-    let r = request(&Route::Proxy, Model::Haiku, &[], &ctx("x", &[]));
+    let r = ask_for(&Route::Proxy, Model::Haiku, &ctx("x", &[]));
     assert_eq!(r.url, PROXY_URL);
     assert_eq!(header(&r, "x-api-key"), None);
     assert_eq!(header(&r, "anthropic-dangerous-direct-browser-access"), None);
@@ -646,122 +654,50 @@ fn haiku_has_no_fallback_and_the_proxy_route_has_no_key() {
             .unwrap()
             .contains("none: it compiles")
     );
-    let opus = request(&Route::Proxy, Model::Opus, &[], &ctx("x", &[]));
+    let opus = ask_for(&Route::Proxy, Model::Opus, &ctx("x", &[]));
     assert!(opus.body.contains("\"claude-opus-5-5\""));
 }
 
-/// Every kept page goes back as context (Nick, 2026-11-01), oldest
-/// first; only past `MAX_CONTEXT` bytes do the oldest drop off.
+/// The answers of one instruction that failed their checks go back as
+/// context, oldest first; only past `MAX_CONTEXT` bytes do the oldest
+/// drop off.
 #[test]
-fn every_kept_page_is_sent_back_until_the_byte_cap() {
+fn every_earlier_turn_is_sent_back_until_the_byte_cap() {
     let history: Vec<Exchange> = (0..10)
         .map(|k| Exchange {
-            question: format!("q{k}"),
             asked: format!("q{k}"),
             answer: format!("a{k}"),
         })
         .collect();
-    let r = request(&Route::Proxy, Model::default(), &history, &ctx("x", &[]));
+    let r = request(&Route::Proxy, Model::default(), &history, "x");
     let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
     let msgs = body["messages"].as_array().unwrap();
     assert_eq!(msgs.len(), 10 * 2 + 1);
     assert_eq!(msgs[0]["content"], "q0");
     assert_eq!(msgs[1]["role"], "assistant");
+    assert_eq!(msgs[20]["content"], "x");
     let big: Vec<Exchange> = (0..8)
         .map(|k| Exchange {
-            question: format!("q{k}"),
             asked: "x".repeat(100 * 1024),
             answer: format!("a{k}"),
         })
         .collect();
     let sent = claude::context_pages(&big);
     assert_eq!(sent.len(), 5, "five of 100 kB fit the 512 kB cap");
-    assert_eq!(sent[0].question, "q3", "the newest stay");
+    assert_eq!(sent[0].answer, "a3", "the newest stay");
     assert_eq!(claude::context_pages(&[]), &[]);
 }
 
-/// Pages are the conversation: ‹ › walk them, Delete drops one from the
-/// context, New conversation drops them all, and the newest past
-/// `MAX_PAGES` goes first.
+/// Nick 2026-11-01 (agent-iterations): the first PROGRAM the Agent
+/// writes from a built-in example asks for the program's name once; the
+/// ones after it land in that project with the newest as main.st and the
+/// one replaced kept as the next vN.st, which the build skips; past the
+/// project's size the oldest iterations go; a reload asks again.
 #[test]
-fn pages_are_walked_deleted_and_bounded() {
-    let mut chat = Chat::new(Box::new(claude::NoStore));
-    chat.receive(Incoming::Proxy(true));
-    for k in 0..3 {
-        chat.question = format!("q{k}");
-        let (seq, _) = chat.ask("x", &[], "").unwrap();
-        chat.receive(Incoming::Chunk {
-            seq,
-            text: STREAM.into(),
-        });
-        chat.receive(Incoming::End { seq });
-    }
-    assert_eq!(chat.history.len(), 3);
-    assert_eq!(chat.history[2].question, "q2");
-    assert!(chat.pages_dirty, "to be written to the project");
-    assert!(chat.viewing().is_none(), "the live answer shows");
-    chat.prev_page();
-    assert_eq!(chat.viewing().map(|e| e.question.as_str()), Some("q2"));
-    chat.prev_page();
-    chat.prev_page();
-    chat.prev_page();
-    assert_eq!(
-        chat.viewing().map(|e| e.question.as_str()),
-        Some("q0"),
-        "stops at the first"
-    );
-    chat.next_page();
-    assert_eq!(chat.viewing().map(|e| e.question.as_str()), Some("q1"));
-    chat.pages_dirty = false;
-    chat.delete_page();
-    assert_eq!(chat.history.len(), 2);
-    assert_eq!(
-        chat.viewing().map(|e| e.question.as_str()),
-        Some("q2"),
-        "the next page takes its place"
-    );
-    assert!(chat.pages_dirty);
-    chat.delete_page();
-    assert!(chat.viewing().is_none(), "past the last: the live answer");
-    chat.next_page();
-    assert!(chat.viewing().is_none());
-    chat.delete_page();
-    assert_eq!(chat.history.len(), 1, "nothing on view, nothing deleted");
-    let pages = chat.pages();
-    assert_eq!(pages[0].question, "q0");
-    chat.load_pages(
-        (0..claude::MAX_PAGES + 3)
-            .map(|k| helmsman_project::agent::Page {
-                question: format!("p{k}"),
-                asked: "a".into(),
-                answer: "b".into(),
-            })
-            .collect(),
-    );
-    assert!(!chat.pages_dirty, "loading is not a change");
-    chat.question = "one more".into();
-    let (seq, _) = chat.ask("x", &[], "").unwrap();
-    chat.receive(Incoming::Chunk {
-        seq,
-        text: STREAM.into(),
-    });
-    chat.receive(Incoming::End { seq });
-    assert_eq!(chat.history.len(), claude::MAX_PAGES, "bounded");
-    assert_eq!(chat.history.last().unwrap().question, "one more");
-    chat.clear();
-    assert!(chat.history.is_empty() && chat.pages_dirty);
-}
-
-/// Nick 2026-11-01 (agent-iterations): the first PROGRAM answer of a
-/// conversation asks for the program's name once; the answers after it
-/// land in that project with the newest as main.st and the one replaced
-/// kept as the next vN.st, which the build skips; past the project's
-/// size the oldest iterations go; New conversation asks again.
-#[test]
-fn a_conversations_programs_pile_up_under_one_name_newest_as_main() {
+fn the_agents_new_programs_pile_up_under_one_name_newest_as_main() {
     let mut v = PlaygroundView::with_storage(Box::new(SharedStorage::default()));
     let prog = |k: u32| format!("PROGRAM lamp_test\nVAR x{k} : BOOL; END_VAR\nx{k} := TRUE;\nEND_PROGRAM\n");
-    assert!(v.chat.program.is_none());
+    assert!(v.new_program.is_none());
     v.take_code(prog(1));
     let q = v.program_name.clone().expect("asked for a name");
     assert_eq!(q.input, "lamp_test", "the PROGRAM's name to start from");
@@ -775,7 +711,7 @@ fn a_conversations_programs_pile_up_under_one_name_newest_as_main() {
     v.confirm_program_name();
     assert!(v.program_name.is_none());
     assert_eq!(
-        v.chat.program.as_deref(),
+        v.new_program.as_deref(),
         Some("line3"),
         "lower-cased, the project's rule"
     );
@@ -824,9 +760,8 @@ fn a_conversations_programs_pile_up_under_one_name_newest_as_main() {
     v.take_code("FUNCTION_BLOCK Helper\nEND_FUNCTION_BLOCK\n".into());
     assert!(v.program_name.is_none());
     assert!(v.proj.files.contains_key("helper.st"));
-    // New conversation: the name is asked again.
-    v.chat.clear();
-    assert!(v.chat.program.is_none());
+    // The name lives in the page: after a reload it is asked again.
+    v.new_program = None;
     v.take_code(prog(4));
     assert!(v.program_name.is_some());
     // Naming an existing project lands in it, iterating what it has.
@@ -895,28 +830,12 @@ fn revisions_are_kept_with_the_project_restored_and_bounded() {
     );
     assert!(revs[0].files["main.st"].ends_with("(* one *)"));
     assert_eq!(revs[0].page, None);
-    // An answer taken records the page it came from.
-    v.chat.receive(Incoming::Proxy(true));
-    v.chat.question = "make it blink".into();
-    let (seq, _) = v.chat.ask("x", &[], "").unwrap();
-    v.chat.receive(Incoming::Chunk {
-        seq,
-        text: STREAM.into(),
-    });
-    v.chat.receive(Incoming::End { seq });
-    v.chat.program = Some("mine".into());
+    // A program taken into the project is a revision too.
+    v.new_program = Some("mine".into());
     v.take_code("PROGRAM p\nEND_PROGRAM\n".into());
     let revs = v.proj.revisions();
     assert_eq!(revs.len(), 2);
     assert_eq!(revs[1].what, "took the Agent's answer into main.st");
-    assert!(
-        revs[1]
-            .page
-            .as_deref()
-            .is_some_and(|p| p.starts_with("make it blink")),
-        "{:?}",
-        revs[1].page
-    );
     assert!(revs[1].files.contains_key("v1.st"));
     assert!(
         !revs[1].files.contains_key("agent.md"),
@@ -953,58 +872,6 @@ fn revisions_are_kept_with_the_project_restored_and_bounded() {
     assert_eq!(row.by, "you");
     let view = again.proj.revisions()[0].view();
     assert!(view.files.contains_key("main.st"));
-}
-
-/// The pages live with the project: written to agent.md as they come,
-/// read back when the project opens again, kept out of the Files tab's
-/// list and out of the project's dirty mark.
-#[test]
-fn pages_survive_a_reload_with_the_project() {
-    let store = SharedStorage::default();
-    let mut v = PlaygroundView::with_storage(Box::new(store.clone()));
-    v.proj.create("mine", None);
-    v.open_project("mine");
-    v.chat.receive(Incoming::Proxy(true));
-    v.chat.question = "make it blink".into();
-    let (seq, _) = v.chat.ask("x", &[], "").unwrap();
-    v.chat.receive(Incoming::Chunk {
-        seq,
-        text: STREAM.into(),
-    });
-    v.chat.receive(Incoming::End { seq });
-    assert!(v.chat.pages_dirty);
-    let ctx = eframe::egui::Context::default();
-    v.tick(&ctx);
-    assert!(!v.chat.pages_dirty, "written on the next frame");
-    assert!(v.proj.agent_text().is_some_and(|t| t.contains("make it blink")));
-    assert!(!v.proj.dirty(), "pages never dirty the project");
-    assert!(!v.proj.file_dirty("agent.md"));
-    drop(v);
-    let again = PlaygroundView::with_storage(Box::new(store.clone()));
-    assert_eq!(again.proj.open, "mine");
-    assert_eq!(again.chat.history.len(), 1, "the page came back with the project");
-    assert_eq!(again.chat.history[0].question, "make it blink");
-    // An example is read-only: its pages last until the page closes, and
-    // a Save of a copy keeps them.
-    let mut ex = PlaygroundView::with_storage(Box::new(SharedStorage::default()));
-    assert!(ex.proj.is_example());
-    ex.chat.receive(Incoming::Proxy(true));
-    ex.chat.question = "why".into();
-    let (seq, _) = ex.chat.ask("x", &[], "").unwrap();
-    ex.chat.receive(Incoming::Chunk {
-        seq,
-        text: STREAM.into(),
-    });
-    ex.chat.receive(Incoming::End { seq });
-    ex.tick(&ctx);
-    assert!(ex.proj.agent_text().is_some());
-    assert!(!ex.proj.dirty(), "an example with pages is not dirty");
-    ex.proj.save();
-    assert!(!ex.proj.is_example());
-    assert!(
-        ex.proj.saved[&ex.proj.open].0.contains_key("agent.md"),
-        "the copy keeps them"
-    );
 }
 
 #[test]
@@ -1287,37 +1154,27 @@ fn the_key_stays_in_memory_unless_remember_is_ticked() {
 }
 
 #[test]
-fn asking_needs_a_key_or_the_proxy_and_one_question_at_a_time() {
+fn asking_needs_a_key_or_the_proxy_and_one_answer_at_a_time() {
     let mut chat = Chat::new(Box::new(claude::NoStore));
-    chat.question = "why?".into();
-    assert!(
-        chat.ask("PROGRAM p END_PROGRAM", &[], "").is_err(),
-        "still checking for a proxy"
-    );
+    assert!(chat.send("why?", &[]).is_err(), "still checking for a proxy");
     chat.receive(Incoming::Proxy(false));
     assert_eq!(chat.proxy, Proxy::No);
     assert_eq!(
-        chat.ask("x", &[], "").unwrap_err(),
+        chat.send("why?", &[]).unwrap_err(),
         "Paste an Anthropic API key first."
     );
     chat.key_mut().push_str(KEY);
-    let (seq, req) = chat.ask("x", &[], "").unwrap();
+    let (seq, req) = chat.send("why?", &[]).unwrap();
     assert_eq!(req.url, ANTHROPIC_URL);
-    assert_eq!(chat.question, "");
     assert!(chat.busy());
-    chat.question = "again".into();
-    assert!(chat.ask("x", &[], "").is_err(), "busy");
-    // The stream completes; the exchange joins the history once.
+    assert!(chat.send("again", &[]).is_err(), "busy");
     chat.receive(Incoming::Chunk {
         seq,
         text: STREAM.into(),
     });
     chat.receive(Incoming::End { seq });
     assert_eq!(chat.answer.as_ref().unwrap().phase, Phase::Done);
-    assert_eq!(chat.history.len(), 1);
-    assert!(chat.history[0].asked.contains("<current_program>"));
-    chat.question = "offline".into();
-    let (seq, _) = chat.ask("x", &[], "").unwrap();
+    let (seq, _) = chat.send("offline", &[]).unwrap();
     chat.receive(Incoming::Unreachable {
         seq,
         why: "TypeError: Failed to fetch".into(),
@@ -1325,19 +1182,16 @@ fn asking_needs_a_key_or_the_proxy_and_one_question_at_a_time() {
     assert!(
         matches!(&chat.answer.as_ref().unwrap().phase, Phase::Failed(w) if w.contains("Failed to fetch"))
     );
-    assert_eq!(chat.history.len(), 1, "a failed answer is not history");
     let mut proxied = Chat::new(Box::new(claude::NoStore));
     proxied.receive(Incoming::Proxy(true));
-    proxied.question = "q".into();
-    assert_eq!(proxied.ask("x", &[], "").unwrap().1.url, PROXY_URL);
+    assert_eq!(proxied.send("q", &[]).unwrap().1.url, PROXY_URL);
 }
 
 #[test]
 fn a_stopped_answer_ignores_what_arrives_late() {
     let mut chat = Chat::new(Box::new(claude::NoStore));
     chat.receive(Incoming::Proxy(true));
-    chat.question = "q".into();
-    let (seq, _) = chat.ask("x", &[], "").unwrap();
+    let (seq, _) = chat.send("q", &[]).unwrap();
     chat.stop();
     chat.receive(Incoming::Chunk {
         seq,
@@ -1351,7 +1205,6 @@ fn a_stopped_answer_ignores_what_arrives_late() {
     let a = chat.answer.as_ref().unwrap();
     assert_eq!(a.phase, Phase::Failed("stopped".into()));
     assert_eq!(a.text, "");
-    assert_eq!(chat.history.len(), 0);
 }
 
 // ---- "Use this code" ---------------------------------------------------
@@ -2033,57 +1886,61 @@ fn tapping_an_output_picks_it() {
     assert_eq!(s.chrome.tab, Tab::Io, "no tab of its own");
 }
 
+/// An instruction on a built-in example: no key, nothing is sent and the
+/// tab says why; Stop ends it with the file untouched; a checked program
+/// asks for its project's name once, lands there, and never runs by
+/// itself.
 #[test]
-fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
+fn an_instruction_on_an_example_lands_its_program_named_and_never_runs_it() {
+    use crate::instruct::Kind;
     let mut s = Screen::as_opened();
     s.chrome.tab = Tab::Claude;
     s.frame(vec![]);
-    s.view.chat.question = "a latch please".into();
-    s.view.ask(&s.ctx.clone());
-    assert_eq!(
-        s.view.ask_error.as_deref(),
-        Some("Paste an Anthropic API key first.")
-    );
+    s.view.instruct.draft = "a latch please".into();
+    s.view.send_instruction(&s.ctx.clone());
+    let o = s.view.instruct.outcome.clone().expect("said why");
+    assert_eq!(o.kind, Kind::Failed);
+    assert_eq!(o.status, "Paste an Anthropic API key first.");
+    assert_eq!(s.view.instruct.draft, "a latch please", "kept to send again");
     assert_eq!(s.view.link.sent.len(), 0);
     s.view.chat.key_mut().push_str(KEY);
-    s.view.chat.question = "a latch please".into();
-    s.view.ask(&s.ctx.clone());
+    s.view.send_instruction(&s.ctx.clone());
     assert_eq!(s.view.link.sent.len(), 1);
-    // Stopped and asked again: the first answer is dropped.
+    assert_eq!(s.view.instruct.draft, "", "the box empties");
+    // Stopped and sent again: the first answer is dropped.
     s.view.stop_answer();
     assert_eq!(s.view.link.aborted, 1);
-    s.view.chat.question = "a latch please".into();
-    s.view.ask(&s.ctx.clone());
+    assert_eq!(
+        s.view.instruct.outcome.as_ref().map(|o| o.kind),
+        Some(Kind::Failed)
+    );
+    s.view.instruct.draft = "a latch please".into();
+    s.view.send_instruction(&s.ctx.clone());
     assert_eq!(s.view.link.sent.len(), 2);
     let (seq, req) = s.view.link.sent[1].clone();
     assert!(
         req.body.contains("PROGRAM blink"),
         "the editor's program goes along"
     );
+    let latch = STREAM.replace("PROGRAM p\\nEND_PROGRAM", &example("latch").replace('\n', "\\n"));
     s.view.link.inbox.push(Incoming::Chunk {
         seq,
-        text: STREAM.replace("PROGRAM p\\nEND_PROGRAM", &example("latch").replace('\n', "\\n")),
+        text: latch.clone(),
     });
     s.view.link.inbox.push(Incoming::End { seq });
     s.wait(0.1);
     // Code with no scenario is asked for one, once; the same answer again
-    // is shown, not checked by a scenario (`crate::verify`).
+    // is taken, checked by no scenario (`crate::verify`).
     assert_eq!(s.view.link.sent.len(), 3, "asked once for a scenario");
     let (seq, _) = s.view.link.sent[2].clone();
-    s.view.link.inbox.push(Incoming::Chunk {
-        seq,
-        text: STREAM.replace("PROGRAM p\\nEND_PROGRAM", &example("latch").replace('\n', "\\n")),
-    });
+    s.view.link.inbox.push(Incoming::Chunk { seq, text: latch });
     s.view.link.inbox.push(Incoming::End { seq });
     s.wait(0.1);
     assert_eq!(s.view.link.sent.len(), 3);
-    assert_eq!(s.view.chat.answer.as_ref().unwrap().phase, Phase::Done);
-    assert!(s.view.live_check.as_ref().is_some_and(|(c, _)| c.unchecked()));
     assert!(s.view.session.running, "the example was running");
-    assert!(s.view.use_answer());
     assert!(
         s.view.program_name.is_some(),
-        "the first PROGRAM answer asks for a name"
+        "the first new program asks for a name"
     );
     assert_eq!(
         s.view.program_name.as_ref().unwrap().input,
@@ -2091,9 +1948,27 @@ fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
         "the PROGRAM's, past the built-in example of that name"
     );
     s.view.confirm_program_name();
-    assert_eq!(s.view.chat.program.as_deref(), Some("latch-2"));
+    assert_eq!(s.view.new_program.as_deref(), Some("latch-2"));
+    let o = s.view.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(o.status, "Updated main.st. No scenario checks this change.");
+    assert_eq!(
+        o.why.as_deref(),
+        Some("Here:"),
+        "no Why: line, so its first words"
+    );
+    assert!(o.undo.is_none(), "a new project has no version before it");
+    let rev = s.view.proj.revisions().last().cloned().unwrap();
+    assert_eq!(rev.what, "Agent: a latch please");
+    assert!(
+        rev.page
+            .as_deref()
+            .is_some_and(|p| p.starts_with("Instruction: a latch please\nFile: main.st\n")),
+        "{:?}",
+        rev.page
+    );
     assert_eq!(s.view.session.src, example("latch"));
-    assert!(!s.view.session.running, "Claude's code never runs by itself");
+    assert!(!s.view.session.running, "the Agent's code never runs by itself");
     assert!(
         s.view
             .session
