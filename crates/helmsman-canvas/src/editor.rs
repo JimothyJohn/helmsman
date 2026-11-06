@@ -130,8 +130,9 @@ impl Pane {
 
 /// The left pane's width when first opened, points: one width for every
 /// tab (Nick, 2026-11-01); 200 since the third tab (three tab buttons and
-/// the hide chevron must fit the row, or the pane grows every frame).
-pub const LEFT_W: f32 = 200.0;
+/// the hide chevron must fit the row, or the pane grows every frame); 240
+/// since 2026-11-05 (Nick: "just a bit wider").
+pub const LEFT_W: f32 = 240.0;
 /// The right panel's width when first opened, points: 236 since the
 /// Requirements tab (three tab buttons and the hide chevron must fit the
 /// row, or the panel grows every frame).

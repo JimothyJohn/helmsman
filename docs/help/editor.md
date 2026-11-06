@@ -108,17 +108,22 @@ label is drawn, the icon stands alone at a readable size.
   the project's files, the examples and starters, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
-  next. **Devices** (<kbd>Alt</kbd> <kbd>4</kbd>): the devices the
-  project's I/O map names, each with its points under it, their live
+  next. **Devices** (<kbd>Alt</kbd> <kbd>4</kbd>): at the top, **I/O
+  wiring** links to the project's `io.map`, the file that says which
+  program variable is wired to which device point; then the devices it
+  names, each with its points under it, their live
   values, and whether the link is up; a right-click on the blank space
   adds a device (name, protocol, address, settings) as a line of the
   map; Import device… takes the vendor's EDS file, keeps it in the
   project and fills the form in from it. Under the map's devices, **On
   the network**: Scan lists every EtherNet/IP device that answers on the
   LAN, says whether the map already has it, and shows what the public
-  device library knows of it; right-click one that is not in the map and
-  Add to the map… opens the form filled in, the device named by its
-  identity so a changed address never loses it. One map may mix Modbus
+  device library knows of it (in the simulation, one simulated E1213).
+  **Use this device** under one opens the form filled in, the device
+  named by its identity so a changed address never loses it; on a
+  read-only example it copies the project first. After Add, it offers to
+  move the program's inputs and outputs off the box's own channels onto
+  the device's points, showing each line before it changes. One map may mix Modbus
   TCP and EtherNet/IP devices. The agent reads the same listing, network
   included. Under that, **Plant states**: the quantities a project's
   plant model keeps for the machine it stands in for (mark a variable

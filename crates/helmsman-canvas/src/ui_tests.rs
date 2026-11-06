@@ -1367,9 +1367,16 @@ mod chrome {
         assert_eq!(d.protocol, 1, "EtherNet/IP");
         h.press("device ok");
         h.wait(0.3);
+        // The program's lamp was on the box's channel: asked, left there.
+        assert!(h.has("rewire form"));
+        h.press("rewire cancel");
+        h.wait(0.2);
         let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(map.contains("out lamp bool box do:0"), "Not now leaves it: {map}");
         assert!(
-            map.contains("device e1213 enip-io cip=991:515:0x00e12130 rpi_ms=100 poll_ms=20\n"),
+            map.contains(
+                "device e1213 enip-io cip=991:515:0x00e12130 profile=moxa-e1213 rpi_ms=100 poll_ms=20\n"
+            ),
             "{map}"
         );
         // Scan again: now the map binds it.
@@ -1383,6 +1390,70 @@ mod chrome {
         h.press("menu add network");
         h.wait(0.2);
         assert!(!h.has("device form"), "already in the map: nothing to add");
+        assert!(
+            !h.has("use network 192.168.127.254"),
+            "a wired device has no Use button"
+        );
+    }
+
+    /// Nick, 2026-11-05: "It says it's not in the map but I don't even
+    /// know where the map is". On a read-only example, "Use this device"
+    /// copies the project, gives it the io.map its program implies, opens
+    /// the form; after Add, a question moves the box channels onto the
+    /// device, showing the lines; the I/O wiring link opens io.map.
+    #[test]
+    fn use_this_device_copies_an_example_and_rewires_its_io() {
+        let mut h = Harness::new(App::sim());
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            // An example with a BOOL input and output (Latch).
+            let ex = crate::playground::EXAMPLES
+                .iter()
+                .map(|e| e.src)
+                .find(|src| {
+                    let m = crate::sim_projects::example_io_map(src);
+                    m.contains(" box di:0") && m.contains(" box do:0")
+                })
+                .map(|src| crate::sim_projects::example_project(src).0)
+                .expect("an example with BOOL I/O");
+            sim.open_project(&ex);
+            assert!(sim.proj.is_example());
+        }
+        h.press("pane devices");
+        h.press("devices scan");
+        h.wait(0.3);
+        assert!(
+            h.has("use network 192.168.127.254"),
+            "a visible button, not only a right-click"
+        );
+        let found = &h.app.sim.as_ref().unwrap().devices_ui.found[0];
+        assert!(found.simulated, "the playground's E1213 says it is simulated");
+        h.press("use network 192.168.127.254");
+        h.wait(0.3);
+        {
+            let sim = h.app.sim.as_ref().unwrap();
+            assert!(
+                !sim.proj.is_example(),
+                "copied into a project of the visitor's own"
+            );
+            assert!(sim.proj.open.starts_with("my-"), "{}", sim.proj.open);
+            let map = &sim.proj.files["io.map"];
+            assert!(map.contains(" bool box di:0"), "{map}");
+        }
+        assert!(h.has("device form"));
+        h.press("device ok");
+        h.wait(0.3);
+        assert!(h.has("rewire form"), "asks before moving the lines");
+        h.press("rewire ok");
+        h.wait(0.3);
+        assert!(!h.has("rewire form"));
+        let map = h.app.sim.as_ref().unwrap().proj.files["io.map"].clone();
+        assert!(!map.contains(" box di:") && !map.contains(" box do:"), "{map}");
+        assert!(map.contains(" bool e1213 di:0"), "{map}");
+        // The I/O wiring link opens the file in the editor.
+        h.press("devices open map");
+        h.wait(0.2);
+        assert_eq!(h.app.sim.as_ref().unwrap().proj.current, "io.map");
     }
 
     /// The library's match fills the form's name and profile in.

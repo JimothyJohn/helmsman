@@ -541,6 +541,26 @@ impl BoxView {
         if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
         {
             self.add_device_line(&line);
+            if let Some(b) = self
+                .projects
+                .open
+                .as_ref()
+                .and_then(|o| o.bufs.get(helmsman_project::IO_MAP))
+                .filter(|b| b.loaded)
+            {
+                let map = b.text.clone();
+                self.devices_ui.offer_rewire(&map, &line);
+            }
+        }
+        if let Some(changes) = self.devices_ui.rewire_ui(&ui.ctx().clone(), chrome)
+            && let Some(b) = self
+                .projects
+                .open
+                .as_mut()
+                .and_then(|o| o.bufs.get_mut(helmsman_project::IO_MAP))
+                .filter(|b| b.loaded)
+        {
+            b.text = crate::devices::apply_rewire(&b.text, &changes);
         }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
@@ -1344,10 +1364,18 @@ impl Body for BoxView {
         self.devices_ui.plant.states = crate::plant::states(&refs, &map, &|_| None, &signal_value);
         self.devices_ui.plant.devices = crate::plant::device_choices(&map);
         self.devices_ui.plant.simulated = false;
-        if self.devices_ui.show(ui, &nodes, &source, chrome, &write) == Some(crate::devices::DeviceAct::Scan)
-        {
-            self.devices_ui.scan = crate::devices::Scan::Running;
-            self.projects.discover();
+        self.devices_ui.copy_first = false;
+        match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
+            Some(crate::devices::DeviceAct::Scan) => {
+                self.devices_ui.scan = crate::devices::Scan::Running;
+                self.projects.discover();
+            }
+            Some(crate::devices::DeviceAct::Use(d)) => self.devices_ui.adding = Some(d),
+            Some(crate::devices::DeviceAct::OpenMap) => {
+                self.projects.open_file(helmsman_project::IO_MAP);
+                chrome.show_code();
+            }
+            Some(crate::devices::DeviceAct::Add(_)) | None => {}
         }
     }
 

@@ -173,7 +173,8 @@ pub fn example_io_map(src: &str) -> String {
         "# This example's inputs and outputs, on the box's own channels so it\n\
          # runs with nothing wired. If this box's own channels are wired to\n\
          # anything, these lines drive it: check them first. To use a remote\n\
-         # I/O module, declare it and change the device on each line.\n",
+         # I/O module: Devices tab, Scan, then Use this device; it offers\n\
+         # to move these lines onto the module.\n",
     );
     let (mut di, mut dq) = (0, 0);
     for p in s.inputs().chain(s.outputs()) {

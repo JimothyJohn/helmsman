@@ -1201,9 +1201,21 @@ impl PlaygroundView {
         if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
         {
             self.add_device_line(&line);
+            let map = self
+                .proj
+                .files
+                .get(helmsman_project::IO_MAP)
+                .cloned()
+                .unwrap_or_default();
+            self.devices_ui.offer_rewire(&map, &line);
         }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
+        }
+        if let Some(changes) = self.devices_ui.rewire_ui(&ui.ctx().clone(), chrome)
+            && let Some(text) = self.proj.files.get_mut(helmsman_project::IO_MAP)
+        {
+            *text = crate::devices::apply_rewire(text, &changes);
         }
         if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
@@ -1588,12 +1600,20 @@ impl Body for PlaygroundView {
         self.devices_ui.plant.states = self.plant_states(&map);
         self.devices_ui.plant.devices = crate::plant::device_choices(&map);
         self.devices_ui.plant.simulated = true;
-        if self.devices_ui.show(ui, &nodes, &source, chrome, &write) == Some(crate::devices::DeviceAct::Scan)
-        {
-            self.devices_ui.simulated_scan(&map);
-            #[cfg(target_arch = "wasm32")]
-            self.library
-                .fetch(helmsman_project::devlib::DEFAULT_URL, &ui.ctx().clone());
+        self.devices_ui.copy_first = self.proj.is_example();
+        match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
+            Some(crate::devices::DeviceAct::Scan) => {
+                self.devices_ui.simulated_scan(&map);
+                #[cfg(target_arch = "wasm32")]
+                self.library
+                    .fetch(helmsman_project::devlib::DEFAULT_URL, &ui.ctx().clone());
+            }
+            Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
+            Some(crate::devices::DeviceAct::OpenMap) => {
+                self.proj.open_file(helmsman_project::IO_MAP);
+                chrome.show_code();
+            }
+            Some(crate::devices::DeviceAct::Add(_)) | None => {}
         }
     }
 
@@ -2378,6 +2398,41 @@ impl PlaygroundView {
             Some(text) => *text = crate::devices::appended(text, line),
             None => self.proj.add_file(helmsman_project::IO_MAP, line.to_string()),
         }
+    }
+
+    /// "Use this device": a read-only example is copied into a project of
+    /// the visitor's own first, a project without an `io.map` gets the one
+    /// its program's I/O implies (on the box's own channels, which the
+    /// rewire question then moves), and the form opens filled in.
+    fn use_device(&mut self, d: crate::devices::NewDevice) {
+        if self.proj.is_example() {
+            let from = self.proj.open.clone();
+            let to = (1..=99)
+                .map(|n| {
+                    if n == 1 {
+                        format!("my-{from}")
+                    } else {
+                        format!("my-{from}-{n}")
+                    }
+                })
+                .map(|n| n.chars().take(48).collect::<String>())
+                .find(|n| !self.proj.exists(n))
+                .unwrap_or_default();
+            self.proj.create(&to, Some(&from));
+            self.reload();
+            if self.proj.is_example() {
+                return;
+            }
+            self.proj.note(
+                format!("{from} is a read-only example, so it was copied as {to} to wire the device in."),
+                false,
+            );
+        }
+        if !self.proj.files.contains_key(helmsman_project::IO_MAP) {
+            let map = crate::sim_projects::example_io_map(&self.session.src);
+            self.proj.add_file(helmsman_project::IO_MAP, map);
+        }
+        self.devices_ui.adding = Some(d);
     }
 
     /// The inputs the diagram shows a control for.
