@@ -2364,6 +2364,18 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   value outside its type's range never reaches the program. The Trend
   tab: up to six pinned signals over the last 10 s.
 - **The live diagram** is the box's (`st_view::Viewer`).
+- **The guided tour** (`tour.rs`; `?tour`, Help › Take the tour; Nick,
+  2026-11-06): a card beside the control each step is about, the control
+  outlined, over everything in the `Tooltip` order so no panel moves. A
+  step advances on what the app shows (`tour::Seen`, read by
+  `PlaygroundView::tour_seen`), measured from what it showed when the
+  step began, so Back never lands on a step already done: Blink's name
+  popup, a project of the visitor's own, an edit that compiles, the edit
+  running, a pick, the trend's window or signals, a request to the Agent
+  (or Skip this step). Anchors are `Chrome::hits` keys, the first drawn
+  wins (the control, else its tab, else its pane's strip). Contracts in
+  `tour_tests.rs` (the state machine) and `ui_tests.rs` (`tour`: start to
+  finish on the real interface; Skip leaves the app as it was).
 - **Claude** (its tab). Calls the Messages API from the page:
   `claude-sonnet-5-5` by default (Opus 5.5 and Haiku 5.5 selectable),
   streamed, API version `2026-10-21`, `max_tokens` 16000, effort medium,

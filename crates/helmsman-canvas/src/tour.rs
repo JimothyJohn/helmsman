@@ -425,7 +425,16 @@ pub fn ui(
     });
     tour.anchor = found.as_ref().map(|(k, _)| k.clone());
     let anchor = found.map(|(_, r)| r);
-    let screen = ctx.content_rect();
+    // Under the header: the card never hides the menus or the project's
+    // name, even when it points at the header.
+    let whole = ctx.content_rect();
+    let screen = Rect::from_min_max(
+        egui::pos2(
+            whole.left(),
+            (whole.top() + crate::app::HEADER_H + 4.0).min(whole.bottom()),
+        ),
+        whole.max,
+    );
     let id = egui::Id::unique("tour-card");
     let size = Vec2::new(CARD_W, ctx.data(|d| d.get_temp::<f32>(id)).unwrap_or(260.0));
     let card = place(anchor, size, screen);
