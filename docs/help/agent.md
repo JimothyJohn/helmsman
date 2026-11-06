@@ -14,7 +14,7 @@ playground from your own machine with a local proxy, or natively with
 the key in the environment, the tab says the key is preloaded so you are
 not left wondering.
 
-<img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the question and Ask." width="240">
+<img src="img/agent-tab.png" alt="The Agent tab: the key, the model, the question and Ask." width="300">
 
 Ask for a program ("a conveyor with a photo eye that stops after three
 parts"), for a change to the open one ("add a two-second delay before the

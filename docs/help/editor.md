@@ -142,6 +142,6 @@ label is drawn, the icon stands alone at a readable size.
 
 <img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
 
-<img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="240">
+<img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">
 
 Each pane remembers whether it was open, per browser.
