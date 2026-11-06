@@ -178,6 +178,16 @@ pub fn wants_monitor() -> bool {
     crate::app::wants_monitor(&query)
 }
 
+/// Whether this page starts the guided tour ([`crate::app::wants_tour`]
+/// on its query string: `?tour`).
+#[must_use]
+pub fn wants_tour() -> bool {
+    let query = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default();
+    crate::app::wants_tour(&query)
+}
+
 /// The playground's link to Claude: one answer at a time, abortable.
 /// Callbacks only push [`Incoming`]s; [`crate::claude::Chat`] decides.
 #[derive(Default)]

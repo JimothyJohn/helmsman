@@ -84,6 +84,9 @@ mod theme;
 mod tips;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tips_tests;
+mod tour;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tour_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod ui_tests;
 mod verify;

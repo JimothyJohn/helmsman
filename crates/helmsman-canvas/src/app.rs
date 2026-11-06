@@ -83,6 +83,14 @@ pub fn wants_monitor(query: &str) -> bool {
     has(query, "monitor") || has(query, "andon")
 }
 
+/// Whether a page with this query string starts the guided tour:
+/// `?tour` (the help pages link `/playground/?tour`).
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[must_use]
+pub fn wants_tour(query: &str) -> bool {
+    has(query, "tour")
+}
+
 // Independent UI flags (menu open, served by a box, first frame routed,
 // …), not a state machine in disguise.
 #[allow(clippy::struct_excessive_bools)]
@@ -112,6 +120,8 @@ pub struct App {
     fell_back: bool,
     /// When the proposal list was last asked for (page time, s).
     listed: Option<f64>,
+    /// The guided tour, while it runs (`?tour`, Help › Take the tour).
+    pub tour: Option<crate::tour::Tour>,
 }
 
 impl App {
@@ -137,6 +147,10 @@ impl App {
         if crate::web::wants_monitor() {
             app.open_monitor();
         }
+        #[cfg(target_arch = "wasm32")]
+        if app.source == Source::Sim && crate::web::wants_tour() {
+            app.tour = Some(crate::tour::Tour::new());
+        }
         app
     }
 
@@ -160,6 +174,7 @@ impl App {
             about: false,
             fell_back: false,
             listed: None,
+            tour: None,
         }
     }
 
@@ -364,6 +379,7 @@ impl App {
         for a in hotkeys::pressed(&ctx) {
             self.act(a, &ctx);
         }
+        self.tour_ui(&ctx);
         theme::pointer_cursor(&ctx);
     }
 
@@ -1175,6 +1191,19 @@ impl App {
                 ) {
                     ctx.open_url(egui::OpenUrl::new_tab(format!("{HELP_URL}#keyboard")));
                 }
+                if self.source == Source::Sim
+                    && menu_item(
+                        ui,
+                        &mut chrome,
+                        "help tour",
+                        "Take the tour",
+                        self.tour.is_some(),
+                        "A guided tour of the playground: each step points at a control and moves on when you use it.",
+                    )
+                {
+                    self.tour = Some(crate::tour::Tour::new());
+                    self.screen = Screen::Editor;
+                }
                 ui.separator();
                 if menu_item(
                     ui,
@@ -1191,6 +1220,35 @@ impl App {
         });
         hits.extend(chrome.hits.drain(before..));
         self.chrome = chrome;
+    }
+
+    /// The guided tour over the window, while it runs: reads the
+    /// simulation's state, moves the tour on, and draws its card.
+    fn tour_ui(&mut self, ctx: &egui::Context) {
+        let Some(tour) = &mut self.tour else { return };
+        let seen = match (self.screen, self.source, &self.sim) {
+            (Screen::Editor, Source::Sim, Some(s)) => s.tour_seen(&self.chrome),
+            _ => crate::tour::Seen::default(),
+        };
+        tour.observe(&seen);
+        let deploy = hotkeys::label(ctx, Action::Deploy);
+        let effect = crate::tour::ui(ctx, tour, &seen, &mut self.chrome, &deploy);
+        if tour.ended {
+            self.tour = None;
+        }
+        match effect {
+            Some(crate::tour::Effect::CloseNaming) => {
+                if let Some(s) = &mut self.sim {
+                    s.files_ui.naming = None;
+                }
+            }
+            Some(crate::tour::Effect::Requirements) => {
+                self.chrome.right = true;
+                self.chrome.tab = crate::editor::Tab::Requirements;
+            }
+            Some(crate::tour::Effect::Help) => ctx.open_url(egui::OpenUrl::new_tab(HELP_URL)),
+            None => {}
+        }
     }
 
     /// The open view's actions in the header: the simulation's run

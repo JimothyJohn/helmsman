@@ -1337,6 +1337,45 @@ impl PlaygroundView {
     }
 }
 
+impl PlaygroundView {
+    /// What the guided tour reads of this view (`crate::tour`), with the
+    /// Editor on screen and the trend panel as `chrome` has it.
+    #[must_use]
+    pub fn tour_seen(&self, chrome: &Chrome) -> crate::tour::Seen {
+        use std::hash::{Hash, Hasher};
+        let hash = |f: &dyn Fn(&mut std::collections::hash_map::DefaultHasher)| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            f(&mut h);
+            h.finish()
+        };
+        let blink = crate::sim_projects::example_project(crate::playground::EXAMPLES[0].src).0;
+        let trend = &self.session.trend;
+        crate::tour::Seen {
+            editor: true,
+            naming_blink: self.files_ui.naming == Some(projects::Naming::FromStarter(blink)),
+            open: self.proj.open.clone(),
+            example: self.proj.is_example(),
+            source: hash(&|h| self.proj.files.hash(h)),
+            compiles: self.pending.is_none() && self.session.diags.is_empty(),
+            live: self.session.running
+                && !self.session.stale()
+                && self.proj.running.as_deref() == Some(self.proj.open.as_str()),
+            picked: self
+                .viewer
+                .as_ref()
+                .filter(|v| v.pick.is_some() || v.because.is_some())
+                .map(|v| format!("{:?} {:?}", v.pick, v.because)),
+            trend: hash(&|h| {
+                trend.window_ms.hash(h);
+                trend.signals.hash(h);
+            }),
+            asks: self.chat.seq(),
+            keyed: self.chat.route().is_ok(),
+            trend_open: chrome.trend && chrome.bottom == editor::Bottom::Trend,
+        }
+    }
+}
+
 /// What [`PlaygroundView::watch`] compares against.
 #[derive(Default)]
 struct Seen {
@@ -1553,6 +1592,7 @@ impl Body for PlaygroundView {
                 editor::st_editor(ui, egui::Id::unique(SOURCE_ID), text, &diags, MAX_SOURCE, chrome)
             })
             .inner;
+        chrome.hit("st editor", r.rect);
         if r.changed() {
             self.edited(now);
         }
@@ -1717,7 +1757,7 @@ impl Body for PlaygroundView {
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         match tab {
-            Tab::Io => self.io(ui),
+            Tab::Io => self.io(ui, chrome),
             Tab::Requirements => {
                 let ctx = ui.ctx().clone();
                 let act = egui::ScrollArea::vertical()
@@ -1818,7 +1858,7 @@ impl Body for PlaygroundView {
 }
 
 impl PlaygroundView {
-    fn io(&mut self, ui: &mut egui::Ui) {
+    fn io(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if self.session.build.is_none() {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
@@ -1876,7 +1916,7 @@ impl PlaygroundView {
             }
             let mut picked = None;
             let (cols, col) = columns(ui);
-            egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
+            let grid = egui::Grid::new("pg-io-out").num_columns(cols).show(ui, |ui| {
                 for pair in outputs.chunks(cols) {
                     for p in pair {
                         ui.scope(|ui| {
@@ -1889,6 +1929,9 @@ impl PlaygroundView {
                     ui.end_row();
                 }
             });
+            if !outputs.is_empty() {
+                chrome.hit("io outputs", grid.response.rect);
+            }
             if let Some(name) = picked {
                 self.pick(&name);
             }
@@ -1949,7 +1992,7 @@ impl PlaygroundView {
                     ui.label(RichText::new("Checking for a local proxy…").color(t.muted))
                         .tip("With a local proxy the API key stays on this machine.");
                 }
-                Proxy::No => self.key_ui(ui),
+                Proxy::No => self.key_ui(ui, chrome),
             }
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Model").color(t.muted))
@@ -2011,7 +2054,7 @@ impl PlaygroundView {
         ui.add_space(4.0);
     }
 
-    fn key_ui(&mut self, ui: &mut egui::Ui) {
+    fn key_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let held = "Held in this page only; sent only to api.anthropic.com, billed to your account.";
         let key_tip = if self.chat.from_env {
             format!("{held} Preloaded from ANTHROPIC_API_KEY in this machine's environment.")
@@ -2029,6 +2072,7 @@ impl PlaygroundView {
                     .desired_width(f32::INFINITY),
             )
             .tip(&key_tip);
+        chrome.hit("agent key", r.rect);
         if r.changed() {
             self.chat.key_changed();
         }
