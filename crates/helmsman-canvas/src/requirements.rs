@@ -723,7 +723,7 @@ fn edit_ui(ctx: &egui::Context, chrome: &mut Chrome, v: &View<'_>, rui: &mut Req
         .unwrap_or_default();
     let mut out = None;
     let mut done = false;
-    let m = egui::Modal::new(egui::Id::unique("req-edit")).show(ctx, |ui| {
+    let m = crate::theme::near_pointer(ctx, "req-edit").show(ctx, |ui| {
         ui.set_min_width(480.0);
         ui.set_max_width(480.0);
         let t = theme(ui);
@@ -812,7 +812,7 @@ fn delete_ui(ctx: &egui::Context, chrome: &mut Chrome, v: &View<'_>, rui: &mut R
         .map_or_else(|| file.clone(), |r| r.words().to_string());
     let mut out = None;
     let mut done = false;
-    let m = egui::Modal::new(egui::Id::unique("req-delete")).show(ctx, |ui| {
+    let m = crate::theme::near_pointer(ctx, "req-delete").show(ctx, |ui| {
         ui.set_max_width(460.0);
         ui.label(RichText::new("Delete this requirement?").strong().size(20.0));
         ui.add_space(8.0);

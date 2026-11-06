@@ -33,7 +33,7 @@ impl DevicesUi {
         let mut done = false;
         let program = self.program.clone();
         let eds_files = self.eds_files.clone();
-        let m = egui::Modal::new(egui::Id::unique("device-new")).show(ctx, |ui| {
+        let m = crate::theme::near_pointer(ctx, "device-new").show(ctx, |ui| {
             // A fixed width: the form is centred, so a width that follows
             // its content moves Add under the pointer as fields change.
             ui.set_min_width(WIDTH);
@@ -47,7 +47,8 @@ impl DevicesUi {
             ui.add_space(8.0);
             fields(ui, chrome, &mut d, &eds_files);
             ui.add_space(10.0);
-            let rows_h = (ctx.content_rect().height() * 0.35).max(180.0);
+            // Small enough that the whole form fits on a laptop's screen.
+            let rows_h = (ctx.content_rect().height() * 0.28).clamp(160.0, 320.0);
             points(ui, chrome, &mut d, &program, rows_h);
             if let Some(err) = &d.error {
                 ui.add_space(4.0);
@@ -117,7 +118,7 @@ impl DevicesUi {
         let plan = self.rename_plan.clone();
         let mut out = None;
         let mut done = false;
-        let m = egui::Modal::new(egui::Id::unique("signal-rename")).show(ctx, |ui| {
+        let m = crate::theme::near_pointer(ctx, "signal-rename").show(ctx, |ui| {
             ui.set_max_width(460.0);
             let t = theme(ui);
             ui.label(RichText::new(format!("Rename {old}")).strong().size(20.0));
@@ -184,7 +185,7 @@ impl DevicesUi {
         let n = self.map.signals.iter().filter(|s| s.device == name).count();
         let mut out = None;
         let mut done = false;
-        let m = egui::Modal::new(egui::Id::unique("device-delete")).show(ctx, |ui| {
+        let m = crate::theme::near_pointer(ctx, "device-delete").show(ctx, |ui| {
             ui.set_max_width(460.0);
             ui.label(RichText::new(format!("Delete {name}?")).strong().size(20.0));
             ui.add_space(8.0);
@@ -380,7 +381,9 @@ fn points(
                 let n = ui
                     .add_enabled(
                         !fixed_name,
-                        egui::TextEdit::singleline(&mut r.name).desired_width(130.0),
+                        egui::TextEdit::singleline(&mut r.name)
+                            .desired_width(130.0)
+                            .min_size(egui::vec2(130.0, 0.0)),
                     )
                     .tip(if fixed_name {
                         "The program's own variable: pick New variable to name it yourself."
@@ -412,7 +415,12 @@ fn points(
                         Dir::Out => format!("{}:0", device_form::out_bit(driver)),
                     };
                     let p = ui
-                        .add(egui::TextEdit::singleline(&mut r.point).hint_text(hint).desired_width(90.0))
+                        .add(
+                            egui::TextEdit::singleline(&mut r.point)
+                                .hint_text(hint)
+                                .desired_width(90.0)
+                                .min_size(egui::vec2(90.0, 0.0)),
+                        )
                         .tip("The point on the device: di:N, coil:N, hr:N:i16 on Modbus; di:N, do:N, in:OFFSET:FMT on EtherNet/IP.");
                     chrome.hit(format!("point {i} point"), p.rect);
                 }
@@ -450,14 +458,15 @@ fn points(
         .filter(|r| r.on && r.use_ == Use::Declare)
         .map(|r| r.name.as_str())
         .collect();
-    if !new.is_empty() {
-        ui.add(
-            egui::Label::new(
-                RichText::new(format!("New variables in the program: {}", new.join(", "))).color(t.muted),
-            )
-            .wrap(),
-        );
-    }
+    // Always one line, so ticking a row never changes the form's height.
+    let new = if new.is_empty() {
+        "none".to_string()
+    } else {
+        new.join(", ")
+    };
+    let line = format!("New variables in the program: {new}");
+    ui.add(egui::Label::new(RichText::new(&line).color(t.muted)).truncate())
+        .tip(line);
 }
 
 /// What the program does with row `i`: wiring only, a new variable, or

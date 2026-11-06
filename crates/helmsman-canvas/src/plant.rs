@@ -522,7 +522,7 @@ impl PlantUi {
         let mut f = self.adding.clone()?;
         let mut out = None;
         let mut done = false;
-        let m = egui::Modal::new(egui::Id::unique("sensor-new")).show(ctx, |ui| {
+        let m = crate::theme::near_pointer(ctx, "sensor-new").show(ctx, |ui| {
             ui.set_max_width(420.0);
             ui.label(
                 RichText::new(format!("A sensor for {}", f.state))

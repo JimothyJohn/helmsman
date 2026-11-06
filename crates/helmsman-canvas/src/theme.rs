@@ -168,6 +168,40 @@ pub fn apply(ctx: &egui::Context, light: bool) {
     }
 }
 
+/// A popup that opens where it was asked for (Nick, 2026-11-05: "going
+/// all the way back and forth is very annoying, especially for bulk
+/// deletes"): its top centre just under the pointer as it was when the
+/// popup appeared, kept there while it stays open, held on the screen.
+/// It is still a modal: the page behind is dimmed and takes no input.
+#[must_use]
+pub fn near_pointer(ctx: &egui::Context, key: &str) -> egui::Modal {
+    let id = egui::Id::unique(("near-pointer", key));
+    let pass = ctx.cumulative_pass_nr();
+    let screen = ctx.content_rect();
+    let pointer = ctx
+        .input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()))
+        .unwrap_or(screen.center());
+    let at = ctx.data_mut(|d| {
+        let seen: &mut (u64, egui::Pos2) = d.get_temp_mut_or_insert_with(id, || (0, pointer));
+        // Not drawn last pass: this is a new opening, at the pointer now.
+        if seen.0 + 1 < pass {
+            seen.1 = pointer;
+        }
+        seen.0 = pass;
+        seen.1
+    });
+    // egui's modal area, less its anchor (an anchor pins it to the centre).
+    let area = egui::Area::new(egui::Id::unique(key))
+        .kind(egui::UiKind::Modal)
+        .sense(egui::Sense::hover())
+        .order(egui::Order::Foreground)
+        .interactable(true)
+        .pivot(egui::Align2::CENTER_TOP)
+        .fixed_pos(at + egui::vec2(0.0, 14.0))
+        .constrain(true);
+    egui::Modal::new(egui::Id::unique(key)).area(area)
+}
+
 /// "Copy" under an Agent's answer: the whole text to the clipboard
 /// (Nick, 2026-11-05: selecting in the page's canvas is not enough).
 pub fn copy_button(ui: &mut egui::Ui, text: &str) -> egui::Response {

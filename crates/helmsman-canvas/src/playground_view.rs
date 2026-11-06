@@ -1140,7 +1140,7 @@ impl PlaygroundView {
         };
         let mut done = false;
         let mut ok = false;
-        let m = egui::Modal::new(egui::Id::unique("pg-program-name")).show(ctx, |ui| {
+        let m = crate::theme::near_pointer(ctx, "pg-program-name").show(ctx, |ui| {
             ui.set_max_width(420.0);
             let why = "The Agent's answers in this conversation land in a project of this name: \
                        the newest as main.st, the earlier ones kept under it.";

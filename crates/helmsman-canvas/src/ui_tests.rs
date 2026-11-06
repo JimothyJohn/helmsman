@@ -1055,7 +1055,7 @@ mod chrome {
     /// not buttons under the lists; the question is asked in the middle
     /// of the screen (Nick, 2026-11-02).
     #[test]
-    fn rename_and_delete_are_the_menus_and_the_delete_key_and_ask_in_the_centre() {
+    fn rename_and_delete_are_the_menus_and_the_delete_key_and_ask_by_the_click() {
         let mut h = Harness::new(App::sim());
         h.press("bar file");
         h.press("file copy");
@@ -1079,15 +1079,17 @@ mod chrome {
         h.wait(0.3);
         assert!(h.has("file two.st"));
         h.right_click(h.rect("file two.st").center());
+        let at = h.rect("menu delete").center();
         h.press("menu delete");
         h.frame(vec![]);
         let v = h.app.sim.as_ref().unwrap();
         assert_eq!(v.files_ui.confirm, Some(Act::DeleteFile("two.st".into())));
-        let c = h.rect("confirm").center();
-        let mid = Pos2::new(h.size.x / 2.0, h.size.y / 2.0);
+        // By the click, not across the screen (Nick, 2026-11-05: "going
+        // all the way back and forth is very annoying").
+        let c = h.rect("confirm");
         assert!(
-            (c - mid).length() < 40.0,
-            "the question sits in the middle of the screen, not at {c:?}"
+            (c.top() - at.y).abs() < 60.0 && c.x_range().contains(at.x),
+            "the question sits by the click at {at:?}, not at {c:?}"
         );
         h.press("confirm no");
         h.frame(vec![]);
@@ -2232,15 +2234,18 @@ mod chrome {
         // The clipboard crosses projects: a new, empty one takes the paste.
         // New project from a right-click on the pane's blank space.
         h.right_click(h.rect("files blank").center());
+        let at = h.rect("menu new project").center();
         h.press("menu new project");
-        // The name popup settles into the centre on its second frame.
         h.wait(0.2);
-        // A popup in the middle of the screen, not a field in the side
-        // panel (Nick, 2026-11-05).
+        // A popup by the click (Nick, 2026-11-05), held on the screen.
         let form = h.rect("name form");
         assert!(
-            form.center().x > h.rect("left").right(),
-            "the name is asked in the centre: {form:?}"
+            (form.top() - at.y).abs() < 60.0 || form.bottom() >= h.size.y - 1.0,
+            "the name is asked by the click at {at:?}: {form:?}"
+        );
+        assert!(
+            form.left() >= 0.0 && form.right() <= h.size.x,
+            "on the screen: {form:?}"
         );
         h.press("name");
         h.frame(vec![Event::Text("mine".into())]);
