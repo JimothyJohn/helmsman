@@ -598,6 +598,10 @@ impl FilesUi {
         let size = Vec2::new(ui.available_width(), left);
         let r = ui.allocate_response(size, egui::Sense::click());
         chrome.hit("files blank", r.rect);
+        // Space to right-click, not a button: the menu pointer, not the finger.
+        if r.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ContextMenu);
+        }
         let mut act = None;
         r.context_menu(|ui| {
             if menu_item(
@@ -657,7 +661,7 @@ impl FilesUi {
         };
         let mut ok = false;
         let mut cancel = false;
-        let m = egui::Modal::new(egui::Id::unique("files-name")).show(ctx, |ui| {
+        let m = crate::theme::near_pointer(ctx, "files-name").show(ctx, |ui| {
             ui.set_max_width(420.0);
             ui.label(RichText::new(what).strong().size(16.0));
             ui.add_space(8.0);
@@ -735,7 +739,7 @@ impl FilesUi {
             _ => return None,
         };
         let mut out = None;
-        let m = egui::Modal::new(egui::Id::unique("files-confirm")).show(ctx, |ui| {
+        let m = crate::theme::near_pointer(ctx, "files-confirm").show(ctx, |ui| {
             ui.set_max_width(420.0);
             ui.label(RichText::new(what).strong().size(16.0));
             ui.add_space(12.0);

@@ -601,13 +601,20 @@ pub fn ui(
             ui.push_id(("box-agent-turn", k), |ui| {
                 ui.label(RichText::new(&turn.user).strong());
                 if !turn.text.is_empty() {
+                    let c = crate::theme::copy_button(ui, &turn.text);
+                    chrome.hit("agent copy", c.rect);
+                    // Selectable (labels are not, theme::apply): an
+                    // engineer copies from the agent's words.
                     for seg in crate::claude::segments(&turn.text) {
                         match seg {
                             crate::claude::Segment::Prose(p) => {
-                                ui.label(p.trim());
+                                ui.add(egui::Label::new(p.trim()).selectable(true));
                             }
                             crate::claude::Segment::Code { body, .. } => {
-                                ui.label(RichText::new(body.trim_end()).monospace());
+                                ui.add(
+                                    egui::Label::new(RichText::new(body.trim_end()).monospace())
+                                        .selectable(true),
+                                );
                             }
                         }
                     }

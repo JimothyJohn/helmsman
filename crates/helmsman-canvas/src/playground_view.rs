@@ -146,6 +146,18 @@ pub struct PlaygroundView {
     pub selection: Option<(String, u32, u32)>,
     /// Why the last "Use this code" was refused, shown under the answer.
     pub use_error: Option<String>,
+    /// The answer being checked and, while it is retried, what failed
+    /// (`crate::verify`); `None` once it settles.
+    pub chain: Option<Chain>,
+    /// How the live answer came out of its checks, once settled, and how
+    /// many retries it took.
+    pub live_check: Option<(crate::verify::Check, u8)>,
+    /// The answer [`Self::settle`] last looked at.
+    checked_seq: u64,
+    /// Checks of pages on view, by answer, scope and project.
+    check_cache: Vec<(u64, crate::verify::Check)>,
+    /// The scenarios a new project's code takes with it, once named.
+    pending_tests: Vec<(String, String)>,
     /// Downloads made (natively nothing saves them: tests read them).
     #[cfg(not(target_arch = "wasm32"))]
     pub downloads: Vec<(String, Vec<u8>)>,
@@ -210,6 +222,11 @@ impl PlaygroundView {
             req_seq: 1 << 40,
             selection: None,
             use_error: None,
+            chain: None,
+            live_check: None,
+            checked_seq: 0,
+            check_cache: Vec::new(),
+            pending_tests: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
         };
@@ -379,7 +396,12 @@ impl PlaygroundView {
                 let mut dropped = 0;
                 if text.to_ascii_uppercase().contains("PROGRAM ") {
                     dropped = self.land_program(&name, text);
+                    // The scenarios its answer passed, kept as its tests.
+                    for (f, t) in std::mem::take(&mut self.pending_tests) {
+                        self.proj.files.insert(f, t);
+                    }
                 } else {
+                    self.pending_tests.clear();
                     let file = self.proj.free_file(&format!("{name}.st"));
                     self.proj.new_file(&file);
                     if let Some(t) = self.proj.current_text_mut() {
@@ -631,6 +653,8 @@ impl PlaygroundView {
         match self.chat.ask(&self.session.src, &diags, &devices) {
             Ok((seq, req)) => {
                 self.ask_error = None;
+                self.chain = Some(Chain::default());
+                self.live_check = None;
                 self.link.send(seq, req, ctx);
             }
             Err(e) => self.ask_error = Some(e),
@@ -801,7 +825,7 @@ impl PlaygroundView {
         let Some(a) = self.chat.answer.as_ref().filter(|a| a.phase == Phase::Done) else {
             return false;
         };
-        if !has_code(&a.text) {
+        if !crate::verify::has_code(&a.text) {
             return false;
         }
         let page = match self.chat.history.last() {
@@ -1012,26 +1036,160 @@ impl PlaygroundView {
     /// per conversation); anything else lands in the open project
     /// through [`Self::land_scoped`].
     pub fn use_page(&mut self, page: &crate::claude::Exchange) {
-        let asked = crate::scope::from_asked(&page.asked);
-        let scope = match asked {
-            _ if self.proj.is_example() => crate::scope::Scope::NewProject,
-            Some((_, crate::scope::Scope::NewProject)) | None => self.scope(),
-            Some((project, _)) if project != self.proj.open => {
-                return self.refuse(&format!(
-                    "This answer is for {project}; open it first, then use the code."
-                ));
-            }
-            Some((_, s)) => s,
+        let scope = match self.page_scope(page) {
+            Ok(s) => s,
+            Err(why) => return self.refuse(&why),
         };
+        // The page's checks first (`crate::verify`): a red answer is
+        // refused, a green one brings its scenarios.
+        let check = self.check_in(&scope, &page.answer);
+        if let Some(why) = check.refusal() {
+            return self.refuse(&why);
+        }
         match crate::scope::apply(&scope, &self.proj.files, &page.answer) {
             Err(r) => self.refuse(&r.why),
             Ok(files) if scope == crate::scope::Scope::NewProject => {
                 self.use_error = None;
+                self.pending_tests = check.add;
                 if let Some(code) = files.get(helmsman_project::MAIN) {
                     self.take_code(code.clone());
                 }
             }
-            Ok(files) => self.land_scoped(&scope, &files, page),
+            Ok(files) => {
+                self.pending_tests.clear();
+                self.land_scoped(&scope, &files, page, &check.add);
+            }
+        }
+    }
+
+    /// The scope `page`'s question went with: the scope now for a page
+    /// older than scopes (or one asked of an example), and why not when
+    /// it was asked in another project.
+    fn page_scope(&self, page: &crate::claude::Exchange) -> Result<crate::scope::Scope, String> {
+        match crate::scope::from_asked(&page.asked) {
+            _ if self.proj.is_example() => Ok(crate::scope::Scope::NewProject),
+            Some((_, crate::scope::Scope::NewProject)) | None => Ok(self.scope()),
+            Some((project, _)) if project != self.proj.open => Err(format!(
+                "This answer is for {project}; open it first, then use the code."
+            )),
+            Some((_, s)) => Ok(s),
+        }
+    }
+
+    /// `answer` checked in `scope` against the open project
+    /// ([`crate::verify::check`]), from the cache while the answer, the
+    /// scope and the project are the same.
+    fn check_in(&mut self, scope: &crate::scope::Scope, answer: &str) -> crate::verify::Check {
+        use std::hash::{Hash, Hasher};
+        let settings = self.test_settings();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        answer.hash(&mut h);
+        format!("{scope:?}").hash(&mut h);
+        self.proj.open.hash(&mut h);
+        self.proj.files.hash(&mut h);
+        settings.period.hash(&mut h);
+        let key = h.finish();
+        if let Some((_, c)) = self.check_cache.iter().find(|(k, _)| *k == key) {
+            return c.clone();
+        }
+        let c = crate::verify::check(scope, &self.proj.files, answer, settings);
+        self.check_cache.push((key, c.clone()));
+        if self.check_cache.len() > 8 {
+            self.check_cache.remove(0);
+        }
+        c
+    }
+
+    /// A finished answer is checked before it is shown
+    /// ([`crate::verify::next`]): green, or red after the retries, it
+    /// stays as the page of its question; red with retries left (or code
+    /// with no scenario, once) it goes back to the Agent with what failed,
+    /// and its answer takes its place. A retry stopped or broken brings
+    /// the last answer back as the page.
+    fn settle(&mut self, ctx: &egui::Context) {
+        use crate::verify::Next;
+        let Some(a) = &self.chat.answer else { return };
+        if a.running() || self.chat.seq() == self.checked_seq {
+            return;
+        }
+        self.checked_seq = self.chat.seq();
+        // Only a question asked from the tab is checked ([`Self::ask`]).
+        let Some(mut chain) = self.chain.take() else {
+            self.live_check = None;
+            return;
+        };
+        if a.phase != Phase::Done {
+            if let Some(last) = chain.failed.pop() {
+                let page = crate::claude::Exchange {
+                    question: chain.question,
+                    asked: chain.asked,
+                    answer: last.answer,
+                };
+                self.chat.history.push(page.clone());
+                self.chat.pages_dirty = true;
+                // On view as a page: its check and its Use this code.
+                self.chat.page = Some(self.chat.history.len() - 1);
+                self.live_check = self
+                    .page_scope(&page)
+                    .ok()
+                    .map(|s| (self.check_in(&s, &page.answer), chain.retries));
+            }
+            return;
+        }
+        let text = a.text.clone();
+        let Some(last) = self.chat.history.last().cloned().filter(|p| p.answer == text) else {
+            return;
+        };
+        if chain.failed.is_empty() {
+            chain.question.clone_from(&last.question);
+            chain.asked.clone_from(&last.asked);
+        }
+        let page = crate::claude::Exchange {
+            question: chain.question.clone(),
+            asked: chain.asked.clone(),
+            answer: text,
+        };
+        let Ok(scope) = self.page_scope(&page) else {
+            return;
+        };
+        let check = self.check_in(&scope, &page.answer);
+        match crate::verify::next(&check, chain.retries, chain.asked_scenarios) {
+            Next::Show => {
+                if let Some(p) = self.chat.history.last_mut()
+                    && *p != page
+                {
+                    *p = page;
+                    self.chat.pages_dirty = true;
+                }
+                self.live_check = Some((check, chain.retries));
+            }
+            Next::Retry(msg) => {
+                let Some(failed) = self.chat.history.pop() else {
+                    return;
+                };
+                chain.failed.push(failed);
+                chain.retries += 1;
+                chain.asked_scenarios |= check.unchecked();
+                chain.problems = if check.unchecked() {
+                    vec!["The answer gave code but no scenario to check it.".into()]
+                } else {
+                    check.problems()
+                };
+                let diags = self.session.diag_lines();
+                let devices = self.devices_text();
+                let src = self.session.src.clone();
+                match self.chat.follow_up(&chain.failed, &msg, &src, &diags, &devices) {
+                    Ok((seq, req)) => {
+                        self.link.send(seq, req, ctx);
+                        self.chain = Some(chain);
+                    }
+                    Err(e) => {
+                        self.chat.history.push(page);
+                        self.live_check = Some((check, chain.retries - 1));
+                        self.ask_error = Some(e);
+                    }
+                }
+            }
         }
     }
 
@@ -1056,6 +1214,7 @@ impl PlaygroundView {
         scope: &crate::scope::Scope,
         files: &crate::scope::Files,
         page: &crate::claude::Exchange,
+        scenarios: &[(String, String)],
     ) {
         let Some(file) = scope.file().map(str::to_string) else {
             return;
@@ -1082,6 +1241,10 @@ impl PlaygroundView {
             self.proj.current.clone_from(&file);
             0
         };
+        // The scenarios it passed, kept as requirement tests.
+        for (f, t) in scenarios {
+            self.proj.files.insert(f.clone(), t.clone());
+        }
         let into = scope.label().replacen("Editing: ", "", 1);
         let what = if iteration {
             format!("took the Agent's answer into {into} as its next iteration")
@@ -1096,8 +1259,13 @@ impl PlaygroundView {
         } else {
             String::new()
         };
+        let kept = match scenarios.len() {
+            0 => String::new(),
+            1 => " Its scenario is kept as a requirement test.".into(),
+            n => format!(" Its {n} scenarios are kept as requirement tests."),
+        };
         self.notice = Some(format!(
-            "The Agent's change is in {into}, saved, and the requirement tests pass; Deploy runs it.{size}"
+            "The Agent's change is in {into}, saved, and the requirement tests pass; Deploy runs it.{kept}{size}"
         ));
     }
 
@@ -1140,7 +1308,7 @@ impl PlaygroundView {
         };
         let mut done = false;
         let mut ok = false;
-        let m = egui::Modal::new(egui::Id::unique("pg-program-name")).show(ctx, |ui| {
+        let m = crate::theme::near_pointer(ctx, "pg-program-name").show(ctx, |ui| {
             ui.set_max_width(420.0);
             let why = "The Agent's answers in this conversation land in a project of this name: \
                        the newest as main.st, the earlier ones kept under it.";
@@ -1198,12 +1366,40 @@ impl PlaygroundView {
             #[cfg(target_arch = "wasm32")]
             crate::web::pick_file(crate::app::DEVICE_ACCEPT, &ui.ctx().clone());
         }
-        if let Some(crate::devices::DeviceAct::Add(line)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome)
-        {
-            self.add_device_line(&line);
+        if let Some(crate::devices::DeviceAct::Add(w)) = self.devices_ui.form_ui(&ui.ctx().clone(), chrome) {
+            self.apply_wiring(&w);
         }
         if let Some(line) = self.devices_ui.plant.form_ui(&ui.ctx().clone(), chrome) {
             self.add_device_line(&line);
+        }
+        if self.devices_ui.renaming.is_some() {
+            let files: Vec<(String, String)> = self
+                .proj
+                .files
+                .iter()
+                .map(|(n, t)| (n.clone(), t.clone()))
+                .collect();
+            self.devices_ui.plan_rename(&files);
+        }
+        if let Some(crate::devices::DeviceAct::Delete(name)) =
+            self.devices_ui.delete_ui(&ui.ctx().clone(), chrome)
+            && let Some(t) = self.proj.files.get_mut(helmsman_project::IO_MAP)
+        {
+            *t = crate::device_form::remove_device(t, &name);
+            self.proj.note(format!("{name} deleted from io.map."), false);
+            self.edited(f64::NEG_INFINITY);
+        }
+        if let Some(crate::devices::DeviceAct::Rename(plan)) =
+            self.devices_ui.rename_ui(&ui.ctx().clone(), chrome)
+        {
+            for (f, text, _) in plan.files {
+                if let Some(t) = self.proj.files.get_mut(&f) {
+                    *t = text;
+                }
+            }
+            self.proj
+                .note(format!("Renamed {} to {}.", plan.old, plan.new), false);
+            self.edited(f64::NEG_INFINITY);
         }
         if let Some(a) = self.files_ui.naming_ui(&ui.ctx().clone(), chrome) {
             self.act(a);
@@ -1240,6 +1436,7 @@ impl PlaygroundView {
                 self.chat.receive(m);
             }
         }
+        self.settle(ctx);
         self.save_pages();
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
@@ -1588,12 +1785,34 @@ impl Body for PlaygroundView {
         self.devices_ui.plant.states = self.plant_states(&map);
         self.devices_ui.plant.devices = crate::plant::device_choices(&map);
         self.devices_ui.plant.simulated = true;
-        if self.devices_ui.show(ui, &nodes, &source, chrome, &write) == Some(crate::devices::DeviceAct::Scan)
-        {
-            self.devices_ui.simulated_scan(&map);
-            #[cfg(target_arch = "wasm32")]
-            self.library
-                .fetch(helmsman_project::devlib::DEFAULT_URL, &ui.ctx().clone());
+        self.devices_ui.copy_first = self.proj.is_example();
+        self.devices_ui.program = crate::device_form::ports_of(&self.proj.build_src());
+        self.devices_ui.map = map.clone();
+        self.devices_ui.eds_files = self
+            .proj
+            .files
+            .keys()
+            .filter(|f| crate::devices::is_eds(f))
+            .cloned()
+            .collect();
+        match self.devices_ui.show(ui, &nodes, &source, chrome, &write) {
+            Some(crate::devices::DeviceAct::Scan) => {
+                self.devices_ui.simulated_scan(&map);
+                #[cfg(target_arch = "wasm32")]
+                self.library
+                    .fetch(helmsman_project::devlib::DEFAULT_URL, &ui.ctx().clone());
+            }
+            Some(crate::devices::DeviceAct::Use(d)) => self.use_device(d),
+            Some(crate::devices::DeviceAct::OpenMap) => {
+                self.proj.open_file(helmsman_project::IO_MAP);
+                chrome.show_code();
+            }
+            Some(
+                crate::devices::DeviceAct::Add(_)
+                | crate::devices::DeviceAct::Rename(_)
+                | crate::devices::DeviceAct::Delete(_),
+            )
+            | None => {}
         }
     }
 
@@ -1645,6 +1864,16 @@ impl Body for PlaygroundView {
                         self.proj.delete_file(&f);
                         self.req_ui.open = None;
                         self.run_tests();
+                    }
+                    Some(crate::requirements::Act::Reword { file, text }) => {
+                        self.proj.files.insert(file, text);
+                        self.proj.save();
+                        self.run_tests();
+                    }
+                    Some(crate::requirements::Act::Rewrite { file, requirement }) => {
+                        self.proj.delete_file(&file);
+                        self.req_ui.open = None;
+                        self.add_requirement(&requirement, &ctx);
                     }
                     None => {}
                 }
@@ -2010,7 +2239,14 @@ impl PlaygroundView {
         ui.label(RichText::new(page.question.trim()).strong().color(t.fg));
         ui.add_space(4.0);
         markdown(ui, &page.answer);
-        if has_code(&page.answer) && self.use_button(ui, chrome) {
+        if !crate::verify::has_code(&page.answer) {
+            return;
+        }
+        if let Ok(scope) = self.page_scope(page) {
+            let check = self.check_in(&scope, &page.answer);
+            check_ui(ui, &check, None, chrome);
+        }
+        if self.use_button(ui, chrome) {
             self.use_page(page);
         }
     }
@@ -2081,6 +2317,10 @@ impl PlaygroundView {
         let Some(a) = &self.chat.answer else {
             return;
         };
+        if let Some(c) = self.chain.as_ref().filter(|c| c.retries > 0 && a.running()) {
+            retry_ui(ui, c, chrome);
+            return;
+        }
         if let Some(m) = &a.model
             && m != self.chat.model.id()
         {
@@ -2112,8 +2352,17 @@ impl PlaygroundView {
                     .color(t.muted),
             );
         }
-        if a.phase == Phase::Done && has_code(&a.text) && self.use_button(ui, chrome) {
-            self.use_answer();
+        let settled = a.phase == Phase::Done && self.chain.is_none();
+        if settled && crate::verify::has_code(&a.text) {
+            if let Some((c, tries)) = &self.live_check {
+                check_ui(ui, c, Some(*tries), chrome);
+            }
+            if self.use_button(ui, chrome) {
+                self.use_answer();
+            }
+        } else if a.phase == Phase::Done && crate::verify::has_code(&a.text) {
+            ui.label(RichText::new("Checking the answer…").color(t.muted))
+                .tip("The page runs its scenarios and the requirement tests before it shows the result.");
         }
     }
 
@@ -2380,6 +2629,98 @@ impl PlaygroundView {
         }
     }
 
+    /// "Use this device": a read-only example is copied into a project of
+    /// the visitor's own first, a project without an `io.map` gets the one
+    /// its program's I/O implies (on the box's own channels, which the
+    /// rewire question then moves), and the form opens filled in.
+    fn use_device(&mut self, d: crate::devices::NewDevice) {
+        if self.proj.is_example() {
+            let from = self.proj.open.clone();
+            let to = (1..=99)
+                .map(|n| {
+                    if n == 1 {
+                        format!("my-{from}")
+                    } else {
+                        format!("my-{from}-{n}")
+                    }
+                })
+                .map(|n| n.chars().take(48).collect::<String>())
+                .find(|n| !self.proj.exists(n))
+                .unwrap_or_default();
+            self.proj.create(&to, Some(&from));
+            self.reload();
+            if self.proj.is_example() {
+                return;
+            }
+            self.proj.note(
+                format!("{from} is a read-only example, so it was copied as {to} to wire the device in."),
+                false,
+            );
+        }
+        if !self.proj.files.contains_key(helmsman_project::IO_MAP) {
+            let map = crate::sim_projects::example_io_map(&self.proj.build_src());
+            self.proj.add_file(helmsman_project::IO_MAP, map);
+        }
+        // The copy's program and map, for the form's channels.
+        let map = self
+            .proj
+            .files
+            .get(helmsman_project::IO_MAP)
+            .cloned()
+            .unwrap_or_default();
+        self.devices_ui.map = helmsman_project::iomap::skim(&map);
+        self.devices_ui.program = crate::device_form::ports_of(&self.proj.build_src());
+        self.devices_ui.open(d);
+    }
+
+    /// The form's Add: new variables into the program file (refused, with
+    /// nothing changed, if the program would not read after), then the
+    /// device and its signals into io.map.
+    fn apply_wiring(&mut self, w: &crate::device_form::Wiring) {
+        if !w.declare.is_empty() {
+            let Some(file) = crate::device_form::program_file(
+                self.proj.files.iter().map(|(n, t)| (n.as_str(), t.as_str())),
+            ) else {
+                self.proj.note("No PROGRAM to add the new variables to.", true);
+                return;
+            };
+            let mut src = self.proj.files[&file].clone();
+            for (dir, name, ty) in &w.declare {
+                let Some(s) = crate::device_form::declare_var(&src, *dir, name, *ty) else {
+                    self.proj
+                        .note(format!("{file} has no PROGRAM to add {name} to."), true);
+                    return;
+                };
+                src = s;
+            }
+            if helmsman_iec::ast::parse(&self.proj.files[&file]).is_ok()
+                && helmsman_iec::ast::parse(&src).is_err()
+            {
+                self.proj.note(
+                    "A new variable's name is an ST keyword: rename it and Add again.",
+                    true,
+                );
+                return;
+            }
+            if let Some(t) = self.proj.files.get_mut(&file) {
+                *t = src;
+            }
+        }
+        let map = self
+            .proj
+            .files
+            .get(helmsman_project::IO_MAP)
+            .cloned()
+            .unwrap_or_default();
+        let map = crate::device_form::apply_map(&map, w);
+        match self.proj.files.get_mut(helmsman_project::IO_MAP) {
+            Some(t) => *t = map,
+            None => self.proj.add_file(helmsman_project::IO_MAP, map),
+        }
+        self.proj.note(w.summary(), false);
+        self.edited(f64::NEG_INFINITY);
+    }
+
     /// The inputs the diagram shows a control for.
     pub(crate) fn on_map(&self) -> Vec<String> {
         let Some(v) = &self.viewer else { return Vec::new() };
@@ -2404,13 +2745,104 @@ pub struct ProgramName {
     pub error: Option<String>,
 }
 
-/// Whether an answer offers "Use this code": it has a closed code block
-/// with something in it ([`crate::scope::apply`] decides the rest).
-#[must_use]
-pub fn has_code(answer: &str) -> bool {
-    crate::claude::fences(answer)
-        .iter()
-        .any(|f| !f.body.trim().is_empty())
+/// The answer being checked (`crate::verify`): its question as asked,
+/// the retries so far, what the last one failed on, and the answers that
+/// failed (sent back as context).
+#[derive(Clone, Debug, Default)]
+pub struct Chain {
+    pub question: String,
+    pub asked: String,
+    pub retries: u8,
+    /// A retry asked for scenarios already.
+    pub asked_scenarios: bool,
+    pub problems: Vec<String>,
+    pub(crate) failed: Vec<crate::claude::Exchange>,
+}
+
+/// While a failed answer is retried: what failed, and that the Agent is
+/// fixing it.
+fn retry_ui(ui: &mut egui::Ui, c: &Chain, chrome: &mut Chrome) {
+    let t = theme(ui);
+    let r = ui
+        .label(
+            RichText::new(format!(
+                "The answer did not pass the page's checks, so the Agent is fixing it (try {} of {}).",
+                c.retries + 1,
+                crate::verify::RETRIES + 1
+            ))
+            .strong()
+            .color(WARN),
+        )
+        .tip("The page sent the Agent what failed. The fixed answer is checked again before it is shown.");
+    chrome.hit("answer retrying", r.rect);
+    for p in &c.problems {
+        ui.label(RichText::new(p).color(t.muted))
+            .tip("What the page found in the last answer.");
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.spinner();
+        ui.label(RichText::new("waiting for the fixed answer…").color(t.muted))
+            .tip("Stop keeps the last answer, with what it failed.");
+    });
+}
+
+/// How an answer's code came out of the page's checks: each scenario in
+/// plain words, green; or what failed, red; or that no scenario checks it.
+fn check_ui(ui: &mut egui::Ui, c: &crate::verify::Check, tries: Option<u8>, chrome: &mut Chrome) {
+    let t = theme(ui);
+    if !c.code {
+        return;
+    }
+    ui.add_space(4.0);
+    if c.red() {
+        let after = match tries {
+            Some(n) if n > 0 => format!(" after {n} more tries"),
+            _ => String::new(),
+        };
+        let r = ui
+            .label(
+                RichText::new(format!(
+                    "This answer did not pass the page's checks{after}, so Use this code is refused."
+                ))
+                .strong()
+                .color(RED),
+            )
+            .tip("The page took the code into a copy of the project and ran its scenarios and the requirement tests.");
+        chrome.hit("answer red", r.rect);
+        for p in c.problems() {
+            ui.label(RichText::new(p).color(RED)).tip("What failed.");
+        }
+        return;
+    }
+    if c.scenarios.is_empty() {
+        let r = ui
+            .label(RichText::new("Not checked by a scenario: the Agent gave none.").color(t.muted))
+            .tip("The code compiles and the requirement tests pass with it, but nothing checks this change.");
+        chrome.hit("answer unchecked", r.rect);
+        return;
+    }
+    let r = ui
+        .label(
+            RichText::new("Checked before it was shown:")
+                .strong()
+                .color(GREEN),
+        )
+        .tip("The page took the code into a copy of the project and ran these scenarios on it.");
+    chrome.hit("answer green", r.rect);
+    for s in &c.scenarios {
+        ui.label(RichText::new(format!("Passed: {}", s.requirement)).color(GREEN))
+            .tip("Kept as a requirement test when you use this code.");
+    }
+    if c.tests_green > 0 {
+        ui.label(
+            RichText::new(format!(
+                "The project's {} requirement test(s) pass with it.",
+                c.tests_green
+            ))
+            .color(t.muted),
+        )
+        .tip("The tests already in the Requirements tab.");
+    }
 }
 
 /// A name for the Agent's answer: the `PROGRAM`, `FUNCTION_BLOCK` or
@@ -2889,12 +3321,17 @@ pub fn show(ty: Ty, v: Value) -> String {
 /// Answer text: paragraphs as labels, fenced code in monospace blocks.
 fn markdown(ui: &mut egui::Ui, text: &str) {
     let t = theme(ui);
+    if !text.trim().is_empty() {
+        crate::theme::copy_button(ui, text);
+    }
     for (k, s) in segments(text).into_iter().enumerate() {
         match s {
             Segment::Prose(p) => {
                 let para = p.trim();
                 if !para.is_empty() {
-                    ui.label(RichText::new(para).color(t.fg));
+                    // The Agent's words stay selectable (labels are not,
+                    // theme::apply): an engineer copies from them.
+                    ui.add(egui::Label::new(RichText::new(para).color(t.fg)).selectable(true));
                 }
             }
             Segment::Code { body, .. } => {
@@ -2913,7 +3350,8 @@ fn markdown(ui: &mut egui::Ui, text: &str) {
                             .show(ui, |ui| {
                                 ui.add(
                                     egui::Label::new(RichText::new(body).monospace().size(12.0))
-                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                        .wrap_mode(egui::TextWrapMode::Extend)
+                                        .selectable(true),
                                 );
                             });
                     });

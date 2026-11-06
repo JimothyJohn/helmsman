@@ -199,8 +199,15 @@ fn the_envelope_carries_the_scope_its_text_and_reads_back_from_a_page() {
     };
     let e = s.envelope("line3", &files);
     assert!(e.starts_with("Editing: lines 10–12 of main.st (the lines selected in the Code tab)\n"));
-    assert!(e.ends_with(&format!("text:\n{}", lines(MAIN, 10, 12))), "{e}");
-    assert!(!e.contains("PROGRAM main"), "only the lines");
+    // The whole file goes, the lines it may change beside it.
+    assert!(
+        e.contains(&format!(
+            "changed only in lines 10-12\nsection:\n{}text:\n",
+            lines(MAIN, 10, 12)
+        )),
+        "{e}"
+    );
+    assert!(e.ends_with(&format!("text:\n{MAIN}")), "the whole file: {e}");
     let asked = format!(
         "make it latch\n\n<current_program>\nx\n</current_program>\n<edit_scope>\n{e}\n</edit_scope>"
     );
@@ -645,7 +652,12 @@ mod in_the_page {
                 to: 4
             }
         );
-        ask(&mut v, "say why", &st("lamp := start; (* follows start *)\n"));
+        // The whole file comes back, changed only in line 4.
+        ask(
+            &mut v,
+            "say why",
+            &st(&new.replace("lamp := start; (* same *)", "lamp := start; (* follows start *)")),
+        );
         // Clicked elsewhere since: the scope the page was asked with holds.
         v.selection = None;
         assert!(v.use_answer());
@@ -734,7 +746,11 @@ mod in_the_page {
         );
         assert!(s.label().starts_with("Editing: block "), "{}", s.label());
         // The block's answer lands in its lines.
-        ask(&mut v, "debounce", &st("lamp := start AND start;\n"));
+        ask(
+            &mut v,
+            "debounce",
+            &st(&LAMP.replace("lamp := start;", "lamp := start AND start;")),
+        );
         assert!(v.use_answer());
         assert_eq!(v.use_error, None, "{:?}", v.notice);
         assert!(v.proj.files["main.st"].contains("lamp := start AND start;\nEND_PROGRAM"));
