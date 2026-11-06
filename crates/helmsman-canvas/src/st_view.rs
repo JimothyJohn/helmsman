@@ -16,6 +16,7 @@ use helmsman_diagram::{
     Diagram, Drivers, Gate, Live, Module, NodeId, NodeKind, RegionId, Scan, annotate, drivers,
 };
 use helmsman_iec::Value;
+use helmsman_iec::trace::StmtId;
 
 /// Brand colours (docs/brand/index.html).
 pub mod brand {
@@ -37,7 +38,10 @@ pub mod brand {
     pub const OFF_RED: Color32 = Color32::from_rgb(0x6A, 0x22, 0x1E);
 }
 
-use brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
+use brand::{BLACK, STEEL, YELLOW};
+
+use crate::theme::{Theme, theme};
+use crate::tips::Tip;
 
 /// How much of the diagram a pan must leave in view, points.
 pub const KEEP: f32 = 120.0;
@@ -174,6 +178,10 @@ pub struct Viewer {
     /// The blocks' one-character icons (the project's `icons.map` over
     /// the built-in ones).
     pub icons: crate::icons::Icons,
+    /// Breakpoints to mark, as the host keeps them (the simulation's).
+    pub breaks: Vec<StmtId>,
+    /// The statement a paused scan stopped before.
+    pub paused: Option<StmtId>,
 }
 
 /// One row of the program tree.
@@ -340,6 +348,38 @@ impl Viewer {
             moved,
             edits: 0,
             icons: crate::icons::Icons::default(),
+            breaks: Vec::new(),
+            paused: None,
+        }
+    }
+
+    /// The picked block if it reads a variable: its path and its index
+    /// among the diagram's reads (the order [`Self::reads_on_screen`]
+    /// lists them in, which keys the controls drawn over them).
+    #[must_use]
+    pub fn picked_read(&self) -> Option<(usize, String)> {
+        let Some(Pick::Node(n)) = self.pick else {
+            return None;
+        };
+        let reads = self
+            .diagram()
+            .nodes
+            .iter()
+            .filter(|m| matches!(m.kind, NodeKind::Read { .. }));
+        reads.enumerate().find_map(|(k, m)| match &m.kind {
+            NodeKind::Read { path } if m.id == n => Some((k, path.clone())),
+            _ => None,
+        })
+    }
+
+    /// The statement the picked block or region was lowered from: what a
+    /// breakpoint (Ctrl B) goes on.
+    #[must_use]
+    pub fn picked_stmt(&self) -> Option<StmtId> {
+        let d = self.diagram();
+        match self.pick? {
+            Pick::Node(n) => d.nodes.get(n.0 as usize).map(|n| n.stmt),
+            Pick::Region(r) => d.regions.get(r.0 as usize).map(|r| r.stmt),
         }
     }
 
@@ -650,7 +690,15 @@ impl Viewer {
                 #[allow(clippy::cast_precision_loss)]
                 ui.add_space(row.depth as f32 * 14.0);
                 if row.has_kids {
-                    if ui.small_button(if row.folded { "▸" } else { "▾" }).clicked() {
+                    if ui
+                        .small_button(if row.folded { "▸" } else { "▾" })
+                        .tip(if row.folded {
+                            "Shows the instances it calls."
+                        } else {
+                            "Hides the instances it calls."
+                        })
+                        .clicked()
+                    {
                         fold = Some(row.scope);
                     }
                 } else {
@@ -659,7 +707,7 @@ impl Viewer {
                 let text = RichText::new(&s.label).monospace();
                 if ui
                     .selectable_label(row.scope == self.scope, text)
-                    .on_hover_text("show this one's diagram")
+                    .tip("Shows this one's diagram.")
                     .clicked()
                 {
                     chosen = Some(row.scope);
@@ -726,34 +774,44 @@ impl Viewer {
     pub fn crumbs_ui(&mut self, ui: &mut egui::Ui, outer: &[String]) -> Option<usize> {
         let mut hit = None;
         let mut go = None;
+        let t = theme(ui);
         ui.horizontal_wrapped(|ui| {
             let up = self.parent();
             if ui
                 .add_enabled(up.is_some(), egui::Button::new("↑"))
-                .on_hover_text("up one level (Alt+↑)")
+                .tip(if up.is_some() {
+                    "Up one level (Alt+↑)."
+                } else {
+                    "Up one level (Alt+↑): this is the program, the top."
+                })
                 .clicked()
             {
                 go = up;
             }
             for (i, o) in outer.iter().enumerate() {
-                if ui.link(RichText::new(o).color(brand::STEEL)).clicked() {
+                if ui
+                    .link(RichText::new(o).color(t.muted))
+                    .tip(format!("Goes to {o}."))
+                    .clicked()
+                {
                     hit = Some(i);
                 }
-                ui.label(RichText::new("›").color(brand::STEEL));
+                ui.label(RichText::new("›").color(t.muted));
             }
             let trail = self.trail();
             for (j, &k) in trail.iter().enumerate() {
                 if j > 0 {
-                    ui.label(RichText::new("›").color(brand::STEEL));
+                    ui.label(RichText::new("›").color(t.muted));
                 }
                 let last = j + 1 == trail.len();
                 let text = RichText::new(&self.scopes[k].label).monospace();
-                let text = if last {
-                    text.strong().color(brand::YELLOW)
+                let text = if last { text.strong().color(t.accent) } else { text };
+                let tip = if last {
+                    "The diagram shown now."
                 } else {
-                    text
+                    "Shows this level's diagram."
                 };
-                if ui.link(text).clicked() {
+                if ui.link(text).tip(tip).clicked() {
                     go = Some(k);
                 }
             }
@@ -770,16 +828,21 @@ impl Viewer {
     /// The outputs with their values; a click picks one.
     pub fn outputs_ui(&mut self, ui: &mut egui::Ui, scan: Option<&dyn Scan>) {
         ui.label(RichText::new("Outputs").strong())
-            .on_hover_text("click: pick it");
+            .tip("Click an output to light the path that sets it in the diagram.");
+        let t = theme(ui);
         for path in self.outputs() {
             let value = scan.and_then(|s| s.get(&path));
             let on = value == Some(Value::Bool(true));
             let text = RichText::new(format!("{} {path} = {}", if on { "●" } else { "○" }, show(value)))
                 .monospace()
-                .color(if on { YELLOW } else { WHITE });
+                .color(if on { t.accent } else { t.fg });
             let row = egui::Button::selectable(self.because.as_deref() == Some(path.as_str()), text)
                 .min_size(Vec2::new(ui.available_width(), TAP));
-            if ui.add(row).clicked() {
+            if ui
+                .add(row)
+                .tip("Click to light why it has this value in the diagram.")
+                .clicked()
+            {
                 self.because = Some(path);
             }
         }
@@ -835,10 +898,54 @@ impl Viewer {
         let NodeKind::Fb { instance, .. } = &self.diagram().node(n).kind else {
             return None;
         };
+        self.instance_scope(instance)
+    }
+
+    /// The scope of block instance `instance` called on the diagram shown,
+    /// if it has a diagram of its own (a user function block's).
+    fn instance_scope(&self, instance: &str) -> Option<usize> {
         let want = format!("{}{instance}.", self.scopes[self.scope].prefix);
         self.scopes
             .iter()
             .position(|s| s.prefix.eq_ignore_ascii_case(&want))
+    }
+
+    /// Opens the picked block instance's diagram (Ctrl ]); whether the
+    /// pick was an instance with a diagram of its own.
+    pub fn step_into(&mut self) -> bool {
+        let Some(Pick::Node(n)) = self.pick else {
+            return false;
+        };
+        let Some(NodeKind::Fb { instance, .. }) = self.diagram().nodes.get(n.0 as usize).map(|n| &n.kind)
+        else {
+            return false;
+        };
+        let Some(k) = self.instance_scope(&instance.clone()) else {
+            return false;
+        };
+        self.open(k);
+        true
+    }
+
+    /// Up to the caller's diagram (Ctrl [), the instance just left picked
+    /// there so Ctrl ] goes back in; whether there was a level up.
+    pub fn step_out(&mut self) -> bool {
+        let Some(up) = self.parent() else {
+            return false;
+        };
+        let left = self.scopes[self.scope].prefix.clone();
+        self.open(up);
+        let pre = self.scopes[up].prefix.clone();
+        self.pick = self
+            .diagram()
+            .nodes
+            .iter()
+            .find(|n| {
+                matches!(&n.kind, NodeKind::Fb { instance, .. }
+                    if format!("{pre}{instance}.").eq_ignore_ascii_case(&left))
+            })
+            .map(|n| Pick::Node(n.id));
+        true
     }
 
     /// What a drag starting at screen point `p` takes hold of.
@@ -861,6 +968,7 @@ impl Viewer {
         let area = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(area, Sense::click_and_drag());
         let painter = ui.painter_at(area);
+        let t = theme(ui);
         let size = self.diagram().size;
         let cam = &mut self.cams[self.scope];
         // The view changed size (a pane opened, the window resized) and
@@ -965,6 +1073,7 @@ impl Viewer {
             .or_else(|| self.path(scan));
         draw(
             &painter,
+            &t,
             area,
             cam,
             self.diagram(),
@@ -975,6 +1084,8 @@ impl Viewer {
                 lit: self.lit.as_ref(),
                 vars: self.module.program().map(|p| &p.vars),
                 icons: &self.icons,
+                breaks: &self.breaks,
+                paused: self.paused,
             },
         );
     }
@@ -1007,12 +1118,14 @@ fn font(size: f32) -> FontId {
     FontId::monospace(size)
 }
 
-fn wire_color(v: Option<Value>) -> (Color32, f32) {
+/// A wire's colour and width: TRUE in the brand yellow on either page,
+/// FALSE muted, a value in the page's ink, no scan faint.
+fn wire_color(t: &Theme, v: Option<Value>) -> (Color32, f32) {
     match v {
         Some(Value::Bool(true)) => (YELLOW, 2.5),
-        Some(Value::Bool(false)) => (STEEL, 1.5),
-        Some(_) => (WHITE, 1.5),
-        None => (GRAPHITE.gamma_multiply(1.6), 1.2),
+        Some(Value::Bool(false)) => (t.muted, 1.5),
+        Some(_) => (t.fg, 1.5),
+        None => (t.idle, 1.2),
     }
 }
 
@@ -1066,6 +1179,23 @@ struct Marks<'a> {
     vars: Option<&'a std::collections::HashMap<String, Var>>,
     /// The blocks' icons.
     icons: &'a crate::icons::Icons,
+    /// Statements with a breakpoint: a red dot on the blocks they end in
+    /// (an IF's, CASE's or loop's on its first region's label).
+    breaks: &'a [StmtId],
+    /// The statement a paused scan stopped before: outlined.
+    paused: Option<StmtId>,
+}
+
+/// Where a statement is marked on the diagram: the blocks it ends in, or
+/// for an IF, CASE or loop its first region.
+fn marked(d: &Diagram, id: StmtId) -> (Vec<NodeId>, Option<RegionId>) {
+    let Some(s) = d.stmts.iter().find(|s| s.id == id) else {
+        return (Vec::new(), None);
+    };
+    match s.arms.first() {
+        Some(&r) => (Vec::new(), Some(r)),
+        None => (s.roots.clone(), None),
+    }
 }
 
 /// The program variable a node's path starts at (`M.ON` is `M`'s).
@@ -1138,24 +1268,58 @@ const BUBBLE: f32 = 4.0;
 
 /// The negation bubble on a pin at `p` (screen), entered from the left:
 /// outlined in the colour of the value its consumer sees.
-fn bubble(painter: &egui::Painter, p: Pos2, z: f32, seen: Option<Value>, fade: f32) {
-    let (c, _) = wire_color(seen);
+fn bubble(painter: &egui::Painter, t: &Theme, p: Pos2, z: f32, seen: Option<Value>, fade: f32) {
+    let (c, _) = wire_color(t, seen);
     painter.circle(
         p - Vec2::new(BUBBLE * z, 0.0),
         BUBBLE * z,
-        BLACK,
+        t.bg,
         Stroke::new(1.5 * z.max(0.5), c.gamma_multiply(fade)),
     );
 }
 
-fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option<&Live>, marks: Marks<'_>) {
+/// A breakpoint's mark: a red dot with a dark rim, centred at `at`.
+fn break_dot(painter: &egui::Painter, at: Pos2, z: f32) {
+    let r = (6.0 * z).max(4.0);
+    painter.circle(at, r, brand::RED, Stroke::new((1.5 * z).max(1.0), BLACK));
+}
+
+/// Where a paused scan stands: a thick warning-coloured frame.
+fn paused_outline(painter: &egui::Painter, r: Rect, z: f32) {
+    painter.rect_stroke(
+        r.expand(5.0 * z),
+        CornerRadius::same(7),
+        Stroke::new((3.0 * z).max(2.0), brand::WARN),
+        StrokeKind::Outside,
+    );
+}
+
+fn draw(
+    painter: &egui::Painter,
+    t: &Theme,
+    area: Rect,
+    cam: Cam,
+    d: &Diagram,
+    live: Option<&Live>,
+    marks: Marks<'_>,
+) {
     let Marks {
         pick,
         lines,
         lit,
         vars,
         icons,
+        breaks,
+        paused,
     } = marks;
+    let mut dot_nodes = std::collections::HashSet::new();
+    let mut dot_regions = std::collections::HashSet::new();
+    for &b in breaks {
+        let (ns, r) = marked(d, b);
+        dot_nodes.extend(ns);
+        dot_regions.extend(r);
+    }
+    let (here_nodes, here_region) = paused.map_or_else(|| (Vec::new(), None), |p| marked(d, p));
     let z = cam.zoom;
     let strength = |on: bool| if lit.is_none() || on { 1.0 } else { DIMMED };
     // Pins entered through a bubble: no pin dot over it.
@@ -1165,7 +1329,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         .filter(|w| w.negated)
         .map(|w| (w.to, w.inp))
         .collect();
-    painter.rect_filled(area, CornerRadius::ZERO, BLACK);
+    painter.rect_filled(area, CornerRadius::ZERO, t.bg);
     let text = z > 0.35;
     // Regions, outermost first.
     for r in &d.regions {
@@ -1174,9 +1338,13 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         let rect = cam.rect(&r.rect);
         let (stroke, fill, state) = match gate {
             Some(Gate::Open(n)) => (YELLOW, YELLOW.gamma_multiply(0.06), format!("taken ×{n}")),
-            Some(Gate::Closed) => (STEEL.gamma_multiply(0.7), Color32::TRANSPARENT, "skipped".into()),
-            Some(Gate::NotReached) => (GRAPHITE, Color32::TRANSPARENT, "not reached".into()),
-            None => (STEEL, Color32::TRANSPARENT, String::new()),
+            Some(Gate::Closed) => (
+                t.muted.gamma_multiply(0.7),
+                Color32::TRANSPARENT,
+                "skipped".into(),
+            ),
+            Some(Gate::NotReached) => (t.rule, Color32::TRANSPARENT, "not reached".into()),
+            None => (t.muted, Color32::TRANSPARENT, String::new()),
         };
         let (stroke, fill) = (stroke.gamma_multiply(f), fill.gamma_multiply(f));
         painter.rect_filled(rect, CornerRadius::same(6), fill);
@@ -1191,6 +1359,12 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
             Stroke::new(width * z, stroke),
             StrokeKind::Inside,
         );
+        if here_region == Some(r.id) {
+            paused_outline(painter, rect, z);
+        }
+        if dot_regions.contains(&r.id) {
+            break_dot(painter, rect.min + Vec2::new(-2.0, LABEL_H / 2.0) * z, z);
+        }
         if text {
             let at = rect.min + Vec2::new(8.0, LABEL_H / 2.0) * z;
             painter.text(at, Align2::LEFT_CENTER, &r.label, font(12.0 * z), stroke);
@@ -1207,7 +1381,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
             let n = d.node(g);
             let (x, y) = out_port(n, port);
             let v = live.and_then(|l| l.values[g.0 as usize].get(port).copied().flatten());
-            let (c, w) = wire_color(v);
+            let (c, w) = wire_color(t, v);
             let end = cam.to_screen(r.rect.x, r.rect.y + LABEL_H / 2.0);
             let wire_end = if r.negated {
                 end - Vec2::new(2.0 * BUBBLE * z, 0.0)
@@ -1216,7 +1390,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
             };
             bezier(painter, cam.to_screen(x, y), wire_end, z, c.gamma_multiply(f), w);
             if r.negated {
-                bubble(painter, end, z, live.and_then(|l| l.gate_value(d, r.id)), f);
+                bubble(painter, t, end, z, live.and_then(|l| l.gate_value(d, r.id)), f);
             }
         }
     }
@@ -1230,7 +1404,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         let (ax, ay) = out_port(a, w.out);
         let (bx, by) = in_port(b, w.inp);
         let v = live.and_then(|l| l.wire(d, k));
-        let (c, width) = wire_color(v);
+        let (c, width) = wire_color(t, v);
         let (pa, pb) = (cam.to_screen(ax, ay), cam.to_screen(bx, by));
         let end = if w.negated {
             pb - Vec2::new(2.0 * BUBBLE * z, 0.0)
@@ -1262,7 +1436,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
             bezier(painter, pa, end, z, c.gamma_multiply(f), width);
         }
         if w.negated {
-            bubble(painter, pb, z, live.and_then(|l| l.input(d, k)), f);
+            bubble(painter, t, pb, z, live.and_then(|l| l.input(d, k)), f);
         }
         if text
             && let Some(v) = v
@@ -1274,7 +1448,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                 Align2::LEFT_CENTER,
                 label,
                 font(10.0 * z),
-                WHITE.gamma_multiply(f),
+                t.fg.gamma_multiply(f),
             );
         }
     }
@@ -1286,13 +1460,14 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         }
         let ran = live.is_none_or(|l| l.ran[n.id.0 as usize]);
         let on_path = strength(lit.is_some_and(|l| l.node(n.id)));
+        // A block's head is yellow with black ink (the brand pair), an
+        // assignment's the page inverted, a variable's or an operator's a
+        // grey of the page with its ink.
         let (head, ink) = match &n.kind {
             NodeKind::Fb { .. } | NodeKind::For { .. } => (YELLOW, BLACK),
-            NodeKind::Write { .. } => (WHITE, BLACK),
-            NodeKind::Read { .. } | NodeKind::Const { .. } => (GRAPHITE, WHITE),
-            NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } => {
-                (Color32::from_rgb(0x55, 0x55, 0x55), WHITE)
-            }
+            NodeKind::Write { .. } => (t.fg, t.bg),
+            NodeKind::Read { .. } | NodeKind::Const { .. } => (t.rule, t.fg),
+            NodeKind::Op { .. } | NodeKind::Func { .. } | NodeKind::Access { .. } => (t.shade, t.fg),
             NodeKind::Jump => (STEEL, BLACK),
         };
         let fade: f32 = if ran { 1.0 } else { 0.4 } * on_path;
@@ -1303,7 +1478,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         // of its own; an operator, function or literal is one shade.
         let two_tone = n.kind.headed();
         if two_tone {
-            painter.rect_filled(r, radius, PANEL.gamma_multiply(fade.max(0.7) * on_path));
+            painter.rect_filled(r, radius, t.panel.gamma_multiply(fade.max(0.7) * on_path));
             painter.rect_filled(
                 h,
                 CornerRadius {
@@ -1329,9 +1504,15 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
         let outline = if pick == Some(Pick::Node(n.id)) {
             Stroke::new(2.5 * z, YELLOW)
         } else {
-            Stroke::new(1.0 * z, Color32::from_black_alpha(200))
+            Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
+        if here_nodes.contains(&n.id) {
+            paused_outline(painter, r, z);
+        }
+        if dot_nodes.contains(&n.id) {
+            break_dot(painter, r.min + Vec2::new(-2.0, HEADER / 2.0) * z, z);
+        }
         // The block's one-character icon: at the header's left edge beside
         // the label, or alone and large enough to read when the label is
         // too small to draw (Nick, 2026-11-01).
@@ -1371,7 +1552,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                 let (x, y) = in_port(n, k);
                 let p = cam.to_screen(x, y);
                 if !bubbled.contains(&(n.id, k)) {
-                    painter.circle_filled(p, 3.0 * z, STEEL.gamma_multiply(on_path));
+                    painter.circle_filled(p, 3.0 * z, t.muted.gamma_multiply(on_path));
                 }
                 if !name.is_empty() {
                     painter.text(
@@ -1379,7 +1560,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                         Align2::LEFT_CENTER,
                         name,
                         font(10.0 * z),
-                        STEEL.gamma_multiply(on_path),
+                        t.muted.gamma_multiply(on_path),
                     );
                 }
             }
@@ -1387,14 +1568,14 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                 let (x, y) = out_port(n, k);
                 let p = cam.to_screen(x, y);
                 let v = live.and_then(|l| l.values[n.id.0 as usize].get(k).copied().flatten());
-                painter.circle_filled(p, 3.5 * z, wire_color(v).0.gamma_multiply(on_path));
+                painter.circle_filled(p, 3.5 * z, wire_color(t, v).0.gamma_multiply(on_path));
                 if !name.is_empty() {
                     painter.text(
                         p - Vec2::new(6.0 * z, 0.0),
                         Align2::RIGHT_CENTER,
                         name,
                         font(10.0 * z),
-                        STEEL.gamma_multiply(on_path),
+                        t.muted.gamma_multiply(on_path),
                     );
                 }
             }
@@ -1406,7 +1587,7 @@ fn draw(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, live: Option
                 let color = match v {
                     Value::Bool(true) => brand::GREEN,
                     Value::Bool(false) => brand::RED,
-                    _ => WHITE,
+                    _ => t.fg,
                 };
                 painter.text(
                     Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0),

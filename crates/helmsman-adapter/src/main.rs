@@ -21,6 +21,9 @@ usage: helmsman-adapter [options]
   --io-port N          local UDP I/O port (default 2222, 0 = any)
   --peer-io-port N     scanner's UDP I/O port, where input is sent (default 2222;
                        0 = the port its output packets come from)
+  --o-to-t-port N      consume O->T on this UDP port instead of the I/O port and
+                       name it in each Forward_Open reply, as an E1213 does with
+                       5222 (default: the I/O port, as OpENer does; 0 = any)
   --profile NAME       opener (default) or moxa-e1213
 OpENer sample profile: 150 = from the scanner (32 B), 100 = to the scanner
 (32 B, a copy of 150), 151 = configuration (10 B), 152/153 = heartbeats.
@@ -60,6 +63,7 @@ fn parse(args: &[String]) -> Result<(ServerConfig, Profile), String> {
             "--encap-port" => cfg.encap_port = port()?,
             "--io-port" => cfg.io_port = port()?,
             "--peer-io-port" => cfg.peer_io_port = port()?,
+            "--o-to-t-port" => cfg.o_to_t_port = Some(port()?),
             "--profile" => {
                 profile = match v.as_str() {
                     "opener" => Profile::Opener,
@@ -81,9 +85,13 @@ fn run(cfg: &ServerConfig, profile: Profile) -> Result<(), String> {
     };
     let adapter = Adapter::start(Device::new(device), cfg).map_err(|e| format!("CIP sockets: {e}"))?;
     eprintln!(
-        "helmsman-adapter: CIP on {} (I/O {})",
+        "helmsman-adapter: CIP on {} (I/O {}{})",
         adapter.encap_addr(),
-        adapter.io_addr()
+        adapter.io_addr(),
+        adapter
+            .o_to_t_addr()
+            .map(|a| format!(", O->T consumed on {a}"))
+            .unwrap_or_default()
     );
     let dev = adapter.device();
     let mut e1213 = helmsman_adapter::e1213::Application::bench();

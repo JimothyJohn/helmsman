@@ -9,11 +9,30 @@ page falls back to when no box answers.
 A project opens running. The glyphs over the diagram run or stop it
 (<kbd>Ctrl</kbd> <kbd>Enter</kbd>; <kbd>Shift</kbd> <kbd>F8</kbd> stops),
 step one scan while stopped (<kbd>F10</kbd>), and restart from initial
-values with the clock at zero. The state in the header says which it is;
-the clock beside it is the program's own time.
+values with the clock at zero. The same three buttons and keys are in
+the Monitor's header. The state in the header says which it is; the
+clock beside it is the program's own time.
+
+<img src="img/monitor-stopped.png" alt="The Monitor's header with the program stopped: run, step and restart beside the crumbs." width="700">
 
 One program runs in the page at a time. Opening or deploying another
 stops the one before.
+
+## Breakpoints
+
+Pick a block in the diagram and press <kbd>Ctrl</kbd> <kbd>B</kbd> (or
+**Edit › Breakpoint**): a red dot marks it. The next scan that reaches
+the block stops just before it runs, the simulation stops with it, and
+the diagram and every value show the scan as it stood at that moment.
+The block is framed in orange and the notice under the header names its
+line. <kbd>F10</kbd> runs the rest of that scan.
+<kbd>Ctrl</kbd> <kbd>Enter</kbd> goes on to the next stop: the same
+block's next pass in a loop, another breakpoint, or the next scan. An
+input you change while stopped shows at once in what the diagram shows.
+A breakpoint inside a function block stops in every instance of it.
+<kbd>Ctrl</kbd> <kbd>B</kbd> on the block again clears it. Stopping at a
+breakpoint changes nothing the program does: the scan runs exactly as it
+would have.
 
 ## Editing
 
@@ -26,6 +45,15 @@ and the last good program keeps running.
 
 Undo and Redo (<kbd>Ctrl</kbd> <kbd>Z</kbd>, <kbd>Ctrl</kbd> <kbd>Y</kbd>)
 work in the editor and from the Edit menu.
+
+<kbd>Ctrl</kbd> <kbd>F</kbd> opens a find box over the Structured Text.
+Every match is marked in yellow, the current one brighter, and the pane
+scrolls to it; the box counts them. <kbd>Enter</kbd> or
+<kbd>Ctrl</kbd> <kbd>G</kbd> goes to the next match,
+<kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Shift</kbd>
+<kbd>G</kbd> to the previous one, and letters match in either case, as
+Structured Text does. <kbd>Esc</kbd> closes the box and leaves the match
+selected in the editor. It works the same on a box's code.
 
 ## Inputs
 
@@ -41,15 +69,24 @@ show.
   commits it, <kbd>Esc</kbd> puts the old value back. The I/O panel's
   sliders apply as you drag.
 
-The machine examples read a plant model, a block that stands in for the
-tank, the belt or the compressors, so that they move with nothing wired.
-Nothing moves until you press `start_pb`.
+With an input's block picked, <kbd>Ctrl</kbd> <kbd>Shift</kbd>
+<kbd>F</kbd> flips a switch or opens a number's field, so you can set
+inputs without the mouse.
+
+A project can carry a plant model, a block that stands in for the tank,
+the belt or the compressors, so that it moves with nothing wired.
 
 ## The trend
 
 The Trend tab along the bottom plots the signals you pin, up to six,
-over the last ten seconds, each in its own lane with its last value. Pin
-from the tab's list. History restarts when you change the set.
+each in its own lane with its last value. The Window slider sets how
+much of the past the pane shows, from 100 ms to 10 minutes on a
+logarithmic scale, and the plot follows as you drag; history is kept for
+the widest, so widening shows what already ran. The lane's scale is at its right edge: it rounds out to an even step
+and moves only when the values cross one. Pin from the tab's list.
+History restarts when you change the set.
+
+![The Trend tab: three pinned signals, the Window slider, a lane each with its scale at the right edge.](img/trend.png)
 
 ## Faults
 

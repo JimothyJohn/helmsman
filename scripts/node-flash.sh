@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Flash the edge node's firmware onto the ESP32-POE2 over USB and watch its
+# serial output. Nick's step, run in his own shell: the board has NO
+# galvanic isolation, so this never runs while PoE is connected, and an
+# agent session never runs it at all.
+#
+#   ⚠ UNPLUG ETHERNET BEFORE USB. Flash over USB, then unplug USB before any
+#     Ethernet cable goes back in. Never both.
+#
+# Phase 1 (default, `bench`): stay on USB and read the numbers in the monitor.
+# Phase 2 (`modbus`): the node needs Ethernet, so the order is
+#   1. flash here over USB (Ethernet unplugged), Ctrl-C the monitor;
+#   2. unplug USB;
+#   3. plug the PoE cable;
+#   4. read the node's report lines on the Studio:
+#        /usr/bin/python3 -I scripts/node-log-sink.py
+#      (start it before step 3; it listens on udp/9514, the node's LOG_SINK).
+#   The E1213's comms-loss safe state must be set on its console first; then
+#   G5 is pulling the node's cable and watching the outputs go safe.
+#
+# Does: builds the release image (scripts/node-build.sh), finds the one USB
+#       serial port (or takes SERIAL_PORT), confirms the rule with you,
+#       flashes with espflash and stays in the monitor; everything the board
+#       prints is also written to scratch/node-<bin>-<utc>.log for docs/EDGE.md.
+# Needs: the esp toolchain, espflash (`cargo install espflash --locked`),
+#        the POE2 on USB with Ethernet unplugged.
+# Idempotent: flashing the same image again changes nothing but the log.
+#
+# Usage: scripts/node-flash.sh [bench|modbus]
+#        SERIAL_PORT=/dev/cu.usbserial-XXXX scripts/node-flash.sh modbus
+#        NODE_BOARD=poe-iso scripts/node-flash.sh modbus
+#
+# The port and the board's MAC are remembered per board after a flash that
+# completes (scratch/node-board.<board>, untracked): with several boards on
+# USB the next run takes the remembered port without SERIAL_PORT, reads that
+# one board's MAC first (espflash board-info: it resets only the board about
+# to be flashed) and refuses if it is not the board remembered under that
+# name, so a POE2 is never flashed as a POE-ISO by a moved cable.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+command -v espflash >/dev/null || { echo "espflash missing: cargo install espflash --locked" >&2; exit 1; }
+bin="${1:-bench}"
+case "$bin" in
+  bench) build_mode="" ;;
+  modbus) build_mode="net" ;;
+  *) echo "usage: $0 [bench|modbus]" >&2; exit 2 ;;
+esac
+
+board="${NODE_BOARD:-poe2}"
+root="$PWD"
+memo="$root/scratch/node-board.$board"
+want_mac=""
+memo_port=""
+if [ -f "$memo" ]; then
+  read -r memo_port want_mac < "$memo" || true
+fi
+if [ -z "${SERIAL_PORT:-}" ] && [ -n "$memo_port" ] && [ -e "$memo_port" ]; then
+  SERIAL_PORT="$memo_port"
+  echo "$board: the remembered port $SERIAL_PORT (MAC $want_mac)"
+fi
+if [ -z "${SERIAL_PORT:-}" ]; then
+  ports=()
+  for p in /dev/cu.usbserial-* /dev/cu.usbmodem* /dev/cu.SLAB_USBtoUART* /dev/ttyUSB* /dev/ttyACM*; do
+    [ -e "$p" ] && ports+=("$p")
+  done
+  case "${#ports[@]}" in
+    0) echo "no USB serial port: is the POE2 on USB?" >&2; exit 1 ;;
+    1) SERIAL_PORT="${ports[0]}" ;;
+    *) echo "several serial ports (${ports[*]}): set SERIAL_PORT= once; it is remembered for $board" >&2; exit 1 ;;
+  esac
+fi
+
+mac="$(espflash board-info --port "$SERIAL_PORT" 2>/dev/null | awk '/MAC address/ { print $3 }')"
+if [ -z "$mac" ]; then
+  echo "no ESP32 answers on $SERIAL_PORT (espflash board-info)" >&2
+  exit 1
+fi
+if [ -n "$want_mac" ] && [ "$mac" != "$want_mac" ]; then
+  echo "FAIL: $SERIAL_PORT has MAC $mac, but $board was $want_mac: another board is on that port." >&2
+  echo "      Set SERIAL_PORT= for $board (and NODE_BOARD= for the other board) to flash it." >&2
+  exit 1
+fi
+echo "board on $SERIAL_PORT: MAC $mac"
+case "${NODE_BOARD:-poe2}" in
+  poe-iso)
+    echo "ESP32-POE-ISO on $SERIAL_PORT, image: $bin"
+    echo
+    echo "  The POE-ISO is isolated: USB may stay on while it runs on PoE (that is"
+    echo "  why this board can show its serial log on the network). Check the board"
+    echo "  on $SERIAL_PORT IS the POE-ISO: on a POE2 never plug PoE with USB in."
+    echo
+    read -r -p "This is the POE-ISO, flash now? [y/N] " yes
+    ;;
+  *)
+    echo "ESP32-POE2 on $SERIAL_PORT, image: $bin"
+    echo
+    echo "  ⚠  The POE2 has no isolation: USB and PoE together can damage the board,"
+    echo "     the switch port or this computer. Confirm the Ethernet cable is OUT."
+    echo
+    read -r -p "Ethernet unplugged, flash now? [y/N] " yes
+    ;;
+esac
+[ "$yes" = "y" ] || [ "$yes" = "Y" ] || { echo "not flashing"; exit 1; }
+
+# shellcheck disable=SC2086
+scripts/node-build.sh $build_mode
+mkdir -p scratch
+log="scratch/node-$bin-$(date -u +%Y%m%dT%H%M%SZ).log"
+echo "monitor output also goes to $log; Ctrl-C to leave the monitor"
+cd crates/helmsman-node
+espflash flash --monitor --port "$SERIAL_PORT" \
+  "target/xtensa-esp32-none-elf/release/$bin" 2>&1 | tee "../../$log"
+echo "log: $log"
+if grep -q "Flashing has completed" "$root/$log"; then
+  printf '%s %s\n' "$SERIAL_PORT" "$mac" > "$memo"
+  echo "remembered: $board on $SERIAL_PORT, MAC $mac ($memo)"
+fi
+if [ "$bin" = modbus ] && [ "${NODE_BOARD:-poe2}" = poe-iso ]; then
+  echo "now: start the sink (/usr/bin/python3 -I scripts/node-log-sink.py), plug PoE (USB may stay),"
+  echo "     and rerun: espflash monitor --port $SERIAL_PORT to watch the console."
+elif [ "$bin" = modbus ]; then
+  echo "now: unplug USB, start the sink (/usr/bin/python3 -I scripts/node-log-sink.py), plug PoE."
+else
+  echo "paste the '--- round' lines into docs/EDGE.md (Phase 1, numbers)"
+fi

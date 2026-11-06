@@ -25,6 +25,7 @@ use serde_json::{Value as Json, json};
 use crate::editor::Chrome;
 use crate::sim_projects::Storage;
 use crate::st_view::{Arrangement, TAP, Viewer};
+use crate::tips::Tip;
 
 /// The format the tweaks are stored in.
 const FORMAT: &str = "helmsman-arrangements 1";
@@ -235,32 +236,34 @@ pub fn menu_items(
     view: Option<&mut Viewer>,
     can: Result<(), String>,
 ) -> bool {
-    let wide = Vec2::new(ui.available_width().max(74.0), TAP * 0.7);
+    // A fixed floor, not `available_width()`: see editor::menu_item_keyed.
+    let wide = Vec2::new(74.0, TAP * 0.7);
     let Some(v) = view else {
-        ui.add_enabled(false, egui::Button::new("Reset layout").min_size(wide));
+        ui.add_enabled(false, egui::Button::new("Reset layout").min_size(wide))
+            .tip("No diagram to arrange yet.");
         return false;
     };
     let (label, tip, on) = match (layers.tweaked(), layers.has_default()) {
         (true, true) => (
             "Reset to default",
-            "back to the project's shared layout; your own moves here are dropped",
+            "Back to the project's shared layout. Your own moves here are dropped.",
             true,
         ),
         (false, true) => (
             "Automatic layout",
-            "from the shared layout to the automatic one (only on this browser)",
+            "From the shared layout to the automatic one, in this browser only.",
             v.rearranged(),
         ),
-        (true, false) => ("Reset layout", "back to the automatic layout", true),
+        (true, false) => ("Reset layout", "Back to the automatic layout.", true),
         (false, false) => (
             "Reset layout",
-            "drag blocks, or an IF/CASE/loop by its label, to rearrange the diagram",
+            "Nothing to reset. Drag blocks, or an IF, CASE or loop by its label, to rearrange the diagram.",
             false,
         ),
     };
     let r = ui
         .add_enabled(on, egui::Button::new(label).min_size(wide))
-        .on_hover_text(tip);
+        .tip(tip);
     chrome.hit("reset layout", r.rect);
     if r.clicked() {
         layers.reset(v);
@@ -270,8 +273,8 @@ pub fn menu_items(
     let r = match can {
         Ok(()) => ui
             .add_enabled(v.rearranged() || layers.has_default(), b)
-            .on_hover_text("everyone who opens this project starts from this arrangement"),
-        Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
+            .tip("Everyone who opens this project starts from this arrangement."),
+        Err(why) => ui.add_enabled(false, b).tip(why),
     };
     chrome.hit("save layout", r.rect);
     if r.clicked() {

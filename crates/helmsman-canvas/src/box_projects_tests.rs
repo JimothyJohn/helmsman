@@ -220,9 +220,11 @@ impl Bench {
                 Arc::clone(&table),
                 Arc::new(helmsman_io::open),
                 Arc::new(|| Box::new(Channels::new())),
-                Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
-                    dv.set(name, err.map(ToString::to_string));
-                }),
+                Arc::new(
+                    move |name: &str, err: Option<&helmsman_io::Error>, _address: Option<String>| {
+                        dv.set(name, err.map(ToString::to_string));
+                    },
+                ),
             );
             set.start(&parsed.map).unwrap();
             handle.with_links(Arc::new(Mutex::new(set)))
@@ -574,6 +576,36 @@ impl Harness {
         self.frame(vec![button(false)]);
     }
 
+    /// A right click at `at` (opens a context menu).
+    fn right_click(&mut self, at: Pos2) {
+        let press = |pressed| Event::PointerButton {
+            pos: at,
+            button: PointerButton::Secondary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        self.frame(vec![Event::PointerMoved(at)]);
+        self.frame(vec![press(true)]);
+        self.frame(vec![press(false)]);
+        self.frame(vec![]);
+    }
+
+    fn key(&mut self, key: egui::Key) {
+        self.chord(Modifiers::NONE, key);
+    }
+
+    fn chord(&mut self, modifiers: Modifiers, key: egui::Key) {
+        for pressed in [true, false] {
+            self.frame(vec![Event::Key {
+                key,
+                physical_key: None,
+                pressed,
+                repeat: false,
+                modifiers,
+            }]);
+        }
+    }
+
     fn rect(&self, key: &str) -> Rect {
         self.app.chrome.rect(key).unwrap_or_else(|| {
             let keys: Vec<&String> = self.app.chrome.hits.iter().map(|(k, _)| k).collect();
@@ -606,6 +638,60 @@ impl Harness {
 }
 
 // ---- the tests ----
+
+/// Nick 2026-11-01 (project-history): the page lists the box's revisions
+/// after each save, reads one whole, and restores it as an engineer.
+#[test]
+fn the_page_lists_reads_and_restores_the_boxs_revisions() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    settle(&b, &jar, p);
+    let base = p.history.len();
+    assert!(base >= 1, "{:?}", p.history);
+    assert_eq!(p.history[0].what, "saved main.st");
+    assert_eq!(p.history[0].by, "alice (engineer)");
+    p.open_file("main.st");
+    let edited = MAIN.replace("reset := FALSE", "reset := NOT start");
+    p.current_mut().unwrap().text.clone_from(&edited);
+    p.save();
+    settle(&b, &jar, p);
+    assert_eq!(p.history.len(), base + 1, "a save is a revision");
+    // The last revision `make` wrote holds MAIN (its first is the empty file).
+    let last = u32::try_from(base).unwrap();
+    p.read_revision("line", last);
+    settle(&b, &jar, p);
+    let view = p.revision.clone().expect("the revision on view");
+    assert_eq!(view.row.n, last);
+    assert_eq!(view.files["main.st"], MAIN);
+    assert_eq!(view.page, None);
+    p.restore("line", last);
+    settle(&b, &jar, p);
+    assert!(p.revision.is_none(), "shut after the restore");
+    assert_eq!(p.current().unwrap().text, MAIN, "the file came back");
+    assert_eq!(p.history.len(), base + 2);
+    assert_eq!(p.history[base + 1].what, format!("restored revision {last}"));
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], MAIN);
+    // An operator sees the history and cannot restore.
+    let jar2 = Jar::default();
+    let mut w = page(&b, &jar2, Some(("bob", BOB)));
+    let q = &mut w.projects;
+    q.open_project("line");
+    settle(&b, &jar2, q);
+    assert_eq!(q.history.len(), base + 2);
+    q.restore("line", 2);
+    settle(&b, &jar2, q);
+    assert_eq!(q.history.len(), base + 2, "nothing restored");
+    assert!(
+        q.notice
+            .as_ref()
+            .is_some_and(|(n, err)| *err && n.contains("not restored")),
+        "{:?}",
+        q.notice
+    );
+}
 
 #[test]
 fn an_engineer_lists_opens_edits_saves_and_deploys_a_project_on_the_box() {
@@ -813,6 +899,118 @@ fn a_stale_save_is_a_409_and_reload_brings_the_boxs_text() {
     );
 }
 
+/// A requirement test that wants the lamp off while start is held: red
+/// against MAIN (the latch turns the lamp on).
+const TEST_RED: &str = "\
+(* The lamp stays off while start is held. *)
+PROGRAM test_lamp
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
+VAR t : TON; lamp_stays_off : ASSERT; END_VAR
+  start := TRUE;
+  t(IN := TRUE, PT := T#50ms);
+  IF t.Q THEN
+    lamp_stays_off(COND := NOT lamp);
+    done := TRUE;
+  END_IF;
+END_PROGRAM
+";
+
+/// The same test, wanting the lamp on: green against MAIN.
+const TEST_GREEN: &str = "\
+(* The lamp is on within 50 ms of start. *)
+PROGRAM test_lamp
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start : BOOL; done : BOOL; END_VAR
+VAR t : TON; lamp_follows_start : ASSERT; END_VAR
+  start := TRUE;
+  t(IN := TRUE, PT := T#50ms);
+  IF t.Q THEN
+    lamp_follows_start(COND := lamp);
+    done := TRUE;
+  END_IF;
+END_PROGRAM
+";
+
+/// Requirement tests on a box (TODO.md spec-tests): opening a project runs
+/// its `test_*.st` files on the box and the Requirements tab shows each,
+/// red or green with why; a red one refuses the deploy, saying which; a
+/// save runs them again, and green, the deploy goes through.
+#[test]
+fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(
+        &b,
+        &jar,
+        p,
+        "line",
+        &[
+            ("main.st", MAIN),
+            ("blocks.st", BLOCKS),
+            ("io.map", MAP),
+            ("test_lamp.st", TEST_RED),
+        ],
+    );
+    settle(&b, &jar, p);
+    assert!(p.tests.ran, "opening the project ran its tests on the box");
+    assert_eq!(p.tests.rows.len(), 1, "{:?}", p.tests);
+    assert!(!p.tests.rows[0].passed());
+    assert_eq!(
+        p.tests.rows[0].requirement,
+        "The lamp stays off while start is held."
+    );
+    assert!(
+        p.tests.rows[0].why.starts_with("lamp stays off failed at "),
+        "{:?}",
+        p.tests
+    );
+    assert_eq!(p.tests.red().len(), 1);
+
+    // Deploy: refused by the box, naming the test; nothing runs from it.
+    p.deploy();
+    settle(&b, &jar, p);
+    let Deploy::Failed(why) = &p.deploy else {
+        panic!("deployed past a red test: {:?}", p.deploy);
+    };
+    assert!(
+        why.contains("requirement test") && why.contains("test_lamp"),
+        "{why}"
+    );
+    assert!(p.running.is_none());
+
+    // The tab draws the row red and the refusal shows under the header.
+    let ctx = egui::Context::default();
+    v.step_all(&ctx, vec![], vec![], 0.0);
+    let mut chrome = crate::editor::Chrome::default();
+    chrome.tab = crate::editor::Tab::Requirements;
+    let mut out = ctx.run_ui(RawInput::default(), |ui| {
+        crate::editor::Body::tab(&mut v, ui, crate::editor::Tab::Requirements, &mut chrome);
+    });
+    out.textures_delta.clear();
+    assert!(chrome.rect("test test_lamp").is_some(), "{:?}", chrome.hits);
+    assert!(chrome.rect("tests run").is_some());
+
+    // Fixed and saved: the box runs them again, green, and deploys.
+    let p = &mut v.projects;
+    p.open_file("test_lamp.st");
+    p.current_mut().unwrap().text = TEST_GREEN.to_string();
+    p.save();
+    settle(&b, &jar, p);
+    assert!(p.tests.rows[0].passed(), "{:?}", p.tests);
+    p.deploy();
+    settle(&b, &jar, p);
+    assert!(
+        matches!(p.deploy, Deploy::Done(_)),
+        "{:?} {:?}",
+        p.deploy,
+        p.tests
+    );
+    assert_eq!(p.running.as_deref(), Some("line"));
+}
+
 #[test]
 fn compile_errors_name_file_and_line_and_a_click_opens_it_there() {
     let b = Bench::new();
@@ -902,18 +1100,30 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
             .unwrap()
             .text
             .push_str("(* not mine *)");
-        // The sidebar's buttons are on the Files tab.
+        // The sidebar's buttons are on the Files tab; Rename and Delete
+        // are its right-click menu's (disabled here) and the Delete key's
+        // (nothing happens without write access).
         h.app.chrome.show_files();
         h.wait(0.3);
-        for k in ["save", "rename project", "delete project", "new file"] {
+        for k in ["save", "new file"] {
             h.press(k);
         }
+        let row = h.rect("project line").center();
+        h.right_click(row);
+        h.press("menu rename project");
+        h.right_click(row);
+        h.press("menu delete project");
+        h.key(egui::Key::Backspace);
+        assert_eq!(h.bv().files_ui.confirm, None, "no delete asked for");
         // New project is the File menu's (disabled here; pressing it is nothing).
         h.press("bar file");
         h.press("file new");
         // Deploy is the File menu's (disabled here; pressing it is nothing).
         h.press("bar file");
         h.press("file deploy");
+        // ... and a file's right-click menu's (disabled here too).
+        h.right_click(h.rect("file main.st").center());
+        h.press("menu deploy");
         // Reads (the Trend's pins) go; no write does.
         let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
         assert!(sent.is_empty(), "{sent:?}");
@@ -932,6 +1142,19 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
             role: "engineer".into(),
         }),
     );
+    // Right-click a file › Deploy starts the deploy, the check first
+    // (Nick, 2026-11-05).
+    h.app.chrome.show_files();
+    h.wait(0.3);
+    h.right_click(h.rect("file main.st").center());
+    h.press("menu deploy");
+    let sent = h.sent();
+    assert!(
+        sent.iter()
+            .any(|q| q.method == "POST" && q.url.ends_with("/check")),
+        "{sent:?}"
+    );
+    h.bv().projects.deploy = Deploy::Idle;
     h.bv().projects.current_mut().unwrap().text.push_str("(* mine *)");
     h.frame(vec![]);
     assert!(h.app.chrome.rect("dirty").is_some(), "the header marks it");
@@ -940,19 +1163,17 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
     assert!(sent.iter().any(|q| q.method == "PUT"), "{sent:?}");
 }
 
-#[test]
-fn an_engineer_forces_an_input_from_the_diagram_and_releases_all() {
-    let b = Bench::new();
-    let jar = Jar::default();
+/// Alice's page on the bench box, watched until the running module is
+/// drawn with a scan.
+fn drawn(b: &Bench, jar: &Jar) -> BoxView {
     let ctx = egui::Context::default();
-    let mut v = page(&b, &jar, Some(("alice", ALICE)));
-    // Watch the box until the running module is drawn with a scan.
+    let mut v = page(b, jar, Some(("alice", ALICE)));
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut now = 0.0;
     while v.view.is_none() || v.state.scan.is_none() {
         assert!(Instant::now() < deadline, "never drawn: {:?}", v.state.problem);
         v.step_all(&ctx, vec![], vec![], now);
-        pump(&b, &jar, &mut v, &ctx, now);
+        pump(b, jar, &mut v, &ctx, now);
         if let Some(name) = v.state.selected.clone() {
             for (ev, data) in b.events(&crate::remote::trace_url(&name), 1) {
                 v.state.apply(Msg::Event(Stream::Trace, ev, data), now);
@@ -960,6 +1181,14 @@ fn an_engineer_forces_an_input_from_the_diagram_and_releases_all() {
         }
         now += 0.1;
     }
+    v
+}
+
+#[test]
+fn an_engineer_forces_an_input_from_the_diagram_and_releases_all() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let v = drawn(&b, &jar);
     let start = |v: &BoxView| {
         v.state
             .signals
@@ -1036,6 +1265,77 @@ fn an_engineer_forces_an_input_from_the_diagram_and_releases_all() {
 }
 
 #[test]
+fn ctrl_shift_f_forces_the_picked_input_and_ctrl_shift_u_releases_all() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = drawn(&b, &jar);
+    let view = v.view.as_mut().expect("drawn");
+    let read = view
+        .diagram()
+        .nodes
+        .iter()
+        .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Read { path } if path.eq_ignore_ascii_case("start")))
+        .expect("a read of start")
+        .id;
+    view.pick = Some(crate::st_view::Pick::Node(read));
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.frame(vec![]);
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::F);
+    let reqs = h.sent();
+    let post = reqs
+        .iter()
+        .find(|q| q.url == "/api/forces" && q.method == "POST")
+        .unwrap_or_else(|| panic!("{reqs:?}"));
+    let body = String::from_utf8_lossy(post.body.as_deref().unwrap_or_default()).into_owned();
+    assert!(body.contains("false"), "start (on) flips to FALSE: {body}");
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        h.bv().projects.answer(q.call, &a);
+    }
+    settle(&b, &jar, &mut h.bv().projects);
+    h.frame(vec![]);
+    assert_eq!(h.bv().state.forces.len(), 1);
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::U);
+    let reqs = h.sent();
+    assert!(
+        reqs.iter()
+            .any(|q| q.url == "/api/forces" && q.method == "DELETE"),
+        "{reqs:?}"
+    );
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        h.bv().projects.answer(q.call, &a);
+    }
+    settle(&b, &jar, &mut h.bv().projects);
+    assert_eq!(b.json("/api/forces")["forces"], serde_json::json!([]));
+}
+
+#[test]
+fn ctrl_shift_f_sends_nothing_without_an_engineer_signed_in() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = drawn(&b, &jar);
+    let view = v.view.as_mut().expect("drawn");
+    let read = view
+        .diagram()
+        .nodes
+        .iter()
+        .find(|n| matches!(&n.kind, helmsman_diagram::NodeKind::Read { path } if path.eq_ignore_ascii_case("start")))
+        .expect("a read of start")
+        .id;
+    view.pick = Some(crate::st_view::Pick::Node(read));
+    v.session = None;
+    let mut h = Harness::new(v, None);
+    h.frame(vec![]);
+    h.sent();
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::F);
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::U);
+    let reqs = h.sent();
+    assert!(!reqs.iter().any(|q| q.url.starts_with("/api/forces")), "{reqs:?}");
+}
+
+#[test]
 fn a_box_without_projects_keeps_the_module_view() {
     let b = crate::box_tests::Bench::new();
     let mut p = BoxProjects::new();
@@ -1062,7 +1362,13 @@ fn a_session_the_box_ended_signs_the_header_out() {
     let b = Bench::new();
     let jar = Jar::default();
     let mut v = page(&b, &jar, Some(("alice", ALICE)));
-    make(&b, &jar, &mut v.projects, "line", &[("main.st", MAIN)]);
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
     // Signed out elsewhere: the box forgets the cookie.
     let head = "POST /api/logout HTTP/1.1\r\nHost: box\r\nX-Helmsman-Request: 1\r\nOrigin: http://box\r\n";
     let c = jar.get().unwrap();
@@ -1289,35 +1595,29 @@ fn the_shared_layout_round_trips_through_the_running_project_for_an_engineer_onl
     assert_eq!(b.send(&jar, &bad).status, 422);
 }
 
-/// Every built-in machine and template arrives on the box as a project, all
-/// its files at once, and deploys there against the real API as it stands.
+/// Every example arrives on the box as a project of its own, named as asked,
+/// and deploys there against the real API as it stands.
 #[test]
-fn a_new_project_from_any_machine_or_template_deploys_on_the_box() {
-    use helmsman_project::starters::STARTERS;
+fn a_new_project_from_any_example_deploys_on_the_box() {
     let b = Bench::build(true);
     let jar = Jar::default();
     let mut v = page(&b, &jar, Some(("alice", ALICE)));
     let p = &mut v.projects;
-    for s in STARTERS {
-        let name = format!("my-{}", s.name);
-        p.create_from(&name, s.name);
+    for e in &crate::playground::EXAMPLES {
+        let (from, file) = crate::sim_projects::example_project(e.src);
+        let name = format!("my-{from}").replace('_', "-");
+        p.create_from(&name, &from);
         settle(&b, &jar, p);
         assert_eq!(p.open.as_ref().unwrap().name, name, "{:?}", p.notice);
-        let mut want: Vec<&str> = s.files.iter().map(|(f, _)| *f).collect();
+        let mut want = vec![file.as_str(), "io.map"];
         want.sort_unstable();
         assert_eq!(files(p), want);
-        assert_eq!(
-            p.current().unwrap().text,
-            s.files[0].1,
-            "{}: main.st first",
-            s.name
-        );
+        assert_eq!(p.current().unwrap().text, e.src, "{from}");
         p.deploy();
         settle(&b, &jar, p);
         assert!(
             matches!(p.deploy, Deploy::Done(_)),
-            "{}: {:?} {:?}",
-            s.name,
+            "{from}: {:?} {:?}",
             p.deploy,
             p.diags
         );
@@ -1335,16 +1635,16 @@ fn a_new_project_from_any_machine_or_template_deploys_on_the_box() {
         });
     }
     // A name that is taken is not overwritten without asking.
-    p.create_from("my-batch-mixer", "pump-station");
+    p.create_from("my-blink", "counter");
     settle(&b, &jar, p);
     let (msg, err) = p.notice.clone().unwrap();
     assert!(err && msg.contains("Replace it?"), "{msg}");
     assert!(
-        b.json("/api/projects/my-batch-mixer/files/main.st")["text"]
+        b.json("/api/projects/my-blink/files/blink.st")["text"]
             .as_str()
             .unwrap()
-            .contains("mixer_tank"),
-        "still the mixer"
+            .contains("PROGRAM blink"),
+        "still blink"
     );
 }
 
@@ -1357,9 +1657,7 @@ fn only_an_engineer_can_start_a_project_from_the_list() {
     let session = v.session.clone();
     let mut h = Harness::new(v, session);
     h.wait(0.2);
-    h.press("starters");
-    h.wait(0.1);
-    h.press("starter pump-station");
+    h.press("starter latch");
     h.wait(0.1);
     assert!(h.app.chrome.rect("name").is_some(), "the name is asked for");
     h.press("name ok");
@@ -1368,24 +1666,261 @@ fn only_an_engineer_can_start_a_project_from_the_list() {
         .iter()
         .find(|q| q.method == "POST")
         .unwrap_or_else(|| panic!("nothing sent: {sent:?}"));
-    assert_eq!(up.url, "/api/projects/pump-station/zip");
+    assert_eq!(up.url, "/api/projects/latch/zip");
     assert_eq!(up.ctype, "application/zip");
     for q in sent {
         let a = b.send(&jar, &q);
         h.bv().projects.answer(q.call, &a);
     }
-    assert_eq!(b.get("/api/projects/pump-station/files/plant_model.st").0, 200);
+    assert_eq!(b.get("/api/projects/latch/files/latch.st").0, 200);
+    assert_eq!(b.get("/api/projects/latch/files/io.map").0, 200);
 
     let jar = Jar::default();
     let v = page(&b, &jar, Some(("bob", BOB)));
     let session = v.session.clone();
     let mut h = Harness::new(v, session);
     h.wait(0.2);
-    h.press("starters");
-    h.wait(0.1);
-    h.press("starter pump-station");
+    h.press("starter latch");
     h.wait(0.1);
     assert_eq!(h.app.chrome.rect("name"), None, "disabled for an operator");
     let writes: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
     assert!(writes.is_empty(), "{writes:?}");
+}
+
+/// Undoes HTTP chunked framing (a streamed answer).
+fn unchunk(raw: &[u8]) -> String {
+    let s = String::from_utf8_lossy(raw);
+    let mut rest: &str = &s;
+    let mut out = String::new();
+    while let Some((size, after)) = rest.split_once("\r\n") {
+        let Ok(n) = usize::from_str_radix(size.trim(), 16) else {
+            break;
+        };
+        if n == 0 || after.len() < n {
+            break;
+        }
+        out.push_str(&after[..n]);
+        rest = after[n..].strip_prefix("\r\n").unwrap_or(&after[n..]);
+    }
+    if out.is_empty() { s.into_owned() } else { out }
+}
+
+/// Nick, 2026-11-05: a requirement typed on a box goes to the box's
+/// requirements route; with no relay the box writes it as "no test yet",
+/// and the list shows it grey, never refusing a deploy.
+#[test]
+fn a_requirement_added_on_a_box_without_an_agent_is_listed_with_no_test_yet() {
+    use crate::requirements::{Adding, Phase, State};
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    settle(&b, &jar, &mut v.projects);
+
+    let (mut a, req) = Adding::to_box("line", "The conveyor runs after start", "conveyor_runs", 1);
+    assert_eq!(req.url, "/api/projects/line/requirements");
+    let head = format!(
+        "POST {} HTTP/1.1\r\nHost: box\r\nX-Helmsman-Request: 1\r\nOrigin: http://box\r\nCookie: helmsman_session={}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        req.url,
+        jar.get().unwrap(),
+        req.body.len()
+    );
+    let (status, _, body) = b.raw(&head, req.body.as_bytes());
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    a.chunk(&unchunk(&body));
+    a.end(None);
+    assert_eq!(
+        a.phase,
+        Phase::Untested {
+            file: "test_conveyor_runs.st".into(),
+            why: String::new()
+        }
+    );
+
+    // The page reads the project again, which runs its tests.
+    v.projects.open_project("line");
+    settle(&b, &jar, &mut v.projects);
+    v.projects.run_tests();
+    settle(&b, &jar, &mut v.projects);
+    let row = v
+        .projects
+        .tests
+        .rows
+        .iter()
+        .find(|r| r.file == "test_conveyor_runs.st")
+        .expect("its row");
+    assert_eq!(row.state, State::Untested, "{:?}", v.projects.tests);
+    assert_eq!(row.requirement, "The conveyor runs after start");
+    assert_eq!(v.projects.tests.refusal(), None);
+
+    // Signed out, the box refuses it.
+    let (mut a, req) = Adding::to_box("line", "The belt stops on stop", "belt_stops", 2);
+    let head = format!(
+        "POST {} HTTP/1.1\r\nHost: box\r\nX-Helmsman-Request: 1\r\nOrigin: http://box\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        req.url,
+        req.body.len()
+    );
+    let (status, _, body) = b.raw(&head, req.body.as_bytes());
+    assert_eq!(status, 401);
+    a.refused(status, &String::from_utf8_lossy(&body));
+    assert!(
+        matches!(&a.phase, Phase::Failed(w) if w.starts_with("Sign in")),
+        "{:?}",
+        a.phase
+    );
+}
+
+/// The box's Agent tab takes the page's path (`crate::instruct`, Nick
+/// 2026-11-05): the instruction goes to `POST /api/chat` with the answer
+/// format and the whole file in a new conversation; a checked answer is
+/// saved on the box with its History entry and its scenario as a test;
+/// Undo restores the revision before it; a follow-up carries the earlier
+/// instruction, read back from the box's History; a red answer is sent
+/// back in the same conversation and, still red, never written.
+#[test]
+fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_it() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::{BOX_RULES, Kind};
+    use crate::instruct_tests::{LAMP, st};
+    use serde_json::json;
+
+    /// The agent's turn for the last message: its words, then done.
+    fn answer(v: &mut BoxView, text: &str) {
+        let seq = v.chat_sent.last().expect("a message").seq;
+        let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+        let body = [
+            ev("session", json!({"id": "s1"})),
+            ev("text", json!({ "delta": text })),
+            ev("done", json!({"stop": "end_turn", "why": null})),
+        ]
+        .concat();
+        v.agent.apply(Incoming::Chunk { seq, text: body });
+        v.agent.apply(Incoming::End { seq });
+    }
+    /// A frame, then the box's answers carried out until quiet.
+    fn run(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context) {
+        v.tick(ctx);
+        for _ in 0..20 {
+            pump(b, jar, v, ctx, 1.0);
+            if v.psent.is_empty() {
+                return;
+            }
+        }
+        panic!("the box never went quiet");
+    }
+    fn body(v: &BoxView, k: usize) -> Json {
+        serde_json::from_str(&v.chat_sent[k].body).unwrap()
+    }
+
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    run(&b, &jar, &mut v, &ctx);
+    let before = v.projects.history.last().map(|r| r.n).expect("revisions");
+
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let m = body(&v, 0);
+    assert_eq!(m["session"], Json::Null);
+    let message = m["message"].as_str().unwrap();
+    assert!(message.starts_with(BOX_RULES));
+    assert!(
+        message.contains("\n\ncomment it\n\n<current_program>"),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("text:\n{LAMP}</edit_scope>")),
+        "{message}"
+    );
+    let new = LAMP.replace("lamp := start;", "lamp := start; (* follows start *)");
+    answer(&mut v, &st(&new));
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(o.status, "Updated main.st: 1 scenario passed, kept as a test.");
+    assert_eq!(o.why.as_deref(), Some("it says so."));
+    assert_eq!(o.undo.as_ref().map(|u| u.revision), Some(before));
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], new.as_str());
+    assert!(
+        b.json("/api/projects/line/files/test_lamp_follows.st")["text"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("(* The lamp follows start. *)")),
+        "the scenario is a test on the box"
+    );
+    let saved = v
+        .projects
+        .history
+        .iter()
+        .find(|r| r.what == "took the Agent's answer into main.st")
+        .cloned()
+        .expect("the change's revision");
+    assert!(saved.page);
+    let page = b.json(&format!("/api/projects/line/history/{}", saved.n));
+    assert!(
+        page["page"]
+            .as_str()
+            .is_some_and(|p| p.starts_with("Instruction: comment it\nFile: main.st\nWhy: it says so.\n")),
+        "{page}"
+    );
+    assert_eq!(v.projects.current().unwrap().text, new, "the editor shows it");
+
+    // Undo: the box restores the revision before it.
+    v.undo_change();
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Undone));
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], LAMP);
+    assert_eq!(
+        v.projects.history.last().map(|r| r.what.clone()),
+        Some(format!("restored revision {before}"))
+    );
+
+    // A follow-up: the earlier instruction comes from the box's History;
+    // a red answer goes back in the same conversation, then is refused.
+    run(&b, &jar, &mut v, &ctx);
+    v.instruct.draft = "now invert it".into();
+    v.send_instruction(&ctx);
+    let m = body(&v, 1);
+    assert_eq!(m["session"], Json::Null, "a new conversation per instruction");
+    assert!(
+        m["message"]
+            .as_str()
+            .unwrap()
+            .contains("<earlier_instructions>\n- comment it\n</earlier_instructions>"),
+        "{m}"
+    );
+    let red = st(&LAMP.replace("lamp := start;", "lamp := NOT start;"));
+    answer(&mut v, &red);
+    run(&b, &jar, &mut v, &ctx);
+    assert_eq!(v.chat_sent.len(), 3);
+    let m = body(&v, 2);
+    assert_eq!(m["session"], "s1", "the retry continues the conversation");
+    assert!(
+        m["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("The page checked your answer before showing it"),
+        "{m}"
+    );
+    answer(&mut v, &red);
+    run(&b, &jar, &mut v, &ctx);
+    answer(&mut v, &red);
+    run(&b, &jar, &mut v, &ctx);
+    let o = v.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Refused, "{o:?}");
+    assert!(o.problems.iter().any(|p| p.contains("lamp on failed")), "{o:?}");
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "never written"
+    );
 }

@@ -18,8 +18,16 @@
 //! | Structured Text | Alt 1 | POUs view |
 //! | Trend along the bottom | Alt 2 | Modules view |
 //! | Side panel | Alt 3 | Messages view |
+//! | Devices tab | Alt 4 | (a key of our own) |
 //! | Go to definition (picked block's variable) | Ctrl/⌘ Shift D | Go to Definition |
 //! | Cross references (its reads and writes lit) | Ctrl/⌘ Shift X | Display Cross References |
+//! | Breakpoint on the picked block (simulation) | Ctrl/⌘ B | (Toggle Breakpoint is F9 there) |
+//! | Force the picked input | Ctrl/⌘ Shift F | (a key of our own) |
+//! | Release every force (box) | Ctrl/⌘ Shift U | (a key of our own) |
+//! | Into the picked instance's diagram, one scan (stopped) | Ctrl/⌘ ] | (a key of our own) |
+//! | Out to the caller's diagram, one scan (stopped) | Ctrl/⌘ [ | (a key of our own) |
+//! | Find in the Structured Text | Ctrl/⌘ F | (a key of our own) |
+//! | Next / previous match | Ctrl/⌘ G, Ctrl/⌘ Shift G | (a key of our own) |
 //! | Up one level in the diagram | Alt ↑ | (`st_view`, as before) |
 //!
 //! The shortcuts are read at the end of the frame, after every widget
@@ -42,11 +50,20 @@ pub enum Action {
     Undo,
     Redo,
     Files,
+    Devices,
     St,
     Panel,
     Trend,
     GoToDefinition,
     CrossReferences,
+    Breakpoint,
+    Force,
+    ReleaseAll,
+    StepInto,
+    StepOut,
+    Find,
+    FindNext,
+    FindPrevious,
     /// Cold restart of the simulation (a glyph; no key).
     Restart,
     Upload,
@@ -102,10 +119,34 @@ pub const TABLE: &[Hotkey] = &[
         Key::X,
         "Display Cross References",
     ),
+    key(Action::Breakpoint, Modifiers::COMMAND, Key::B, ""),
+    key(
+        Action::Force,
+        Modifiers::COMMAND.plus(Modifiers::SHIFT),
+        Key::F,
+        "",
+    ),
+    key(
+        Action::ReleaseAll,
+        Modifiers::COMMAND.plus(Modifiers::SHIFT),
+        Key::U,
+        "",
+    ),
+    key(Action::StepInto, Modifiers::COMMAND, Key::CloseBracket, ""),
+    key(Action::StepOut, Modifiers::COMMAND, Key::OpenBracket, ""),
+    key(Action::Find, Modifiers::COMMAND, Key::F, ""),
+    key(Action::FindNext, Modifiers::COMMAND, Key::G, ""),
+    key(
+        Action::FindPrevious,
+        Modifiers::COMMAND.plus(Modifiers::SHIFT),
+        Key::G,
+        "",
+    ),
     key(Action::Files, Modifiers::ALT, Key::Num0, "Devices"),
     key(Action::St, Modifiers::ALT, Key::Num1, "POUs"),
     key(Action::Trend, Modifiers::ALT, Key::Num2, "Modules"),
     key(Action::Panel, Modifiers::ALT, Key::Num3, "Messages"),
+    key(Action::Devices, Modifiers::ALT, Key::Num4, ""),
 ];
 
 /// What each action does, for the help page.
@@ -122,11 +163,26 @@ const fn does(action: Action) -> &'static str {
         Action::Undo => "Undo in the Structured Text",
         Action::Redo => "Redo in the Structured Text",
         Action::Files => "The left pane's Files tab",
+        Action::Devices => "The left pane's Devices tab (the I/O map's devices and points)",
         Action::St => "The left pane's Code tab (the Structured Text)",
         Action::Trend => "The bottom panel (Trend, Messages)",
         Action::Panel => "The side panel (I/O, Agent)",
         Action::GoToDefinition => "Go to definition: the picked block's variable, at its VAR line",
         Action::CrossReferences => "Cross references: every read and write of it lit",
+        Action::Breakpoint => {
+            "Breakpoint on the picked block (simulation): the scan stops before it; F10 runs the rest \
+             of the scan, Ctrl Enter goes on to the next stop"
+        }
+        Action::Force => {
+            "Force the picked input: a switch flips, a number's field opens (on a box, an engineer's \
+             audited force)"
+        }
+        Action::ReleaseAll => "Release every force on the box",
+        Action::StepInto => "Into the picked block instance's diagram; a stopped simulation steps one scan",
+        Action::StepOut => "Out to the caller's diagram; a stopped simulation steps one scan",
+        Action::Find => "Find in the Structured Text (Enter: next, Esc: close)",
+        Action::FindNext => "The next match",
+        Action::FindPrevious => "The previous match",
         Action::Restart | Action::Upload | Action::Download => "",
     }
 }
@@ -177,12 +233,7 @@ pub fn markdown() -> String {
         let _ = writeln!(out, "| {} | {d} | {codesys} |", key_text(h.keys));
     }
     out.push_str("| Alt ↑ | Up one level in the diagram | |\n");
-    out.push_str(
-        "\nReserved, not built yet, on chords rather than function keys: Ctrl B toggle a \
-         breakpoint on the picked block, Ctrl ] / Ctrl [ step into / out of an instance, \
-         Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F find in \
-         the Structured Text with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2 the Agent.\n",
-    );
+    out.push_str("\nReserved, not built yet: F2 / Shift F2 for the Agent.\n");
     out
 }
 
@@ -287,6 +338,9 @@ mod tests {
         assert!(wants(&down(Modifiers::SHIFT, Key::F8)));
         assert!(wants(&down(Modifiers::ALT, Key::F8)));
         assert!(wants(&down(Modifiers::NONE, Key::F10)));
+        // Back and Forward on a Mac: ours while the page has the keyboard.
+        assert!(wants(&down(Modifiers::COMMAND, Key::OpenBracket)));
+        assert!(wants(&down(Modifiers::COMMAND, Key::CloseBracket)));
         for (m, k) in [
             (Modifiers::NONE, Key::F5),
             (Modifiers::NONE, Key::F11),

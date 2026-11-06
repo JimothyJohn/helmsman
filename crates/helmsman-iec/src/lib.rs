@@ -2,7 +2,7 @@
 //! a time against a process image.
 //!
 //! ```
-//! use std::time::Duration;
+//! use core::time::Duration;
 //! use helmsman_iec::{Image, ImageSizes, Value, compile};
 //!
 //! let src = "
@@ -42,6 +42,26 @@
 //! Ladder (LD) and function block diagrams (FBD) drawn in an editor such
 //! as Beremiz or the `OpenPLC` Editor come in as `PLCopen` TC6 XML through
 //! [`compile_plcopen`].
+//!
+//! The crate is `no_std + alloc` without its `std` feature (on by default):
+//! the same compiler and interpreter on an edge node (docs/EDGE.md), with
+//! the clock coming in through [`Program::scan_at`] and the float functions
+//! from `libm` (`--no-default-features --features libm`). Only
+//! [`Program::scan`], the wall-clock scan, needs std.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+/// What the std prelude gives and `no_std` modules import instead.
+#[cfg(not(feature = "std"))]
+mod prelude {
+    pub use alloc::borrow::ToOwned;
+    pub use alloc::boxed::Box;
+    pub use alloc::string::{String, ToString};
+    pub use alloc::vec::Vec;
+    pub use alloc::{format, vec};
+}
 
 /// The syntax tree of a compilation unit, read-only, for views built from
 /// the source (the ST diagram, `helmsman-diagram`). Statement positions are
@@ -73,30 +93,41 @@ pub mod ast {
 }
 
 mod check;
+mod fmath;
 mod interp;
 pub mod l5x;
 pub mod ladder;
 mod lexer;
+mod once;
 mod parser;
 pub mod plcopen;
+mod rename;
+pub mod spec;
 mod state;
 pub mod trace;
 mod types;
 mod xml;
 
-use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+use alloc::sync::Arc;
+use core::time::Duration;
+#[cfg(feature = "std")]
+use std::time::Instant;
+
+use once::Once;
 
 pub use check::{Area, Diagnostic, ImageSizes};
 pub use interp::{BadParam, Fault, FaultKind, Image};
 pub use lexer::Pos;
+pub use rename::rename_ident;
 pub use state::{Carry, State};
 pub use types::{Ty, Value};
 
 use check::{AggKind, Checked, Type};
-use interp::Machine;
+use interp::{Halt, Machine};
 use parser::Section;
-use trace::{Recorder, Trace, TraceMap};
+use trace::{Recorder, StmtId, Trace, TraceMap};
 
 /// Instructions one scan may execute before it faults (see [`FaultKind::Watchdog`]).
 pub const DEFAULT_BUDGET: u64 = 1_000_000;
@@ -105,7 +136,7 @@ pub const DEFAULT_BUDGET: u64 = 1_000_000;
 pub const LIBRARY: &str = include_str!("library.st");
 
 fn library() -> &'static parser::Unit {
-    static LIB: OnceLock<parser::Unit> = OnceLock::new();
+    static LIB: Once<parser::Unit> = Once::new();
     LIB.get_or_init(|| {
         parser::parse(LIBRARY, true).unwrap_or_else(|e| panic!("library.st {}: {}", e.pos, e.msg))
     })
@@ -130,13 +161,49 @@ pub struct Program {
     code: Checked,
     mem: Vec<Value>,
     budget: u64,
+    /// When the first wall-clock scan ran ([`Program::scan`]; std only:
+    /// without std the clock comes in through [`Program::scan_at`]).
+    #[cfg(feature = "std")]
     started: Option<Instant>,
     /// Located initial values are still to be written (a cold start).
     cold: bool,
     /// Trace counters per scan (see [`trace`]).
     counters: u32,
     /// Built on the first traced scan; shared by its clones.
-    map: OnceLock<Arc<TraceMap>>,
+    map: Once<Arc<TraceMap>>,
+}
+
+/// Where [`Program::scan_to`] stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stopped {
+    /// Before this statement, at a breakpoint.
+    Before(StmtId),
+    /// At the end of the scan, no breakpoint reached: the scan's result.
+    End(Result<(), Fault>),
+}
+
+/// One scan of `code`'s program over `mem` and `image`.
+fn run_on(
+    code: &Checked,
+    budget: u64,
+    mem: &mut [Value],
+    image: &mut Image,
+    now: Duration,
+    tap: Option<&mut Recorder>,
+) -> Result<(), Halt> {
+    let mut m = Machine {
+        mem,
+        image,
+        pous: &code.pous,
+        library: code.library,
+        base: 0,
+        budget,
+        now: i128::try_from(now.as_nanos())
+            .unwrap_or(i128::MAX)
+            .min(i128::from(i64::MAX)),
+        tap,
+    };
+    m.run(&code.pous[code.program])
 }
 
 /// Compiles a unit holding one `PROGRAM` (plus any FUNCTIONs,
@@ -158,10 +225,11 @@ pub fn compile(src: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>>
         mem: code.mem_init.clone(),
         code,
         budget: DEFAULT_BUDGET,
+        #[cfg(feature = "std")]
         started: None,
         cold: true,
         counters,
-        map: OnceLock::new(),
+        map: Once::new(),
     })
 }
 
@@ -199,10 +267,12 @@ impl Program {
         self.budget = budget;
     }
 
-    /// Runs one scan; the clock is wall time since the first scan.
+    /// Runs one scan; the clock is wall time since the first scan (std
+    /// only; a node drives [`Program::scan_at`] from its own clock).
     ///
     /// # Errors
     /// A [`Fault`]; see [`Program::scan_at`].
+    #[cfg(feature = "std")]
     pub fn scan(&mut self, image: &mut Image) -> Result<(), Fault> {
         let now = self.started.get_or_insert_with(Instant::now).elapsed();
         self.scan_at(image, now)
@@ -231,8 +301,49 @@ impl Program {
         let r = self.run(image, now, Some(&mut rec));
         let prog = &self.code.pous[self.code.program];
         let frame = self.mem[prog.base..prog.base + prog.size].to_vec();
-        let trace = Trace::new(self.trace_map(), now, rec, frame, image.clone(), r.err());
+        let trace = Trace::new(self.trace_map(), now, rec, frame, image.clone(), r.err(), false);
         (r, trace)
+    }
+
+    /// Runs a scan as far as a breakpoint, on copies: the program's
+    /// variables and `image` are left as they were, so the scan can be
+    /// looked at as it stood and then run for real.
+    ///
+    /// The scan stops before the `skip + 1`-th start of any statement in
+    /// `breaks` (statements in a function block's body stop in every
+    /// instance). The trace shows the scan up to there
+    /// ([`Trace::paused_at`]), the values as of that moment. A scan is
+    /// deterministic in its variables, `image` and `now`, so
+    /// [`Program::scan_traced`] with the same arguments runs through the
+    /// same moment and on to the end: that is how a paused scan resumes.
+    /// `skip + 1` stops at the next hit.
+    ///
+    /// Returns where the scan stopped: before a statement, or at its end
+    /// (no breakpoint was reached, `skip` included) with the scan's result.
+    pub fn scan_to(&self, image: &Image, now: Duration, breaks: &[StmtId], skip: u32) -> (Stopped, Trace) {
+        let map = self.trace_map();
+        let counters = breaks.iter().filter_map(|&id| map.counter(id)).collect();
+        let mut rec = Recorder::with_breaks(self.counters, counters, skip);
+        let mut mem = self.mem.clone();
+        let mut image = image.clone();
+        if self.cold {
+            interp::init_located(&mut image, &self.code.loc_init);
+        }
+        let r = run_on(&self.code, self.budget, &mut mem, &mut image, now, Some(&mut rec));
+        let prog = &self.code.pous[self.code.program];
+        let frame = mem[prog.base..prog.base + prog.size].to_vec();
+        let fault = match r {
+            Err(Halt::Fault(f)) => Some(f),
+            _ => None,
+        };
+        let paused = matches!(r, Err(Halt::Break(_)));
+        let trace = Trace::new(map, now, rec, frame, image, fault, paused);
+        let stopped = match (trace.paused_at(), fault) {
+            (Some(id), _) => Stopped::Before(id),
+            (None, Some(f)) => Stopped::End(Err(f)),
+            (None, None) => Stopped::End(Ok(())),
+        };
+        (stopped, trace)
     }
 
     /// The statement table and variable list every trace of this program
@@ -249,27 +360,20 @@ impl Program {
             interp::init_located(image, &self.code.loc_init);
             self.cold = false;
         }
-        let program = &self.code.pous[self.code.program];
-        let mut m = Machine {
-            mem: &mut self.mem,
-            image,
-            pous: &self.code.pous,
-            library: self.code.library,
-            base: 0,
-            budget: self.budget,
-            now: i128::try_from(now.as_nanos())
-                .unwrap_or(i128::MAX)
-                .min(i128::from(i64::MAX)),
-            tap,
-        };
-        m.run(program)
+        run_on(&self.code, self.budget, &mut self.mem, image, now, tap).map_err(|h| match h {
+            Halt::Fault(f) => f,
+            Halt::Break(_) => unreachable!("only scan_to sets breakpoints"),
+        })
     }
 
     /// Restores every variable to its initial value (a cold restart); the
     /// next scan rewrites located initial values into the image.
     pub fn reset(&mut self) {
         self.mem.clone_from(&self.code.mem_init);
-        self.started = None;
+        #[cfg(feature = "std")]
+        {
+            self.started = None;
+        }
         self.cold = true;
     }
 
@@ -383,28 +487,26 @@ impl Program {
         let (slot, Type::Elem(ty)) = (prog.base + v.off, v.ty) else {
             return Err(SetError::NoSuchInput);
         };
-        let stored = match (ty, value) {
-            (Ty::Bool, Value::Bool(_)) => value,
-            (t, Value::Real(x)) if t.is_real() => {
-                if !x.is_finite() {
-                    return Err(SetError::Range(ty));
-                }
-                let r = types::round_real(t, x);
-                if !r.is_finite() {
-                    return Err(SetError::Range(ty));
-                }
-                Value::Real(r)
-            }
-            (t, Value::Int(n)) if t != Ty::Bool && !t.is_real() => {
-                let (lo, hi) = t.range();
-                if n < lo || n > hi {
-                    return Err(SetError::Range(ty));
-                }
-                value
-            }
-            _ => return Err(SetError::Kind(ty)),
-        };
+        let stored = checked(ty, value)?;
         self.mem[slot] = stored;
+        Ok(())
+    }
+
+    /// Writes any scalar variable by path (`count`, `plant.level_m`,
+    /// `grid[1,2]`; case-insensitive), function block internals included,
+    /// between scans: what a host does to stand a measured value in for a
+    /// simulated one. Same rules as [`Self::set_input`]: nothing wrapped,
+    /// truncated or converted. Located variables live in the image and
+    /// enumerations are refused.
+    ///
+    /// # Errors
+    /// No such scalar, or a value of the wrong kind or out of range; the
+    /// variable keeps its previous value.
+    pub fn set(&mut self, path: &str, value: Value) -> Result<(), SetError> {
+        let Some((slot, Type::Elem(ty))) = self.resolve(path) else {
+            return Err(SetError::NoSuchVariable);
+        };
+        self.mem[slot] = checked(ty, value)?;
         Ok(())
     }
 
@@ -436,28 +538,53 @@ pub struct Port {
     pub ty: Ty,
 }
 
-/// Why [`Program::set_input`] refused a value.
+/// Why [`Program::set_input`] or [`Program::set`] refused a value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetError {
     /// The program has no `VAR_INPUT` of that name.
     NoSuchInput,
+    /// [`Program::set`]: no scalar variable at that path.
+    NoSuchVariable,
     /// A value of the wrong kind (BOOL, integer or real) for this type.
     Kind(Ty),
     /// Out of this type's range, or a non-finite real.
     Range(Ty),
 }
 
-impl std::fmt::Display for SetError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for SetError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::NoSuchInput => f.write_str("no such VAR_INPUT"),
+            Self::NoSuchVariable => f.write_str("no such variable"),
             Self::Kind(t) => write!(f, "wrong kind of value for {t}"),
             Self::Range(t) => write!(f, "value out of range for {t}"),
         }
     }
 }
 
-impl std::error::Error for SetError {}
+impl core::error::Error for SetError {}
+
+/// `value` as a `ty` variable stores it, or why it does not fit.
+fn checked(ty: Ty, value: Value) -> Result<Value, SetError> {
+    Ok(match (ty, value) {
+        (Ty::Bool, Value::Bool(_)) => value,
+        (t, Value::Real(x)) if t.is_real() => {
+            let r = if x.is_finite() { types::round_real(t, x) } else { x };
+            if !r.is_finite() {
+                return Err(SetError::Range(ty));
+            }
+            Value::Real(r)
+        }
+        (t, Value::Int(n)) if t != Ty::Bool && !t.is_real() => {
+            let (lo, hi) = t.range();
+            if n < lo || n > hi {
+                return Err(SetError::Range(ty));
+            }
+            value
+        }
+        _ => return Err(SetError::Kind(ty)),
+    })
+}
 
 /// `name[1,2]` -> ("NAME", Some([1, 2])); `name` -> ("NAME", None).
 fn split_index(seg: &str) -> Option<(&str, Option<Vec<i128>>)> {

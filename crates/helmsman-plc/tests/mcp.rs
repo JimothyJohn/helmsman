@@ -1006,6 +1006,23 @@ fn plant_text_stays_inside_the_envelope() {
     );
 }
 
+/// Nick, 2026-11-05 (card mcp-devices): an engineer's own MCP client
+/// lists devices as the relay agent does. `list_devices` reads GET
+/// /api/devices and the read-only discover scan; both are reachable.
+#[test]
+fn list_devices_works_over_mcp() {
+    let b = &*SHARED;
+    let (ok, d) = b.data("list_devices", json!({}));
+    assert!(ok, "list_devices failed over MCP: {d}");
+    let names: Vec<&str> = d["devices"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{d}"))
+        .iter()
+        .filter_map(|x| x["name"].as_str())
+        .collect();
+    assert!(names.contains(&"box"), "{d}");
+}
+
 // ------------------------------------------------------------ malformed
 
 fn post(b: &Bench, body: &[u8]) -> Wire {

@@ -11,17 +11,20 @@ use helmsman_iec::{Ty, Value};
 use crate::app::{App, Source};
 use crate::claude::{
     self, ANTHROPIC_URL, API_VERSION, Answer, ApiKey, Chat, Context, Event as SseEvent, Exchange,
-    FALLBACK_BETA, HISTORY, Incoming, KeyStore, MAX_ANSWER, MAX_PROGRAM, Model, PROXY_URL, Phase, Proxy,
-    Route, Segment, Sse, extract_program, request, segments,
+    FALLBACK_BETA, Incoming, KeyStore, MAX_ANSWER, MAX_PROGRAM, Model, PROXY_URL, Phase, Proxy, Route,
+    Segment, Sse, extract_program, request, segments,
 };
 use crate::editor::{Chrome, Tab, highlight};
 use crate::playground::{
-    Dir, EXAMPLES, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget,
+    Dir, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget, nice_range, tick_label,
 };
-use crate::playground_view::PlaygroundView;
+use crate::playground_view::{PlaygroundView, window_label};
 use crate::projects::Workspace;
+use crate::sim_projects::Storage;
 
 const KEY: &str = "sk-ant-api03-TESTKEY-not-a-real-key-0123456789";
+
+use crate::test_programs::PROGRAMS as EXAMPLES;
 
 fn example(name: &str) -> &'static str {
     EXAMPLES
@@ -68,6 +71,41 @@ fn every_example_compiles_draws_and_has_io() {
         assert!(s.outputs().count() > 0, "{} has outputs", e.name);
         assert!(!s.stale());
         assert!(!s.running, "a new session waits for Run");
+    }
+}
+
+/// The examples the page offers (Nick, 2026-11-05): the first chapters of
+/// an ST book, a few lines each, every one with an output to watch and,
+/// but Blink, an input to switch; each runs without a fault.
+#[test]
+fn the_offered_examples_are_short_and_each_has_io() {
+    let names: Vec<&str> = crate::playground::EXAMPLES.iter().map(|e| e.name).collect();
+    assert_eq!(
+        names,
+        [
+            "Blink",
+            "Read and write",
+            "Logic: AND, OR, NOT",
+            "Start/stop latch",
+            "Counter"
+        ]
+    );
+    for e in crate::playground::EXAMPLES {
+        assert!(e.src.lines().count() <= 25, "{} is short", e.name);
+        let mut s = Session::new(e.src);
+        assert_eq!(s.diag_lines(), Vec::<String>::new(), "{}", e.name);
+        assert!(
+            s.build.as_ref().and_then(|b| b.module.as_ref()).is_some(),
+            "{} draws",
+            e.name
+        );
+        assert!(s.outputs().count() > 0, "{} has an output", e.name);
+        assert_eq!(s.inputs().count() > 0, e.name != "Blink", "{} inputs", e.name);
+        s.set_running(true);
+        for _ in 0..100 {
+            s.step();
+        }
+        assert_eq!(s.fault, None, "{}", e.name);
     }
 }
 
@@ -410,6 +448,41 @@ fn loading_a_program_never_runs_it() {
     assert_eq!(s.scans, 0);
 }
 
+/// Nick, 2026-11-01: a count that grew was pinned to the top of a lane
+/// refitted every frame. The lane's axis rounds out to a 1-2-5 step,
+/// about four to the lane, and holds between steps.
+#[test]
+fn the_trend_axis_is_a_nice_range_that_holds_between_steps() {
+    assert_eq!(nice_range(0.0, 1.0), (0.0, 1.0, 0.5), "a BOOL lane stays 0..1");
+    assert_eq!(nice_range(0.0, 0.73), (0.0, 0.8, 0.2));
+    assert_eq!(nice_range(-0.2, 17.0), (-5.0, 20.0, 5.0));
+    assert_eq!(nice_range(17.0, -0.2), (-5.0, 20.0, 5.0), "either order");
+    // A count climbing 0, 1, 2, ... sees an axis that moves only at a
+    // step's boundary: 0 to 6 holds for 5 and 6, 0 to 8 for 7 and 8.
+    let axes: Vec<(f64, f64, f64)> = (0..=10).map(|n| nice_range(0.0, f64::from(n))).collect();
+    assert_eq!(axes[1], (0.0, 1.0, 0.5));
+    assert_eq!(axes[3], (0.0, 3.0, 1.0));
+    assert_eq!(axes[4], (0.0, 4.0, 1.0));
+    assert_eq!(axes[5], (0.0, 6.0, 2.0));
+    assert_eq!(axes[6], (0.0, 6.0, 2.0));
+    assert_eq!(axes[7], (0.0, 8.0, 2.0));
+    assert_eq!(axes[8], (0.0, 8.0, 2.0));
+    assert_eq!(axes[9], (0.0, 10.0, 5.0));
+    assert_eq!(axes[10], (0.0, 10.0, 5.0), "{axes:?}");
+    // A constant gets a span above it, and the scale never collapses.
+    assert_eq!(nice_range(3.0, 3.0), (3.0, 4.0, 0.5));
+    assert_eq!(nice_range(0.0, 0.0), (0.0, 1.0, 0.5));
+    let (lo, hi, _) = nice_range(1234.0, 1234.0);
+    assert!(lo <= 1234.0 && hi > 1234.0 + 100.0, "{lo} {hi}");
+    assert_eq!(nice_range(f64::NAN, 1.0), (0.0, 1.0, 0.5), "nothing finite");
+    assert_eq!(nice_range(f64::NEG_INFINITY, f64::INFINITY), (0.0, 1.0, 0.5));
+    // Labels carry the step's decimals, no more.
+    assert_eq!(tick_label(0.8, 0.2), "0.8");
+    assert_eq!(tick_label(20.0, 5.0), "20");
+    assert_eq!(tick_label(0.5, 0.5), "0.5");
+    assert_eq!(tick_label(-5.0, 5.0), "-5");
+}
+
 #[test]
 fn the_trend_records_chosen_signals_in_a_bounded_window() {
     let mut s = Session::new(example("traffic"));
@@ -424,14 +497,22 @@ fn the_trend_records_chosen_signals_in_a_bounded_window() {
         s.trend.toggle(n);
     }
     assert_eq!(s.trend.signals.len(), TREND_SIGNALS);
-    // 15 s at 10 ms: the window keeps the last 10 s at most.
+    // 150 s at 10 ms: the history keeps the widest window, 100 s, at most.
     let mut s = Session::new(example("traffic"));
-    scans(&mut s, 1500);
+    scans(&mut s, 15_000);
     let (first, last) = (
         s.trend.samples.front().unwrap().t_ms,
         s.trend.samples.back().unwrap().t_ms,
     );
-    assert!(last - first <= crate::playground::TREND_MS);
+    assert!(last - first <= crate::playground::TREND_KEEP_MS);
+    assert!(last - first > 90_000, "{first}..{last}");
+    assert_eq!(s.trend.window_ms, crate::playground::TREND_MS, "opens on 10 s");
+    // The buttons read in seconds unless the width is whole minutes
+    // (100 s read as "1 min" on 2026-11-01).
+    assert_eq!(window_label(1_000), "1 s");
+    assert_eq!(window_label(10_000), "10 s");
+    assert_eq!(window_label(100_000), "100 s");
+    assert_eq!(window_label(600_000), "10 min");
 }
 
 // ---- Claude: the request ----------------------------------------------
@@ -472,7 +553,15 @@ fn ctx<'a>(source: &'a str, diags: &'a [String]) -> Context<'a> {
         question: "Make it blink faster",
         source,
         diagnostics: diags,
+        devices: "",
+        scope: "",
+        earlier: &[],
     }
+}
+
+/// The request for `c`'s user message, with no earlier turns.
+fn ask_for(route: &Route, model: Model, c: &Context<'_>) -> claude::Request {
+    request(route, model, &[], &claude::user_message(c))
 }
 
 fn header<'a>(r: &'a claude::Request, name: &str) -> Option<&'a str> {
@@ -486,10 +575,9 @@ fn header<'a>(r: &'a claude::Request, name: &str) -> Option<&'a str> {
 fn the_direct_request_carries_the_key_only_in_its_header_to_the_api() {
     let key = ApiKey::new(KEY).unwrap();
     let diags = vec!["3:7: unknown variable MOTR".to_string()];
-    let r = request(
+    let r = ask_for(
         &Route::Direct(key.clone()),
         Model::default(),
-        &[],
         &ctx("PROGRAM p END_PROGRAM", &diags),
     );
     assert_eq!(r.url, ANTHROPIC_URL);
@@ -541,6 +629,9 @@ fn the_system_prompt_is_long_enough_to_cache_and_names_the_dialect() {
         "```st",
         "END_PROGRAM",
         "<current_program>",
+        "Why: ",
+        "```st scenario",
+        "<earlier_instructions>",
     ] {
         assert!(claude::SYSTEM.contains(must), "{must}");
     }
@@ -548,7 +639,7 @@ fn the_system_prompt_is_long_enough_to_cache_and_names_the_dialect() {
 
 #[test]
 fn haiku_has_no_fallback_and_the_proxy_route_has_no_key() {
-    let r = request(&Route::Proxy, Model::Haiku, &[], &ctx("x", &[]));
+    let r = ask_for(&Route::Proxy, Model::Haiku, &ctx("x", &[]));
     assert_eq!(r.url, PROXY_URL);
     assert_eq!(header(&r, "x-api-key"), None);
     assert_eq!(header(&r, "anthropic-dangerous-direct-browser-access"), None);
@@ -563,24 +654,224 @@ fn haiku_has_no_fallback_and_the_proxy_route_has_no_key() {
             .unwrap()
             .contains("none: it compiles")
     );
-    let opus = request(&Route::Proxy, Model::Opus, &[], &ctx("x", &[]));
+    let opus = ask_for(&Route::Proxy, Model::Opus, &ctx("x", &[]));
     assert!(opus.body.contains("\"claude-opus-5-5\""));
 }
 
+/// The answers of one instruction that failed their checks go back as
+/// context, oldest first; only past `MAX_CONTEXT` bytes do the oldest
+/// drop off.
 #[test]
-fn history_is_sent_back_capped() {
+fn every_earlier_turn_is_sent_back_until_the_byte_cap() {
     let history: Vec<Exchange> = (0..10)
         .map(|k| Exchange {
             asked: format!("q{k}"),
             answer: format!("a{k}"),
         })
         .collect();
-    let r = request(&Route::Proxy, Model::default(), &history, &ctx("x", &[]));
+    let r = request(&Route::Proxy, Model::default(), &history, "x");
     let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
     let msgs = body["messages"].as_array().unwrap();
-    assert_eq!(msgs.len(), HISTORY * 2 + 1);
-    assert_eq!(msgs[0]["content"], format!("q{}", 10 - HISTORY));
+    assert_eq!(msgs.len(), 10 * 2 + 1);
+    assert_eq!(msgs[0]["content"], "q0");
     assert_eq!(msgs[1]["role"], "assistant");
+    assert_eq!(msgs[20]["content"], "x");
+    let big: Vec<Exchange> = (0..8)
+        .map(|k| Exchange {
+            asked: "x".repeat(100 * 1024),
+            answer: format!("a{k}"),
+        })
+        .collect();
+    let sent = claude::context_pages(&big);
+    assert_eq!(sent.len(), 5, "five of 100 kB fit the 512 kB cap");
+    assert_eq!(sent[0].answer, "a3", "the newest stay");
+    assert_eq!(claude::context_pages(&[]), &[]);
+}
+
+/// Nick 2026-11-01 (agent-iterations): the first PROGRAM the Agent
+/// writes from a built-in example asks for the program's name once; the
+/// ones after it land in that project with the newest as main.st and the
+/// one replaced kept as the next vN.st, which the build skips; past the
+/// project's size the oldest iterations go; a reload asks again.
+#[test]
+fn the_agents_new_programs_pile_up_under_one_name_newest_as_main() {
+    let mut v = PlaygroundView::with_storage(Box::new(SharedStorage::default()));
+    let prog = |k: u32| format!("PROGRAM lamp_test\nVAR x{k} : BOOL; END_VAR\nx{k} := TRUE;\nEND_PROGRAM\n");
+    assert!(v.new_program.is_none());
+    v.take_code(prog(1));
+    let q = v.program_name.clone().expect("asked for a name");
+    assert_eq!(q.input, "lamp_test", "the PROGRAM's name to start from");
+    assert_eq!(q.text, prog(1));
+    assert!(!v.proj.exists("lamp_test"), "nothing lands before the name");
+    // A bad name is refused and the question stays.
+    v.program_name.as_mut().unwrap().input = "Bad Name!".into();
+    v.confirm_program_name();
+    assert!(v.program_name.as_ref().is_some_and(|p| p.error.is_some()));
+    v.program_name.as_mut().unwrap().input = "Line3".into();
+    v.confirm_program_name();
+    assert!(v.program_name.is_none());
+    assert_eq!(
+        v.new_program.as_deref(),
+        Some("line3"),
+        "lower-cased, the project's rule"
+    );
+    assert_eq!(v.proj.open, "line3");
+    assert_eq!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(prog(1).as_str())
+    );
+    assert_eq!(
+        v.proj.files.len(),
+        1,
+        "the starter's main.st did not become an iteration"
+    );
+    // The next answers land without a question, the newest as main.st.
+    v.take_code(prog(2));
+    assert!(v.program_name.is_none());
+    assert_eq!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(prog(2).as_str())
+    );
+    assert_eq!(
+        v.proj.files.get("v1.st").map(String::as_str),
+        Some(prog(1).as_str())
+    );
+    v.take_code(prog(3));
+    assert_eq!(
+        v.proj.files.get("v2.st").map(String::as_str),
+        Some(prog(2).as_str())
+    );
+    assert_eq!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(prog(3).as_str())
+    );
+    assert_eq!(v.proj.current, "main.st");
+    let build = v.proj.build_src();
+    assert!(
+        build.contains("x3 := TRUE") && !build.contains("x1 := TRUE"),
+        "only main.st builds: {build}"
+    );
+    assert_eq!(v.session.src, build);
+    assert!(
+        v.proj.saved["line3"].0.contains_key("v2.st"),
+        "saved with the project"
+    );
+    // A block answer is a file in the open project, as before.
+    v.take_code("FUNCTION_BLOCK Helper\nEND_FUNCTION_BLOCK\n".into());
+    assert!(v.program_name.is_none());
+    assert!(v.proj.files.contains_key("helper.st"));
+    // The name lives in the page: after a reload it is asked again.
+    v.new_program = None;
+    v.take_code(prog(4));
+    assert!(v.program_name.is_some());
+    // Naming an existing project lands in it, iterating what it has.
+    v.program_name.as_mut().unwrap().input = "line3".into();
+    v.confirm_program_name();
+    assert_eq!(
+        v.proj.files.get("v3.st").map(String::as_str),
+        Some(prog(3).as_str())
+    );
+    assert_eq!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(prog(4).as_str())
+    );
+    // Past the project's size, the oldest iterations go first.
+    let big = |k: u32| {
+        format!(
+            "PROGRAM lamp_test\n(* {} *)\nEND_PROGRAM\n",
+            "b".repeat(200 * 1024) + &k.to_string()
+        )
+    };
+    for k in 5..10 {
+        v.take_code(big(k));
+    }
+    let total = helmsman_project::Files(v.proj.files.clone()).total();
+    assert!(total <= helmsman_project::MAX_TOTAL, "{total}");
+    assert!(!v.proj.files.contains_key("v1.st"), "the oldest went");
+    assert!(v.proj.files.contains_key("main.st"));
+    assert!(
+        v.notice
+            .as_deref()
+            .is_some_and(|n| n.contains("oldest iteration")),
+        "{:?}",
+        v.notice
+    );
+}
+
+/// Nick 2026-11-01 (project-history): every save and every answer taken
+/// is a revision kept with the project here too (the newest twenty, in
+/// the browser's storage): who, when, what, the Agent page, the files;
+/// a revision restores as a new revision; a built-in example records
+/// nothing; a reload finds them.
+#[test]
+fn revisions_are_kept_with_the_project_restored_and_bounded() {
+    let store = SharedStorage::default();
+    let mut v = PlaygroundView::with_storage(Box::new(store.clone()));
+    assert!(v.proj.is_example());
+    v.proj.save();
+    assert!(!v.proj.is_example(), "a copy");
+    let copy = v.proj.open.clone();
+    assert_eq!(v.proj.revisions().len(), 1, "the copy's first save");
+    v.proj.create("mine", None);
+    v.open_project("mine");
+    assert!(v.proj.revisions().is_empty(), "nothing saved yet");
+    v.proj.current_text_mut().unwrap().push_str("(* one *)");
+    v.proj.save();
+    let revs = v.proj.revisions();
+    assert_eq!(revs.len(), 1);
+    assert_eq!(
+        (revs[0].n, revs[0].by.as_str(), revs[0].what.as_str()),
+        (1, "you", "saved")
+    );
+    assert!(
+        revs[0].at_ms > 1_700_000_000_000,
+        "a real clock: {}",
+        revs[0].at_ms
+    );
+    assert!(revs[0].files["main.st"].ends_with("(* one *)"));
+    assert_eq!(revs[0].page, None);
+    // A program taken into the project is a revision too.
+    v.new_program = Some("mine".into());
+    v.take_code("PROGRAM p\nEND_PROGRAM\n".into());
+    let revs = v.proj.revisions();
+    assert_eq!(revs.len(), 2);
+    assert_eq!(revs[1].what, "took the Agent's answer into main.st");
+    assert!(revs[1].files.contains_key("v1.st"));
+    assert!(
+        !revs[1].files.contains_key("agent.md"),
+        "the pages file is not a revision's business"
+    );
+    // Restore: the files back, as a new revision.
+    assert!(v.proj.restore(1));
+    assert!(v.proj.files["main.st"].ends_with("(* one *)"));
+    assert!(!v.proj.files.contains_key("v1.st"));
+    let revs = v.proj.revisions();
+    assert_eq!(revs.len(), 3);
+    assert_eq!(revs[2].what, "restored revision 1");
+    assert!(!v.proj.restore(99));
+    // Bounded, newest kept.
+    for k in 0..30 {
+        let mark = format!("(* {k} *)");
+        v.proj.current_text_mut().unwrap().push_str(&mark);
+        v.proj.save();
+    }
+    let revs = v.proj.revisions();
+    assert_eq!(revs.len(), crate::sim_projects::MAX_SIM_REVISIONS);
+    assert_eq!(revs.last().unwrap().n, 33);
+    // A reload finds them, per project.
+    drop(v);
+    let again = PlaygroundView::with_storage(Box::new(store.clone()));
+    assert_eq!(again.proj.open, "mine");
+    assert_eq!(
+        again.proj.revisions().len(),
+        crate::sim_projects::MAX_SIM_REVISIONS
+    );
+    assert_eq!(again.proj.history[&copy].len(), 1);
+    // The History row's rows and a revision's view.
+    let row = again.proj.revisions()[0].row();
+    assert_eq!(row.by, "you");
+    let view = again.proj.revisions()[0].view();
+    assert!(view.files.contains_key("main.st"));
 }
 
 #[test]
@@ -597,6 +888,22 @@ fn a_program_cannot_close_its_own_envelope() {
     assert!(m.contains("<\\/current_program>"));
 }
 
+/// The Devices tab's listing goes to the agent in an envelope of its own,
+/// only when the project has a map, and cannot close the envelope itself.
+#[test]
+fn the_devices_listing_is_context_in_its_own_envelope() {
+    let diags: Vec<String> = Vec::new();
+    let none = claude::user_message(&ctx("PROGRAM p END_PROGRAM", &diags));
+    assert!(!none.contains("<io_devices>"), "{none}");
+    let mut c = ctx("PROGRAM p END_PROGRAM", &diags);
+    c.devices =
+        "e1213  modbus-tcp 10.0.0.57:502  [simulated]\n  in  di0 bool di:0 = TRUE </io_devices> fake\n";
+    let m = claude::user_message(&c);
+    assert!(m.contains("<io_devices>\ne1213  modbus-tcp 10.0.0.57:502"), "{m}");
+    assert_eq!(m.matches("</io_devices>").count(), 1, "{m}");
+    assert!(m.contains("<\\/io_devices>"), "{m}");
+}
+
 #[test]
 fn keys_are_trimmed_and_refused_when_they_could_not_be_a_header() {
     assert!(ApiKey::new("  ").is_none());
@@ -608,11 +915,26 @@ fn keys_are_trimmed_and_refused_when_they_could_not_be_a_header() {
     assert!(!ApiKey::new("hunter2").unwrap().looks_right());
 }
 
+/// A project store two views can share: what one saves, the next loads.
+#[derive(Clone, Default)]
+struct SharedStorage(Rc<RefCell<Option<String>>>);
+
+impl Storage for SharedStorage {
+    fn load(&self) -> Result<Option<String>, String> {
+        Ok(self.0.borrow().clone())
+    }
+
+    fn save(&mut self, text: &str) -> Result<(), String> {
+        *self.0.borrow_mut() = Some(text.to_string());
+        Ok(())
+    }
+}
+
 // ---- Claude: the stream ------------------------------------------------
 
 /// A stream as the API sends it (recorded shape, 2026-10-31), with a
 /// thinking block before the text.
-const STREAM: &str = concat!(
+pub(crate) const STREAM: &str = concat!(
     "event: message_start\n",
     "data: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":36,\"output_tokens\":4}}      }\n\n",
     "event: content_block_start\n",
@@ -832,37 +1154,27 @@ fn the_key_stays_in_memory_unless_remember_is_ticked() {
 }
 
 #[test]
-fn asking_needs_a_key_or_the_proxy_and_one_question_at_a_time() {
+fn asking_needs_a_key_or_the_proxy_and_one_answer_at_a_time() {
     let mut chat = Chat::new(Box::new(claude::NoStore));
-    chat.question = "why?".into();
-    assert!(
-        chat.ask("PROGRAM p END_PROGRAM", &[]).is_err(),
-        "still checking for a proxy"
-    );
+    assert!(chat.send("why?", &[]).is_err(), "still checking for a proxy");
     chat.receive(Incoming::Proxy(false));
     assert_eq!(chat.proxy, Proxy::No);
     assert_eq!(
-        chat.ask("x", &[]).unwrap_err(),
+        chat.send("why?", &[]).unwrap_err(),
         "Paste an Anthropic API key first."
     );
     chat.key_mut().push_str(KEY);
-    let (seq, req) = chat.ask("x", &[]).unwrap();
+    let (seq, req) = chat.send("why?", &[]).unwrap();
     assert_eq!(req.url, ANTHROPIC_URL);
-    assert_eq!(chat.question, "");
     assert!(chat.busy());
-    chat.question = "again".into();
-    assert!(chat.ask("x", &[]).is_err(), "busy");
-    // The stream completes; the exchange joins the history once.
+    assert!(chat.send("again", &[]).is_err(), "busy");
     chat.receive(Incoming::Chunk {
         seq,
         text: STREAM.into(),
     });
     chat.receive(Incoming::End { seq });
     assert_eq!(chat.answer.as_ref().unwrap().phase, Phase::Done);
-    assert_eq!(chat.history.len(), 1);
-    assert!(chat.history[0].asked.contains("<current_program>"));
-    chat.question = "offline".into();
-    let (seq, _) = chat.ask("x", &[]).unwrap();
+    let (seq, _) = chat.send("offline", &[]).unwrap();
     chat.receive(Incoming::Unreachable {
         seq,
         why: "TypeError: Failed to fetch".into(),
@@ -870,19 +1182,16 @@ fn asking_needs_a_key_or_the_proxy_and_one_question_at_a_time() {
     assert!(
         matches!(&chat.answer.as_ref().unwrap().phase, Phase::Failed(w) if w.contains("Failed to fetch"))
     );
-    assert_eq!(chat.history.len(), 1, "a failed answer is not history");
     let mut proxied = Chat::new(Box::new(claude::NoStore));
     proxied.receive(Incoming::Proxy(true));
-    proxied.question = "q".into();
-    assert_eq!(proxied.ask("x", &[]).unwrap().1.url, PROXY_URL);
+    assert_eq!(proxied.send("q", &[]).unwrap().1.url, PROXY_URL);
 }
 
 #[test]
 fn a_stopped_answer_ignores_what_arrives_late() {
     let mut chat = Chat::new(Box::new(claude::NoStore));
     chat.receive(Incoming::Proxy(true));
-    chat.question = "q".into();
-    let (seq, _) = chat.ask("x", &[]).unwrap();
+    let (seq, _) = chat.send("q", &[]).unwrap();
     chat.stop();
     chat.receive(Incoming::Chunk {
         seq,
@@ -896,7 +1205,6 @@ fn a_stopped_answer_ignores_what_arrives_late() {
     let a = chat.answer.as_ref().unwrap();
     assert_eq!(a.phase, Phase::Failed("stopped".into()));
     assert_eq!(a.text, "");
-    assert_eq!(chat.history.len(), 0);
 }
 
 // ---- "Use this code" ---------------------------------------------------
@@ -988,6 +1296,22 @@ struct Screen {
 }
 
 impl Screen {
+    /// The page as it opens (the first example, its project open), with
+    /// no fixture loaded over it.
+    fn as_opened() -> Self {
+        let mut chrome = Chrome::default();
+        chrome.show_code();
+        let mut s = Self {
+            ctx: egui::Context::default(),
+            view: PlaygroundView::new(),
+            chrome,
+            time: 0.0,
+        };
+        s.frame(vec![]);
+        s.frame(vec![]);
+        s
+    }
+
     fn new() -> Self {
         // The ST open on the left pane's Code tab, as the simulation starts.
         let mut chrome = Chrome::default();
@@ -998,6 +1322,10 @@ impl Screen {
             chrome,
             time: 0.0,
         };
+        // The fixture blink (an enable and a period to drive), as the page
+        // opened before the textbook examples; running, as it opens.
+        s.view.load(example("blink"), "blink");
+        s.view.session.set_running(true);
         s.frame(vec![]);
         s.frame(vec![]);
         s
@@ -1413,6 +1741,7 @@ fn typing_in_the_editor_checks_after_a_pause_and_marks_the_error_line() {
         None,
         &egui::FontId::monospace(13.0),
         f32::INFINITY,
+        &crate::theme::Theme::dark(),
     );
     assert!(job.sections.iter().any(|x| x.format.underline.width > 0.0));
     assert_eq!(job.text, s.view.session.src, "the layout keeps the text as is");
@@ -1541,19 +1870,6 @@ fn every_tab_and_example_draws() {
         }
         assert!(s.view.session.scans > 0, "{k}");
     }
-    for st in helmsman_project::starters::STARTERS {
-        let mut src = String::new();
-        for (f, text) in st.files {
-            if helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St) {
-                src.push_str(text);
-            }
-        }
-        s.view.load(&src, st.name);
-        s.view.session.set_running(true);
-        s.wait(0.1);
-        assert!(s.view.session.scans > 0, "{}", st.name);
-        assert_eq!(s.view.session.fault, None, "{}", st.name);
-    }
     // A program with no diagram still runs and the screen says why not.
     s.view.load("", "nothing");
     s.wait(0.1);
@@ -1570,44 +1886,89 @@ fn tapping_an_output_picks_it() {
     assert_eq!(s.chrome.tab, Tab::Io, "no tab of its own");
 }
 
+/// An instruction on a built-in example: no key, nothing is sent and the
+/// tab says why; Stop ends it with the file untouched; a checked program
+/// asks for its project's name once, lands there, and never runs by
+/// itself.
 #[test]
-fn asking_claude_sends_one_request_and_use_this_code_loads_without_running() {
-    let mut s = Screen::new();
+fn an_instruction_on_an_example_lands_its_program_named_and_never_runs_it() {
+    use crate::instruct::Kind;
+    let mut s = Screen::as_opened();
     s.chrome.tab = Tab::Claude;
     s.frame(vec![]);
-    s.view.chat.question = "a latch please".into();
-    s.view.ask(&s.ctx.clone());
-    assert_eq!(
-        s.view.ask_error.as_deref(),
-        Some("Paste an Anthropic API key first.")
-    );
+    s.view.instruct.draft = "a latch please".into();
+    s.view.send_instruction(&s.ctx.clone());
+    let o = s.view.instruct.outcome.clone().expect("said why");
+    assert_eq!(o.kind, Kind::Failed);
+    assert_eq!(o.status, "Paste an Anthropic API key first.");
+    assert_eq!(s.view.instruct.draft, "a latch please", "kept to send again");
     assert_eq!(s.view.link.sent.len(), 0);
     s.view.chat.key_mut().push_str(KEY);
-    s.view.chat.question = "a latch please".into();
-    s.view.ask(&s.ctx.clone());
+    s.view.send_instruction(&s.ctx.clone());
     assert_eq!(s.view.link.sent.len(), 1);
-    // Stopped and asked again: the first answer is dropped.
+    assert_eq!(s.view.instruct.draft, "", "the box empties");
+    // Stopped and sent again: the first answer is dropped.
     s.view.stop_answer();
     assert_eq!(s.view.link.aborted, 1);
-    s.view.chat.question = "a latch please".into();
-    s.view.ask(&s.ctx.clone());
+    assert_eq!(
+        s.view.instruct.outcome.as_ref().map(|o| o.kind),
+        Some(Kind::Failed)
+    );
+    s.view.instruct.draft = "a latch please".into();
+    s.view.send_instruction(&s.ctx.clone());
     assert_eq!(s.view.link.sent.len(), 2);
     let (seq, req) = s.view.link.sent[1].clone();
     assert!(
         req.body.contains("PROGRAM blink"),
         "the editor's program goes along"
     );
+    let latch = STREAM.replace("PROGRAM p\\nEND_PROGRAM", &example("latch").replace('\n', "\\n"));
     s.view.link.inbox.push(Incoming::Chunk {
         seq,
-        text: STREAM.replace("PROGRAM p\\nEND_PROGRAM", &example("latch").replace('\n', "\\n")),
+        text: latch.clone(),
     });
     s.view.link.inbox.push(Incoming::End { seq });
     s.wait(0.1);
-    assert_eq!(s.view.chat.answer.as_ref().unwrap().phase, Phase::Done);
+    // Code with no scenario is asked for one, once; the same answer again
+    // is taken, checked by no scenario (`crate::verify`).
+    assert_eq!(s.view.link.sent.len(), 3, "asked once for a scenario");
+    let (seq, _) = s.view.link.sent[2].clone();
+    s.view.link.inbox.push(Incoming::Chunk { seq, text: latch });
+    s.view.link.inbox.push(Incoming::End { seq });
+    s.wait(0.1);
+    assert_eq!(s.view.link.sent.len(), 3);
     assert!(s.view.session.running, "the example was running");
-    assert!(s.view.use_answer());
+    assert!(
+        s.view.program_name.is_some(),
+        "the first new program asks for a name"
+    );
+    assert_eq!(
+        s.view.program_name.as_ref().unwrap().input,
+        "latch-2",
+        "the PROGRAM's, past the built-in example of that name"
+    );
+    s.view.confirm_program_name();
+    assert_eq!(s.view.new_program.as_deref(), Some("latch-2"));
+    let o = s.view.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+    assert_eq!(o.status, "Updated main.st. No scenario checks this change.");
+    assert_eq!(
+        o.why.as_deref(),
+        Some("Here:"),
+        "no Why: line, so its first words"
+    );
+    assert!(o.undo.is_none(), "a new project has no version before it");
+    let rev = s.view.proj.revisions().last().cloned().unwrap();
+    assert_eq!(rev.what, "Agent: a latch please");
+    assert!(
+        rev.page
+            .as_deref()
+            .is_some_and(|p| p.starts_with("Instruction: a latch please\nFile: main.st\n")),
+        "{:?}",
+        rev.page
+    );
     assert_eq!(s.view.session.src, example("latch"));
-    assert!(!s.view.session.running, "Claude's code never runs by itself");
+    assert!(!s.view.session.running, "the Agent's code never runs by itself");
     assert!(
         s.view
             .session

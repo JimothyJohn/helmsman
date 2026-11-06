@@ -12,6 +12,11 @@ use helmsman_proto::cip::class;
 use helmsman_proto::scanner::{Input, IoConfig, IoConnection};
 use helmsman_proto::session::Session;
 
+/// Set to `1`, the box exits when its stdin closes: every box a test starts
+/// gets it with a piped stdin its handle holds, so the box dies with the
+/// test even when the test is killed outright.
+const EXIT_WITH_STDIN: &str = "HELMSMAN_EXIT_WITH_STDIN";
+
 struct Running {
     child: Child,
     stderr: BufReader<ChildStderr>,
@@ -102,6 +107,8 @@ fn spawn_with(args: &[&std::ffi::OsStr], peer_io_port: u16) -> (Running, SocketA
         // Its own API port and token, so parallel tests never share them.
         .args(["--api", "127.0.0.1:0", "--state-dir"])
         .arg(state_dir())
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -420,8 +427,7 @@ out lamp  bool box do:0 safe=true
 /// apart. The scanner's bit goes through the module to the E1213's DO-00,
 /// back on its wired DI-00, through the module again and out to the
 /// scanner. (`--io-port 0` only so parallel test runs don't fight over
-/// 2222; adapter and link share whatever port it is.) Only with the
-/// `enip-io` feature (`scripts/lint.sh` builds it; out of the box build).
+/// 2222; adapter and link share whatever port it is.)
 #[cfg(feature = "enip-io")]
 #[test]
 fn the_adapter_and_an_enip_io_link_share_one_io_port() {
@@ -476,48 +482,6 @@ in  clamp_fb bool rio di:0
     let log = plc.finish();
     assert!(log.contains("device rio up"), "{log}");
     assert!(!log.contains("address in use"), "{log}");
-}
-
-/// The box build leaves `enip-io` out (TODO.md `enip-in-box`): a map that
-/// names it is refused before the box goes on the network, saying so,
-/// even when no signal uses the device. The E1213 runs over Modbus/TCP.
-#[cfg(not(feature = "enip-io"))]
-#[test]
-fn a_map_naming_enip_io_is_refused_as_not_in_this_build() {
-    let prog = program_file(
-        "enip_out",
-        "PROGRAM p VAR_INPUT start : BOOL; END_VAR VAR_OUTPUT lamp : BOOL; END_VAR lamp := start; END_PROGRAM",
-    );
-    for (name, text) in [
-        (
-            "enip_used.iomap",
-            "device rio enip-io 127.0.0.1:44818\nin start bool rio di:0\nout lamp bool box do:0\n",
-        ),
-        (
-            "enip_unused.iomap",
-            "device rio enip-io 127.0.0.1:44818\nin start bool box di:0\nout lamp bool box do:0\n",
-        ),
-    ] {
-        let map = text_file(name, text);
-        let out = plc()
-            .arg(&prog)
-            .arg("--io-map")
-            .arg(&map)
-            .args(["--encap-port", "0", "--io-port", "0"])
-            .output()
-            .unwrap();
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert_eq!(out.status.code(), Some(1), "{name}: {err}");
-        assert!(
-            err.contains("device rio: unknown driver \"enip-io: not in this build"),
-            "{name}: {err}"
-        );
-        assert!(
-            err.contains("modbus-tcp"),
-            "{name}: names the way that works: {err}"
-        );
-        assert!(!err.contains("CIP on"), "{name}: {err}");
-    }
 }
 
 #[test]
@@ -1049,6 +1013,8 @@ fn spawn_api(state: &Path) -> (Running, std::net::SocketAddr, String) {
         .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
         .args(["--api", "127.0.0.1:0", "--state-dir"])
         .arg(state)
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -1383,14 +1349,17 @@ fn the_retired_screen_flag_is_refused_with_the_reason() {
     assert!(!help.contains("--screen") && !help.contains("andon"), "{help}");
 }
 
-/// The relay serves agent v3 (the drop-in tools) and explain-v1 (read-only
-/// tools, floor language); a box asks for them unless told otherwise.
+/// A box asks the relay for agent v7 (v6's tools with strict schemas the
+/// model API takes; v3 to v6 are refused there), explain-v2 (read-only
+/// tools, floor language) and tests-v1 (the requirement route's one
+/// tool, `submit_test`) unless told otherwise.
 #[test]
 fn the_default_agent_versions_are_the_ones_the_relay_serves() {
     let out = plc().arg("--help").output().unwrap();
     let usage = String::from_utf8_lossy(&out.stdout);
-    assert!(usage.contains("(default v3)"), "{usage}");
-    assert!(usage.contains("default explain-v1"), "{usage}");
+    assert!(usage.contains("(default v7)"), "{usage}");
+    assert!(usage.contains("default explain-v2"), "{usage}");
+    assert!(usage.contains("default tests-v1"), "{usage}");
 }
 
 /// A map naming `wasm:NAME` boots on `<state-dir>/drivers/NAME.wasm`, with
@@ -1413,6 +1382,8 @@ fn the_binary_boots_a_wasm_driver_from_its_state_directory() {
             .arg(&map)
             .args(["--encap-port", "0", "--io-port", "0", "--state-dir"])
             .arg(state)
+            .env(EXIT_WITH_STDIN, "1")
+            .stdin(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .unwrap()
@@ -1426,7 +1397,11 @@ fn the_binary_boots_a_wasm_driver_from_its_state_directory() {
             std::fs::create_dir_all(state.join("drivers")).unwrap();
             std::fs::write(state.join("drivers/modbus.wasm"), b).unwrap();
         }
-        let out = boot(&state).wait_with_output().unwrap();
+        // Hold stdin open: wait_with_output closes it, and that would end
+        // the box (EXIT_WITH_STDIN) before it could refuse.
+        let mut child = boot(&state);
+        let _stdin = child.stdin.take();
+        let out = child.wait_with_output().unwrap();
         let err = String::from_utf8_lossy(&out.stderr);
         assert_eq!(out.status.code(), Some(1), "{err}");
         assert!(err.contains(says), "{err}");
@@ -1470,6 +1445,8 @@ fn the_default_state_directory_is_in_the_working_directory_never_the_crate() {
         .current_dir(&cwd)
         .arg(&echo)
         .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -1485,4 +1462,83 @@ fn the_default_state_directory_is_in_the_working_directory_never_the_crate() {
     assert!(said.contains("helmsman-state/api-token"), "{said}");
     assert!(cwd.join("helmsman-state/api-token").is_file(), "{said}");
     assert!(!in_crate.exists(), "{}", leaked());
+}
+
+/// Set in a re-run of this test binary: the state directory of the box the
+/// run starts and holds ([`orphan_parent`]).
+const ORPHAN_PARENT: &str = "HELMSMAN_TEST_ORPHAN_PARENT";
+
+/// Only in a re-run with [`ORPHAN_PARENT`] set (otherwise a no-op): starts
+/// a box the way every test does, prints `orphan-box PID API` and stays
+/// alive, holding the box's stdin, until it is killed.
+#[test]
+fn orphan_parent() {
+    use std::io::Write as _;
+    let Some(state) = std::env::var_os(ORPHAN_PARENT) else {
+        return;
+    };
+    let (mut running, api, _) = spawn_api(Path::new(&state));
+    let mut out = std::io::stdout();
+    writeln!(out, "orphan-box {} {api}", running.child.id()).unwrap();
+    out.flush().unwrap();
+    // Drain the box's stderr so it never blocks on a full pipe; then wait
+    // to be killed (the test below does it).
+    let mut line = String::new();
+    while running.stderr.read_line(&mut line).unwrap_or(0) > 0 {
+        line.clear();
+    }
+    loop {
+        std::thread::park();
+    }
+}
+
+#[cfg(unix)]
+fn alive(pid: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", pid])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// A test killed outright (`kill -9`: no unwinding, no Drop) takes its box
+/// with it: the box's stdin pipe closes with the test, and the box exits
+/// on that, freeing its ports.
+#[cfg(unix)]
+#[test]
+fn a_box_dies_with_the_test_that_started_it() {
+    let mut parent = Command::new(std::env::current_exe().unwrap())
+        .args(["orphan_parent", "--exact", "--nocapture", "--test-threads", "1"])
+        .env(ORPHAN_PARENT, state_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(parent.stdout.take().unwrap());
+    let (pid, api) = loop {
+        let mut line = String::new();
+        assert!(lines.read_line(&mut line).unwrap() > 0, "the parent exited first");
+        // libtest's `test orphan_parent ... ` comes first on the line.
+        if let Some((_, rest)) = line.trim_end().split_once("orphan-box ") {
+            let (pid, api) = rest.split_once(' ').unwrap();
+            break (pid.to_string(), api.parse::<std::net::SocketAddr>().unwrap());
+        }
+    };
+    assert!(alive(&pid), "the box runs");
+    assert!(
+        std::net::TcpStream::connect(api).is_ok(),
+        "the box serves its API"
+    );
+    parent.kill().unwrap();
+    parent.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let gone = || !alive(&pid) && std::net::TcpStream::connect(api).is_err();
+    while !gone() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !gone() {
+        let _ = Command::new("kill").args(["-9", &pid]).status();
+        panic!("box {pid} outlived its test (API {api})");
+    }
 }

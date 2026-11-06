@@ -1533,10 +1533,12 @@ dependencies = [
 name = "helmsman-agent"
 version = "0.1.0"
 dependencies = [
+ "helmsman-project",
  "proptest",
  "rustls",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "webpki-roots",
 ]
 
@@ -1545,11 +1547,13 @@ name = "helmsman-canvas"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "helmsman-agent",
  "helmsman-diagram",
  "helmsman-iec",
  "helmsman-io",
  "helmsman-plc",
  "helmsman-project",
+ "proptest",
  "serde_json",
  "wasm-bindgen-futures",
  "web-sys",
@@ -1567,6 +1571,7 @@ dependencies = [
 name = "helmsman-iec"
 version = "0.1.0"
 dependencies = [
+ "libm",
  "proptest",
 ]
 
@@ -1577,6 +1582,7 @@ dependencies = [
  "gpiocdev",
  "helmsman-adapter",
  "helmsman-io",
+ "helmsman-modbus",
  "helmsman-proto",
  "i2cdev",
  "proptest",
@@ -1585,6 +1591,10 @@ dependencies = [
  "wasmi",
  "wat",
 ]
+
+[[package]]
+name = "helmsman-modbus"
+version = "0.1.0"
 
 [[package]]
 name = "helmsman-plc"
@@ -1618,6 +1628,7 @@ version = "0.1.0"
 dependencies = [
  "miniz_oxide 0.9.1",
  "proptest",
+ "serde_json",
 ]
 
 [[package]]

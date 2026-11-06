@@ -28,6 +28,11 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, ClientConnection, DigitallySignedStruct, SignatureScheme, StreamOwned};
 use serde_json::Value as Json;
 
+/// Set to `1`, the box exits when its stdin closes: every box a test starts
+/// gets it with a piped stdin its handle holds, so the box dies with the
+/// test even when the test is killed outright.
+const EXIT_WITH_STDIN: &str = "HELMSMAN_EXIT_WITH_STDIN";
+
 // ------------------------------------------------------------ the client
 
 /// Trusts exactly the certificate whose SHA-256 is `pin`, as a person
@@ -180,7 +185,12 @@ fn plc(state: &Path, extra: &[&str]) -> Command {
 
 /// Starts the box; returns once its API line is out.
 fn start(state: &Path, extra: &[&str]) -> Plc {
-    let mut child = plc(state, extra).stderr(Stdio::piped()).spawn().unwrap();
+    let mut child = plc(state, extra)
+        .env(EXIT_WITH_STDIN, "1")
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     let mut stderr = BufReader::new(child.stderr.take().unwrap());
     let (mut api, mut cert) = (None, String::new());
     while api.is_none() {

@@ -318,14 +318,60 @@ fn error_result(id: &str, tool: &str, data: &Json) -> Json {
     })
 }
 
-/// The tool's name as written into an envelope: one of ours, or `unknown`
-/// (a made-up name is model text and goes nowhere near the markup).
-fn label(name: &str) -> &str {
-    tools::NAMES
-        .iter()
-        .find(|n| **n == name)
-        .copied()
-        .unwrap_or("unknown")
+/// The tool's name as written into an envelope: one of the tools this
+/// loop runs, or `unknown` (a made-up name is model text and goes nowhere
+/// near the markup).
+fn label<'a>(name: &str, ours: &[&'a str]) -> &'a str {
+    ours.iter().find(|n| **n == name).copied().unwrap_or("unknown")
+}
+
+/// Tools the caller runs itself, in process, in place of the box API's
+/// ([`Agent::chat_local`]): the box's requirement route runs
+/// `submit_test` this way. With a `Local` the loop runs nothing else: a
+/// call to any other name, one of [`tools::NAMES`] included, is answered
+/// "not available", unrun.
+pub trait Local {
+    /// The names it runs (fixed, plain identifiers: they go into the
+    /// envelope's markup).
+    fn names(&self) -> &[&'static str];
+    /// Runs `name` (one of [`Local::names`]) on `input`, which is valid
+    /// JSON but not yet checked against any schema: the runner checks it.
+    fn run(&mut self, name: &str, input: &Json) -> tools::Outcome;
+}
+
+/// Whether a call to the box API's tool `name` may run with `set`: why
+/// not, and what the model is told, when it may not.
+fn box_call_ok(name: &str, input: &Json, set: &[&str]) -> Result<(), (String, Json)> {
+    let not_run = |why: String| {
+        let data = json!({ "error": why, "ran": false });
+        Err((why, data))
+    };
+    if !tools::NAMES.contains(&name) {
+        return not_run(format!(
+            "no tool named {name:?} on this box; the tools are {}. Nothing was run.",
+            set.join(", ")
+        ));
+    }
+    if !set.contains(&name) {
+        return not_run(format!(
+            "{name} is not available in this mode (read-only); the tools here are {}. Nothing was run.",
+            set.join(", ")
+        ));
+    }
+    if let Err(e) = tools::validate(name, input) {
+        let raw = serde_json::to_string(input).unwrap_or_default();
+        return Err((
+            format!("the input does not fit the schema ({e}); not run"),
+            json!({ "INVALID_JSON": raw }),
+        ));
+    }
+    Ok(())
+}
+
+/// What one loop may run: some of the box API's tools, or a caller's own.
+enum Runner<'a> {
+    Box(&'a [&'a str]),
+    Local(&'a mut dyn Local),
 }
 
 impl Agent {
@@ -369,12 +415,16 @@ impl Agent {
         &self,
         conv: &mut Conversation,
         call: &crate::turn::ToolCall,
-        set: &[&str],
+        runner: &mut Runner<'_>,
         allowed: Result<(), String>,
         on: &mut dyn FnMut(Progress),
         proposals: &mut Vec<u64>,
     ) -> Json {
-        let tool = label(&call.name);
+        let ours: &[&str] = match runner {
+            Runner::Box(_) => &tools::NAMES,
+            Runner::Local(l) => l.names(),
+        };
+        let tool = label(&call.name, ours);
         on(Progress::ToolCall {
             id: call.id.clone(),
             name: call.name.clone(),
@@ -405,31 +455,25 @@ impl Agent {
                 );
             }
         };
-        if !tools::NAMES.contains(&call.name.as_str()) {
-            let why = format!(
-                "no tool named {:?} on this box; the tools are {}. Nothing was run.",
-                call.name,
-                set.join(", ")
-            );
-            return refuse(why.clone(), json!({ "error": why, "ran": false }), on);
-        }
-        if !set.contains(&call.name.as_str()) {
-            let why = format!(
-                "{} is not available in this mode (read-only); the tools here are {}. Nothing was run.",
-                call.name,
-                set.join(", ")
-            );
-            return refuse(why.clone(), json!({ "error": why, "ran": false }), on);
-        }
-        if let Err(e) = tools::validate(&call.name, input) {
-            let raw = serde_json::to_string(input).unwrap_or_default();
-            return refuse(
-                format!("the input does not fit the schema ({e}); not run"),
-                json!({ "INVALID_JSON": raw }),
-                on,
-            );
-        }
-        let out = tools::run(&self.api, &mut conv.drafts, &call.name, input);
+        let out = match runner {
+            Runner::Local(l) => {
+                if !l.names().contains(&call.name.as_str()) {
+                    let why = format!(
+                        "no tool named {:?} in this mode; the tools here are {}. Nothing was run.",
+                        call.name,
+                        l.names().join(", ")
+                    );
+                    return refuse(why.clone(), json!({ "error": why, "ran": false }), on);
+                }
+                l.run(&call.name, input)
+            }
+            Runner::Box(set) => {
+                if let Err((why, data)) = box_call_ok(&call.name, input, set) {
+                    return refuse(why, data, on);
+                }
+                tools::run_with(&self.api, Some(&self.relay), &mut conv.drafts, &call.name, input)
+            }
+        };
         if !out.proposals.is_empty() {
             proposals.extend(&out.proposals);
             let summary = input["summary"].as_str().unwrap_or_default().to_string();
@@ -486,6 +530,29 @@ impl Agent {
         conv: &mut Conversation,
         blocks: Vec<Json>,
         set: &[&str],
+        on: &mut dyn FnMut(Progress),
+    ) -> Outcome {
+        self.run_loop(conv, blocks, &mut Runner::Box(set), on)
+    }
+
+    /// Runs the loop for one user message of `blocks` with only `local`'s
+    /// tools, run in process by the caller; nothing reaches the box API
+    /// and no other tool runs, whatever the model asks for.
+    pub fn chat_local(
+        &self,
+        conv: &mut Conversation,
+        blocks: Vec<Json>,
+        local: &mut dyn Local,
+        on: &mut dyn FnMut(Progress),
+    ) -> Outcome {
+        self.run_loop(conv, blocks, &mut Runner::Local(local), on)
+    }
+
+    fn run_loop(
+        &self,
+        conv: &mut Conversation,
+        blocks: Vec<Json>,
+        runner: &mut Runner<'_>,
         on: &mut dyn FnMut(Progress),
     ) -> Outcome {
         let until = Instant::now() + self.budget.time;
@@ -550,7 +617,7 @@ impl Agent {
                 } else {
                     Ok(())
                 };
-                results.push(self.answer(conv, call, set, allowed, on, &mut out.proposals));
+                results.push(self.answer(conv, call, runner, allowed, on, &mut out.proposals));
             }
             conv.push_user(results);
             if out.output_tokens >= self.budget.output_tokens {

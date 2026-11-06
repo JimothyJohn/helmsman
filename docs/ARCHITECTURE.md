@@ -65,6 +65,8 @@ Three directions of traffic, three different rules:
 | `helmsman-adapter` | CIP target: a sans-IO `Device` state machine (every call takes `now`) and a std-thread server. Identity, assemblies, `Forward_Open`, cyclic I/O on its own I/O endpoint or the box's shared one (`Adapter::start_on`); layouts `opener_sample`, `moxa_e1213` and any EDS (`from_eds`); a simulated E1213 application (`e1213`); misbehaviour knobs for scanner tests; a Logix tag-service fixture (`logix::Controller`) for tests. | built |
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
+| `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10, 43/14 Read Device Identification), reply checks (exact lengths, exceptions, echoes, identification objects), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
+| `helmsman-node` | The edge node's firmware (docs/EDGE.md): `helmsman-iec` without std on an Olimex ESP32-POE2 (esp-hal, the esp toolchain, Xtensa). Not a workspace member (own lock, `make node-build`): the scan bench (Phase 1), then Modbus TCP to a remote block over embassy-net (Phase 2). | built: Phase 1; Phase 2 in progress |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
 | `helmsman-diagram` | A module's ST lowered to a read-only FBD-like diagram (`st-graph-view`): nodes, wires, gated regions, each tagged with its `StmtId`; deterministic layout; a trace's values and gates on it; "on because …" as data. Depends only on `helmsman-iec`. | built |
@@ -128,8 +130,14 @@ scan; the scheduler bounds how often.
 ## The I/O layer, as built (`helmsman-io`)
 
 - **`Device`**: an endpoint the box is master of: `id`, `driver` name
-  (`modbus-tcp`, `modbus-rtu`, `enip-io`, `logix-tag`), `endpoint` (`host:port`, or a
-  serial port's path for `modbus-rtu`), driver params (`unit`,
+  (`modbus-tcp`, `modbus-rtu`, `enip-io`, `logix-tag`), `endpoint` (`host:port`, a
+  serial port's path for `modbus-rtu`, or an identity the box resolves
+  when it connects: `mac=00-90-e8-7e-af-be` through its ARP table,
+  `cip=VENDOR:PRODUCT[:SERIAL]` through one `ListIdentity` broadcast,
+  `modbus=VENDOR:PRODUCT` through Read Device Identification (FC 43/14)
+  to TCP 502 of the hosts its ARP table lists, bounded in hosts,
+  concurrency and time (`modbus-identification`);
+  `helmsman_io::resolve`, `device-by-identity`), driver params (`unit`,
   `timeout_ms`, and the serial settings).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
   `Real`), a direction (`In`, `Out`), an optional engineering `unit`
@@ -181,7 +189,10 @@ scan; the scheduler bounds how often.
 - **`enip`**: `enip-io`, an EtherNet/IP adapter (remote I/O) the box
   masters over one Class 1 connection, from a built-in profile
   (`profile=moxa-e1213`), the vendor's EDS (`eds=PATH`, read by
-  `helmsman_proto::eds`) or explicit points and sizes. Points are bits and
+  `helmsman_proto::eds`; `eds=NAME.eds` names the project's own device
+  file, a project file kind the Devices tab's Import device… adds and
+  `helmsman_plc::driver_dir` resolves to its path when the map loads) or
+  explicit points and sizes. Points are bits and
   little-endian words of the input and output assemblies (`di:N`, `do:N`,
   `in:BYTE.BIT`, `out:OFFSET:FMT`, ...); reads answer from the latest T->O
   packet, writes change the O->T image. No T->O data within the
@@ -190,11 +201,11 @@ scan; the scheduler bounds how often.
   ownership) and reopens it with the outputs it held from the first packet.
   A point past an assembly or a value its format can't hold is a point
   error. Behind helmsman-io's `enip` feature, which helmsman-plc's `enip-io`
-  feature turns on; the box build (`box`) leaves it out until the E1213
-  bench passes (TODO.md `enip-in-box`), so a box map naming `enip-io` is
-  refused as "not in this build" (`helmsman_plc::drivers::not_in_build`)
-  and the E1213 runs over Modbus/TCP meanwhile. `scripts/lint.sh` lints
-  helmsman-plc with `enip-io` so it keeps compiling.
+  feature turns on: in the default build since the real E1213 passed the
+  bench (2026-11-02, TODO.md `e1213-bench`). A helmsman-plc built without
+  it refuses a box map naming `enip-io` as "not in this build"
+  (`helmsman_plc::drivers::not_in_build`); `scripts/lint.sh` lints that
+  build so it keeps compiling.
   `enip_sim` (feature `enip-sim`) is a simulated Moxa ioLogik E1213 for
   the harness: `conformance -- --sim-e1213`. The device:
   `docs/devices/moxa-iologik-e1213.md`.
@@ -588,6 +599,126 @@ unchanged. Such an output is one no device takes: no link polls or writes
 it, a module drives it through a `VAR_OUTPUT` of that name under the
 one-writer rule and safe values, and the Monitor shows it as one of the
 program's outputs. No layout has to fit it any more.
+
+## Requirement tests (`spec-tests`, built; interview 2026-11-02)
+
+A requirement the engineer and the agent agreed on is kept as a test the
+box can run on its own: `test_NAME.st` in the project, a PROGRAM that
+drives the program's inputs, steps the clock and checks its outputs with
+the `ASSERT` standard block (a Helmsman extension in `library.st`:
+`FAILED` latches on the first scan `COND` is FALSE, `FAILED_AT` keeps
+when). The runner is `helmsman_iec::spec`, one code path for the page and
+the box: the test and the program under test are two compiled `Program`s
+scanned in lockstep on one clock at the project's period; each scan the
+test runs first, its `VAR_OUTPUT`s are copied into the program's
+`VAR_INPUT`s of the same name, the program runs, its `VAR_OUTPUT`s are
+copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
+`ASSERT` failed (named as words, with its declaration line's comment, and
+when), either side faulted or does not compile, a shared port's types
+differ, `DONE` never came within the limit (two minutes of simulated
+time), or the test holds no `ASSERT` at all. The test's first comment is
+the requirement in the engineer's words. Deterministic: no wall clock, no
+I/O.
+
+**Untested** (Nick, 2026-11-05). A test file that states its requirement
+(a first comment) but declares no `ASSERT`, or whose PROGRAM has an empty
+body, is a third state, `Outcome::Untested`: the requirement is written
+down and nothing checks it yet. It is neither green nor red: `spec::red`
+leaves it out, so it never refuses a deploy or a "Use this code".
+`POST /api/projects/{p}/tests` gives each test a `state` (`passed`,
+`failed`, `untested`) beside the old fields (`passed` stays true only when
+green, so an older client reads an untested one as not passed) and an
+`untested` count; `ok` and `red` count only the red ones. A file with no
+comment, a body and no `ASSERT` is still red.
+
+**Writing a requirement** (`POST /api/projects/{p}/requirements`,
+`api::requirements`). The Requirements tab becomes a list of plain-words
+requirements; typing one has the agent write the test behind it. The
+request is `{text, name?}`: one line (no control characters), 1 to 500
+characters trimmed; `name` is snake case (`spec::name_ok`, 1 to 48 of
+`a-z 0-9 _`, starting with a letter), else the box slugs the words
+(`spec::slug`), unique in the project (`_2` to `_99`). A name whose file
+states another requirement is 409; the same words again are the same
+requirement and its file. Engineer only, exactly as a file save: an
+engineer (or above) login session, as a bearer or the page's cookie with
+its same-origin proof; the box token alone is 403. The response streams:
+
+```text
+event: requirement  {"name", "text"}
+event: text         {"delta"}
+event: tool_call    {"id", "name", "input"}
+event: tool_result  {"id", "name", "ok", "summary"}
+event: retrying     {"error", "after_ms"}
+event: test         {"name", "file", "state": "passed"|"failed"|"untested", "why", "revision"}
+event: done         {"stop": "end_turn"|"budget"|"refusal"|"offline", "why", "steps", "output_tokens"}
+event: error        {"kind", "message", "retryable"}
+```
+
+The box asks the relay for the tests profile (`--relay-tests-agent V`,
+default `tests-v1`), whose one tool is `submit_test {name, source}`. The
+agent loop runs it in process (`Agent::chat_local` with a `Local` runner)
+and nothing else: any other name, the box API's tools included, is
+answered "not available", unrun. One user message: fixed words outside
+the envelope, then the requirement, the name and the project's built
+program files (no tests, no `vN.st` iterations) inside `<box-data>`. On
+`submit_test` the box checks the name is the one it gave and that the
+source declares exactly one PROGRAM, `test_NAME`; writes the requirement
+as the first line (`spec::header`, every `(*` and `*)` in the words
+broken with a space so nothing escapes the comment); and runs it with the
+spec runner against the project. A test that does not compile or checks
+nothing (no `ASSERT`) is answered with why and nothing is written; the
+model may resubmit while its budget lasts (8 turns, 2 calls a turn, 64k
+output tokens, 5 min). One that compiles is saved as a normal project save
+(version-checked, a revision by the session's person, audited), passed
+or failed (a failing test is a correct test of a program that does not
+meet it yet). Offline, with no relay, or when the agent wrote nothing,
+the requirement is written down untested (`spec::placeholder`: the
+comment and an empty `PROGRAM test_NAME END_PROGRAM`) unless its file is
+already there, and `done` says `stop: "offline"` when the agent was not
+reached. `test` comes once, after the agent's events and before `done`
+or `error`: the file as it now is on the box, run.
+
+Test files never deploy: the project build (`project::build`) and the
+page's build both skip `spec::is_test` files. The page runs the tests
+after every build change and before Deploy and "Use this code" (a block
+answer is tested with the candidate file in place); a box runs them when a
+project opens, after each save (`POST /api/projects/{p}/tests`, token or
+session, nothing changes) and inside the deploy's approval path, where a
+red test refuses with 409 before anything builds (`projects::red_tests`).
+The Requirements tab of the right panel shows one row per test, green or
+red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
+same gate.
+
+The Agent tab is one path in the page and on a box (`agent-instruct`,
+crates/helmsman-canvas/src/instruct.rs; Nick 2026-11-05: no chat). The
+engineer types an instruction; the request carries the whole file in its
+scope (`scope::Scope::envelope`), the program and its errors, and the
+last five instructions carried out on that file, read back from the
+project's History (`instruct::recent` over the revisions' Agent pages,
+`<earlier_instructions>`). The answer is a `Why:` line, the whole file in
+one ```` ```st ```` block and ```` ```st scenario ```` blocks
+(requirement tests in the same format). It is checked before anything is
+written (`verify::check`): the code taken into a copy through
+`scope::apply`, the scenarios added, compiled, the scenarios run with
+the project's own tests, and the whole-file rule (`verify::full_copy`: no
+elision markers, every POU with its header and END_ line, the landed file
+equal to the code). A failure goes back with what failed, up to two
+retries (`verify::next`); still red, nothing is written and the tab says
+why. Green is written into the file at once and saved as one revision
+whose Agent page is `instruct::record` (instruction, reason, scenarios,
+failed attempts, the Agent's words), the scenarios kept as test files;
+Undo restores the revision before it. The tab shows only the instruction
+box, Send or Stop, Undo, and a status line with the reason.
+
+The transports differ. In the page, `claude.rs` sends it to the Messages
+API with the playground's system prompt, the failed answers of the same
+instruction as earlier turns. On a box, `box_agent.rs` sends it as one
+`POST /api/chat` message, the answer format (`instruct::BOX_RULES`) in
+front because the relay profile's prompt is the box's own, in a new
+conversation per instruction (a retry continues it); the change is saved
+through `PUT .../files/{f}` with `page`, and Undo is the box's restore.
+A proposal the box's agent stores instead is offered for review and
+nothing is written.
 
 ## Sim replay (`sim-replay`, built)
 
@@ -1155,7 +1286,12 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   (PLCopen TC6) lowered to `F.st` by the existing importer; `F.L5X`
   (Rockwell ladder) converted to `F.st` by `helmsman_iec::ladder` (below,
   "L5X ladder import"), or 422 with every problem, each at its program,
-  routine and rung (the first 20 in the message, then a count).
+  routine and rung (the first 20 in the message, then a count). An
+  L5X's periodic tasks also write `program TASK scan_ms=N` into
+  project.settings (`helmsman_project::settings::set_scans`: a missing
+  line is added, a bare one gets `scan_ms`, an engineer's `scan_ms` is
+  kept and named in the response's `notes`); the playground does the
+  same.
 - **The engineer gate.** Every write (create, copy, rename, delete,
   save, upload, import, replay, deploy) needs a login session of an
   engineer or above (an account's, or the engineer's role-PIN session on
@@ -1177,6 +1313,8 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
 | `DELETE /api/projects/{p}/files/{f}` | engineer | |
 | `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval}`, or 422 `{diagnostics: [{file, line, col, message}]}` |
+| `POST /api/projects/{p}/tests` | token or session | `{ok, red: [line], untested, tests: [{file, requirement, state, passed, why, scans, elapsed_ms}]}`; `state` is `passed`, `failed` or `untested` (never red) |
+| `POST /api/projects/{p}/requirements` | engineer | `{text, name?}`; an event stream: the agent writes the requirement's test (see Requirement tests) |
 | `POST /api/projects/{p}/replay` | engineer | sim replay evidence, as `POST /api/proposals/{id}/replay` |
 | `POST /api/projects/{p}/deploy` | engineer | `{replay?}`; as apply, plus `project: {name, recorded}` |
 | `GET /api/projects/{p}/zip` | open | `application/zip` |
@@ -1313,7 +1451,10 @@ converts or nothing is written.
   two programs in one task that share a name, or that shadow a
   controller tag, become `PROGRAM_TAG`; a tag whose name ST keeps
   (`Log`, `Max`, `Limit`) becomes `Log_tag`. An export without tasks is
-  one PROGRAM named as the controller. Every PROGRAM is compiled before
+  one PROGRAM named as the controller. A periodic task's `Rate` (whole
+  ms, RM014 p.313) is its PROGRAM's scan (`Converted::scans`, written to
+  project.settings by the import); a continuous task's PROGRAM runs
+  every base scan, as the note says. Every PROGRAM is compiled before
   it is returned: a converter fault is a refusal, never a broken file.
 - **Refused**, each with its place: any other instruction (add-on
   instructions named as such), FBD, SFC and ST routines (Logix ST calls
@@ -1321,7 +1462,10 @@ converts or nothing is written.
   CONTROL, module I/O such as `Local:1:I.Data.3`, also through an alias),
   indirect subscripts, produced/consumed and InOut tags, constant tags
   written, JSR with parameters or inside a branch, JSR to the main
-  routine, programs in no task or disabled, event tasks, a controller
+  routine, programs in no task or disabled, event tasks, periodic tasks
+  whose `Rate` is not a whole number of ms from 1 to 10000 (refused, not
+  clamped: a clamped or default scan runs the logic at a period it was
+  not written for), a controller
   tag two tasks use (the box's PROGRAMs share no memory), conflicting
   pseudo-operands, malformed rungs. The file passes the L5X reader's
   limits (no DTD so no entities or XXE, nesting 256, 8 MiB, 100 000
@@ -1388,7 +1532,7 @@ module's unit tests.
 
 ## Agent loop (`agent-loop`, built)
 
-`helmsman-plc --relay URL --relay-token FILE [--relay-agent v3]` turns on
+`helmsman-plc --relay URL --relay-token FILE [--relay-agent v7]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
 an Anthropic key, and names no model, prompt or tool schema: the relay
@@ -1475,8 +1619,9 @@ HTTP from another host is refused (Box API, HTTPS). Sources:
 - **Tools.** The agent's eleven (`helmsman_agent::tools::NAMES`), by the
   same executor, which reaches the box through `tools::Caller`: the chat
   agent's goes over loopback HTTP, MCP's calls the API's handler in
-  process and may reach only the reads and the four draft routes
-  (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
+  process and may reach only the reads (the devices and the library
+  among them), the read-only network scan (`list_devices`, allowed by
+  Nick 2026-11-05) and the four draft routes (`mcp::reachable`). No tool applies, rolls back or takes a PIN; approval
   stays a person on the canvas. Results are text inside the agent's
   `<box-data>` envelope, never `structuredContent`.
 - **Drafts.** The protocol has no sessions, so drafts are server-minted
@@ -1585,6 +1730,23 @@ contracts in `helmsman-plc/tests/dropins.rs` and
   object's Get Instance Attribute List only (`LogixDriver::browse`); it
   exists for the `logix-tag` devices in the I/O map. Nothing ever goes
   back into the customer's PLC.
+- **Fetched documentation** (relay agent v6): `fetch_document {url,
+  vendor_id, product_code, query}` is the one tool the relay runs. The
+  box posts the input to the relay's
+  `POST /v1/agents/{version}/tools/fetch_document` with its relay token;
+  the relay answers with the public device library's record (nothing
+  fetched), a document from an allow-listed vendor site (PDF, EDS, text or
+  an HTML page as text, with its kind, name, SHA-256 and source in
+  headers), or a refusal (`404 no_match`, `403 fetch_refused`,
+  `429 rate_limited`, `502 fetch_failed`, each a tool error in words). The
+  box checks the document (the relay's caps, 12 MiB for a PDF and 2 MiB
+  for an EDS or text; the hash; a PDF's magic) and stores it as a
+  drop-in through `POST /api/dropins`, whose own caps (2 MiB PDF, 1 MiB
+  text) still apply and come back as a tool error. The model gets
+  `{dropin_id, name, kind, size, sha256, source}` and
+  reads an EDS or text with `read_dropin`; a PDF is read when attached to
+  a message. A box without a relay answers the tool with an error; the
+  MCP route offers the same tool with the box's relay.
 - **Watch modules.** A conversation that has read a PLC drop-in is
   watch-only from then on (`Drafts::watch_only`): its checks, simulations
   and proposals go to the box with `watch: true`, and it can propose no
@@ -1740,6 +1902,51 @@ host-enforced checks; an AI review (`marketplace`) can only refuse on top.
   policy classifies it from the diff like any proposal: a bundle that drives
   anything is output-affecting (engineer PIN + replay). Every import,
   refused or not, is audited.
+
+## Marketplace index (`marketplace`, the skeleton, built)
+
+`helmsman_plc::bundle::index` and `bundle::market`, the CLI's `bundle
+index` and `bundle fetch`, and `api/market.rs`; contract in
+`tests/bundle.rs` (the index tests). What a box needs to *use* a
+marketplace, under this repository's licence; the server side (accounts,
+review, payments) is private and does not exist yet (LICENSING.md).
+
+- **A marketplace is a static site**: `index.json`, `index.json.sig` and
+  the bundle files beside them, published from a repository or any web
+  server. No API, no accounts. `helmsman-plc bundle index --key KEY
+  --publisher NAME DIR OUT` builds the index from every `.hbundle` in a
+  folder (each decoded, its signatures checked) and signs it.
+- **The index** (`helmsman-index 1`, canonical JSON): the publisher's name
+  and one entry per bundle: name, version, author, description, the bundle
+  id, the file's SHA-256 and size, the file name (plain: letters, digits,
+  `. _ -`, ending `.hbundle`), the keys it is signed with. Refused before
+  it costs anything: over 1 MiB, over 256 entries, unknown fields, a hash
+  that is not 64 hex digits, a size over a bundle's, control or invisible
+  characters in a text field.
+- **The signature** (`helmsman-index-signature 1`): Ed25519 over the
+  domain string and the SHA-256 of the index bytes, by a key the box's
+  trust store names (the same store as bundle import). The index can
+  point at a bundle; it cannot vouch for one: the bundle fetched must
+  still pass `bundle::verify` on the box, signatures and content.
+- **Fetching** (`bundle::market`, over `helmsman_agent::http`): the index,
+  then its `.sig`, then one bundle file, each body capped before it is
+  read, each step checked before the next (signature, publisher name
+  matching the key's, the file's size and hash against the entry). The
+  box fetches a URL a client gave it, so the host must resolve to public
+  addresses: loopback, private, link-local, shared (100.64/10), multicast
+  and unspecified are refused unless the box runs with
+  `--market-allow-local on` (a bench, a LAN mirror). The check is on the
+  resolved addresses at fetch time, which is why the flag is off by
+  default (DNS rebinding is not caught).
+- **On the box**: `POST /api/market/list {index}` and `POST
+  /api/market/install {index, name, version?}` (token; never a read,
+  since both make the box fetch). Install hands the checked bytes to the
+  same import as `POST /api/bundles`: verified, bound by name, a proposal
+  the policy classifies; the audit line and the proposal's note say which
+  index and file it came from. `helmsman-plc bundle fetch` does the same
+  on a laptop and writes the bundle file.
+- **Not in the skeleton**: publisher accounts, uploads, the AI review on
+  install, payments, mirrors. A third party can run its own index today.
 
 ## Webhook sinks (`sink-webhook`, built)
 
@@ -2016,8 +2223,10 @@ path that drives an output).
   even a proposal. One question per conversation, none kept; its own
   budget (6 turns, 32k output tokens, 3 min); the chat's running slots.
   `--relay-explain-agent V` asks the relay for an explain profile
-  (default `explain-v1`: the relay's read-only, floor-language profile;
-  the chat defaults to agent `v3`, which adds the drop-in tools). `GET /api` says whether the box has an
+  (default `explain-v2`: the relay's read-only, floor-language profile;
+  the chat defaults to agent `v3`, which adds the drop-in tools;
+  `--relay-tests-agent V`, default `tests-v1`, is the requirement
+  route's profile, see Requirement tests). `GET /api` says whether the box has an
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.
 
@@ -2160,14 +2369,14 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   streamed, API version `2026-10-21`, `max_tokens` 16000, effort medium,
   the fixed system prompt (the playground's dialect: what helmsman-iec
   supports and does not, how ports and `%IX`/`%QX` become I/O, "answer
-  with one complete program in a ```st block") cached with
+  with a Why line, the whole file in a ```st block and scenarios") cached with
   `cache_control`, and `fallbacks: "default"` (beta
-  `server-side-fallback-2026-07-01`; not for Haiku). Each question
+  `server-side-fallback-2026-07-01`; not for Haiku). Each instruction
   carries the editor's source and compile errors inside
   `<current_program>`/`<compile_errors>` tags the source cannot close,
-  plus the last six exchanges. "Use this code" loads the last closed
-  fenced block holding a whole `PROGRAM … END_PROGRAM` (ST-tagged first;
-  64 KiB at most; no control characters) and never runs it.
+  its scope and the earlier instructions for the file (`instruct.rs`,
+  above); a checked answer is written into the file and never run. On a
+  built-in example the program becomes a project of its own, named once.
 - **The key.** Pasted into a password field, held in page memory; an
   explicit "Remember on this device" (off by default, with a warning)
   keeps it in `localStorage`, and unticking or Forget removes it. It goes
@@ -2203,7 +2412,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
 | driver ↔ box | strings and values | the `Driver` contract; a WASM driver (`helmsman-driver/v1`) imports only its socket to its own device's endpoint (it never names a host or port; no files, clocks or WASI, refused at load otherwise), and only in `read` and `write`, under fuel and memory limits and a per-call deadline; a trap fails that point (`Error::Driver`), not the link or the runtime; the binary is a file (`drivers/NAME.wasm`, a slug, regular files only, links never followed, checked at upload and at every load) | built (`wasm-driver`, `wasm-driver-map`; `helmsman-io/tests/wasm_driver.rs`, `helmsman-plc/tests/wasm_driver.rs`, `helmsman-plc/tests/driver_map.rs`) |
 | box ↔ observed PLCs | tag reads | `helmsman-proto` without its `unrestricted` feature can only send reads: `Session::get_attribute_single` and `logix::TagReader`, whose `ReadRequest` has no constructor that takes a service code (no Write Tag, no `Set_Attribute`); `Session::request`/`request_raw` exist only with the feature; the Class 1 scanner (its own `scanner` feature, out of the box build for now, below) sends only `Forward_Open`/`Forward_Close` to an Assembly path. The `logix-tag` driver's points are not writable and its `write` is refused. `helmsman-plc/tests/box_build.rs` fails if the box build's resolved features ever include `unrestricted`. | built (`logix-tag-read`); the CLI, a bench tool, enables `unrestricted`; real-controller check waits for hardware |
 | box ↔ scanner | assemblies 150/100 | the adapter's connection rules | built |
-| box ↔ mastered EtherNet/IP adapters | Class 1 I/O: the device's output assembly, its input assembly | `helmsman-proto`'s `scanner` feature, which only helmsman-plc's `enip-io` feature turns on (out of the box build until `e1213-bench` passes): it sends `Forward_Open` and `Forward_Close` to an Assembly-class path and nothing else (no other service, no `Session::request`); only devices in the I/O map, through `enip-io`, with the map's one-writer rule and approval tier. `tests/box_build.rs` checks the box build has neither `scanner` nor `unrestricted`, and that `enip-io` brings `scanner` alone. | built (`enip-io`, out of the box); real-device check `e1213-bench` |
+| box ↔ mastered EtherNet/IP adapters | Class 1 I/O: the device's output assembly, its input assembly | `helmsman-proto`'s `scanner` feature, which only helmsman-plc's `enip-io` feature turns on (in the default build): it sends `Forward_Open` and `Forward_Close` to an Assembly-class path and nothing else (no other service, no `Session::request`); only devices in the I/O map, through `enip-io`, with the map's one-writer rule and approval tier. `tests/box_build.rs` checks the box build has `scanner` and not `unrestricted`, and that `enip-io` brings `scanner` alone. | built; passed on the real E1213 2026-11-02 (`e1213-bench`, docs/devices/moxa-iologik-e1213.md) |
 | box ↔ LAN peers | site beacons in, this box's beacon out | strict parse, source-address rule, intake and refresh limits, a bounded list, no takeover of a live id; the box only lists peers and never connects to one; `/api/site` is the only cross-origin read | built (`site-view`) |
 | agent ↔ box | proposals only | box API + approval policy: the agent drafts, a human with the right PIN applies; anything that can move an output needs an engineer PIN and a sim replay | built: box API (no write route; mutations need the token and are audited) and `approval-policy` (tier from the diff, policy floor in code, role PINs with lockout, replay bound to content hashes) and `local-accounts` (per-person logins that replace the PINs once an accounts file exists; the audit names the person) |
 | text ↔ agent | tag names, comments, bundle text, manuals, drop-in documents, PLC programs and photos | treated as data, never instructions: the relay's system prompt says so, and every tool result wraps plant text in a `<box-data>` envelope it cannot close; the tool set is fixed and has no apply (explain mode: reads only, and the box writes the ask itself, the plant text only inside the envelope); a conversation that read a PLC program proposes only watch modules, and the box refuses a watch module that drives an output; a photo goes as an image block of a format, size and shape the box read from its headers, with the box's note saying it is data; the host rules above hold regardless | built (`agent-loop`, `explain-mode`, `dropin-prose`, `dropin-plc`, `dropin-photo`; `helmsman-plc/tests/agent.rs`, `tests/dropins.rs`) |

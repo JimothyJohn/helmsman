@@ -6,27 +6,39 @@
 <title>Helmsman Factory Automation</title>
 <meta name="description" content="Helmsman Factory Automation: the soft PLC you program by describing the machine. Write the spec, validate the result; standard IEC 61131-3 Structured Text, EtherNet/IP and Modbus TCP.">
 <link rel="icon" type="image/svg+xml" href="brand/helmsman-mark-16-yellow.svg">
+<script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&amp;family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
 <style>
-:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;--white:#FFFFFF;--dim:#A8A8A8;
+:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;--white:#FFFFFF;--dim:#A8A8A8;--ink:#F2F2F2;--header-fg:#C8C8C8;
 --stencil:'Saira Stencil One',Impact,sans-serif;--cond:'Barlow Condensed','Arial Narrow',sans-serif;
---mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif}
+--mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif;
+color-scheme:dark;
+--bg:#141414;--fg:#F0F0F0;--muted:#8C8C8C;--rule:#3A3A3A;--rule-strong:#F0F0F0;
+--band:#242424;--band-fg:#F2F2F2;--band-pre:#0A0A0A;--band-code:#3A3A3A;
+--pre:#242424;--pre-fg:#F2F2F2;--code:#2C2C2C;--code-fg:#F0F0F0;--diagram:#242424;--footer:#0A0A0A}
+:root[data-theme="light"]{color-scheme:light;
+--bg:#FFFFFF;--fg:#141414;--muted:#3A3A3A;--rule:#8C8C8C;--rule-strong:#141414;
+--band:#141414;--band-fg:#F2F2F2;--band-pre:#0A0A0A;--band-code:#3A3A3A;
+--pre:#141414;--pre-fg:#F2F2F2;--code:#EDEDED;--code-fg:#141414;--diagram:#141414;--footer:#141414}
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--white);color:var(--black);font:16px/1.6 var(--sans)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans)}
 .sprite{position:absolute;width:0;height:0;overflow:hidden}
 .mk{display:block;flex:none;max-width:100%;height:auto}
 .wrap{max-width:1040px;margin:0 auto;padding:0 16px}
 a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
 .on-black a,.on-graphite a{color:var(--yellow)}
-header.top{background:var(--black);color:#fff;border-bottom:4px solid var(--yellow)}
+header.top{background:var(--black);color:var(--white);border-bottom:4px solid var(--yellow)}
 header.top .wrap{display:flex;align-items:center;gap:16px;min-height:56px}
-header.top .brand{display:flex;align-items:center;gap:10px;color:#fff;text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em;flex:none}
+header.top .brand{display:flex;align-items:center;gap:10px;color:var(--white);text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em;flex:none}
 header.top nav{display:flex;gap:18px;overflow-x:auto;margin-left:auto;font:13px var(--mono);padding:8px 0}
-header.top nav a{color:#C8C8C8;text-decoration:none;white-space:nowrap}
+header.top nav a{color:var(--header-fg);text-decoration:none;white-space:nowrap}
 header.top nav a:hover{color:var(--yellow)}
+header.top .theme{flex:none;margin:0;padding:6px 0;background:none;border:0;color:var(--header-fg);font:13px var(--mono);cursor:pointer;white-space:nowrap}
+header.top .theme:hover{color:var(--yellow)}
+header.top .theme:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
 .hero{background:var(--yellow);color:var(--black)}
 .hero .wrap{padding-top:56px;padding-bottom:56px}
 .lockup{display:flex;flex-wrap:wrap;align-items:center;gap:20px 36px}
@@ -37,33 +49,33 @@ header.top nav a:hover{color:var(--yellow)}
 .cta{display:flex;flex-wrap:wrap;gap:12px}
 .btn{font:600 14px/1 var(--mono);padding:13px 18px;text-decoration:none;border:2px solid var(--black);color:var(--black)}
 .btn.primary{background:var(--black);color:var(--yellow)}
-.facts{background:var(--graphite);color:#fff}
+.facts{background:var(--graphite);color:var(--white)}
 .facts .wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
 .facts div div{padding:18px 16px 18px 0}
 .facts b{display:block;font:700 20px/1.2 var(--cond);letter-spacing:.06em;text-transform:uppercase;color:var(--yellow)}
 .facts span{font-size:14px}
 section{padding:64px 0}
-.on-black{background:var(--black);color:#F2F2F2}
-.on-graphite{background:var(--graphite);color:#fff}
+.on-black{background:var(--band);color:var(--band-fg)}
+.on-graphite{background:var(--graphite);color:var(--white)}
 h2{font:700 14px/1 var(--cond);letter-spacing:.32em;text-transform:uppercase;margin:0 0 12px}
 .on-black h2{color:var(--yellow)}
 h3{font:clamp(30px,5vw,44px)/1 var(--stencil);letter-spacing:.03em;margin:0 0 20px;text-transform:uppercase}
 p{max-width:700px}
-.muted{color:var(--graphite)}
+.muted{color:var(--muted)}
 .on-black .muted{color:var(--dim)}
-pre{background:var(--black);color:#F2F2F2;font:13.5px/1.6 var(--mono);padding:18px 20px;overflow-x:auto;margin:20px 0;border-left:4px solid var(--yellow)}
-.on-black pre{background:#0A0A0A}
+pre{background:var(--pre);color:var(--pre-fg);font:13.5px/1.6 var(--mono);padding:18px 20px;overflow-x:auto;margin:20px 0;border-left:4px solid var(--yellow)}
+.on-black pre{background:var(--band-pre)}
 pre .c{color:var(--dim)}
 pre .k{color:var(--yellow)}
 code{font-family:var(--mono);font-size:.92em}
-p code,li code,td code{background:#EDEDED;padding:1px 5px}
-.on-black p code,.on-black li code,.on-black td code{background:var(--graphite);color:#fff}
+p code,li code,td code{background:var(--code);color:var(--code-fg);padding:1px 5px}
+.on-black p code,.on-black li code,.on-black td code{background:var(--band-code);color:var(--white)}
 .rules{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));margin:28px 0 0;padding:0;list-style:none;counter-reset:r}
-.rules li{border-top:4px solid var(--black);padding-top:12px}
+.rules li{border-top:4px solid var(--rule-strong);padding-top:12px}
 .rules li b{display:block;font:700 22px/1.15 var(--cond);letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px}
-.diagram{margin:28px 0 0;overflow-x:auto;background:var(--black);padding:20px}
+.diagram{margin:28px 0 0;overflow-x:auto;background:var(--diagram);padding:20px}
 .diagram svg{width:100%;min-width:600px;height:auto;display:block}
-.diagram text{font-family:var(--mono);fill:#F2F2F2}
+.diagram text{font-family:var(--mono);fill:var(--ink)}
 .diagram .dim{fill:var(--dim)}
 .diagram .box{fill:var(--graphite);stroke:var(--steel);stroke-width:1.5}
 .diagram .us{fill:var(--yellow)}
@@ -77,18 +89,18 @@ p code,li code,td code{background:#EDEDED;padding:1px 5px}
 @media (max-width:760px){.two{grid-template-columns:1fr}}
 .table-scroll{overflow-x:auto}
 table{border-collapse:collapse;width:100%;font-size:14.5px;margin:20px 0}
-th,td{text-align:left;padding:10px 12px 10px 0;border-bottom:1px solid var(--steel);vertical-align:top}
+th,td{text-align:left;padding:10px 12px 10px 0;border-bottom:1px solid var(--rule);vertical-align:top}
 th{font:600 12px var(--mono);text-transform:uppercase;letter-spacing:.06em}
 .chip{display:inline-block;font:600 12px/1 var(--mono);padding:5px 8px;white-space:nowrap}
 .chip.ok{background:var(--yellow);color:var(--black)}
-.chip.pending{background:var(--graphite);color:#fff}
+.chip.pending{background:var(--graphite);color:var(--white)}
 .brandband{background:var(--yellow);color:var(--black);padding:40px 0}
 .brandband .wrap{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:20px}
 .brandband p{margin:0;font-size:17px}
-footer{background:var(--black);color:var(--dim);padding:28px 0 48px;font:13px var(--mono)}
+footer{background:var(--footer);color:var(--dim);padding:28px 0 48px;font:13px var(--mono)}
 footer .wrap{display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px}
 footer a{color:var(--yellow)}
-header.top .gh{display:flex;color:#C8C8C8;flex:none;padding:6px}
+header.top .gh{display:flex;color:var(--header-fg);flex:none;padding:6px}
 header.top .gh:hover{color:var(--yellow)}
 .early{margin:22px 0 0;font-size:15px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .steps{counter-reset:s}
@@ -110,6 +122,7 @@ header.top .gh:hover{color:var(--yellow)}
       <a href="helmsman-datasheet.pdf" download="helmsman-datasheet.pdf">Datasheet</a>
       <a href="playground/">Try it</a>
     </nav>
+    <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
     <a class="gh" href="https://github.com/JimothyJohn/helmsman" aria-label="Source on GitHub" title="Source on GitHub"><svg viewBox="0 0 16 16" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
   </div>
 </header>
@@ -232,5 +245,8 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
     <span>Helmsman Factory Automation · early release · open source (Apache 2.0)</span>
   </div>
 </footer>
+<script>
+(function(){var h=document.documentElement,b=document.querySelector('header.top .theme');if(!b){return}function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();
+</script>
 </body>
 </html>

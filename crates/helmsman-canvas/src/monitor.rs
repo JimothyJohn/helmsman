@@ -27,10 +27,14 @@ use helmsman_iec::Value;
 use helmsman_iec::ast::{self, PouKind, Section, TypeRef};
 
 use crate::editor::Chrome;
+use crate::glyphs;
+use crate::hotkeys::Action;
 use crate::playground_view::PlaygroundView;
 use crate::remote::{BoxState, Link};
 use crate::st_view::TAP;
-use crate::st_view::brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{WHITE, YELLOW};
+use crate::theme::theme;
+use crate::tips::Tip;
 
 /// Seconds without a new scan after which a program's tiles go grey.
 pub const STALE_AFTER: f64 = 3.0;
@@ -359,6 +363,17 @@ pub struct Group {
 pub enum Wish {
     /// The Editor's diagram of `program`, at `prefix`.
     Diagram { program: String, prefix: String },
+    /// A transport button: run or stop, step, restart.
+    Act(Action),
+}
+
+/// The simulation's transport as the Monitor shows it: whether a program
+/// is built, and whether it runs. A box has none (card
+/// monitor-box-run-stop): its Monitor stays watch-only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Transport {
+    pub built: bool,
+    pub running: bool,
 }
 
 /// The Monitor's own state: which level is shown. Values are the feed's.
@@ -546,7 +561,16 @@ impl Monitor {
     /// One frame: the crumbs and the tiles, filling `ui`. Draws what was
     /// where into `chrome`'s hits. `engineer`: the page is signed in as
     /// one, so the "Scan detail" toggle is offered and honoured.
-    pub fn show(&mut self, ui: &mut egui::Ui, feed: &dyn Feed, chrome: &mut Chrome, engineer: bool) {
+    /// `transport`: the simulation's run or stop, step and restart, drawn
+    /// in the header (Nick, 2026-11-01: play, start, stop on the Monitor).
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        feed: &dyn Feed,
+        chrome: &mut Chrome,
+        engineer: bool,
+        transport: Option<Transport>,
+    ) {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
         // Ages tick and data goes stale with no event to wake the page.
@@ -554,10 +578,11 @@ impl Monitor {
         let trouble = feed.trouble(now);
         let area = ctx.content_rect();
         let k = (area.width() / 1100.0).min(area.height() / 650.0).clamp(1.0, 3.5);
+        let t = theme(ui);
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BLACK).inner_margin(12.0 * k))
+            .frame(egui::Frame::new().fill(t.bg).inner_margin(12.0 * k))
             .show(ui, |ui| {
-                self.top(ui, k, trouble.as_deref(), chrome, engineer);
+                self.top(ui, k, trouble.as_deref(), chrome, engineer, transport);
                 // After the toggle, so a tap shows on the same frame.
                 let groups = self.groups(feed, now, engineer && chrome.scan);
                 ui.add_space(10.0 * k);
@@ -571,11 +596,11 @@ impl Monitor {
                                     egui::RichText::new(&g.program)
                                         .font(FontId::proportional(20.0 * k))
                                         .strong()
-                                        .color(YELLOW),
+                                        .color(t.accent),
                                 );
                             }
                             if let Some(n) = &g.note {
-                                ui.label(egui::RichText::new(n).size(14.0 * k).color(STEEL));
+                                ui.label(egui::RichText::new(n).size(14.0 * k).color(t.muted));
                             }
                             self.grid(ui, &g.tiles, k, chrome);
                             ui.add_space(14.0 * k);
@@ -584,49 +609,74 @@ impl Monitor {
                             ui.label(
                                 egui::RichText::new("No program is running.")
                                     .size(18.0 * k)
-                                    .color(STEEL),
+                                    .color(t.muted),
                             );
                         }
                     });
             });
     }
 
-    /// Back, the crumbs, "Open diagram", an engineer's "Scan detail"
-    /// toggle, and a red banner when the source cannot be trusted.
-    fn top(&mut self, ui: &mut egui::Ui, k: f32, trouble: Option<&str>, chrome: &mut Chrome, engineer: bool) {
+    /// Back, the crumbs, the simulation's transport, "Open diagram", an
+    /// engineer's "Scan detail" toggle, and a red banner when the source
+    /// cannot be trusted.
+    fn top(
+        &mut self,
+        ui: &mut egui::Ui,
+        k: f32,
+        trouble: Option<&str>,
+        chrome: &mut Chrome,
+        engineer: bool,
+        transport: Option<Transport>,
+    ) {
         let mut go: Option<Option<(String, String)>> = None;
         let crumbs = self.crumbs();
+        let t = theme(ui);
         ui.horizontal_wrapped(|ui| {
             let size = 16.0 * k;
-            let back = ui.add_enabled(
-                self.at.is_some(),
-                egui::Button::new(egui::RichText::new("‹ Back").size(size).strong())
-                    .min_size(Vec2::new(TAP * 1.6 * k, TAP * k)),
-            );
+            let back = ui
+                .add_enabled(
+                    self.at.is_some(),
+                    egui::Button::new(egui::RichText::new("‹ Back").size(size).strong())
+                        .min_size(Vec2::new(TAP * 1.6 * k, TAP * k)),
+                )
+                .tip(if self.at.is_some() {
+                    "Up one level."
+                } else {
+                    "Up one level: this is the top already."
+                });
             chrome.hit("monitor back", back.rect);
             if back.clicked() {
                 self.back();
             }
             for (i, (text, to)) in crumbs.iter().enumerate() {
                 if i > 0 {
-                    ui.label(egui::RichText::new("›").size(size).color(STEEL));
+                    ui.label(egui::RichText::new("›").size(size).color(t.muted));
                 }
                 let last = i + 1 == crumbs.len();
-                let t = egui::RichText::new(text).size(size).monospace();
-                let t = if last {
-                    t.strong().color(YELLOW)
+                let rt = egui::RichText::new(text).size(size).monospace();
+                let rt = if last {
+                    rt.strong().color(t.accent)
                 } else {
-                    t.color(WHITE)
+                    rt.color(t.fg)
                 };
-                let r = ui.add(
-                    egui::Button::new(t)
-                        .frame(false)
-                        .min_size(Vec2::new(0.0, TAP * k)),
-                );
+                let r = ui
+                    .add(
+                        egui::Button::new(rt)
+                            .frame(false)
+                            .min_size(Vec2::new(0.0, TAP * k)),
+                    )
+                    .tip(if last {
+                        "The level shown now."
+                    } else {
+                        "Goes back to this level."
+                    });
                 chrome.hit(format!("monitor crumb {i}"), r.rect);
                 if r.clicked() && !last {
                     go = Some(to.clone());
                 }
+            }
+            if let Some(t) = transport {
+                self.transport(ui, t, chrome);
             }
             let open = ui
                 .add(
@@ -664,6 +714,46 @@ impl Monitor {
                     .background_color(RED),
             );
             chrome.hit("monitor banner", r.rect);
+        }
+    }
+
+    /// The simulation's transport, the Editor's glyphs under the same keys
+    /// (`run`, `step`, `restart`), so the hotkeys' tests and the page's
+    /// behave alike on either screen.
+    fn transport(&mut self, ui: &mut egui::Ui, t: Transport, chrome: &mut Chrome) {
+        let (icon, tip) = if !t.built {
+            (
+                glyphs::Icon::Run,
+                "Run (Ctrl+Enter): the program does not compile yet.",
+            )
+        } else if t.running {
+            (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
+        } else {
+            (glyphs::Icon::Run, "Run (Ctrl+Enter)")
+        };
+        let items = [
+            ("run", icon, t.built, tip, Action::RunStop),
+            (
+                "step",
+                glyphs::Icon::Step,
+                t.built && !t.running,
+                "Step one scan (F10)",
+                Action::Step,
+            ),
+            (
+                "restart",
+                glyphs::Icon::Restart,
+                t.built,
+                "Restart: initial values, clock to zero",
+                Action::Restart,
+            ),
+        ];
+        for (key, icon, enabled, tip, act) in items {
+            let r = glyphs::button(ui, icon, enabled, false, tip);
+            chrome.hit(key, r.rect);
+            if r.clicked() {
+                self.wish = Some(Wish::Act(act));
+            }
         }
     }
 
@@ -710,9 +800,15 @@ fn tile_height(t: &Tile, k: f32) -> f32 {
 
 fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
     let p = ui.painter_at(r);
+    let th = theme(ui);
     let stale = t.stale.is_some();
-    let fill = if stale { Color32::from_gray(0x1C) } else { PANEL };
-    let edge = if hot { YELLOW } else { GRAPHITE };
+    // A stale tile sinks halfway back into the page.
+    let fill = if stale {
+        th.panel.gamma_multiply(0.5)
+    } else {
+        th.panel
+    };
+    let edge = if hot { YELLOW } else { th.rule };
     p.rect(
         r,
         CornerRadius::same(8),
@@ -720,7 +816,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
         Stroke::new(1.5 * k, edge),
         StrokeKind::Inside,
     );
-    let ink = if stale { STEEL } else { WHITE };
+    let ink = if stale { th.muted } else { th.fg };
     let pad = 14.0 * k;
     let mut y = r.min.y + pad;
     let title = if t.into.is_some() {
@@ -740,8 +836,8 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
         Pos2::new(r.min.x + pad, y),
         egui::Align2::LEFT_TOP,
         &t.sub,
-        FontId::monospace(14.0 * k),
-        STEEL,
+        FontId::monospace((14.0 * k).max(crate::theme::MIN_TEXT)),
+        th.muted,
     );
     y += 26.0 * k;
     match &t.kind {
@@ -749,11 +845,11 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
             let (word, color) = match run {
                 Run::Running => ("RUNNING", GREEN),
                 Run::Faulted(_) => ("FAULTED", RED),
-                Run::Held => ("HELD", YELLOW),
-                Run::Stopped => ("STOPPED", STEEL),
-                Run::Starting => ("STARTING", STEEL),
+                Run::Held => ("HELD", th.accent),
+                Run::Stopped => ("STOPPED", th.muted),
+                Run::Starting => ("STARTING", th.muted),
             };
-            let color = if stale { STEEL } else { color };
+            let color = if stale { th.muted } else { color };
             p.text(
                 Pos2::new(r.min.x + pad, y),
                 egui::Align2::LEFT_TOP,
@@ -767,7 +863,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                     Pos2::new(r.min.x + pad, y),
                     egui::Align2::LEFT_TOP,
                     f,
-                    FontId::proportional(14.0 * k),
+                    FontId::proportional((14.0 * k).max(crate::theme::MIN_TEXT)),
                     ink,
                 );
                 y += 22.0 * k;
@@ -779,8 +875,8 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                     Pos2::new(r.min.x + pad, y),
                     egui::Align2::LEFT_TOP,
                     "no outputs",
-                    FontId::proportional(16.0 * k),
-                    STEEL,
+                    FontId::proportional((16.0 * k).max(crate::theme::MIN_TEXT)),
+                    th.muted,
                 );
                 y += 30.0 * k;
             }
@@ -797,7 +893,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                         p.circle_filled(c, rad, if on { GREEN } else { RED });
                     }
                     Some(_) => {
-                        p.circle_stroke(c, rad, Stroke::new(1.5 * k, STEEL));
+                        p.circle_stroke(c, rad, Stroke::new(1.5 * k, th.muted));
                     }
                     None => {}
                 }
@@ -810,7 +906,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                     Pos2::new(x, mid),
                     egui::Align2::LEFT_CENTER,
                     &l.name,
-                    FontId::proportional(18.0 * k),
+                    FontId::proportional((18.0 * k).max(crate::theme::MIN_TEXT)),
                     ink,
                 );
                 if let Some(v) = text {
@@ -818,8 +914,8 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                         Pos2::new(r.max.x - pad, mid),
                         egui::Align2::RIGHT_CENTER,
                         v,
-                        FontId::monospace(18.0 * k),
-                        if stale { STEEL } else { YELLOW },
+                        FontId::monospace((18.0 * k).max(crate::theme::MIN_TEXT)),
+                        if stale { th.muted } else { th.accent },
                     );
                 }
                 y += 30.0 * k;
@@ -831,8 +927,8 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
             Pos2::new(r.min.x + pad, y + 4.0 * k),
             egui::Align2::LEFT_TOP,
             s,
-            FontId::proportional(15.0 * k),
-            STEEL,
+            FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT)),
+            th.muted,
         );
     }
 }

@@ -11,7 +11,9 @@
 //! GET  /api/modules/{name}/trace/events   event stream of traced scans
 //! GET  /api/traces/events                 event stream of every module's traced scans (the Monitor's one stream)
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
-//! GET  /api/devices                       device links: up, down (why), unknown
+//! GET  /api/devices                       device links: up, down (why), unknown, address
+//! POST /api/devices/discover              token or session: one ListIdentity sweep; every EtherNet/IP device on the LAN, mapped or not, with the library's match (see [`discover`])
+//! GET  /api/devices/library?vendor=&product=|q=   the device library's matches with their map lines
 //! GET  /api/proposals                     drafts awaiting approval
 //! GET  /api/proposals/{id}
 //! POST /api/proposals                     token: a module draft, a param change, or a new io_map / calendar file, checked, stored as a draft
@@ -30,6 +32,8 @@
 //! GET  /api/snapshots/{a}/diff/{b}
 //! GET  /api/snapshots/{id}/bundle         that snapshot as an unsigned bundle file (see [`bundle`])
 //! POST /api/bundles                       token: a bundle file, verified, bound by name, stored as a draft
+//! POST /api/market/list                   token: {index}: the signed index at that URL, verified, its bundles (see [`market`])
+//! POST /api/market/install                token: {index, name, version?}: that bundle fetched, checked against the index, imported as POST /api/bundles
 //! POST /api/snapshots/{id}/replay         token: sim replay of a rollback to it
 //! POST /api/snapshots/{id}/rollback       as apply: roll back through the approval policy
 //! GET  /api/replays/{n}                   a replay kept as evidence
@@ -45,6 +49,7 @@
 //! GET  /api/dropins/{id}/plc?view=V...    a PLC drop-in's inventory (overview, tags, routine, names)
 //! POST /api/devices/{name}/browse         token: an observed controller's tag list, read-only
 //! GET  /api/projects ...                  the editor's projects; PUT, DELETE, deploy and uploads need an engineer session (see [`projects`])
+//! POST /api/projects/{p}/requirements    engineer session: one requirement in words; the agent writes its test (see [`requirements`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
 //! GET  /api/forces                        forced inputs; POST and DELETE need an engineer session (see [`forces`])
 //! GET  /api/drivers ...                   the box's WASM driver files; list, PUT and DELETE need an engineer session (see [`drivers`])
@@ -99,6 +104,7 @@ pub mod approve;
 pub mod bundle;
 pub mod catalog;
 pub mod chat;
+pub mod discover;
 pub mod drivers;
 pub mod dropin;
 pub mod explain;
@@ -106,12 +112,14 @@ pub mod forces;
 pub mod http;
 pub mod live;
 pub mod login;
+pub mod market;
 pub mod mcp;
 pub mod pdf;
 pub mod photo;
 pub mod projects;
 pub mod proposal;
 pub mod render;
+pub mod requirements;
 pub mod sim;
 pub mod store;
 pub mod swap;
@@ -213,6 +221,10 @@ pub struct Extras {
     /// Publishers whose bundles import (`POST /api/bundles`); `None`:
     /// import answers 501.
     pub trust: Option<TrustStore>,
+    /// The marketplace routes may fetch from local addresses (loopback,
+    /// private ranges): a bench or a LAN mirror. Off on a box
+    /// (`--market-allow-local` turns it on).
+    pub market_local: bool,
 }
 
 /// What a box running the editor serves besides [`Extras`] (a struct of
@@ -237,6 +249,10 @@ pub struct More {
     /// (`<state-dir>/trend-pins`, [`trend::Trends::in_file`]). `None`:
     /// memory only.
     pub trend_pins: Option<std::path::PathBuf>,
+    /// How the box scans its network for devices and where its device
+    /// library is (see [`discover`]). The default sweeps the LAN's
+    /// broadcast and reads the public library.
+    pub discovery: discover::Discovery,
 }
 
 /// The box's HTTPS: what it serves with, and the certificate's
@@ -307,10 +323,14 @@ struct Ctx {
     ui: Option<ui::Ui>,
     /// Publishers whose bundles import; `None`: import answers 501.
     trust: Option<TrustStore>,
+    /// The marketplace routes may fetch from local addresses.
+    market_local: bool,
     /// Drop-in documents (see [`dropin`]).
     dropins: Mutex<dropin::Store>,
     /// Held while a device browse runs (one at a time).
     browsing: Mutex<()>,
+    /// The network scan and the device library (see [`discover`]).
+    discovery: discover::State,
     /// The site this box announces itself in (`--site`), and what it heard.
     site: Option<crate::site::Handle>,
     /// The MCP route's drafts (see [`mcp`]).
@@ -510,7 +530,15 @@ impl Api {
         ui: Option<ui::Ui>,
         trust: Option<TrustStore>,
     ) -> io::Result<Self> {
-        Self::start_with(cfg, shared, Extras { ui, trust })
+        Self::start_with(
+            cfg,
+            shared,
+            Extras {
+                ui,
+                trust,
+                ..Extras::default()
+            },
+        )
     }
 
     /// [`Api::start`], with what a box may serve besides its state.
@@ -567,13 +595,18 @@ impl Api {
         more: More,
         tls: Option<Tls>,
     ) -> io::Result<Self> {
-        let Extras { ui, trust } = extras;
+        let Extras {
+            ui,
+            trust,
+            market_local,
+        } = extras;
         let More {
             projects,
             forces,
             drivers: driver_dir,
             running_drivers,
             trend_pins,
+            discovery,
         } = more;
         let listener = TcpListener::bind(cfg.bind)?;
         let addr = listener.local_addr()?;
@@ -602,8 +635,10 @@ impl Api {
             streams: AtomicUsize::new(0),
             ui,
             trust,
+            market_local,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
+            discovery: discover::State::new(discovery),
             site,
             mcp: Mutex::new(mcp::Workspace::default()),
             projects,
@@ -723,6 +758,8 @@ enum Reply {
     Chat(chat::Taken),
     /// One explanation for the agent.
     Explain(explain::Job),
+    /// One requirement: the agent writes its test.
+    Requirement(Box<requirements::Job>),
     /// A file of the UI.
     File(ui::Asset),
 }
@@ -859,6 +896,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 chat.serve(&mut stream, taken, &ctx.catalog());
             }
         }
+        Reply::Requirement(job) => requirements::serve(ctx, &mut stream, &job),
         Reply::File(asset) => {
             let _ = ui::send(&mut stream, asset);
         }
@@ -871,7 +909,11 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 Reply::Traces(k) => trace_stream(&mut stream, ctx, k),
                 Reply::AllTraces => all_traces_stream(&mut stream, ctx),
                 Reply::Values => value_stream(&mut stream, ctx),
-                Reply::Once(_) | Reply::Chat(_) | Reply::Explain(_) | Reply::File(_) => Ok(()),
+                Reply::Once(_)
+                | Reply::Chat(_)
+                | Reply::Explain(_)
+                | Reply::Requirement(_)
+                | Reply::File(_) => Ok(()),
             };
         }
     }
@@ -973,6 +1015,17 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         && req.segments[1] == "explain"
     {
         return start_explain(req, ctx);
+    }
+    if let [api, projects, name, requirements] = req.segments.as_slice()
+        && req.method == "POST"
+        && api == "api"
+        && projects == "projects"
+        && requirements == "requirements"
+    {
+        return match requirements::start(req, ctx, name) {
+            Ok(job) => Reply::Requirement(Box::new(job)),
+            Err(r) => Reply::Once(r),
+        };
     }
     if mcp_route {
         return Reply::Once(mcp::post(req, ctx));
@@ -1234,7 +1287,10 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
+        ("POST", ["api", "market", "list"]) => return market::list(req, ctx),
+        ("POST", ["api", "market", "install"]) => return market::install(req, ctx),
         ("POST", ["api", "dropins"]) => return dropin::post(req, ctx),
+        ("POST", ["api", "devices", "discover"]) => return discover::post(req, ctx),
         ("POST", ["api", "devices", name, "browse"]) => return dropin::browse(req, ctx, name),
         ("POST", ["api", "proposals", "check"]) => return check_only(req, ctx),
         ("POST", ["api", "proposals", "replay"]) => return replay_draft(req, ctx),
@@ -1286,8 +1342,11 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
         | ["api", "chat" | "explain" | "bundles" | "login" | "logout"]
+        | ["api", "devices", "discover"]
+        | ["api", "market", "list" | "install"]
         | ["api", "devices", _, "browse"] => Some("POST"),
         ["api"]
+        | ["api", "devices", "library"]
         | [
             "api",
             "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
@@ -1606,6 +1665,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         },
         ["api", "outputs"] => Response::json(200, &render::outputs(c, &view)),
         ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices)),
+        ["api", "devices", "library"] => discover::library(req, ctx),
         ["api", "io_map"] => io_map(ctx),
         ["api", "proposals"] => Response::json(
             200,
@@ -1755,6 +1815,8 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
             e("GET", "/api/snapshots/{id}/bundle", false, "that snapshot as an unsigned bundle file (sign it off the box)"),
             e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
+            e("POST", "/api/market/list", true, "{index}: the signed marketplace index at that URL, verified against the trusted publishers, and its bundles"),
+            e("POST", "/api/market/install", true, "{index, name, version?}: that bundle fetched from the index's site, checked against the index, then imported as POST /api/bundles"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: as apply, checked against the policy"),
             e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
@@ -1778,6 +1840,8 @@ fn index(agent: bool) -> Json {
             e("PUT", "/api/projects/{p}/files/{f}", true, "engineer session: save {text, version?} (a draft; version: what was read, null: a new file)"),
             e("DELETE", "/api/projects/{p}/files/{f}", true, "engineer session: delete a file"),
             e("POST", "/api/projects/{p}/check", true, "build the project as a deploy would: its modules and tier, or every problem with file and line; nothing changes"),
+            e("POST", "/api/projects/{p}/tests", true, "run the project's requirement tests (test_*.st) in the simulation: each passed, failed or untested (no test yet, never red), with why; nothing changes"),
+            e("POST", "/api/projects/{p}/requirements", true, "engineer session: one requirement {text, name?} (one line, 1 to 500 characters): the agent writes its test, compiled and run here, saved as a revision; offline it is written down untested. An event stream: requirement, text, tool_call, tool_result, retrying, test, done or error"),
             e("POST", "/api/projects/{p}/replay", true, "engineer session: sim replay of deploying the project (evidence for deploy)"),
             e("POST", "/api/projects/{p}/deploy", true, "engineer session: {replay?}: build, apply through the approval policy, commit a snapshot, hot-swap between scans"),
             e("GET", "/api/projects/{p}/zip", false, "the project as a .zip (its .st files, io.map, project.settings)"),
@@ -1879,10 +1943,17 @@ fn devices(d: &Devices) -> Json {
     Json::Array(
         d.list()
             .into_iter()
-            .map(|(name, state)| match state {
-                None => json!({ "name": name, "state": "unknown" }),
-                Some(Ok(())) => json!({ "name": name, "state": "up" }),
-                Some(Err(why)) => json!({ "name": name, "state": "down", "error": why }),
+            .map(|(name, state)| {
+                let mut j = match state {
+                    None => json!({ "name": name, "state": "unknown" }),
+                    Some(Ok(())) => json!({ "name": name, "state": "up" }),
+                    Some(Err(why)) => json!({ "name": name, "state": "down", "error": why }),
+                };
+                // Where the link found its device, once its driver said.
+                if let Some(a) = d.address(&name) {
+                    j["address"] = json!(a);
+                }
+                j
             })
             .collect(),
     )

@@ -26,7 +26,9 @@
 //! left out and listed in [`Project::skipped`], so a tag called "ignore
 //! previous instructions" never reaches anything that treats it as a name.
 
-use std::fmt::Write as _;
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+use core::fmt::Write as _;
 
 use crate::lexer::Pos;
 use crate::xml::{self, Element};
@@ -43,6 +45,8 @@ pub const MAX_DESCRIPTION: usize = 1000;
 pub const MAX_TEXT: usize = 8000;
 /// Longest alias target or dimension list.
 const MAX_REF: usize = 200;
+/// Characters of a task's `Rate` kept as exported ([`Task::rate`]).
+pub const MAX_RATE_TEXT: usize = 32;
 /// Most entries in [`Project::skipped`]; the rest are only counted.
 pub const MAX_SKIPPED: usize = 200;
 
@@ -53,8 +57,8 @@ pub struct Error {
     pub msg: String,
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}: {}", self.pos, self.msg)
     }
 }
@@ -223,8 +227,13 @@ pub struct Task {
     pub name: String,
     /// `CONTINUOUS`, `PERIODIC` or `EVENT`.
     pub kind: Option<String>,
-    /// `Rate` of a periodic task, ms.
+    /// `Rate`, when it is a whole number of ms (RM014 p.313 allows
+    /// 1.000 to 2,000,000.000, three decimals; `10` and `10.000` both read
+    /// as 10). Anything else (`2.5`, `-5`, `1e9`, absent) is `None`.
     pub rate_ms: Option<u32>,
+    /// `Rate` as exported, clipped to [`MAX_RATE_TEXT`] characters, for a
+    /// message about one that does not read.
+    pub rate: Option<String>,
     pub programs: Vec<String>,
 }
 
@@ -587,8 +596,8 @@ impl Cx {
             .attr("Type")
             .filter(|t| matches!(*t, "CONTINUOUS" | "PERIODIC" | "EVENT"))
             .map(str::to_string);
-        // Rates are whole ms in exports; anything else is reported as absent.
-        let rate_ms = e.attr("Rate").and_then(|r| r.trim().parse::<u32>().ok());
+        let rate_ms = e.attr("Rate").and_then(whole_ms);
+        let rate = e.attr("Rate").map(|r| clip(r, MAX_RATE_TEXT));
         let programs = e
             .child("ScheduledPrograms")
             .into_iter()
@@ -599,9 +608,22 @@ impl Cx {
             name,
             kind,
             rate_ms,
+            rate,
             programs,
         })
     }
+}
+
+/// A task's `Rate` as whole ms: digits, then optionally `.` and zeros
+/// (RM014 p.313: three decimals). Signs, exponents, a fraction and values
+/// past `u32` are `None`.
+fn whole_ms(r: &str) -> Option<u32> {
+    let r = r.trim();
+    let (int, frac) = r.split_once('.').unwrap_or((r, ""));
+    if int.is_empty() || !int.bytes().all(|c| c.is_ascii_digit()) || !frac.bytes().all(|c| c == b'0') {
+        return None;
+    }
+    int.parse().ok()
 }
 
 /// `Dimensions="10"`, `"2 3"`, `"4,5"`; absent or `"0"` for a scalar.

@@ -18,8 +18,9 @@ a while, or when it is a day old.
 Deploy on a box goes through its **approval policy**: a change the policy
 calls small lands at once; a larger one, a logic change, is held as a
 proposal until an approver signs it off, with a replay in the simulation
-to look at first. The ⋯ menu lists proposals waiting; the header's ⋯
-badge counts them. Nothing runs on the box that was not approved under
+to look at first. The header's yellow **waiting** badge counts the
+proposals waiting and opens the Proposals screen that lists them.
+Nothing runs on the box that was not approved under
 the policy, and every change is in the box's audit log.
 
 The first install of a box seeds a project but runs nothing: an engineer
@@ -34,6 +35,11 @@ FORCED in the warning colour on its block and in the I/O panel, a banner
 lists every force with a release for each and for all, and forces end
 when you sign out or deploy. Forcing is for commissioning and
 troubleshooting; the audit log records each one.
+
+From the keyboard: pick the input's block and press <kbd>Ctrl</kbd>
+<kbd>Shift</kbd> <kbd>F</kbd> to force it (a BOOL flips, a number's
+field opens for the value), and <kbd>Ctrl</kbd> <kbd>Shift</kbd>
+<kbd>U</kbd> releases every force. Both are in the Edit menu.
 
 ## The trend
 
@@ -59,9 +65,11 @@ on a tile goes to that level in the Editor. An engineer can turn on
 **Scan detail** (View) to see each program's scan period and counts;
 they are hidden otherwise.
 
+![The Monitor: a tile per program with its state, and a tile of its outputs.](img/monitor.png)
+
 ## HTTPS
 
 A box serves HTTPS with a certificate it made at first boot; the browser
 asks once. The certificate's fingerprint is printed at the box's startup
-and shown in the ⋯ menu, so you can compare the two. From the box's own
+and shown in Help › About, so you can compare the two. From the box's own
 host, plain HTTP still works for scripts.

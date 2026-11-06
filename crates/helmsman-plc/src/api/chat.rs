@@ -79,6 +79,14 @@ pub struct Setup {
     pub explain_agent: Option<String>,
     /// What one explanation may cost.
     pub explain_budget: Budget,
+    /// The agent version `POST /api/projects/{p}/requirements` asks the
+    /// relay for (a tests profile whose one tool is `submit_test`);
+    /// `None`: the chat's version. The box runs only `submit_test` for
+    /// it either way ([`super::requirements`]).
+    pub tests_agent: Option<String>,
+    /// What writing one requirement's test may cost (its turns bound the
+    /// resubmissions).
+    pub tests_budget: Budget,
     /// How often the relay is probed while the agent is not online.
     pub probe_every: Duration,
 }
@@ -96,6 +104,8 @@ impl Setup {
             idle: Duration::from_secs(3600),
             explain_agent: None,
             explain_budget: super::explain::budget(),
+            tests_agent: None,
+            tests_budget: super::requirements::budget(),
             probe_every: Duration::from_secs(15),
         }
     }
@@ -153,6 +163,15 @@ pub struct Chat {
     next: AtomicU64,
     running: AtomicUsize,
     link: Arc<Mutex<Link>>,
+}
+
+impl Chat {
+    /// The relay this box talks to, for the one tool the relay runs
+    /// (`fetch_document`, from an MCP client).
+    #[must_use]
+    pub fn relay(&self) -> &relay::Config {
+        &self.setup.relay
+    }
 }
 
 impl std::fmt::Debug for Chat {
@@ -302,11 +321,11 @@ impl Chat {
         lock(&self.link).state
     }
 
-    fn online(&self) {
+    pub(super) fn online(&self) {
         set(&self.link, State::Online, None);
     }
 
-    fn offline(&self, e: &relay::Error) {
+    pub(super) fn offline(&self, e: &relay::Error) {
         set(
             &self.link,
             State::Offline,
@@ -582,6 +601,35 @@ impl Chat {
             retry: self.setup.retry,
             limits: self.setup.limits,
         }
+    }
+
+    /// The agent the requirement route runs: the tests profile's version,
+    /// the tests budget. Its one tool runs in process
+    /// ([`helmsman_agent::Agent::chat_local`]).
+    pub(super) fn tests_agent(&self) -> Agent {
+        let mut relay = self.setup.relay.clone();
+        if let Some(v) = &self.setup.tests_agent {
+            relay.version.clone_from(v);
+        }
+        Agent {
+            relay,
+            api: self.api.clone(),
+            budget: self.setup.tests_budget,
+            retry: self.setup.retry,
+            limits: self.setup.limits,
+        }
+    }
+
+    /// Probes the relay once when the agent is offline; whether it is
+    /// offline after.
+    pub(super) fn still_offline(&self) -> bool {
+        if self.state() == State::Offline {
+            match relay::probe(&self.setup.relay) {
+                Ok(()) => self.online(),
+                Err(e) => self.offline(&e),
+            }
+        }
+        self.state() == State::Offline
     }
 
     pub(super) fn slot(&self) -> Option<Running<'_>> {

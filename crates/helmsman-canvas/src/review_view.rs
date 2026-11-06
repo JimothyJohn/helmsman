@@ -18,7 +18,9 @@ use crate::review::{
     Answer, Call, Chart, Delta, Drawn, Open, Phase, ROLES, Refusal, Replay, Request, Review, SignalChart,
     Step, Target, Track, Why,
 };
-use crate::st_view::brand::{BLACK, GRAPHITE, PANEL, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, YELLOW};
+use crate::theme::{Theme, theme};
+use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 /// Removed lines and ghost blocks.
@@ -90,11 +92,11 @@ impl Default for ReviewView {
 /// The tier badge's colours: output-affecting in the hazard pair
 /// (black on yellow), logic black on white, param white on graphite.
 #[must_use]
-pub fn tier_colors(tier: &str) -> (Color32, Color32) {
+pub fn tier_colors(t: &Theme, tier: &str) -> (Color32, Color32) {
     match tier {
         "output-affecting" => (YELLOW, BLACK),
-        "logic" => (WHITE, BLACK),
-        _ => (GRAPHITE, WHITE),
+        "logic" => (t.fg, t.bg),
+        _ => (t.rule, t.fg),
     }
 }
 
@@ -194,10 +196,9 @@ impl ReviewView {
     }
 
     fn left(&mut self, ui: &mut egui::Ui) {
-        ui.heading(RichText::new("Proposals").color(YELLOW));
-        ui.label(
-            RichText::new("drafts the agent made; approving one goes through the box's policy").color(STEEL),
-        );
+        let t = theme(ui);
+        ui.heading(RichText::new("Proposals").color(t.accent))
+            .tip("Drafts the agent made. Approving one goes through the box's policy.");
         ui.separator();
         self.login_ui(ui);
         ui.separator();
@@ -207,13 +208,15 @@ impl ReviewView {
     /// Who is approving: signed in, or the way in this box takes (a user
     /// and password with accounts, else a role and its PIN).
     pub fn login_ui(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Signed in").strong());
+        let t = theme(ui);
+        ui.label(RichText::new("Signed in").strong()).tip(SESSION);
         if let Some(who) = self.state.signed_in() {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("● {who}")).color(YELLOW));
+                ui.label(RichText::new(format!("● {who}")).color(t.accent))
+                    .tip("Approvals and edits are made as this user.");
                 let out = ui
                     .button("Sign out")
-                    .on_hover_text("end the session now, here and on the box");
+                    .tip("Ends the session now, here and on the box (Ctrl+F8).");
                 self.rects.push(("logout".into(), out.rect));
                 if out.clicked() {
                     self.state.logout();
@@ -223,7 +226,7 @@ impl ReviewView {
         }
         let go = match self.state.credentials() {
             None => {
-                ui.label(RichText::new("asking the box how to sign in…").color(STEEL));
+                ui.label(RichText::new("asking the box how to sign in…").color(t.muted));
                 return;
             }
             Some("unavailable") => {
@@ -251,30 +254,31 @@ impl ReviewView {
         if let Some(p) = &self.state.login_problem {
             ui.colored_label(RED, p);
         }
-        ui.label(
-            RichText::new("The box keeps the session (1 h, or 15 min unused) in a cookie this page cannot read; signing out ends it on the box. Approvals are made as who is signed in.")
-                .small()
-                .color(STEEL),
-        );
     }
 
     /// A user name and masked password; whether "Sign in" was asked for.
     fn account_fields(&mut self, ui: &mut egui::Ui) -> bool {
-        let user = ui.add(
-            egui::TextEdit::singleline(&mut self.user_input)
-                .hint_text("user")
-                .desired_width(f32::INFINITY),
-        );
+        let user = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.user_input)
+                    .hint_text("user")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("Your user name on this box.");
         self.rects.push(("user".into(), user.rect));
-        let pass = ui.add(
-            egui::TextEdit::singleline(&mut self.password_input)
-                .password(true)
-                .hint_text("password")
-                .desired_width(f32::INFINITY),
-        );
+        let pass = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.password_input)
+                    .password(true)
+                    .hint_text("password")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("Your password. Enter signs in.");
         self.rects.push(("password".into(), pass.rect));
         let enter = pass.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let go = ui.add_enabled(!self.state.logging_in, egui::Button::new("Sign in"));
+        let go = ui
+            .add_enabled(!self.state.logging_in, egui::Button::new("Sign in"))
+            .tip(sign_in_tip(self.state.logging_in));
         self.rects.push(("login".into(), go.rect));
         go.clicked() || enter
     }
@@ -283,27 +287,39 @@ impl ReviewView {
     fn pin_fields(&mut self, ui: &mut egui::Ui) -> bool {
         ui.horizontal_wrapped(|ui| {
             for r in ROLES {
-                let b = ui.selectable_value(&mut self.role_input, r.to_string(), r);
+                let b = ui
+                    .selectable_value(&mut self.role_input, r.to_string(), r)
+                    .tip(format!("Sign in as {r}, with that role's PIN."));
                 self.rects.push((format!("role {r}"), b.rect));
             }
         });
-        let pin = ui.add(
-            egui::TextEdit::singleline(&mut self.pin_input)
-                .password(true)
-                .hint_text("PIN")
-                .desired_width(f32::INFINITY),
-        );
+        let pin = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.pin_input)
+                    .password(true)
+                    .hint_text("PIN")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("The role's PIN. Enter signs in.");
         self.rects.push(("pin".into(), pin.rect));
         let enter = pin.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let go = ui.add_enabled(!self.state.logging_in, egui::Button::new("Sign in"));
+        let go = ui
+            .add_enabled(!self.state.logging_in, egui::Button::new("Sign in"))
+            .tip(sign_in_tip(self.state.logging_in));
         self.rects.push(("login".into(), go.rect));
         go.clicked() || enter
     }
 
     fn drafts_ui(&mut self, ui: &mut egui::Ui) {
+        let t = theme(ui);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Drafts").strong());
-            if ui.small_button("Refresh").clicked() {
+            ui.label(RichText::new("Drafts").strong())
+                .tip("The box's proposals, newest last. Click one to review it.");
+            if ui
+                .small_button("Refresh")
+                .tip("Asks the box for its proposals again.")
+                .clicked()
+            {
                 self.state.refresh();
             }
         });
@@ -311,17 +327,19 @@ impl ReviewView {
             ui.colored_label(RED, e);
         }
         if self.state.list.is_empty() {
-            ui.label(RichText::new("No proposals on this box.").color(STEEL));
+            ui.label(RichText::new("No proposals on this box.").color(t.muted));
         }
         let mut chosen = None;
         let open = self.state.open.as_ref().map(|o| o.id);
         for r in &self.state.list {
             ui.horizontal_wrapped(|ui| {
-                if let Some(t) = &r.tier {
-                    badge(ui, t, tier_colors(t));
+                if let Some(tier) = &r.tier {
+                    badge(ui, tier, tier_colors(&t, tier));
                 }
                 let text = RichText::new(format!("#{} {} · {}", r.id, r.title, r.status)).monospace();
-                let row = ui.selectable_label(open == Some(r.id), text);
+                let row = ui
+                    .selectable_label(open == Some(r.id), text)
+                    .tip("Click to review this proposal.");
                 self.rects.push((format!("row {}", r.id), row.rect));
                 if row.clicked() {
                     chosen = Some(r.id);
@@ -336,11 +354,12 @@ impl ReviewView {
     }
 
     fn center(&mut self, ui: &mut egui::Ui, now: f64) {
+        let t = theme(ui);
         let signed_in = self.state.signed_in();
         let Some(o) = self.state.open.as_mut() else {
             ui.add_space(40.0);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new("Pick a proposal to review it.").color(STEEL));
+                ui.label(RichText::new("Pick a proposal to review it.").color(t.muted));
             });
             return;
         };
@@ -354,9 +373,9 @@ impl ReviewView {
                         .monospace()
                         .strong(),
                 );
-                ui.label(RichText::new(&p.from).monospace().color(STEEL));
+                ui.label(RichText::new(&p.from).monospace().color(t.muted));
                 ui.label(RichText::new("→").monospace());
-                ui.label(RichText::new(&p.to).monospace().color(YELLOW).strong());
+                ui.label(RichText::new(&p.to).monospace().color(t.accent).strong());
             });
             let range = match (&p.min, &p.max) {
                 (Some(lo), Some(hi)) => format!("declared range {lo} .. {hi}"),
@@ -364,7 +383,7 @@ impl ReviewView {
                 (None, Some(hi)) => format!("declared maximum {hi}"),
                 (None, None) => "no declared range".into(),
             };
-            ui.label(RichText::new(range).color(STEEL));
+            ui.label(RichText::new(range).color(t.muted));
         }
         if !o.manifest.is_empty() {
             section(ui, "Manifest");
@@ -373,7 +392,7 @@ impl ReviewView {
         if o.json["kind"] == "module" {
             section(ui, "Source");
             if o.current.is_none() {
-                ui.label(RichText::new("loading what runs now…").color(STEEL));
+                ui.label(RichText::new("loading what runs now…").color(t.muted));
             } else {
                 source(ui, &o.lines);
             }
@@ -394,8 +413,7 @@ impl ReviewView {
         section(ui, "Approve");
         approve_ui(ui, o, now, &mut out);
         if let Some(u) = o.undo.as_mut() {
-            section(ui, "Undo");
-            ui.label("Roll back to what ran before, through the same approval check.");
+            section(ui, "Undo").tip("Roll back to what ran before, through the same approval check.");
             replay_ui(ui, u, &mut out);
             step_ui(ui, u, now, "Undo", &mut out);
         }
@@ -410,7 +428,7 @@ impl ReviewView {
                     h["kind"]["kind"].as_str().unwrap_or("?")
                 ))
                 .monospace()
-                .color(STEEL),
+                .color(t.muted),
             );
         }
         self.rects.extend(out.rects);
@@ -438,9 +456,24 @@ struct Out {
     signed_in: Option<String>,
 }
 
-fn section(ui: &mut egui::Ui, title: &str) {
+/// What the session note under the sign-in said, now the heading's tooltip.
+const SESSION: &str = "The box keeps the session (1 h, or 15 min unused) in a cookie this page \
+                       cannot read; signing out ends it on the box. Approvals are made as who \
+                       is signed in.";
+
+/// The Sign in button's tooltip.
+const fn sign_in_tip(busy: bool) -> &'static str {
+    if busy {
+        "Signing in: waiting for the box."
+    } else {
+        "Signs in to this box (Alt+F8)."
+    }
+}
+
+fn section(ui: &mut egui::Ui, title: &str) -> egui::Response {
+    let t = theme(ui);
     ui.add_space(10.0);
-    ui.label(RichText::new(title.to_uppercase()).strong().color(YELLOW));
+    ui.label(RichText::new(title.to_uppercase()).strong().color(t.accent))
 }
 
 fn short_id(s: &str) -> String {
@@ -448,10 +481,11 @@ fn short_id(s: &str) -> String {
 }
 
 fn header(ui: &mut egui::Ui, o: &Open) {
+    let t = theme(ui);
     ui.horizontal_wrapped(|ui| {
         match o.tier() {
-            Some(t) => badge(ui, t, tier_colors(t)),
-            None => badge(ui, "no tier", (GRAPHITE, WHITE)),
+            Some(tier) => badge(ui, tier, tier_colors(&t, tier)),
+            None => badge(ui, "no tier", (t.rule, t.fg)),
         }
         let title = match o.json["kind"].as_str() {
             Some("module") => format!(
@@ -471,12 +505,12 @@ fn header(ui: &mut egui::Ui, o: &Open) {
                 o.json["param"].as_str().unwrap_or("?")
             ),
         };
-        ui.label(RichText::new(title).heading().color(WHITE));
+        ui.label(RichText::new(title).heading().color(t.fg));
         if o.json["touches_outputs"] == true {
             badge(ui, "drives outputs", (YELLOW, BLACK));
         }
         if o.applied() {
-            badge(ui, "applied", (WHITE, BLACK));
+            badge(ui, "applied", (t.fg, t.bg));
         }
     });
     if o.tier().is_none() {
@@ -486,7 +520,7 @@ fn header(ui: &mut egui::Ui, o: &Open) {
         );
     }
     for r in o.reasons() {
-        ui.label(RichText::new(format!("· {r}")).color(STEEL));
+        ui.label(RichText::new(format!("· {r}")).color(t.muted));
     }
     if let Some((role, replay)) = o.needs() {
         let what = if replay {
@@ -497,14 +531,19 @@ fn header(ui: &mut egui::Ui, o: &Open) {
         ui.label(RichText::new(what).strong());
     }
     if let Some(n) = o.json["note"].as_str() {
-        ui.label(RichText::new(format!("Agent's note: {n}")).italics().color(STEEL));
+        ui.label(
+            RichText::new(format!("Agent's note: {n}"))
+                .italics()
+                .color(t.muted),
+        );
     }
     if let Some(a) = o.json["manifest"]["author"].as_str() {
-        ui.label(RichText::new(format!("by {a}")).small().color(STEEL));
+        ui.label(RichText::new(format!("by {a}")).small().color(t.muted));
     }
 }
 
 fn manifest(ui: &mut egui::Ui, o: &Open) {
+    let t = theme(ui);
     egui::Grid::new("manifest").striped(true).show(ui, |ui| {
         for r in &o.manifest {
             let mark = match r.delta {
@@ -515,12 +554,12 @@ fn manifest(ui: &mut egui::Ui, o: &Open) {
             };
             let hot = r.output && r.delta != Delta::Same;
             let color = match r.delta {
-                Delta::Same => STEEL,
+                Delta::Same => t.muted,
                 Delta::Removed => GONE,
-                _ => WHITE,
+                _ => t.fg,
             };
             ui.label(RichText::new(mark).monospace().strong().color(color));
-            ui.label(RichText::new(r.field).monospace().color(STEEL));
+            ui.label(RichText::new(r.field).monospace().color(t.muted));
             if hot {
                 badge(ui, &r.name, (YELLOW, BLACK));
             } else {
@@ -535,7 +574,7 @@ fn manifest(ui: &mut egui::Ui, o: &Open) {
             };
             ui.label(RichText::new(text).monospace().color(color));
             if hot {
-                ui.label(RichText::new("can move an output").small().color(YELLOW));
+                ui.label(RichText::new("can move an output").small().color(t.accent));
             } else {
                 ui.label("");
             }
@@ -547,8 +586,9 @@ fn manifest(ui: &mut egui::Ui, o: &Open) {
 /// The source diff, changed lines with a few lines of context around them.
 fn source(ui: &mut egui::Ui, lines: &[Line]) {
     const CONTEXT: usize = 3;
+    let t = theme(ui);
     if lines.iter().all(|l| !l.is_change()) {
-        ui.label(RichText::new("The source is unchanged.").color(STEEL));
+        ui.label(RichText::new("The source is unchanged.").color(t.muted));
         return;
     }
     let near: Vec<bool> = (0..lines.len())
@@ -559,23 +599,23 @@ fn source(ui: &mut egui::Ui, lines: &[Line]) {
         })
         .collect();
     egui::Frame::new()
-        .fill(BLACK)
+        .fill(t.bg)
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
             let mut skipped = false;
             for (k, l) in lines.iter().enumerate() {
                 if !near[k] {
                     if !skipped {
-                        ui.label(RichText::new("   ⋯").monospace().color(STEEL));
+                        ui.label(RichText::new("   ⋯").monospace().color(t.muted));
                     }
                     skipped = true;
                     continue;
                 }
                 skipped = false;
                 let (gutter, fg, bg) = match l {
-                    Line::Same { new, .. } => (format!("{new:>4}  "), STEEL, None),
+                    Line::Same { new, .. } => (format!("{new:>4}  "), t.muted, None),
                     Line::Added { new, .. } => (format!("{new:>4} +"), BLACK, Some(YELLOW)),
-                    Line::Removed { old, .. } => (format!("{old:>4} −"), WHITE, Some(GRAPHITE)),
+                    Line::Removed { old, .. } => (format!("{old:>4} −"), t.fg, Some(t.rule)),
                 };
                 let mut t = RichText::new(format!("{gutter} {}", l.text()))
                     .monospace()
@@ -592,19 +632,34 @@ fn source(ui: &mut egui::Ui, lines: &[Line]) {
 }
 
 fn diagram(ui: &mut egui::Ui, d: &Drawn, pou: &mut usize, cam: &mut Cam) {
+    let t = theme(ui);
     let (added, removed, changed) = d.diff.counts();
     ui.label(format!(
-        "{added} block(s) added, {changed} changed, {removed} removed (shown as ghosts below the diagram)"
-    ));
+        "{added} block(s) added, {changed} changed, {removed} removed"
+    ))
+    .tip(
+        "Yellow: added. Yellow outline: changed. Dashed grey, below the diagram: removed. \
+         Drag to pan, pinch to zoom, double-click to fit.",
+    );
     if d.diff.is_empty() {
-        ui.label(RichText::new("The diagram is unchanged.").color(STEEL));
+        ui.label(RichText::new("The diagram is unchanged.").color(t.muted));
     }
     let names: Vec<String> = d.new.pous.iter().map(|p| p.name.clone()).collect();
     let changed_pous = d.diff.pous();
     ui.horizontal_wrapped(|ui| {
         for (k, n) in names.iter().enumerate() {
             let mark = if changed_pous.contains(n) { " •" } else { "" };
-            if ui.selectable_label(*pou == k, format!("{n}{mark}")).clicked() && *pou != k {
+            let tip = if mark.is_empty() {
+                "Shows this POU's diagram."
+            } else {
+                "Shows this POU's diagram. • : the change touches it."
+            };
+            if ui
+                .selectable_label(*pou == k, format!("{n}{mark}"))
+                .tip(tip)
+                .clicked()
+                && *pou != k
+            {
                 *pou = k;
                 cam.fitted = false;
             }
@@ -648,21 +703,16 @@ fn diagram(ui: &mut egui::Ui, d: &Drawn, pou: &mut usize, cam: &mut Cam) {
         cam.fitted = false;
     }
     let painter = ui.painter_at(area);
-    painter.rect_filled(area, CornerRadius::ZERO, BLACK);
+    painter.rect_filled(area, CornerRadius::ZERO, t.bg);
     let marks = Marks {
         added: d.diff.new_nodes(&p.name, Change::Added),
         changed: d.diff.new_nodes(&p.name, Change::Changed),
         regions: d.diff.new_regions(&p.name),
     };
-    draw_diff(&painter, area, *cam, &p.diagram, &marks);
+    draw_diff(&painter, &t, area, *cam, &p.diagram, &marks);
     if let Some(o) = old {
         draw_ghosts(&painter, *cam, o, &ghosts, &ghost_wires, p.diagram.size.1);
     }
-    ui.label(
-        RichText::new("yellow: added · yellow outline: changed · dashed grey: removed · drag to pan, pinch to zoom, double-click to fit")
-            .small()
-            .color(STEEL),
-    );
 }
 
 /// What to highlight in the proposed diagram.
@@ -676,7 +726,7 @@ fn font(z: f32, size: f32) -> FontId {
     FontId::monospace(size * z)
 }
 
-fn draw_diff(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, m: &Marks) {
+fn draw_diff(painter: &egui::Painter, t: &Theme, area: Rect, cam: Cam, d: &Diagram, m: &Marks) {
     let z = cam.zoom;
     let text = z > 0.35;
     for r in &d.regions {
@@ -684,7 +734,7 @@ fn draw_diff(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, m: &Mar
         let hot = m.regions.iter().find(|(id, _)| *id == r.id).map(|(_, c)| *c);
         let (stroke, width) = match hot {
             Some(_) => (YELLOW, 2.0),
-            None => (STEEL.gamma_multiply(0.6), 1.0),
+            None => (t.muted.gamma_multiply(0.6), 1.0),
         };
         painter.rect_stroke(
             rect,
@@ -702,7 +752,7 @@ fn draw_diff(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, m: &Mar
                     Align2::RIGHT_CENTER,
                     tag,
                     font(z, 10.0),
-                    YELLOW,
+                    t.accent,
                 );
             }
         }
@@ -712,7 +762,7 @@ fn draw_diff(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, m: &Mar
         let (ax, ay) = out_port(a, w.out);
         let (bx, by) = in_port(b, w.inp);
         let hot = m.added.contains(&w.to) || m.added.contains(&w.from);
-        let color = if hot { YELLOW } else { STEEL.gamma_multiply(0.8) };
+        let color = if hot { YELLOW } else { t.muted.gamma_multiply(0.8) };
         painter.line_segment(
             [cam.to_screen(ax, ay), cam.to_screen(bx, by)],
             Stroke::new(1.4 * z, color),
@@ -726,11 +776,11 @@ fn draw_diff(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, m: &Mar
         let added = m.added.contains(&n.id);
         let changed = m.changed.contains(&n.id);
         let (head, ink, body) = if added {
-            (YELLOW, BLACK, PANEL)
+            (YELLOW, BLACK, t.panel)
         } else if changed {
-            (GRAPHITE, WHITE, PANEL)
+            (t.rule, t.fg, t.panel)
         } else {
-            (GRAPHITE.gamma_multiply(0.7), STEEL, PANEL.gamma_multiply(0.8))
+            (t.rule.gamma_multiply(0.7), t.muted, t.panel.gamma_multiply(0.8))
         };
         painter.rect_filled(r, CornerRadius::same(4), body);
         let h = Rect::from_min_size(r.min, Vec2::new(r.width(), HEADER * z));
@@ -738,7 +788,7 @@ fn draw_diff(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, m: &Mar
         let outline = if added || changed {
             Stroke::new(2.5 * z, YELLOW)
         } else {
-            Stroke::new(1.0 * z, Color32::from_black_alpha(200))
+            Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, CornerRadius::same(4), outline, StrokeKind::Outside);
         if text {
@@ -749,7 +799,7 @@ fn draw_diff(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, m: &Mar
                     Align2::RIGHT_BOTTOM,
                     "changed",
                     font(z, 9.5),
-                    YELLOW,
+                    t.accent,
                 );
             } else if added {
                 painter.text(
@@ -757,7 +807,7 @@ fn draw_diff(painter: &egui::Painter, area: Rect, cam: Cam, d: &Diagram, m: &Mar
                     Align2::RIGHT_BOTTOM,
                     "new",
                     font(z, 9.5),
-                    YELLOW,
+                    t.accent,
                 );
             }
         }
@@ -824,11 +874,12 @@ fn draw_ghosts(
 }
 
 fn refusal_ui(ui: &mut egui::Ui, r: &Refusal, now: f64) {
+    let t = theme(ui);
     egui::Frame::new()
-        .fill(PANEL)
+        .fill(t.panel)
         .stroke(Stroke::new(
             1.0,
-            if r.why == Why::Locked { YELLOW } else { STEEL },
+            if r.why == Why::Locked { YELLOW } else { t.muted },
         ))
         .inner_margin(egui::Margin::same(8))
         .show(ui, |ui| {
@@ -840,7 +891,7 @@ fn refusal_ui(ui: &mut egui::Ui, r: &Refusal, now: f64) {
             ui.label(
                 RichText::new(format!("{code}the box said: {}", r.error))
                     .monospace()
-                    .color(WHITE),
+                    .color(t.fg),
             );
             ui.label(&r.hint);
             if let Some(at) = r.retry_at {
@@ -849,16 +900,17 @@ fn refusal_ui(ui: &mut egui::Ui, r: &Refusal, now: f64) {
                     ui.label(
                         RichText::new(format!("PIN entry opens again in {left:.0} s"))
                             .strong()
-                            .color(YELLOW),
+                            .color(t.accent),
                     );
                 } else {
-                    ui.label(RichText::new("PIN entry is open again.").color(STEEL));
+                    ui.label(RichText::new("PIN entry is open again.").color(t.muted));
                 }
             }
         });
 }
 
 fn replay_ui(ui: &mut egui::Ui, step: &Step, out: &mut Out) {
+    let t = theme(ui);
     let running = matches!(step.replay, Replay::Running);
     let label = match step.replay {
         Replay::Done(_) => "Replay again",
@@ -867,14 +919,18 @@ fn replay_ui(ui: &mut egui::Ui, step: &Step, out: &mut Out) {
     ui.horizontal_wrapped(|ui| {
         let b = ui
             .add_enabled(!running, egui::Button::new(label))
-            .on_hover_text("the box replays what runs and this change over its recorded window");
+            .tip(if running {
+                "The replay is running."
+            } else {
+                "The box replays what runs and this change over its recorded inputs."
+            });
         out.rects.push((format!("replay {:?}", step.target), b.rect));
         if b.clicked() {
             out.act.push(Act::Replay(step.target.clone()));
         }
         if running {
             ui.spinner();
-            ui.label(RichText::new("replaying…").color(STEEL));
+            ui.label(RichText::new("replaying…").color(t.muted));
         }
     });
     match &step.replay {
@@ -885,18 +941,20 @@ fn replay_ui(ui: &mut egui::Ui, step: &Step, out: &mut Out) {
 }
 
 fn approve_ui(ui: &mut egui::Ui, o: &mut Open, now: f64, out: &mut Out) {
+    let t = theme(ui);
     if o.tier().is_none() {
-        ui.label(RichText::new("Not applicable on this box.").color(STEEL));
+        ui.label(RichText::new("Not applicable on this box.").color(t.muted));
         return;
     }
     if o.json["status"] == "applied" && !matches!(o.step.phase, Phase::Applied(_)) {
-        ui.label(RichText::new("Already applied.").color(STEEL));
+        ui.label(RichText::new("Already applied.").color(t.muted));
         return;
     }
     step_ui(ui, &mut o.step, now, "Approve and apply", out);
 }
 
 fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut Out) {
+    let t = theme(ui);
     if let Phase::Applied(a) = &step.phase {
         egui::Frame::new()
             .fill(YELLOW)
@@ -925,13 +983,25 @@ fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut O
     let mut go = false;
     ui.horizontal_wrapped(|ui| {
         match &out.signed_in {
-            Some(who) => ui.label(RichText::new(format!("as {who}")).color(STEEL)),
-            None => ui.label(RichText::new("Sign in (left) to approve.").color(STEEL)),
+            Some(who) => ui.label(RichText::new(format!("as {who}")).color(t.muted)),
+            None => ui.label(RichText::new("not signed in").color(t.muted)),
+        }
+        .tip("Approvals are made as who is signed in.");
+        let why = if out.signed_in.is_none() {
+            format!("Sign in (left) to {}.", verb.to_ascii_lowercase())
+        } else if let Some(left) = locked {
+            format!("The box refuses for now: try again in {left} s.")
+        } else if sending {
+            "Waiting for the box's answer.".to_string()
+        } else {
+            format!("{verb}: the box checks its approval policy first.")
         };
-        let button = ui.add_enabled(
-            out.signed_in.is_some() && locked.is_none() && !sending,
-            egui::Button::new(RichText::new(verb).strong()),
-        );
+        let button = ui
+            .add_enabled(
+                out.signed_in.is_some() && locked.is_none() && !sending,
+                egui::Button::new(RichText::new(verb).strong()),
+            )
+            .tip(why);
         out.rects.push((format!("go {:?}", step.target), button.rect));
         go = button.clicked();
         if sending {
@@ -942,7 +1012,7 @@ fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut O
         ui.label(
             RichText::new(format!("cites replay #{}", c.id))
                 .small()
-                .color(STEEL),
+                .color(t.muted),
         );
     }
     if go {
@@ -956,13 +1026,14 @@ fn step_ui(ui: &mut egui::Ui, step: &mut Step, now: f64, verb: &str, out: &mut O
 /// The replay, one chart per signal: what runs (steel) against the
 /// proposal (yellow), rises marked, the box's summary above each.
 fn chart(ui: &mut egui::Ui, c: &Chart) {
+    let t = theme(ui);
     let secs = (c.end_ms.saturating_sub(c.start_ms)) as f64 / 1000.0;
-    ui.label(RichText::new(format!("replay #{} over {secs:.1} s of recorded inputs", c.id)).color(STEEL));
+    ui.label(RichText::new(format!("replay #{} over {secs:.1} s of recorded inputs", c.id)).color(t.muted));
     for f in &c.faults {
         ui.colored_label(RED, format!("the proposal faulted: {f}"));
     }
     if c.signals.is_empty() {
-        ui.label(RichText::new("No module drives a signal in either version.").color(STEEL));
+        ui.label(RichText::new("No module drives a signal in either version.").color(t.muted));
     }
     // Differences first; the box's order otherwise.
     let mut order: Vec<&SignalChart> = c.signals.iter().collect();
@@ -971,26 +1042,27 @@ fn chart(ui: &mut egui::Ui, c: &Chart) {
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(&s.signal).monospace().strong());
-            let t = RichText::new(s.summary());
+            let rt = RichText::new(s.summary());
             ui.label(if s.identical {
-                t.color(STEEL)
+                rt.color(t.muted)
             } else {
-                t.strong().color(WHITE)
+                rt.strong().color(t.fg)
             });
         });
         plot(ui, c, s);
     }
     ui.horizontal(|ui| {
-        swatch(ui, STEEL, "what runs now");
+        swatch(ui, t.muted, "what runs now");
         swatch(ui, YELLOW, "the proposal");
-        ui.label(RichText::new("▲ a rise (turned on)").small().color(STEEL));
+        ui.label(RichText::new("▲ a rise (turned on)").small().color(t.muted));
     });
 }
 
 fn swatch(ui: &mut egui::Ui, c: Color32, text: &str) {
+    let t = theme(ui);
     let (r, _) = ui.allocate_exact_size(Vec2::new(18.0, 4.0), Sense::hover());
     ui.painter().rect_filled(r, CornerRadius::ZERO, c);
-    ui.label(RichText::new(text).small().color(STEEL));
+    ui.label(RichText::new(text).small().color(t.muted));
 }
 
 /// The value range a plot spans.
@@ -1046,6 +1118,7 @@ pub fn step_points(t: &Track, start: u64, end: u64, rect: Rect, (lo, hi): (f64, 
 }
 
 fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
+    let t = theme(ui);
     let boolean = [&s.current, &s.proposed]
         .into_iter()
         .flatten()
@@ -1054,23 +1127,23 @@ fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
     let width = ui.available_width().max(160.0);
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, h), Sense::hover());
     let p = ui.painter_at(rect);
-    p.rect_filled(rect, CornerRadius::same(3), BLACK);
+    p.rect_filled(rect, CornerRadius::same(3), t.chart);
     let inner = rect.shrink2(Vec2::new(8.0, 10.0));
     let range = if boolean { (0.0, 1.0) } else { span(s) };
     p.line_segment(
         [inner.left_bottom(), inner.right_bottom()],
-        Stroke::new(1.0, GRAPHITE),
+        Stroke::new(1.0, t.rule),
     );
     // The proposal a little lower when both are flat on the same value, so
     // neither hides the other.
-    for (track, color, dy) in [(&s.current, STEEL, -1.5), (&s.proposed, YELLOW, 1.5)] {
-        let Some(t) = track else { continue };
-        for run in step_points(t, c.start_ms, c.end_ms, inner, range) {
+    for (track, color, dy) in [(&s.current, t.muted, -1.5), (&s.proposed, YELLOW, 1.5)] {
+        let Some(tr) = track else { continue };
+        for run in step_points(tr, c.start_ms, c.end_ms, inner, range) {
             let pts: Vec<Pos2> = run.iter().map(|q| *q + Vec2::new(0.0, dy)).collect();
             p.add(Shape::line(pts, Stroke::new(2.0, color)));
         }
         if boolean {
-            for at in t.rises() {
+            for at in tr.rises() {
                 let x = inner.left()
                     + inner.width()
                         * ((at.clamp(c.start_ms, c.end_ms) - c.start_ms) as f32
@@ -1092,13 +1165,13 @@ fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
                 ));
             }
         }
-        if t.truncated {
+        if tr.truncated {
             p.text(
                 rect.right_top() + Vec2::new(-4.0, 2.0),
                 Align2::RIGHT_TOP,
                 "chart cut short; counts are exact",
-                FontId::proportional(10.0),
-                STEEL,
+                FontId::proportional(crate::theme::MIN_TEXT),
+                t.muted,
             );
         }
     }
@@ -1107,15 +1180,15 @@ fn plot(ui: &mut egui::Ui, c: &Chart, s: &SignalChart) {
             inner.left_top(),
             Align2::LEFT_TOP,
             format!("{:.3}", range.1),
-            FontId::monospace(10.0),
-            STEEL,
+            FontId::monospace(crate::theme::MIN_TEXT),
+            t.muted,
         );
         p.text(
             inner.left_bottom(),
             Align2::LEFT_BOTTOM,
             format!("{:.3}", range.0),
-            FontId::monospace(10.0),
-            STEEL,
+            FontId::monospace(crate::theme::MIN_TEXT),
+            t.muted,
         );
     }
     let on = |ms: u64| ms as f64 / 1000.0;

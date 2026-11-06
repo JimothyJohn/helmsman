@@ -11,28 +11,36 @@
 #      the wire, not by read-back), a point past the 51-byte input assembly.
 #
 # Needs:
-#   - the E1213 on the Studio link (192.168.3.x), powered, its IP given;
+#   - the E1213 reachable from here, powered, its IP given (the bench unit:
+#     10.0.0.57 by DHCP on the office LAN, 2026-11-02);
 #   - EtherNet/IP enabled on its web console AND activated for this unit
 #     (manual pp. 3-26, 5-1); without that it ignores ListIdentity or
 #     refuses the Forward_Open;
-#   - DO-00..DO-03 wired to DI-00..DI-03 (the io-bench wiring), with field
-#     power on the DO side; other wiring: LOOPS="do:0=di:4 do:1=di:5";
+#   - DO-00..DO-02 wired to DI-00..DI-02 (the bench wiring of 2026-11-02),
+#     with 24 V on the EXT terminals (source-type DO: without EXT field power
+#     the DOs report ON and no DI follows); other wiring:
+#     LOOPS="do:0=di:4 do:1=di:5";
 #   - UDP 2222 free on this machine (nothing else scanning; not the box's
-#     own adapter), since the E1213 sends its inputs there;
-#   - macOS: the conformance binary is cargo-built and unsigned, so the
-#     firewall asks once whether it may accept incoming UDP. Run this in the
-#     native terminal the first time (over SSH nobody can click "Allow" and
-#     the inputs never arrive: every read then times out).
+#     own adapter), since the E1213 sends its inputs there (its outputs it
+#     takes on UDP 5222, which its Forward_Open reply names; the scanner
+#     follows that);
+#   - macOS: the conformance binary is cargo-built and ad-hoc signed, so the
+#     firewall drops its incoming UDP until it is allowed: run
+#     scratch/02-allow-firewall.sh (sudo socketfilterfw --add --unblockapp)
+#     first, and again after each rebuild; otherwise every read times out.
 # Idempotent and read-mostly: it drives DO-00..03 on and off and leaves them
 # as they were. Nothing is written to the device's configuration.
 #
 # Usage: scripts/bench-e1213.sh IP
 set -euo pipefail
-host="${1:?usage: $0 IP (the E1213 on the Studio link)}"
-loops="${LOOPS:-do:0=di:0 do:1=di:1 do:2=di:2 do:3=di:3}"
+host="${1:?usage: $0 IP (the E1213; 10.0.0.57 on the bench)}"
+loops="${LOOPS:-do:0=di:0 do:1=di:1 do:2=di:2}"
 cd "$(dirname "$0")/.."
 
+# Nick keeps the vendor's EDS (untracked: *.eds is ignored, see TODO.md
+# e1213-eds-license) in devices/, or at the repo root.
 eds=moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds
+[ -f "$eds" ] || eds="devices/$eds"
 if [ -f "${E1213_EDS:-$eds}" ]; then
   echo "==> EDS"
   E1213_EDS="${E1213_EDS:-$PWD/$eds}" scripts/eds-corpus.sh >/dev/null
@@ -49,9 +57,19 @@ conformance=target/release/examples/conformance
 echo "==> discover (ListIdentity, with the identity it answers)"
 found="$("$discover" "$host" 1500)"
 echo "$found"
+# The bench unit is firmware 3.1 (rev=3.1); the EDS describes 4.1, so no
+# electronic key is asked for (key=off, the default).
 if ! echo "$found" | grep -q "vendor=991 .*code=515"; then
   echo "FAIL: no ListIdentity reply from an E1213 (vendor 991, product code 515) at $host" >&2
   echo "      (EtherNet/IP enabled and activated? manual pp. 3-26, 5-1)" >&2
+  exit 1
+fi
+
+# The conformance binary binds UDP 2222 itself; a running box (its own
+# adapter) or another scanner holds it and every read would fail the same way.
+if holder="$(lsof -nP -iUDP:2222 -t 2>/dev/null)" && [ -n "$holder" ]; then
+  echo "FAIL: UDP 2222 is held by pid(s) $holder: $(ps -o command= -p "$holder" | head -1)" >&2
+  echo "      stop it first (a demo box: ./scratch/03-run-e1213-box.sh stop)" >&2
   exit 1
 fi
 

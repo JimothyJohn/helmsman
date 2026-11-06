@@ -7,7 +7,9 @@ use std::collections::VecDeque;
 
 use eframe::egui::{self, RichText};
 
-use crate::st_view::brand::{GREEN, RED, STEEL, WARN, WHITE};
+use crate::st_view::brand::{GREEN, RED, WARN};
+use crate::theme::theme;
+use crate::tips::Tip;
 
 /// How many messages the log keeps.
 pub const KEEP: usize = 200;
@@ -140,15 +142,18 @@ impl Log {
                 .enumerate()
             {
                 let text = RichText::new(format!("{name} {}", counts[k])).color(color);
-                let r = ui.add(egui::Button::selectable(self.show[k], text));
+                let r = ui
+                    .add(egui::Button::selectable(self.show[k], text))
+                    .tip(format!("Shows or hides the {name}."));
                 chrome.hit(format!("messages {name}"), r.rect);
                 if r.clicked() {
                     self.show[k] = !self.show[k];
                 }
             }
         });
+        let t = theme(ui);
         if self.items.is_empty() {
-            ui.label(RichText::new("Nothing to report yet.").color(STEEL));
+            ui.label(RichText::new("Nothing to report yet.").color(t.muted));
             return;
         }
         egui::ScrollArea::vertical()
@@ -162,14 +167,18 @@ impl Log {
                         Level::Error => ("error", RED),
                     };
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{:>8.1}s", m.at)).monospace().color(STEEL));
+                        ui.label(
+                            RichText::new(format!("{:>8.1}s", m.at))
+                                .monospace()
+                                .color(t.muted),
+                        );
                         ui.label(
                             RichText::new(format!("{tag:<7}"))
                                 .monospace()
                                 .strong()
                                 .color(color),
                         );
-                        ui.label(RichText::new(&m.text).color(WHITE));
+                        ui.label(RichText::new(&m.text).color(t.fg));
                     });
                 }
             });

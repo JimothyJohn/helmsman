@@ -18,21 +18,26 @@ use serde_json::{Value as Json, json};
 
 use crate::box_projects::{Answer, PCall, PReq};
 use crate::editor::Chrome;
+use crate::playground::nice_range;
+use crate::playground_view::{scale_labels, window_slider};
 use crate::remote::{BoxState, segment};
 use crate::review::Session;
 use crate::sim_projects::Storage;
-use crate::st_view::brand::{BLACK, GRAPHITE, STEEL};
+use crate::theme::theme;
+use crate::tips::Tip;
 
 /// Signals one trend draws at most (as in the simulation).
 pub const PINS: usize = crate::playground::TREND_SIGNALS;
 /// History drawn, ms (the box keeps 10 min).
 pub const WINDOW_MS: u64 = 600_000;
+/// The widths the chart can show of it: 10 s, 100 s, the whole 10 min.
 /// Points a signal keeps here.
 pub const MAX_POINTS: usize = 2400;
 /// Seconds between history asks while the tab is open.
 pub const RENEW_S: f64 = 600.0;
 
-/// Line colours, in pin order.
+/// Line colours, in pin order (the last, near white, is the page's ink
+/// in light mode).
 const LINES: [Color32; 6] = [
     Color32::from_rgb(0xFF, 0xC2, 0x0E),
     Color32::from_rgb(0x4F, 0xC3, 0xF7),
@@ -73,6 +78,8 @@ pub struct BoxTrend {
     pub series: BTreeMap<String, Vec<(u64, f64)>>,
     /// The box's clock at the newest point.
     pub now_ms: u64,
+    /// The width of the window drawn, ms (the slider's range).
+    pub window_ms: u64,
     /// What the box said about the last ask or save.
     pub notice: Option<String>,
     /// Why this browser does not keep pins, if it does not.
@@ -102,6 +109,7 @@ impl BoxTrend {
             pins: Vec::new(),
             series: BTreeMap::new(),
             now_ms: 0,
+            window_ms: WINDOW_MS,
             notice: None,
             problem: None,
             store,
@@ -282,12 +290,21 @@ impl BoxTrend {
     ) {
         let now = ui.ctx().input(|i| i.time);
         let who = owner(session).unwrap_or_else(|| "this browser".into());
-        ui.label(RichText::new(format!("Pin up to {PINS} signals (kept for {who})")).color(STEEL));
+        let t = theme(ui);
+        ui.label(RichText::new("Signals").strong().color(t.muted))
+            .tip(format!(
+                "Click a signal to pin it to the trend, up to {PINS}. The pins are kept for {who}."
+            ));
         let mut flip = None;
         ui.horizontal_wrapped(|ui| {
             for s in &state.signals {
                 let on = self.pins.contains(&s.name);
-                let r = ui.selectable_label(on, s.name.to_ascii_lowercase());
+                let r =
+                    crate::theme::tab(ui, on, &s.name.to_ascii_lowercase(), egui::Vec2::ZERO).tip(if on {
+                        "On the trend. Click to take it off."
+                    } else {
+                        "Click to pin it to the trend."
+                    });
                 chrome.hit(format!("pin {}", s.name), r.rect);
                 if r.clicked() {
                     flip = Some(s.name.clone());
@@ -297,44 +314,54 @@ impl BoxTrend {
         if let Some(n) = flip {
             self.toggle(&n, session, now);
         }
-        for t in [&self.notice, &self.problem].into_iter().flatten() {
-            ui.label(RichText::new(t).color(STEEL));
+        for text in [&self.notice, &self.problem].into_iter().flatten() {
+            ui.label(RichText::new(text).color(t.muted));
         }
+        window_slider(ui, chrome, &mut self.window_ms);
         ui.add_space(6.0);
         self.chart(ui);
     }
 
     fn chart(&self, ui: &mut egui::Ui) {
+        let t = theme(ui);
         let rect = ui.available_rect_before_wrap();
         ui.allocate_rect(rect, Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::ZERO, BLACK);
+        painter.rect_filled(rect, CornerRadius::ZERO, t.chart);
         if self.pins.is_empty() {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "Pick signals to trend above",
-                FontId::proportional(13.0),
-                STEEL,
+                FontId::proportional(crate::theme::MIN_TEXT),
+                t.muted,
             );
             return;
         }
         let end = self.now_ms;
-        let start = end.saturating_sub(WINDOW_MS);
+        let window = self.window_ms.max(1);
+        let start = end.saturating_sub(window);
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / self.pins.len() as f32;
         #[allow(clippy::cast_precision_loss)]
         let x_of = |t: u64| {
-            rect.left() + 90.0 + (rect.width() - 96.0) * (t.max(start) - start) as f32 / WINDOW_MS as f32
+            rect.left() + 90.0 + (rect.width() - 96.0) * (t.max(start) - start) as f32 / window as f32
         };
         for (k, name) in self.pins.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
-            let color = LINES[k % LINES.len()];
+            let color = match k % LINES.len() {
+                5 if !t.dark => t.fg,
+                i => LINES[i],
+            };
             let line: &[(u64, f64)] = self.series.get(name).map_or(&[], Vec::as_slice);
+            // The point before the window holds its value into it; the
+            // scale is the window's.
             let (lo, hi) = line
                 .iter()
-                .map(|p| p.1)
+                .enumerate()
+                .filter(|(i, p)| p.0 >= start || line.get(i + 1).is_none_or(|n| n.0 >= start))
+                .map(|(_, p)| p.1)
                 .filter(|v| v.is_finite())
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
@@ -348,17 +375,18 @@ impl BoxTrend {
                     name.to_ascii_lowercase(),
                     last.map_or("–".into(), |v| format!("{v}"))
                 ),
-                FontId::monospace(10.5),
+                FontId::monospace(crate::theme::MIN_TEXT),
                 color,
             );
             painter.line_segment(
                 [Pos2::new(rect.left(), top), Pos2::new(rect.right(), top)],
-                Stroke::new(1.0, GRAPHITE),
+                Stroke::new(1.0, t.rule),
             );
-            let span = if hi > lo { hi - lo } else { 1.0 };
+            let (lo, hi, step) = nice_range(lo, hi);
+            scale_labels(&painter, &t, rect, top, lane, (lo, hi, step));
             let y_of = |v: f64| {
                 #[allow(clippy::cast_possible_truncation)]
-                let f = ((v - lo) / span) as f32;
+                let f = ((v - lo) / (hi - lo)) as f32;
                 top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
             };
             let mut pts: Vec<Pos2> = Vec::new();

@@ -38,6 +38,55 @@ fn local(channel: &str) -> Binding {
     }
 }
 
+/// `device-by-identity`: an endpoint may be `mac=` or `cip=`; one that
+/// does not read is refused by the map's validation, naming the device.
+#[test]
+fn identity_endpoints_validate_and_bad_ones_are_named() {
+    let map = |endpoint: &str| IoMap {
+        devices: vec![Device {
+            id: "rio".into(),
+            driver: "modbus-tcp".into(),
+            endpoint: endpoint.into(),
+            params: BTreeMap::new(),
+        }],
+        signals: vec![Signal {
+            name: "x".into(),
+            ty: Ty::Bool,
+            dir: Dir::In,
+            unit: None,
+            poll: None,
+            binding: Binding::Device {
+                device: "rio".into(),
+                point: "di:0".into(),
+            },
+        }],
+    };
+    for ok in [
+        "10.0.0.57:502",
+        "rio.local",
+        "mac=00-90-e8-7e-af-be",
+        "cip=991:515",
+        "cip=991:515:0x2A629EAE",
+    ] {
+        assert!(map(ok).validate().is_ok(), "{ok}");
+    }
+    for bad in [
+        "mac=00-90-e8",
+        "mac=zz-zz-zz-zz-zz-zz",
+        "cip=991",
+        "cip=moxa:e1213",
+        "",
+    ] {
+        let errs = map(bad).validate().unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, MapError::BadEndpoint { device, .. } if device == "rio")),
+            "{bad:?}: {errs:?}"
+        );
+        assert!(errs[0].to_string().starts_with("device rio: "), "{}", errs[0]);
+    }
+}
+
 #[test]
 fn a_sensible_map_validates() {
     let map = IoMap {

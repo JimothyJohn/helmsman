@@ -8,6 +8,12 @@
 //!     modbus.wasm
 //! ```
 //!
+//! A device's EDS travels the same way: a map line `device ID enip-io ADDR
+//! eds=NAME.eds` names the project's own `NAME.eds` (a project file kind,
+//! `device-import`), which [`Sources::find`] resolves to its path in the
+//! project's folder ([`Found::eds`]) and [`layout`] hands to the driver
+//! in place of the name; the stored map keeps the name.
+//!
 //! A map line `device ID wasm:NAME ...` runs on `drivers/NAME.wasm`. Where
 //! it is looked for is [`Sources`]: the project's folder first (the project
 //! being deployed, else the one recorded as running), then the box's, so a
@@ -451,6 +457,61 @@ pub struct Found {
     pub origin: BTreeMap<String, Origin>,
     /// One line per device whose driver file is there but will not load.
     pub problems: Vec<String>,
+    /// By device id: the project's EDS file an `eds=NAME.eds` param names
+    /// (`device-import`), as the path the driver reads.
+    pub eds: BTreeMap<String, PathBuf>,
+}
+
+impl Found {
+    /// `io_map` with each resolved `eds=NAME.eds` token replaced by the
+    /// file's path, for the drivers to open; the stored map keeps the
+    /// name. `None` for no map.
+    #[must_use]
+    pub fn resolved_map(&self, io_map: Option<&str>) -> Option<String> {
+        let text = io_map?;
+        if self.eds.is_empty() {
+            return Some(text.to_string());
+        }
+        let mut out = String::with_capacity(text.len());
+        for (k, line) in text.split('\n').enumerate() {
+            if k > 0 {
+                out.push('\n');
+            }
+            let (code, comment) = line.split_once('#').map_or((line, None), |(c, r)| (c, Some(r)));
+            let tokens: Vec<&str> = code.split_whitespace().collect();
+            let path = match tokens.as_slice() {
+                ["device", id, ..] => self.eds.get(*id),
+                _ => None,
+            };
+            match path {
+                Some(path) => {
+                    let mut first = true;
+                    for t in tokens {
+                        if !first {
+                            out.push(' ');
+                        }
+                        first = false;
+                        match t.strip_prefix("eds=") {
+                            Some(name)
+                                if helmsman_project::file_name(name)
+                                    == Some(helmsman_project::FileKind::Eds) =>
+                            {
+                                out.push_str("eds=");
+                                out.push_str(&path.to_string_lossy());
+                            }
+                            _ => out.push_str(t),
+                        }
+                    }
+                    if let Some(c) = comment {
+                        out.push_str(" #");
+                        out.push_str(c);
+                    }
+                }
+                None => out.push_str(line),
+            }
+        }
+        Some(out)
+    }
 }
 
 impl Sources {
@@ -509,6 +570,18 @@ impl Sources {
         let mut found = Found::default();
         let mut seen: BTreeMap<&str, Option<Result<(), Vec<String>>>> = BTreeMap::new();
         for d in &map.devices {
+            // A device file the project carries (`eds=NAME.eds`): the
+            // project's folder is the only place it can be.
+            if let Some(name) = d.params.get("eds")
+                && helmsman_project::file_name(name) == Some(helmsman_project::FileKind::Eds)
+            {
+                match self.eds_path(name) {
+                    Ok(path) => {
+                        found.eds.insert(d.id.clone(), path);
+                    }
+                    Err(why) => found.problems.push(format!("device {}: eds={name}: {why}", d.id)),
+                }
+            }
             let Some(name) = wasm_name(&d.driver) else {
                 continue;
             };
@@ -540,6 +613,32 @@ impl Sources {
         found
     }
 
+    /// The project's EDS file `name` (`NAME.eds`, a project file kind), as
+    /// the path the `enip-io` driver reads: a regular file, not a link,
+    /// at most `helmsman_project::MAX_FILE` bytes, on a path with no blank
+    /// (a map token).
+    fn eds_path(&self, name: &str) -> Result<PathBuf, String> {
+        let Some((project, dir)) = &self.project else {
+            return Err("names a project's device file, but no project is running or deploying".into());
+        };
+        let path = dir.join(name);
+        let meta = fs::symlink_metadata(&path)
+            .map_err(|_| format!("no such file in project {project} (upload the EDS into the project)"))?;
+        if !meta.file_type().is_file() {
+            return Err(format!("not a regular file in project {project}"));
+        }
+        if meta.len() > helmsman_project::MAX_FILE as u64 {
+            return Err(format!("{} bytes, larger than a project file", meta.len()));
+        }
+        if path.to_string_lossy().chars().any(char::is_whitespace) {
+            return Err(format!(
+                "the project folder's path has a blank in it ({}); a map token cannot carry it",
+                path.display()
+            ));
+        }
+        Ok(path)
+    }
+
     /// [`Sources::find`] for a map's text; nothing for no map or one that
     /// does not parse (its load says why).
     #[must_use]
@@ -560,5 +659,6 @@ pub fn layout(io_map: Option<&str>, calendar: Option<&str>, found: &Found) -> Re
     if !found.problems.is_empty() {
         return Err(found.problems.iter().map(|p| format!("io.map: {p}")).collect());
     }
-    Layout::build_with(io_map, calendar, &found.drivers)
+    let resolved = found.resolved_map(io_map);
+    Layout::build_with(resolved.as_deref(), calendar, &found.drivers)
 }

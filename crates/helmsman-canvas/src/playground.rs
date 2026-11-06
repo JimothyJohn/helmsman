@@ -12,8 +12,8 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use helmsman_diagram::Module;
-use helmsman_iec::trace::Trace;
-use helmsman_iec::{Diagnostic, Image, ImageSizes, PortDir, Program, Ty, Value, compile};
+use helmsman_iec::trace::{StmtId, Trace};
+use helmsman_iec::{Diagnostic, Image, ImageSizes, PortDir, Program, Stopped, Ty, Value, compile};
 
 /// Process image: 8 bytes each way (`%IX0.0` .. `%IX7.7`), some memory.
 pub const SIZES: ImageSizes = ImageSizes { i: 8, q: 8, m: 64 };
@@ -24,10 +24,15 @@ pub const MIN_PERIOD: u64 = 1;
 pub const MAX_PERIOD: u64 = 1000;
 /// At most this many scans per frame (a slow tab catches up gradually).
 pub const MAX_CATCH_UP: u64 = 500;
-/// The trend keeps this much history, ms of program time.
+/// The window a project opens with, ms of program time (the slider goes
+/// from `playground_view::WINDOW_MIN_MS` to `WINDOW_MAX_MS`; Nick,
+/// 2026-11-01: how fast the line crosses the pane).
 pub const TREND_MS: u64 = 10_000;
-/// And at most this many samples.
-pub const TREND_CAP: usize = 4000;
+/// The trend keeps this much history, ms of program time: the widest
+/// window (10 min), so widening it shows what already ran.
+pub const TREND_KEEP_MS: u64 = 600_000;
+/// And at most this many samples (10 min at the 10 ms scan).
+pub const TREND_CAP: usize = 60_000;
 /// Signals the trend draws at most.
 pub const TREND_SIGNALS: usize = 6;
 /// The editor refuses text past this.
@@ -40,40 +45,70 @@ pub struct Example {
     pub src: &'static str,
 }
 
+/// The examples (Nick, 2026-11-05): what the first chapters of a
+/// Structured Text book teach, one idea each, a few lines long. Inputs are
+/// `VAR_INPUT`s the I/O tab switches; outputs are `VAR_OUTPUT`s it shows.
 pub const EXAMPLES: [Example; 5] = [
     Example {
-        name: "Blink (TON)",
+        name: "Blink",
         src: "PROGRAM blink
-VAR_INPUT
-  enable : BOOL := TRUE;
-  period : TIME := T#500ms;
-END_VAR
 VAR_OUTPUT
   lamp : BOOL;
 END_VAR
 VAR
   pulse : TON;
 END_VAR
-(* A timer that restarts itself: Q is TRUE for one scan every period. *)
-pulse(IN := enable AND NOT pulse.Q, PT := period);
+(* The timer restarts itself every 500 ms; each time, the lamp flips. *)
+pulse(IN := NOT pulse.Q, PT := T#500ms);
 IF pulse.Q THEN
   lamp := NOT lamp;
 END_IF;
-IF NOT enable THEN
-  lamp := FALSE;
-END_IF;
+END_PROGRAM
+",
+    },
+    Example {
+        name: "Read and write",
+        src: "PROGRAM read_write
+VAR_INPUT
+  switch : BOOL;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+END_VAR
+(* Read an input, write an output: the lamp follows the switch. *)
+lamp := switch;
+END_PROGRAM
+",
+    },
+    Example {
+        name: "Logic: AND, OR, NOT",
+        src: "PROGRAM logic
+VAR_INPUT
+  a : BOOL;
+  b : BOOL;
+END_VAR
+VAR_OUTPUT
+  both : BOOL;
+  either : BOOL;
+  neither : BOOL;
+END_VAR
+both := a AND b;
+either := a OR b;
+neither := NOT (a OR b);
 END_PROGRAM
 ",
     },
     Example {
         name: "Start/stop latch",
         src: "PROGRAM latch
-VAR
-  start AT %IX0.0 : BOOL;  (* push button *)
-  stop AT %IX0.1 : BOOL;   (* push button *)
-  motor AT %QX0.0 : BOOL;
+VAR_INPUT
+  start : BOOL;
+  stop : BOOL;
 END_VAR
-(* Seal-in: start latches the motor on, stop wins. *)
+VAR_OUTPUT
+  motor : BOOL;
+END_VAR
+(* Start turns the motor on and it stays on; stop turns it off. *)
 motor := (start OR motor) AND NOT stop;
 END_PROGRAM
 ",
@@ -84,121 +119,18 @@ END_PROGRAM
 VAR_INPUT
   pulse : BOOL;
   reset : BOOL;
-  target : INT := 5;
 END_VAR
 VAR_OUTPUT
   count : INT;
   done : BOOL;
 END_VAR
 VAR
-  parts : CTU;
+  c : CTU;
 END_VAR
-(* Counts rising edges of pulse until it reaches target. *)
-parts(CU := pulse, R := reset, PV := target);
-count := parts.CV;
-done := parts.Q;
-END_PROGRAM
-",
-    },
-    Example {
-        name: "Traffic light",
-        src: "PROGRAM traffic
-VAR_INPUT
-  run : BOOL := TRUE;
-  green_time : TIME := T#3s;
-END_VAR
-VAR_OUTPUT
-  red : BOOL;
-  yellow : BOOL;
-  green : BOOL;
-END_VAR
-VAR
-  phase : INT;  (* 0 green, 1 yellow, 2 red *)
-  dwell : TIME;
-  t : TON;
-END_VAR
-CASE phase OF
-  0: dwell := green_time;
-  1: dwell := T#1s;
-ELSE
-  dwell := T#3s;
-END_CASE;
-t(IN := run AND NOT t.Q, PT := dwell);
-IF t.Q THEN
-  phase := (phase + 1) MOD 3;
-END_IF;
-green := run AND (phase = 0);
-yellow := run AND (phase = 1);
-red := NOT run OR (phase = 2);
-END_PROGRAM
-",
-    },
-    Example {
-        name: "Line of stations (nested blocks)",
-        src: "(* A line of two stations, each driving two motors: open the
-   instances in the tree on the left, or double-click a block. *)
-FUNCTION_BLOCK motor
-VAR_INPUT
-  run : BOOL;
-  fault : BOOL;
-END_VAR
-VAR_OUTPUT
-  running : BOOL;
-  tripped : BOOL;
-END_VAR
-VAR
-  start_delay : TON;
-END_VAR
-start_delay(IN := run AND NOT tripped, PT := T#300ms);
-IF fault THEN
-  tripped := TRUE;
-ELSIF NOT run THEN
-  tripped := FALSE;
-END_IF;
-running := start_delay.Q AND NOT tripped;
-END_FUNCTION_BLOCK
-
-FUNCTION_BLOCK station
-VAR_INPUT
-  enable : BOOL;
-  part_present : BOOL;
-  jam : BOOL;
-END_VAR
-VAR_OUTPUT
-  busy : BOOL;
-  alarm : BOOL;
-END_VAR
-VAR
-  infeed : motor;
-  outfeed : motor;
-END_VAR
-infeed(run := enable AND NOT part_present, fault := jam);
-outfeed(run := enable AND part_present, fault := FALSE);
-busy := infeed.running OR outfeed.running;
-alarm := infeed.tripped;
-END_FUNCTION_BLOCK
-
-PROGRAM line
-VAR_INPUT
-  enable : BOOL := TRUE;
-  part_at_1 : BOOL;
-  part_at_2 : BOOL;
-  jam_1 : BOOL;
-END_VAR
-VAR_OUTPUT
-  station1_busy : BOOL;
-  station2_busy : BOOL;
-  alarm : BOOL;
-END_VAR
-VAR
-  s1 : station;
-  s2 : station;
-END_VAR
-s1(enable := enable, part_present := part_at_1, jam := jam_1);
-s2(enable := enable, part_present := part_at_2, jam := FALSE);
-station1_busy := s1.busy;
-station2_busy := s2.busy;
-alarm := s1.alarm OR s2.alarm;
+(* Counts rising edges of pulse; done at 10; reset starts over. *)
+c(CU := pulse, R := reset, PV := 10);
+count := c.CV;
+done := c.Q;
 END_PROGRAM
 ",
     },
@@ -450,6 +382,27 @@ impl Build {
     }
 }
 
+/// `breaks` of `old`'s program, as statements of `new`'s: the ones
+/// whose POU, line and column are still a statement's. An edit that
+/// moves a statement drops its breakpoint.
+fn moved_breaks(old: &Build, new: &Build, breaks: &[StmtId]) -> Vec<StmtId> {
+    let (was, now) = (old.program.trace_map(), new.program.trace_map());
+    let mut out: Vec<StmtId> = breaks
+        .iter()
+        .filter_map(|&id| {
+            let s = was.stmt(id)?;
+            now.stmts()
+                .iter()
+                .position(|t| t.pou == s.pou && t.line == s.line && t.col == s.col)
+                .and_then(|k| u32::try_from(k).ok())
+                .map(StmtId)
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// One trend sample: program time and each trended signal's value.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sample {
@@ -457,11 +410,24 @@ pub struct Sample {
     pub values: Vec<f64>,
 }
 
-/// The trend: which signals, and their recent history.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// The trend: which signals, their recent history, and how much of it
+/// the pane shows.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Trend {
     pub signals: Vec<String>,
     pub samples: VecDeque<Sample>,
+    /// The width of the window drawn, ms (`WINDOW_MIN_MS..=WINDOW_MAX_MS`).
+    pub window_ms: u64,
+}
+
+impl Default for Trend {
+    fn default() -> Self {
+        Self {
+            signals: Vec::new(),
+            samples: VecDeque::new(),
+            window_ms: TREND_MS,
+        }
+    }
 }
 
 impl Trend {
@@ -481,7 +447,7 @@ impl Trend {
             || self
                 .samples
                 .front()
-                .is_some_and(|f| t_ms.saturating_sub(f.t_ms) > TREND_MS)
+                .is_some_and(|f| t_ms.saturating_sub(f.t_ms) > TREND_KEEP_MS)
         {
             self.samples.pop_front();
         }
@@ -496,6 +462,51 @@ impl Trend {
         }
         self.samples.clear();
     }
+}
+
+/// The axis a trend lane draws `lo..=hi` on: the values rounded out to
+/// a step of 1, 2 or 5 times a power of ten, about four of them to the
+/// lane, so a rising value climbs through a scale that holds still
+/// between steps instead of being pinned to the top of a lane refitted
+/// every frame (Nick, 2026-11-01: a count that grew jumped to the top
+/// and the line beneath it flattened as the window filled). A constant
+/// gets a span above it; nothing finite gets `0..=1`. Returns the
+/// bounds and the step, for the labels.
+#[must_use]
+pub fn nice_range(lo: f64, hi: f64) -> (f64, f64, f64) {
+    if !lo.is_finite() || !hi.is_finite() {
+        return (0.0, 1.0, 0.5);
+    }
+    let (lo, hi) = if lo < hi { (lo, hi) } else { (hi, lo) };
+    let hi = if hi > lo {
+        hi
+    } else {
+        lo + (lo.abs() * 0.1).max(1.0)
+    };
+    let raw = (hi - lo) / 4.0;
+    let mag = 10f64.powf(raw.log10().floor());
+    let unit = raw / mag;
+    let step = if unit <= 1.0 {
+        1.0
+    } else if unit <= 2.0 {
+        2.0
+    } else if unit <= 5.0 {
+        5.0
+    } else {
+        10.0
+    } * mag;
+    let lo = (lo / step).floor() * step;
+    let hi = (hi / step).ceil() * step;
+    (lo, hi, step)
+}
+
+/// A scale label for `v` on an axis of `step`: as many decimals as the
+/// step has, no more.
+#[must_use]
+pub fn tick_label(v: f64, step: f64) -> String {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let decimals = (-step.log10().floor()).max(0.0) as usize;
+    format!("{v:.decimals$}")
 }
 
 /// The whole playground.
@@ -519,6 +530,19 @@ pub struct Session {
     /// The last traced scan, for the diagram.
     pub trace: Option<Trace>,
     pub trend: Trend,
+    /// Measured plant states (`crate::plant::substitutions`): the model's
+    /// variable path and the input point that stands in for it. Before each
+    /// scan the variable takes the point's value, so the model runs from
+    /// the sensor instead of its own state.
+    pub sensors: Vec<(String, String)>,
+    /// Breakpoints (Ctrl B): statements of the running build a scan stops
+    /// before, sorted. A statement in a function block's body stops in
+    /// every instance.
+    pub breaks: Vec<StmtId>,
+    /// The scan stopped at a breakpoint, not yet committed: how many
+    /// breakpoint hits it passed first. [`Self::trace`] is that moment;
+    /// the program and the image are still as the scan found them.
+    pub paused: Option<u32>,
     /// Page time the clock last caught up to, s.
     last: Option<f64>,
     acc_ms: f64,
@@ -539,6 +563,9 @@ impl Session {
             fault: None,
             trace: None,
             trend: Trend::default(),
+            sensors: Vec::new(),
+            breaks: Vec::new(),
+            paused: None,
             last: None,
             acc_ms: 0.0,
         };
@@ -593,6 +620,11 @@ impl Session {
         self.take(src);
         match Build::new(&self.src) {
             Ok(mut b) => {
+                self.breaks = self
+                    .build
+                    .as_ref()
+                    .map_or_else(Vec::new, |old| moved_breaks(old, &b, &self.breaks));
+                self.paused = None;
                 if let Some(old) = &self.build {
                     for p in b.points.iter_mut().filter(|p| p.dir == Dir::In) {
                         if let Some(o) = old
@@ -680,13 +712,39 @@ impl Session {
     }
 
     /// Run or stop. Starting clears a fault and restarts the program cold
-    /// if it had faulted.
+    /// if it had faulted. Starting from a breakpoint goes on to the
+    /// scan's next breakpoint hit, and runs on from there if there is
+    /// none; stopping leaves a paused scan paused.
     pub fn set_running(&mut self, on: bool) {
         if on && self.fault.is_some() {
             self.restart();
         }
-        self.running = on;
         self.last = None;
+        if on
+            && let Some(skip) = self.paused
+            && self.scan_or_pause(skip + 1)
+        {
+            return;
+        }
+        self.running = on;
+    }
+
+    /// Sets or clears a breakpoint on `id` (Ctrl B). Clearing the one a
+    /// scan is paused at leaves it paused there (F10 finishes the scan).
+    pub fn toggle_break(&mut self, id: StmtId) {
+        match self.breaks.binary_search(&id) {
+            Ok(k) => {
+                self.breaks.remove(k);
+            }
+            Err(k) => self.breaks.insert(k, id),
+        }
+    }
+
+    /// The statement the paused scan stopped before.
+    #[must_use]
+    pub fn paused_at(&self) -> Option<StmtId> {
+        self.paused?;
+        self.trace.as_ref()?.paused_at()
     }
 
     /// Cold restart: initial values, clock to zero, trend cleared.
@@ -699,15 +757,48 @@ impl Session {
         self.scans = 0;
         self.fault = None;
         self.trace = None;
+        self.paused = None;
         self.trend.samples.clear();
     }
 
-    /// One scan, traced, whether running or not (Step).
+    /// One scan, traced, whether running or not (Step). It stops at a
+    /// breakpoint; from one, it runs the rest of the scan.
     pub fn step(&mut self) {
         if self.fault.is_some() {
             self.restart();
         }
+        if self.paused.is_some() {
+            self.scan(true);
+        } else {
+            self.scan_or_pause(0);
+        }
+    }
+
+    /// A scan that stops before its `skip + 1`-th breakpoint hit (the
+    /// program untouched, the moment in [`Self::trace`]), or runs to its
+    /// end, traced, when it has no such hit. Whether it stopped.
+    fn scan_or_pause(&mut self, skip: u32) -> bool {
+        if !self.breaks.is_empty() && self.peek(skip) {
+            self.running = false;
+            return true;
+        }
         self.scan(true);
+        false
+    }
+
+    /// Runs the coming scan as far as its `skip + 1`-th breakpoint hit;
+    /// if it gets there, the moment is the trace and the scan is paused.
+    fn peek(&mut self, skip: u32) -> bool {
+        self.feed();
+        let Some(b) = &self.build else { return false };
+        let now = Duration::from_millis(self.now_ms);
+        let (stopped, trace) = b.program.scan_to(&b.image, now, &self.breaks, skip);
+        if !matches!(stopped, Stopped::Before(_)) {
+            return false;
+        }
+        self.trace = Some(trace);
+        self.paused = Some(skip);
+        true
     }
 
     /// Runs the scans due by page time `t` (s) at the scan period, the
@@ -715,6 +806,11 @@ impl Session {
     pub fn advance(&mut self, t: f64) {
         let last = self.last.replace(t).unwrap_or(t);
         if !self.running {
+            // Paused: the moment follows the inputs as they change. If it
+            // no longer comes, the scan stays paused where it was shown.
+            if let Some(skip) = self.paused {
+                self.peek(skip);
+            }
             return;
         }
         #[allow(clippy::cast_precision_loss)]
@@ -728,10 +824,14 @@ impl Session {
         }
         if due == 0 && self.trace.is_none() {
             // Something to draw from the first frame.
-            self.scan(true);
+            self.scan_or_pause(0);
             return;
         }
         for k in 0..due {
+            if !self.breaks.is_empty() && self.peek(0) {
+                self.running = false;
+                return;
+            }
             self.scan(k + 1 == due);
             if self.fault.is_some() {
                 break;
@@ -739,7 +839,9 @@ impl Session {
         }
     }
 
-    fn scan(&mut self, traced: bool) {
+    /// Puts the panel's inputs and the measured plant states into the
+    /// program and its image, as the coming scan reads them.
+    fn feed(&mut self) {
         let Some(b) = &mut self.build else { return };
         for p in b.points.iter().filter(|p| p.dir == Dir::In) {
             match p.place {
@@ -758,6 +860,30 @@ impl Session {
                 }
             }
         }
+        for (path, signal) in &self.sensors {
+            let Some(p) = b
+                .points
+                .iter()
+                .find(|p| p.dir == Dir::In && p.name.eq_ignore_ascii_case(signal))
+            else {
+                continue;
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let v = match (p.value, b.program.ty(path)) {
+                (Value::Int(n), Some(t)) if t.is_real() => Value::Real(n as f64),
+                (v, _) => v,
+            };
+            // A kind or range the variable cannot hold leaves the model's own.
+            let _ = b.program.set(path, v);
+        }
+    }
+
+    /// Runs the coming scan to its end, committed: the program, the
+    /// image, the outputs and the clock move on.
+    fn scan(&mut self, traced: bool) {
+        self.feed();
+        self.paused = None;
+        let Some(b) = &mut self.build else { return };
         let now = Duration::from_millis(self.now_ms);
         let r = if traced {
             let (r, trace) = b.program.scan_traced(&mut b.image, now);

@@ -15,14 +15,15 @@ a lamp that blinks. The diagram in the middle is the program as it runs,
 live; the Structured Text that makes it is one key away (View › Structured
 Text, or <kbd>Alt</kbd> <kbd>1</kbd>).
 
+![The playground as it opens: the blink example running, its diagram in the middle, the Structured Text on the left, the I/O panel on the right and the trend along the bottom.](img/editor.png)
+
 Things to try, in order:
 
-1. Click the `enable` block on the diagram. It is an input; the click
-   flips it and the lamp stops. Click again.
-2. Open **Files** on the left and pick another example, then one of the
-   machines. Each opens running. The machines run against a small plant
-   model so they move with nothing wired; press `start_pb` on the diagram
-   to start one.
+1. Watch the lamp on the diagram: Blink's timer flips it every 500 ms.
+2. Open **Files** on the left and click **Read and write**. Give it a
+   name: it opens as a program of your own, running. Click the `switch`
+   block on the diagram; it is an input, the click flips it, and the lamp
+   follows.
 3. Open the Structured Text and change something. The program keeps
    running what it had; the editor marks any error as you type. Press
    **Deploy** (File › Deploy, <kbd>Ctrl</kbd> <kbd>D</kbd>) to run your
@@ -50,7 +51,7 @@ simulation by itself and says so.
   diagram, the panels.
 - [The simulation](simulation.html): running, stepping, inputs, the trend.
 - [Projects](projects.html): files, save, deploy, upload and download, the
-  examples and the machine starters.
+  the examples.
 - [On a box](box.html): signing in, deploying through the approval policy,
   forcing, the Monitor.
 - [The Agent](agent.html): writing and changing programs from a

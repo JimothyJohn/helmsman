@@ -321,9 +321,11 @@ impl Bench {
             Arc::clone(&table),
             Arc::new(helmsman_io::open),
             Arc::new(|| Box::new(Channels::new())),
-            Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
-                dv.set(name, err.map(ToString::to_string));
-            }),
+            Arc::new(
+                move |name: &str, err: Option<&helmsman_io::Error>, address: Option<String>| {
+                    dv.set_with(name, err.map(ToString::to_string), address);
+                },
+            ),
         );
         let plan = set
             .plan_with(layout.map.as_ref().unwrap(), &found.drivers)
@@ -384,6 +386,7 @@ impl Bench {
             drivers: Some(DriverDir::in_state_dir(&state)),
             running_drivers: found.drivers,
             trend_pins: None,
+            discovery: helmsman_plc::api::discover::Discovery::default(),
         };
         let api = Api::start_box(cfg, shared, Extras::default(), None, more).unwrap();
         let addr = api.addr();
@@ -1185,6 +1188,70 @@ fn a_box_boots_a_schema_3_head_on_its_driver_file_and_rolls_back_across_the_chan
 
 // ---- finding files: precedence, problems, races -----------------------------------
 
+/// `device-import`: a map's `eds=NAME.eds` names the project's own EDS
+/// file; the load resolves it to the file's path in the project folder
+/// (the stored map keeps the name), a missing or odd file is a problem
+/// naming the device, and a path that is not a project file name is left
+/// to the driver as before.
+#[test]
+fn a_projects_eds_file_resolves_from_its_folder_when_the_map_loads() {
+    const FACTS: &str = include_str!("../../helmsman-proto/tests/fixtures/e1213-facts.eds");
+    let root = tmp("eds-sources");
+    let project = root.join("projects/line");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join("e1213.eds"), FACTS).unwrap();
+    let sources = Sources {
+        project: Some(("line".into(), project.clone())),
+        boxed: None,
+    };
+    let text = "device rio enip-io 127.0.0.1 eds=e1213.eds rpi_ms=100 # the bench block\nin part bool rio di:4\nout lamp bool box do:0\n";
+    let found = sources.find_text(Some(text));
+    assert!(found.problems.is_empty(), "{found:?}");
+    assert_eq!(found.eds["rio"], project.join("e1213.eds"));
+    let resolved = found.resolved_map(Some(text)).unwrap();
+    assert!(
+        resolved.starts_with(&format!(
+            "device rio enip-io 127.0.0.1 eds={} rpi_ms=100 # the bench block\nin part bool rio di:4\n",
+            project.join("e1213.eds").display()
+        )),
+        "{resolved}"
+    );
+    // The layout builds on the resolved path (the driver reads the file
+    // when its link opens, not here).
+    let layout = driver_dir::layout(Some(text), None, &found).unwrap();
+    assert!(layout.table.index("part").is_some());
+    // Missing: a problem naming the device, and the layout refuses.
+    let missing = "device rio enip-io 127.0.0.1 eds=other.eds\nout lamp bool box do:0\n";
+    let found = sources.find_text(Some(missing));
+    assert_eq!(found.problems.len(), 1, "{found:?}");
+    assert!(
+        found.problems[0].contains("device rio: eds=other.eds: no such file in project line"),
+        "{found:?}"
+    );
+    assert!(driver_dir::layout(Some(missing), None, &found).is_err());
+    // A link is not a regular file.
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(project.join("e1213.eds"), project.join("linked.eds")).unwrap();
+        let found = sources.find_text(Some(
+            "device rio enip-io 127.0.0.1 eds=linked.eds\nout lamp bool box do:0\n",
+        ));
+        assert!(found.problems[0].contains("not a regular file"), "{found:?}");
+    }
+    // Not a project file name: not ours to resolve (the driver reads the
+    // path as given, and says so when it is not there).
+    let elsewhere = "device rio enip-io 127.0.0.1 eds=/nowhere/x.eds\nout lamp bool box do:0\n";
+    let found = sources.find_text(Some(elsewhere));
+    assert!(found.problems.is_empty() && found.eds.is_empty(), "{found:?}");
+    assert_eq!(found.resolved_map(Some(elsewhere)).as_deref(), Some(elsewhere));
+    // Without a project there is nowhere to look.
+    let found = Sources::boxed(&root).find_text(Some(text));
+    assert!(
+        found.problems[0].contains("no project is running or deploying"),
+        "{found:?}"
+    );
+}
+
 #[test]
 fn a_project_driver_comes_first_and_a_bad_one_never_falls_back_to_the_boxs() {
     let root = tmp("sources");
@@ -1333,32 +1400,6 @@ fn map_validation_refuses_a_driver_it_was_not_given() {
     // And a device param the guest's configure refuses.
     let bad = ok.replace("unit=1", "unit=x");
     assert!(Layout::build_with(Some(&bad), None, &have).is_err());
-}
-
-/// The box build leaves `enip-io` out (TODO.md `enip-in-box`): a proposed
-/// or reloaded map that names it is refused as not in this build, used by
-/// a signal or not, while the same device over Modbus/TCP passes.
-#[cfg(not(feature = "enip-io"))]
-#[test]
-fn map_validation_refuses_enip_io_as_not_in_this_build() {
-    for text in [
-        "device rio enip-io 127.0.0.1:44818\nin start bool rio di:0\nout lamp bool box do:0\n",
-        "device rio enip-io 127.0.0.1:44818\nout lamp bool box do:0\n",
-    ] {
-        for drivers in [
-            Drivers::new(),
-            Drivers::from([("enip-io".to_string(), MODBUS.to_vec())]),
-        ] {
-            let e = Layout::build_with(Some(text), None, &drivers).unwrap_err();
-            assert!(
-                e.iter()
-                    .any(|l| l.contains("device rio:") && l.contains("enip-io: not in this build")),
-                "{text}: {e:?}"
-            );
-        }
-    }
-    let modbus = "device rio modbus-tcp 127.0.0.1:502\nin start bool rio di:0\nout lamp bool box do:0\n";
-    Layout::build_with(Some(modbus), None, &Drivers::new()).unwrap();
 }
 
 #[test]

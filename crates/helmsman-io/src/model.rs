@@ -129,6 +129,12 @@ pub struct IoMap {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MapError {
     DuplicateDevice(String),
+    /// A device's endpoint is an identity (`mac=`, `cip=`) that does not
+    /// read, or a blank where a host should be ([`crate::resolve`]).
+    BadEndpoint {
+        device: String,
+        why: String,
+    },
     BadName(String),
     DuplicateSignal(String),
     UnknownDevice {
@@ -162,6 +168,7 @@ impl fmt::Display for MapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateDevice(d) => write!(f, "device {d:?} defined twice"),
+            Self::BadEndpoint { device, why } => write!(f, "device {device}: {why}"),
             Self::BadName(n) => write!(f, "{n:?} is not an identifier"),
             Self::DuplicateSignal(n) => write!(f, "signal {n:?} defined twice"),
             Self::UnknownDevice { signal, device } => write!(f, "{signal}: no device {device:?}"),
@@ -231,6 +238,26 @@ impl IoMap {
         self.validate_with(&mut parse_point_on)
     }
 
+    /// The devices by id, each declared once, every network endpoint a
+    /// host or an identity that reads (serial ports are paths).
+    fn check_devices(&self, errs: &mut Vec<MapError>) -> BTreeMap<&str, &Device> {
+        let mut devices = BTreeMap::new();
+        for d in &self.devices {
+            if devices.insert(d.id.as_str(), d).is_some() {
+                errs.push(MapError::DuplicateDevice(d.id.clone()));
+            }
+            if d.driver != "modbus-rtu"
+                && let Err(why) = crate::resolve::parse(&d.endpoint)
+            {
+                errs.push(MapError::BadEndpoint {
+                    device: d.id.clone(),
+                    why,
+                });
+            }
+        }
+        devices
+    }
+
     /// [`IoMap::validate`], parsing each device point with `parse` rather
     /// than the built-in drivers alone: a box passes one that also knows
     /// the WASM drivers it has approved (`wasm:NAME`, [`crate::driver::WASM`]),
@@ -243,12 +270,7 @@ impl IoMap {
         parse: &mut dyn FnMut(&Device, &str) -> Result<PointInfo, crate::Error>,
     ) -> Result<(), Vec<MapError>> {
         let mut errs = Vec::new();
-        let mut devices = BTreeMap::new();
-        for d in &self.devices {
-            if devices.insert(d.id.as_str(), d).is_some() {
-                errs.push(MapError::DuplicateDevice(d.id.clone()));
-            }
-        }
+        let devices = self.check_devices(&mut errs);
         let mut names = BTreeSet::new();
         // Written target (device, point) or ("", channel) -> signal name.
         let mut writers: BTreeMap<(String, String), &str> = BTreeMap::new();

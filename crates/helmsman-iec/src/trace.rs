@@ -17,9 +17,11 @@
 //! every instance and call: their counts are totals over all of them. Each
 //! instance's own state is in the values (`timer.Q`, `sums[2].total`).
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use crate::check::{AggKind, Checked, Loc, PouCode, St, StKind, Type};
 use crate::interp::{Fault, Image, from_raw};
@@ -126,7 +128,7 @@ struct Leaf {
 pub struct TraceMap {
     stmts: Vec<StmtInfo>,
     leaves: Vec<Leaf>,
-    by_path: HashMap<String, usize>,
+    by_path: BTreeMap<String, usize>,
 }
 
 impl TraceMap {
@@ -168,6 +170,12 @@ impl TraceMap {
     /// type (enumerations as DINT). Function block internals included.
     pub fn vars(&self) -> impl Iterator<Item = (&str, Ty)> {
         self.leaves.iter().map(|l| (l.path.as_str(), l.ty))
+    }
+
+    /// The counter a statement's hits are kept in (what the interpreter
+    /// knows a statement by).
+    pub(crate) fn counter(&self, id: StmtId) -> Option<u32> {
+        self.stmts.get(id.0 as usize).map(|s| s.counter)
     }
 
     fn by_counter(&self, counter: u32) -> Option<StmtId> {
@@ -350,6 +358,10 @@ pub(crate) struct Recorder {
     pub counts: Vec<u32>,
     /// Counter of the innermost statement running, [`NONE`] outside any.
     pub cur: u32,
+    /// Breakpoints: the counters of the statements to stop before, sorted.
+    breaks: Vec<u32>,
+    /// Breakpoint hits still to pass before stopping.
+    skip: u32,
 }
 
 impl Recorder {
@@ -357,7 +369,35 @@ impl Recorder {
         Self {
             counts: vec![0; counters as usize],
             cur: NONE,
+            breaks: Vec::new(),
+            skip: 0,
         }
+    }
+
+    /// A recorder that stops before the `skip + 1`-th start of any of
+    /// `breaks` (counters).
+    pub fn with_breaks(counters: u32, mut breaks: Vec<u32>, skip: u32) -> Self {
+        breaks.sort_unstable();
+        breaks.dedup();
+        Self {
+            breaks,
+            skip,
+            ..Self::new(counters)
+        }
+    }
+
+    /// Whether the scan stops before statement `tr` now (it is a
+    /// breakpoint and no hits are left to pass).
+    #[inline]
+    pub fn stops_at(&mut self, tr: u32) -> bool {
+        if self.breaks.is_empty() || self.breaks.binary_search(&tr).is_err() {
+            return false;
+        }
+        if self.skip == 0 {
+            return true;
+        }
+        self.skip -= 1;
+        false
     }
 
     fn bump(&mut self, at: usize) {
@@ -373,7 +413,7 @@ impl Recorder {
     /// completes, so `cur` is left on the innermost one.
     pub fn enter(&mut self, tr: u32) -> u32 {
         self.bump(tr as usize);
-        std::mem::replace(&mut self.cur, tr)
+        core::mem::replace(&mut self.cur, tr)
     }
 
     /// IF or CASE `tr` took arm `k` (`k` = the number of arms: none held).
@@ -405,6 +445,7 @@ pub struct Trace {
     image: Image,
     fault: Option<Fault>,
     fault_at: Option<StmtId>,
+    paused_at: Option<StmtId>,
 }
 
 impl Trace {
@@ -415,9 +456,12 @@ impl Trace {
         frame: Vec<Value>,
         image: Image,
         fault: Option<Fault>,
+        paused: bool,
     ) -> Self {
         let fault_at = fault.and_then(|_| map.by_counter(rec.cur));
+        let paused_at = if paused { map.by_counter(rec.cur) } else { None };
         Self {
+            paused_at,
             map,
             now,
             counts: rec.counts,
@@ -497,6 +541,15 @@ impl Trace {
     #[must_use]
     pub const fn fault(&self) -> Option<Fault> {
         self.fault
+    }
+
+    /// The statement a breakpoint stopped the scan before
+    /// ([`crate::Program::scan_to`]); `None` for a scan that ran to its
+    /// end or its fault. The statement has not run: its hit is not counted
+    /// and the values are as they stood just before it.
+    #[must_use]
+    pub const fn paused_at(&self) -> Option<StmtId> {
+        self.paused_at
     }
 
     /// The innermost statement running when the scan faulted (a loop

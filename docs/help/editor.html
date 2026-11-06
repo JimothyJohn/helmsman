@@ -5,42 +5,54 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Helmsman Help · The Editor</title>
 <link rel="icon" type="image/svg+xml" href="../brand/helmsman-mark-16-yellow.svg">
+<script>(function(){try{if(localStorage.getItem('helmsman-theme')==='light'){document.documentElement.dataset.theme='light'}}catch(e){}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Saira+Stencil+One&amp;display=swap">
 <style>
-:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;--white:#FFFFFF;
+:root{--yellow:#FFC20E;--black:#141414;--graphite:#3A3A3A;--steel:#8C8C8C;--white:#FFFFFF;--header-fg:#C8C8C8;
 --stencil:'Saira Stencil One',Impact,sans-serif;
---mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif}
+--mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;--sans:'IBM Plex Sans',system-ui,sans-serif;
+color-scheme:dark;
+--bg:#141414;--fg:#F0F0F0;--muted:#8C8C8C;--rule:#3A3A3A;--nav:#B8B8B8;
+--code:#2C2C2C;--pre:#242424;--pre-fg:#F0F0F0;--kbd:#2C2C2C;--kbd-edge:#4A4A4A;--note:#2B2510}
+:root[data-theme="light"]{color-scheme:light;
+--bg:#FFFFFF;--fg:#141414;--muted:#3A3A3A;--rule:#E6E6E6;--nav:#3A3A3A;
+--code:#F2F2F2;--pre:#141414;--pre-fg:#F0F0F0;--kbd:#F2F2F2;--kbd-edge:#D8D8D8;--note:#FFF8E0}
 *{box-sizing:border-box}
-body{margin:0;background:var(--white);color:var(--black);font:16px/1.6 var(--sans)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 var(--sans)}
 .wrap{max-width:1040px;margin:0 auto;padding:0 16px}
-header.top{background:var(--black);color:#fff;border-bottom:4px solid var(--yellow)}
+header.top{background:var(--black);color:var(--white);border-bottom:4px solid var(--yellow)}
 header.top .wrap{display:flex;align-items:center;gap:16px;min-height:56px}
-header.top .brand{color:#fff;text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em;flex:none}
+header.top .brand{color:var(--white);text-decoration:none;font:22px/1 var(--stencil);letter-spacing:.04em;flex:none}
 header.top .section{color:var(--steel);font:13px var(--mono)}
-header.top .site{margin-left:auto;color:#C8C8C8;text-decoration:none;font:13px var(--mono)}
+header.top .site{margin-left:auto;color:var(--header-fg);text-decoration:none;font:13px var(--mono)}
 header.top .site:hover{color:var(--yellow)}
+header.top .theme{flex:none;margin:0;padding:6px 0;background:none;border:0;color:var(--header-fg);font:13px var(--mono);cursor:pointer;white-space:nowrap}
+header.top .theme:hover{color:var(--yellow)}
+header.top .theme:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
 .page{display:grid;grid-template-columns:220px 1fr;gap:40px;padding:32px 0 64px}
 nav.help{position:sticky;top:16px;align-self:start;display:flex;flex-direction:column;gap:4px;font:14px var(--mono)}
-nav.help a{color:var(--graphite);text-decoration:none;padding:6px 10px;border-left:3px solid transparent}
-nav.help a:hover{color:var(--black);border-left-color:var(--steel)}
-nav.help a.current{color:var(--black);border-left-color:var(--yellow);font-weight:600}
+nav.help a{color:var(--nav);text-decoration:none;padding:6px 10px;border-left:3px solid transparent}
+nav.help a:hover{color:var(--fg);border-left-color:var(--steel)}
+nav.help a.current{color:var(--fg);border-left-color:var(--yellow);font-weight:600}
 main{min-width:0}
 main h1{font-size:32px;line-height:1.15;margin:0 0 16px}
-main h2{font-size:22px;margin:36px 0 10px;padding-top:12px;border-top:1px solid #E6E6E6}
+main h2{font-size:22px;margin:36px 0 10px;padding-top:12px;border-top:1px solid var(--rule)}
 main h3{font-size:17px;margin:24px 0 6px}
 main p,main li{max-width:72ch}
-main code{font-family:var(--mono);font-size:.92em;background:#F2F2F2;padding:1px 4px;border-radius:3px}
-main pre{background:var(--black);color:#F0F0F0;padding:14px 16px;overflow-x:auto;border-radius:6px;font:14px/1.5 var(--mono)}
+main code{font-family:var(--mono);font-size:.92em;background:var(--code);padding:1px 4px;border-radius:3px}
+main pre{background:var(--pre);color:var(--pre-fg);padding:14px 16px;overflow-x:auto;border-radius:6px;font:14px/1.5 var(--mono)}
 main pre code{background:none;padding:0;color:inherit}
 main table{border-collapse:collapse;margin:12px 0;font-size:15px}
-main th,main td{text-align:left;padding:6px 12px;border-bottom:1px solid #E6E6E6;vertical-align:top}
-main th{font:600 13px var(--mono);color:var(--graphite)}
-main kbd{font:13px var(--mono);background:#F2F2F2;border:1px solid #D8D8D8;border-bottom-width:2px;border-radius:4px;padding:1px 6px}
+main th,main td{text-align:left;padding:6px 12px;border-bottom:1px solid var(--rule);vertical-align:top}
+main th{font:600 13px var(--mono);color:var(--muted)}
+main img{display:block;max-width:100%;height:auto;margin:14px 0;border:1px solid var(--rule);border-radius:6px}
+main img.narrow{max-width:420px}
+main kbd{font:13px var(--mono);background:var(--kbd);border:1px solid var(--kbd-edge);border-bottom-width:2px;border-radius:4px;padding:1px 6px}
 main a{color:inherit;text-decoration-thickness:2px;text-underline-offset:3px}
-.note{border-left:4px solid var(--yellow);background:#FFF8E0;padding:10px 14px;margin:14px 0}
-footer{background:var(--graphite);color:#C8C8C8;font:13px var(--mono);padding:18px 0}
+.note{border-left:4px solid var(--yellow);background:var(--note);padding:10px 14px;margin:14px 0}
+footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);padding:18px 0}
 @media (max-width:760px){.page{grid-template-columns:1fr;gap:16px}nav.help{position:static;flex-direction:row;flex-wrap:wrap}}
 </style>
 </head>
@@ -48,9 +60,10 @@ footer{background:var(--graphite);color:#C8C8C8;font:13px var(--mono);padding:18
 <header class="top"><div class="wrap">
   <a class="brand" href="../">HELMSMAN</a><span class="section">Help</span>
   <a class="site" href="../playground/">Playground</a>
+  <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples and starters</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="the-editor">The Editor</h1>
 <p>The Editor is the screen you program in. It is the same on a box and
@@ -62,21 +75,28 @@ in the simulation; what differs is where the program runs.</p>
 <li><strong>File · Edit · View · Help</strong>: the menus. Every item
 that has a key shows it. File holds Save, Deploy, Upload and Download.
 Edit holds Undo and Redo for the Structured Text, Go to definition and
-Cross references. View switches between the Editor and the Monitor and
-shows or hides each pane. Help opens these pages, the keyboard table,
-and About Helmsman (the version and build).</li>
+Cross references. View switches between the Editor and the Monitor,
+shows or hides each pane, and has Light mode (dark is the default; the
+browser remembers your choice). Help opens these pages, the keyboard
+table, and About Helmsman (the version and build).</li>
 <li><strong>The state</strong>: <code>running</code>,
 <code>stopped</code> or <code>faulted</code>, green when running, red
 otherwise, with the program's clock. On a box this is the link to the
 box instead.</li>
 <li>On the right: the project's name, a mark when it has unsaved edits,
-the <strong>Editor | Monitor</strong> toggle, the ⋯ menu (proposals, and
-where the program runs) and, on a box, <strong>Sign in</strong>.</li>
+the <strong>Editor | Monitor</strong> toggle, a yellow
+<strong>waiting</strong> badge when proposals wait for an approver (it
+opens the Proposals screen) and, on a box, <strong>Sign
+in</strong>.</li>
 </ul>
+<img src="img/file-menu.png" alt="The File menu open: New project, Copy project, Save, Deploy, Upload and Download, each with its key." width="520">
+
 <p>If something needs saying, a line appears under the header while it
 is true: a fault, a deploy under way or refused, a file someone else
 saved since you opened it (with a Reload). The Messages tab along the
 bottom keeps those lines after they have gone.</p>
+<p><img src="img/editor-light.png"
+alt="The same screen in light mode, View › Light mode." /></p>
 <h2 id="the-glyphs">The glyphs</h2>
 <p>A strip of buttons sits over the diagram's top-right corner. In the
 simulation: run or stop (<kbd>Ctrl</kbd> <kbd>Enter</kbd>), step one
@@ -84,6 +104,8 @@ scan (<kbd>F10</kbd>, when stopped), and restart from initial values. On
 both: save, upload a file into the project, download the project as a
 <code>.zip</code>, and <strong>?</strong> for these pages. Hover one for
 its name and key.</p>
+<img src="img/glyphs.png" alt="The glyph strip: stop, step, restart, then save, upload and download." width="300">
+
 <h2 id="the-diagram">The diagram</h2>
 <p>The diagram is the program, drawn from its Structured Text and lit
 from the controller as it runs. It is not a second way to write the
@@ -110,13 +132,19 @@ the virtual inputs; on a box they are forces (see <a href="box.html">On
 a box</a>).</li>
 <li><strong>Go into a block.</strong> Double-click a function block
 instance to see its own diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the
-breadcrumbs come back up.</li>
+breadcrumbs come back up. From the keyboard, pick the instance and press
+<kbd>Ctrl</kbd> <kbd>]</kbd> to go in and <kbd>Ctrl</kbd> <kbd>[</kbd>
+to come out (the instance stays picked, so <kbd>Ctrl</kbd> <kbd>]</kbd>
+goes back in). With the simulation stopped, each also steps one scan, so
+you watch the instance work as you move through the levels.</li>
 <li><strong>Arrange.</strong> Drag a block, or an IF by its label, to
 move it. View › Reset layout goes back; View › Save layout as default
 keeps your arrangement with the project so everyone opens it that way.
 Pan with a drag on empty space, zoom with the wheel; the diagram never
 leaves the view, and a double-click on empty space fits it again.</li>
 </ul>
+<p><img src="img/diagram-why.png"
+alt="The lamp&#39;s assignment picked: it is outlined, what drives it stays lit and the rest dims." /></p>
 <p>Values that would clutter the diagram are left off it: a constant
 shows its name alone, a time reads as <code>T#500ms</code>. A wire that
 would cross the whole diagram is drawn as a pair of tagged stubs naming
@@ -136,30 +164,82 @@ TON = ⏱          # over the built-in one</code></pre>
 the label is drawn, the icon stands alone at a readable size.</p>
 <h2 id="the-panes">The panes</h2>
 <ul>
-<li><strong>The left pane</strong> has two tabs. <strong>Files</strong>
-(<kbd>Alt</kbd> <kbd>0</kbd>): the project's files, the examples and
-starters, and the program tree under them; a right-click on a file
-offers Copy, Paste, Duplicate, Rename and Delete, and what you copy
-pastes into any project you open next. <strong>Code</strong>
+<li><strong>The left pane</strong> has three tabs.
+<strong>Files</strong> (<kbd>Alt</kbd> <kbd>0</kbd>): the project's
+files, the examples and starters, and the program tree under them; a
+right-click on a file offers Copy, Paste, Duplicate, Rename and Delete,
+and what you copy pastes into any project you open next.
+<strong>Devices</strong> (<kbd>Alt</kbd> <kbd>4</kbd>): at the top,
+<strong>I/O wiring</strong> links to the project's <code>io.map</code>,
+the file that says which program variable is wired to which device
+point; then the devices it names, each with its points under it, their
+live values, and whether the link is up; a right-click on the blank
+space adds a device (name, protocol, address, settings) as a line of the
+map; Import device… takes the vendor's EDS file, keeps it in the project
+and fills the form in from it. Under the map's devices, <strong>On the
+network</strong>: Scan lists every EtherNet/IP device that answers on
+the LAN, says whether the map already has it, and shows what the public
+device library knows of it (in the simulation, one simulated E1213).
+<strong>Use this device</strong> under one opens the form filled in, the
+device named by its identity so a changed address never loses it; on a
+read-only example it copies the project first. The form has a field for
+each of the protocol's settings, filled in with the usual values and
+checked against the driver's ranges, with the device's io.map line under
+them. Below that are its inputs and outputs: a known device (the ioLogik
+E1213) lists every channel, and the program's inputs and outputs that
+were on the box's own channels are already ticked on the first free
+ones. Tick any other channel and name it, or add rows with
+<ul>
+<li>Input and + Output for any other device. For each row, Program picks
+what the program does with it: one of its own variables, a new variable
+(declared in the program's <code>VAR_INPUT</code> or
+<code>VAR_OUTPUT</code>), or wiring only. <strong>Edit</strong> beside a
+device opens the same form on it, its settings and wired points filled
+in, and Save replaces it in io.map; <strong>Delete</strong> asks, then
+takes the device and its inputs and outputs out (the program's variables
+stay). Double-click or right-click a wired signal to rename it: the
+io.map line and every use in the program change together, listed before
+you confirm. One map may mix Modbus TCP and EtherNet/IP devices. The
+agent reads the same listing, network included. Under that,
+<strong>Plant states</strong>: the quantities a project's plant model
+keeps for the machine it stands in for (mark a variable with
+<code>{state unit=m}</code> on its line), each with the simulation's
+value and the sensor that measures it on the real machine, or the kind
+of sensor that would; right-click one and Add a sensor… writes that
+signal into the map. When that signal is one of the program's inputs, in
+the same unit, the simulation runs the model from it: set it in the I/O
+tab and the plant follows the sensor. <strong>Code</strong>
 (<kbd>Alt</kbd> <kbd>1</kbd>): the Structured Text editor. Errors are
 marked on the line as you type; the program running does not change
 until you deploy. The key for a tab opens the pane on it, or shuts the
 pane when that tab already shows.</li>
+</ul></li>
 <li><strong>The bottom panel</strong> (<kbd>Alt</kbd> <kbd>2</kbd>): the
 <strong>Trend</strong> of the signals you pin, with a long time axis,
 and <strong>Messages</strong>, the last two hundred things the page had
 to say, with the error count on the tab.</li>
 <li><strong>The side panel</strong>, on the right (<kbd>Alt</kbd>
 <kbd>3</kbd>): <strong>I/O</strong>, every input and output with its
-value and a control for each input the diagram does not show; and
-<strong>Agent</strong>, where you describe what you want.</li>
+value and a control for each input the diagram does not show;
+<strong>Requirements</strong>, the project's requirement tests, one row
+each, green or red with why, with <strong>Edit</strong> (new words; the
+agent rewrites the test for them, or only the words change) and
+<strong>Delete</strong> (asks first) on every row (see <a
+href="projects.html#requirement-tests">Requirement tests</a>); and
+<strong>Agent</strong>, where you type what the open file should do and
+it is updated (see <a href="agent.html">The Agent</a>).</li>
 </ul>
+<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
+
+<img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">
+
 <p>Each pane remembers whether it was open, per browser.</p>
 </main>
 </div>
 <footer><div class="wrap">Helmsman Factory Automation · early release · open source (Apache 2.0) · <a href="https://github.com/JimothyJohn/helmsman" style="color:inherit">source</a></div></footer>
 <script>
 (function(){var c=document.querySelectorAll('nav.help a');for(var i=0;i<c.length;i++){if(c[i].getAttribute('href')==='editor.html'){c[i].className='current';}}})();
+(function(){var h=document.documentElement,b=document.querySelector('header.top .theme');if(!b){return}function show(){var l=h.dataset.theme==='light';b.textContent=l?'Dark':'Light';b.setAttribute('aria-pressed',l?'true':'false')}b.addEventListener('click',function(){var l=h.dataset.theme==='light';if(l){delete h.dataset.theme}else{h.dataset.theme='light'}try{localStorage.setItem('helmsman-theme',l?'dark':'light')}catch(e){}show()});show()})();
 </script>
 </body>
 </html>

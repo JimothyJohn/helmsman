@@ -14,7 +14,8 @@ use eframe::egui::{
 };
 
 use crate::st_view::TAP;
-use crate::st_view::brand::{GRAPHITE, STEEL, WHITE, YELLOW};
+use crate::theme::{Theme, theme};
+use crate::tips::Tip;
 
 /// Where the app keeps [`Chrome`] in the browser's storage.
 pub const CHROME_KEY: &str = "helmsman-canvas/editor";
@@ -29,21 +30,38 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
+    /// The project's requirement tests, green or red (`helmsman_iec::spec`).
+    Requirements,
     Claude,
 }
 
 impl Tab {
+    /// Every tab, in the panel's order.
+    pub const ALL: [Self; 3] = [Self::Io, Self::Requirements, Self::Claude];
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
+            Self::Requirements => "Requirements",
             Self::Claude => "Agent",
+        }
+    }
+
+    /// The tab button's tooltip.
+    #[must_use]
+    pub const fn tip(self) -> &'static str {
+        match self {
+            Self::Io => "The program's inputs and outputs with their live values.",
+            Self::Requirements => "The project's requirement tests, green or red. A red test stops Deploy.",
+            Self::Claude => "Ask the agent about the program, or have it propose a change.",
         }
     }
 
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
+            Self::Requirements => "tests",
             Self::Claude => "claude",
         }
     }
@@ -67,37 +85,58 @@ impl Bottom {
 }
 
 /// The left pane's tabs (Nick, 2026-11-01: Code | Files, as the right
-/// panel has I/O | Agent).
+/// panel has I/O | Agent; 2026-11-02: Devices between them).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Pane {
     #[default]
     Files,
+    /// The I/O map's devices and their points (`crate::devices`).
+    Devices,
     /// The Structured Text editor.
     Code,
 }
 
 impl Pane {
+    /// Every tab, left to right.
+    pub const ALL: [Self; 3] = [Self::Files, Self::Devices, Self::Code];
+
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Files => "Files",
+            Self::Devices => "Devices",
             Self::Code => "Code",
+        }
+    }
+
+    /// The tab button's tooltip.
+    #[must_use]
+    pub const fn tip(self) -> &'static str {
+        match self {
+            Self::Files => "The projects and the open one's files (Alt+0 opens or shuts it).",
+            Self::Devices => "The I/O map: the remote modules and their points (Alt+4 opens or shuts it).",
+            Self::Code => "The Structured Text of the open file (Alt+1 opens or shuts it).",
         }
     }
 
     const fn key(self) -> &'static str {
         match self {
             Self::Files => "files",
+            Self::Devices => "devices",
             Self::Code => "code",
         }
     }
 }
 
-/// The left pane's width when first opened, points: one width for both
-/// tabs (Nick, 2026-11-01).
-pub const LEFT_W: f32 = 160.0;
-/// The right panel's width when first opened, points.
-pub const RIGHT_W: f32 = 204.0;
+/// The left pane's width when first opened, points: one width for every
+/// tab (Nick, 2026-11-01); 200 since the third tab (three tab buttons and
+/// the hide chevron must fit the row, or the pane grows every frame); 240
+/// since 2026-11-05 (Nick: "just a bit wider").
+pub const LEFT_W: f32 = 240.0;
+/// The right panel's width when first opened, points: 236 since the
+/// Requirements tab (three tab buttons and the hide chevron must fit the
+/// row, or the panel grows every frame).
+pub const RIGHT_W: f32 = 236.0;
 
 /// The Editor's layout and the Monitor's scan detail (kept per browser)
 /// and what was drawn where this frame (tests click by it).
@@ -120,6 +159,8 @@ pub struct Chrome {
     /// The Monitor's status tiles show the scan period and counts: an
     /// engineer's choice, and only shown while one is signed in.
     pub scan: bool,
+    /// View › Light mode: the light page instead of the dark one.
+    pub light: bool,
     /// The source line a block click sent the ST editor to.
     pub line: Option<u32>,
     /// [`Self::line`] not scrolled to yet.
@@ -129,6 +170,8 @@ pub struct Chrome {
     /// Where the diagram was drawn this frame (the glyph buttons sit in
     /// its top-right corner).
     pub diagram: Rect,
+    /// The find box over the ST pane, while open (Ctrl F).
+    pub find: Option<crate::find::Find>,
 }
 
 impl Default for Chrome {
@@ -141,10 +184,12 @@ impl Default for Chrome {
             bottom: Bottom::Trend,
             tab: Tab::Io,
             scan: false,
+            light: false,
             line: None,
             jump: None,
             hits: Vec::new(),
             diagram: Rect::NOTHING,
+            find: None,
         }
     }
 }
@@ -154,14 +199,15 @@ impl Chrome {
     #[must_use]
     pub fn saved(&self) -> String {
         format!(
-            "left={} right={} pane={} tab={} scan={} trend={} bottom={}",
+            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={}",
             u8::from(self.left),
             u8::from(self.right),
             self.pane.key(),
             self.tab.key(),
             u8::from(self.scan),
             u8::from(self.trend),
-            self.bottom.key()
+            self.bottom.key(),
+            u8::from(self.light)
         )
     }
 
@@ -177,12 +223,14 @@ impl Chrome {
                 // its own.
                 Some(("pane", "code") | ("st", "1")) => c.pane = Pane::Code,
                 Some(("pane", "files")) => c.pane = Pane::Files,
+                Some(("pane", "devices")) => c.pane = Pane::Devices,
                 Some(("scan", v)) => c.scan = v == "1",
                 Some(("trend", v)) => c.trend = v == "1",
+                Some(("light", v)) => c.light = v == "1",
                 Some(("bottom", "messages")) => c.bottom = Bottom::Messages,
                 Some(("bottom", "trend")) => c.bottom = Bottom::Trend,
                 Some(("tab", v)) => {
-                    if let Some(t) = [Tab::Io, Tab::Claude].into_iter().find(|t| t.key() == v) {
+                    if let Some(t) = Tab::ALL.into_iter().find(|t| t.key() == v) {
                         c.tab = t;
                     }
                 }
@@ -228,6 +276,28 @@ impl Chrome {
         self.pane = Pane::Files;
     }
 
+    /// Whether the Devices tab is on screen.
+    #[must_use]
+    pub fn devices_open(&self) -> bool {
+        self.left && self.pane == Pane::Devices
+    }
+
+    /// Opens the left pane on the devices.
+    pub fn show_devices(&mut self) {
+        self.left = true;
+        self.pane = Pane::Devices;
+    }
+
+    /// Alt 4, View › Devices: the Devices tab, or the pane shut when that
+    /// is what shows.
+    pub fn toggle_devices(&mut self) {
+        if self.devices_open() {
+            self.left = false;
+        } else {
+            self.show_devices();
+        }
+    }
+
     /// Alt 1, View › Structured Text: the Code tab, or the pane shut when
     /// that is what shows.
     pub fn toggle_code(&mut self) {
@@ -257,16 +327,17 @@ impl Chrome {
     }
 }
 
-/// A menu item: a full-width button that closes its menu when clicked.
-/// Whether it was.
+/// A menu item: a full-width button that closes its menu when clicked,
+/// with `tip` on hover (and when disabled: say why). Whether it was.
 pub fn menu_item(
     ui: &mut egui::Ui,
     chrome: &mut Chrome,
     key: &str,
     text: impl Into<RichText>,
     on: bool,
+    tip: &str,
 ) -> bool {
-    menu_item_keyed(ui, chrome, key, text, on, "")
+    menu_item_keyed(ui, chrome, key, text, on, "", tip)
 }
 
 /// [`menu_item`] with its keyboard shortcut printed at the right.
@@ -277,15 +348,17 @@ pub fn menu_item_keyed(
     text: impl Into<RichText>,
     on: bool,
     shortcut: &str,
+    tip: &str,
 ) -> bool {
-    let b = egui::Button::selectable(on, text.into())
-        .min_size(Vec2::new(ui.available_width().max(74.0), TAP * 0.7));
-    let b = if shortcut.is_empty() {
-        b
-    } else {
-        b.shortcut_text(RichText::new(shortcut).weak())
-    };
-    let r = ui.add(b);
+    // No `available_width()` here: a menu measures itself against the
+    // style's default area (600 pt) before it knows its size, and an item
+    // that wide would be remembered. The menu's justified layout fills
+    // every item to the widest one instead.
+    let mut b = egui::Button::selectable(on, text.into()).min_size(Vec2::new(74.0, TAP * 0.7));
+    if !shortcut.is_empty() {
+        b = b.shortcut_text(RichText::new(shortcut).weak());
+    }
+    let r = ui.add(b).tip(tip);
     chrome.hit(key, r.rect);
     if r.clicked() {
         ui.close();
@@ -301,17 +374,61 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
     let (code, files, right) = (chrome.code_open(), chrome.files_open(), chrome.right);
     let ctx = ui.ctx().clone();
     let k = |a| label(&ctx, a);
-    if menu_item_keyed(ui, chrome, "view st", "Structured Text", code, &k(Action::St)) {
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view st",
+        "Structured Text",
+        code,
+        &k(Action::St),
+        "Shows or hides the code pane.",
+    ) {
         chrome.toggle_code();
     }
-    if menu_item_keyed(ui, chrome, "view files", "Files", files, &k(Action::Files)) {
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view files",
+        "Files",
+        files,
+        &k(Action::Files),
+        "Shows or hides the projects and their files.",
+    ) {
         chrome.toggle_files();
     }
-    if menu_item_keyed(ui, chrome, "view panel", "Side panel", right, &k(Action::Panel)) {
+    let devices = chrome.devices_open();
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view devices",
+        "Devices",
+        devices,
+        &k(Action::Devices),
+        "Shows or hides the I/O map's devices.",
+    ) {
+        chrome.toggle_devices();
+    }
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view panel",
+        "Side panel",
+        right,
+        &k(Action::Panel),
+        "Shows or hides the panel on the right: I/O, Requirements, Agent.",
+    ) {
         chrome.right = !right;
     }
     let trend = chrome.trend;
-    if menu_item_keyed(ui, chrome, "view trend", "Trend", trend, &k(Action::Trend)) {
+    if menu_item_keyed(
+        ui,
+        chrome,
+        "view trend",
+        "Trend",
+        trend,
+        &k(Action::Trend),
+        "Shows or hides the trend and messages along the bottom.",
+    ) {
         chrome.trend = !trend;
     }
     for &t in tabs {
@@ -322,11 +439,43 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
             &format!("view tab {}", t.key()),
             format!("    {}", t.label()),
             on,
+            t.tip(),
         ) {
             chrome.tab = t;
             chrome.right = true;
         }
     }
+}
+
+/// The characters selected in the ST editor `id` (either order), when
+/// any are.
+#[must_use]
+pub fn selection(ctx: &egui::Context, id: egui::Id) -> Option<(usize, usize)> {
+    let r = TextEditState::load(ctx, id)?.cursor.char_range()?;
+    (r.primary.index != r.secondary.index).then_some((r.secondary.index.into(), r.primary.index.into()))
+}
+
+/// Drops the ST editor `id`'s selection, leaving the caret where it was.
+pub fn deselect(ctx: &egui::Context, id: egui::Id) {
+    if let Some(mut state) = TextEditState::load(ctx, id)
+        && let Some(r) = state.cursor.char_range()
+    {
+        state
+            .cursor
+            .set_char_range(Some(egui::text::CCursorRange::one(r.primary)));
+        state.store(ctx, id);
+    }
+}
+
+/// Selects characters `a..b` of the ST editor `id` (the tests' mouse).
+#[cfg(test)]
+pub fn select(ctx: &egui::Context, id: egui::Id, a: usize, b: usize) {
+    let mut state = TextEditState::load(ctx, id).unwrap_or_default();
+    state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+        egui::text::CCursor::new(a),
+        egui::text::CCursor::new(b),
+    )));
+    state.store(ctx, id);
 }
 
 /// Undoes (or, `redo`, redoes) the last edit of the ST editor `id` on
@@ -369,6 +518,9 @@ pub trait Body {
     /// The left pane's Files tab: the projects, the open one's files and
     /// the program tree.
     fn files(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
+    /// The left pane's Devices tab: the I/O map's devices and their
+    /// points, live (`crate::devices`).
+    fn devices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The left pane's Code tab: the ST editor (read-only on a box).
     fn st(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
     /// The Trend along the bottom: pins and the plot.
@@ -377,7 +529,7 @@ pub trait Body {
     fn messages(&mut self) -> &mut crate::messages::Log;
     /// The right panel's tabs this view has, in order.
     fn tabs(&self) -> &'static [Tab];
-    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab);
+    fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome);
     /// The diagram with its breadcrumbs; a block click calls
     /// [`Chrome::goto`].
     fn diagram(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome);
@@ -418,7 +570,8 @@ fn chevron(ui: &egui::Ui, c: Pos2, left: bool, hot: bool) {
     let dir = if left { -1.0 } else { 1.0 };
     let tip = Pos2::new(c.x + dir * s * 0.5, c.y);
     let back = c.x - dir * s * 0.5;
-    let stroke = Stroke::new(2.5, if hot { YELLOW } else { STEEL });
+    let t = theme(ui);
+    let stroke = Stroke::new(2.5, if hot { t.accent } else { t.muted });
     ui.painter().line_segment([Pos2::new(back, c.y - s), tip], stroke);
     ui.painter().line_segment([Pos2::new(back, c.y + s), tip], stroke);
 }
@@ -433,6 +586,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut hits = Vec::new();
     let mut left = chrome.left;
     let mut pane = chrome.pane;
+    let (left0, pane0) = (left, pane);
     let flip = egui::Panel::show_switched(
         ui,
         &mut left,
@@ -446,20 +600,24 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
         |ui, open| {
             let toggle = if open {
                 let mut t = None;
-                // Tabs: Files | Code, the hide chevron at the right.
+                // Tabs: Files | Devices | Code, the hide chevron at the right.
                 ui.horizontal(|ui| {
-                    for p in [Pane::Files, Pane::Code] {
-                        let b = egui::Button::selectable(pane == p, RichText::new(p.label()).strong())
-                            .min_size(Vec2::new(48.0, TAP * 0.75));
-                        let r = ui.add(b);
+                    for p in Pane::ALL {
+                        let r = crate::theme::tab(ui, pane == p, p.label(), Vec2::new(0.0, TAP * 0.75))
+                            .tip(p.tip());
                         hits.push((format!("pane {}", p.key()), r.rect));
                         if r.clicked() {
                             pane = p;
                         }
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        t = Some(header_toggle(ui, true, "hide the pane"));
-                    });
+                    // The chevron at the right edge, or right after the
+                    // tabs when they fill the row: a right-to-left layout
+                    // with no room left would draw it over the last tab.
+                    // The gap leaves the item spacing before the chevron,
+                    // or the row overflows and the panel grows every frame.
+                    let gap = ui.available_width() - TAP * 0.75 - ui.spacing().item_spacing.x;
+                    ui.add_space(gap.max(0.0));
+                    t = Some(header_toggle(ui, true, "Hides the pane."));
                 });
                 ui.separator();
                 match pane {
@@ -468,11 +626,16 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                             .id_salt("ed-files-scroll")
                             .show(ui, |ui| body.files(ui, chrome));
                     }
+                    Pane::Devices => {
+                        egui::ScrollArea::vertical()
+                            .id_salt("ed-devices-scroll")
+                            .show(ui, |ui| body.devices(ui, chrome));
+                    }
                     Pane::Code => body.st(ui, chrome),
                 }
                 t
             } else {
-                Some(strip_toggle(ui, false, "show the pane"))
+                Some(strip_toggle(ui, false, "Shows the pane."))
             };
             if let Some(t) = toggle {
                 hits.push(("left".to_string(), t.rect));
@@ -486,8 +649,14 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     if flip {
         left = !left;
     }
-    chrome.left = left;
-    chrome.pane = pane;
+    // The body may have moved the pane itself (a double click on a file
+    // opens the Code tab); the tabs' copy wins only when it did not.
+    if chrome.left == left0 {
+        chrome.left = left;
+    }
+    if chrome.pane == pane0 {
+        chrome.pane = pane;
+    }
 
     let tabs = body.tabs();
     if !tabs.contains(&chrome.tab) {
@@ -508,11 +677,10 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             let toggle = if open {
                 let mut t = None;
                 ui.horizontal(|ui| {
-                    t = Some(header_toggle(ui, false, "hide the panel"));
+                    t = Some(header_toggle(ui, false, "Hides the panel (Alt+3)."));
                     for &k in tabs {
-                        let b = egui::Button::selectable(tab == k, RichText::new(k.label()).strong())
-                            .min_size(Vec2::new(64.0, TAP * 0.75));
-                        let r = ui.add(b);
+                        let r = crate::theme::tab(ui, tab == k, k.label(), Vec2::new(0.0, TAP * 0.75))
+                            .tip(k.tip());
                         hits.push((format!("tab {}", k.key()), r.rect));
                         if r.clicked() {
                             tab = k;
@@ -520,10 +688,10 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                     }
                 });
                 ui.separator();
-                body.tab(ui, tab);
+                body.tab(ui, tab, chrome);
                 t
             } else {
-                Some(strip_toggle(ui, true, "show the panel"))
+                Some(strip_toggle(ui, true, "Shows the panel (Alt+3)."))
             };
             if let Some(t) = toggle {
                 hits.push(("right".to_string(), t.rect));
@@ -549,14 +717,22 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             // Tabs: Trend | Messages (errors counted on the tab).
             let label = body.messages().label();
             ui.horizontal(|ui| {
-                for (b, text, key) in [
-                    (Bottom::Trend, "Trend".to_string(), "bottom trend"),
-                    (Bottom::Messages, label, "bottom messages"),
+                for (b, text, key, tip) in [
+                    (
+                        Bottom::Trend,
+                        "Trend".to_string(),
+                        "bottom trend",
+                        "Pinned signals over time (Alt+2).",
+                    ),
+                    (
+                        Bottom::Messages,
+                        label,
+                        "bottom messages",
+                        "What happened: connections, deploys, faults and errors, newest last.",
+                    ),
                 ] {
-                    let r = ui.add(
-                        egui::Button::selectable(chrome.bottom == b, RichText::new(text).strong())
-                            .min_size(Vec2::new(64.0, TAP * 0.6)),
-                    );
+                    let r =
+                        crate::theme::tab(ui, chrome.bottom == b, &text, Vec2::new(64.0, TAP * 0.6)).tip(tip);
                     chrome.hit(key, r.rect);
                     if r.clicked() {
                         chrome.bottom = b;
@@ -590,8 +766,9 @@ pub fn st_editor(
     limit: usize,
     chrome: &mut Chrome,
 ) -> egui::Response {
-    let font = FontId::monospace(13.0);
+    let font = FontId::monospace(crate::theme::MONO);
     let row = ui.fonts_mut(|f| f.row_height(&font));
+    let found = crate::find::row(ui, &mut chrome.find, id, text.as_str());
     let mut scroll = egui::ScrollArea::vertical().id_salt(id.with("scroll"));
     if let Some(line) = chrome.jump.take() {
         #[allow(clippy::cast_precision_loss)]
@@ -611,6 +788,32 @@ pub fn st_editor(
             state.store(ui.ctx(), id);
         }
     }
+    // The current match: selected and scrolled to.
+    if let Some(f) = &found
+        && f.reveal
+        && let Some(r) = f.current.and_then(|k| f.ranges.get(k))
+    {
+        let s = text.as_str();
+        let line = s[..r.start].matches('\n').count();
+        #[allow(clippy::cast_precision_loss)]
+        let y = line.saturating_sub(4) as f32 * row;
+        scroll = scroll.vertical_scroll_offset(y);
+        crate::find::select(ui.ctx(), id, s, r.clone(), true);
+    }
+    let t = theme(ui);
+    let marks: Vec<(std::ops::Range<usize>, Color32)> = found
+        .as_ref()
+        .map(|f| {
+            f.ranges
+                .iter()
+                .enumerate()
+                .map(|(k, r)| {
+                    let strength = if f.current == Some(k) { 0.75 } else { 0.3 };
+                    (r.clone(), crate::st_view::brand::YELLOW.gamma_multiply(strength))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let at = chrome.line;
     scroll
         .show(ui, |ui| {
@@ -622,7 +825,9 @@ pub fn st_editor(
                 let wrap = (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0);
                 // The rows the text takes at that width: each source line
                 // numbered on its first row, its wrapped rows blank.
-                let galley = ui.fonts_mut(|f| f.layout_job(highlight(text.as_str(), diags, at, &font, wrap)));
+                let mut job = highlight(text.as_str(), diags, at, &font, wrap, &t);
+                crate::find::mark(&mut job, &marks);
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
                 let mut gutter = LayoutJob::default();
                 for (n, number) in numbering(galley.rows.iter().map(|r| r.ends_with_newline)) {
                     let bad = diags.iter().any(|(l, _)| *l as usize == n);
@@ -630,9 +835,9 @@ pub fn st_editor(
                     let color = if bad {
                         RED
                     } else if here {
-                        YELLOW
+                        t.accent
                     } else {
-                        STEEL
+                        t.muted
                     };
                     let label = if number {
                         format!("{n:>3}\n")
@@ -644,11 +849,14 @@ pub fn st_editor(
                 gutter.wrap.max_width = f32::INFINITY;
                 ui.label(gutter);
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
-                    let job = highlight(buf.as_str(), diags, at, &font, wrap);
+                    let mut job = highlight(buf.as_str(), diags, at, &font, wrap, &t);
+                    crate::find::mark(&mut job, &marks);
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
+                // A tooltip would sit over the code under the pointer while
+                // the engineer types; the pane's tab button has one.
                 ui.add(
-                    egui::TextEdit::multiline(text)
+                    egui::TextEdit::multiline(text) // tip: exempt
                         .id(id)
                         .code_editor()
                         .desired_width(wrap)
@@ -682,21 +890,27 @@ pub fn numbering(rows: impl Iterator<Item = bool>) -> Vec<(usize, bool)> {
 }
 
 /// The ST as a layout wrapped at `wrap` points: a line with a diagnostic
-/// on a dark red ground, its column to the end of the word underlined;
-/// the line `at` (a block click sent the editor there) on a graphite
-/// ground.
+/// on a red ground, its column to the end of the word underlined; the
+/// line `at` (a block click sent the editor there) on a grey ground.
 #[must_use]
-pub fn highlight(text: &str, diags: &[(u32, u32)], at: Option<u32>, font: &FontId, wrap: f32) -> LayoutJob {
+pub fn highlight(
+    text: &str,
+    diags: &[(u32, u32)],
+    at: Option<u32>,
+    font: &FontId,
+    wrap: f32,
+    t: &Theme,
+) -> LayoutJob {
     let mut job = LayoutJob::default();
-    let plain = TextFormat::simple(font.clone(), Color32::from_gray(230));
-    let bad_ground = Color32::from_rgb(0x4A, 0x16, 0x14);
+    let plain = TextFormat::simple(font.clone(), t.code);
+    let bad_ground = t.bad;
     for (k, line) in text.split_inclusive('\n').enumerate() {
         let n = u32::try_from(k + 1).unwrap_or(u32::MAX);
         let Some(&(_, col)) = diags.iter().find(|(l, _)| *l == n) else {
             let format = if at == Some(n) {
                 TextFormat {
-                    background: GRAPHITE,
-                    color: WHITE,
+                    background: t.rule,
+                    color: t.fg,
                     ..plain.clone()
                 }
             } else {
@@ -731,7 +945,7 @@ pub fn highlight(text: &str, diags: &[(u32, u32)], at: Option<u32>, font: &FontI
             0.0,
             TextFormat {
                 underline: Stroke::new(1.5, RED),
-                color: WHITE,
+                color: t.fg,
                 ..ground.clone()
             },
         );

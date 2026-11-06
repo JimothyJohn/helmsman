@@ -11,14 +11,25 @@
 //! PUT    /api/projects/{p}/files/{f}          engineer: {text, version?}: save (a draft); version = what was read, null = new
 //! DELETE /api/projects/{p}/files/{f}          engineer
 //! POST   /api/projects/{p}/check              token or session: build it as a deploy would; nothing changes
+//! POST   /api/projects/{p}/tests              token or session: run its requirement tests (test_*.st) in the simulation; nothing changes
+//! POST   /api/projects/{p}/requirements       engineer: {text, name?}: one requirement; the agent writes its test (an event stream, see [`super::requirements`])
 //! POST   /api/projects/{p}/replay             engineer: sim replay of deploying it (evidence a deploy can cite)
-//! POST   /api/projects/{p}/deploy             engineer: {replay?}: build, apply through the approval policy, commit, hot-swap
+//! POST   /api/projects/{p}/deploy             engineer: {replay?}: tests, build, apply through the approval policy, commit, hot-swap; a red test refuses (409)
 //! GET    /api/projects/{p}/zip                the project as a .zip
 //! POST   /api/projects/{p}/zip[?replace=true] engineer: a .zip as project p (new, or in place of it)
-//! POST   /api/projects/{p}/import?file=F[&replace=true]
+//! POST   /api/projects/{p}/import?file=F[&replace=true]   (.st, .xml, .L5X as ST; .eds kept as NAME.eds)
 //!                                             engineer: one file into p: F.st as it is, F.xml (PLCopen) lowered to F.st
+//! GET    /api/projects/{p}/history            its revisions, oldest first: n, at_ms, by, what, page, files
+//! GET    /api/projects/{p}/history/{n}        one revision: the files' text, and the Agent page if one
+//! POST   /api/projects/{p}/history/{n}/restore engineer: the project's files back to revision n (a new revision)
 //! GET    /api/running                         which project was deployed last, and whether it is what runs
 //! ```
+//!
+//! **History.** Every save (`PUT .../files/{f}`, which may carry `page`,
+//! the Agent page the change came from), upload, import and restore
+//! writes a revision ([`crate::project::history`]): the files as they are
+//! after it, who (the session's label), when, what. Deploys keep
+//! snapshotting into the store as before.
 //!
 //! **The engineer gate.** Every route that writes (create, copy, rename,
 //! delete, save, upload, import, replay, deploy) needs a login session
@@ -32,6 +43,7 @@
 //! compile, swap between scans, commit; a deploy that does not build
 //! changes nothing. Every call is audited.
 
+use helmsman_iec::{ImageSizes, spec};
 use serde_json::{Value as Json, json};
 
 use super::approve::{self, Approval, Target};
@@ -109,6 +121,30 @@ pub(super) fn get(ctx: &Ctx, rest: &[&str]) -> Response {
             ),
             Err(r) => refusal(&r),
         },
+        // A project that is not there has no history to list (404), while
+        // one that is has an empty one.
+        ["projects", name, "history"] if p.folder(name).is_none() => Response::error(404, "no such project"),
+        ["projects", name, "history"] => match p.history().list(name) {
+            Ok(list) => Response::json(
+                200,
+                &json!({ "revisions": list.iter().map(project::history::Revision::json).collect::<Vec<_>>() }),
+            ),
+            Err(r) => refusal(&r),
+        },
+        ["projects", name, "history", _] if p.folder(name).is_none() => {
+            Response::error(404, "no such project")
+        }
+        ["projects", name, "history", n] => match n.parse::<u32>().ok().map(|n| p.history().read(name, n)) {
+            Some(Ok(r)) => Response::json(
+                200,
+                &json!({
+                    "n": r.revision.n, "at_ms": r.revision.at_ms, "by": r.revision.by, "what": r.revision.what,
+                    "page": r.page, "files": r.files.0,
+                }),
+            ),
+            Some(Err(r)) => refusal(&r),
+            None => Response::error(404, "no such revision"),
+        },
         ["projects", name, "zip"] => match p.zip(name) {
             Ok(bytes) => Response {
                 status: 200,
@@ -135,16 +171,19 @@ pub(super) fn allowed(path: &[&str]) -> Option<&'static str> {
             "api",
             "projects",
             _,
-            "rename" | "check" | "replay" | "deploy" | "import",
-        ] => Some("POST"),
-        ["api", "running"] => Some("GET"),
+            "rename" | "check" | "tests" | "requirements" | "replay" | "deploy" | "import",
+        ]
+        | ["api", "projects", _, "history", _, "restore"] => Some("POST"),
+        ["api", "running"] | ["api", "projects", _, "history"] | ["api", "projects", _, "history", _] => {
+            Some("GET")
+        }
         _ => None,
     }
 }
 
 /// Refused unless the call carries a login session of an engineer or
 /// above.
-fn engineer(ctx: &Ctx, req: &Request, what: &str) -> Result<(), Response> {
+pub(super) fn engineer(ctx: &Ctx, req: &Request, what: &str) -> Result<(), Response> {
     let why = match &req.session {
         Some(p) if p.role >= Role::Engineer => return Ok(()),
         Some(p) => format!("{what} needs an engineer login; this session is {}", p.label()),
@@ -161,7 +200,7 @@ fn engineer(ctx: &Ctx, req: &Request, what: &str) -> Result<(), Response> {
     ))
 }
 
-fn json_body(req: &Request) -> Result<serde_json::Map<String, Json>, &'static str> {
+pub(super) fn json_body(req: &Request) -> Result<serde_json::Map<String, Json>, &'static str> {
     if !is_json(req) {
         return Err("Content-Type must be application/json");
     }
@@ -214,6 +253,9 @@ pub(super) fn mutate(req: &Request, ctx: &Ctx, rest: &[&str]) -> Response {
     };
     if let ("POST", ["projects", _, "check"]) = (method, rest) {
         return check(req, ctx, rest[1]);
+    }
+    if let ("POST", ["projects", _, "tests"]) = (method, rest) {
+        return tests(req, ctx, rest[1]);
     }
     if let Err(r) = engineer(ctx, req, &what) {
         return r;
@@ -281,6 +323,21 @@ pub(super) fn mutate(req: &Request, ctx: &Ctx, rest: &[&str]) -> Response {
             }
         }
         ("PUT", ["projects", name, "files", file]) => save(req, p, name, file, &done, &failed, &what),
+        ("POST", ["projects", name, "history", n, "restore"]) => match n.parse::<u32>() {
+            Ok(n) => match p.restore(name, n, &by(req)) {
+                Ok(m) => done(
+                    200,
+                    json!({ "restored": n, "revision": m }),
+                    format!("{what}: restored revision {n} (as revision {m})"),
+                ),
+                Err(r) => failed(r, &format!("revision {n} not restored")),
+            },
+            Err(_) => done(
+                404,
+                json!({ "error": "no such revision" }),
+                format!("{what}: no such revision"),
+            ),
+        },
         ("DELETE", ["projects", name, "files", file]) => match p.remove(name, file) {
             Ok(()) => done(
                 200,
@@ -326,9 +383,10 @@ fn save(
         Ok(m) => m,
         Err(e) => return done(400, json!({ "error": e }), format!("{what}: malformed save")),
     };
-    if let Err(e) = keys(&m, &["text", "version"]) {
+    if let Err(e) = keys(&m, &["text", "version", "page"]) {
         return done(400, json!({ "error": e }), format!("{what}: malformed save"));
     }
+    let page = m.get("page").and_then(Json::as_str);
     let Some(text) = m.get("text").and_then(Json::as_str) else {
         return done(
             400,
@@ -338,11 +396,18 @@ fn save(
     };
     let if_match = m.get("version").map(Json::as_str);
     match p.save(name, file, text.as_bytes(), if_match) {
-        Ok(version) => done(
-            200,
-            json!({ "name": file, "version": version, "bytes": text.len() }),
-            format!("{what}: file {} saved ({} bytes)", clean(file), text.len()),
-        ),
+        Ok(version) => {
+            let event = match page {
+                Some(_) => format!("took the Agent's answer into {file}"),
+                None => format!("saved {file}"),
+            };
+            let revision = p.record_revision(name, &by(req), &event, page).ok();
+            done(
+                200,
+                json!({ "name": file, "version": version, "bytes": text.len(), "revision": revision }),
+                format!("{what}: file {} saved ({} bytes)", clean(file), text.len()),
+            )
+        }
         Err(r) => failed(r, &format!("file {} not saved", clean(file))),
     }
 }
@@ -382,19 +447,22 @@ fn upload(
         }
     };
     match p.install_with(name, &files, &drivers, replace) {
-        Ok(()) => done(
-            if replace { 200 } else { 201 },
-            json!({
-                "name": name,
-                "files": files.0.keys().collect::<Vec<_>>(),
-                "drivers": drivers.keys().collect::<Vec<_>>(),
-            }),
-            format!(
-                "{what}: uploaded ({} files, {} drivers)",
-                files.0.len(),
-                drivers.len()
-            ),
-        ),
+        Ok(()) => {
+            let _ = p.record_revision(name, &by(req), "uploaded a zip", None);
+            done(
+                if replace { 200 } else { 201 },
+                json!({
+                    "name": name,
+                    "files": files.0.keys().collect::<Vec<_>>(),
+                    "drivers": drivers.keys().collect::<Vec<_>>(),
+                }),
+                format!(
+                    "{what}: uploaded ({} files, {} drivers)",
+                    files.0.len(),
+                    drivers.len()
+                ),
+            )
+        }
         Err(r) => done(
             r.status,
             json!({ "error": r.why }),
@@ -403,13 +471,39 @@ fn upload(
     }
 }
 
+/// Who a change is recorded as: the session's label, else the box.
+pub(super) fn by(req: &Request) -> String {
+    req.session
+        .as_ref()
+        .map_or_else(|| "box".to_string(), crate::policy::account::Principal::label)
+}
+
+/// What a single uploaded file becomes: the file it goes in, its text,
+/// and the `(PROGRAM, scan_ms)` an L5X's periodic tasks ask for.
+type Imported = (String, String, Vec<(String, u32)>);
+
 /// The ST a single uploaded file becomes, and the file it goes in.
-fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> {
+fn imported(file: &str, body: &[u8]) -> Result<Imported, (u16, String)> {
     let lower = file.to_ascii_lowercase();
     let (stem, ext) = lower
         .rsplit_once('.')
         .map(|(s, e)| (&file[..s.len()], e))
-        .ok_or((400, "file needs an extension: .st, .xml or .L5X".to_string()))?;
+        .ok_or((
+            400,
+            "file needs an extension: .st, .xml, .L5X or .eds".to_string(),
+        ))?;
+    if ext == "eds" {
+        // A device's EDS: kept as the project's `NAME.eds` (its stem as a
+        // slug) for the map's `eds=NAME.eds`; it must read as an EDS.
+        let target = project::eds_file_name(file).ok_or((
+            400,
+            format!("{file}: nothing of the name survives as a slug (a-z 0-9 _ -)"),
+        ))?;
+        let text = project::check_text(body).map_err(|e| (422, format!("{file}: {e}")))?;
+        #[cfg(feature = "enip-io")]
+        helmsman_io::enip::check_eds(text).map_err(|e| (422, format!("{file} is not an EDS: {e}")))?;
+        return Ok((target, text.to_string(), Vec::new()));
+    }
     let target = format!("{stem}.st");
     if project::file_name(&target) != Some(FileKind::St) {
         return Err((
@@ -420,7 +514,7 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
     match ext {
         "st" => {
             let text = project::check_text(body).map_err(|e| (422, format!("{file}: {e}")))?;
-            Ok((target, text.to_string()))
+            Ok((target, text.to_string(), Vec::new()))
         }
         "xml" => {
             let text = std::str::from_utf8(body).map_err(|_| (422, format!("{file}: not UTF-8")))?;
@@ -434,7 +528,7 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
                     ),
                 )
             })?;
-            Ok((target, lowered.st().to_string()))
+            Ok((target, lowered.st().to_string(), Vec::new()))
         }
         "l5x" => {
             // Ladder in the converted subset becomes ST; anything else
@@ -447,12 +541,43 @@ fn imported(file: &str, body: &[u8]) -> Result<(String, String), (u16, String)> 
                 }
                 (422, format!("{file} is not converted: {}", lines.join("; ")))
             })?;
-            Ok((target, converted.st))
+            Ok((target, converted.st, converted.scans))
         }
         _ => Err((
             415,
-            "import takes .st, .xml (PLCopen TC6) or .L5X (Logix ladder)".into(),
+            "import takes .st, .xml (PLCopen TC6), .L5X (Logix ladder) or .eds (a device's EDS)".into(),
         )),
+    }
+}
+
+/// Writes an imported L5X's task rates into project.settings
+/// ([`helmsman_project::settings::set_scans`]), only if the file is still
+/// what was read. Whether it changed, and what the engineer should know:
+/// a `scan_ms` kept, or why the file was not written (the `.st` is
+/// imported either way).
+fn import_scans(p: &Projects, name: &str, scans: &[(String, u32)]) -> (bool, Vec<String>) {
+    if scans.is_empty() {
+        return (false, Vec::new());
+    }
+    let current = match p.file(name, project::SETTINGS) {
+        Ok(t) => Some(t),
+        Err(r) if r.status == 404 => None,
+        Err(r) => return (false, vec![format!("project.settings not read: {}", r.why)]),
+    };
+    let (text, mut notes) = helmsman_project::settings::set_scans(current.as_deref().unwrap_or(""), scans);
+    if current.as_deref() == Some(text.as_str()) {
+        return (false, notes);
+    }
+    let seen = current.as_deref().map(|t| project::version(t.as_bytes()));
+    match p.save(name, project::SETTINGS, text.as_bytes(), Some(seen.as_deref())) {
+        Ok(_) => (true, notes),
+        Err(r) => {
+            notes.push(format!(
+                "project.settings not updated with the task rates: {}",
+                r.why
+            ));
+            (false, notes)
+        }
     }
 }
 
@@ -467,7 +592,7 @@ fn import(
     let Some(file) = query(req, "file") else {
         return done(
             400,
-            json!({ "error": "import needs ?file=NAME.st, NAME.xml or NAME.L5X" }),
+            json!({ "error": "import needs ?file=NAME.st, NAME.xml, NAME.L5X or NAME.eds" }),
             format!("{what}: import without a file name"),
         );
     };
@@ -475,7 +600,7 @@ fn import(
         Ok(r) => r,
         Err(e) => return done(400, json!({ "error": e }), format!("{what}: malformed import")),
     };
-    let (target, text) = match imported(file, &req.body) {
+    let (target, text, scans) = match imported(file, &req.body) {
         Ok(x) => x,
         Err((status, e)) => {
             return done(status, json!({ "error": e }), format!("{what}: import refused"));
@@ -483,11 +608,25 @@ fn import(
     };
     let if_match = if replace { None } else { Some(None) };
     match p.save(name, &target, text.as_bytes(), if_match) {
-        Ok(version) => done(
-            201,
-            json!({ "name": target, "version": version, "bytes": text.len() }),
-            format!("{what}: imported {} as {target}", clean(file)),
-        ),
+        Ok(version) => {
+            let (scanned, notes) = import_scans(p, name, &scans);
+            let also = if scanned {
+                " and its task rates in project.settings"
+            } else {
+                ""
+            };
+            let _ = p.record_revision(
+                name,
+                &by(req),
+                &format!("imported {} as {target}{also}", clean(file)),
+                None,
+            );
+            done(
+                201,
+                json!({ "name": target, "version": version, "bytes": text.len(), "notes": notes }),
+                format!("{what}: imported {} as {target}{also}", clean(file)),
+            )
+        }
         Err(r) => failed(r, "import not saved"),
     }
 }
@@ -523,6 +662,105 @@ fn shape(appr: &Approval) -> Shape {
         i_len: appr.plant.i_len,
         q_len: appr.plant.q_len,
     }
+}
+
+/// How this box runs a project's requirement tests: its scan period and
+/// image sizes (the simulation's defaults on a box with no approval path).
+pub(super) fn test_settings(ctx: &Ctx) -> spec::Settings {
+    match &ctx.approval {
+        Some(appr) => spec::Settings::new(ImageSizes {
+            i: appr.plant.i_len,
+            q: appr.plant.q_len,
+            m: appr.plant.defaults.m,
+        })
+        .period(appr.plant.defaults.period),
+        None => spec::Settings::new(ImageSizes { i: 32, q: 32, m: 256 }),
+    }
+}
+
+/// Project `name`'s requirement tests, run (`helmsman_iec::spec`), or
+/// why they could not be (the status, body and audit detail).
+fn run_tests(ctx: &Ctx, name: &str) -> Result<Vec<spec::Verdict>, (u16, Json, String)> {
+    let Some(p) = &ctx.projects else {
+        return Err((
+            404,
+            json!({ "error": "no projects on this box (--projects)", "changed": false }),
+            "no projects on this box".into(),
+        ));
+    };
+    let files: Files = p.read(name).map_err(|r| {
+        (
+            r.status,
+            json!({ "error": r.why, "changed": false }),
+            r.why.clone(),
+        )
+    })?;
+    let plan = spec::plan(files.st());
+    Ok(spec::run_all(&plan, test_settings(ctx)))
+}
+
+/// One test's result. `state` is `passed`, `failed` or `untested` (no
+/// test yet: the requirement is written down and nothing checks it; not
+/// red). `passed` is kept for older clients: true only when green, so an
+/// untested one reads `passed: false` there.
+pub(super) fn verdict_json(v: &spec::Verdict) -> Json {
+    json!({
+        "file": v.file,
+        "requirement": v.requirement,
+        "state": v.state(),
+        "passed": v.passed(),
+        "why": v.why(),
+        "scans": v.scans,
+        "elapsed_ms": u64::try_from(v.elapsed.as_millis()).unwrap_or(u64::MAX),
+    })
+}
+
+/// `POST /api/projects/{p}/tests`: every requirement test of the project,
+/// green, red or untested, with why. `ok` and `red` count only the red
+/// ones: an untested requirement never refuses a deploy. Nothing changes.
+fn tests(req: &Request, ctx: &Ctx, name: &str) -> Response {
+    let what = format!("project {}", clean(name));
+    match run_tests(ctx, name) {
+        Ok(v) => {
+            let red = spec::red(&v);
+            let untested = v.iter().filter(|v| v.untested()).count();
+            let body = json!({
+                "ok": red.is_empty(),
+                "tests": v.iter().map(verdict_json).collect::<Vec<_>>(),
+                "red": red,
+                "untested": untested,
+            });
+            let detail = format!(
+                "{what}: {} test(s), {} red, {untested} untested",
+                v.len(),
+                red.len()
+            );
+            audited(ctx, req, 200, &body, &detail)
+        }
+        Err((status, body, why)) => audited(ctx, req, status, &body, &format!("{what}: tests: {why}")),
+    }
+}
+
+/// The deploy gate: `Ok` when every requirement test of project `name` is
+/// green or untested (or it has none); else 409 naming each red one,
+/// nothing changed.
+pub(super) fn red_tests(ctx: &Ctx, name: &str) -> Result<(), (u16, Json, String)> {
+    let v = run_tests(ctx, name)?;
+    let red = spec::red(&v);
+    if red.is_empty() {
+        return Ok(());
+    }
+    let why = format!("{} requirement test(s) red: {}", red.len(), red.join("; "));
+    Err((
+        409,
+        json!({
+            "error": format!("not deployed: {why}"),
+            "changed": false,
+            "tests": v.iter().map(verdict_json).collect::<Vec<_>>(),
+            "red": red,
+        }),
+        why,
+    ))
 }
 
 /// Project `name` built against what runs: its change set, or the status,

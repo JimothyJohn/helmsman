@@ -36,7 +36,9 @@
 //! tag a `VAR`. Before the first scan the program runs Logix's prescan
 //! (each instruction's Prescan row in RM003): OTE clears, one-shots arm,
 //! timers reset. An export without tasks (one program's) is one PROGRAM
-//! named as the controller.
+//! named as the controller. A periodic task's `Rate` (ms, RM014 p.313)
+//! becomes its PROGRAM's `scan_ms` ([`Converted::scans`]); a continuous
+//! task's PROGRAM runs every base scan.
 //!
 //! **Refused**, each with its program, routine and rung: any other
 //! instruction or add-on instruction, FBD, SFC and ST routines (Logix
@@ -45,17 +47,20 @@
 //! STRING, CONTROL, module-defined I/O tags) and aliases to them,
 //! indirect subscripts (`A[i]`), produced/consumed and `InOut` tags, JSR
 //! with parameters, recursion, programs in no task or disabled, event
-//! tasks, a controller tag shared by two tasks (the box's programs share
+//! tasks, periodic tasks whose rate is not a whole number of ms from 1 to
+//! [`MAX_SCAN_MS`], a controller tag shared by two tasks (the box's programs share
 //! no memory), and names that are Structured Text keywords.
 //!
 //! **Not reproduced**: math status flags (S:V, S:Z, S:N, S:C) and minor
 //! faults, which do not change a tag; the system's own `S:FS`; the
 //! controller's microsecond clock (a timer reads the scan's time once).
 
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
 pub mod rung;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt::Write as _;
+use alloc::collections::{BTreeMap, BTreeSet};
+use core::fmt::Write as _;
 
 use crate::l5x::{self, Data, Project, RoutineKind, TagKind};
 use rung::{Elem, Expr, Index, Instr, Op, Operand, Path, Seg};
@@ -79,7 +84,14 @@ pub struct Converted {
     pub programs: Vec<String>,
     /// What the engineer should know (also at the top of `st`).
     pub notes: Vec<String>,
+    /// `(PROGRAM, ms)` for each periodic task, in task order: the
+    /// `program NAME scan_ms=N` lines an import writes into
+    /// project.settings (`helmsman_project::settings::set_scans`).
+    pub scans: Vec<(String, u32)>,
 }
+
+/// The longest scan a project.settings `scan_ms` takes (the shortest is 1).
+pub const MAX_SCAN_MS: u32 = 10_000;
 
 /// One reason the export does not convert, and where.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,8 +101,8 @@ pub struct Problem {
     pub msg: String,
 }
 
-impl std::fmt::Display for Problem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Problem {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         if self.at.is_empty() {
             f.write_str(&self.msg)
         } else {
@@ -107,8 +119,8 @@ pub struct Refused {
     pub total: usize,
 }
 
-impl std::fmt::Display for Refused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Refused {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         for (k, p) in self.problems.iter().enumerate() {
             if k > 0 {
                 f.write_str("; ")?;
@@ -315,9 +327,9 @@ struct Cx {
     p: Project,
     tags: Vec<TagDef>,
     /// Upper-cased name -> tag, controller scope.
-    ctl: HashMap<String, TagId>,
+    ctl: BTreeMap<String, TagId>,
     /// Per program: upper-cased name -> tag.
-    prog: Vec<HashMap<String, TagId>>,
+    prog: Vec<BTreeMap<String, TagId>>,
     problems: Vec<Problem>,
     total: usize,
     notes: Vec<String>,
@@ -1238,7 +1250,7 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
     };
     let mut cx = Cx {
         tags: Vec::new(),
-        ctl: HashMap::new(),
+        ctl: BTreeMap::new(),
         prog: Vec::new(),
         problems: Vec::new(),
         total: 0,
@@ -1335,7 +1347,7 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
         }
     }
     for k in 0..cx.p.programs.len() {
-        cx.prog.push(HashMap::new());
+        cx.prog.push(BTreeMap::new());
         for t in cx.p.programs[k].tags.clone() {
             if add(&mut cx, &t, Some(k)).is_some() {
                 let pn = cx.p.programs[k].name.clone();
@@ -1350,6 +1362,7 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
     // Units: tasks, or the whole export.
     let mut units: Vec<Unit> = Vec::new();
     let mut scheduled: BTreeMap<usize, String> = BTreeMap::new();
+    let mut scans: Vec<(String, u32)> = Vec::new();
     if cx.p.tasks.is_empty() {
         let name =
             cx.p.controller
@@ -1389,14 +1402,41 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
                     );
                     continue;
                 }
-                Some("PERIODIC") if !progs.is_empty() => {
-                    if let Some(ms) = task.rate_ms {
+                Some("PERIODIC") if !progs.is_empty() => match task.rate_ms {
+                    Some(ms) if (1..=MAX_SCAN_MS).contains(&ms) => {
                         cx.notes.push(format!(
-                            "Task {} is periodic every {ms} ms in Logix: give PROGRAM {} that scan in project.settings.",
+                            "Task {} is periodic every {ms} ms in Logix: the import gives PROGRAM {} scan_ms={ms} in project.settings.",
                             task.name, task.name
                         ));
+                        scans.push((task.name.clone(), ms));
                     }
-                }
+                    // Refused rather than clamped or left at the default
+                    // scan: either would run the logic at a period it was
+                    // not written for, with nothing to show for it.
+                    Some(ms) => cx.problem(
+                        format!("task {}", task.name),
+                        format!(
+                            "is periodic every {ms} ms, outside the 1 to {MAX_SCAN_MS} ms a box scans at; set its rate in Logix and export again"
+                        ),
+                    ),
+                    None => cx.problem(
+                        format!("task {}", task.name),
+                        match &task.rate {
+                            Some(r) => format!(
+                                "is periodic with Rate {r:?}, not a whole number of ms from 1 to {MAX_SCAN_MS}"
+                            ),
+                            None => "is periodic with no Rate".into(),
+                        },
+                    ),
+                },
+                Some("CONTINUOUS") if !progs.is_empty() => cx.notes.push(format!(
+                    "Task {} is continuous in Logix: PROGRAM {} runs every base scan (--scan-ms) unless project.settings gives it a scan_ms.",
+                    task.name, task.name
+                )),
+                None if !progs.is_empty() => cx.notes.push(format!(
+                    "Task {} has no task type: PROGRAM {} runs every base scan (--scan-ms), as a continuous task, unless project.settings gives it a scan_ms.",
+                    task.name, task.name
+                )),
                 _ => {}
             }
             if progs.is_empty() {
@@ -1828,6 +1868,7 @@ pub fn convert(src: &str) -> Result<Converted, Refused> {
         st: format!("{head}{st_out}"),
         programs,
         notes: cx.notes,
+        scans,
     })
 }
 

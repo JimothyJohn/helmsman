@@ -35,7 +35,7 @@ while read -r b track; do
     case "$b" in dev|master) continue ;; esac
     if grep -qxF "$b" <<<"$checked_out"; then continue; fi
     if [ "$track" = "[gone]" ] \
-        || printf '%s\n' "${remote[@]}" | grep -qxF "$b" \
+        || printf '%s\n' ${remote[@]+"${remote[@]}"} | grep -qxF "$b" \
         || git merge-base --is-ancestor "$b" origin/dev \
         || git merge-base --is-ancestor "$b" origin/master; then
         local+=("$b")
@@ -46,8 +46,11 @@ done < <(git branch --format='%(refname:short) %(upstream:track)')
 
 echo "origin: ${#remote[@]} to delete; local: ${#local[@]} to delete"
 if [ "${DRY_RUN:-0}" = 1 ]; then
-    printf '  origin/%s\n' "${remote[@]}"
-    printf '  %s\n' "${local[@]}"
+    # An empty array is "unbound" to bash 3.2's `set -u` (the Mac's
+    # /bin/bash), and printf with no arguments still prints its format
+    # once: list only what there is.
+    [ ${#remote[@]} -eq 0 ] || printf '  origin/%s\n' "${remote[@]}"
+    [ ${#local[@]} -eq 0 ] || printf '  %s\n' "${local[@]}"
     exit 0
 fi
 

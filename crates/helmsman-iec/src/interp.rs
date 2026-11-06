@@ -23,7 +23,10 @@
 
 #![allow(clippy::many_single_char_names)]
 
-use std::fmt;
+#[cfg(not(feature = "std"))]
+use crate::prelude::*;
+
+use core::fmt;
 
 use crate::check::{Area, Base, Builtin, Call, Ex, Loc, Move, Place, PouCode, PouType, St, StKind};
 use crate::parser::{BinOp, UnOp};
@@ -153,6 +156,20 @@ impl fmt::Display for Fault {
     }
 }
 
+/// Why a scan stopped early: a fault, or a breakpoint (the counter of the
+/// statement it stopped before; see [`Recorder::stops_at`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Halt {
+    Fault(Fault),
+    Break(u32),
+}
+
+impl From<Fault> for Halt {
+    fn from(f: Fault) -> Self {
+        Self::Fault(f)
+    }
+}
+
 enum Flow {
     Next,
     Exit,
@@ -167,7 +184,11 @@ const NS_PER_MS: i128 = 1_000_000;
 fn real_to_int(r: f64, to: Ty, round: bool) -> i128 {
     let (lo, hi) = to.range();
     // `as` saturates at the i128 range and maps NaN to 0.
-    let v = (if round { r.round() } else { r.trunc() }) as i128;
+    let v = (if round {
+        crate::fmath::round(r)
+    } else {
+        crate::fmath::trunc(r)
+    }) as i128;
     v.clamp(lo, hi)
 }
 
@@ -216,7 +237,7 @@ pub fn convert(v: Value, from: Ty, to: Ty) -> Value {
         return Value::Int(Ty::Time.wrap(match v {
             Value::Bool(b) => i128::from(b) * NS_PER_MS,
             Value::Int(i) => i.wrapping_mul(NS_PER_MS),
-            Value::Real(r) => (r * 1e6).round() as i128,
+            Value::Real(r) => crate::fmath::round(r * 1e6) as i128,
         }));
     }
     match (v, to) {
@@ -255,7 +276,7 @@ fn boolean(v: Value) -> bool {
 }
 
 /// Orders two values of the same type (NaN compares unordered).
-fn compare(a: Value, b: Value) -> Option<std::cmp::Ordering> {
+fn compare(a: Value, b: Value) -> Option<core::cmp::Ordering> {
     match (a, b) {
         (Value::Bool(x), Value::Bool(y)) => Some(x.cmp(&y)),
         (Value::Int(x), Value::Int(y)) => Some(x.cmp(&y)),
@@ -265,7 +286,7 @@ fn compare(a: Value, b: Value) -> Option<std::cmp::Ordering> {
 }
 
 fn binop(op: BinOp, a: Value, b: Value, ty: Ty) -> Result<Value, FaultKind> {
-    use std::cmp::Ordering::{Equal, Greater, Less};
+    use core::cmp::Ordering::{Equal, Greater, Less};
     let ord = || compare(a, b);
     let v = match op {
         BinOp::Eq => Value::Bool(ord() == Some(Equal)),
@@ -294,7 +315,7 @@ fn binop(op: BinOp, a: Value, b: Value, ty: Ty) -> Result<Value, FaultKind> {
                     BinOp::Sub => x - y,
                     BinOp::Mul => x * y,
                     BinOp::Div => x / y,
-                    BinOp::Pow => x.powf(y),
+                    BinOp::Pow => crate::fmath::powf(x, y),
                     _ => unreachable!("MOD on REAL is rejected by the checker"),
                 },
             ))
@@ -320,7 +341,7 @@ fn binop(op: BinOp, a: Value, b: Value, ty: Ty) -> Result<Value, FaultKind> {
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn builtin(b: Builtin, args: &[Value], ty: Ty, now: i128) -> Result<Value, FaultKind> {
     let r = |f: fn(f64) -> f64| Value::Real(round_real(ty, f(real(args[0]))));
-    let pick = |want: std::cmp::Ordering| {
+    let pick = |want: core::cmp::Ordering| {
         args[1..].iter().fold(
             args[0],
             |acc, &x| if compare(x, acc) == Some(want) { x } else { acc },
@@ -330,30 +351,30 @@ fn builtin(b: Builtin, args: &[Value], ty: Ty, now: i128) -> Result<Value, Fault
         Builtin::Now => Value::Int(now),
         Builtin::Fault(p) => return Err(FaultKind::BadParam(p)),
         Builtin::Abs => match args[0] {
-            Value::Real(x) => Value::Real(x.abs()),
+            Value::Real(x) => Value::Real(crate::fmath::abs(x)),
             v => Value::Int(ty.arith().wrap(int(v).abs())),
         },
-        Builtin::Sqrt => r(f64::sqrt),
-        Builtin::Ln => r(f64::ln),
-        Builtin::Log => r(f64::log10),
-        Builtin::Exp => r(f64::exp),
-        Builtin::Sin => r(f64::sin),
-        Builtin::Cos => r(f64::cos),
-        Builtin::Tan => r(f64::tan),
-        Builtin::Asin => r(f64::asin),
-        Builtin::Acos => r(f64::acos),
-        Builtin::Atan => r(f64::atan),
+        Builtin::Sqrt => r(crate::fmath::sqrt),
+        Builtin::Ln => r(crate::fmath::ln),
+        Builtin::Log => r(crate::fmath::log10),
+        Builtin::Exp => r(crate::fmath::exp),
+        Builtin::Sin => r(crate::fmath::sin),
+        Builtin::Cos => r(crate::fmath::cos),
+        Builtin::Tan => r(crate::fmath::tan),
+        Builtin::Asin => r(crate::fmath::asin),
+        Builtin::Acos => r(crate::fmath::acos),
+        Builtin::Atan => r(crate::fmath::atan),
         Builtin::Trunc => Value::Int(real_to_int(real(args[0]), Ty::DInt, false)),
-        Builtin::Min => pick(std::cmp::Ordering::Less),
-        Builtin::Max => pick(std::cmp::Ordering::Greater),
+        Builtin::Min => pick(core::cmp::Ordering::Less),
+        Builtin::Max => pick(core::cmp::Ordering::Greater),
         Builtin::Limit => {
             let (mn, x, mx) = (args[0], args[1], args[2]);
-            let low = if compare(x, mx) == Some(std::cmp::Ordering::Greater) {
+            let low = if compare(x, mx) == Some(core::cmp::Ordering::Greater) {
                 mx
             } else {
                 x
             };
-            if compare(low, mn) == Some(std::cmp::Ordering::Less) {
+            if compare(low, mn) == Some(core::cmp::Ordering::Less) {
                 mn
             } else {
                 low
@@ -418,14 +439,21 @@ pub struct Machine<'a> {
     pub tap: Option<&'a mut Recorder>,
 }
 
-type Res<T> = Result<T, Fault>;
+type Res<T> = Result<T, Halt>;
 
 impl Machine<'_> {
+    /// Statement `tr` starts, or the scan stops before it at a breakpoint.
     #[inline]
-    fn enter(&mut self, tr: u32) -> u32 {
+    fn enter(&mut self, tr: u32) -> Res<u32> {
         match &mut self.tap {
-            Some(r) => r.enter(tr),
-            None => 0,
+            Some(r) => {
+                if r.stops_at(tr) {
+                    r.cur = tr;
+                    return Err(Halt::Break(tr));
+                }
+                Ok(r.enter(tr))
+            }
+            None => Ok(0),
         }
     }
 
@@ -465,7 +493,8 @@ impl Machine<'_> {
                 return Err(Fault {
                     kind: FaultKind::IndexOutOfRange,
                     line,
-                });
+                }
+                .into());
             }
             i += usize::try_from(v - d.lo).unwrap_or(0) * d.stride;
         }
@@ -545,9 +574,9 @@ impl Machine<'_> {
                 let k = real(self.eval(k, line)?);
                 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
                 let out = match op {
-                    BinOp::Div if k == 0.0 => return Err(f(FaultKind::DivisionByZero)),
-                    BinOp::Div => (ns as f64 / k).round() as i128,
-                    _ => (ns as f64 * k).round() as i128,
+                    BinOp::Div if k == 0.0 => return Err(f(FaultKind::DivisionByZero).into()),
+                    BinOp::Div => crate::fmath::round(ns as f64 / k) as i128,
+                    _ => crate::fmath::round(ns as f64 * k) as i128,
                 };
                 Value::Int(Ty::Time.wrap(out))
             }
@@ -604,12 +633,9 @@ impl Machine<'_> {
         self.base = callee;
         let r = self.block(&pou.body);
         self.base = saved;
-        r.map_err(|f| {
-            if c.pou < self.library {
-                Fault { line, ..f }
-            } else {
-                f
-            }
+        r.map_err(|h| match h {
+            Halt::Fault(f) if c.pou < self.library => Halt::Fault(Fault { line, ..f }),
+            h => h,
         })?;
         for o in &c.outs {
             if let Some((from, to)) = o.conv {
@@ -628,7 +654,8 @@ impl Machine<'_> {
             return Err(Fault {
                 kind: FaultKind::Watchdog,
                 line,
-            });
+            }
+            .into());
         }
         self.budget -= 1;
         Ok(())
@@ -655,7 +682,7 @@ impl Machine<'_> {
     }
 
     fn stmt(&mut self, s: &St) -> Res<Flow> {
-        let outer = self.enter(s.tr);
+        let outer = self.enter(s.tr)?;
         let flow = self.exec(s)?;
         self.leave(outer);
         Ok(flow)
@@ -756,7 +783,7 @@ impl Machine<'_> {
     }
 
     /// Runs the program POU once.
-    pub fn run(&mut self, program: &PouCode) -> Res<()> {
+    pub(crate) fn run(&mut self, program: &PouCode) -> Res<()> {
         for &(off, len) in &program.temps {
             self.mem[program.base + off..program.base + off + len]
                 .copy_from_slice(&program.init[off..off + len]);
@@ -784,8 +811,12 @@ pub fn eval_const(e: &Ex) -> Result<Value, String> {
         now: 0,
         tap: None,
     };
-    m.eval(e, 0).map_err(|f| match f.kind {
-        FaultKind::DivisionByZero => "integer division by zero in an initial value".to_string(),
-        k => format!("{k:?} in an initial value"),
+    m.eval(e, 0).map_err(|h| match h {
+        Halt::Fault(Fault {
+            kind: FaultKind::DivisionByZero,
+            ..
+        }) => "integer division by zero in an initial value".to_string(),
+        Halt::Fault(f) => format!("{:?} in an initial value", f.kind),
+        Halt::Break(_) => unreachable!("a constant is evaluated without a tap"),
     })
 }

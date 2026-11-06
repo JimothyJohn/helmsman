@@ -8,14 +8,12 @@
 //! Nothing here talks to a box or to storage: the sidebar answers with an
 //! [`Act`], and the view carries it out.
 
-use std::collections::HashSet;
-
-use eframe::egui::{self, Color32, RichText, Vec2};
-use helmsman_project::starters::{Kind, STARTERS, starter};
+use eframe::egui::{self, Color32, Key, Modifiers, RichText, Vec2};
 
 use crate::editor::Chrome;
 use crate::st_view::TAP;
-use crate::st_view::brand::{STEEL, WHITE, YELLOW};
+use crate::theme::theme;
+use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
@@ -60,12 +58,9 @@ impl ProjectRow {
 pub enum Group {
     /// The person's own.
     Mine,
-    /// The small built-in examples, always in view.
+    /// The built-in examples, always in view: a click asks for a name and
+    /// makes the person's own copy.
     FirstSteps,
-    /// Worked machines, folded until asked for.
-    Machines,
-    /// Starting points, folded until asked for.
-    Templates,
 }
 
 /// What the sidebar asks for.
@@ -96,6 +91,9 @@ pub enum Act {
     DeleteFile(String),
     /// A file's text to the sidebar's clipboard (right-click › Copy).
     CopyFile(String),
+    /// Deploy the open project, as File › Deploy (right-click a file ›
+    /// Deploy; Nick, 2026-11-05).
+    Deploy,
     /// A copy of a file beside it, under a free name (right-click ›
     /// Duplicate).
     DuplicateFile(String),
@@ -113,6 +111,8 @@ pub enum Act {
         text: String,
         save: bool,
     },
+    /// Show revision n of the open project (the History row).
+    ShowRevision(u32),
 }
 
 /// What the sidebar shows.
@@ -129,6 +129,12 @@ pub struct Listing<'a> {
     /// Offer the built-in machines and templates to start a project from
     /// (a box; the simulation lists them as projects).
     pub starters: bool,
+    /// The open project is the one running: its `main.st` is marked.
+    pub running: bool,
+    /// The open project's revisions, oldest first (the History row).
+    pub history: &'a [crate::history_ui::RevisionRow],
+    /// Whether the open project may be deployed now, or why not.
+    pub deploy: Result<(), String>,
 }
 
 /// Which name the sidebar's text field is for.
@@ -142,19 +148,33 @@ pub enum Naming {
     RenameFile(String),
 }
 
+/// The row last clicked in the sidebar: what the Delete key is for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Picked {
+    Project(String),
+    File(String),
+}
+
 /// The sidebar's own state: a name being typed, a delete being confirmed.
 #[derive(Debug, Default)]
 pub struct FilesUi {
     pub naming: Option<Naming>,
     pub input: String,
+    /// A question with the page's answer pending, asked in the middle of
+    /// the screen ([`Self::confirm_ui`]).
     pub confirm: Option<Act>,
-    /// The long lists opened by hand.
-    pub unfolded: HashSet<Group>,
-    /// The list of machines and templates to start from is open.
-    pub starters_open: bool,
+    /// The project or file last clicked; the Delete key deletes it (or
+    /// the open project when nothing was).
+    pub picked: Option<Picked>,
+    /// The earlier iterations (`vN.st`) are unfolded.
+    pub earlier_open: bool,
+    /// The History row is unfolded.
+    pub history_open: bool,
     /// The file last copied (name, text): the app's own, not the
     /// system's, so a paste works in any open project here.
     pub clipboard: Option<(String, String)>,
+    /// The name popup just opened: its field takes the keyboard.
+    pub focus_name: bool,
 }
 
 /// A file name not taken, from `want`: `want` itself, else `stem-2.ext`,
@@ -172,9 +192,18 @@ pub fn free_file_name(want: &str, taken: impl Fn(&str) -> bool) -> String {
 }
 
 /// A right-click menu's item: whether it was clicked (the menu closes).
-fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enabled: bool) -> bool {
-    let b = egui::Button::new(text).min_size(Vec2::new(ui.available_width().max(110.0), TAP * 0.6));
-    let r = ui.add_enabled(enabled, b);
+/// `tip` shows on hover, enabled or not: when disabled, say why.
+fn menu_item(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    text: &str,
+    enabled: bool,
+    tip: &str,
+) -> bool {
+    // A fixed floor, not `available_width()`: see editor::menu_item_keyed.
+    let b = egui::Button::new(text).min_size(Vec2::new(110.0, TAP * 0.6));
+    let r = ui.add_enabled(enabled, b).tip(tip);
     chrome.hit(key, r.rect);
     if r.clicked() {
         ui.close();
@@ -187,36 +216,49 @@ fn menu_item(ui: &mut egui::Ui, chrome: &mut Chrome, key: &str, text: &str, enab
 fn write_button(ui: &mut egui::Ui, write: &Result<(), String>, text: &str, hint: &str) -> egui::Response {
     let b = egui::Button::new(text).min_size(Vec2::new(0.0, TAP * 0.7));
     match write {
-        Ok(()) => ui.add(b).on_hover_text(hint),
-        Err(why) => ui.add_enabled(false, b).on_disabled_hover_text(why),
+        Ok(()) => ui.add(b).tip(hint),
+        Err(why) => ui.add_enabled(false, b).tip(why),
     }
 }
 
 impl FilesUi {
     /// The projects, then the open project's files. Returns what was asked.
     pub fn show(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, chrome: &mut Chrome) -> Option<Act> {
+        let t = theme(ui);
         let mut act = None;
         let mut shown = Group::Mine;
         for p in l.projects {
             if p.group != shown {
                 shown = p.group;
-                self.group_header(ui, l, shown, chrome);
-            }
-            if !self.group_open(l, p.group) {
-                continue;
+                group_header(ui, shown);
             }
             let open = l.open == Some(p.name.as_str());
             let mut text = format!("{} {}", if open { "▾" } else { "▸" }, p.name);
             if p.running {
                 text.push_str("  ● running");
             }
-            let color = if p.running { YELLOW } else { WHITE };
+            let color = if p.running { t.accent } else { t.fg };
             let r = ui.selectable_label(open, RichText::new(text).monospace().color(color));
             chrome.hit(format!("project {}", p.name), r.rect);
-            let r = match starter(&p.name).filter(|_| p.example()) {
-                Some(s) => r.on_hover_text(format!("{}: {}", s.title, s.about)),
-                None => r,
-            };
+            if p.example() {
+                let title = example_title(&p.name).unwrap_or(&p.name);
+                let r = r.tip(format!(
+                    "{title}: click to make your own copy of this example, under a name you choose."
+                ));
+                if r.clicked() {
+                    let name = free_name(l, &p.name);
+                    self.ask(Naming::FromStarter(p.name.clone()), &name);
+                }
+                continue;
+            }
+            let r = r.tip(if open {
+                "Your program, open. Right-click to copy, rename or delete it."
+            } else {
+                "Your program: click to open it. Right-click to copy, rename or delete it."
+            });
+            if r.clicked() {
+                self.picked = Some(Picked::Project(p.name.clone()));
+            }
             if r.clicked() && !open {
                 let a = Act::OpenProject(p.name.clone());
                 if l.dirty {
@@ -227,11 +269,28 @@ impl FilesUi {
                 }
             }
             // Right-click a project: copy it, and for one of your own
-            // rename or delete it (Nick, 2026-11-01).
+            // rename or delete it (Nick, 2026-11-01). Rename and Delete
+            // live only here and on the Delete key, not as buttons
+            // (Nick, 2026-11-02).
             let can_write = l.write.is_ok();
             let mine = !p.example();
+            let or_why = |tip: &str| match (&l.write, mine) {
+                (Err(why), _) => why.clone(),
+                (Ok(()), false) => "A built-in example stays as it is: copy it first.".to_string(),
+                (Ok(()), true) => tip.to_string(),
+            };
             r.context_menu(|ui| {
-                if menu_item(ui, chrome, "menu copy project", "Copy project…", can_write) {
+                if menu_item(
+                    ui,
+                    chrome,
+                    "menu copy project",
+                    "Copy project…",
+                    can_write,
+                    l.write
+                        .as_ref()
+                        .err()
+                        .map_or("Copies it under a new name.", String::as_str),
+                ) {
                     self.copy_project(&p.name);
                 }
                 if menu_item(
@@ -240,6 +299,7 @@ impl FilesUi {
                     "menu rename project",
                     "Rename project…",
                     can_write && mine,
+                    &or_why("Gives the project a new name."),
                 ) {
                     self.ask(Naming::RenameProject(p.name.clone()), &p.name);
                 }
@@ -249,6 +309,7 @@ impl FilesUi {
                     "menu delete project",
                     "Delete project…",
                     can_write && mine,
+                    &or_why("Deletes the project and all its files, asked first."),
                 ) {
                     self.naming = None;
                     self.confirm = Some(Act::DeleteProject(p.name.clone()));
@@ -256,103 +317,191 @@ impl FilesUi {
             });
         }
         if l.projects.is_empty() {
-            ui.label(RichText::new("No projects yet.").color(STEEL));
+            ui.label(RichText::new("No projects yet.").color(t.muted))
+                .tip("Right-click the empty space below, or use File › New project.");
         }
-        // New project and Copy project are the File menu's (and a
-        // right-click's); Rename and Delete of the open project stay here.
-        ui.horizontal_wrapped(|ui| {
-            if let Some(open) = l.open {
-                let is_example = l.projects.iter().any(|p| p.name == open && p.example());
-                if !is_example {
-                    let r = write_button(ui, &l.write, "Rename", "rename the open project");
-                    chrome.hit("rename project", r.rect);
-                    if r.clicked() {
-                        self.ask(Naming::RenameProject(open.into()), open);
-                    }
-                    let r = write_button(ui, &l.write, "Delete", "delete the open project");
-                    chrome.hit("delete project", r.rect);
-                    if r.clicked() {
-                        self.confirm = Some(Act::DeleteProject(open.into()));
-                    }
-                }
-            }
-        });
         if l.starters {
-            self.starters_ui(ui, &l.write, chrome);
+            self.starters_ui(ui, l, chrome);
         }
         if let Some(open) = l.open {
             ui.separator();
             let is_example = l.projects.iter().any(|p| p.name == open && p.example());
             let can_write = l.write.is_ok() && !is_example;
-            let head = ui.label(RichText::new(format!("{open}: files")).strong().color(STEEL));
+            let head = ui
+                .label(RichText::new(format!("{open}: files")).strong().color(t.muted))
+                .tip("The open project's files. Right-click to paste a copied file.");
+            let paste_tip = if is_example {
+                "A built-in example stays as it is: copy the project first."
+            } else if let Err(why) = &l.write {
+                why.as_str()
+            } else if self.clipboard.is_none() {
+                "Nothing copied yet: right-click a file and Copy."
+            } else {
+                "Pastes the copied file into this project."
+            };
             // Right-click the heading: paste into this project.
             head.context_menu(|ui| {
                 let paste = self.clipboard.is_some() && can_write;
-                if menu_item(ui, chrome, "menu paste", "Paste", paste)
+                if menu_item(ui, chrome, "menu paste", "Paste", paste, paste_tip)
                     && let Some((name, text)) = self.clipboard.clone()
                 {
                     act = Some(Act::PasteFile { name, text });
                 }
             });
-            for (f, dirty) in &l.files {
+            // The program's files, then the earlier iterations folded under
+            // one row, newest first (Nick, 2026-11-01).
+            let mut earlier: Vec<&(String, bool)> = l
+                .files
+                .iter()
+                .filter(|(f, _)| helmsman_project::iteration_number(f).is_some())
+                .collect();
+            earlier.sort_by_key(|(f, _)| std::cmp::Reverse(helmsman_project::iteration_number(f)));
+            // Requirement tests live behind their rows in the Requirements
+            // tab (Nick, 2026-11-05), not here.
+            let mut rows: Vec<&(String, bool)> = l
+                .files
+                .iter()
+                .filter(|(f, _)| {
+                    helmsman_project::iteration_number(f).is_none() && !helmsman_iec::spec::is_test(f)
+                })
+                .collect();
+            if !earlier.is_empty() {
+                let arrow = if self.earlier_open { "▾" } else { "▸" };
+                let r = ui
+                    .selectable_label(
+                        false,
+                        RichText::new(format!("{arrow} earlier ({})", earlier.len()))
+                            .monospace()
+                            .color(t.muted),
+                    )
+                    .tip("Earlier iterations of the program, newest first. Click to show or hide them.");
+                chrome.hit("earlier", r.rect);
+                if r.clicked() {
+                    self.earlier_open = !self.earlier_open;
+                }
+                if self.earlier_open {
+                    rows.extend(earlier);
+                }
+            }
+            for (f, dirty) in rows {
                 let here = l.current == Some(f.as_str());
-                let text = format!("{f}{}", if *dirty { " ●" } else { "" });
-                let r = ui.selectable_label(here, RichText::new(text).monospace());
+                let runs = l.running && f == helmsman_project::MAIN && !l.files.is_empty();
+                let text = format!(
+                    "{f}{}{}",
+                    if *dirty { " ●" } else { "" },
+                    if runs { "  · runs" } else { "" }
+                );
+                let r = ui
+                    .selectable_label(here, RichText::new(text).monospace())
+                    .tip(if runs {
+                        "The file that runs. Double-click to edit it; right-click for more."
+                    } else {
+                        "Click to open, double-click to edit; right-click to deploy, copy, rename or delete."
+                    });
                 chrome.hit(format!("file {f}"), r.rect);
-                if r.clicked() && !here {
-                    act = Some(Act::OpenFile(f.clone()));
+                if r.clicked() {
+                    self.picked = Some(Picked::File(f.clone()));
+                    if !here {
+                        act = Some(Act::OpenFile(f.clone()));
+                    }
+                }
+                // A double click opens the file in the Code tab (Nick,
+                // 2026-11-02).
+                if r.double_clicked() {
+                    chrome.show_code();
                 }
                 // Right-click a file: copy, paste, duplicate, rename, delete
                 // (Nick, 2026-11-01: easy copy and paste of files).
+                let write_tip = |tip: &'static str| -> &str {
+                    if is_example {
+                        "A built-in example stays as it is: copy the project first."
+                    } else {
+                        l.write.as_ref().err().map_or(tip, String::as_str)
+                    }
+                };
                 r.context_menu(|ui| {
-                    if menu_item(ui, chrome, "menu copy", "Copy", true) {
+                    // Deploy first: the step a right-click is most often
+                    // for (Nick, 2026-11-05). It deploys the project, whose
+                    // main.st runs, whichever file was clicked.
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu deploy",
+                        "Deploy",
+                        l.deploy.is_ok(),
+                        l.deploy.as_ref().err().map_or(
+                            "Saves, checks and runs this project (its main.st), as File › Deploy.",
+                            String::as_str,
+                        ),
+                    ) {
+                        act = Some(Act::Deploy);
+                    }
+                    ui.separator();
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu copy",
+                        "Copy",
+                        true,
+                        "Copies the file, to paste into this or another project.",
+                    ) {
                         act = Some(Act::CopyFile(f.clone()));
                     }
                     let paste = self.clipboard.is_some() && can_write;
-                    if menu_item(ui, chrome, "menu paste", "Paste", paste)
+                    if menu_item(ui, chrome, "menu paste", "Paste", paste, paste_tip)
                         && let Some((name, text)) = self.clipboard.clone()
                     {
                         act = Some(Act::PasteFile { name, text });
                     }
-                    if menu_item(ui, chrome, "menu duplicate", "Duplicate", can_write) {
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu duplicate",
+                        "Duplicate",
+                        can_write,
+                        write_tip("Makes a copy of the file beside it."),
+                    ) {
                         act = Some(Act::DuplicateFile(f.clone()));
                     }
-                    if menu_item(ui, chrome, "menu rename", "Rename…", can_write) {
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu rename",
+                        "Rename…",
+                        can_write,
+                        write_tip("Gives the file a new name."),
+                    ) {
                         self.ask(Naming::RenameFile(f.clone()), f);
                     }
-                    if menu_item(ui, chrome, "menu delete", "Delete…", can_write) {
+                    if menu_item(
+                        ui,
+                        chrome,
+                        "menu delete",
+                        "Delete…",
+                        can_write,
+                        write_tip("Deletes the file, asked first (Delete key)."),
+                    ) {
                         self.naming = None;
                         self.confirm = Some(Act::DeleteFile(f.clone()));
                     }
                 });
             }
             if !is_example {
-                ui.horizontal_wrapped(|ui| {
-                    let r = write_button(ui, &l.write, "New file", "a new .st file in this project");
-                    chrome.hit("new file", r.rect);
-                    if r.clicked() {
-                        self.ask(Naming::NewFile, ".st");
-                    }
-                    if let Some(cur) = l.current {
-                        let r = write_button(ui, &l.write, "Rename", "rename the open file");
-                        chrome.hit("rename file", r.rect);
-                        if r.clicked() {
-                            self.ask(Naming::RenameFile(cur.into()), cur);
-                        }
-                        let r = write_button(ui, &l.write, "Delete", "delete the open file");
-                        chrome.hit("delete file", r.rect);
-                        if r.clicked() {
-                            self.confirm = Some(Act::DeleteFile(cur.into()));
-                        }
-                    }
-                });
+                let r = write_button(ui, &l.write, "New file", "Adds a new .st file to this project.");
+                chrome.hit("new file", r.rect);
+                if r.clicked() {
+                    self.ask(Naming::NewFile, ".st");
+                }
             }
         }
-        if let Some(a) = self.naming_ui(ui, chrome) {
-            act = Some(a);
+        if l.open.is_some()
+            && let Some(n) = crate::history_ui::rows_ui(ui, chrome, l.history, &mut self.history_open)
+        {
+            act = Some(Act::ShowRevision(n));
         }
-        if let Some(a) = self.confirm_ui(ui, chrome) {
-            act = Some(a);
+        if let Some(a) = self.delete_key(ui, l) {
+            self.naming = None;
+            self.confirm = Some(a);
         }
         if l.write.is_err() {
             self.naming = None;
@@ -363,66 +512,53 @@ impl FilesUi {
         act
     }
 
-    /// Whether `g`'s rows show: the short lists always; a long one once
-    /// unfolded, or while the open project is in it.
-    fn group_open(&self, l: &Listing<'_>, g: Group) -> bool {
-        match g {
-            Group::Mine | Group::FirstSteps => true,
-            Group::Machines | Group::Templates => {
-                self.unfolded.contains(&g)
-                    || l.projects
-                        .iter()
-                        .any(|p| p.group == g && l.open == Some(p.name.as_str()))
+    /// The Delete key (Backspace on a Mac keyboard) with the pane up and
+    /// no text field focused: what to delete, asked first. The file or
+    /// project last clicked; with nothing clicked, the open project. A
+    /// built-in example is never offered (Nick, 2026-11-02).
+    fn delete_key(&mut self, ui: &egui::Ui, l: &Listing<'_>) -> Option<Act> {
+        if l.write.is_err() || self.naming.is_some() || self.confirm.is_some() {
+            return None;
+        }
+        if ui.memory(|m| m.focused().is_some()) {
+            return None;
+        }
+        let pressed = ui.input_mut(|i| {
+            i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)
+        });
+        if !pressed {
+            return None;
+        }
+        let mine = |name: &str| l.projects.iter().any(|p| p.name == name && !p.example());
+        let open_mine = l.open.filter(|o| mine(o));
+        match &self.picked {
+            Some(Picked::File(f)) if open_mine.is_some() && l.files.iter().any(|(n, _)| n == f) => {
+                Some(Act::DeleteFile(f.clone()))
             }
+            Some(Picked::Project(p)) if mine(p) => Some(Act::DeleteProject(p.clone())),
+            _ => open_mine.map(|o| Act::DeleteProject(o.into())),
         }
     }
 
-    /// A list's heading; a long list's folds on a click.
-    fn group_header(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, g: Group, chrome: &mut Chrome) {
-        let title = match g {
-            Group::Mine => return,
-            Group::FirstSteps => {
-                ui.add_space(4.0);
-                ui.label(RichText::new("Examples").strong().color(STEEL));
-                return;
-            }
-            Group::Machines => "Machines",
-            Group::Templates => "Templates",
-        };
-        let open = self.group_open(l, g);
-        let n = l.projects.iter().filter(|p| p.group == g).count();
-        let text = format!("{} {title} ({n})", if open { "▾" } else { "▸" });
+    /// The examples on a box (the simulation lists them with the
+    /// projects): a click asks for the new program's name.
+    fn starters_ui(&mut self, ui: &mut egui::Ui, l: &Listing<'_>, chrome: &mut Chrome) {
+        let t = theme(ui);
         ui.add_space(4.0);
-        let r = ui.selectable_label(false, RichText::new(text).strong().color(STEEL));
-        chrome.hit(format!("group {title}"), r.rect);
-        if r.clicked() && !self.unfolded.remove(&g) {
-            self.unfolded.insert(g);
-        }
-    }
-
-    /// "Start from a machine or template": the same list the simulation
-    /// has; a click asks for the new project's name.
-    fn starters_ui(&mut self, ui: &mut egui::Ui, write: &Result<(), String>, chrome: &mut Chrome) {
-        let arrow = if self.starters_open { "▾" } else { "▸" };
-        let r = ui.selectable_label(
-            false,
-            RichText::new(format!("{arrow} Start from a machine or template")).color(STEEL),
-        );
-        chrome.hit("starters", r.rect);
-        if r.clicked() {
-            self.starters_open = !self.starters_open;
-        }
-        if !self.starters_open {
-            return;
-        }
-        for (kind, title) in [(Kind::Machine, "Machines"), (Kind::Template, "Templates")] {
-            ui.label(RichText::new(title).strong().color(STEEL));
-            for s in STARTERS.iter().filter(|s| s.kind == kind) {
-                let r = write_button(ui, write, s.title, s.about);
-                chrome.hit(format!("starter {}", s.name), r.rect);
-                if r.clicked() {
-                    self.ask(Naming::FromStarter(s.name.into()), s.name);
-                }
+        ui.label(RichText::new("Examples").strong().color(t.muted))
+            .tip("Short programs that teach one thing each. Click one to make it a program of your own on this box.");
+        for e in &crate::playground::EXAMPLES {
+            let (name, _) = crate::sim_projects::example_project(e.src);
+            let r = write_button(
+                ui,
+                &l.write,
+                e.name,
+                "makes your own copy of this example, under a name you choose",
+            );
+            chrome.hit(format!("starter {name}"), r.rect);
+            if r.clicked() {
+                let free = free_name(l, &name);
+                self.ask(Naming::FromStarter(name), &free);
             }
         }
     }
@@ -431,6 +567,7 @@ impl FilesUi {
         self.naming = Some(n);
         self.input = start.into();
         self.confirm = None;
+        self.focus_name = true;
     }
 
     /// Asks for a new, empty project's name (File › New project, or a
@@ -461,13 +598,36 @@ impl FilesUi {
         let size = Vec2::new(ui.available_width(), left);
         let r = ui.allocate_response(size, egui::Sense::click());
         chrome.hit("files blank", r.rect);
+        // Space to right-click, not a button: the menu pointer, not the finger.
+        if r.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ContextMenu);
+        }
         let mut act = None;
         r.context_menu(|ui| {
-            if menu_item(ui, chrome, "menu new project", "New project…", write.is_ok()) {
+            if menu_item(
+                ui,
+                chrome,
+                "menu new project",
+                "New project…",
+                write.is_ok(),
+                write
+                    .as_ref()
+                    .err()
+                    .map_or("Starts an empty project.", String::as_str),
+            ) {
                 self.new_project();
             }
             let paste = can_paste && write.is_ok() && self.clipboard.is_some();
-            if menu_item(ui, chrome, "menu paste", "Paste", paste)
+            let paste_tip = if let Err(why) = write {
+                why.as_str()
+            } else if !can_paste {
+                "Open a project of your own to paste into."
+            } else if self.clipboard.is_none() {
+                "Nothing copied yet: right-click a file and Copy."
+            } else {
+                "Pastes the copied file into the open project."
+            };
+            if menu_item(ui, chrome, "menu paste", "Paste", paste, paste_tip)
                 && let Some((name, text)) = self.clipboard.clone()
             {
                 act = Some(Act::PasteFile { name, text });
@@ -476,12 +636,21 @@ impl FilesUi {
         act
     }
 
-    fn naming_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) -> Option<Act> {
+    /// The name asked for (new project, a copy, a rename, a new file) as
+    /// a box in the middle of the screen over a dimmed page, whichever
+    /// tab is up (Nick, 2026-11-05: the New project prompt a popup, not
+    /// a field in the side panel). Enter or OK uses the name; Cancel,
+    /// Escape or a click outside leaves things as they are. The view
+    /// draws it each frame after the Editor; returns what was asked.
+    pub fn naming_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<Act> {
         let n = self.naming.clone()?;
         let what = match &n {
             Naming::NewProject => "New project".to_string(),
             Naming::CopyProject(p) => format!("Copy {p} as"),
-            Naming::FromStarter(p) => format!("New project from {p}, named"),
+            Naming::FromStarter(p) => format!(
+                "Name your program (from the {} example)",
+                example_title(p).unwrap_or(p)
+            ),
             Naming::RenameProject(p) => format!("Rename {p} to"),
             Naming::NewFile => "New file".to_string(),
             Naming::RenameFile(f) => format!("Rename {f} to"),
@@ -490,42 +659,69 @@ impl FilesUi {
             Naming::NewFile | Naming::RenameFile(_) => "NAME.st",
             _ => "a-z 0-9 _ -",
         };
-        let mut out = None;
-        ui.separator();
-        ui.label(RichText::new(what).strong());
-        let t = ui.add(
-            egui::TextEdit::singleline(&mut self.input)
-                .hint_text(hint)
-                .desired_width(f32::INFINITY),
-        );
-        chrome.hit("name", t.rect);
-        let enter = t.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        ui.horizontal(|ui| {
-            let ok = ui.button("OK");
-            chrome.hit("name ok", ok.rect);
-            let no = ui.button("Cancel");
-            chrome.hit("name cancel", no.rect);
-            if ok.clicked() || enter {
-                let name = self.input.trim().to_string();
-                if !name.is_empty() {
-                    out = Some(match n.clone() {
-                        Naming::NewProject => Act::NewProject(name),
-                        Naming::CopyProject(from) => Act::CopyProject { from, to: name },
-                        Naming::FromStarter(from) => Act::FromStarter { from, to: name },
-                        Naming::RenameProject(from) => Act::RenameProject { from, to: name },
-                        Naming::NewFile => Act::NewFile(name),
-                        Naming::RenameFile(from) => Act::RenameFile { from, to: name },
-                    });
-                }
-                self.naming = None;
-            } else if no.clicked() {
-                self.naming = None;
+        let mut ok = false;
+        let mut cancel = false;
+        let m = crate::theme::near_pointer(ctx, "files-name").show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(RichText::new(what).strong().size(16.0));
+            ui.add_space(8.0);
+            let t = ui
+                .add(
+                    egui::TextEdit::singleline(&mut self.input)
+                        .hint_text(hint)
+                        .desired_width(f32::INFINITY),
+                )
+                .tip(format!("The name ({hint}). Enter confirms."));
+            chrome.hit("name", t.rect);
+            if std::mem::take(&mut self.focus_name) {
+                t.request_focus();
             }
+            let enter = t.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let yes = ui
+                    .add(egui::Button::new(RichText::new("OK").strong()).min_size(tall))
+                    .tip("Uses this name (Enter).");
+                chrome.hit("name ok", yes.rect);
+                let no = ui
+                    .add(egui::Button::new("Cancel").min_size(tall))
+                    .tip("Leaves things as they are (Escape).");
+                chrome.hit("name cancel", no.rect);
+                ok = yes.clicked() || enter;
+                cancel = no.clicked();
+            });
         });
-        out
+        chrome.hit("name form", m.response.rect);
+        // OK first: the click that pressed it also reads as a click on
+        // the modal's backdrop, which would otherwise shut the question.
+        if ok {
+            self.naming = None;
+            let name = self.input.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            return Some(match n {
+                Naming::NewProject => Act::NewProject(name),
+                Naming::CopyProject(from) => Act::CopyProject { from, to: name },
+                Naming::FromStarter(from) => Act::FromStarter { from, to: name },
+                Naming::RenameProject(from) => Act::RenameProject { from, to: name },
+                Naming::NewFile => Act::NewFile(name),
+                Naming::RenameFile(from) => Act::RenameFile { from, to: name },
+            });
+        }
+        if cancel || m.should_close() {
+            self.naming = None;
+        }
+        None
     }
 
-    fn confirm_ui(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) -> Option<Act> {
+    /// The pending question ([`Self::confirm`]) as a box in the middle of
+    /// the screen over a dimmed page, whichever tab is up: its buttons,
+    /// Escape or a click outside answer it (Nick, 2026-11-02: every
+    /// confirmation a popup in the centre). The view draws it each frame
+    /// after the Editor; returns what was agreed to.
+    pub fn confirm_ui(&mut self, ctx: &egui::Context, chrome: &mut Chrome) -> Option<Act> {
         let a = self.confirm.clone()?;
         let (what, verb, stay) = match &a {
             Act::DeleteProject(p) => (format!("Delete project {p} and all its files?"), "Delete", "Keep"),
@@ -543,32 +739,50 @@ impl FilesUi {
             _ => return None,
         };
         let mut out = None;
-        ui.separator();
-        ui.colored_label(RED, what);
-        ui.horizontal(|ui| {
-            let yes = ui.button(verb);
-            chrome.hit("confirm yes", yes.rect);
-            if let Act::UseAnswer { name, text, .. } = &a {
-                let drop = ui.button("Drop them, then open");
-                chrome.hit("confirm drop", drop.rect);
-                if drop.clicked() {
-                    out = Some(Act::UseAnswer {
-                        name: name.clone(),
-                        text: text.clone(),
-                        save: false,
+        let m = crate::theme::near_pointer(ctx, "files-confirm").show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(RichText::new(what).strong().size(16.0));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let tall = Vec2::new(0.0, TAP * 0.7);
+                let yes = ui
+                    .add(egui::Button::new(RichText::new(verb).color(RED)).min_size(tall))
+                    .tip(match &a {
+                        Act::DeleteProject(_) | Act::DeleteFile(_) => "Deletes it. There is no undo.",
+                        Act::UseAnswer { .. } => "Saves the edits here, then opens the agent's code.",
+                        _ => "Opens it. The edits here are lost.",
                     });
+                chrome.hit("confirm yes", yes.rect);
+                if let Act::UseAnswer { name, text, .. } = &a {
+                    let drop = ui
+                        .add(egui::Button::new("Drop them, then open").min_size(tall))
+                        .tip("Opens the agent's code. The edits here are lost.");
+                    chrome.hit("confirm drop", drop.rect);
+                    if drop.clicked() {
+                        out = Some(Act::UseAnswer {
+                            name: name.clone(),
+                            text: text.clone(),
+                            save: false,
+                        });
+                        self.confirm = None;
+                    }
+                }
+                let no = ui
+                    .add(egui::Button::new(stay).min_size(tall))
+                    .tip("Leaves everything as it is (Escape).");
+                chrome.hit("confirm no", no.rect);
+                if yes.clicked() {
+                    out = Some(a.clone());
+                    self.confirm = None;
+                } else if no.clicked() {
                     self.confirm = None;
                 }
-            }
-            let no = ui.button(stay);
-            chrome.hit("confirm no", no.rect);
-            if yes.clicked() {
-                out = Some(a.clone());
-                self.confirm = None;
-            } else if no.clicked() {
-                self.confirm = None;
-            }
+            });
         });
+        chrome.hit("confirm", m.response.rect);
+        if m.should_close() {
+            self.confirm = None;
+        }
         out
     }
 }
@@ -582,7 +796,7 @@ pub fn diags_ui(ui: &mut egui::Ui, diags: &[Diag], chrome: &mut Chrome) -> Optio
             .add(
                 egui::Label::new(RichText::new(d.label()).monospace().color(RED)).sense(egui::Sense::click()),
             )
-            .on_hover_text("open the file at this line");
+            .tip("Opens the file at this line.");
         chrome.hit(format!("diag {k}"), r.rect);
         if r.clicked() {
             out = Some(d.clone());
@@ -625,6 +839,31 @@ pub trait Workspace {
     /// Lights every read and write of the picked block's variable on the
     /// diagram (Cross references); whether there was one.
     fn cross_references(&mut self) -> bool;
+    /// Sets or clears a breakpoint on the picked block (Ctrl B); whether
+    /// there was a block to put one on. Only the simulation stops.
+    fn toggle_breakpoint(&mut self) -> bool {
+        false
+    }
+    /// Forces the input the picked block reads (Ctrl Shift F): a BOOL
+    /// flips, a number's field takes the keyboard. On a box an engineer's
+    /// force; in the simulation the input's switch. Whether it did.
+    fn force_picked(&mut self, _ctx: &egui::Context) -> bool {
+        false
+    }
+    /// Opens the picked block instance's diagram (Ctrl ]); a stopped
+    /// simulation then steps one scan. Whether it opened one.
+    fn step_into(&mut self) -> bool {
+        false
+    }
+    /// Up one level of the diagram (Ctrl [); a stopped simulation then
+    /// steps one scan. Whether there was a level up.
+    fn step_out(&mut self) -> bool {
+        false
+    }
+    /// Releases every force (Ctrl Shift U); whether there were any.
+    fn release_all(&mut self) -> bool {
+        false
+    }
 }
 
 /// The file and line a line of a project build is from: the build is every
@@ -663,6 +902,39 @@ pub fn slug(file: &str) -> String {
     let mut out = out.trim_end_matches('-').to_string();
     out.truncate(48);
     if out.is_empty() { "project".into() } else { out }
+}
+
+/// An example's title from its project name.
+fn example_title(name: &str) -> Option<&'static str> {
+    crate::playground::EXAMPLES
+        .iter()
+        .find(|e| crate::sim_projects::example_project(e.src).0 == name)
+        .map(|e| e.name)
+}
+
+/// `base`, or `base-2`, `base-3`, ... whichever no project has yet.
+fn free_name(l: &Listing<'_>, base: &str) -> String {
+    let taken = |n: &str| l.projects.iter().any(|p| p.name == n);
+    if !taken(base) {
+        return base.to_string();
+    }
+    // One more name tried than there are projects: one of them is free.
+    let last = l.projects.len() + 2;
+    (2..=last)
+        .map(|k| format!("{base}-{k}"))
+        .find(|n| !taken(n))
+        .unwrap_or_else(|| format!("{base}-{last}"))
+}
+
+/// A list's heading.
+fn group_header(ui: &mut egui::Ui, g: Group) {
+    let t = theme(ui);
+    if g == Group::FirstSteps {
+        ui.add_space(4.0);
+        ui.label(RichText::new("Examples").strong().color(t.muted)).tip(
+            "Short programs that teach one thing each. Click one to make your own copy under a name you choose.",
+        );
+    }
 }
 
 #[cfg(test)]

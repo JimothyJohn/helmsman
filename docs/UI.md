@@ -24,7 +24,8 @@ this; change it here first when a decision changes.
   Deploy, Upload, Download),
   Edit (Undo, Redo, Go to definition, Cross references), View (Editor /
   Monitor, Structured Text, Files, the side panel and its tabs, Trend,
-  Zoom to fit, the layout items, Scan detail for an engineer) and Help
+  Zoom to fit, the layout items, Scan detail for an engineer, and Light
+  mode: dark by default, the choice kept per browser with the layout) and Help
   (Help and Keyboard shortcuts on the site, About Helmsman: version,
   build, licence, and on a box its certificate fingerprint). After them
   the program's state, green running, red stopped or faulted (a box: its
@@ -38,21 +39,111 @@ this; change it here first when a decision changes.
   restart (the simulation), then save, upload, download. Strokes in the
   brand colours; each tells its key on hover.
 - **Bottom panel**, under the diagram, collapsible and resizable (View ›
-  Trend, Alt 2), two tabs: Trend (its time axis is the long side) and
+  Trend, Alt 2), two tabs: Trend (its time axis is the long side; one
+  Window slider, logarithmic from 100 ms to 10 min, the plot following
+  as it moves; Nick, 2026-11-02) and
   Messages (the last 200 things the page had to say, filtered by level
   with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
   deploy is still there to read after the line under the header has gone.
-- **Left pane, collapsible, tabs (160 pt):** Files (the projects, the
+- **Left pane, collapsible, tabs (200 pt):** Files (the projects, the
   open one's files, the program tree; a right-click on a project offers
   Copy, Rename and Delete, on a file Copy, Paste, Duplicate, Rename and
   Delete with an app-wide clipboard so a file pastes into any open
   project, and on the blank space New project and Paste; New project and
-  Copy project are also the File menu's first items) and Code (the
-  Structured Text editor). One width for both tabs; Alt 0 and Alt 1 open the pane on its
-  tab, or shut it when that tab shows.
-- **Right panel, collapsible, tabs (204 pt):** I/O (values; inputs the
-  diagram does not show), Agent. On a Pi the Trend opens with
+  Copy project are also the File menu's first items; the Delete key
+  deletes the row last clicked, a double click on a file opens the Code
+  tab, every delete is confirmed in a modal at the screen's centre, and
+  the earlier iterations of the program, `vN.st`, fold under one
+  "earlier (n)" row with `main.st` marked as the one running),
+  Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
+  system's, each with its points under it, live values and the link's
+  state; on a box the open project's `io.map`, else the map the box runs;
+  a right-click on the blank space adds a device as a file is added: a
+  form in the centre, name, protocol (Modbus TCP, EtherNet/IP), address
+  and settings, written as one `device` line of `io.map`; Import device…
+  takes a vendor's EDS, which joins the project as `NAME.eds` and fills
+  the form in (EtherNet/IP, `eds=NAME.eds`); the box reads the file from
+  the project when the map loads (2026-11-02, `device-import`); under the
+  map's devices, "On the network": Scan asks the box for one ListIdentity
+  sweep (`POST /api/devices/discover`; the simulation answers with its
+  simulated E1213) and lists every device that answered, with whether a
+  map device binds it and what the public device library knows of it
+  (github.com/JimothyJohn/helmsman-devices, looked up by identity first,
+  then by vendor and model text; `--devices-index` points a box at
+  another); a right-click on one not in the map offers Add to the map…,
+  the form filled in by identity (`cip=V:P:S`) with the library's name
+  and profile (2026-11-02, `devices-repo`); the same listing, network
+  included, is the context the agent gets, in the page and as the box's
+  `list_devices` tool; under that, "Plant states" (2026-11-02,
+  `sim-feedback-devices`): the quantities the project's plant model
+  keeps, marked `{state [unit=U] [measured_by=NAME]}` on their VAR line
+  (the IEC pragma the compiler skips), each with the simulation's value,
+  the map `in` signal that measures it on the real machine (found by
+  name: the state's, `NAME_in`, `NAME_raw`, the name without its unit
+  suffix, or the attribute) or, unmeasured, the sensor kind that would
+  (level transmitter, pressure transducer, RTD, encoder, flow meter,
+  load cell, counter input, a switch); a right-click on an unmeasured
+  state offers Add a sensor…, a form in the centre (signal name, the
+  map's device, point, unit) that appends the `in` line; a measuring
+  signal that is one of the program's inputs, in the state's unit and
+  not a `_raw` count, stands in for the model's variable in the
+  simulation (it is written into each instance before every scan, so
+  the model runs from the sensor, set in the I/O tab); the agent's
+  context carries the same list, so it can suggest and reason about
+  what the machine does not measure yet) and Code (the Structured Text
+  editor). One width
+  for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
+  pane on its tab, or shut it when that tab shows.
+- **Right panel, collapsible, tabs (236 pt since the third tab):** I/O
+  (values; inputs the diagram does not show), Requirements (Nick, 2026-11-05: a list of requirements in plain words.
+  Type one and Add: the agent writes the test behind it, a
+  `test_NAME.st` PROGRAM whose first comment is the requirement, and runs
+  it; in the simulation through the page's Agent route, on a box through
+  `POST /api/projects/{p}/requirements`, where the box's agent writes and
+  checks it. Each row is green (passing), red (failing, and why) or grey
+  (no test yet: no agent was reachable, or it wrote none); a row opens to
+  its test with Edit test and Delete. Test files stay out of the Files
+  list. The page runs the tests after every build change and before
+  Deploy and "Use this code", a box when a project opens, after each save
+  and before a deploy; a red one refuses both, naming the test, a grey one
+  does not), Agent (Nick,
+  2026-11-01: the conversation is pages, ‹ › walk them, Delete drops
+  one, every kept page goes to the model as context each time, and the
+  pages live with the project as `agent.md`, so a reload or a download
+  keeps them; an earlier page's code has its own Use this code. On a box
+  (card `agent-on-box`, first cut) the Agent tab talks to the agent the
+  box runs through its relay, `POST /api/chat` with the session cookie:
+  the reply streams in with each tool it ran, ✓ or ✗ and a summary, and
+  each change it stored as a proposal with a Review #n button that opens
+  it under Proposals, where it is replayed, approved or left like any
+  other; nothing on the tab applies a change. A line on top says whether
+  the agent is online, offline (a message is then read by rule: a param
+  edit becomes a proposal, nothing else) or not configured; signed out,
+  Send stays off. Stop ends the answer on the page; New conversation
+  starts one of its own on the box. Pages, iterations and the edit scope
+  are the page's alone for now. The agent edits only what is in focus (Nick 2026-11-01,
+  interview 2026-11-02, card `agent-scoped-edits`): the open file by
+  default, the lines selected in the Code tab or the block picked in the
+  diagram (its statement, while the diagram is of the editor's text) when
+  there is one; a line above the question says which ("Editing: main.st",
+  "Editing: lines 12–30 of main.st", "Editing: block Motor1") and by which
+  rule, with Whole file to drop the selection or pick. The scope goes to
+  the model in an `<edit_scope>` envelope and back with the page; Use
+  this code takes the answer into that scope only (`scope.rs`,
+  `apply`): another file, lines outside the selection, a block's
+  neighbour, several code blocks, the page's envelope markers or no
+  change at all are refused, saying what it tried to touch, and nothing
+  outside the scope changes, byte for byte. A taken change must keep the
+  requirement tests green; unsaved edits are saved first, then the
+  change is one revision with its page. A whole `main.st` with its
+  PROGRAM lands as an iteration; lines and blocks are edited in place.
+  With a built-in example open (read-only) the scope is a new project:
+  Use this code on a PROGRAM asks for the program's name once per
+  conversation; the answers after it land in that project with the
+  newest as `main.st` and the file it replaced kept as the next `vN.st`,
+  serially, however many; `vN.st` is never built, and past the project's
+  size the oldest go first). On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.
@@ -86,7 +177,15 @@ this; change it here first when a decision changes.
   running. Opening or editing another project never disturbs the running
   one.
 - **Save** writes the edited files (a draft; a file someone else saved
-  since it was read is refused, and the page offers to reload it).
+  since it was read is refused, and the page offers to reload it). Every
+  save, upload, import and restore is a **revision** of the project on
+  the box (Nick 2026-11-01, project-history; interview 2026-11-02:
+  revisions, not git): the files as they were, who, when, what, and the
+  Agent page the change came from when there was one. The Files tab's
+  History row lists them; a revision opens in the centre with a line
+  diff against the project as it is and Restore (an engineer's, a new
+  revision). The simulation keeps the newest twenty in the browser's
+  storage the same way. Deploy snapshots in the store are untouched.
   **Deploy** saves first, compiles the open project, records a snapshot in
   the store (history and rollback keep working) and hot-swaps it in
   between scans; compile errors list file and line, and a click goes
@@ -105,16 +204,17 @@ this; change it here first when a decision changes.
   compile is refused and the old program keeps running. A browser that
   keeps nothing (a private window) still works; the projects last until
   the page closes.
-- **Machines and templates.** Worked machines (conveyor sorter, pump
-  station, batch mixer, pick and place, bottle filler, air compressors,
-  air handler) and templates (discrete machine, process loop) are one list,
-  kept as files in `crates/helmsman-project/starters/`. In the simulation
-  the Files sidebar shows Examples (the short teaching programs, in view,
-  and the one a first visit opens), then Machines and Templates, folded
-  until opened; each is a read-only starter that Save copies. On a box,
-  "Start from a machine or template" in the sidebar asks an engineer for a
-  name and sends the project as its `.zip`; nothing else changes what the
-  box holds, and a first install still seeds `line` alone, undeployed.
+- **Examples** (Nick, 2026-11-05). Five programs from the first chapters
+  of a Structured Text book, a few lines each: Blink, Read and write,
+  Logic (AND, OR, NOT), Start/stop latch, Counter (`playground::EXAMPLES`).
+  The worked machines and templates are gone. A click on an example asks
+  for the program's name (prefilled, made unique) and opens the person's
+  own copy; the example itself never opens for editing (a first visit
+  shows Blink running). On a box the same list sends the copy as a `.zip`
+  with an `io.map` made from the example's own ports, BOOL inputs on the
+  box's `di` channels and outputs on its `do` channels, so it deploys with
+  nothing wired; nothing else changes what the box holds, and a first
+  install still seeds `line` alone, undeployed.
 
 ## Keyboard
 
@@ -129,7 +229,7 @@ The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
 | Ctrl D | Deploy | (Download has no key) |
 | Ctrl Enter | Run / Stop the simulation | (Start is F5, the browser's) |
 | Shift F8 | Stop the simulation | Stop |
-| F10 | Step one scan (stopped) | Step Over |
+| F10 | Step one scan (stopped); from a breakpoint, the rest of the scan | Step Over |
 | Alt F8 | Sign in (box) | Login |
 | Ctrl F8 | Sign out (box) | Logout |
 | Ctrl Z, Ctrl Y | Undo, Redo in the ST editor | Undo, Restore |
@@ -137,16 +237,20 @@ The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
 | Alt 1 | The left pane's Code tab (the Structured Text) | POUs view |
 | Alt 2 | Trend along the bottom | Modules view |
 | Alt 3 | Side panel | Messages view |
+| Alt 4 | The left pane's Devices tab | |
 | Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
 | Ctrl Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References |
+| Ctrl B | Breakpoint on the picked block (simulation): the scan stops before it, framed in orange; Ctrl Enter goes on to the next stop | (Toggle Breakpoint is F9) |
+| Ctrl Shift F | Force the picked input: a switch flips, a number's field opens (on a box an engineer's audited force) | |
+| Ctrl Shift U | Release every force (box, engineer) | |
+| Ctrl ] | Into the picked block instance's diagram; a stopped simulation steps one scan | |
+| Ctrl [ | Out to the caller's diagram, the instance left picked; a stopped simulation steps one scan | |
+| Ctrl F | Find in the ST: every match marked, the current one brighter and scrolled to; Enter / Shift Enter next / previous, Esc closes with the match selected | |
+| Ctrl G, Ctrl Shift G | Next / previous match | |
 | Alt ↑ | Up one level in the diagram | |
 
-Each menu item prints its key. Reserved, not built (TODO cards
-`hotkey-*`), on chords rather than F keys: Ctrl B toggle a breakpoint on
-the picked block, Ctrl ] / Ctrl [ step into / out of an instance,
-Ctrl Shift F force the picked input and Ctrl Shift U release all, Ctrl F
-find in the ST with Ctrl G / Ctrl Shift G next / previous, F2 / Shift F2
-the Agent.
+Each menu item prints its key. Reserved, not built (TODO card
+`hotkey-agent-reserved`): F2 / Shift F2 the Agent.
 
 ## Monitor (phone to wall TV; replaces Andon)
 
@@ -157,7 +261,11 @@ the Agent.
 - **Tap a tile:** the same tiles one level down (that instance's instances
   and outputs). Back and breadcrumbs go up; the full diagram is one tap
   away.
-- **Watch only.** The Monitor never writes.
+- **Watch only.** The Monitor never writes to a box. In the simulation
+  its header carries the transport (run or stop, step, restart) and the
+  same keys as the Editor (Nick, 2026-11-01); a box's Monitor gets the
+  same once the box has an audited stop and start (card
+  `monitor-box-run-stop`).
 
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan

@@ -17,7 +17,6 @@
 
 use std::collections::BTreeMap;
 
-use helmsman_project::starters::{Kind, STARTERS, starter};
 use helmsman_project::{FileKind, Files, file_name, project_name};
 use serde_json::{Value as Json, json};
 
@@ -63,6 +62,82 @@ impl Storage for MemStorage {
 
 /// The format the projects are stored in.
 const FORMAT: &str = "helmsman-projects 1";
+/// Most revisions kept per project in the browser's storage.
+pub const MAX_SIM_REVISIONS: usize = 20;
+
+/// One revision of a project here: its files as saved, who, when, what,
+/// and the Agent page the change came from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimRevision {
+    pub n: u32,
+    pub at_ms: u64,
+    pub by: String,
+    pub what: String,
+    pub page: Option<String>,
+    pub files: BTreeMap<String, String>,
+}
+
+impl SimRevision {
+    #[must_use]
+    pub fn row(&self) -> crate::history_ui::RevisionRow {
+        crate::history_ui::RevisionRow {
+            n: self.n,
+            at_ms: self.at_ms,
+            by: self.by.clone(),
+            what: self.what.clone(),
+            page: self.page.is_some(),
+        }
+    }
+
+    #[must_use]
+    pub fn view(&self) -> crate::history_ui::RevisionView {
+        crate::history_ui::RevisionView {
+            row: self.row(),
+            files: self.files.clone(),
+            page: self.page.clone(),
+        }
+    }
+
+    fn json(&self) -> Json {
+        json!({
+            "n": self.n, "at_ms": self.at_ms, "by": self.by, "what": self.what,
+            "page": self.page, "files": self.files,
+        })
+    }
+
+    fn parse(j: &Json) -> Option<Self> {
+        let files: BTreeMap<String, String> = j["files"]
+            .as_object()?
+            .iter()
+            .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+            .collect();
+        Files(files.clone()).check().ok()?;
+        Some(Self {
+            n: u32::try_from(j["n"].as_u64()?).ok()?,
+            at_ms: j["at_ms"].as_u64().unwrap_or(0),
+            by: j["by"].as_str().unwrap_or("you").to_string(),
+            what: j["what"].as_str().unwrap_or("").to_string(),
+            page: j["page"].as_str().map(str::to_string),
+            files,
+        })
+    }
+}
+
+/// Now, as Unix milliseconds (the browser's clock, or the system's).
+#[must_use]
+pub fn wall_ms() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let ms = web_sys::js_sys::Date::now();
+        if ms.is_finite() && ms > 0.0 { ms as u64 } else { 0 }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+    }
+}
 
 /// A starter project made from a built-in example: named after its
 /// PROGRAM, one file.
@@ -84,6 +159,44 @@ pub fn example_project(src: &str) -> (String, String) {
     (name, file)
 }
 
+/// The `io.map` an example takes onto a box, from its own ports: a box
+/// binds every program port to a signal, and an example comes with none.
+/// BOOL inputs on the box's own `di` channels and BOOL outputs on its `do`
+/// channels, in order, as the old starters had them, so it runs with
+/// nothing wired; a number output on the screen.
+#[must_use]
+pub fn example_io_map(src: &str) -> String {
+    use crate::playground::Dir;
+    use helmsman_iec::Ty;
+    let s = crate::playground::Session::new(src);
+    let mut out = String::from(
+        "# This example's inputs and outputs, on the box's own channels so it\n\
+         # runs with nothing wired. If this box's own channels are wired to\n\
+         # anything, these lines drive it: check them first. To use a remote\n\
+         # I/O module: Devices tab, Scan, then Use this device; it offers\n\
+         # to move these lines onto the module.\n",
+    );
+    let (mut di, mut dq) = (0, 0);
+    for p in s.inputs().chain(s.outputs()) {
+        let name = p.name.to_ascii_lowercase();
+        let line = match (p.dir, p.ty) {
+            (Dir::In, Ty::Bool) => {
+                di += 1;
+                format!("in  {name} bool box di:{}", di - 1)
+            }
+            (Dir::Out, Ty::Bool) => {
+                dq += 1;
+                format!("out {name} bool box do:{} safe=false", dq - 1)
+            }
+            (Dir::Out, _) => format!("out {name} int screen {name} safe=0"),
+            (Dir::In, _) => format!("in  {name} int screen {name}"),
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 fn examples() -> BTreeMap<String, Files> {
     EXAMPLES
         .iter()
@@ -91,17 +204,12 @@ fn examples() -> BTreeMap<String, Files> {
             let (name, file) = example_project(e.src);
             (name, Files(BTreeMap::from([(file, e.src.to_string())])))
         })
-        .chain(STARTERS.iter().map(|s| (s.name.to_string(), s.project())))
         .collect()
 }
 
 /// The list a built-in project is under.
-fn group_of(name: &str) -> Group {
-    match starter(name).map(|s| s.kind) {
-        Some(Kind::Machine) => Group::Machines,
-        Some(Kind::Template) => Group::Templates,
-        None => Group::FirstSteps,
-    }
+const fn group_of(_name: &str) -> Group {
+    Group::FirstSteps
 }
 
 /// What a new project starts with.
@@ -136,6 +244,9 @@ pub struct SimProjects {
     pub notice: Option<(String, bool)>,
     /// An upload whose name is taken, waiting for Replace.
     pub pending: Option<(String, Files)>,
+    /// Each project's revisions, oldest first (the newest
+    /// [`MAX_SIM_REVISIONS`]).
+    pub history: BTreeMap<String, Vec<SimRevision>>,
 }
 
 impl std::fmt::Debug for SimProjects {
@@ -166,12 +277,14 @@ impl SimProjects {
             storage_problem: None,
             notice: None,
             pending: None,
+            history: BTreeMap::new(),
         };
         let mut open = None;
         match s.store.load() {
             Ok(Some(text)) => match parse(&text) {
-                Some((saved, last)) => {
+                Some((saved, last, history)) => {
                     s.saved = saved;
+                    s.history = history;
                     open = last;
                 }
                 None => {
@@ -191,7 +304,7 @@ impl SimProjects {
         s
     }
 
-    fn exists(&self, name: &str) -> bool {
+    pub(crate) fn exists(&self, name: &str) -> bool {
         self.saved.contains_key(name) || self.examples.contains_key(name)
     }
 
@@ -234,13 +347,24 @@ impl SimProjects {
     /// Whether file `f` has edits not saved.
     #[must_use]
     pub fn file_dirty(&self, f: &str) -> bool {
-        self.base().and_then(|b| b.get(f)) != self.files.get(f).map(String::as_str)
+        !helmsman_project::agent::is_agent_file(f)
+            && self.base().and_then(|b| b.get(f)) != self.files.get(f).map(String::as_str)
     }
 
-    /// The open project has edits not saved.
+    /// The open project has edits not saved. The Agent's pages
+    /// (`agent.md`) are written as they come and never count.
     #[must_use]
     pub fn dirty(&self) -> bool {
-        self.base().is_none_or(|b| b.0 != self.files)
+        self.base().is_none_or(|b| {
+            let mine = self
+                .files
+                .iter()
+                .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n));
+            let theirs =
+                b.0.iter()
+                    .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n));
+            !mine.eq(theirs)
+        })
     }
 
     /// Opens `name` (its stored files; unsaved edits elsewhere are
@@ -261,18 +385,13 @@ impl SimProjects {
             .cloned()
             .unwrap_or_default();
         self.pending = None;
-        if self.is_example() {
-            if let Some(e) = EXAMPLES.iter().find(|e| example_project(e.src).0 == name) {
-                self.note(
-                    format!("{}: a built-in example. Save keeps your own copy.", e.name),
-                    false,
-                );
-            } else if let Some(s) = starter(name) {
-                self.note(
-                    format!("{}: {}. Save keeps your own copy.", s.title, s.about),
-                    false,
-                );
-            }
+        if self.is_example()
+            && let Some(e) = EXAMPLES.iter().find(|e| example_project(e.src).0 == name)
+        {
+            self.note(
+                format!("{}: a built-in example. Save keeps your own copy.", e.name),
+                false,
+            );
         }
         self.persist();
     }
@@ -289,15 +408,20 @@ impl SimProjects {
         self.files.get_mut(&self.current)
     }
 
-    /// The open project's build: its `.st` files, one as it is, several
-    /// each under a `(* file NAME *)` line.
+    /// The open project's `.st` files that build: every one but the
+    /// requirement tests (`test_NAME.st`, `helmsman_iec::spec`), in name
+    /// order.
+    fn built_files(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.files
+            .iter()
+            .filter(|(n, _)| file_name(n) == Some(FileKind::St) && !helmsman_iec::spec::is_test(n))
+    }
+
+    /// The open project's build: its `.st` files (tests aside), one as it
+    /// is, several each under a `(* file NAME *)` line.
     #[must_use]
     pub fn build_src(&self) -> String {
-        let st: Vec<(&String, &String)> = self
-            .files
-            .iter()
-            .filter(|(n, _)| file_name(n) == Some(FileKind::St))
-            .collect();
+        let st: Vec<(&String, &String)> = self.built_files().collect();
         if let [(_, text)] = st.as_slice() {
             return (*text).clone();
         }
@@ -314,28 +438,36 @@ impl SimProjects {
         out
     }
 
+    /// The open project's requirement tests, planned against its build
+    /// (`helmsman_iec::spec::plan`): what the Requirements tab runs.
+    #[must_use]
+    pub fn test_plan(&self) -> helmsman_iec::spec::Plan {
+        helmsman_iec::spec::plan(
+            self.files
+                .iter()
+                .filter(|(n, _)| file_name(n) == Some(FileKind::St))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        )
+    }
+
     /// The file and line a line of the build is.
     #[must_use]
     pub fn locate(&self, line: u32) -> Option<(String, u32)> {
-        let st: Vec<&String> = self
-            .files
-            .keys()
-            .filter(|n| file_name(n) == Some(FileKind::St))
-            .collect();
+        let st: Vec<&String> = self.built_files().map(|(n, _)| n).collect();
         match st.as_slice() {
             [one] => Some(((*one).clone(), line)),
             _ => file_line(&self.build_src(), line),
         }
     }
 
-    fn note(&mut self, text: impl Into<String>, error: bool) {
+    pub(crate) fn note(&mut self, text: impl Into<String>, error: bool) {
         self.notice = Some((text.into(), error));
     }
 
     /// Writes the visitor's projects and which is open; a failure is
     /// noted once, and the projects stay in memory.
     fn persist(&mut self) {
-        let text = render(&self.saved, &self.open);
+        let text = render(&self.saved, &self.open, &self.history);
         if let Err(e) = self.store.save(&text)
             && self.storage_problem.is_none()
         {
@@ -345,14 +477,6 @@ impl SimProjects {
         }
     }
 
-    /// A free name for a copy of `base` (neither a project here nor an
-    /// example): `base`, else `base-2`, `-3`, ...
-    /// A project name not taken yet, from `base` (`base-2`, ... when it is).
-    #[must_use]
-    pub fn free_name(&self, base: &str) -> String {
-        self.free(base)
-    }
-
     /// A file name not taken in the open project, from `want`
     /// (`name-2.st`, ... when it is).
     #[must_use]
@@ -360,7 +484,7 @@ impl SimProjects {
         crate::projects::free_file_name(want, |n| self.files.contains_key(n))
     }
 
-    fn free(&self, base: &str) -> String {
+    pub(crate) fn free(&self, base: &str) -> String {
         let base: String = base.chars().take(44).collect();
         let taken = |n: &str| self.saved.contains_key(n) || self.examples.contains_key(n);
         if !taken(&base) {
@@ -375,6 +499,12 @@ impl SimProjects {
 
     /// Saves the open project; an example is saved as a copy, which opens.
     pub fn save(&mut self) {
+        self.save_as("saved", None);
+    }
+
+    /// [`Self::save`], recorded in the project's history as `what`, with
+    /// the Agent `page` the change came from when there was one.
+    pub fn save_as(&mut self, what: &str, page: Option<&str>) {
         let files = Files(self.files.clone());
         if let Err(e) = files.check() {
             self.note(format!("Not saved: {}", e.join("; ")), true);
@@ -392,7 +522,68 @@ impl SimProjects {
             self.saved.insert(self.open.clone(), files);
             self.note(format!("Saved {}.", self.open), false);
         }
+        self.record_revision(what, page);
         self.persist();
+    }
+
+    /// The open project's files as stored, as its next revision.
+    fn record_revision(&mut self, what: &str, page: Option<&str>) {
+        let Some(files) = self.saved.get(&self.open) else {
+            return;
+        };
+        let files: BTreeMap<String, String> = files
+            .0
+            .iter()
+            .filter(|(n, _)| !helmsman_project::agent::is_agent_file(n))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
+        let revs = self.history.entry(self.open.clone()).or_default();
+        let n = revs.last().map_or(1, |r| r.n + 1);
+        revs.push(SimRevision {
+            n,
+            at_ms: wall_ms(),
+            by: "you".into(),
+            what: what.chars().take(200).collect(),
+            page: page.map(|p| {
+                helmsman_project::agent::sanitize(p)
+                    .chars()
+                    .take(16 * 1024)
+                    .collect()
+            }),
+            files,
+        });
+        if revs.len() > MAX_SIM_REVISIONS {
+            let extra = revs.len() - MAX_SIM_REVISIONS;
+            revs.drain(..extra);
+        }
+    }
+
+    /// The open project's revisions, oldest first.
+    #[must_use]
+    pub fn revisions(&self) -> &[SimRevision] {
+        self.history.get(&self.open).map_or(&[], Vec::as_slice)
+    }
+
+    /// The open project's files back to revision `n`, saved as a new
+    /// revision. Whether there was such a revision.
+    pub fn restore(&mut self, n: u32) -> bool {
+        let Some(rev) = self.revisions().iter().find(|r| r.n == n).cloned() else {
+            return false;
+        };
+        let agent = self.files.get(helmsman_project::AGENT).cloned();
+        self.files = rev.files;
+        if let Some(a) = agent {
+            self.files.insert(helmsman_project::AGENT.into(), a);
+        }
+        self.current = self
+            .files
+            .keys()
+            .find(|f| *f == "main.st")
+            .or_else(|| self.files.keys().find(|f| file_name(f) == Some(FileKind::St)))
+            .cloned()
+            .unwrap_or_default();
+        self.save_as(&format!("restored revision {n}"), None);
+        true
     }
 
     /// The open project's shared diagram layout (`""`: none), as edited.
@@ -620,10 +811,26 @@ impl SimProjects {
         }
         if ext.eq_ignore_ascii_case("l5x") {
             match l5x(file, bytes) {
-                Ok(st) => {
+                Ok((st, scans)) => {
                     self.files.insert(target.clone(), st);
                     self.current.clone_from(&target);
-                    self.note(format!("Imported {file} into {} as {target}.", self.open), false);
+                    // The task rates, as the box writes them.
+                    let mut said = format!("Imported {file} into {} as {target}.", self.open);
+                    if !scans.is_empty() {
+                        let settings = helmsman_project::SETTINGS;
+                        let had = self.files.get(settings).cloned().unwrap_or_default();
+                        let (text, notes) = helmsman_project::settings::set_scans(&had, &scans);
+                        if text != had {
+                            self.files.insert(settings.to_string(), text);
+                            said.push_str(" Its task rates are in project.settings.");
+                        }
+                        for n in notes {
+                            said.push(' ');
+                            said.push_str(&n);
+                            said.push('.');
+                        }
+                    }
+                    self.note(said, false);
                 }
                 Err(e) => self.note(e, true),
             }
@@ -661,7 +868,7 @@ impl SimProjects {
 /// ladder in the converted subset becomes Structured Text
 /// ([`helmsman_iec::ladder::convert`]); anything else refuses the whole
 /// file, every problem with its rung (the first 20, then how many more).
-fn l5x(file: &str, bytes: &[u8]) -> Result<String, String> {
+fn l5x(file: &str, bytes: &[u8]) -> Result<(String, Vec<(String, u32)>), String> {
     let text = std::str::from_utf8(bytes).map_err(|_| format!("{file}: not UTF-8"))?;
     let converted = helmsman_iec::ladder::convert(text).map_err(|r| {
         let mut lines: Vec<String> = r.problems.iter().take(20).map(ToString::to_string).collect();
@@ -671,21 +878,36 @@ fn l5x(file: &str, bytes: &[u8]) -> Result<String, String> {
         format!("{file} is not converted: {}", lines.join("; "))
     })?;
     helmsman_project::check_text(converted.st.as_bytes()).map_err(|e| format!("{file} was refused: {e}"))?;
-    Ok(converted.st)
+    Ok((converted.st, converted.scans))
 }
 
-fn render(saved: &BTreeMap<String, Files>, open: &str) -> String {
+fn render(
+    saved: &BTreeMap<String, Files>,
+    open: &str,
+    history: &BTreeMap<String, Vec<SimRevision>>,
+) -> String {
     json!({
         "format": FORMAT,
         "open": open,
         "projects": saved.iter().map(|(n, f)| (n.clone(), json!(f.0))).collect::<serde_json::Map<_, _>>(),
+        "history": history
+            .iter()
+            .filter(|(n, _)| saved.contains_key(*n))
+            .map(|(n, r)| (n.clone(), Json::Array(r.iter().map(SimRevision::json).collect())))
+            .collect::<serde_json::Map<_, _>>(),
     })
     .to_string()
 }
 
 /// What [`render`] wrote, each project held to the rules (one that breaks
 /// them is dropped, not trusted).
-fn parse(text: &str) -> Option<(BTreeMap<String, Files>, Option<String>)> {
+type Parsed = (
+    BTreeMap<String, Files>,
+    Option<String>,
+    BTreeMap<String, Vec<SimRevision>>,
+);
+
+fn parse(text: &str) -> Option<Parsed> {
     let j: Json = serde_json::from_str(text).ok()?;
     if j["format"] != FORMAT {
         return None;
@@ -703,5 +925,23 @@ fn parse(text: &str) -> Option<(BTreeMap<String, Files>, Option<String>)> {
             out.insert(name.clone(), files);
         }
     }
-    Some((out, j["open"].as_str().map(str::to_string)))
+    let mut history = BTreeMap::new();
+    if let Some(h) = j["history"].as_object() {
+        for (name, revs) in h {
+            if !out.contains_key(name) {
+                continue;
+            }
+            let mut revs: Vec<SimRevision> = revs
+                .as_array()
+                .map(|a| a.iter().filter_map(SimRevision::parse).collect())
+                .unwrap_or_default();
+            revs.sort_by_key(|r| r.n);
+            if revs.len() > MAX_SIM_REVISIONS {
+                let extra = revs.len() - MAX_SIM_REVISIONS;
+                revs.drain(..extra);
+            }
+            history.insert(name.clone(), revs);
+        }
+    }
+    Some((out, j["open"].as_str().map(str::to_string), history))
 }

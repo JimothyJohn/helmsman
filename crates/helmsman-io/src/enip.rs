@@ -76,6 +76,7 @@
 //! it is taken again, and the outputs come back without a zero glitch.
 
 use std::collections::BTreeMap;
+use std::net::SocketAddrV4;
 use std::time::Duration;
 
 use crate::driver::{Error, PointInfo};
@@ -86,6 +87,17 @@ pub const DRIVER: &str = "enip-io";
 pub const DEFAULT_PORT: u16 = 44818;
 /// Where targets send T->O data, and take O->T.
 pub const IO_PORT: u16 = 2222;
+
+/// Whether `text` reads as an EDS (`helmsman_proto::eds::Eds::parse`):
+/// what a box checks before it keeps an uploaded device file.
+///
+/// # Errors
+/// The parser's line and reason.
+pub fn check_eds(text: &str) -> Result<(), String> {
+    helmsman_proto::eds::Eds::parse(text)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
 
 /// Little-endian numeric formats.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -556,6 +568,10 @@ pub struct Params {
     pub io_port: Option<u16>,
     pub device_io_port: u16,
     pub key: Key,
+    /// Where a `cip=` or `mac=` endpoint's `ListIdentity` goes
+    /// (`crate::resolve`): the broadcast address by default; a subnet's
+    /// broadcast on a multi-homed host, or a unicast address in tests.
+    pub sweep: Option<SocketAddrV4>,
 }
 
 /// Electronic key in the `Forward_Open`.
@@ -581,6 +597,7 @@ const KNOWN: &[&str] = &[
     "device_io_port",
     "key",
     "poll_ms",
+    "sweep",
 ];
 
 impl Params {
@@ -693,9 +710,17 @@ impl Params {
                 .and_then(|v| u16::try_from(v).ok())
                 .unwrap_or(default))
         };
+        let sweep = match get("sweep") {
+            None => None,
+            Some(s) => Some(
+                s.parse::<SocketAddrV4>()
+                    .map_err(|_| bad("sweep", "an IPv4 address and port, like 192.168.1.255:44818"))?,
+            ),
+        };
         let params = Self {
             spec,
             eds: get("eds").map(str::to_string),
+            sweep,
             connection,
             rpi,
             multiplier: int("multiplier", 7)?
@@ -759,7 +784,7 @@ pub use driver::EnipDriver;
 #[cfg(feature = "enip")]
 mod driver {
     use std::io;
-    use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
     use std::time::Duration;
 
     use helmsman_proto::endpoint::IoEndpoint;
@@ -792,6 +817,9 @@ mod driver {
         shared: Option<IoEndpoint>,
         /// `Forward_Open`s sent, for tests and status.
         pub opens: u64,
+        /// Where the device was found at the last connection
+        /// (`crate::resolve`).
+        resolved: Option<SocketAddrV4>,
     }
 
     impl std::fmt::Debug for EnipDriver {
@@ -853,10 +881,12 @@ mod driver {
             if params.key != Key::Off && spec.identity.is_none() {
                 return Err(Error::Address("key: the EDS has no [Device] identity".into()));
             }
-            let endpoint = if endpoint.contains(':') {
-                endpoint.to_string()
-            } else {
-                format!("{endpoint}:{DEFAULT_PORT}")
+            // An identity (`mac=`, `cip=`) is resolved at each connect; a
+            // host gets the port now, as before.
+            let endpoint = match crate::resolve::parse(endpoint) {
+                Ok(crate::resolve::Endpoint::Host(h)) if !h.contains(':') => format!("{h}:{DEFAULT_PORT}"),
+                Ok(_) => endpoint.to_string(),
+                Err(e) => return Err(Error::Address(e)),
             };
             Ok(Self {
                 endpoint,
@@ -867,6 +897,7 @@ mod driver {
                 stale: None,
                 shared: None,
                 opens: 0,
+                resolved: None,
             })
         }
 
@@ -918,15 +949,15 @@ mod driver {
         }
 
         fn connect(&mut self) -> Result<(), Error> {
-            let peer: SocketAddr = self
-                .endpoint
-                .to_socket_addrs()
-                .map_err(Error::Io)?
-                .find(SocketAddr::is_ipv4)
-                .ok_or_else(|| Error::Io(io::Error::new(io::ErrorKind::InvalidInput, "no IPv4 address")))?;
-            let IpAddr::V4(ip) = peer.ip() else {
-                return Err(Error::Io(io::Error::new(io::ErrorKind::InvalidInput, "IPv6")));
-            };
+            let mut resolver = crate::resolve::Resolver::default();
+            if let Some(s) = self.params.sweep {
+                resolver.sweep = Some(s);
+            }
+            let v4 =
+                crate::resolve::socket_addr(&self.endpoint, DEFAULT_PORT, &resolver).map_err(Error::Io)?;
+            let peer = SocketAddr::V4(v4);
+            let ip = *v4.ip();
+            self.resolved = Some(v4);
             let mut session = Session::connect(peer, self.params.timeout).map_err(session_error)?;
             if let Some(c) = self.stale.take() {
                 // Releases ownership a lost session left behind; "not
@@ -1028,6 +1059,10 @@ mod driver {
     impl Driver for EnipDriver {
         fn parse(&self, addr: &str) -> Result<PointInfo, Error> {
             self.point(addr).map(|(_, i)| i)
+        }
+
+        fn address(&self) -> Option<String> {
+            self.resolved.map(|a| a.to_string())
         }
 
         fn read(&mut self, addrs: &[&str]) -> Result<Vec<Value>, Error> {

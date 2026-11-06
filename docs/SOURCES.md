@@ -381,6 +381,27 @@ into the code.
   p.30, 1-123 registers), exception replies and codes (§7 p.47). The same
   application layer runs over RTU (`rtu.rs`), which also takes reply lengths
   from it.
+- **Read Device Identification** (card `modbus-identification`;
+  `crates/helmsman-modbus` `pdu::read_device_id` / `reply::device_id`,
+  `helmsman-io` `modbus::app::read_device_identification` and
+  `modbus::identify`, the simulator's `sim::Identification`): FC 43 is the
+  Encapsulated Interface Transport (§6.19 p.41) and MEI type 14 (0x0E) Read
+  Device Identification (§6.21 "43 / 14 (0x2B / 0x0E) Read Device
+  Identification", pp.43-46). Used from it: the object table, with
+  VendorName 0x00, ProductCode 0x01 and MajorMinorRevision 0x02 the
+  mandatory Basic category, all ASCII strings (p.43); the request (function,
+  MEI type, Read Device ID code 01-04, Object Id) and response layout
+  (conformity level 0x01-0x03 / 0x81-0x83, More Follows 0x00 / 0xFF, Next
+  Object Id, Number of Objects, then id, length, value per object) and the
+  0xAB exception (pp.43-44); exception 03 for an illegal Read Device ID
+  code, a stream from an unknown Object Id restarting at object 0, the
+  client asking again from the Next Object Id while More Follows is 0xFF,
+  individual access (code 04) answering exception 02 for an unknown object
+  (p.44); the worked examples, whose object lengths are hex (0x16 for the
+  22-byte "Company identification"), one reply and a two-transaction More
+  Follows (p.45); the server state diagram, Figure 30 (p.46). Page numbers
+  re-checked 2026-11-04 against the file above (same sha256, read with
+  `pdftotext -layout`; the page footer's "n/50").
 - **How to cite:** `App §<x> p.<n>` in the module, after the module docs name
   the document once.
 
@@ -501,6 +522,12 @@ into the code.
   `None`), `Constant`, `Dimensions` (p.107); `DataTypes` (p.37ff.);
   `MainRoutineName` (p.196); `RLLContent` / `Rung` (pp.206-208);
   `STContent` / `Line` (p.264ff.); tasks and `ScheduledProgram` (p.313).
+- **A task's `Rate` (p.313, checked 2026-11-04):** "how often to run the
+  task (1.000...2,000,000.000 µs)". The unit there contradicts the same
+  chapter: its safety-task example has `Rate := 10` and the note under
+  it puts that rate between 5 ms and 500 ms (p.315). Still to confirm on
+  a real Studio 5000 export (`l5x-real-export`). `helmsman_iec` reads `Rate` as ms,
+  whole (`10` or `10.000`), and refuses a periodic task with any other.
 - **Not in RM014's text:** the root's `TargetName` and `TargetType`
   attributes (they are in real exports and in the `l5x` package; RM014's
   root example is not in the extracted text). Still to do: run the reader
@@ -661,6 +688,26 @@ into the code.
 
 ## Device sources
 
+### supervictor (Nick's ESP32-POE-ISO fleet firmware) and ph-esp32-mac
+
+- **What:** the Ethernet bring-up the edge node copies (crates/helmsman-node:
+  `board.rs`, `ethernet.rs`, 2026-11-03): `supervictor/edge/src/board/poe_iso.rs`
+  (the APLL at 50 MHz, mirroring ESP-IDF `rtc_clk_apll_enable` /
+  `rtc_clk_apll_coeff_set`) and `board/poe2.rs` (the clock out of GPIO0 via
+  clock-output channel 1, as Olimex's `LAN8720-POE2` Arduino example and
+  ESP-IDF `esp_clock_output_start(CLKOUT_SIG_APLL, 0)` do), and
+  `network/ethernet.rs` (EMAC init, PHY init, DHCP after link-up with
+  promiscuous mode held until a lease), which follows `ph-esp32-mac`'s
+  hardware-verified embassy-net example. `HARDWARE.md` §4.2 there: the POE2
+  has no galvanic isolation, never USB and PoE together.
+- **Where:** `/Users/nick/github/supervictor` (private); `ph-esp32-mac` at
+  `photon-circus/ph-esp32-mac` commit `b05d53ade4224361175283ac1b65c7504a029301`
+  (the upstream merge of the MDIO fix; crates.io 0.1.1 cannot read the PHY),
+  as supervictor pins it. esp-hal 1.0.0, esp-alloc 0.9.0, esp-rtos 0.2,
+  embassy-net 0.9.1 at supervictor's versions.
+- **Leaned on by:** docs/EDGE.md Phases 1 and 2, crates/helmsman-node.
+- **How to cite:** `supervictor edge <file>` / `ph-esp32-mac b05d53a <file>`.
+
 ### Moxa ioLogik E1213 EDS, v2.0 (EtherNet/IP Electronic Data Sheet)
 
 - **What:** `moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`,
@@ -703,6 +750,37 @@ into the code.
   and connection limit, the Modbus example map. Bit positions within the
   status words and the counters' byte order are inferred, and say so.
 - **How to cite:** `E1200 manual v15.10 p. X-N`.
+
+### The host's ARP table: `proc(5)` and `arp(8)`
+
+- **What:** where `helmsman_io::resolve` looks a `mac=` endpoint up.
+  Linux: `/proc/net/arp`, a header line then one entry a line (`IP
+  address`, `HW type`, `Flags`, `HW address`, `Mask`, `Device`), flags
+  `0x0` for an incomplete entry (`man 5 proc`, "/proc/net/arp"). macOS and
+  the BSDs: `arp -an`, one line an entry, `? (10.0.0.57) at
+  0:90:e8:7e:af:be on en1 ifscope [ethernet]`, hex bytes without leading
+  zeros, `(incomplete)` for an entry with no address (`man 8 arp`).
+- **Leaned on by:** `resolve::arp_lookup` reads both shapes by looking
+  for an IPv4 token and a MAC token on one line, so the exact columns
+  never matter; incomplete entries have no MAC token and fall through.
+- **How to cite:** `proc(5) /proc/net/arp`, `arp(8)`.
+
+### The bench E1213 (firmware V3.1 Build19110615), 2026-11-02
+
+- **What:** the unit itself, serial TAIGB1106222, observed over the wire
+  with a stand-alone Python scanner and Modbus client (session scratch,
+  not committed) while its web console was read page by page. What it
+  showed is in docs/devices/moxa-iologik-e1213.md, "On the bench": the
+  O->T socket-address item in its `Forward_Open` reply (UDP 5222), the
+  T->O source port, bit order, the EXT field power dependency, the
+  refusal code for a second owner, identity revision 3.1.
+- **Where:** 10.0.0.57 by DHCP on the office LAN at the time; MAC
+  00-90-e8-7e-af-be.
+- **Leaned on by:** `helmsman_proto::scanner` honouring the O->T
+  socket-address item, `helmsman_adapter::server`'s `o_to_t_port`, the
+  simulated E1213, the device doc's confirmed lines, the `e1213-loop`
+  example.
+- **How to cite:** `E1213 bench 2026-11-02` (and the device doc section).
 
 ### OpENer sample application EDS (`data/opener_sample_app.eds`)
 

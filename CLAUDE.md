@@ -25,7 +25,10 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   reaches the canvas.
 - **Test helpers that start the binary** (`plc()` in tests/bin.rs and its
   copies) pass `--opcua off`; a subcommand (`account`, `bundle`) must be the
-  first argument, so those helpers build a bare `Command`.
+  first argument, so those helpers build a bare `Command`. A box a test
+  spawns (one that keeps running) gets `HELMSMAN_EXIT_WITH_STDIN=1` and a
+  piped stdin its `Child` keeps, so it dies with a killed test; don't set
+  it on `.output()` runs (that closes stdin at once).
 - **Timing in tests.** No fixed sleeps before an assertion: wait with a
   deadline (`wait(...)` in tests/reload.rs). Watchers start once the state
   they watch holds. The suite must pass with 6 copies running at once.
@@ -33,6 +36,13 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   .github/workflows/update-branches.yml updates auto-merge PRs when dev
   moves (drafts stay behind until they leave draft).
 - **Protocol claims** get a docs/SOURCES.md entry and a § / page citation.
+- **A resizable egui panel grows to any row that overflows it, every
+  frame.** A label in a plain `horizontal`, a combo box or field at full
+  width beside a scroll bar, a grid cell with a full-width button: each
+  widened the side panel by a third on 2026-11-01. Wrap rows
+  (`horizontal_wrapped`), cap widths to the column, leave 12 pt for the
+  bar, and keep `every_tab_leaves_the_panels_their_width` (ui_tests.rs)
+  green: it visits every tab and asserts the panels stayed put.
 
 ## Voice (anything a user reads: the site, README intro, UI text, release notes)
 
@@ -55,6 +65,7 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
   until Nick runs its `scripts/create-github-repo.sh`, which creates
   JimothyJohn/agent-relay). Client-agnostic; the box↔relay contract is its
   `docs/relay-protocol.md`. Helmsman's agent profiles are
-  `agents/helmsman/<name>/` (ids `helmsman/v3`, ...); the bare `v3` and
-  `explain-v1` the box asks for are aliases.
+  `agents/helmsman/<name>/` (ids `helmsman/v6`, ...); the bare `v6` and
+  `explain-v2` the box asks for are aliases. A served profile never
+  changes: a prompt or tool change is a new id.
 - `.claude/handoff.md` (untracked): where the last session stopped.

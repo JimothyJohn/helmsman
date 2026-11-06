@@ -11,12 +11,14 @@ use crate::box_view::{BoxView, is_engineer};
 use crate::editor::{Body, CHROME_KEY, Chrome, menu_item, menu_item_keyed};
 use crate::glyphs;
 use crate::hotkeys::{self, Action};
-use crate::monitor::{Monitor, NARROW, Wish};
+use crate::monitor::{Monitor, NARROW, Transport, Wish};
 use crate::playground_view::PlaygroundView;
 use crate::projects::Workspace;
 use crate::review_view::ReviewView;
 use crate::st_view::TAP;
-use crate::st_view::brand::{BLACK, GRAPHITE, STEEL, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, GRAPHITE, YELLOW};
+use crate::theme::{self, theme};
+use crate::tips::Tip;
 
 /// The header's height, points: one row, as tall as the two it replaced.
 pub const HEADER_H: f32 = 48.0;
@@ -30,7 +32,10 @@ const PROPOSALS_EVERY: f64 = 30.0;
 
 /// What Upload's file picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub const UPLOAD_ACCEPT: &str = ".zip,.st,.xml,.l5x";
+pub const UPLOAD_ACCEPT: &str = ".zip,.st,.xml,.l5x,.eds";
+/// What the Devices tab's "Import device…" picker offers.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub const DEVICE_ACCEPT: &str = ".eds";
 
 /// What the program runs on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,7 +116,6 @@ pub struct App {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
         // A page the box serves watches that box; docs/playground/ (and
         // the old `?playground` and `?demo` links) run the simulation, as
         // does the native window.
@@ -126,6 +130,9 @@ impl App {
         if let Some(saved) = cc.storage.and_then(|s| s.get_string(CHROME_KEY)) {
             app.chrome = Chrome::restored(&saved);
         }
+        // Dark by default; the light mode this browser chose, from the
+        // first frame.
+        theme::apply(&cc.egui_ctx, app.chrome.light);
         #[cfg(target_arch = "wasm32")]
         if crate::web::wants_monitor() {
             app.open_monitor();
@@ -242,6 +249,7 @@ impl App {
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let now = ctx.input(|i| i.time);
+        theme::apply(&ctx, self.chrome.light);
         if self.source == Source::Sim && self.screen == Screen::Proposals {
             self.screen = Screen::Editor;
         }
@@ -311,6 +319,12 @@ impl App {
                 if std::mem::take(&mut b.wants_sim) {
                     self.source = Source::Sim;
                 }
+                // The Agent tab's "Review #n": the Proposals screen, on it.
+                if let Some(id) = b.wants_review.take() {
+                    let r = self.review.get_or_insert_with(ReviewView::new);
+                    r.state.open(id);
+                    self.screen = Screen::Proposals;
+                }
                 // A project call found the session gone: so is the header's.
                 if std::mem::take(&mut b.projects.ended)
                     && let Some(r) = &mut self.review
@@ -327,16 +341,22 @@ impl App {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.state.set_monitor(true);
                 b.tick(&ctx);
-                self.monitor.show(ui, &b.state, &mut self.chrome, engineer);
+                self.monitor.show(ui, &b.state, &mut self.chrome, engineer, None);
             }
             (Screen::Monitor, Source::Sim) => {
                 let s = self.sim.get_or_insert_with(PlaygroundView::new);
                 s.tick(&ctx);
-                self.monitor.show(ui, &*s, &mut self.chrome, engineer);
+                let t = Transport {
+                    built: s.session.build.is_some(),
+                    running: s.session.running,
+                };
+                self.monitor.show(ui, &*s, &mut self.chrome, engineer, Some(t));
             }
         }
-        if let Some(Wish::Diagram { program, prefix }) = self.monitor.wish.take() {
-            self.open_diagram(&program, &prefix);
+        match self.monitor.wish.take() {
+            Some(Wish::Diagram { program, prefix }) => self.open_diagram(&program, &prefix),
+            Some(Wish::Act(a)) => self.act(a, &ctx),
+            None => {}
         }
         self.glyphs(ui);
         self.chrome.hits.extend(header);
@@ -344,6 +364,7 @@ impl App {
         for a in hotkeys::pressed(&ctx) {
             self.act(a, &ctx);
         }
+        theme::pointer_cursor(&ctx);
     }
 
     /// Does what a shortcut (or its menu item) asks; nothing where it
@@ -368,7 +389,8 @@ impl App {
                 }
             }
             Action::RunStop | Action::Stop | Action::Step => {
-                if self.source != Source::Sim || self.screen != Screen::Editor {
+                // On the Editor and the Monitor alike (Nick, 2026-11-01).
+                if self.source != Source::Sim || self.screen == Screen::Proposals {
                     return;
                 }
                 let Some(s) = self.sim.as_mut() else { return };
@@ -418,6 +440,40 @@ impl App {
                     w.cross_references();
                 }
             }
+            Action::Force => {
+                if let Some(w) = self.workspace() {
+                    w.force_picked(ctx);
+                }
+            }
+            Action::Find => {
+                self.chrome.show_code();
+                crate::find::Find::open(&mut self.chrome.find);
+            }
+            Action::FindNext | Action::FindPrevious => {
+                self.chrome.show_code();
+                crate::find::Find::step(&mut self.chrome.find, if a == Action::FindNext { 1 } else { -1 });
+            }
+            Action::StepInto | Action::StepOut => {
+                if let Some(w) = self.workspace() {
+                    if a == Action::StepInto {
+                        w.step_into();
+                    } else {
+                        w.step_out();
+                    }
+                }
+            }
+            Action::ReleaseAll => {
+                if let Some(w) = self.workspace() {
+                    w.release_all();
+                }
+            }
+            Action::Breakpoint => {
+                if self.source == Source::Sim
+                    && let Some(w) = self.workspace()
+                {
+                    w.toggle_breakpoint();
+                }
+            }
             Action::Restart => {
                 if self.source == Source::Sim
                     && let Some(s) = self.sim.as_mut()
@@ -438,6 +494,7 @@ impl App {
                 }
             }
             Action::Files => self.chrome.toggle_files(),
+            Action::Devices => self.chrome.toggle_devices(),
             Action::St => self.chrome.toggle_code(),
             Action::Panel => self.chrome.right = !self.chrome.right,
             Action::Trend => self.chrome.trend = !self.chrome.trend,
@@ -478,11 +535,12 @@ impl App {
         let engineer = is_engineer(self.session().as_ref()).is_ok();
         let panel = egui::Panel::top("header").show(ui, |ui| {
             let size = Vec2::new(ui.available_width(), HEADER_H);
+            let t = theme(ui);
             ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 // The wordmark is the way to the site.
                 let mark = ui
-                    .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(YELLOW)).frame(false))
-                    .on_hover_text(SITE_URL);
+                    .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent)).frame(false))
+                    .tip(format!("Opens {SITE_URL} in a new tab."));
                 hits.push(("mark".to_string(), mark.rect));
                 if mark.clicked() {
                     ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
@@ -506,7 +564,9 @@ impl App {
                         let b =
                             egui::Button::new(RichText::new(format!("{n} waiting")).strong().color(BLACK))
                                 .fill(YELLOW);
-                        let r = ui.add(b).on_hover_text("proposals waiting for an approver");
+                        let r = ui
+                            .add(b)
+                            .tip("Proposals waiting for an approver. Click to review them.");
                         hits.push(("proposals waiting".to_string(), r.rect));
                         if r.clicked() {
                             self.screen = Screen::Proposals;
@@ -515,10 +575,13 @@ impl App {
                     ui.separator();
                     self.dirty_mark(ui, &mut hits);
                     if self.source == Source::Sim {
-                        ui.label(RichText::new("simulation").color(STEEL));
+                        ui.label(RichText::new("simulation").color(t.muted))
+                            .tip("The program runs in this page. Nothing reaches a controller.");
                     }
-                    let t = ui.label(RichText::new(&title).strong().monospace().color(WHITE));
-                    hits.push(("title".to_string(), t.rect));
+                    let r = ui
+                        .label(RichText::new(&title).strong().monospace().color(t.fg))
+                        .tip("The open project.");
+                    hits.push(("title".to_string(), r.rect));
                     m.rect
                 })
                 .inner
@@ -539,12 +602,13 @@ impl App {
     /// Editor | Monitor as one two-way toggle: the active side filled.
     fn screen_toggle(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
         let half = Vec2::new(TAP * 1.6, TAP * 0.62);
+        let t = theme(ui);
         let (rect, _) = ui.allocate_exact_size(Vec2::new(half.x * 2.0, half.y), egui::Sense::hover());
-        ui.painter().rect_filled(rect, CornerRadius::same(6), GRAPHITE);
+        ui.painter().rect_filled(rect, CornerRadius::same(6), t.rule);
         ui.painter().rect_stroke(
             rect,
             CornerRadius::same(6),
-            egui::Stroke::new(1.0, STEEL.gamma_multiply(0.6)),
+            egui::Stroke::new(1.0, t.muted.gamma_multiply(0.6)),
             egui::StrokeKind::Inside,
         );
         let sides = [
@@ -555,7 +619,10 @@ impl App {
             #[allow(clippy::cast_precision_loss)]
             let r = Rect::from_min_size(rect.min + Vec2::new(half.x * k as f32, 0.0), half);
             let id = ui.scope_id().with(key);
-            let resp = ui.interact(r, id, egui::Sense::click());
+            let resp = ui.interact(r, id, egui::Sense::click()).tip(match screen {
+                Screen::Editor => "Editor: the program, its live diagram and its files.",
+                _ => "Monitor: the machine's state at a glance, for any screen from a phone to a wall TV.",
+            });
             let on = self.screen == screen;
             if on {
                 ui.painter()
@@ -565,8 +632,8 @@ impl App {
                 r.center(),
                 egui::Align2::CENTER_CENTER,
                 label,
-                egui::FontId::proportional(14.0),
-                if on { BLACK } else { WHITE },
+                egui::FontId::proportional(crate::theme::BODY),
+                if on { BLACK } else { t.fg },
             );
             hits.push((key.to_string(), r));
             // A click on either side flips (Nick, 2026-11-01), so from the
@@ -591,9 +658,24 @@ impl App {
         let at = self.chrome.diagram.right_top() + Vec2::new(-8.0, 8.0);
         let mut hits = Vec::new();
         let mut act: Vec<Action> = Vec::new();
-        let (dirty, can_write) = self
-            .workspace()
-            .map_or((false, false), |w| (w.dirty(), w.writable().is_ok() && !w.busy()));
+        let (dirty, write, busy) = self.workspace().map_or_else(
+            || (false, Err("No project is open.".to_string()), false),
+            |w| (w.dirty(), w.writable(), w.busy()),
+        );
+        let can_write = write.is_ok() && !busy;
+        // A disabled glyph says why on hover.
+        let blocked = |what: &str| match &write {
+            Err(why) if !why.is_empty() => format!("{what}: {why}"),
+            Err(_) => format!("{what}: no project is open."),
+            Ok(()) if busy => format!("{what}: wait for the save or deploy under way."),
+            Ok(()) => what.to_string(),
+        };
+        let save_tip = if can_write && !dirty {
+            "Save (Ctrl+S): nothing changed since the last save.".to_string()
+        } else {
+            blocked("Save (Ctrl+S)")
+        };
+        let upload_tip = blocked("Upload a .zip, .st, .xml or .l5x file into the project");
         let has_ws = self.workspace().is_some();
         let sim = (self.source == Source::Sim).then(|| {
             self.sim
@@ -607,7 +689,7 @@ impl App {
             .fixed_pos(at)
             .show(ui.ctx(), |ui| {
                 egui::Frame::new()
-                    .fill(BLACK.gamma_multiply(0.75))
+                    .fill(theme(ui).veil)
                     .corner_radius(CornerRadius::same(7))
                     .inner_margin(4.0)
                     .show(ui, |ui| {
@@ -621,7 +703,12 @@ impl App {
                                     }
                                 };
                             if let Some((built, running)) = sim {
-                                let (icon, tip) = if running {
+                                let (icon, tip) = if !built {
+                                    (
+                                        glyphs::Icon::Run,
+                                        "Run (Ctrl+Enter): the program does not compile yet.",
+                                    )
+                                } else if running {
                                     (glyphs::Icon::Stop, "Stop (Ctrl+Enter, Shift+F8)")
                                 } else {
                                     (glyphs::Icon::Run, "Run (Ctrl+Enter)")
@@ -633,7 +720,11 @@ impl App {
                                     glyphs::Icon::Step,
                                     built && !running,
                                     false,
-                                    "Step one scan (F10)",
+                                    if running {
+                                        "Step one scan (F10): stop the program first."
+                                    } else {
+                                        "Step one scan (F10)"
+                                    },
                                     Action::Step,
                                 );
                                 g(
@@ -653,7 +744,7 @@ impl App {
                                 glyphs::Icon::Save,
                                 can_write && dirty,
                                 false,
-                                "Save (Ctrl+S)",
+                                &save_tip,
                                 Action::Save,
                             );
                             g(
@@ -662,7 +753,7 @@ impl App {
                                 glyphs::Icon::Upload,
                                 can_write,
                                 false,
-                                "Upload a .zip, .st, .xml or .l5x",
+                                &upload_tip,
                                 Action::Upload,
                             );
                             g(
@@ -693,8 +784,9 @@ impl App {
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.label(RichText::new("HELMSMAN").strong().size(22.0).color(YELLOW));
-                ui.label(RichText::new("FACTORY AUTOMATION").strong().color(STEEL));
+                let t = theme(ui);
+                ui.label(RichText::new("HELMSMAN").strong().size(22.0).color(t.accent));
+                ui.label(RichText::new("FACTORY AUTOMATION").strong().color(t.muted));
                 ui.add_space(8.0);
                 ui.label(format!(
                     "Version {} (build {})",
@@ -713,7 +805,7 @@ impl App {
                             RichText::new(format!("HTTPS certificate SHA-256\n{a}\n{b}"))
                                 .small()
                                 .monospace()
-                                .color(STEEL),
+                                .color(t.muted),
                         )
                         .on_hover_text(
                             "the browser shows this page's certificate fingerprint too: they must match",
@@ -722,12 +814,12 @@ impl App {
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.link(SITE_URL).clicked() {
+                    if ui.link(SITE_URL).tip("Opens the site in a new tab.").clicked() {
                         ctx.open_url(egui::OpenUrl::new_tab(SITE_URL));
                     }
                 });
                 ui.add_space(6.0);
-                let c = ui.button("Close");
+                let c = ui.button("Close").tip("Closes this window.");
                 hits.push(("about close".to_string(), c.rect));
                 if c.clicked() {
                     self.about = false;
@@ -759,24 +851,55 @@ impl App {
                     .map_or((false, Err(String::new())), |w| (w.dirty(), w.writable()));
                 let can = write.is_ok();
                 let k = |a| hotkeys::label(&ctx, a);
+                // Why the writes are off goes in each item's tooltip (it
+                // was a note under Deploy).
+                let or_why = |tip: &str| match &write {
+                    Err(why) if !why.is_empty() => why.clone(),
+                    Err(_) => "No project is open.".to_string(),
+                    Ok(()) => tip.to_string(),
+                };
                 // New project and Copy project moved here from the Files
                 // tab's buttons (Nick, 2026-11-01).
                 ui.add_enabled_ui(can, |ui| {
-                    if menu_item(ui, &mut chrome, "file new", "New project…", false)
-                        && let Some(w) = self.workspace()
+                    if menu_item(
+                        ui,
+                        &mut chrome,
+                        "file new",
+                        "New project…",
+                        false,
+                        &or_why("Starts an empty project."),
+                    ) && let Some(w) = self.workspace()
                     {
                         w.new_project(&mut chrome);
                     }
-                    if menu_item(ui, &mut chrome, "file copy", "Copy project…", false)
-                        && let Some(w) = self.workspace()
+                    if menu_item(
+                        ui,
+                        &mut chrome,
+                        "file copy",
+                        "Copy project…",
+                        false,
+                        &or_why("Copies the open project under a new name."),
+                    ) && let Some(w) = self.workspace()
                     {
                         w.copy_project(&mut chrome);
                     }
                 });
                 ui.separator();
+                let save_tip = if can && !dirty {
+                    "Nothing changed since the last save.".to_string()
+                } else {
+                    or_why("Keeps the edits in the project. Nothing runs until Deploy.")
+                };
                 ui.add_enabled_ui(can && dirty, |ui| {
-                    if menu_item_keyed(ui, &mut chrome, "file save", "Save", false, &k(Action::Save))
-                        && let Some(w) = self.workspace()
+                    if menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "file save",
+                        "Save",
+                        false,
+                        &k(Action::Save),
+                        &save_tip,
+                    ) && let Some(w) = self.workspace()
                     {
                         w.save();
                     }
@@ -789,26 +912,40 @@ impl App {
                         "Deploy",
                         false,
                         &k(Action::Deploy),
+                        &or_why("Saves, checks the program and its requirement tests, then runs it."),
                     ) && let Some(w) = self.workspace()
                     {
                         w.deploy();
                     }
                 });
-                if let Err(why) = &write
-                    && !why.is_empty()
-                {
-                    ui.label(RichText::new(why).small().color(STEEL));
-                }
                 ui.separator();
                 ui.add_enabled_ui(can, |ui| {
-                    if menu_item(ui, &mut chrome, "file upload", "Upload…", false) {
+                    if menu_item(
+                        ui,
+                        &mut chrome,
+                        "file upload",
+                        "Upload…",
+                        false,
+                        &or_why("Adds a .zip, .st, .xml or .l5x file to the project."),
+                    ) {
                         #[cfg(target_arch = "wasm32")]
                         crate::web::pick_file(UPLOAD_ACCEPT, &ctx);
                     }
                 });
-                ui.add_enabled_ui(self.workspace().is_some(), |ui| {
-                    if menu_item(ui, &mut chrome, "file download", "Download .zip", false)
-                        && let Some(w) = self.workspace()
+                let has_ws = self.workspace().is_some();
+                ui.add_enabled_ui(has_ws, |ui| {
+                    if menu_item(
+                        ui,
+                        &mut chrome,
+                        "file download",
+                        "Download .zip",
+                        false,
+                        if has_ws {
+                            "Downloads the open project as a .zip file."
+                        } else {
+                            "No project is open."
+                        },
+                    ) && let Some(w) = self.workspace()
                     {
                         w.download();
                     }
@@ -817,13 +954,27 @@ impl App {
             hits.push(("bar file".to_string(), f.response.rect));
             let e = ui.menu_button("Edit", |ui| {
                 let k = |a| hotkeys::label(&ctx, a);
-                if menu_item_keyed(ui, &mut chrome, "edit undo", "Undo", false, &k(Action::Undo))
-                    && let Some(w) = self.workspace()
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit undo",
+                    "Undo",
+                    false,
+                    &k(Action::Undo),
+                    "Takes back the last edit to the open file.",
+                ) && let Some(w) = self.workspace()
                 {
                     w.undo(&ctx, false);
                 }
-                if menu_item_keyed(ui, &mut chrome, "edit redo", "Redo", false, &k(Action::Redo))
-                    && let Some(w) = self.workspace()
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit redo",
+                    "Redo",
+                    false,
+                    &k(Action::Redo),
+                    "Puts back the edit Undo took back.",
+                ) && let Some(w) = self.workspace()
                 {
                     w.undo(&ctx, true);
                 }
@@ -835,6 +986,7 @@ impl App {
                     "Go to definition",
                     false,
                     &k(Action::GoToDefinition),
+                    "Opens the code where the picked block's variable is declared.",
                 ) && let Some(w) = self.workspace()
                 {
                     w.go_to_definition(&mut chrome);
@@ -846,9 +998,51 @@ impl App {
                     "Cross references",
                     false,
                     &k(Action::CrossReferences),
+                    "Lights every block that reads or writes the picked block's variable.",
                 ) && let Some(w) = self.workspace()
                 {
                     w.cross_references();
+                }
+                if menu_item_keyed(
+                    ui,
+                    &mut chrome,
+                    "edit force",
+                    "Force input",
+                    false,
+                    &k(Action::Force),
+                    "Forces the input the picked block reads: a switch flips, a number's field opens. \
+                     On a box only an engineer forces, and every force is recorded.",
+                ) && let Some(w) = self.workspace()
+                {
+                    w.force_picked(&ctx);
+                }
+                if self.source == Source::Box
+                    && menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "edit release",
+                        "Release all forces",
+                        false,
+                        &k(Action::ReleaseAll),
+                        "Releases every force on the box: each input reads its module again.",
+                    )
+                    && let Some(w) = self.workspace()
+                {
+                    w.release_all();
+                }
+                if self.source == Source::Sim
+                    && menu_item_keyed(
+                        ui,
+                        &mut chrome,
+                        "edit breakpoint",
+                        "Breakpoint",
+                        false,
+                        &k(Action::Breakpoint),
+                        "Sets or clears a breakpoint on the picked block: the simulation's scan stops just before it.",
+                    )
+                    && let Some(w) = self.workspace()
+                {
+                    w.toggle_breakpoint();
                 }
             });
             hits.push(("bar edit".to_string(), e.response.rect));
@@ -859,6 +1053,7 @@ impl App {
                     "view editor",
                     "Editor",
                     self.screen == Screen::Editor,
+                    "The program, its live diagram and its files.",
                 ) {
                     self.screen = Screen::Editor;
                 }
@@ -868,6 +1063,7 @@ impl App {
                     "view monitor",
                     "Monitor",
                     self.screen == Screen::Monitor,
+                    "The machine's state at a glance, for any screen from a phone to a wall TV.",
                 ) {
                     self.screen = Screen::Monitor;
                 }
@@ -883,16 +1079,27 @@ impl App {
                         "view proposals",
                         text,
                         self.screen == Screen::Proposals,
+                        "Changes waiting for review and approval before they reach the box.",
                     ) {
                         self.screen = Screen::Proposals;
                     }
                 }
                 if self.served_by_box {
-                    let (key, text, to) = match self.source {
-                        Source::Box => ("view sim", "Simulate in this browser", Source::Sim),
-                        Source::Sim => ("view box", "Back to this box", Source::Box),
+                    let (key, text, to, tip) = match self.source {
+                        Source::Box => (
+                            "view sim",
+                            "Simulate in this browser",
+                            Source::Sim,
+                            "Runs the program in this page. The box keeps running its own.",
+                        ),
+                        Source::Sim => (
+                            "view box",
+                            "Back to this box",
+                            Source::Box,
+                            "Leaves the simulation and shows the box again.",
+                        ),
                     };
-                    if menu_item(ui, &mut chrome, key, text, false) {
+                    if menu_item(ui, &mut chrome, key, text, false, tip) {
                         self.source = to;
                         self.screen = Screen::Editor;
                     }
@@ -904,32 +1111,79 @@ impl App {
                 };
                 crate::editor::view_menu(ui, &mut chrome, tabs);
                 ui.separator();
-                if menu_item(ui, &mut chrome, "view fit", "Zoom to fit", false)
-                    && let Some(w) = self.workspace()
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "view fit",
+                    "Zoom to fit",
+                    false,
+                    "Fits the whole diagram in view.",
+                ) && let Some(w) = self.workspace()
                 {
                     w.zoom_to_fit();
                 }
                 if let Some(w) = self.workspace() {
                     w.layout_menu(ui, &mut chrome);
                 }
+                ui.separator();
                 if engineer {
-                    ui.separator();
                     let on = chrome.scan;
-                    if menu_item(ui, &mut chrome, "view scan", "Scan detail", on) {
+                    if menu_item(
+                        ui,
+                        &mut chrome,
+                        "view scan",
+                        "Scan detail",
+                        on,
+                        "Shows each program's scan period and counts on the Monitor.",
+                    ) {
                         chrome.scan = !on;
                     }
+                }
+                // Dark by default; the choice is kept per browser with the
+                // layout, and `show` applies it to egui each frame.
+                let light = chrome.light;
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "view light",
+                    "Light mode",
+                    light,
+                    "Light colours for a bright room. Kept in this browser.",
+                ) {
+                    chrome.light = !light;
                 }
             });
             hits.push(("bar view".to_string(), v.response.rect));
             let h = ui.menu_button("Help", |ui| {
-                if menu_item(ui, &mut chrome, "help docs", "Help", false) {
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "help docs",
+                    "Help",
+                    false,
+                    "Opens the help pages in a new tab.",
+                ) {
                     ctx.open_url(egui::OpenUrl::new_tab(HELP_URL));
                 }
-                if menu_item(ui, &mut chrome, "help keys", "Keyboard shortcuts", false) {
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "help keys",
+                    "Keyboard shortcuts",
+                    false,
+                    "Opens the list of keys in a new tab.",
+                ) {
                     ctx.open_url(egui::OpenUrl::new_tab(format!("{HELP_URL}#keyboard")));
                 }
                 ui.separator();
-                if menu_item(ui, &mut chrome, "help about", "About Helmsman…", self.about) {
+                if menu_item(
+                    ui,
+                    &mut chrome,
+                    "help about",
+                    "About Helmsman…",
+                    self.about,
+                    "The version, the build and the licence.",
+                ) {
                     self.about = true;
                 }
             });
@@ -972,7 +1226,7 @@ impl App {
         if self.workspace().is_some_and(|w| w.dirty()) {
             let d = ui
                 .label(RichText::new("●").strong().color(YELLOW))
-                .on_hover_text("edited, not saved");
+                .tip("Edited, not saved. Save keeps it (Ctrl+S).");
             hits.push(("dirty".to_string(), d.rect));
         }
     }
@@ -989,7 +1243,7 @@ impl App {
             .map_or_else(|| "Sign in".to_string(), |who| format!("● {who}"));
         let b = ui
             .add(egui::Button::selectable(self.login, RichText::new(text).strong()))
-            .on_hover_text("sign in to edit, deploy, force and approve; or sign out");
+            .tip("Sign in to edit, deploy, force inputs and approve proposals, or sign out.");
         hits.push(("sign in".to_string(), b.rect));
         if b.clicked() {
             self.login = !self.login;
@@ -1007,7 +1261,11 @@ impl App {
             .pivot(egui::Align2::RIGHT_TOP)
             .fixed_pos(at.right_bottom() + Vec2::new(0.0, 4.0))
             .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).fill(GRAPHITE).show(ui, |ui| {
+                // Lifted off the dark header on graphite; a white card on
+                // the light page.
+                let t = theme(ui);
+                let fill = if t.dark { GRAPHITE } else { t.panel };
+                egui::Frame::popup(ui.style()).fill(fill).show(ui, |ui| {
                     ui.set_max_width(300.0);
                     r.login_ui(ui);
                 });
@@ -1028,5 +1286,23 @@ impl eframe::App for App {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string(CHROME_KEY, self.chrome.saved());
+    }
+
+    /// The layout string above is all that is kept per browser. egui's
+    /// own memory (panel widths among it) is not: a width a pane once
+    /// grew to would come back on every load for good, long after the
+    /// row that pushed it was fixed (Nick, 2026-11-02: the side panes
+    /// still too wide in a browser that had seen the old builds).
+    fn persist_egui_memory(&self) -> bool {
+        false
+    }
+
+    /// What shows where nothing is painted (the frameless centre behind
+    /// the diagram's crumbs): the page, in either theme, rather than
+    /// eframe's near-black.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        theme::Theme::for_mode(visuals.dark_mode)
+            .bg
+            .to_normalized_gamma_f32()
     }
 }

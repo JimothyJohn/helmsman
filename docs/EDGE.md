@@ -330,6 +330,21 @@ thumbv7em-none-eabihf` (a `rustup target add` in the workflow) next to the
 existing checks; `scripts/lint.sh` gets the same line. Nothing else in the
 workspace changes, and no test changes.
 
+*Done 2026-11-02 (feat/iec-no-std).* As planned, with three differences.
+The `no_std` build is `--no-default-features --features libm`: cargo cannot
+turn a dependency on when a feature is *absent*, so `libm` is an optional
+dependency the node's build names; the std build still has none. The
+wall-clock start (`started: Option<Instant>` on `Program` and `State`) is
+behind `std` rather than turned into a `Duration`: it only serves
+`Program::scan`, which a node never calls, and `scan_at`'s clock already
+comes from the caller. `OnceLock` (the parsed standard library, a
+program's trace map) is a small `Once<T>` of the crate's own: std's
+`OnceLock` under `std`, a lock-free leak-once `AtomicPtr` cell without.
+`HashMap`/`HashSet` became `BTreeMap`/`BTreeSet` throughout (no hashbrown),
+which also makes every iteration order deterministic. `scripts/lint.sh`
+runs clippy on the thumbv7em build; the CI step is a separate draft PR
+(workflow edits go through a draft, per the cloud-security rules).
+
 **Phase 1, the board, no network (G2, G3).** `crates/helmsman-node`, not a
 default member. Embed the `trace_bench` source and the batch-mixer starter
 (blocks concatenated), compile at boot, scan in a loop, print min / mean /
@@ -337,12 +352,141 @@ max / p99 per-scan time and `esp-alloc` stats after compile and after
 10 000 scans over USB serial. Ethernet unplugged throughout; USB power.
 Repeat with the program heap in PSRAM on a WROVER.
 
+*Built 2026-11-03 (feat/node-scan-bench).* **Numbers, the board, 2026-11-03**
+(Olimex ESP32-POE2, ESP32 rev 3.0 WROVER-E, 240 MHz, flash 40 MHz DIO as
+the bootloader reports it; after `fix/node-stack`: 128 KiB + 96 KiB
+internal heap, 60 784 B main stack):
+
+| round | program | compile | heap for the program | 10 000 scans: min / mean / p99 / max | peak heap |
+| --- | --- | --- | --- | --- | --- |
+| 1, internal SRAM (229 376 B heap) | bench-4k | 40.9 ms | 158 216 B | 31.8 / 32.0 / 32.3 / 32.8 ms | 198 440 B (13.5 % headroom) |
+| 1, internal SRAM | cell (batch-mixer) | out of heap during compile: the allocator's error handler aborts | | | |
+| 1, internal SRAM, second flash | bench-4k | 38.7 ms | 158 216 B | 27.9 / 28.1 / 28.3 / 28.9 ms | 198 440 B |
+| 2, + PSRAM (4 423 680 B heap) | bench-4k | 19.0 ms | 85 308 B | 27.9 / 28.1 / 28.3 / 28.9 ms | 198 440 B |
+| 2, + PSRAM | cell (batch-mixer) | **panic during compile**: "memory allocation of 1061212033 bytes failed" in `check::Ck::coerce` (a `Vec::reserve`) | | | |
+
+**G2 fails**: 32 ms against < 5 ms, about 520× the Studio's 61.8 µs
+(a 240 MHz in-order core alone would explain 50–100×). Suspects, not yet
+measured: flash at 40 MHz DIO (instruction fetch through the cache), the
+interpreter's `i128` `Value::Int` on a 32-bit core, the BTreeMap lookups
+the no_std port brought in, and esp-alloc's heap-stats. **G3 fails on
+internal SRAM** (13.5 % headroom for bench-4k, the starter does not fit);
+with PSRAM the scan time is unchanged (esp-alloc fills internal SRAM
+first, so the program likely still sits there). The batch-mixer starter
+**crashes compiling with PSRAM**: the size asked for, 1 061 212 033 =
+0x3F40D781, is an address in the flash-mapped rodata, so a pointer is
+being read as a length: memory corruption on the board, not an
+out-of-memory (the same source compiles on the host and in every test).
+Suspects, not yet tested: the ESP32's PSRAM cache behaviour and esp-alloc's
+PSRAM region. Per the rule above: record and stop; the follow-on (speed,
+and the PSRAM corruption) is a separate card.
+
+`crates/helmsman-node` is excluded from the workspace (own Cargo.lock,
+`rust-toolchain.toml` channel `esp`, `.cargo/config.toml` with the Xtensa
+target and build-std), built by `make node-build` (`scripts/node-build.sh`;
+`make node-clippy` for the lint). The firmware embeds the host bench's
+workload, now the shared file `crates/helmsman-iec/examples/trace_bench.st`,
+and the batch-mixer starter's `main.st` with its six blocks (the plant model
+left out) as the "realistic cell"; compiles each at boot, scans it 10 000
+times at a 10 ms clock, and prints compile time, heap for the program,
+min / mean / max / p99 per scan and heap used and peak (esp-alloc's
+`internal-heap-stats`, which costs a little per allocation and is named in
+the output). The round runs twice: internal SRAM alone (160 kB in the main
+DRAM segment plus 96 kB in `dram2`, supervictor's figures), then with the
+PSRAM added as a second heap region (esp-alloc fills internal RAM first),
+which gives G3 both figures; the interpreter is not told where to put
+what, so "program image in SRAM, scratch in PSRAM" is what the fill order
+makes of it, not a placement. The board, read over USB with `espflash
+board-info` on 2026-11-02: chip esp32 revision v3.0, 40 MHz crystal, 4 MB
+flash, MAC 10:97:bd:e4:1f:40; a WROVER-E module per Nick (board-info does
+not report PSRAM; the firmware prints the heap size after the PSRAM region
+is added, which is the check). Flashing is `scripts/node-flash.sh`, run by
+Nick in his own shell: it prints the unplug rule, asks, builds, flashes
+with espflash and tees the monitor into `scratch/node-bench-<utc>.log`.
+Host baseline for the same workload on the Mac Studio (M-series, release):
+61.8 µs per scan, tracing off (`cargo run --release -p helmsman-iec
+--example trace_bench`, 2026-11-03).
+
 **Phase 2, one real block (G4, G5).** The async `Transport` over
 `embassy-net`, DI read and DO write batched per scan, DO0 to DO3 looped to
 DI0 to DI3 as in the tabletop bench card. Flash over USB with Ethernet
 unplugged, unplug USB, plug PoE, read the log over UDP to the laptop. G4
 over 10 minutes; then set the block's comms-loss safe state, yank the
 node's cable, and time the outputs going safe.
+
+*Built 2026-11-03 (feat/node-modbus). Run on the boards 2026-11-03, then
+**parked by Nick the same evening** (TODO.md `node-resume`).* What the runs
+showed:
+
+- **Stack.** The first flash panicked on its stack guard right after the PHY
+  came up: the 160 KiB internal heap left the main stack 1 704 bytes. Fixed
+  in #208 (heap 112 KiB, stack 50 856 B; `scripts/node-build.sh` refuses an
+  image under 32 KiB). After it the POE2 boots, gets a DHCP lease (10.0.0.50)
+  and runs the chase program against the E1213 over Modbus TCP: DO-00..02
+  step every 500 ms, watched from the Studio. **The Modbus loop works on
+  hardware.** No G4 number: with 28 ms scans (Phase 1) against a 10 ms
+  period, G4 fails regardless.
+- **POE2: frames from the Studio never register.** The UDP reports never
+  reached the sink. tcpdump on the Studio: the node asks `who-has 10.0.0.41`
+  about once a second, the Studio answers each time (`is-at
+  7e:28:c7:a7:d6:f3`, its Wi-Fi address on en1), the node never takes the
+  answer and never sends a datagram; it also answers no ping. Ruled out: the
+  macOS firewall (the sink's python is permitted; a datagram from the Studio
+  itself arrives), the UDP bind (embassy-net gives port 0 a free port), the
+  report's size (about 250 B in a 512 B buffer), smoltcp's neighbour cache
+  (8 entries). The E1213's frames do get in (Modbus works), so it is some
+  frames, not all.
+- **POE-ISO (WROOM, `NODE_BOARD=poe-iso`, #211): no lease.** The RMII clock
+  on GPIO17 works: PHY id 0x0007c0f1, `link up Mbps100 Full`. Then one DHCP
+  request (seen by tcpdump on the Studio's wired en0) in about 30 s, no
+  retries, no lease. Whether the router's offer reached the board is not
+  known (a unicast offer never passes the Studio's switch port).
+- **Not the bring-up code.** helmsman-node's `ethernet.rs` matches
+  supervictor's hardware-verified one line for line (buffer counts and
+  sizes, promiscuous mode while DHCP runs, the ph-esp32-mac commit); the
+  EMAC's DMA buffers sit in internal DRAM.
+- **Where it points.** The receive path, or the network task stalling after
+  its first send, in what surrounds the bring-up: the executor and interrupt
+  setup (esp-rtos), or how the main task shares the CPU with the network
+  task. Unproven.
+- **Next step when resumed.** Flash supervictor's own known-good POE-ISO
+  firmware on the same board and port: a lease there puts the bug in this
+  firmware; none puts it in the board or the switch.
+
+The
+shared part is the codec: `crates/helmsman-modbus` (`no_std`, no deps; PR
+#197) holds the PDUs, reply checks and MBAP framing that helmsman-io's
+client and the node's client both use, since helmsman-io itself cannot
+build without std (helmsman-proto's sockets). The node's client
+(`crates/helmsman-node/src/modbus.rs`) is the async twin of helmsman-io's
+`Transport`: one embassy-net TCP socket reused across reconnects, a
+200 ms timeout on every step, any error dropping the connection so a late
+reply is never taken for a newer request's answer. The `modbus` binary
+(`net` feature; `make node-build net`, `scripts/node-build.sh clippy net`)
+brings the POE2 up on Ethernet with supervictor's recipe copied in
+(`board.rs`: the APLL at 50 MHz routed out of GPIO0 through clock-output
+channel 1, PHY power on GPIO12; `ethernet.rs`: ph-esp32-mac's EMAC +
+LAN8720A over RMII, DHCP after link-up), waits for a lease, then scans
+every 10 ms: DI-00..07 in one FC 2 round trip, an embedded ST program (a
+one-of-three chase on DO-00..02 every 500 ms, `seen` true when the three
+DIs match the three DOs), DO-00..03 in one FC 15 round trip (0x0F is new
+in the codec for exactly this). Counted and reported every 10 s over
+serial and as a UDP line to the Studio (`scripts/node-log-sink.py`, port
+9514; run it with Apple's python so the firewall lets it receive): scans,
+late scans (started more than a period after their deadline: G4's
+number), scans whose own work overran the period, cycle mean and max,
+reads, writes, link errors and the last one, reconnects, matched and
+mismatched scans, heap used and peak. `E1213_ADDR` and `LOG_SINK` at build
+time change the defaults (10.0.0.57:502, 10.0.0.41:9514).
+
+Run order (`scripts/node-flash.sh modbus` prints it): flash over USB with
+Ethernet unplugged, Ctrl-C the monitor, unplug USB, start the sink, plug
+PoE. G5 is the block's own comms-loss setting: set the E1213's Modbus
+watchdog and DO safe mode on its console (manual pp. 3-4, 3-11, 3-21),
+then pull the node's cable and watch the outputs go safe within the
+timeout; the node cannot do that part without power or network, so the
+test proves the block does it.
+
 
 ## Out of scope for the spike
 

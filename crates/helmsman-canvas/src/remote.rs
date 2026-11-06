@@ -51,6 +51,23 @@ pub enum Fetch {
     Module(String),
     /// A module's source for the Monitor ([`BoxState::programs`]).
     Source(String),
+    /// `GET /api/devices`: each device link's state (the Devices tab).
+    Devices,
+    /// `GET /api/io_map`: the map the box runs (the Devices tab, when
+    /// no project's own map is open).
+    IoMap,
+}
+
+/// How often the Devices tab's link states are asked for, s.
+const DEVICES_EVERY: f64 = 5.0;
+
+/// Where the Devices tab's two reads stand.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum DevicesPoll {
+    /// Never asked (`None`), or last answered at this page time.
+    Answered(Option<f64>),
+    /// Asked, not answered yet.
+    Asking,
 }
 
 /// An event stream.
@@ -366,6 +383,29 @@ impl SignalRow {
     }
 }
 
+/// A device link as the box lists it (`GET /api/devices`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRow {
+    pub name: String,
+    /// `up`, `down` or `unknown`.
+    pub state: String,
+    /// Why it is down.
+    pub error: Option<String>,
+    /// Where the box found it (a `mac=` or `cip=` endpoint resolved).
+    pub address: Option<String>,
+}
+
+impl DeviceRow {
+    pub(crate) fn parse(j: &Json) -> Option<Self> {
+        Some(Self {
+            name: j["name"].as_str()?.to_string(),
+            state: j["state"].as_str().unwrap_or("unknown").to_string(),
+            error: j["error"].as_str().map(str::to_string),
+            address: j["address"].as_str().map(str::to_string),
+        })
+    }
+}
+
 /// A forced input as the box lists it (`GET /api/forces`, the values
 /// stream's `forces`).
 #[derive(Debug, Clone, PartialEq)]
@@ -466,6 +506,12 @@ pub struct BoxState {
     pub signals: Vec<SignalRow>,
     /// The box's forced inputs, as the values stream last said.
     pub forces: Vec<ForceRow>,
+    /// Each device link's state, as last listed.
+    pub devices: Vec<DeviceRow>,
+    /// The map the box runs, as last read (`None` until read, or when the
+    /// box runs none).
+    pub io_map: Option<String>,
+    devs: DevicesPoll,
     /// The values stream's last `seq`.
     pub seq: Option<u64>,
     /// Page time the last `values` event arrived, s.
@@ -508,6 +554,9 @@ impl BoxState {
             scan: None,
             signals: Vec::new(),
             forces: Vec::new(),
+            devices: Vec::new(),
+            io_map: None,
+            devs: DevicesPoll::Answered(None),
             seq: None,
             values_at: None,
             values_at_ms: None,
@@ -536,6 +585,13 @@ impl BoxState {
         }
         if self.list.due(now) {
             self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
+        }
+        if let DevicesPoll::Answered(at) = self.devs
+            && at.is_none_or(|t| now - t >= DEVICES_EVERY)
+        {
+            self.devs = DevicesPoll::Asking;
+            self.queue.push(Cmd::Get(Fetch::Devices, "/api/devices".into()));
+            self.queue.push(Cmd::Get(Fetch::IoMap, "/api/io_map".into()));
         }
         if self.monitor && self.traces.due(now) {
             self.queue.push(Cmd::Listen(Stream::Traces, TRACES_URL.into()));
@@ -675,6 +731,24 @@ impl BoxState {
                 }
             }
             Msg::Got(Fetch::Modules, Err(_)) => self.list.failed(now),
+            Msg::Got(Fetch::Devices, r) => {
+                self.devs = DevicesPoll::Answered(Some(now));
+                if let Some(list) = r
+                    .ok()
+                    .as_deref()
+                    .and_then(parse)
+                    .and_then(|j| rows(&j, DeviceRow::parse))
+                {
+                    self.devices = list;
+                }
+            }
+            Msg::Got(Fetch::IoMap, r) => {
+                self.io_map = r
+                    .ok()
+                    .as_deref()
+                    .and_then(parse)
+                    .and_then(|j| j["text"].as_str().map(str::to_string));
+            }
             Msg::Got(Fetch::Source(name), r) => {
                 let Some(w) = self.programs.get_mut(&name) else {
                     return;
@@ -916,7 +990,10 @@ mod tests {
             first,
             [
                 Cmd::Get(Fetch::Modules, "/api/modules".into()),
-                Cmd::Listen(Stream::Values, "/api/events".into())
+                Cmd::Listen(Stream::Values, "/api/events".into()),
+                // The Devices tab's two reads, every DEVICES_EVERY.
+                Cmd::Get(Fetch::Devices, "/api/devices".into()),
+                Cmd::Get(Fetch::IoMap, "/api/io_map".into()),
             ]
         );
         assert_eq!(s.link(), Link::Connecting);

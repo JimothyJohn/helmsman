@@ -11,20 +11,26 @@ One row along the top.
 - **File · Edit · View · Help**: the menus. Every item that has a key
   shows it. File holds Save, Deploy, Upload and Download. Edit holds Undo
   and Redo for the Structured Text, Go to definition and Cross references.
-  View switches between the Editor and the Monitor and shows or hides
-  each pane. Help opens these pages, the keyboard table, and About
+  View switches between the Editor and the Monitor, shows or hides
+  each pane, and has Light mode (dark is the default; the browser
+  remembers your choice). Help opens these pages, the keyboard table, and About
   Helmsman (the version and build).
 - **The state**: `running`, `stopped` or `faulted`, green when running,
   red otherwise, with the program's clock. On a box this is the link to
   the box instead.
 - On the right: the project's name, a mark when it has unsaved edits, the
-  **Editor | Monitor** toggle, the ⋯ menu (proposals, and where the
-  program runs) and, on a box, **Sign in**.
+  **Editor | Monitor** toggle, a yellow **waiting** badge when proposals
+  wait for an approver (it opens the Proposals screen) and, on a box,
+  **Sign in**.
+
+<img src="img/file-menu.png" alt="The File menu open: New project, Copy project, Save, Deploy, Upload and Download, each with its key." width="520">
 
 If something needs saying, a line appears under the header while it is
 true: a fault, a deploy under way or refused, a file someone else saved
 since you opened it (with a Reload). The Messages tab along the bottom
 keeps those lines after they have gone.
+
+![The same screen in light mode, View › Light mode.](img/editor-light.png)
 
 ## The glyphs
 
@@ -33,6 +39,8 @@ simulation: run or stop (<kbd>Ctrl</kbd> <kbd>Enter</kbd>), step one scan
 (<kbd>F10</kbd>, when stopped), and restart from initial values. On both:
 save, upload a file into the project, download the project as a `.zip`,
 and **?** for these pages. Hover one for its name and key.
+
+<img src="img/glyphs.png" alt="The glyph strip: stop, step, restart, then save, upload and download." width="300">
 
 ## The diagram
 
@@ -59,12 +67,18 @@ you cannot draw into it. What you can do:
   on a box they are forces (see [On a box](box.html)).
 - **Go into a block.** Double-click a function block instance to see its
   own diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the breadcrumbs come back
-  up.
+  up. From the keyboard, pick the instance and press <kbd>Ctrl</kbd>
+  <kbd>]</kbd> to go in and <kbd>Ctrl</kbd> <kbd>[</kbd> to come out (the
+  instance stays picked, so <kbd>Ctrl</kbd> <kbd>]</kbd> goes back in).
+  With the simulation stopped, each also steps one scan, so you watch
+  the instance work as you move through the levels.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
   Reset layout goes back; View › Save layout as default keeps your
   arrangement with the project so everyone opens it that way. Pan with a
   drag on empty space, zoom with the wheel; the diagram never leaves the
   view, and a double-click on empty space fits it again.
+
+![The lamp's assignment picked: it is outlined, what drives it stays lit and the rest dims.](img/diagram-why.png)
 
 Values that would clutter the diagram are left off it: a constant shows
 its name alone, a time reads as `T#500ms`. A wire that would cross the
@@ -90,19 +104,65 @@ label is drawn, the icon stands alone at a readable size.
 
 ## The panes
 
-- **The left pane** has two tabs. **Files** (<kbd>Alt</kbd> <kbd>0</kbd>):
+- **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>0</kbd>):
   the project's files, the examples and starters, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
-  next. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the Structured Text
-  editor. Errors are marked on the line as you type; the program running
-  does not change until you deploy. The key for a tab opens the pane on
-  it, or shuts the pane when that tab already shows.
+  next. **Devices** (<kbd>Alt</kbd> <kbd>4</kbd>): at the top, **I/O
+  wiring** links to the project's `io.map`, the file that says which
+  program variable is wired to which device point; then the devices it
+  names, each with its points under it, their live
+  values, and whether the link is up; a right-click on the blank space
+  adds a device (name, protocol, address, settings) as a line of the
+  map; Import device… takes the vendor's EDS file, keeps it in the
+  project and fills the form in from it. Under the map's devices, **On
+  the network**: Scan lists every EtherNet/IP device that answers on the
+  LAN, says whether the map already has it, and shows what the public
+  device library knows of it (in the simulation, one simulated E1213).
+  **Use this device** under one opens the form filled in, the device
+  named by its identity so a changed address never loses it; on a
+  read-only example it copies the project first. The form has a field
+  for each of the protocol's settings, filled in with the usual values
+  and checked against the driver's ranges, with the device's io.map line
+  under them. Below that are its inputs and outputs: a known device (the
+  ioLogik E1213) lists every channel, and the program's inputs and
+  outputs that were on the box's own channels are already ticked on the
+  first free ones. Tick any other channel and name it, or add rows with
+  + Input and + Output for any other device. For each row, Program picks
+  what the program does with it: one of its own variables, a new
+  variable (declared in the program's `VAR_INPUT` or `VAR_OUTPUT`), or
+  wiring only. **Edit** beside a device opens the same form on it, its
+  settings and wired points filled in, and Save replaces it in io.map;
+  **Delete** asks, then takes the device and its inputs and outputs out
+  (the program's variables stay). Double-click or right-click a wired signal to rename it:
+  the io.map line and every use in the program change together, listed
+  before you confirm. One map may mix Modbus
+  TCP and EtherNet/IP devices. The agent reads the same listing, network
+  included. Under that, **Plant states**: the quantities a project's
+  plant model keeps for the machine it stands in for (mark a variable
+  with `{state unit=m}` on its line), each with the simulation's value
+  and the sensor that measures it on the real machine, or the kind of
+  sensor that would; right-click one and Add a sensor… writes that
+  signal into the map. When that signal is one of the program's inputs,
+  in the same unit, the simulation runs the model from it: set it in
+  the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
+  Structured Text editor. Errors are marked on the line as you type; the
+  program running does not change until you deploy. The key for a tab
+  opens the pane on it, or shuts the pane when that tab already shows.
 - **The bottom panel** (<kbd>Alt</kbd> <kbd>2</kbd>): the **Trend** of the
   signals you pin, with a long time axis, and **Messages**, the last two
   hundred things the page had to say, with the error count on the tab.
 - **The side panel**, on the right (<kbd>Alt</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
-  diagram does not show; and **Agent**, where you describe what you want.
+  diagram does not show; **Requirements**, the project's requirement tests,
+  one row each, green or red with why, with **Edit** (new words; the
+  agent rewrites the test for them, or only the words change) and
+  **Delete** (asks first) on every row (see [Requirement tests](projects.html#requirement-tests));
+  and **Agent**, where you type what the open file should do and it
+  is updated (see [The Agent](agent.html)).
+
+<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
+
+<img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">
 
 Each pane remembers whether it was open, per browser.

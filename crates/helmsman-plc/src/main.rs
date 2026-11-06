@@ -8,7 +8,7 @@
 //! the network so the PLC can still be found.
 
 use std::fs;
-use std::io::BufRead as _;
+use std::io::{BufRead as _, Write as _};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -94,6 +94,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        canvas's ⋯ menu. Plain HTTP on the same port is
                        served only from this host (loopback, an SSH
                        tunnel); from the LAN it is redirected to https://
+  --market-allow-local on|off
+                       let POST /api/market/* fetch a marketplace index from a
+                       local address (loopback, a private range): a bench or a
+                       LAN mirror. Default off: a marketplace is a public site
   --opcua ADDR        read-only OPC UA server (see helmsman_plc::opcua) on
                        ADDR (default 127.0.0.1:4840: loopback only), or `off`.
                        Anonymous, SecurityPolicy None: nothing is signed or
@@ -103,11 +107,18 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        it the agent is offline and /api/chat answers 503
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
                        The box never holds an Anthropic key.
-  --relay-agent V      the agent version to ask the relay for (default v3)
+  --relay-agent V      the agent version to ask the relay for (default v7)
   --relay-explain-agent V
                        the agent version POST /api/explain asks for (an
-                       explain profile; default explain-v1). The box runs
+                       explain profile; default explain-v2). The box runs
                        only read-only tools for it either way.
+  --relay-tests-agent V
+                       the agent version POST /api/projects/{p}/requirements
+                       asks for (a tests profile; default tests-v1). The box
+                       runs only its submit_test for it either way.
+  --devices-index URL  the device library's index the Devices tab and the
+                       agent look a found device up in (default the public
+                       library's, see docs/devices/; `off` for none)
   --site NAME          announce this box on the LAN as part of site NAME
                        (a UDP multicast beacon to 239.255.72.77:41910, TTL
                        1, every 5 s) and list the boxes of that site it
@@ -150,6 +161,15 @@ const INPUTS: u16 = 150;
 /// Assembly the program writes as `%Q` and the scanner reads (T->O).
 const OUTPUTS: u16 = 100;
 
+/// Which hosts `POST /api/market/*` may fetch from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarketHosts {
+    /// Public addresses only (a box's default).
+    Public,
+    /// Local addresses too (`--market-allow-local on`: a bench, a LAN mirror).
+    Local,
+}
+
 struct Opts {
     programs: Vec<PathBuf>,
     modules: Vec<String>,
@@ -166,14 +186,19 @@ struct Opts {
     /// Serve the API over HTTPS (`--https`, on by default in a build with
     /// the `https` feature).
     https: bool,
+    /// Where the marketplace routes may fetch from (`--market-allow-local`).
+    market: MarketHosts,
     opcua: Option<SocketAddr>,
     state_dir: Option<PathBuf>,
     relay: Option<String>,
     relay_token: Option<PathBuf>,
     relay_agent: String,
     relay_explain_agent: Option<String>,
+    relay_tests_agent: Option<String>,
     ui: Option<PathBuf>,
     site: Option<String>,
+    /// `--devices-index`: `None` is the default library, `Some("off")` none.
+    devices_index: Option<String>,
     box_name: Option<String>,
     policy: Option<PathBuf>,
     set_pin: Option<Role>,
@@ -191,7 +216,8 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`.
+/// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`,
+/// `--relay-tests-agent`.
 fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
     match flag {
         "--relay" => {
@@ -201,6 +227,7 @@ fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
         "--relay-token" => once(&mut o.relay_token, flag, v)?,
         _ if !relay::version_ok(v) => return Err(format!("{flag}: not an agent version: {v:?}")),
         "--relay-explain-agent" => o.relay_explain_agent = Some(v.to_string()),
+        "--relay-tests-agent" => o.relay_tests_agent = Some(v.to_string()),
         _ => v.clone_into(&mut o.relay_agent),
     }
     Ok(())
@@ -222,14 +249,17 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         emit_st: false,
         api: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8080))),
         https: cfg!(feature = "https"),
+        market: MarketHosts::Public,
         opcua: Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 4840))),
         state_dir: None,
         relay: None,
         relay_token: None,
-        relay_agent: "v3".into(),
+        relay_agent: "v7".into(),
         relay_explain_agent: None,
+        relay_tests_agent: None,
         ui: None,
         site: None,
+        devices_index: None,
         box_name: None,
         policy: None,
         set_pin: None,
@@ -288,6 +318,13 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     _ => return Err(format!("--https: expected on or off, got {v:?}")),
                 };
             }
+            "--market-allow-local" => {
+                o.market = match v.as_str() {
+                    "on" => MarketHosts::Local,
+                    "off" => MarketHosts::Public,
+                    _ => return Err(format!("--market-allow-local: expected on or off, got {v:?}")),
+                };
+            }
             "--opcua" if v == "off" => o.opcua = None,
             "--opcua" => {
                 o.opcua = Some(
@@ -302,7 +339,11 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                 );
             }
             "--state-dir" => o.state_dir = Some(PathBuf::from(v)),
-            "--relay" | "--relay-token" | "--relay-agent" | "--relay-explain-agent" => {
+            "--relay"
+            | "--relay-token"
+            | "--relay-agent"
+            | "--relay-explain-agent"
+            | "--relay-tests-agent" => {
                 relay_flag(&mut o, flag, v)?;
             }
             "--policy" => once(&mut o.policy, flag, v)?,
@@ -325,6 +366,10 @@ fn parse(args: &[String]) -> Result<Opts, String> {
                     "--screen is retired: the Monitor (/?monitor) builds its tiles from the program".into(),
                 );
             }
+            "--devices-index" if v == "off" || v.starts_with("https://") || v.starts_with("http://") => {
+                o.devices_index = Some(v.clone());
+            }
+            "--devices-index" => return Err(format!("--devices-index: a http(s):// URL or off, got {v:?}")),
             "--site" if site::valid_token(v) => o.site = Some(v.clone()),
             "--site" => return Err(format!("--site: 1 to 32 of A-Z a-z 0-9 . _ -, got {v:?}")),
             "--box-name" if site::valid_name(v) => o.box_name = Some(v.clone()),
@@ -889,13 +934,16 @@ fn plan_io(
         Arc::clone(table),
         Arc::new(move |d: &helmsman_io::Device| helmsman_io::open_on(d, Some(&io))),
         channels,
-        Arc::new(move |name: &str, err: Option<&helmsman_io::Error>| {
-            match err {
-                None => eprintln!("helmsman-plc: device {name} up"),
-                Some(e) => eprintln!("helmsman-plc: device {name} down: {e}"),
-            }
-            devices.set(name, err.map(ToString::to_string));
-        }),
+        Arc::new(
+            move |name: &str, err: Option<&helmsman_io::Error>, address: Option<String>| {
+                match (err, &address) {
+                    (None, Some(a)) => eprintln!("helmsman-plc: device {name} up at {a}"),
+                    (None, None) => eprintln!("helmsman-plc: device {name} up"),
+                    (Some(e), _) => eprintln!("helmsman-plc: device {name} down: {e}"),
+                }
+                devices.set_with(name, err.map(ToString::to_string), address);
+            },
+        ),
     );
     let plan = set.plan_with(&map.cloned().unwrap_or_default(), drivers)?;
     Ok((set, plan))
@@ -913,6 +961,31 @@ fn describe(s: &Spec) -> String {
         s.q.start,
         s.q.len
     )
+}
+
+/// The environment variable that ties a running box to its stdin: set to
+/// `1`, the box exits as soon as its stdin reaches end of file. A test
+/// holds the write end of a pipe, so the box dies with the test however
+/// the test dies (a `kill -9` included; macOS has no parent-death
+/// signal). Off by default: an installed box's stdin is `/dev/null`.
+const EXIT_WITH_STDIN: &str = "HELMSMAN_EXIT_WITH_STDIN";
+
+/// With [`EXIT_WITH_STDIN`] set to `1`, a thread that reads stdin to its
+/// end, then ends the process.
+fn exit_with_stdin() {
+    if std::env::var_os(EXIT_WITH_STDIN).is_none_or(|v| v != "1") {
+        return;
+    }
+    std::thread::spawn(|| {
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+        // Not eprintln!: stderr may be a pipe whose reader died with the
+        // parent, and a panic here would leave the box running.
+        let _ = writeln!(
+            std::io::stderr(),
+            "helmsman-plc: stdin closed ({EXIT_WITH_STDIN}=1): exiting"
+        );
+        std::process::exit(0);
+    });
 }
 
 /// Where the token lives: `--state-dir`, systemd's `$STATE_DIRECTORY`,
@@ -1060,6 +1133,7 @@ fn start_api(
     let extras = api::Extras {
         ui,
         trust: Some(trust),
+        market_local: o.market == MarketHosts::Local,
     };
     let site = o
         .site
@@ -1074,6 +1148,11 @@ fn start_api(
         drivers: Some(helmsman_plc::driver_dir::DriverDir::in_state_dir(&dir)),
         running_drivers,
         trend_pins: Some(dir.join("trend-pins")),
+        discovery: api::discover::Discovery::lan(match o.devices_index.as_deref() {
+            Some("off") => None,
+            Some(url) => Some(url.to_string()),
+            None => Some(helmsman_project::devlib::DEFAULT_URL.to_string()),
+        }),
     };
     let server = Api::start_secure(cfg, shared, extras, site.as_ref().map(Site::handle), more, tls)
         .map_err(|e| format!("--api {bind}: {e}"))?;
@@ -1213,8 +1292,9 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
     setup.explain_agent = Some(
         o.relay_explain_agent
             .clone()
-            .unwrap_or_else(|| "explain-v1".into()),
+            .unwrap_or_else(|| "explain-v2".into()),
     );
+    setup.tests_agent = Some(o.relay_tests_agent.clone().unwrap_or_else(|| "tests-v1".into()));
     Ok(Some(setup))
 }
 
@@ -1354,6 +1434,7 @@ fn run(o: &Opts) -> Result<(), String> {
     if let Some(role) = o.set_pin {
         return set_pin(o, role);
     }
+    exit_with_stdin();
     let access = o.api.map(|_| load_access(o)).transpose()?;
     let cfg = device_config(o.serial);
     let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));

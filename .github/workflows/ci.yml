@@ -24,39 +24,111 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  gate:
+  # Which suites this change needs (scripts/ci-changes.sh, tested by
+  # scripts/test-ci-changes.sh first). A pull request is compared with its
+  # merge commit's first parent, the base it would land on; a push to dev
+  # or master runs everything. Every condition below reads "!= 'false'", so
+  # a missing answer runs the suite, and `gate` fails if this job did not
+  # succeed: a broken classifier blocks the merge instead of skipping CI.
+  # Skipping is done with job and step `if:`s, never a workflow `paths:`
+  # filter: a skipped job reports success to branch protection, a workflow
+  # that never ran leaves the required checks waiting.
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.which.outputs.rust }}
+      interop: ${{ steps.which.outputs.interop }}
+      oracle: ${{ steps.which.outputs.oracle }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Test the classifier
+        run: ./scripts/test-ci-changes.sh
+      - name: Classify the change
+        id: which
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ] && git rev-parse --verify --quiet HEAD^1 >/dev/null; then
+            git diff --name-only --no-renames -z HEAD^1 HEAD | ./scripts/ci-changes.sh | tee -a "$GITHUB_OUTPUT"
+          else
+            printf 'rust=true\ninterop=true\noracle=true\n' | tee -a "$GITHUB_OUTPUT"
+          fi
+
+  gate:
+    needs: changes
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: The change was classified
+        if: ${{ needs.changes.result != 'success' }}
+        run: |
+          echo "the changes job did not succeed (${{ needs.changes.result }}): fix it before this can merge"
+          exit 1
+      - name: Nothing to build
+        if: ${{ needs.changes.outputs.rust == 'false' }}
+        run: echo "Only files no build or test reads changed (scripts/ci-changes.sh); the gate passes without building."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ needs.changes.outputs.rust != 'false' }}
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
+        if: ${{ needs.changes.outputs.rust != 'false' }}
         with:
           toolchain: stable
           components: rustfmt, clippy
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown, thumbv7em-none-eabihf
+      # Dependencies' builds, kept between runs. Only dev and master save
+      # (a pull request reads its base's cache), so PRs cannot evict them.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: ${{ needs.changes.outputs.rust != 'false' }}
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' }}
       - name: Format check
+        if: ${{ needs.changes.outputs.rust != 'false' }}
         run: cargo fmt --all --check
       - name: Clippy (deny warnings)
+        if: ${{ needs.changes.outputs.rust != 'false' }}
         run: cargo clippy --workspace --all-targets -- -D warnings
       # The two builds that broke dev on 2026-10-30 without CI noticing:
       # helmsman-plc without its `box` feature (the runtime the canvas
       # embeds) and the canvas itself for wasm32. Same as scripts/lint.sh.
       - name: Runtime without the box feature
+        if: ${{ needs.changes.outputs.rust != 'false' }}
         run: cargo check -p helmsman-plc --no-default-features --all-targets
       - name: Canvas for wasm32
+        if: ${{ needs.changes.outputs.rust != 'false' }}
         run: cargo check --target wasm32-unknown-unknown -p helmsman-canvas
+      # helmsman-iec without std, as the edge node builds it (docs/EDGE.md
+      # Phase 0, G1): a cheap upstream target proves no_std without the
+      # Xtensa toolchain. Same as scripts/lint.sh.
+      - name: helmsman-iec without std
+        if: ${{ needs.changes.outputs.rust != 'false' }}
+        run: cargo clippy -p helmsman-iec --no-default-features --features libm --target thumbv7em-none-eabihf -- -D warnings
+      # The Modbus codec the node and helmsman-io share is no_std too.
+      - name: helmsman-modbus without std
+        if: ${{ needs.changes.outputs.rust != 'false' }}
+        run: cargo clippy -p helmsman-modbus --target thumbv7em-none-eabihf -- -D warnings
       - name: Test workspace
+        if: ${{ needs.changes.outputs.rust != 'false' }}
         run: cargo test --workspace --locked
 
   # Interop against the OpENer adapter built from docker/opener/. Separate
   # job so a Docker hiccup is distinguishable from a code failure. Added to
   # the required checks on dev alongside `gate` (see repo-baseline README).
+  # Runs when the EtherNet/IP code, its containers or what CI builds with
+  # changed (scripts/ci-changes.sh); skipped, it reports success.
   interop:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.interop != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' }}
       - name: Start OpENer
         run: docker compose up -d --build opener
       - name: Wait for OpENer to listen
@@ -85,13 +157,19 @@ jobs:
 
   # The same interop suite against our own adapter (helmsman-adapter, which
   # mimics OpENer's sample). Not a required check until it has a green history.
+  # Same trigger as `interop`.
   interop-adapter:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.interop != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' }}
       - name: Start helmsman-adapter
         run: docker compose up -d --build adapter
       - name: Wait for it to listen
@@ -116,13 +194,19 @@ jobs:
 
   # The Structured Text interpreter against ruSTy, an independent compiler
   # (docker/rusty/, pinned and hash-checked). ruSTy is only executed as an
-  # oracle, never linked. Not a required check.
+  # oracle, never linked. Not a required check. Runs when helmsman-iec, the
+  # ruSTy image or what CI builds with changed (scripts/ci-changes.sh).
   oracle:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.oracle != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
         with:
           toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' }}
       - name: Differential test against ruSTy
         run: ./scripts/test-oracle.sh

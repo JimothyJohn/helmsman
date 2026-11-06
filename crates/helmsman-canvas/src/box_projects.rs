@@ -65,7 +65,27 @@ pub enum PCall {
         file: String,
     },
     Check(String),
+    /// `POST /api/projects/{p}/tests`: its requirement tests, run on the box.
+    Tests(String),
     Replay(String),
+    /// `GET .../history`: the project's revisions.
+    History(String),
+    /// `GET .../history/{n}`: one revision, whole.
+    Revision {
+        project: String,
+        n: u32,
+    },
+    /// `GET .../history/{n}` for its Agent page alone (the Agent tab's
+    /// earlier instructions, `crate::instruct::recent`).
+    Page {
+        project: String,
+        n: u32,
+    },
+    /// `POST .../history/{n}/restore`.
+    Restore {
+        project: String,
+        n: u32,
+    },
     Deploy {
         project: String,
         replay: Option<u64>,
@@ -88,6 +108,9 @@ pub enum PCall {
     Layout(String),
     /// ... and saved.
     SaveLayout(String),
+    /// `POST /api/devices/discover`: the Devices tab's Scan (answered by
+    /// the view, not here).
+    Discover,
 }
 
 /// The running project's shared diagram layout, as the box holds it.
@@ -159,6 +182,17 @@ impl PReq {
             ctype: JSON,
         }
     }
+}
+
+/// A revision as the box lists it.
+fn revision_row(j: &Json) -> Option<crate::history_ui::RevisionRow> {
+    Some(crate::history_ui::RevisionRow {
+        n: u32::try_from(j["n"].as_u64()?).ok()?,
+        at_ms: j["at_ms"].as_u64().unwrap_or(0),
+        by: j["by"].as_str().unwrap_or("?").to_string(),
+        what: j["what"].as_str().unwrap_or("").to_string(),
+        page: j["page"].as_bool() == Some(true) || j["page"].is_string(),
+    })
 }
 
 fn project_url(p: &str) -> String {
@@ -267,6 +301,13 @@ pub struct BoxProjects {
     pub deployed: bool,
     /// Links to hand the browser as downloads.
     pub downloads: Vec<String>,
+    /// The open project's revisions, oldest first, as last read.
+    pub history: Vec<crate::history_ui::RevisionRow>,
+    /// The revision on view (the History modal).
+    pub revision: Option<crate::history_ui::RevisionView>,
+    /// The Agent pages of the open project's latest revisions that carry
+    /// one, by revision, as read (`PCall::Page`).
+    pub pages: BTreeMap<u32, String>,
     /// The running project's shared diagram layout, once read.
     pub layout: Option<SharedLayout>,
     /// A layout this page saved as the default, for the view to adopt.
@@ -275,6 +316,12 @@ pub struct BoxProjects {
     saving_layout: Option<String>,
     /// The modules the last check said the project builds.
     modules: Vec<String>,
+    /// The open project's requirement tests as the box last ran them
+    /// (`crate::requirements`): asked when the project opens, after each
+    /// save, on Run, and reported by a refused deploy.
+    pub tests: crate::requirements::Results,
+    /// A test run is on its way.
+    pub testing: bool,
     queue: Vec<PReq>,
 }
 
@@ -332,11 +379,21 @@ impl BoxProjects {
         std::mem::take(&mut self.queue)
     }
 
+    /// Asks the box for a fresh network scan (the Devices tab's Scan).
+    pub fn discover(&mut self) {
+        self.queue.push(PReq::json(
+            PCall::Discover,
+            "POST",
+            "/api/devices/discover?fresh=1".into(),
+            &json!({}),
+        ));
+    }
+
     fn relist(&mut self) {
         self.queue.push(PReq::get(PCall::List, "/api/projects".into()));
     }
 
-    fn note(&mut self, text: impl Into<String>, error: bool) {
+    pub(crate) fn note(&mut self, text: impl Into<String>, error: bool) {
         self.notice = Some((text.into(), error));
     }
 
@@ -368,8 +425,45 @@ impl BoxProjects {
         });
         self.diags.clear();
         self.conflict = None;
+        self.history.clear();
+        self.revision = None;
+        self.pages.clear();
         self.queue
             .push(PReq::get(PCall::Project(name.into()), project_url(name)));
+        self.read_history(name);
+    }
+
+    /// Asks for project `name`'s revisions (the Files tab's History row).
+    pub fn read_history(&mut self, name: &str) {
+        self.queue.push(PReq::get(
+            PCall::History(name.into()),
+            format!("{}/history", project_url(name)),
+        ));
+    }
+
+    /// Asks for revision `n` of project `name`, whole, to show.
+    pub fn read_revision(&mut self, name: &str, n: u32) {
+        self.queue.push(PReq::get(
+            PCall::Revision {
+                project: name.into(),
+                n,
+            },
+            format!("{}/history/{n}", project_url(name)),
+        ));
+    }
+
+    /// The project's files back to revision `n` (an engineer; the box
+    /// records it as a new revision).
+    pub fn restore(&mut self, name: &str, n: u32) {
+        self.queue.push(PReq::json(
+            PCall::Restore {
+                project: name.into(),
+                n,
+            },
+            "POST",
+            format!("{}/history/{n}/restore", project_url(name)),
+            &json!({}),
+        ));
     }
 
     /// Shows `file` of the open project in the ST editor.
@@ -394,13 +488,21 @@ impl BoxProjects {
         ));
     }
 
-    /// A new project `name` with the files of a built-in machine or
-    /// template, sent as the project's `.zip` so it arrives all at once.
+    /// A new project `name` holding the built-in example `from` (its
+    /// project name), sent as the project's `.zip` so it arrives whole.
     pub fn create_from(&mut self, name: &str, from: &str) {
-        let Some(s) = helmsman_project::starters::starter(from) else {
+        let Some(e) = crate::playground::EXAMPLES
+            .iter()
+            .find(|e| crate::sim_projects::example_project(e.src).0 == from)
+        else {
             return;
         };
-        match s.project().to_zip() {
+        let (_, file) = crate::sim_projects::example_project(e.src);
+        let files = helmsman_project::Files(std::collections::BTreeMap::from([
+            (file, e.src.to_string()),
+            ("io.map".to_string(), crate::sim_projects::example_io_map(e.src)),
+        ]));
+        match files.to_zip() {
             Ok(zip) => self.upload(&format!("{name}.zip"), zip, false),
             Err(e) => self.note(format!("{name} was not made: {e}"), true),
         }
@@ -473,6 +575,65 @@ impl BoxProjects {
             },
             file_url(&project, file),
         ));
+    }
+
+    /// The Agent's checked change (`crate::instruct`): `text` into `file`,
+    /// saved with the version it was read as and with `page`, the change's
+    /// History entry; then each scenario it passed as a requirement test
+    /// file (new, or the test it replaces). The box makes each save a revision.
+    pub fn save_agent(&mut self, file: &str, text: &str, page: &str, tests: &[(String, String)]) {
+        let Some(o) = &mut self.open else { return };
+        let project = o.name.clone();
+        let b = o.bufs.entry(file.to_string()).or_default();
+        b.text = text.to_string();
+        b.saving = Some(b.text.clone());
+        let version = b.version.clone();
+        if !b.loaded {
+            b.loaded = true;
+        }
+        self.queue.push(PReq::json(
+            PCall::Save {
+                project: project.clone(),
+                file: file.to_string(),
+            },
+            "PUT",
+            file_url(&project, file),
+            &json!({ "text": text, "version": version, "page": page }),
+        ));
+        o.current = Some(file.to_string());
+        // Each scenario a new file (`version: null`: only if no file of
+        // that name is there), held here as it is sent, the editor left on
+        // the file the Agent changed.
+        for (f, t) in tests {
+            // A test the change replaces goes with the version it was read
+            // as; a new one only if no file of that name is there.
+            let version = o.bufs.get(f).filter(|b| b.loaded).and_then(|b| b.version.clone());
+            o.bufs.insert(
+                f.clone(),
+                Buf {
+                    text: t.clone(),
+                    saving: Some(t.clone()),
+                    loaded: true,
+                    ..Buf::default()
+                },
+            );
+            self.queue.push(PReq::json(
+                PCall::Save {
+                    project: project.clone(),
+                    file: f.clone(),
+                },
+                "PUT",
+                file_url(&project, f),
+                &json!({ "text": t, "version": version }),
+            ));
+        }
+        self.conflict = None;
+    }
+
+    /// The open project's Agent pages, oldest first, as read so far.
+    #[must_use]
+    pub fn agent_pages(&self) -> Vec<&str> {
+        self.pages.values().map(String::as_str).collect()
     }
 
     /// Saves every edited file, each with the version it was read as.
@@ -804,6 +965,21 @@ impl BoxProjects {
                         .cloned();
                 }
                 self.queue.extend(reads);
+                self.run_tests();
+            }
+            PCall::Tests(project) => {
+                self.testing = false;
+                if self.open.as_ref().is_none_or(|o| o.name != project) {
+                    return;
+                }
+                if ok {
+                    self.tests = crate::requirements::Results::from_json(&j);
+                } else {
+                    self.note(
+                        format!("The requirement tests did not run: {}", error_of(a)),
+                        true,
+                    );
+                }
             }
             PCall::File { project, file } => {
                 let Some(o) = self.open.as_mut().filter(|o| o.name == project) else {
@@ -853,7 +1029,91 @@ impl BoxProjects {
                     self.note(format!("{name} was not deleted: {}", error_of(a)), true);
                 }
             }
-            PCall::Save { project, file } => self.saved(&project, &file, a, &j),
+            PCall::Save { project, file } => {
+                self.saved(&project, &file, a, &j);
+                if ok {
+                    self.read_history(&project);
+                }
+            }
+            PCall::History(project) => {
+                if ok && self.open.as_ref().is_some_and(|o| o.name == project) {
+                    self.history = j["revisions"]
+                        .as_array()
+                        .map(|a| a.iter().filter_map(revision_row).collect())
+                        .unwrap_or_default();
+                    // The latest Agent pages, for the next instruction's
+                    // earlier ones (twice as many as it takes: some are
+                    // for other files).
+                    let want: Vec<u32> = self
+                        .history
+                        .iter()
+                        .rev()
+                        .filter(|r| r.page)
+                        .take(2 * crate::instruct::RECENT)
+                        .map(|r| r.n)
+                        .filter(|n| !self.pages.contains_key(n))
+                        .collect();
+                    for n in want {
+                        self.queue.push(PReq::get(
+                            PCall::Page {
+                                project: project.clone(),
+                                n,
+                            },
+                            format!("{}/history/{n}", project_url(&project)),
+                        ));
+                    }
+                }
+            }
+            PCall::Page { project, n } => {
+                if ok
+                    && self.open.as_ref().is_some_and(|o| o.name == project)
+                    && let Some(page) = j["page"].as_str()
+                {
+                    self.pages.insert(n, page.to_string());
+                    while self.pages.len() > 4 * crate::instruct::RECENT {
+                        self.pages.pop_first();
+                    }
+                }
+            }
+            PCall::Revision { project, n } => {
+                if !ok {
+                    self.note(format!("cannot read revision {n}: {}", error_of(a)), true);
+                    return;
+                }
+                if self.open.as_ref().is_none_or(|o| o.name != project) {
+                    return;
+                }
+                let files = j["files"]
+                    .as_object()
+                    .map(|m| {
+                        m.iter()
+                            .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if let Some(row) = revision_row(&j) {
+                    self.revision = Some(crate::history_ui::RevisionView {
+                        row,
+                        files,
+                        page: j["page"].as_str().map(str::to_string),
+                    });
+                }
+            }
+            PCall::Restore { project, n } => {
+                if ok {
+                    self.revision = None;
+                    self.note(
+                        format!("Revision {n} restored (as revision {}).", j["revision"]),
+                        false,
+                    );
+                    if self.open.as_ref().is_some_and(|o| o.name == project) {
+                        // The files changed under the page: read them again.
+                        self.open_project(&project);
+                    }
+                } else {
+                    self.note(format!("revision {n} was not restored: {}", error_of(a)), true);
+                }
+            }
             PCall::NewFile { project, file } => {
                 if ok {
                     if let Some(o) = self.open.as_mut().filter(|o| o.name == project) {
@@ -962,6 +1222,10 @@ impl BoxProjects {
                 } else if a.status == 422 {
                     self.diags = diags_of(&j);
                     self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
+                } else if a.status == 409 && j["tests"].is_array() {
+                    // A red requirement test: the tab shows which.
+                    self.tests = crate::requirements::Results::from_json(&j);
+                    self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
                 } else {
                     self.deploy = Deploy::Failed(format!("{project} was not deployed: {}", error_of(a)));
                 }
@@ -1018,8 +1282,9 @@ impl BoxProjects {
                 }
                 self.queue.push(PReq::get(PCall::Forces, "/api/forces".into()));
             }
-            // The Trend tab's (`box_trend.rs`).
-            PCall::TrendPins | PCall::SavePins | PCall::Trend => {}
+            // The Trend tab's (`box_trend.rs`) and the Devices tab's scan
+            // (`box_view.rs`).
+            PCall::TrendPins | PCall::SavePins | PCall::Trend | PCall::Discover => {}
             PCall::Layout(p) => {
                 if self.running.as_deref() != Some(p.as_str()) {
                     return;
@@ -1103,10 +1368,29 @@ impl BoxProjects {
         if still {
             return;
         }
+        // Saved: the requirement tests run against what is on the box now.
+        self.run_tests();
         if self.deploy == Deploy::Saving {
             self.check();
         } else if !matches!(&self.notice, Some((_, true))) {
             self.note(format!("Saved {project}."), false);
         }
+    }
+
+    /// Asks the box to run the open project's requirement tests
+    /// (`POST /api/projects/{p}/tests`); the Requirements tab shows them.
+    pub fn run_tests(&mut self) {
+        let Some(o) = &self.open else { return };
+        if self.testing {
+            return;
+        }
+        let name = o.name.clone();
+        self.testing = true;
+        self.queue.push(PReq::json(
+            PCall::Tests(name.clone()),
+            "POST",
+            format!("{}/tests", project_url(&name)),
+            &json!({}),
+        ));
     }
 }
