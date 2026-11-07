@@ -7,6 +7,12 @@
 //! down into that instance, Back and the breadcrumbs go up, and "Open
 //! diagram" hands that scope to the Editor.
 //!
+//! A box's status tiles also carry its scan load (card `scan-stats`): for
+//! an engineer with "Scan detail" on, how long the scan takes, how late it
+//! starts and the overruns, a tooltip on each; for everyone, an overrun in
+//! the last [`OVERRUN_RECENT`] seconds in the attention colour. The
+//! simulation runs in the page on no real clock, so it shows none.
+//!
 //! Where the values come from is a [`Feed`]: the box (`BoxState`, its
 //! values stream and every module's traces on one stream) or the
 //! simulation in the page (`PlaygroundView`). The tiles do not care which.
@@ -30,7 +36,7 @@ use crate::editor::Chrome;
 use crate::glyphs;
 use crate::hotkeys::Action;
 use crate::playground_view::PlaygroundView;
-use crate::remote::{BoxState, Link};
+use crate::remote::{BoxState, Link, ScanTiming};
 use crate::st_view::TAP;
 use crate::st_view::brand::{WHITE, YELLOW};
 use crate::theme::theme;
@@ -38,6 +44,10 @@ use crate::tips::Tip;
 
 /// Seconds without a new scan after which a program's tiles go grey.
 pub const STALE_AFTER: f64 = 3.0;
+
+/// An overrun this recent (seconds) shows on the status tile for
+/// everyone, in the attention colour.
+pub const OVERRUN_RECENT: f64 = 60.0;
 
 /// Narrower than this (points) and the app opens on the Monitor: a phone.
 pub const NARROW: f32 = 600.0;
@@ -85,6 +95,18 @@ pub struct Program<'a> {
     pub fresh: Fresh,
     /// Why it cannot be shown in full.
     pub note: Option<String>,
+    /// Its scan load as a box measured it; `None` in the simulation.
+    pub load: Option<Load>,
+}
+
+/// A box module's scan load.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Load {
+    /// `None` before the first scan, or from a box too old to measure.
+    pub timing: Option<ScanTiming>,
+    pub overruns: u64,
+    /// Seconds since it last overran; `None`: never (or not said).
+    pub overrun_ago: Option<f64>,
 }
 
 /// Where the Monitor's values come from. Read-only by construction.
@@ -128,6 +150,11 @@ impl Feed for BoxState {
                         },
                     },
                     note: w.and_then(|w| w.problem.clone()),
+                    load: Some(Load {
+                        timing: m.timing,
+                        overruns: m.overruns,
+                        overrun_ago: m.overrun_ago,
+                    }),
                 }
             })
             .collect()
@@ -181,6 +208,7 @@ impl Feed for PlaygroundView {
             values: s.trace.as_ref().map(|t| t as &dyn Scan),
             fresh,
             note: None,
+            load: None,
         }]
     }
 
@@ -352,6 +380,20 @@ pub struct Tile {
     pub stale: Option<String>,
     /// Where a tap goes: (program, instance prefix).
     pub into: Option<(String, String)>,
+    /// A status tile's scan load lines, each with its tooltip.
+    pub lines: Vec<Line>,
+}
+
+/// One line of numbers on a status tile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Line {
+    /// The name tests and hits know it by: `load line/exec`.
+    pub key: String,
+    pub text: String,
+    /// What the number means and what is normal.
+    pub tip: String,
+    /// Drawn in the attention colour.
+    pub warn: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -429,6 +471,99 @@ fn status_sub(p: &Program<'_>, detail: bool) -> String {
     format!("{period}{} scans", p.scans)
 }
 
+/// A time given in µs, in the unit that reads best: "8.5 µs", "120 µs",
+/// "1.25 ms", "35 ms".
+#[must_use]
+pub fn micros_text(us: f64) -> String {
+    let us = us.max(0.0);
+    if us < 10.0 {
+        format!("{us:.1} µs")
+    } else if us < 1000.0 {
+        format!("{us:.0} µs")
+    } else if us < 10_000.0 {
+        format!("{:.2} ms", us / 1000.0)
+    } else {
+        format!("{:.0} ms", us / 1000.0)
+    }
+}
+
+/// The status tile's scan load lines. With `detail` (an engineer's
+/// choice): scan time, start lateness and overruns, when the box measured
+/// them. Without: only an overrun in the last [`OVERRUN_RECENT`] seconds.
+/// None for the simulation, which has no real clock to measure.
+fn load_lines(p: &Program<'_>, detail: bool) -> Vec<Line> {
+    let Some(load) = p.load else {
+        return Vec::new();
+    };
+    let key = |what: &str| format!("load {}/{what}", p.name);
+    let period = p
+        .period_ms
+        .map_or_else(String::new, |ms| format!(" (the scan period is {ms} ms)"));
+    let mut out = Vec::new();
+    if detail && let Some(t) = load.timing {
+        out.push(Line {
+            key: key("exec"),
+            text: format!(
+                "scan {} · peak {}",
+                micros_text(t.exec.mean),
+                micros_text(t.exec.max)
+            ),
+            tip: format!(
+                "Scan time: how long the program takes to run once, over its last {n} scans. \
+                 Average {avg}, 99 in 100 under {p99}, longest {max}, shortest {min}. \
+                 Normal is well under the scan period{period}; a scan that takes longer \
+                 makes the next one start late.",
+                n = t.window,
+                avg = micros_text(t.exec.mean),
+                p99 = micros_text(t.exec.p99),
+                max = micros_text(t.exec.max),
+                min = micros_text(t.exec.min),
+            ),
+            warn: false,
+        });
+        out.push(Line {
+            key: key("late"),
+            text: format!(
+                "jitter {} · peak {}",
+                micros_text(t.late.mean),
+                micros_text(t.late.max)
+            ),
+            tip: format!(
+                "Jitter: how late each scan started after the moment it was due, over its last {n} scans. \
+                 Average {avg}, 99 in 100 under {p99}, latest {max}. \
+                 Normal is a fraction of a millisecond on a quiet box; a busy computer \
+                 or a long scan of another program adds to it.",
+                n = t.window,
+                avg = micros_text(t.late.mean),
+                p99 = micros_text(t.late.p99),
+                max = micros_text(t.late.max),
+            ),
+            warn: false,
+        });
+    }
+    let recent = load.overrun_ago.filter(|&a| a <= OVERRUN_RECENT);
+    if detail || recent.is_some() {
+        let when = load
+            .overrun_ago
+            .map_or_else(String::new, |a| format!(" · {} ago", age_text(a)));
+        out.push(Line {
+            key: key("overruns"),
+            text: if load.overruns == 0 {
+                "no overruns".into()
+            } else {
+                format!("overruns {}{when}", load.overruns)
+            },
+            tip: "Overruns: scan deadlines missed since the box started, because a scan \
+                  started too late. The program skips the scans it missed and carries on \
+                  at its scan period. Normal is none, or a rare one when the computer is \
+                  busy. The line is yellow for a minute after each overrun."
+                .into(),
+            warn: recent.is_some(),
+        });
+    }
+    out
+}
+
 impl Monitor {
     fn shape(&mut self, name: &str, src: Option<&str>) -> Option<&Shape> {
         let src = src?;
@@ -475,6 +610,7 @@ impl Monitor {
                 lamps: Vec::new(),
                 stale: trouble.clone().map(|t| format!("stale · {t}")),
                 into: None,
+                lines: load_lines(p, detail),
             };
             let mut tiles = vec![status];
             let name = p.name.clone();
@@ -510,6 +646,7 @@ impl Monitor {
                             lamps: lamps(&scope.outs),
                             stale: stale.clone(),
                             into: None,
+                            lines: Vec::new(),
                         });
                     }
                     for &kid in &scope.kids {
@@ -522,6 +659,7 @@ impl Monitor {
                             lamps: lamps(&s.outs),
                             stale: stale.clone(),
                             into: Some((name.clone(), s.prefix.clone())),
+                            lines: Vec::new(),
                         });
                     }
                 }
@@ -702,7 +840,9 @@ impl Monitor {
                         egui::Button::selectable(chrome.scan, egui::RichText::new("Scan detail").size(size))
                             .min_size(Vec2::new(TAP * 2.5 * k, TAP * k)),
                     )
-                    .on_hover_text("the scan period and count on each status tile (kept in this browser)");
+                    .on_hover_text(
+                        "the scan period and count, scan time, jitter and overruns on each status tile (kept in this browser)",
+                    );
                 chrome.hit("monitor scan", scan.rect);
                 if scan.clicked() {
                     chrome.scan = !chrome.scan;
@@ -827,7 +967,13 @@ impl Monitor {
                 let r = Rect::from_min_size(Pos2::new(x, rect.min.y), Vec2::new(w, h));
                 let resp = ui.interact(r, ui.scope_id().with(&t.key), Sense::click());
                 chrome.hit(t.key.clone(), r);
-                draw_tile(ui, r, t, k, resp.hovered() && t.into.is_some());
+                let lines = draw_tile(ui, r, t, k, resp.hovered() && t.into.is_some());
+                for (line, lr) in t.lines.iter().zip(lines) {
+                    chrome.hit(line.key.clone(), lr);
+                    let _ = ui
+                        .interact(lr, ui.scope_id().with(&line.key), Sense::hover())
+                        .on_hover_text(&line.tip);
+                }
                 if resp.clicked()
                     && let Some(to) = &t.into
                 {
@@ -847,10 +993,18 @@ fn tile_height(t: &Tile, k: f32) -> f32 {
         _ => t.lamps.len().max(1) as f32 * 30.0 * k,
     };
     let foot = if t.stale.is_some() { 26.0 * k } else { 0.0 };
-    head + body + foot + 12.0 * k
+    let extra = match &t.kind {
+        TileKind::Status(Run::Stopped(Some(_))) => 22.0 * k,
+        _ => 0.0,
+    };
+    head + body + extra + t.lines.len() as f32 * LINE_H * k + foot + 12.0 * k
 }
 
-fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
+/// A load line's height, before scaling.
+const LINE_H: f32 = 24.0;
+
+/// Draws `t` in `r`; returns where each of its [`Line`]s went.
+fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) -> Vec<Rect> {
     let p = ui.painter_at(r);
     let th = theme(ui);
     let stale = t.stale.is_some();
@@ -870,6 +1024,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
     );
     let ink = if stale { th.muted } else { th.fg };
     let pad = 14.0 * k;
+    let mut spots = Vec::new();
     let mut y = r.min.y + pad;
     let title = if t.into.is_some() {
         format!("{} ›", t.title)
@@ -929,6 +1084,27 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                     ink,
                 );
                 y += 22.0 * k;
+            }
+            for l in &t.lines {
+                let color = if stale {
+                    th.muted
+                } else if l.warn {
+                    th.accent
+                } else {
+                    ink
+                };
+                p.text(
+                    Pos2::new(r.min.x + pad, y),
+                    egui::Align2::LEFT_TOP,
+                    &l.text,
+                    FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT)),
+                    color,
+                );
+                spots.push(Rect::from_min_size(
+                    Pos2::new(r.min.x + pad, y),
+                    Vec2::new((r.width() - 2.0 * pad).max(0.0), LINE_H * k),
+                ));
+                y += LINE_H * k;
             }
         }
         TileKind::Outputs | TileKind::Instance => {
@@ -993,4 +1169,5 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
             th.muted,
         );
     }
+    spots
 }

@@ -164,10 +164,33 @@ pub fn state(s: Status) -> Json {
     }
 }
 
-/// A module's summary: schedule, status, stats.
+fn micros(d: std::time::Duration) -> f64 {
+    d.as_secs_f64() * 1e6
+}
+
+fn spread(s: crate::Spread) -> Json {
+    json!({ "min": micros(s.min), "mean": micros(s.mean), "max": micros(s.max), "p99": micros(s.p99) })
+}
+
+/// A module's scan load, `null` before its first scan: `window` scans,
+/// each one's execution time (`exec_us`) and start lateness (`late_us`),
+/// in microseconds.
+fn timing(live: Option<&ModuleLive>) -> Json {
+    match live.map(|l| l.timing) {
+        Some(t) if t.scans > 0 => json!({
+            "window": t.scans,
+            "exec_us": spread(t.exec),
+            "late_us": spread(t.late),
+        }),
+        _ => Json::Null,
+    }
+}
+
+/// A module's summary: schedule, status, stats, timing.
 #[must_use]
 pub fn module(m: &ModuleInfo, live: Option<&ModuleLive>) -> Json {
     let stats = live.map(|l| l.stats).unwrap_or_default();
+    let ago = live.and_then(|l| l.overrun_ago).map(millis);
     json!({
         "name": m.name,
         "origin": m.origin,
@@ -175,7 +198,13 @@ pub fn module(m: &ModuleInfo, live: Option<&ModuleLive>) -> Json {
         "i": window(m.i),
         "q": window(m.q),
         "status": status(live),
-        "stats": { "scans": stats.scans, "overruns": stats.overruns, "held": stats.held },
+        "stats": {
+            "scans": stats.scans,
+            "overruns": stats.overruns,
+            "held": stats.held,
+            "last_overrun_ms_ago": ago,
+        },
+        "timing": timing(live),
         "has_manifest": m.manifest.is_some(),
     })
 }

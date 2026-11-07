@@ -91,6 +91,15 @@ With a single program (the default deploy) each scan, every `--scan-ms`
 4. sleep to the next deadline; a late scan skips the periods it missed
    (counted as overruns) rather than bursting.
 
+Each scan's execution time (steps 1 to 3, on a monotonic `Clock` the
+runtime reads twice per scan, scripted in tests) and its start lateness
+(the tick's `now` minus the deadline it was due at) go into a fixed ring
+of the module's newest 1000 scans (`TIMING_WINDOW`; no allocation on the
+scan). `Runtime::timing` gives min, mean, max and a nearest-rank p99 of
+each and when the module last overran; `/api/modules` serves them as
+`timing` (`window`, `exec_us`, `late_us`, `null` before the first scan)
+and `stats.last_overrun_ms_ago`, and the Monitor's status tile shows them.
+
 A fault (division by zero, index out of range, watchdog) zeroes that
 module's outputs and stops it; the adapter stays on the network so the PLC
 can still be found and diagnosed, even once every module has stopped.

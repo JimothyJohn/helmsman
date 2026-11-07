@@ -40,7 +40,9 @@ pub mod tap;
 pub mod wasm;
 
 pub use logic::Logic;
-pub use runtime::{ConfigError, MAX_PERIOD, Module, Runtime, Stats, Status, Window};
+pub use runtime::{
+    Clock, ConfigError, MAX_PERIOD, Module, Runtime, Spread, Stats, Status, TIMING_WINDOW, Timing, Window,
+};
 pub use signals::{BindError, SignalTable, TableError};
 pub use tap::{Sample, TraceTap};
 

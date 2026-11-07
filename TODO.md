@@ -228,14 +228,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 The gaps in FEEDBACK.md's design table, each checked against the code at dev 997bedc (2026-11-07). These are small, need no design decision, and answer a complaint engineers make about every platform. Order: `feedback-order`.
 
-- [ ] **Scan time, jitter and overruns on the Monitor** — the runtime counts `scans`, `overruns` and `held` (`/api/modules`), and the watchdog is an instruction budget, but scan time and jitter are not measured, and the Monitor shows only the period and the scan count. OpenPLC users ask how to see scan load and get "There is no straightforward way to do what you want." Measure each module's execution time and the tick's start lateness (monotonic clock, min, mean, max, and a p99 over a window), expose it in `/api/modules`, and show it with overruns on the Monitor, with a tooltip on what each means.
-  result: an engineer sees scan load and jitter per module; an overrun is visible, not just counted
-  est: 1d
-  difficulty: low
-  id: scan-stats
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **One Modbus connection per gateway, shared across unit IDs** — helmsman-io opens one TCP connection per device (`Client` is "a Modbus TCP connection to one unit"), so two units behind one Modbus TCP gateway open two connections. Many gateways cap at 2-4 connections; OpenPLC v3 did the same thing and users reported "dropping connection, reconnecting and generally poor performance". Pool one connection per host:port, serialize requests on it by transaction id, keep per-unit errors per unit, and test against the simulator with several unit ids and a connection cap.
   result: eight RTU devices behind one gateway use one TCP connection
   est: 1d

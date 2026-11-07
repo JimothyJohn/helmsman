@@ -77,8 +77,10 @@ watch-only screen for a phone, a tablet or a wall display: one tile per
 program with its state and its lamps, green TRUE, red FALSE, and a tap
 into each block instance. A phone opens on the Monitor. "Open diagram"
 on a tile goes to that level in the Editor. An engineer can turn on
-**Scan detail** (View) to see each program's scan period and counts;
-they are hidden otherwise.
+**Scan detail** (View) to see each program's scan period and counts,
+how long its scan takes, how late each scan starts (jitter) and its
+overruns, each with a tooltip on what is normal; they are hidden
+otherwise. An overrun in the last minute shows in yellow for everyone.
 
 Signed in as an engineer, the Monitor's header also has **Stop** and
 **Restart** for the program on the box: the one shown, or every program
