@@ -228,14 +228,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 The gaps in FEEDBACK.md's design table, each checked against the code at dev 997bedc (2026-11-07). These are small, need no design decision, and answer a complaint engineers make about every platform. Order: `feedback-order`.
 
-- [ ] **One Modbus connection per gateway, shared across unit IDs** — helmsman-io opens one TCP connection per device (`Client` is "a Modbus TCP connection to one unit"), so two units behind one Modbus TCP gateway open two connections. Many gateways cap at 2-4 connections; OpenPLC v3 did the same thing and users reported "dropping connection, reconnecting and generally poor performance". Pool one connection per host:port, serialize requests on it by transaction id, keep per-unit errors per unit, and test against the simulator with several unit ids and a connection cap.
-  result: eight RTU devices behind one gateway use one TCP connection
-  est: 1d
-  difficulty: med
-  id: modbus-shared-connection
-  asked: 2026-11-07
-  by: claude-session
-
 ## From user feedback: plan for later
 
 Long-term items FEEDBACK.md points to. Each waits on a card already on the board, or on a decision.
