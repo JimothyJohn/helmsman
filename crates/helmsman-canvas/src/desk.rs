@@ -838,11 +838,11 @@ mod tests {
         t
     }
 
-    fn done() -> Option<End> {
-        Some(End::Done {
+    fn done() -> End {
+        End::Done {
             stop: "end_turn".into(),
             why: None,
-        })
+        }
     }
 
     fn form() -> NewDevice {
@@ -879,7 +879,7 @@ mod tests {
                 });
                 // Two bytes a character: cut on a character, not in one.
                 let text = "é".repeat(MAX_TEXT / 2);
-                turn(&format!("{}{k}", "m".repeat(9000)), &text, items, done())
+                turn(&format!("{}{k}", "m".repeat(9000)), &text, items, Some(done()))
             })
             .collect();
         let mut outcome = Outcome::new(Kind::Applied, "Main.st is updated.");
@@ -947,7 +947,11 @@ mod tests {
         );
         let t1 = k.keep(&d, 5.0).unwrap().saved_at;
         assert!(t1 > t0);
-        d.conversation = Conversation::of(&[turn("speed up", "Why: faster", vec![], done())], None, None);
+        d.conversation = Conversation::of(
+            &[turn("speed up", "Why: faster", vec![], Some(done()))],
+            None,
+            None,
+        );
         let t2 = k.keep(&d, 7.0).unwrap().saved_at;
         assert!(t2 > t1, "the answer streamed in");
         let mut f = form();
@@ -1013,7 +1017,7 @@ mod tests {
     #[test]
     fn a_conversation_cut_by_a_reload_ends_and_keeps_its_proposal() {
         let turns = [
-            turn("first", "Why: done", vec![], done()),
+            turn("first", "Why: done", vec![], Some(done())),
             turn(
                 "second",
                 "Looking",
