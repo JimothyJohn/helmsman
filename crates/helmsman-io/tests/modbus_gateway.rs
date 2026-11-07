@@ -99,7 +99,9 @@ fn the_simulated_cap_refuses_or_closes_the_oldest() {
         matches!(second.read(&mut [0u8; 1]), Ok(0) | Err(_)),
         "the second is closed unanswered"
     );
-    assert_eq!((s.accepted(), s.refused()), (1, 1));
+    wait("the refusal counted", Duration::from_secs(5), || {
+        (s.accepted(), s.refused()) == (1, 1)
+    });
 
     let s = gateway([1], Some((1, Cap::CloseOldest)));
     let mut first = TcpStream::connect(s.addr).unwrap();
@@ -110,7 +112,9 @@ fn the_simulated_cap_refuses_or_closes_the_oldest() {
         matches!(first.read(&mut [0u8; 1]), Ok(0) | Err(_)),
         "the oldest is closed"
     );
-    assert_eq!((s.accepted(), s.refused()), (2, 0));
+    wait("the second counted", Duration::from_secs(5), || {
+        (s.accepted(), s.refused()) == (2, 0)
+    });
 }
 
 #[test]

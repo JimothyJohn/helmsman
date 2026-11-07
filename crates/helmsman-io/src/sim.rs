@@ -521,25 +521,24 @@ impl Sim {
 
 /// Takes a connection under the cap: its accept number, or `None` when
 /// it is refused.
+///
+/// Counts first, then acts: whatever a peer sees (a refusal, its old
+/// connection closed) happens after the counters say so.
 fn admit(sh: &Shared, conn: &TcpStream) -> Option<usize> {
     let mut open = lock(&sh.open);
-    if let Some((max, cap)) = sh.max_connections
+    if let Some((max, Cap::Refuse)) = sh.max_connections
         && open.len() >= max
     {
-        match cap {
-            Cap::Refuse => {
-                sh.refused.fetch_add(1, Ordering::Relaxed);
-                return None;
-            }
-            Cap::CloseOldest => {
-                while !open.is_empty() && open.len() >= max {
-                    let (_, old) = open.remove(0);
-                    let _ = old.shutdown(Shutdown::Both);
-                }
-            }
-        }
+        sh.refused.fetch_add(1, Ordering::Relaxed);
+        return None;
     }
     let id = sh.accepted.fetch_add(1, Ordering::Relaxed);
+    if let Some((max, Cap::CloseOldest)) = sh.max_connections {
+        while !open.is_empty() && open.len() >= max {
+            let (_, old) = open.remove(0);
+            let _ = old.shutdown(Shutdown::Both);
+        }
+    }
     if let Ok(c) = conn.try_clone() {
         open.push((id, c));
     }
