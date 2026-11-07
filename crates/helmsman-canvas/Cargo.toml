@@ -16,6 +16,9 @@ helmsman-project = { path = "../helmsman-project" }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 # The box API's JSON (already in the workspace through helmsman-plc).
 serde_json = "1.0"
+# The desk kept in the browser (desk.rs); serde and serde_derive are
+# already in the workspace through helmsman-plc and helmsman-agent.
+serde = { version = "1.0", features = ["derive"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
