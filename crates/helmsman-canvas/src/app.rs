@@ -207,6 +207,13 @@ impl App {
         };
         if let Some(r) = &self.review {
             b.desk_user.clone_from(&r.user_input);
+            b.decided = r
+                .state
+                .list
+                .iter()
+                .filter(|p| p.status != "draft")
+                .map(|p| (p.id, p.status.clone()))
+                .collect();
         }
     }
 

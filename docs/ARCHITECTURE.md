@@ -841,6 +841,23 @@ the person between screens.
   a desk older than the one it holds (409), and the page then reads the
   newer one. A role change on the same account keeps the desk; signed
   out, or with the box not answering, the browser's is the desk.
+- **The Agent's conversation and the device form** (`desk-agent-and-forms`).
+  The desk also keeps the Agent tab's turns with the box's agent and the
+  last instruction's outcome (`desk::Conversation`), and a half-filled New
+  device form with its points (`devices::NewDevice`; the EDS by its file
+  name in the project, never its bytes). The conversation is capped at
+  128 KiB of the desk: the newest turns first, each with at most 16 KiB of
+  answer, 2 KiB of message and 40 rows (proposals first), and an Undo only
+  while its file is at most 64 KiB. The form keeps 256 rows and 256
+  characters a field, and any setting whose key names a credential
+  (`desk::is_secret_key`: a password, PIN, token, key or secret) is left
+  out. Both count as work, so a change dates the desk. Past the box's
+  512 KiB the edits go first, then the conversation, then the form. After a
+  reload an instruction that was under way is over with nothing written,
+  and the proposals its turn stored are still linked; a proposal decided
+  since (no longer a draft in the Proposals list) shows as decided and is
+  not offered again. The box reads both into their own shape like the rest
+  of the desk, so any other field is dropped.
 
 ## Snapshots (`snapshots`, built)
 

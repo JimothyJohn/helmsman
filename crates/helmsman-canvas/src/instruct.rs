@@ -175,7 +175,8 @@ pub enum Step {
 }
 
 /// How the last instruction came out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// The file was updated.
     Applied,
@@ -190,7 +191,7 @@ pub enum Kind {
 }
 
 /// The revision Undo restores.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Undo {
     pub project: String,
     pub file: String,
@@ -200,8 +201,9 @@ pub struct Undo {
     pub text: String,
 }
 
-/// The status line and what goes with it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The status line and what goes with it (kept in the desk,
+/// `crate::desk`, so a reload shows it again).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Outcome {
     pub kind: Kind,
     pub status: String,
@@ -215,7 +217,7 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    fn new(kind: Kind, status: impl Into<String>) -> Self {
+    pub(crate) fn new(kind: Kind, status: impl Into<String>) -> Self {
         Self {
             kind,
             status: status.into(),
@@ -691,6 +693,9 @@ pub struct View {
     pub blocked: Option<String>,
     /// Why Undo is off, if it is.
     pub undo_blocked: Option<String>,
+    /// Proposals already decided (a box), with their status: shown as
+    /// decided instead of offered for review.
+    pub decided: std::collections::BTreeMap<u64, String>,
 }
 
 /// The instruction box, Send or Stop, Undo, and the status line with
@@ -822,6 +827,15 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
         if !o.review.is_empty() {
             ui.horizontal_wrapped(|ui| {
                 for id in &o.review {
+                    if let Some(status) = v.decided.get(id) {
+                        let r = ui
+                            .label(RichText::new(format!("#{id} {status}")).color(t.muted))
+                            .tip(format!(
+                                "Proposal #{id} is decided ({status}): nothing left to review. Proposals has it."
+                            ));
+                        chrome.hit("agent decided", r.rect);
+                        continue;
+                    }
                     let r = ui
                         .small_button(format!("Review #{id}"))
                         .tip("Opens this proposal under Proposals.");

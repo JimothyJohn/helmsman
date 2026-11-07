@@ -14,7 +14,8 @@
 //!   request: there is no way to name another person's desk.
 //! - **What is kept.** Only the fields the page's desk has (the open
 //!   project and file, the unsaved edits with the version each was made
-//!   against, the Agent's and the Requirements' inputs, the screen, the
+//!   against, the Agent's and the Requirements' inputs, the Agent's
+//!   conversation and the half-filled New device form, the screen, the
 //!   sign-in name, and `saved_at`, when its work last changed): the body
 //!   is read into that shape and written back from it, so any other field
 //!   (a password, a PIN) is dropped, never stored.
@@ -64,6 +65,150 @@ pub struct Desk {
     pub requirement: String,
     pub screen: Option<String>,
     pub user: String,
+    /// The Agent tab's conversation (the page caps it).
+    pub conversation: Option<Conversation>,
+    /// The New device form, half filled (the page leaves out any
+    /// credential setting).
+    pub device: Option<Device>,
+}
+
+/// The Agent tab as the page keeps it (helmsman-canvas `desk::Conversation`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Conversation {
+    pub turns: Vec<Turn>,
+    pub outcome: Option<Outcome>,
+    pub interrupted: Option<String>,
+}
+
+/// One message to the agent and what came back (`box_agent::Turn`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Turn {
+    pub user: String,
+    pub text: String,
+    pub items: Vec<Item>,
+    pub end: Option<End>,
+}
+
+/// A row of a turn (`box_agent::Item`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Item {
+    Tool {
+        id: String,
+        name: String,
+        result: Option<(bool, String)>,
+    },
+    Proposal {
+        ids: Vec<u64>,
+        summary: String,
+    },
+    Retrying(String),
+    Fallback {
+        proposed: Option<u64>,
+        kind: Option<String>,
+    },
+}
+
+/// How a turn ended (`box_agent::End`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum End {
+    Done { stop: String, why: Option<String> },
+    Failed(String),
+    Stopped,
+}
+
+/// How the last instruction came out (`instruct::Outcome`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Outcome {
+    pub kind: OutcomeKind,
+    pub status: String,
+    pub why: Option<String>,
+    pub problems: Vec<String>,
+    pub undo: Option<Undo>,
+    pub review: Vec<u64>,
+}
+
+/// `instruct::Kind`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutcomeKind {
+    Applied,
+    Refused,
+    Said,
+    Failed,
+    Undone,
+}
+
+/// The revision Undo restores (`instruct::Undo`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Undo {
+    pub project: String,
+    pub file: String,
+    pub revision: u32,
+    pub text: String,
+}
+
+/// The New device form (`devices::NewDevice`; its EDS by file name).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Device {
+    pub name: String,
+    pub protocol: usize,
+    pub endpoint: String,
+    pub params: String,
+    pub eds: Option<String>,
+    pub points: Vec<Point>,
+    pub catalog: Option<Catalog>,
+    pub editing: Option<String>,
+}
+
+/// One input or output of the form (`device_form::PointRow`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Point {
+    pub on: bool,
+    pub dir: Dir,
+    pub name: String,
+    pub ty: SigTy,
+    pub point: String,
+    #[serde(rename = "use")]
+    pub use_: Use,
+    pub fixed: bool,
+}
+
+/// `device_form::Dir`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Dir {
+    In,
+    Out,
+}
+
+/// `device_form::SigTy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SigTy {
+    Bool,
+    Int,
+    Real,
+}
+
+/// `device_form::Use`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Use {
+    Wiring,
+    Declare,
+    Existing(String),
+}
+
+/// `device_form::Catalog`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Catalog {
+    E1213,
 }
 
 impl Desk {

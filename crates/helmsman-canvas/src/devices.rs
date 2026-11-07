@@ -205,8 +205,10 @@ pub const PROTOCOLS: [(&str, &str, &str, &str); 2] = [
     ),
 ];
 
-/// The "New device" form's fields.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The "New device" form's fields (kept in the desk, `crate::desk`, so a
+/// half-filled form survives a reload; the refusal is not kept).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct NewDevice {
     pub name: String,
     /// An index into [`PROTOCOLS`].
@@ -214,6 +216,7 @@ pub struct NewDevice {
     pub endpoint: String,
     pub params: String,
     /// Why the last Add was refused.
+    #[serde(skip)]
     pub error: Option<String>,
     /// The project's EDS file this device comes from (Import device…).
     pub eds: Option<String>,
