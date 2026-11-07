@@ -92,7 +92,15 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
     with one command: `~/github/helmsman-try/scratch/16-rebuild.sh`
     (untracked, in that checkout). From an `EnterWorktree` session that
     is a hand-off: its paths contain "github", which the isolation check
-    reads as git. Stop: `kill $(lsof -tiTCP:8081 -sTCP:LISTEN)`.
+    reads as git. It runs as the LaunchAgent `io.advin.helmsman-try`
+    (2026-11-07, `scratch/run-box.sh` in that checkout) in Nick's desktop
+    session, because macOS Local Network privacy refuses LAN traffic to a
+    binary started over SSH or from an agent session ("No route to
+    host"; the box comes up but loses its devices). Restart:
+    `launchctl kickstart -k gui/501/io.advin.helmsman-try` (works from
+    SSH). A plain `kill` respawns it; stop for good with `launchctl
+    bootout gui/501/io.advin.helmsman-try`. Never start a box that needs
+    the bench devices with `nohup` from a shell.
   - A new service (board, mock-up server) gets its own entry here first.
   - Anything else running is a leftover: `scripts/dev-processes.sh` lists
     every Helmsman process with its port and checkout, `--stop` stops all
