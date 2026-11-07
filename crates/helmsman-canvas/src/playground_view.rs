@@ -2064,6 +2064,7 @@ impl PlaygroundView {
                 target: self.scope().label().replacen("Editing: ", "", 1),
                 blocked: self.chat.route().err().map(str::to_string),
                 undo_blocked: self.undo_blocked(),
+                decided: std::collections::BTreeMap::new(),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),

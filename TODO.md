@@ -212,15 +212,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: rusty-bump
 
-- [ ] **Persistence 3: the Agent conversation and the device form survive a reload** — still lost on reload after #276: the Agent transcript (`BoxAgent.turns`, box_agent.rs; Turn/Item/End need serde, MAX_TURNS 50, the box has no transcript GET today, so keep the rendered turns in the desk, capped) and the half-filled device form (`DevicesUi.adding: NewDevice`, devices.rs:210, with its points; drop the EDS bytes, keep a reference). Restore both through the desk (browser now, the box once desk-on-box lands). Tests: a reload mid-conversation shows the same turns and a pending proposal link; a half-filled form comes back; a proposal already decided shows as decided, not re-offered.
-  result: nothing typed or read in the Agent tab or the device form is lost to a refresh
-  est: 1d
-  difficulty: med
-  depends: desk-on-box
-  id: desk-agent-and-forms
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Help mode on the Agent, box side** — Nick's interview (2026-11-07): a Help mode beside the coding mode, for a third-party user. The box attaches context automatically (recent Messages as text (`messages::Log::text`), device states and their current errors from /api/devices, the running project and snapshot, the box's build commit, OS), never secrets (tokens, PINs, the relay token) — a test asserts the redaction. The answer is a plain-language diagnosis plus a copyable Markdown issue (title, what happened, expected, steps, the attached context, suspected files linked to github.com/JimothyJohn/helmsman/blob/dev/...), with a Copy button (messages::copyable). Nothing is filed automatically. The relay side is help-mode-relay; build against a relay fixture until it is served.
   result: a user in trouble gets a diagnosis and an issue to paste to another agent or to GitHub
   est: 1d

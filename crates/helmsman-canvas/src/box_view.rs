@@ -76,6 +76,10 @@ pub struct BoxView {
     /// A proposal the Agent tab asked to open under Proposals; the app
     /// takes it.
     pub wants_review: Option<u64>,
+    /// The box's proposals already decided (not drafts), by id, with
+    /// their status: the app sets it from the Proposals list, so a link
+    /// the Agent tab kept over a reload is not offered again.
+    pub decided: std::collections::BTreeMap<u64, String>,
     /// The Requirements tab's field and open row.
     pub req_ui: crate::requirements::ReqUi,
     /// The requirement being added on the box, and the last one's outcome.
@@ -182,10 +186,17 @@ impl BoxView {
         self
     }
 
-    /// The inputs, the screen and the sign-in name from `d`.
+    /// The inputs, the Agent's conversation, the device form, the screen
+    /// and the sign-in name from `d`. A conversation under way here is
+    /// left as it is.
     fn put_back(&mut self, d: crate::desk::Desk) {
         self.instruct.draft.clone_from(&d.agent);
         self.req_ui.draft.clone_from(&d.requirement);
+        if !self.instruct.busy() && !self.agent.busy() {
+            let c = d.conversation.clone().unwrap_or_default();
+            c.put_back(&mut self.agent, &mut self.instruct);
+        }
+        self.devices_ui.adding.clone_from(&d.device);
         self.desk_screen.clone_from(&d.screen);
         self.desk_user.clone_from(&d.user);
         self.restored = Some(d);
@@ -207,6 +218,12 @@ impl BoxView {
             requirement: self.req_ui.draft.clone(),
             screen: self.desk_screen.clone(),
             user: self.desk_user.clone(),
+            conversation: crate::desk::Conversation::of(
+                &self.agent.turns,
+                self.instruct.outcome.as_ref(),
+                self.instruct.run.as_ref().map(crate::instruct::Run::target),
+            ),
+            device: self.devices_ui.adding.as_ref().map(crate::desk::form_of),
             ..crate::desk::Desk::default()
         };
         self.projects.to_desk(&mut d);
@@ -253,6 +270,7 @@ impl BoxView {
             answered_seq: 0,
             agent_at: 0.0,
             wants_review: None,
+            decided: std::collections::BTreeMap::new(),
             req_ui: crate::requirements::ReqUi::default(),
             adding: None,
             desk: crate::desk::Keeper::load(Box::new(crate::sim_projects::MemStorage::default())).0,
@@ -308,9 +326,11 @@ impl BoxView {
         self.run(ctx, cmds);
         self.trend.step(self.session.as_ref(), &self.state, now);
         self.on_box.step(self.session.as_ref());
-        let desk = self.desk();
-        if let Some(d) = self.desk.keep(&desk, now) {
-            self.on_box.keep(&d, now);
+        if self.desk.due(now) {
+            let desk = self.desk();
+            if let Some(d) = self.desk.keep(&desk, now) {
+                self.on_box.keep(&d, now);
+            }
         }
         let mut reqs = self.projects.poll();
         reqs.extend(self.trend.poll());
@@ -852,6 +872,7 @@ impl BoxView {
                 .map_or_else(|| "the open file".into(), |(_, s, _)| crate::instruct::target(&s)),
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
+            decided: self.decided.clone(),
         };
         let act = egui::ScrollArea::vertical()
             .id_salt("box-agent")

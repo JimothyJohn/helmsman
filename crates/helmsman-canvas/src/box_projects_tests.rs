@@ -2407,3 +2407,175 @@ fn a_draft_started_on_one_screen_is_there_on_another_after_signing_in() {
     assert_eq!(air.instruct.draft, "make the lamp blink at 2 Hz");
     assert_eq!(air.projects.open.as_ref().unwrap().bufs["blocks.st"].text, edited);
 }
+
+/// An instruction under way on the box's agent, with a proposal stored
+/// and the answer still streaming: `v` signed in, `line` open on
+/// `main.st`.
+fn mid_conversation(b: &Bench, jar: &Jar, ctx: &egui::Context) -> BoxView {
+    use crate::box_agent::Incoming;
+    let mut v = page(b, jar, Some(("alice", ALICE)));
+    make(b, jar, &mut v.projects, "line", &[("main.st", MAIN)]);
+    v.projects.open_file("main.st");
+    v.instruct.draft = "make the lamp blink at 2 Hz".into();
+    v.send_instruction(ctx);
+    let seq = v.chat_sent.last().expect("sent").seq;
+    v.agent.apply(Incoming::Chunk {
+        seq,
+        text: "event: session\ndata: {\"id\":\"s1\"}\n\n\
+               event: text\ndata: {\"delta\":\"Looking at the lamp\"}\n\n\
+               event: proposal\ndata: {\"ids\":[3,4],\"summary\":\"speed to 2\"}\n\n"
+            .into(),
+    });
+    assert!(v.instruct.busy() && v.agent.busy());
+    v
+}
+
+/// Card `desk-agent-and-forms`: a reload while the Agent answers shows the
+/// same turns, the instruction over with nothing written, and the
+/// proposals that turn stored still offered for review; one decided since
+/// (applied on the Proposals screen) shows as decided and is not offered
+/// again.
+#[test]
+fn a_reload_mid_conversation_shows_the_turns_and_offers_only_the_undecided_proposal() {
+    use crate::box_agent::End;
+    use crate::desk::{MAX_BYTES, TURN_USER};
+    use crate::instruct::Kind;
+    use crate::review::Row;
+    use crate::sim_projects::MemStorage;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let v = mid_conversation(&b, &jar, &ctx);
+    let before = v.agent.turns.clone();
+    let (kept, dropped) = v.desk().text_within(MAX_BYTES);
+    assert!(dropped.is_empty(), "{dropped:?}");
+    assert!(!kept.contains(ALICE), "no password in the desk");
+
+    let r = BoxView::new().with_desk(Box::new(MemStorage(Some(kept))));
+    assert_eq!(r.agent.turns.len(), before.len());
+    let (was, is) = (&before[0], &r.agent.turns[0]);
+    assert!(
+        was.user.starts_with(&is.user[..TURN_USER - 8]),
+        "the message, cut"
+    );
+    assert_eq!(is.text, "Looking at the lamp");
+    assert_eq!(is.items, was.items);
+    assert!(matches!(&is.end, Some(End::Failed(w)) if w.contains("reloaded")));
+    assert!(
+        !r.instruct.busy() && !r.agent.busy(),
+        "nothing under way after a reload"
+    );
+    let o = r.instruct.outcome.clone().unwrap();
+    assert_eq!(o.kind, Kind::Failed);
+    assert_eq!(o.review, [3, 4]);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        MAIN,
+        "nothing written"
+    );
+
+    let session = Some(b.login(&jar, "alice", ALICE));
+    let mut h = Harness::new(r, session);
+    h.press("tab claude");
+    h.frame(vec![]);
+    assert!(h.app.chrome.rect("agent result").is_some());
+    let reviews = |h: &Harness| {
+        h.app
+            .chrome
+            .hits
+            .iter()
+            .filter(|(k, _)| k == "agent review")
+            .count()
+    };
+    assert_eq!(reviews(&h), 2, "both offered while the list is not in");
+    // Proposal 3 was applied since; 4 still waits.
+    h.app.review.as_mut().unwrap().state.list = [(3, "applied"), (4, "draft")]
+        .into_iter()
+        .map(|(id, status)| Row {
+            id,
+            title: "speed to 2".into(),
+            status: status.into(),
+            tier: None,
+        })
+        .collect();
+    h.frame(vec![]);
+    h.frame(vec![]);
+    assert_eq!(reviews(&h), 1, "the decided one is not offered again");
+    assert!(h.app.chrome.rect("agent decided").is_some());
+    h.press("agent review");
+    h.frame(vec![]);
+    let asked: Vec<String> = h
+        .app
+        .review
+        .as_ref()
+        .unwrap()
+        .sent
+        .iter()
+        .map(|q| q.url.clone())
+        .collect();
+    assert!(asked.iter().any(|u| u == "/api/proposals/4"), "{asked:?}");
+}
+
+/// The Agent's conversation and a half-filled New device form ride the
+/// box's desk: kept by the box for the person (without the credential
+/// typed into the form's settings) and there on another screen after
+/// signing in. The box reads back every field the page's desk has.
+#[test]
+fn the_conversation_and_the_device_form_follow_the_person_to_another_screen() {
+    use crate::box_projects::PCall;
+    use crate::desk::{Desk, MAX_BYTES, form_of};
+    use crate::devices::NewDevice;
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let (studio_jar, air_jar) = (Jar::default(), Jar::default());
+    let mut studio = mid_conversation(&b, &studio_jar, &ctx);
+    let mut f = NewDevice::from_eds("e1213.eds", "[Device]\nProdName = \"E1213\";\n");
+    f.endpoint = "192.168.1.60".into();
+    f.points[2].on = true;
+    f.params = format!("{} password=hunter2-device", f.params);
+    studio.devices_ui.adding = Some(f.clone());
+
+    // Every field of the page's desk survives the box's reading of it.
+    let text = studio.desk().text_within(MAX_BYTES).0;
+    let on_box = helmsman_plc::api::desk::Desk::read(text.as_bytes()).expect("the box reads it");
+    assert_eq!(
+        Desk::parse(&serde_json::to_string(&on_box).unwrap()),
+        Desk::parse(&text),
+        "the box keeps every field"
+    );
+
+    let box_desk = |jar: &Jar| -> Json {
+        let a = b.send(jar, &PReq::get(PCall::Desk, "/api/desk".into()));
+        serde_json::from_str(&a.body).unwrap()
+    };
+    let mut now = 0.0;
+    for _ in 0..20 {
+        now += 1.5;
+        pump(&b, &studio_jar, &mut studio, &ctx, now);
+        if box_desk(&studio_jar)["desk"]["device"]["endpoint"] == "192.168.1.60" {
+            break;
+        }
+    }
+    let held = box_desk(&studio_jar);
+    assert_eq!(
+        held["desk"]["conversation"]["turns"][0]["text"],
+        "Looking at the lamp"
+    );
+    assert!(!held.to_string().contains("hunter2"), "no credential on the box");
+    assert!(!held.to_string().contains(ALICE), "no password on the box");
+
+    let mut air = BoxView::new();
+    air.session = Some(b.login(&air_jar, "alice", ALICE));
+    for _ in 0..20 {
+        now += 1.5;
+        pump(&b, &air_jar, &mut air, &ctx, now);
+        if air.devices_ui.adding.is_some() {
+            break;
+        }
+    }
+    assert_eq!(air.devices_ui.adding, Some(form_of(&f)));
+    assert_eq!(air.agent.turns.len(), 1);
+    assert_eq!(air.agent.turns[0].text, "Looking at the lamp");
+    assert_eq!(air.instruct.outcome.as_ref().unwrap().review, [3, 4]);
+    assert_eq!(air.instruct.draft, "", "the instruction went out on the Studio");
+}
