@@ -236,14 +236,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **Show what a deploy keeps and resets, before approving** — a deploy already carries state by name and type (timers and counters keep their values, new or retyped variables reset), and `Carry {kept, reset, dropped}` is computed in helmsman-iec state.rs, but no API or UI shows it. Sysmac users: "The software should warn the user if the variables will be cleared." Put the carry on the proposal (a dry run against the running state), show it on the approval screen in plain words ("keeps 12 values, resets `count` (type changed), drops `old_flag`"), and record it in the audit entry.
-  result: the engineer sees which values reset before entering the PIN; the audit says what the deploy did to state
-  est: 1d
-  difficulty: med
-  id: deploy-state-preview
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Scan time, jitter and overruns on the Monitor** — the runtime counts `scans`, `overruns` and `held` (`/api/modules`), and the watchdog is an instruction budget, but scan time and jitter are not measured, and the Monitor shows only the period and the scan count. OpenPLC users ask how to see scan load and get "There is no straightforward way to do what you want." Measure each module's execution time and the tick's start lateness (monotonic clock, min, mean, max, and a p99 over a window), expose it in `/api/modules`, and show it with overruns on the Monitor, with a tooltip on what each means.
   result: an engineer sees scan load and jitter per module; an overrun is visible, not just counted
   est: 1d
@@ -257,14 +249,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   est: 1d
   difficulty: med
   id: modbus-shared-connection
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **A typo gives one error, at the right line, in plain words** — matiec's top complaints are the wrong line ("The error is on line 23, and matiec outputs what is on line 26") and twenty errors from one `ELSE IF`. Helmsman already stops at the first syntax error, and positions are tested (tests/st.rs `errors_are_sorted_and_positioned`). Pin it with a corpus of the twenty most common ST typos (`ELSE IF`, `=` for `:=`, missing `;`, missing `END_IF`, `:=` in a condition, a misspelled keyword or FB) and assert each one's line, column and a message that names the fix.
-  result: error quality is measured, and a regression in it fails CI
-  est: 1d
-  difficulty: low
-  id: typo-corpus
   asked: 2026-11-07
   by: claude-session
 

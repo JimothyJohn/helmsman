@@ -50,6 +50,11 @@ impl Ty {
         ALL.into_iter().find(|t| t.name() == name)
     }
 
+    /// The names of every elementary type.
+    pub fn names() -> impl Iterator<Item = &'static str> {
+        ALL.into_iter().map(Self::name)
+    }
+
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
