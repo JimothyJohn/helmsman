@@ -356,7 +356,19 @@ impl App {
                 let b = self.boxv.get_or_insert_with(BoxView::new);
                 b.state.set_monitor(true);
                 b.tick(&ctx);
-                self.monitor.show(ui, &b.state, &mut self.chrome, engineer, None);
+                // Card monitor-box-run-stop: an engineer's Stop, Run and
+                // Restart; anyone else's Monitor stays watch-only.
+                let targets = self.monitor.targets(&b.state.modules);
+                let t = engineer.then(|| Transport {
+                    built: !targets.is_empty(),
+                    running: b
+                        .state
+                        .modules
+                        .iter()
+                        .any(|m| targets.contains(&m.name) && m.state != "stopped"),
+                    on_box: true,
+                });
+                self.monitor.show(ui, &b.state, &mut self.chrome, engineer, t);
             }
             (Screen::Monitor, Source::Sim) => {
                 let s = self.sim.get_or_insert_with(PlaygroundView::new);
@@ -364,12 +376,14 @@ impl App {
                 let t = Transport {
                     built: s.session.build.is_some(),
                     running: s.session.running,
+                    on_box: false,
                 };
                 self.monitor.show(ui, &*s, &mut self.chrome, engineer, Some(t));
             }
         }
         match self.monitor.wish.take() {
             Some(Wish::Diagram { program, prefix }) => self.open_diagram(&program, &prefix),
+            Some(Wish::Act(a)) if self.source == Source::Box => self.box_control(a),
             Some(Wish::Act(a)) => self.act(a, &ctx),
             None => {}
         }
@@ -519,6 +533,32 @@ impl App {
 
     /// The Editor's diagram of `program` (empty: the one open), at the
     /// instance `prefix` (empty: the program).
+    /// The box Monitor's transport (card monitor-box-run-stop): Run/Stop
+    /// stops every running target, or runs them all when none runs;
+    /// Restart restarts each. The box checks the session and audits.
+    fn box_control(&mut self, a: Action) {
+        let Some(b) = self.boxv.as_mut() else {
+            return;
+        };
+        let targets = self.monitor.targets(&b.state.modules);
+        let running: Vec<String> = b
+            .state
+            .modules
+            .iter()
+            .filter(|m| targets.contains(&m.name) && m.state != "stopped")
+            .map(|m| m.name.clone())
+            .collect();
+        let (op, names) = match a {
+            Action::RunStop if running.is_empty() => ("run", targets),
+            Action::RunStop => ("stop", running),
+            Action::Restart => ("restart", targets),
+            _ => return,
+        };
+        for n in names {
+            b.projects.control(&n, op);
+        }
+    }
+
     pub fn open_diagram(&mut self, program: &str, prefix: &str) {
         self.screen = Screen::Editor;
         match self.source {

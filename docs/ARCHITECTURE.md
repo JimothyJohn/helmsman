@@ -1483,6 +1483,37 @@ converts or nothing is written.
   most programs run all 40 scans, so it is never vacuous). A real Studio
   5000 export is still to come (`l5x-real-export`).
 
+### Stop, run and restart a module (`monitor-box-run-stop`, built)
+
+`Runtime::stop`, `run` and `restart` (`runtime.rs`), the control job on
+the swap channel (`api/swap.rs`, `Control`), and the routes
+(`api/control.rs`); contract in `tests/run_stop.rs` (with a property
+test over any mix of stops, runs, restarts and ticks) and the `control`
+tests in `tests/projects.rs`; the Monitor's buttons in
+`box_projects_tests.rs`.
+
+- **What.** `POST /api/modules/{name}/stop` makes the module
+  `Status::Stopped`: not scanned, its `%Q` window zero and its output
+  signals at their safe values at once, the other modules on their
+  schedule. `run` scans it again with its state as it was, on its own
+  phase, so the stop counts as neither scans nor overruns (it also clears
+  a fault). `restart` is a cold restart (`Logic::reset`), on its phase
+  too. Each is idempotent.
+- **When.** The scan thread does it between two ticks with the table
+  locked, like an apply; a job not taken within the swap wait is
+  withdrawn and never lands later (503).
+- **Who.** An engineer login session of at least the role the policy
+  names for `output-affecting` (a stop moves outputs), without the
+  replay; the box token, a PIN alone's lesser roles and an operator get
+  403. Every outcome is audited, refusals too, and only a module the
+  catalog lists is named in the audit.
+- **How long.** Until a run or a restart. A deploy, swap or reload keeps
+  a stopped module stopped (a faulted or held one still restarts
+  running); the box restarting starts every module.
+- **Seen.** `state: "stopped"` with `stopped_by` and `stopped_at` in the
+  module's `status` (`/api/modules`, `/api/modules/{name}`, the values
+  stream); `stopped` in the site counts and in OPC UA's module state.
+
 ### Forced inputs (`force-inputs`, built)
 
 `helmsman_plc::force` (the set and how it applies) and `api/forces.rs`

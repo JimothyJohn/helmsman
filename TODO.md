@@ -79,17 +79,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Next to build
 
-- [ ] **Run, stop and restart a box's program from the Monitor** — Nick 2026-11-01: the Monitor needs play, start, stop. The simulation's transport (run or stop, step, restart) is on the Monitor now; a box has no such endpoint: a module runs from deploy until the next one. This adds `POST /api/modules/{name}/run|stop|restart` behind an engineer session and the approval policy, audited like a force, with HELD shown while stopped (outputs at their safe values), and the Monitor's buttons use it when signed in.
-  needs: the runtime's held state exposed per module
-  result: the same three buttons on a box's Monitor, audited; the module's state shows HELD while stopped
-  est: 2d
-  difficulty: med
-  id: monitor-box-run-stop
-  asked: 2026-11-01
-  by: claude-session
-  notes: Nick 2026-11-06: yes, an engineer may stop and restart a program from the Monitor.
-  status: ready
-
 - [ ] **The Agent on a box** — left out of agent-scoped-edits (#207): a box's canvas has no Agent tab (BoxView::tabs() is I/O and Requirements; a ui_test pins it), its page's CSP is connect-src 'self', and the box's agent runs through the relay as proposals (POST /api/chat). Give the box an Agent tab that talks to /api/chat, with the pages (#187), iterations (#201), the requirement gate (red_tests) and the edit scope (`scope::apply` takes plain files, so it is reusable) on the box side.
   needs: the relay deployed (relay-deploy) to try it against a real model; the rest builds against the relay fixtures
   result: the same agent workflow on a box as in the playground, every change still a proposal through the approval policy

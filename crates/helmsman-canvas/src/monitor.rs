@@ -51,7 +51,9 @@ pub const RED: Color32 = Color32::from_rgb(0xE5, 0x39, 0x35);
 pub enum Run {
     Starting,
     Running,
-    Stopped,
+    /// Not scanning: the simulation stopped, or a box module an engineer
+    /// stopped (who, when the box says), its outputs at their safe values.
+    Stopped(Option<String>),
     Held,
     Faulted(String),
 }
@@ -106,6 +108,7 @@ impl Feed for BoxState {
                     run: match m.state.as_str() {
                         "running" => Run::Running,
                         "held" => Run::Held,
+                        "stopped" => Run::Stopped(m.stopped_by.clone()),
                         "faulted" => Run::Faulted(m.fault.clone().unwrap_or_default()),
                         _ => Run::Starting,
                     },
@@ -162,7 +165,7 @@ impl Feed for PlaygroundView {
             ),
             (None, true) => (Run::Running, Fresh::Live),
             (None, false) => (
-                Run::Stopped,
+                Run::Stopped(None),
                 Fresh::Stale {
                     age: None,
                     why: "stopped".into(),
@@ -367,13 +370,17 @@ pub enum Wish {
     Act(Action),
 }
 
-/// The simulation's transport as the Monitor shows it: whether a program
-/// is built, and whether it runs. A box has none (card
-/// monitor-box-run-stop): its Monitor stays watch-only.
+/// The transport as the Monitor shows it: whether there is something to
+/// run, and whether it runs. In the simulation: run or stop, step and
+/// restart. On a box (`on_box`; card monitor-box-run-stop, an engineer
+/// signed in only): stop or run and restart of the program shown, or of
+/// every program at the top level, each through the box's audited route.
+/// Anyone else's box Monitor has none and stays watch-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Transport {
     pub built: bool,
     pub running: bool,
+    pub on_box: bool,
 }
 
 /// The Monitor's own state: which level is shown. Values are the feed's.
@@ -717,10 +724,55 @@ impl Monitor {
         }
     }
 
-    /// The simulation's transport, the Editor's glyphs under the same keys
-    /// (`run`, `step`, `restart`), so the hotkeys' tests and the page's
-    /// behave alike on either screen.
+    /// The box modules the transport acts on: the program shown, or every
+    /// module at the top level.
+    #[must_use]
+    pub fn targets(&self, modules: &[crate::remote::ModuleRow]) -> Vec<String> {
+        match &self.at {
+            Some((program, _)) => modules
+                .iter()
+                .filter(|m| m.name == *program)
+                .map(|m| m.name.clone())
+                .collect(),
+            None => modules.iter().map(|m| m.name.clone()).collect(),
+        }
+    }
+
+    /// The transport, the Editor's glyphs under the same keys (`run`,
+    /// `step`, `restart`), so the hotkeys' tests and the page's behave
+    /// alike on either screen. A box has no step.
     fn transport(&mut self, ui: &mut egui::Ui, t: Transport, chrome: &mut Chrome) {
+        if t.on_box {
+            let (icon, tip) = if t.running {
+                (
+                    glyphs::Icon::Stop,
+                    "Stop on the box: the program stops scanning and its outputs go to their safe values until you run it again (an engineer's; audited).",
+                )
+            } else {
+                (
+                    glyphs::Icon::Run,
+                    "Run on the box: the program scans again from where it stopped (an engineer's; audited).",
+                )
+            };
+            let items = [
+                ("run", icon, t.built, tip, Action::RunStop),
+                (
+                    "restart",
+                    glyphs::Icon::Restart,
+                    t.built,
+                    "Restart on the box: every variable back to its initial value, then run (an engineer's; audited).",
+                    Action::Restart,
+                ),
+            ];
+            for (key, icon, enabled, tip, act) in items {
+                let r = glyphs::button(ui, icon, enabled, false, tip);
+                chrome.hit(key, r.rect);
+                if r.clicked() {
+                    self.wish = Some(Wish::Act(act));
+                }
+            }
+            return;
+        }
         let (icon, tip) = if !t.built {
             (
                 glyphs::Icon::Run,
@@ -846,7 +898,7 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                 Run::Running => ("RUNNING", GREEN),
                 Run::Faulted(_) => ("FAULTED", RED),
                 Run::Held => ("HELD", th.accent),
-                Run::Stopped => ("STOPPED", th.muted),
+                Run::Stopped(_) => ("STOPPED", th.muted),
                 Run::Starting => ("STARTING", th.muted),
             };
             let color = if stale { th.muted } else { color };
@@ -858,6 +910,16 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) {
                 color,
             );
             y += 40.0 * k;
+            if let Run::Stopped(Some(by)) = run {
+                p.text(
+                    Pos2::new(r.min.x + pad, y),
+                    egui::Align2::LEFT_TOP,
+                    format!("outputs at safe values · by {by}"),
+                    FontId::proportional((14.0 * k).max(crate::theme::MIN_TEXT)),
+                    ink,
+                );
+                y += 22.0 * k;
+            }
             if let Run::Faulted(f) = run {
                 p.text(
                     Pos2::new(r.min.x + pad, y),

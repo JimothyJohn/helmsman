@@ -65,6 +65,16 @@ on a tile goes to that level in the Editor. An engineer can turn on
 **Scan detail** (View) to see each program's scan period and counts;
 they are hidden otherwise.
 
+Signed in as an engineer, the Monitor's header also has **Stop** and
+**Restart** for the program on the box: the one shown, or every program
+from the top level. Stop holds the program: it stops scanning and its
+outputs go to their safe values, and its tile says STOPPED with who
+stopped it. The same button then reads **Run** and starts it again where
+it left off. Restart starts it again from its initial values. A deploy
+leaves a stopped program stopped; a box that restarts starts everything.
+The box records each one in its audit log, and anyone not signed in as
+an engineer sees neither button.
+
 ![The Monitor: a tile per program with its state, and a tile of its outputs.](img/monitor.png)
 
 ## HTTPS
