@@ -587,6 +587,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut left = chrome.left;
     let mut pane = chrome.pane;
     let (left0, pane0) = (left, pane);
+    let mut hide = false;
     let flip = egui::Panel::show_switched(
         ui,
         &mut left,
@@ -601,13 +602,17 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             let toggle = if open {
                 let mut t = None;
                 // Tabs: Files | Devices | Code, the hide chevron at the right.
+                // A double click on a tab hides the pane too (Nick, 2026-11-07).
                 ui.horizontal(|ui| {
                     for p in Pane::ALL {
                         let r = crate::theme::tab(ui, pane == p, p.label(), Vec2::new(0.0, TAP * 0.75))
-                            .tip(p.tip());
+                            .tip(format!("{} Double-click hides the pane.", p.tip()));
                         hits.push((format!("pane {}", p.key()), r.rect));
                         if r.clicked() {
                             pane = p;
+                        }
+                        if r.double_clicked() {
+                            hide = true;
                         }
                     }
                     // The chevron at the right edge, or right after the
@@ -639,7 +644,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             };
             if let Some(t) = toggle {
                 hits.push(("left".to_string(), t.rect));
-                t.clicked()
+                t.clicked() || hide
             } else {
                 false
             }
@@ -664,6 +669,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     }
     let mut right = chrome.right;
     let mut tab = chrome.tab;
+    let mut hide_right = false;
     let flip = egui::Panel::show_switched(
         ui,
         &mut right,
@@ -680,10 +686,13 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                     t = Some(header_toggle(ui, false, "Hides the panel (Alt+3)."));
                     for &k in tabs {
                         let r = crate::theme::tab(ui, tab == k, k.label(), Vec2::new(0.0, TAP * 0.75))
-                            .tip(k.tip());
+                            .tip(format!("{} Double-click hides the panel.", k.tip()));
                         hits.push((format!("tab {}", k.key()), r.rect));
                         if r.clicked() {
                             tab = k;
+                        }
+                        if r.double_clicked() {
+                            hide_right = true;
                         }
                     }
                 });
@@ -695,7 +704,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             };
             if let Some(t) = toggle {
                 hits.push(("right".to_string(), t.rect));
-                t.clicked()
+                t.clicked() || hide_right
             } else {
                 false
             }

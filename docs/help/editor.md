@@ -149,6 +149,8 @@ label is drawn, the icon stands alone at a readable size.
   Structured Text editor. Errors are marked on the line as you type; the
   program running does not change until you deploy. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
+  A double click on any tab, on this pane or the side panel, hides that
+  pane.
 - **The bottom panel** (<kbd>Alt</kbd> <kbd>2</kbd>): the **Trend** of the
   signals you pin, with a long time axis, and **Messages**, the last two
   hundred things the page had to say, with the error count on the tab.
