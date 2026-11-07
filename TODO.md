@@ -64,6 +64,16 @@
   asked: 2026-11-04
   by: claude-session
 
+- [ ] **Speed up CI?** — the required `gate` job takes about 8.5 min, 5.5 of it in `cargo test --workspace`, nearly all compiling: ci.yml has no cargo cache, so every run rebuilds every dependency. dev's "branch must be up to date" rule multiplies it: each merge puts every open PR behind and each update re-runs the full gate (on 2026-11-05 #237 and #241 re-ran for a TODO.md card). Proposed as one draft PR: (1) Swatinem/rust-cache, SHA-pinned (a third-party action; I expect gate at roughly 3-4 min, unmeasured); (2) gate checks the changed paths and passes in seconds when no Rust changed (docs, TODO.md, help pages), keeping its name for branch protection; interop only when the CIP code or docker/ changes, oracle only when helmsman-iec changes. Separately, yours: turn off "require up to date" on dev (the push run on dev still catches a semantic clash, at the cost of dev occasionally red for one merge), or a merge queue if the plan allows it on a private repo (unverified).
+  needs: your call
+  result: a PR's wait drops from ~8.5 min to a few, and docs-only changes stop burning a full build
+  options: cache + path skips as a draft PR (recommended) | cache only | leave CI as it is
+  est: 1h
+  difficulty: low
+  id: ci-speed
+  asked: 2026-11-05
+  by: claude-session
+
 ## Tasks
 
 - [x] **Breakpoint on the picked block (Ctrl B)** — Nick 2026-11-01: keep it, off the F key (his "drop" on F9 overridden by his next answer). Pick a block or statement line in the simulation, Ctrl B pauses the scan before that statement runs, the diagram lit as of that moment; F10 runs the rest. Needs pause-at-statement in the interpreter (the trace tap knows the running statement). Box side later, read-only.

@@ -3584,3 +3584,214 @@ fn the_simulation_survives_a_click_storm_on_every_tab() {
         assert_eq!(h.app.source, Source::Sim);
     }
 }
+
+// ---- the guided tour ----
+
+/// The tour (`crate::tour`) driven through the real interface: every step
+/// done by clicking and typing where its card points.
+mod tour {
+    use eframe::egui::{self, Event};
+
+    use super::{App, Harness, Screen, Source};
+    use crate::app::wants_tour;
+    use crate::editor::Tab;
+    use crate::tour::{Step, Tour};
+
+    fn step(h: &Harness) -> Step {
+        h.app.tour.as_ref().expect("the tour runs").step
+    }
+
+    fn anchor(h: &Harness) -> Option<String> {
+        h.app.tour.as_ref().and_then(|t| t.anchor.clone())
+    }
+
+    /// The card is on the screen, clear of the control it points at, and
+    /// no text on the screen is below the minimum.
+    fn card_is_fair(h: &Harness, at: &str) {
+        let card = h.rect("tour card");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, h.size);
+        assert!(
+            screen.expand(0.5).contains_rect(card),
+            "{at}: the card is off the screen: {card:?}"
+        );
+        if let Some(mark) = h.app.chrome.rect("tour mark") {
+            assert!(
+                !card.intersects(mark),
+                "{at}: the card covers what it points at: {card:?} {mark:?}"
+            );
+        }
+        assert_eq!(h.small_text(), [] as [(f32, String); 0], "{at}");
+    }
+
+    #[test]
+    fn tour_parses_from_the_query() {
+        for q in ["?tour", "tour", "?playground&tour", "?tour=1"] {
+            assert!(wants_tour(q), "{q}");
+        }
+        for q in ["", "?tours", "?playground", "?detour"] {
+            assert!(!wants_tour(q), "{q}");
+        }
+    }
+
+    #[test]
+    fn plain_pages_have_no_tour_and_help_starts_one() {
+        let mut h = Harness::new(App::sim());
+        assert!(h.app.tour.is_none());
+        assert!(!h.has("tour card"));
+        h.press("bar help");
+        h.press("help tour");
+        h.frame(vec![]);
+        assert_eq!(step(&h), Step::Welcome);
+        assert!(h.has("tour card"));
+        // Not on a box: the tour is the simulation's.
+        let mut b = Harness::new(App::boxed());
+        b.press("bar help");
+        assert!(!b.has("help tour"));
+    }
+
+    /// Start to finish, each step done by what its card asks: Blink
+    /// copied under a name, its time changed, deployed, its lamp picked,
+    /// the trend's window moved, a key pasted and an instruction sent.
+    #[test]
+    fn the_tour_runs_start_to_finish_on_the_real_interface() {
+        let mut h = Harness::new(App::sim());
+        h.app.tour = Some(Tour::new());
+        h.wait(0.3);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        card_is_fair(&h, "welcome");
+        assert_eq!(anchor(&h), None, "the welcome sits in the middle");
+        h.press("tour start");
+        h.wait(0.2);
+        assert_eq!(step(&h), Step::OpenBlink);
+        // The playground opens on the Code tab: the card points at Files.
+        assert_eq!(anchor(&h).as_deref(), Some("pane files"));
+        card_is_fair(&h, "files tab");
+        h.press("pane files");
+        h.wait(0.2);
+        assert_eq!(anchor(&h).as_deref(), Some("project blink"));
+        card_is_fair(&h, "blink");
+        h.press("project blink");
+        h.wait(0.3);
+        assert_eq!(step(&h), Step::Name);
+        assert_eq!(anchor(&h).as_deref(), Some("name"));
+        card_is_fair(&h, "name");
+        h.press("name ok");
+        h.wait(0.3);
+        assert_eq!(step(&h), Step::Edit);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(!sim.proj.is_example(), "a copy of its own: {}", sim.proj.open);
+        let mine = sim.proj.open.clone();
+        assert_eq!(anchor(&h).as_deref(), Some("pane code"));
+        card_is_fair(&h, "code tab");
+        h.press("pane code");
+        h.wait(0.2);
+        assert_eq!(anchor(&h).as_deref(), Some("st editor"));
+        card_is_fair(&h, "editor");
+        // Select 500 in T#500ms and type 200 over it.
+        let id = egui::Id::unique("pg-source");
+        let editor = h.ctx.read_response(id).expect("the editor").rect;
+        h.click(editor.left_top() + egui::vec2(60.0, 6.0));
+        let sim = h.app.sim.as_ref().unwrap();
+        let text = sim.proj.files[&sim.proj.current].clone();
+        let at = text[..text.find("500ms").expect("Blink's time")].chars().count();
+        crate::editor::select(&h.ctx, id, at, at + 3);
+        h.frame(vec![Event::Text("200".into())]);
+        h.wait(0.6);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.proj.files[&sim.proj.current].contains("T#200ms"));
+        assert_eq!(step(&h), Step::Deploy);
+        assert_eq!(anchor(&h).as_deref(), Some("bar file"));
+        card_is_fair(&h, "file menu");
+        h.press("bar file");
+        assert_eq!(anchor(&h).as_deref(), Some("file deploy"));
+        h.press("file deploy");
+        h.wait(0.3);
+        assert_eq!(step(&h), Step::Watch);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.session.running && !sim.session.stale(), "the edit runs");
+        assert_eq!(sim.proj.running.as_deref(), Some(mine.as_str()));
+        assert_eq!(anchor(&h).as_deref(), Some("io outputs"));
+        card_is_fair(&h, "outputs");
+        // The lamp, the first output.
+        let outs = h.rect("io outputs");
+        h.click(outs.left_center() + egui::vec2(30.0, 0.0));
+        h.wait(0.3);
+        assert_eq!(step(&h), Step::Trend);
+        assert_eq!(anchor(&h).as_deref(), Some("trend window"));
+        card_is_fair(&h, "trend");
+        let w = h.rect("trend window");
+        h.click(w.left_center() + egui::vec2(4.0, 0.0));
+        h.wait(0.3);
+        assert_eq!(step(&h), Step::Agent);
+        assert_eq!(anchor(&h).as_deref(), Some("tab claude"));
+        card_is_fair(&h, "agent tab");
+        h.press("tab claude");
+        h.wait(0.3);
+        assert_eq!(anchor(&h).as_deref(), Some("agent key"));
+        card_is_fair(&h, "key");
+        h.press("agent key");
+        h.frame(vec![Event::Text("sk-ant-api03-tour".into())]);
+        h.wait(0.2);
+        assert_eq!(anchor(&h).as_deref(), Some("agent instruction"));
+        h.press("agent instruction");
+        h.frame(vec![Event::Text(
+            "keep the lamp on for 1 s and off for 2 s".into(),
+        )]);
+        h.wait(0.2);
+        h.press("agent send");
+        h.wait(0.2);
+        assert_eq!(step(&h), Step::Done);
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().link.sent.len(),
+            1,
+            "one instruction sent"
+        );
+        card_is_fair(&h, "done");
+        h.press("tour requirements");
+        h.wait(0.2);
+        assert_eq!(h.app.chrome.tab, Tab::Requirements);
+        h.press("tour finish");
+        h.wait(0.2);
+        assert!(h.app.tour.is_none());
+        assert!(!h.has("tour card"));
+        // The side panels kept their widths the whole way.
+        let l = h.rect("left").right() - left.right();
+        let r = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&l), "the left pane grew {l} pt");
+        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
+    }
+
+    /// Skip at the first card, or at the first step, leaves the app as a
+    /// page with no tour would be.
+    #[test]
+    fn skip_leaves_the_app_untouched() {
+        for presses in [&["tour skip"][..], &["tour start", "tour skip"][..]] {
+            let mut plain = Harness::new(App::sim());
+            let mut toured = Harness::new(App::sim());
+            toured.app.tour = Some(Tour::new());
+            toured.wait(0.2);
+            plain.wait(0.2);
+            for p in presses {
+                let at = toured.rect(p).center();
+                toured.click(at);
+                toured.wait(0.2);
+                // The same clicks' worth of time on the page without the
+                // tour, the pointer nowhere.
+                plain.wait(3.0 / 60.0 + 0.2);
+            }
+            toured.wait(0.2);
+            plain.wait(0.2);
+            assert!(toured.app.tour.is_none(), "{presses:?}");
+            assert_eq!(toured.app.chrome.saved(), plain.app.chrome.saved(), "{presses:?}");
+            assert_eq!(toured.app.screen, Screen::Editor);
+            assert_eq!(toured.app.source, Source::Sim);
+            let (a, b) = (toured.app.sim.as_ref().unwrap(), plain.app.sim.as_ref().unwrap());
+            assert_eq!(a.proj.open, b.proj.open);
+            assert_eq!(a.proj.files, b.proj.files);
+            assert_eq!(a.proj.rows().len(), b.proj.rows().len());
+            assert_eq!(a.session.running, b.session.running);
+            assert!(a.files_ui.naming.is_none());
+            assert_eq!(a.chat.seq(), 0);
+        }
+    }
+}
