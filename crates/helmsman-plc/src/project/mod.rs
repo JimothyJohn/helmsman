@@ -41,7 +41,9 @@
 //!   later apply or rollback moves it.
 
 pub mod build;
+pub mod check;
 pub mod history;
+pub mod junit;
 pub mod settings;
 
 pub use helmsman_project::{
@@ -188,6 +190,41 @@ pub(crate) fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> io::Result<(
         return Err(e);
     }
     Ok(())
+}
+
+/// Why a project folder could not be read ([`read_folder`]).
+#[derive(Debug)]
+pub enum Unread {
+    /// The folder, or the file named, failed to read (a link is
+    /// `InvalidData`: nothing in a project is followed).
+    Io(Option<String>, io::Error),
+    /// The file named breaks the content rules ([`check_text`]).
+    Text(String, String),
+}
+
+/// Every project file in folder `dir`, read as the store reads one of its
+/// projects ([`Projects::read`]): a name that is not a project file's
+/// (temporaries, `drivers/`, anything else) is left out; a file that is a
+/// link, too large or not clean text is an error. How `helmsman-plc test`
+/// reads a project kept outside a box.
+///
+/// # Errors
+/// The folder or a file cannot be read, or a file breaks the rules.
+pub fn read_folder(dir: &Path) -> Result<Files, Unread> {
+    let mut files = BTreeMap::new();
+    for e in fs::read_dir(dir).map_err(|e| Unread::Io(None, e))? {
+        let e = e.map_err(|e| Unread::Io(None, e))?;
+        let Some(file) = e.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if file_name(&file).is_none() {
+            continue; // temporaries, and anything not ours
+        }
+        let bytes = read_file(&e.path(), MAX_FILE).map_err(|e| Unread::Io(Some(file.clone()), e))?;
+        let text = check_text(&bytes).map_err(|e| Unread::Text(file.clone(), e))?;
+        files.insert(file, text.to_string());
+    }
+    Ok(Files(files))
 }
 
 /// Reads a regular file of at most `cap` bytes, refusing links.
@@ -354,20 +391,10 @@ impl Projects {
 
     fn read_locked(&self, name: &str) -> R<Files> {
         let dir = self.dir(name)?;
-        let mut files = BTreeMap::new();
-        for e in fs::read_dir(&dir).map_err(|e| Refusal::io(&e))? {
-            let e = e.map_err(|e| Refusal::io(&e))?;
-            let Some(file) = e.file_name().to_str().map(str::to_string) else {
-                continue;
-            };
-            if file_name(&file).is_none() {
-                continue; // temporaries, and anything not ours
-            }
-            let bytes = read_file(&e.path(), MAX_FILE).map_err(|e| Refusal::io(&e))?;
-            let text = check_text(&bytes).map_err(|e| Refusal::new(500, format!("{file} on disk: {e}")))?;
-            files.insert(file, text.to_string());
-        }
-        Ok(Files(files))
+        read_folder(&dir).map_err(|e| match e {
+            Unread::Io(_, e) => Refusal::io(&e),
+            Unread::Text(file, e) => Refusal::new(500, format!("{file} on disk: {e}")),
+        })
     }
 
     /// One file's text.

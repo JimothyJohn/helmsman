@@ -236,14 +236,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **`helmsman-plc test PROJECT_DIR` with JUnit XML** — the most-requested missing tool in FEEDBACK.md: TcUnit-Runner died driving Visual Studio, and every vendor's compiler lives inside its GUI. Today the requirement tests run headless only through `POST /api/projects/{p}/tests`. Add a subcommand next to `account` and `bundle` that checks and runs a project's `test_*.st` with no box running, exits non-zero on a red or failing check, and writes JUnit XML (`--junit FILE`). Add a template GitHub Actions workflow in docs/ for a project kept in git. (INVESTIGATION §5; it is the "build `helmsman-plc test`" half of `st-edit-outside-canvas`.)
-  result: any CI runner gates an engineer's project; the same tests the box runs
-  est: 1d
-  difficulty: low
-  id: cli-test-runner
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Scan time, jitter and overruns on the Monitor** — the runtime counts `scans`, `overruns` and `held` (`/api/modules`), and the watchdog is an instruction budget, but scan time and jitter are not measured, and the Monitor shows only the period and the scan count. OpenPLC users ask how to see scan load and get "There is no straightforward way to do what you want." Measure each module's execution time and the tick's start lateness (monotonic clock, min, mean, max, and a p99 over a window), expose it in `/api/modules`, and show it with overruns on the Monitor, with a tooltip on what each means.
   result: an engineer sees scan load and jitter per module; an overrun is visible, not just counted
   est: 1d
