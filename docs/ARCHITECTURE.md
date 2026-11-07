@@ -631,6 +631,21 @@ green, so an older client reads an untested one as not passed) and an
 `untested` count; `ok` and `red` count only the red ones. A file with no
 comment, a body and no `ASSERT` is still red.
 
+**On the command line** (`cli-test-runner`). `helmsman-plc test
+PROJECT_DIR [--junit FILE] [--scan-ms MS]` (`project::check::cli`) reads
+a project folder with the store's rules (`project::read_folder`, which
+`Projects::read` also uses), builds it as a deploy does
+(`project::build::build`, for a box started with the defaults) and runs
+`project::check::run_tests`, the function the tests route and the deploy
+gate call, so CI runs the box's tests. Exit 0 green or untested, 1 a red
+test, 2 does not build (each problem `DIR/FILE:LINE:COL`), 64 usage, 74
+I/O. `--junit` writes the report whole or not at all
+(`project::junit`, by hand, no dependency): a `build` case, then one per
+test file in name order; red is `<failure>`, untested `<skipped/>`. It
+needs `box` (the project rules and the build live there) but opens no
+socket. docs/ci/ holds a GitHub Actions template for a project's own
+repository.
+
 **Writing a requirement** (`POST /api/projects/{p}/requirements`,
 `api::requirements`). The Requirements tab becomes a list of plain-words
 requirements; typing one has the agent write the test behind it. The

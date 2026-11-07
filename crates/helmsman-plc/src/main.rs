@@ -55,7 +55,11 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                     (first install only: with no project and nothing deployed,
                     makes NAME from the files for --projects; nothing runs
                     until an engineer deploys it)
-  --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
+       helmsman-plc test PROJECT_DIR [--junit FILE] [--scan-ms MS]
+                    (checks a project folder and runs its requirement tests with
+                    no box running; exit 0 green, 1 red, 2 does not build:
+                    `helmsman-plc test --help`)
+  --module SPEC       PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
   --module-dir DIR     one module as a directory: module.st and module.manifest
@@ -1727,6 +1731,23 @@ fn project_cli(args: &[String]) -> Result<String, String> {
     }
 }
 
+/// The box `helmsman-plc test` builds and tests for: one started with the
+/// defaults (`--scan-ms 10`, `--memory 1024`, the adapter's assemblies).
+fn test_shape() -> helmsman_plc::project::build::Shape {
+    let cfg = device_config(1);
+    let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
+    helmsman_plc::project::build::Shape {
+        defaults: Defaults {
+            period: Duration::from_millis(10),
+            i: Window::new(0, i_len),
+            q: Window::new(0, q_len),
+            m: 1024,
+        },
+        i_len,
+        q_len,
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "account") {
@@ -1753,6 +1774,12 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         };
+    }
+    if args.first().is_some_and(|a| a == "test") {
+        let ran = helmsman_plc::project::check::cli(&args[1..], &test_shape());
+        print!("{}", ran.out);
+        eprint!("{}", ran.err);
+        return ExitCode::from(ran.code);
     }
     if args.first().is_some_and(|a| a == "bundle") {
         return match helmsman_plc::bundle::cli::run(&args[1..]) {

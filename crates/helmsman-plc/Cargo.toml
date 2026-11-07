@@ -199,3 +199,7 @@ required-features = ["box"]
 [[test]]
 name = "retain"
 required-features = ["box"]
+
+[[test]]
+name = "test_cli"
+required-features = ["box"]
