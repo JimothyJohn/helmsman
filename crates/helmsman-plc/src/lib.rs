@@ -25,6 +25,8 @@ pub mod policy;
 pub mod project;
 pub mod record;
 pub mod replay;
+#[cfg(feature = "box")]
+pub mod retain;
 pub mod runtime;
 pub mod signals;
 pub mod sink;

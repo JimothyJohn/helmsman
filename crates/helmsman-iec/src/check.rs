@@ -190,6 +190,9 @@ pub struct VarInfo {
     pub off: usize,
     pub section: Section,
     pub constant: bool,
+    /// Declared `RETAIN` (a program's own variables only): kept across a
+    /// restart of the box.
+    pub retain: bool,
     pub loc: Option<Loc>,
 }
 
@@ -783,6 +786,7 @@ impl<'a> Ck<'a> {
         let mut init: Vec<Value> = Vec::new();
         let mut temps = Vec::new();
         let mut ok = true;
+        let (mut retained, mut too_big) = (0usize, false);
         // A function's result is slot 0, named after the function.
         if let PouKind::Function(rt) = &src.kind {
             match self.resolve(rt) {
@@ -794,6 +798,7 @@ impl<'a> Ck<'a> {
                         off: 0,
                         section: Section::Output,
                         constant: false,
+                        retain: false,
                         loc: None,
                     });
                     init.push(Value::zero(ty));
@@ -806,6 +811,7 @@ impl<'a> Ck<'a> {
                         off: 0,
                         section: Section::Output,
                         constant: false,
+                        retain: false,
                         loc: None,
                     });
                     init.push(Value::Int(self.enums[e].values[0].1));
@@ -846,6 +852,27 @@ impl<'a> Ck<'a> {
                 self.err(d.pos, format!("{what} is not supported in {pk} yet"));
                 ok = false;
                 continue;
+            }
+            if d.retain {
+                let problem = match (kind, d.section) {
+                    (PouType::Function, _) => {
+                        Some("a FUNCTION keeps nothing between calls, so nothing in it is RETAIN")
+                    }
+                    (PouType::FunctionBlock, _) => Some(
+                        "RETAIN inside a FUNCTION_BLOCK is not kept across a restart yet: declare the instance RETAIN in the PROGRAM",
+                    ),
+                    (_, Section::Temp) => Some("VAR_TEMP cannot be RETAIN"),
+                    _ if d.constant => Some("a CONSTANT cannot be RETAIN"),
+                    _ if d.at.is_some() => {
+                        Some("a located variable lives in the process image and cannot be RETAIN")
+                    }
+                    _ => None,
+                };
+                if let Some(m) = problem {
+                    self.err(d.pos, format!("{}: {m}", d.name));
+                    ok = false;
+                    continue;
+                }
             }
             if vars.iter().any(|v| v.name == d.name) {
                 self.err(d.pos, format!("{} is declared twice", d.name));
@@ -953,6 +980,7 @@ impl<'a> Ck<'a> {
                             off: 0,
                             section: d.section,
                             constant: false,
+                            retain: false,
                             loc: Some(loc),
                         });
                     }
@@ -992,6 +1020,21 @@ impl<'a> Ck<'a> {
                 }
             }
             let len = v.len();
+            if d.retain {
+                retained += len;
+                if retained > crate::MAX_RETAIN && !too_big {
+                    too_big = true;
+                    self.err(
+                        d.pos,
+                        format!(
+                            "{}: the RETAIN variables take {retained} values or more; a module keeps at most {} across a restart",
+                            d.name,
+                            crate::MAX_RETAIN
+                        ),
+                    );
+                    ok = false;
+                }
+            }
             init.extend(v);
             if d.section == Section::Temp {
                 temps.push((off, len));
@@ -1002,6 +1045,7 @@ impl<'a> Ck<'a> {
                 off,
                 section: d.section,
                 constant: d.constant,
+                retain: d.retain,
                 loc: None,
             });
         }

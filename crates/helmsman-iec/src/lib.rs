@@ -121,7 +121,7 @@ pub use check::{Area, Diagnostic, ImageSizes};
 pub use interp::{BadParam, Fault, FaultKind, Image};
 pub use lexer::Pos;
 pub use rename::rename_ident;
-pub use state::{Carry, State};
+pub use state::{Carry, DecodeError, MAX_DEPTH, State};
 pub use types::{Ty, Value};
 
 use check::{AggKind, Checked, Type};
@@ -131,6 +131,11 @@ use trace::{Recorder, StmtId, Trace, TraceMap};
 
 /// Instructions one scan may execute before it faults (see [`FaultKind::Watchdog`]).
 pub const DEFAULT_BUDGET: u64 = 1_000_000;
+
+/// Most values (slots: one per elementary variable, element or member) a
+/// program's `RETAIN` variables may take; the checker refuses more, so a
+/// box never quietly keeps only some of them across a restart.
+pub const MAX_RETAIN: usize = 1 << 16;
 
 /// Source of the standard function blocks.
 pub const LIBRARY: &str = include_str!("library.st");

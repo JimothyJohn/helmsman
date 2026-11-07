@@ -38,6 +38,7 @@ use helmsman_plc::policy::account::{self, Accounts, Logins};
 use helmsman_plc::policy::pin::{self, Gate, Pins};
 use helmsman_plc::policy::{Policy, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
+use helmsman_plc::retain;
 use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::site::{self, Site};
 use helmsman_plc::spec::{Defaults, Spec};
@@ -1453,7 +1454,7 @@ fn run(o: &Opts) -> Result<(), String> {
     let d = defaults(o, i_len, q_len);
     let mut content = content(o, &d)?;
     let loaded = specs(o, &d, std::mem::take(&mut content.dirs))?;
-    let (modules, sources): (Vec<Module>, Vec<String>) = loaded
+    let (mut modules, sources): (Vec<Module>, Vec<String>) = loaded
         .iter()
         .map(load)
         .collect::<Result<Vec<_>, _>>()?
@@ -1465,6 +1466,8 @@ fn run(o: &Opts) -> Result<(), String> {
         map,
         calendar: cal,
     } = load_signals(&content)?;
+    let retain_dir = state_dir(o).join(retain::DIR);
+    let restored = retain::restore(&retain_dir, &mut modules);
     let table = Arc::new(Mutex::new(table));
     let bound = Runtime::with_signals(
         i_len,
@@ -1508,6 +1511,10 @@ fn run(o: &Opts) -> Result<(), String> {
         o.gpio_chip.as_deref(),
         cal.as_ref(),
     );
+    for line in &restored {
+        eprintln!("helmsman-plc: {line}");
+    }
+    let mut retainer = retain::Writer::start(retain_dir);
     let recorder = recorder(&table);
     let (swap, swapper) = api::swap::channel(Duration::from_secs(5));
     let swap = swap.with_links(Arc::clone(&link_set));
@@ -1635,6 +1642,7 @@ fn run(o: &Opts) -> Result<(), String> {
             (held, faults)
         };
         report_changes(&specs, &names, &rt, &held, faults);
+        retainer.offer(start.elapsed(), &rt);
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
         sleep_to(start, rt.next_deadline(), cap(scene.calendar.as_ref()), &mut said);
     }
