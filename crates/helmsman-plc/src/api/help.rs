@@ -208,113 +208,132 @@ const fn ends_value(c: char) -> bool {
 /// What it redacts is gone: an issue never needs a secret.
 #[must_use]
 pub fn redact(text: &str, known: &[&str]) -> String {
-    let mut s = text.to_string();
-    for k in known.iter().filter(|k| k.len() >= 8) {
-        s = s.replace(k, REDACTED);
+    let mut named = text.to_string();
+    for secret in known.iter().filter(|k| k.len() >= 8) {
+        named = named.replace(secret, REDACTED);
     }
-    let c: Vec<char> = s.chars().collect();
-    // Pass one: long hex runs and relay tokens.
-    let mut one = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < c.len() {
-        let rest_starts = |p: &str| {
-            p.chars()
-                .enumerate()
-                .all(|(k, pc)| c.get(i + k).is_some_and(|x| x.eq_ignore_ascii_case(&pc)))
+    redact_values(&redact_shapes(&named))
+}
+
+/// Long hex runs and relay tokens, whatever is around them.
+fn redact_shapes(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < chars.len() {
+        let starts = |prefix: &str| {
+            prefix.chars().enumerate().all(|(k, want)| {
+                chars
+                    .get(at + k)
+                    .is_some_and(|got| got.eq_ignore_ascii_case(&want))
+            })
         };
-        if rest_starts("hmr1_") {
-            i += 5;
-            while i < c.len() && c[i].is_ascii_alphanumeric() {
-                i += 1;
+        if starts("hmr1_") {
+            at += 5;
+            while at < chars.len() && chars[at].is_ascii_alphanumeric() {
+                at += 1;
             }
-            one.push_str(REDACTED);
-            continue;
-        }
-        if c[i].is_ascii_hexdigit() {
-            let start = i;
-            while i < c.len() && c[i].is_ascii_hexdigit() {
-                i += 1;
-            }
-            if i - start >= 32 {
-                one.push_str(REDACTED);
-            } else {
-                one.extend(&c[start..i]);
-            }
-            continue;
-        }
-        one.push(c[i]);
-        i += 1;
-    }
-    // Pass two: values after secret keys, Bearer, PIN.
-    let c: Vec<char> = one.chars().collect();
-    let mut out = String::with_capacity(one.len());
-    let word_char = |x: char| x.is_ascii_alphanumeric() || x == '_' || x == '-';
-    let mut i = 0;
-    while i < c.len() {
-        if !word_char(c[i]) || (i > 0 && word_char(c[i - 1])) {
-            out.push(c[i]);
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < c.len() && word_char(c[i]) {
-            i += 1;
-        }
-        let word: String = c[start..i].iter().collect();
-        out.push_str(&word);
-        let lower = word.to_ascii_lowercase();
-        // Where the value starts, if this word is a key with one.
-        let mut j = i;
-        while j < c.len() && (c[j] == ' ' || c[j] == '\t') {
-            j += 1;
-        }
-        let quoted = |mut j: usize| {
-            while j < c.len() && matches!(c[j], ' ' | '\t' | '"' | '\'') {
-                j += 1;
-            }
-            j
-        };
-        let value_at = if secret_key(&word) && j < c.len() && (c[j] == ':' || c[j] == '=') {
-            Some(quoted(j + 1))
-        } else if (lower == "bearer" || lower == "pin" || lower == "password") && j > i {
-            Some(quoted(j))
-        } else {
-            None
-        };
-        let Some(v) = value_at else { continue };
-        let mut e = v;
-        while e < c.len() && !ends_value(c[e]) {
-            e += 1;
-        }
-        let value: String = c[v..e].iter().collect();
-        let done_already: String = c[v..(v + REDACTED.len()).min(c.len())].iter().collect();
-        let redact_it = match lower.as_str() {
-            _ if value.is_empty() || done_already == REDACTED => false,
-            // `Authorization: Bearer X`: the scheme stays, the next word
-            // (the Bearer branch) is the secret.
-            _ if value.eq_ignore_ascii_case("bearer") => false,
-            // "PIN 1234", "Bearer X"; not "pin was wrong".
-            "pin" if !(c.get(j) == Some(&':') || c.get(j) == Some(&'=')) => {
-                (3..=12).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_digit())
-            }
-            "password" if !(c.get(j) == Some(&':') || c.get(j) == Some(&'=')) => false,
-            _ => true,
-        };
-        if redact_it {
-            out.extend(&c[i..v]);
             out.push_str(REDACTED);
-            i = e;
+            continue;
         }
+        if chars[at].is_ascii_hexdigit() {
+            let start = at;
+            while at < chars.len() && chars[at].is_ascii_hexdigit() {
+                at += 1;
+            }
+            if at - start >= 32 {
+                out.push_str(REDACTED);
+            } else {
+                out.extend(&chars[start..at]);
+            }
+            continue;
+        }
+        out.push(chars[at]);
+        at += 1;
     }
     out
 }
 
+/// The values after secret keys, `Bearer` and `PIN`.
+fn redact_values(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let word_char = |x: char| x.is_ascii_alphanumeric() || x == '_' || x == '-';
+    let mut at = 0;
+    while at < chars.len() {
+        if !word_char(chars[at]) {
+            out.push(chars[at]);
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < chars.len() && word_char(chars[at]) {
+            at += 1;
+        }
+        let word: String = chars[start..at].iter().collect();
+        out.push_str(&word);
+        let lower = word.to_ascii_lowercase();
+        // The first character after the word and its spaces.
+        let mut sep = at;
+        while sep < chars.len() && (chars[sep] == ' ' || chars[sep] == '\t') {
+            sep += 1;
+        }
+        let assigned = matches!(chars.get(sep), Some(':' | '='));
+        let past_quotes = |mut k: usize| {
+            while k < chars.len() && matches!(chars[k], ' ' | '\t' | '"' | '\'') {
+                k += 1;
+            }
+            k
+        };
+        let value_at = if secret_key(&word) && assigned {
+            past_quotes(sep + 1)
+        } else if matches!(lower.as_str(), "bearer" | "pin" | "password") && sep > at {
+            past_quotes(sep)
+        } else {
+            continue;
+        };
+        let mut value_end = value_at;
+        while value_end < chars.len() && !ends_value(chars[value_end]) {
+            value_end += 1;
+        }
+        let value: String = chars[value_at..value_end].iter().collect();
+        let head: String = chars[value_at..(value_at + REDACTED.len()).min(chars.len())]
+            .iter()
+            .collect();
+        let redact_it = match lower.as_str() {
+            _ if value.is_empty() || head == REDACTED => false,
+            // `Authorization: Bearer X`: the scheme stays, the next word
+            // (the Bearer branch) is the secret.
+            _ if value.eq_ignore_ascii_case("bearer") => false,
+            // "PIN 1234"; not "the PIN was wrong" or "a password is set".
+            "pin" if !assigned => {
+                (3..=12).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_digit())
+            }
+            "password" if !assigned => false,
+            _ => true,
+        };
+        if redact_it {
+            out.extend(&chars[at..value_at]);
+            out.push_str(REDACTED);
+            at = value_end;
+        }
+    }
+    out
+}
 /// Every string in `j`, redacted.
 fn redact_json(j: &mut Json, known: &[&str]) {
     match j {
         Json::String(s) => *s = redact(s, known),
-        Json::Array(v) => v.iter_mut().for_each(|x| redact_json(x, known)),
-        Json::Object(m) => m.values_mut().for_each(|x| redact_json(x, known)),
+        Json::Array(v) => {
+            for x in v {
+                redact_json(x, known);
+            }
+        }
+        Json::Object(m) => {
+            for x in m.values_mut() {
+                redact_json(x, known);
+            }
+        }
         _ => {}
     }
 }
@@ -728,7 +747,7 @@ pub(super) fn serve(ctx: &Ctx, stream: &mut Conn, job: &Job) {
             } else {
                 no_agent("This box has no relay configured, so there is no agent to diagnose it")
             };
-            done("offline", Some(why), 0, 0)
+            done("offline", Some(&why), 0, 0)
         }
         Some(chat) => {
             let agent = chat.help_agent();
@@ -781,7 +800,7 @@ pub(super) fn serve(ctx: &Ctx, stream: &mut Conn, job: &Job) {
     send(last.0, &last.1);
 }
 
-fn done(stop: &str, why: Option<String>, steps: usize, output_tokens: u64) -> (&'static str, Json) {
+fn done(stop: &str, why: Option<&str>, steps: usize, output_tokens: u64) -> (&'static str, Json) {
     (
         "done",
         json!({ "stop": stop, "why": why, "steps": steps, "output_tokens": output_tokens }),
@@ -792,7 +811,8 @@ fn done(stop: &str, why: Option<String>, steps: usize, output_tokens: u64) -> (&
 /// A relay that does not serve the help profile is `done` with
 /// `unavailable`: the box's issue still stands.
 fn last_event(outcome: &helmsman_agent::Outcome, wrote: bool) -> (&'static str, Json) {
-    let d = |stop: &str, why: Option<String>| done(stop, why, outcome.steps, outcome.output_tokens);
+    let d =
+        |stop: &str, why: Option<String>| done(stop, why.as_deref(), outcome.steps, outcome.output_tokens);
     let error = |kind: &str, message: String, retryable: bool| {
         (
             "error",
@@ -951,7 +971,10 @@ mod tests {
 
     #[test]
     fn the_messages_kept_are_the_newest_whole_lines() {
-        let text: String = (0..2000).map(|k| format!("line {k}\n")).collect();
+        let text = (0..2000).fold(String::new(), |mut s, k| {
+            let _ = writeln!(s, "line {k}");
+            s
+        });
         let t = tail(&text, 100);
         assert!(
             t.len() <= 100 && t.starts_with("line ") && t.ends_with("line 1999\n"),

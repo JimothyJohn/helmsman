@@ -3253,6 +3253,110 @@ mod boxed {
         assert!(asked.iter().any(|u| u == "/api/proposals/3"), "{asked:?}");
     }
 
+    /// Help mode on a box's Agent tab (card `help-mode-box`): signed out,
+    /// Ask stays off; signed in as anyone, the question goes to
+    /// `POST /api/help` with the page's Messages; the answer shows the
+    /// diagnosis and the issue, whose Copy puts the whole Markdown on the
+    /// clipboard; and the panels keep their width throughout.
+    #[test]
+    fn help_mode_on_a_box_asks_and_shows_a_copyable_issue() {
+        use crate::box_agent::Incoming;
+        use crate::review::Session;
+        use serde_json::{Value as Json, json};
+
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.wait(0.3);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        let kept = |h: &Harness, when: &str| {
+            let l = h.rect("left").right() - left.right();
+            let r = right.left() - h.rect("right").left();
+            assert!((0.0..=8.0).contains(&l), "{when}: the left pane grew {l} pt");
+            assert!((0.0..=8.0).contains(&r), "{when}: the right panel grew {r} pt");
+        };
+        h.press("tab claude");
+        h.frame(vec![]);
+        assert!(h.has("agent mode code") && h.has("agent mode help"));
+        assert!(h.has("agent instruction") && !h.has("help question"));
+        h.press("agent mode help");
+        h.frame(vec![]);
+        assert!(h.has("help question") && h.has("help ask") && !h.has("agent instruction"));
+
+        h.app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .log
+            .error(2.0, "The box is unreachable.");
+        h.app.boxv.as_mut().unwrap().help.draft = "The conveyor stopped.".into();
+        h.frame(vec![]);
+        h.press("help ask");
+        h.frame(vec![]);
+        assert!(boxed(&h).help_sent.is_empty(), "signed out, nothing is sent");
+
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("bob".into()),
+            role: "operator".into(),
+        });
+        h.frame(vec![]);
+        h.press("help ask");
+        h.frame(vec![]);
+        let sent = boxed(&h).help_sent.clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].url, "/api/help");
+        let body: Json = serde_json::from_str(&sent[0].body).unwrap();
+        assert_eq!(body["question"], "The conveyor stopped.");
+        assert!(
+            body["messages"]
+                .as_str()
+                .unwrap()
+                .contains("error   The box is unreachable."),
+            "{body}"
+        );
+        assert!(h.has("help stop") && h.has("help working"));
+        kept(&h, "asking");
+
+        let markdown = format!(
+            "# Conveyor stops when rio drops\n\n### What happened\n\n{}\n\n### Context from the box\n\n- Devices:\n  - `rio`: down: connection refused\n",
+            "The conveyor stopped and the panel lamp went red. ".repeat(12)
+        );
+        let issue = json!({
+            "by": "agent", "title": "Conveyor stops when rio drops",
+            "diagnosis": "The remote I/O module rio is not answering. Check its power and network cable.",
+            "markdown": markdown,
+        });
+        let stream = format!(
+            "event: help\ndata: {{\"context\":{{}}}}\n\nevent: issue\ndata: {issue}\n\nevent: done\ndata: {{\"stop\":\"end_turn\",\"why\":null,\"steps\":2,\"output_tokens\":9}}\n\n"
+        );
+        let seq = sent[0].seq;
+        let b = h.app.boxv.as_mut().unwrap();
+        b.help_answer(Incoming::Chunk { seq, text: stream });
+        b.help_answer(Incoming::End { seq });
+        h.frame(vec![]);
+        h.frame(vec![]);
+        assert!(h.has("help diagnosis") && h.has("help issue") && h.has("help issue copy"));
+        assert!(!h.has("help stop"));
+        kept(&h, "answered");
+        let small = h.small_text();
+        assert!(small.is_empty(), "text below the minimum: {small:?}");
+        h.press("help issue copy");
+        assert_eq!(h.copied.last(), Some(&markdown));
+        assert!(
+            boxed(&h)
+                .log
+                .text()
+                .contains("Help: an issue was written (Conveyor stops when rio drops)."),
+            "in Messages"
+        );
+        h.press("agent mode code");
+        h.frame(vec![]);
+        assert!(h.has("agent instruction"));
+        kept(&h, "back to the code");
+    }
+
     /// The Devices tab on a box: the map the box runs, each device with
     /// the link state the box reports and its points' live values; adding
     /// a device needs a project open and an engineer, so here the menu

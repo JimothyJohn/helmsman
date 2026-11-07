@@ -69,6 +69,14 @@ pub struct BoxView {
     pub agent: crate::box_agent::BoxAgent,
     /// The Agent tab (`crate::instruct`, as in the page).
     pub instruct: crate::instruct::Instruct,
+    /// The Agent tab's Help mode (`POST /api/help`).
+    pub help: crate::help::HelpUi,
+    help_seq: u64,
+    #[cfg(target_arch = "wasm32")]
+    help_http: crate::web::ChatHttp,
+    /// Natively: the help requests asked for.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub help_sent: Vec<crate::box_agent::Request>,
     /// The agent turn [`Self::settle_agent`] last took.
     answered_seq: u64,
     /// Page time of the last frame, s (for Messages).
@@ -230,6 +238,12 @@ impl BoxView {
             chat_sent: Vec::new(),
             agent: crate::box_agent::BoxAgent::new(),
             instruct: crate::instruct::Instruct::default(),
+            help: crate::help::HelpUi::default(),
+            help_seq: 0,
+            #[cfg(target_arch = "wasm32")]
+            help_http: crate::web::ChatHttp::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            help_sent: Vec::new(),
             answered_seq: 0,
             agent_at: 0.0,
             wants_review: None,
@@ -403,6 +417,11 @@ impl BoxView {
         for i in self.req_http.drain() {
             if let crate::web::ChatIn::Turn(inc) = i {
                 self.requirement_answer(inc);
+            }
+        }
+        for i in self.help_http.drain() {
+            if let crate::web::ChatIn::Turn(inc) = i {
+                self.help_answer(inc);
             }
         }
         for i in self.chat.drain() {
@@ -804,9 +823,50 @@ impl BoxView {
         self.log_agent();
     }
 
-    /// The Agent tab: the agent's state on one line, then the shared tab.
+    /// A piece of the box's answer to the help request under way.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn help_answer(&mut self, inc: crate::box_agent::Incoming) {
+        let Some(h) = self.help.helping.as_mut() else {
+            return;
+        };
+        let was = h.busy();
+        h.apply(inc);
+        if was && let crate::help::Phase::Answered { issue, .. } = &h.phase {
+            let line = format!("Help: an issue was written ({}).", issue.title);
+            self.log.info(self.agent_at, line);
+        }
+    }
+
+    /// Why Help cannot be asked now, if it cannot: the box takes a request
+    /// from someone signed in, whatever their role.
+    fn help_blocked(&self) -> Option<String> {
+        self.session
+            .is_none()
+            .then(|| "Sign in (top right) to ask for help.".to_string())
+    }
+
+    /// Help mode's Ask: the question and the page's Messages to the box.
+    pub fn ask_help(&mut self, ctx: &egui::Context) {
+        if self.help_blocked().is_some() || crate::help::refusal(&self.help.draft).is_some() {
+            return;
+        }
+        self.help_seq += 1;
+        let req = crate::help::request(&self.help.draft, &self.log.text(), self.help_seq);
+        self.help.helping = Some(crate::help::Helping::new(self.help_seq));
+        #[cfg(target_arch = "wasm32")]
+        self.help_http.send(req, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = ctx;
+            self.help_sent.push(req);
+        }
+    }
+
+    /// The Agent tab: the agent's state on one line, the mode, then the
+    /// shared tab (changing the program) or Help.
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::box_agent::Status;
+        use crate::help::Mode;
         use crate::instruct::Act;
 
         if self.agent.status == Status::Unread && !self.agent.status_asked {
@@ -823,7 +883,10 @@ impl BoxView {
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
         };
-        let act = egui::ScrollArea::vertical()
+        let help_view = crate::help::View {
+            blocked: self.help_blocked(),
+        };
+        let (act, help_act) = egui::ScrollArea::vertical()
             .id_salt("box-agent")
             .show(ui, |ui| {
                 // Room for the scroll bar (a resizable panel grows to any
@@ -834,9 +897,25 @@ impl BoxView {
                     .tip(self.agent.status.line());
                 chrome.hit("agent status", l.rect);
                 ui.add_space(4.0);
-                crate::instruct::ui(ui, chrome, &mut self.instruct, &view)
+                crate::help::mode_ui(ui, chrome, &mut self.help.mode);
+                ui.add_space(4.0);
+                match self.help.mode {
+                    Mode::Code => (crate::instruct::ui(ui, chrome, &mut self.instruct, &view), None),
+                    Mode::Help => (None, crate::help::ui(ui, chrome, &mut self.help, &help_view)),
+                }
             })
             .inner;
+        match help_act {
+            Some(crate::help::Act::Ask) => self.ask_help(&ctx),
+            Some(crate::help::Act::Stop) => {
+                #[cfg(target_arch = "wasm32")]
+                self.help_http.abort();
+                if let Some(h) = self.help.helping.as_mut() {
+                    h.stop();
+                }
+            }
+            None => {}
+        }
         match act {
             Some(Act::Send) => self.send_instruction(&ctx),
             Some(Act::Stop) => {

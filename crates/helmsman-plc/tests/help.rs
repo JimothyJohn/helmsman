@@ -14,6 +14,7 @@
 //! the agent (no relay, offline, a profile the relay does not serve) the
 //! box still writes the issue.
 #![allow(clippy::too_many_lines)] // each test walks one whole flow
+#![allow(clippy::many_single_char_names)] // bench, status, context, issue, data
 
 use std::fmt::Write as _;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -766,9 +767,10 @@ fn help_needs_a_credential_and_a_question_in_words() {
 #[test]
 fn the_messages_kept_are_the_newest() {
     let b = Bench::new(&Agent::None, "x");
-    let lines: String = (0..1500)
-        .map(|k| format!("{k:>8}.0s info    line {k}\n"))
-        .collect();
+    let lines = (0..1500).fold(String::new(), |mut s, k| {
+        let _ = writeln!(s, "{k:>8}.0s info    line {k}");
+        s
+    });
     let (s, _, evs) = b.help(&[bearer(TOKEN)], &json!({ "question": "q", "messages": lines }));
     assert_eq!(s, 200, "{evs:?}");
     let m = evs[0].1["context"]["messages"].as_str().unwrap();
