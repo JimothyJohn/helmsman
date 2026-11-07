@@ -98,6 +98,9 @@ pub enum PCall {
     Forces,
     Force,
     Release,
+    /// `POST /api/modules/{name}/stop|run|restart` (card
+    /// monitor-box-run-stop): the module and the control.
+    Control(String, &'static str),
     /// The signed-in person's trend pins (`box_trend.rs`), read.
     TrendPins,
     /// ... and saved.
@@ -786,6 +789,17 @@ impl BoxProjects {
     }
 
     /// Forces input signal `signal` to `value`.
+    /// Stops, runs or restarts `module` on the box (`op`: `stop`, `run` or
+    /// `restart`); the box checks who may and audits it.
+    pub fn control(&mut self, module: &str, op: &'static str) {
+        self.queue.push(PReq::json(
+            PCall::Control(module.to_string(), op),
+            "POST",
+            format!("/api/modules/{}/{op}", crate::remote::segment(module)),
+            &json!({}),
+        ));
+    }
+
     pub fn force(&mut self, signal: &str, value: &Json) {
         self.queue.push(PReq::json(
             PCall::Force,
@@ -1274,6 +1288,18 @@ impl BoxProjects {
                     self.forces = j["forces"]
                         .as_array()
                         .map(|a| a.iter().filter_map(ForceRow::parse).collect());
+                }
+            }
+            PCall::Control(module, op) => {
+                if ok {
+                    let did = match op {
+                        "stop" => "stopped: its outputs are at their safe values",
+                        "restart" => "restarted from its initial values",
+                        _ => "running again",
+                    };
+                    self.note(format!("{module} {did}."), false);
+                } else {
+                    self.note(format!("{module} was not changed: {}", error_of(a)), true);
                 }
             }
             PCall::Force | PCall::Release => {

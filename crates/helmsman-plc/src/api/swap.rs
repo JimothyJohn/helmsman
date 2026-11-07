@@ -32,6 +32,11 @@
 //!    stopped link's own driver, and the new links start
 //!    ([`LinkSet::finish`]). Links the new map leaves exactly as they were
 //!    never stop; they find their points in the new table by name.
+//!
+//! An engineer's Stop, Run or Restart of one module ([`SwapHandle::control`])
+//! is a job of its own on the same terms: taken between ticks with the
+//! table locked, answered with the module's new status, withdrawn if the
+//! scan thread does not take it in time.
 
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
@@ -49,7 +54,45 @@ use crate::record::{RecordTap, Recorder};
 use crate::spec::Defaults;
 use crate::store::{ChangeSet, Code};
 use crate::wasm::Limits;
-use crate::{Module, Runtime, SignalTable};
+use crate::{Module, Runtime, SignalTable, Status};
+
+/// What an engineer asks of one running module (card monitor-box-run-stop).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Control {
+    /// [`Runtime::stop`]: not scanned, outputs zero and safe.
+    Stop,
+    /// [`Runtime::run`]: scanned again, state as it was.
+    Run,
+    /// [`Runtime::restart`]: a cold restart.
+    Restart,
+}
+
+impl Control {
+    pub const ALL: [Self; 3] = [Self::Stop, Self::Run, Self::Restart];
+
+    /// Its route segment: `stop`, `run`, `restart`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Run => "run",
+            Self::Restart => "restart",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.as_str() == s)
+    }
+}
+
+/// One [`Control`] for the scan thread.
+struct ControlJob {
+    module: String,
+    control: Control,
+    claim: Arc<Mutex<Claim>>,
+    reply: SyncSender<Result<Status, Vec<String>>>,
+}
 
 /// What a replay or an apply needs to know about the box that does not
 /// change while it runs: the signal table's shape (the I/O map and the
@@ -152,6 +195,7 @@ pub struct Served {
 #[derive(Debug)]
 pub struct Swapper {
     rx: Receiver<Job>,
+    controls: Receiver<ControlJob>,
 }
 
 impl std::fmt::Debug for Job {
@@ -164,6 +208,7 @@ impl std::fmt::Debug for Job {
 #[derive(Debug)]
 pub struct SwapHandle {
     tx: Mutex<Sender<Job>>,
+    controls: Mutex<Sender<ControlJob>>,
     /// Longest the API waits for the scan thread to take a job.
     pub wait: Duration,
     /// The box's device links, which a reload changes; `None`: the box
@@ -176,13 +221,15 @@ pub struct SwapHandle {
 #[must_use]
 pub fn channel(wait: Duration) -> (SwapHandle, Swapper) {
     let (tx, rx) = mpsc::channel();
+    let (ctl_tx, ctl_rx) = mpsc::channel();
     (
         SwapHandle {
             tx: Mutex::new(tx),
+            controls: Mutex::new(ctl_tx),
             wait,
             links: None,
         },
-        Swapper { rx },
+        Swapper { rx, controls: ctl_rx },
     )
 }
 
@@ -229,13 +276,22 @@ impl Swapper {
         mut scene: Option<&mut Scene>,
     ) -> Served {
         let mut served = Served::default();
+        while let Ok(job) = self.controls.try_recv() {
+            if !take(&job.claim) {
+                continue;
+            }
+            let result = match job.control {
+                Control::Stop => rt.stop(&job.module, table),
+                Control::Run => rt.run(&job.module),
+                Control::Restart => rt.restart(&job.module),
+            }
+            .map(|()| rt.status(&job.module).unwrap_or(Status::Running))
+            .map_err(|e| vec![e.to_string()]);
+            let _ = job.reply.send(result);
+        }
         while let Ok(job) = self.rx.try_recv() {
-            {
-                let mut c = job.claim.lock().unwrap_or_else(PoisonError::into_inner);
-                if *c != Claim::Pending {
-                    continue;
-                }
-                *c = Claim::Taken;
+            if !take(&job.claim) {
+                continue;
             }
             let result = match (job.layout, scene.as_deref_mut()) {
                 (None, _) => match rt.reconfigure(job.modules, table) {
@@ -266,6 +322,42 @@ impl Swapper {
         }
         served
     }
+}
+
+/// Claims a job for the scan thread; `false` if the API withdrew it.
+fn take(claim: &Mutex<Claim>) -> bool {
+    let mut c = claim.lock().unwrap_or_else(PoisonError::into_inner);
+    if *c != Claim::Pending {
+        return false;
+    }
+    *c = Claim::Taken;
+    true
+}
+
+/// The API's wait for a job's answer: up to `wait` for the scan thread
+/// to take it (else withdrawn), then as long as it takes to answer.
+fn wait_for<T>(
+    answer: &Receiver<Result<T, Vec<String>>>,
+    claim: &Mutex<Claim>,
+    wait: Duration,
+) -> Result<T, SwapError> {
+    match answer.recv_timeout(wait) {
+        Ok(r) => return r.map_err(SwapError::Refused),
+        Err(mpsc::RecvTimeoutError::Disconnected) => return Err(SwapError::NotTaken),
+        Err(mpsc::RecvTimeoutError::Timeout) => {}
+    }
+    {
+        let mut c = claim.lock().unwrap_or_else(PoisonError::into_inner);
+        if *c == Claim::Pending {
+            *c = Claim::Withdrawn;
+            return Err(SwapError::NotTaken);
+        }
+    }
+    // Taken: the scan thread is applying it now and always answers.
+    answer
+        .recv()
+        .map_err(|_| SwapError::NotTaken)
+        .and_then(|r| r.map_err(SwapError::Refused))
 }
 
 /// Step 3 of a reload (module docs), on the scan thread. The new
@@ -390,6 +482,33 @@ impl SwapHandle {
         }
     }
 
+    /// Hands one [`Control`] of `module` to the scan thread and waits for
+    /// it: the module's status after it.
+    ///
+    /// # Errors
+    /// [`SwapError::Refused`] for a module the box does not run, or
+    /// [`SwapError::NotTaken`]; in both cases nothing changed.
+    pub fn control(&self, module: &str, control: Control) -> Result<Status, SwapError> {
+        let claim = Arc::new(Mutex::new(Claim::Pending));
+        let (reply, answer) = mpsc::sync_channel(1);
+        let job = ControlJob {
+            module: module.to_string(),
+            control,
+            claim: Arc::clone(&claim),
+            reply,
+        };
+        if self
+            .controls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .send(job)
+            .is_err()
+        {
+            return Err(SwapError::NotTaken);
+        }
+        wait_for(&answer, &claim, self.wait)
+    }
+
     fn send(
         &self,
         modules: Vec<Module>,
@@ -414,22 +533,6 @@ impl SwapHandle {
         {
             return Err(SwapError::NotTaken);
         }
-        match answer.recv_timeout(self.wait) {
-            Ok(r) => return r.map_err(SwapError::Refused),
-            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(SwapError::NotTaken),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-        }
-        {
-            let mut c = claim.lock().unwrap_or_else(PoisonError::into_inner);
-            if *c == Claim::Pending {
-                *c = Claim::Withdrawn;
-                return Err(SwapError::NotTaken);
-            }
-        }
-        // Taken: the scan thread is applying it now and always answers.
-        answer
-            .recv()
-            .map_err(|_| SwapError::NotTaken)
-            .and_then(|r| r.map_err(SwapError::Refused))
+        wait_for(&answer, &claim, self.wait)
     }
 }

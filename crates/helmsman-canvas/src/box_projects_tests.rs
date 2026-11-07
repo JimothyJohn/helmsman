@@ -1924,3 +1924,127 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
         "never written"
     );
 }
+
+// ---- the Monitor's Stop, Run and Restart on a box (card monitor-box-run-stop) ----
+
+/// The page on the Monitor, its requests carried out against the box until
+/// the conveyor's status tile is up.
+fn monitor(b: &Bench, jar: &Jar, who: Option<(&str, &str)>) -> Harness {
+    let v = page(b, jar, who);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.app.open_monitor();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while h.app.chrome.rect("status conveyor").is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "no status tile: {:?}",
+            h.app.chrome.hits
+        );
+        monitor_pump(b, jar, &mut h);
+    }
+    h
+}
+
+/// One frame, then every request the page queued answered by the box.
+fn monitor_pump(b: &Bench, jar: &Jar, h: &mut Harness) {
+    h.frame(vec![]);
+    let Harness { ctx, app, time } = h;
+    pump(b, jar, app.boxv.as_mut().unwrap(), ctx, *time);
+    values(b, app.boxv.as_mut().unwrap(), *time);
+    h.frame(vec![]);
+}
+
+fn run_of(h: &Harness) -> crate::monitor::Run {
+    use crate::monitor::Feed as _;
+    let bv = h.app.boxv.as_ref().unwrap();
+    bv.state.programs(h.time).remove(0).run
+}
+
+#[test]
+fn an_engineer_stops_runs_and_restarts_the_box_program_from_the_monitor() {
+    use crate::monitor::Run;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut h = monitor(&b, &jar, Some(("alice", ALICE)));
+    assert!(h.app.chrome.rect("run").is_some(), "Stop/Run for an engineer");
+    assert!(h.app.chrome.rect("restart").is_some(), "Restart for an engineer");
+    assert!(h.app.chrome.rect("step").is_none(), "a box has no step");
+    assert_eq!(run_of(&h), Run::Running);
+
+    // Stop: the box stops the module, the tile says who.
+    h.press("run");
+    let reqs = h.sent();
+    assert_eq!(
+        reqs.iter()
+            .map(|q| (q.method, q.url.as_str()))
+            .collect::<Vec<_>>(),
+        [("POST", "/api/modules/conveyor/stop")],
+        "{reqs:?}"
+    );
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        assert_eq!(a.status, 200, "{a:?}");
+        h.bv().projects.answer(q.call, &a);
+    }
+    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "stopped");
+    wait("the tile says stopped, by alice", || {
+        monitor_pump(&b, &jar, &mut h);
+        run_of(&h) == Run::Stopped(Some("alice (engineer)".into()))
+    });
+    let (msg, err) = h.bv().projects.notice.clone().unwrap();
+    assert!(!err && msg.contains("safe values"), "{msg}");
+
+    // The same button runs it again.
+    h.press("run");
+    let reqs = h.sent();
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert_eq!(reqs[0].url, "/api/modules/conveyor/run");
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        h.bv().projects.answer(q.call, &a);
+    }
+    wait("running again", || {
+        monitor_pump(&b, &jar, &mut h);
+        run_of(&h) == Run::Running
+    });
+
+    // Restart.
+    h.press("restart");
+    let reqs = h.sent();
+    assert_eq!(reqs.len(), 1, "{reqs:?}");
+    assert_eq!(reqs[0].url, "/api/modules/conveyor/restart");
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        assert_eq!(a.status, 200, "{a:?}");
+        h.bv().projects.answer(q.call, &a);
+    }
+    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "running");
+    let audit = b.json("/api/audit?limit=1000");
+    for want in [
+        "module conveyor stopped",
+        "module conveyor run",
+        "module conveyor restarted",
+    ] {
+        assert!(
+            audit.as_array().unwrap().iter().any(|e| e["detail"] == want),
+            "{want} not audited"
+        );
+    }
+}
+
+#[test]
+fn signed_out_or_an_operator_sees_no_stop_and_sends_nothing() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    for who in [None, Some(("bob", BOB))] {
+        let mut h = monitor(&b, &jar, who);
+        assert!(h.app.chrome.rect("run").is_none(), "{who:?}: no Stop");
+        assert!(h.app.chrome.rect("restart").is_none(), "{who:?}: no Restart");
+        // The hotkey for Run/Stop on the Monitor does nothing on a box either.
+        h.chord(Modifiers::CTRL, egui::Key::Enter);
+        let reqs = h.sent();
+        assert!(reqs.iter().all(|q| q.method == "GET"), "{who:?}: {reqs:?}");
+        assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "running");
+    }
+}

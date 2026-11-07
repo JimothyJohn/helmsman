@@ -266,9 +266,12 @@ impl Scan for BoxScan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModuleRow {
     pub name: String,
-    /// `starting`, `running`, `held` or `faulted`.
+    /// `starting`, `running`, `held`, `faulted` or `stopped` (by an
+    /// engineer, card monitor-box-run-stop).
     pub state: String,
     pub fault: Option<String>,
+    /// Who stopped it, when it is stopped.
+    pub stopped_by: Option<String>,
     pub scans: u64,
     /// The scan period, ms.
     pub scan_ms: Option<f64>,
@@ -282,6 +285,7 @@ impl ModuleRow {
             name: j["name"].as_str()?.to_string(),
             state: j["status"]["state"].as_str().unwrap_or("?").to_string(),
             fault: j["status"]["fault"]["text"].as_str().map(str::to_string),
+            stopped_by: j["status"]["stopped_by"].as_str().map(str::to_string),
             scans: j["stats"]["scans"].as_u64().unwrap_or(0),
             scan_ms: j["scan_ms"].as_f64(),
             overruns: j["stats"]["overruns"].as_u64().unwrap_or(0),

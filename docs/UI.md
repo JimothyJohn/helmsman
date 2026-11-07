@@ -261,11 +261,15 @@ Each menu item prints its key. Reserved, not built (TODO card
 - **Tap a tile:** the same tiles one level down (that instance's instances
   and outputs). Back and breadcrumbs go up; the full diagram is one tap
   away.
-- **Watch only.** The Monitor never writes to a box. In the simulation
-  its header carries the transport (run or stop, step, restart) and the
-  same keys as the Editor (Nick, 2026-11-01); a box's Monitor gets the
-  same once the box has an audited stop and start (card
-  `monitor-box-run-stop`).
+- **Watch only, but for an engineer's Stop and Restart.** In the
+  simulation the header carries the transport (run or stop, step,
+  restart) and the same keys as the Editor (Nick, 2026-11-01). On a box,
+  an engineer signed in gets Stop or Run and Restart there (no step):
+  they act on the program shown, or on every program at the top level,
+  through the box's audited routes (card `monitor-box-run-stop`, Nick
+  2026-11-06). A stopped program's tile says STOPPED, "outputs at safe
+  values" and who stopped it. For anyone else the Monitor writes
+  nothing.
 
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan

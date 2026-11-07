@@ -95,6 +95,8 @@ pub enum ModState {
     Running,
     Held,
     Faulted(String),
+    /// Stopped by an engineer.
+    Stopped,
 }
 
 impl ModState {
@@ -103,6 +105,7 @@ impl ModState {
         match self {
             Self::Running => "running".into(),
             Self::Held => "held".into(),
+            Self::Stopped => "stopped".into(),
             Self::Faulted(why) => format!("faulted: {why}"),
         }
     }
@@ -240,6 +243,7 @@ impl FeedPublisher {
                 .map(|m| match rt.status(m) {
                     Some(Status::Running) => ModState::Running,
                     Some(Status::Faulted(f)) => ModState::Faulted(f.to_string()),
+                    Some(Status::Stopped) => ModState::Stopped,
                     Some(Status::Held) | None => ModState::Held,
                 })
                 .collect(),

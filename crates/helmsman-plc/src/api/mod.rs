@@ -9,6 +9,7 @@
 //! GET  /api/modules/{name}                + ports, source, manifest
 //! GET  /api/modules/{name}/trace          asks for a traced scan; the newest one (200), or 202 until one lands
 //! GET  /api/modules/{name}/trace/events   event stream of traced scans
+//! POST /api/modules/{name}/stop|run|restart  engineer session: stop, run or cold-restart one module (see [`control`])
 //! GET  /api/traces/events                 event stream of every module's traced scans (the Monitor's one stream)
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
 //! GET  /api/devices                       device links: up, down (why), unknown, address
@@ -104,6 +105,7 @@ pub mod approve;
 pub mod bundle;
 pub mod catalog;
 pub mod chat;
+mod control;
 pub mod discover;
 pub mod drivers;
 pub mod dropin;
@@ -340,6 +342,8 @@ struct Ctx {
     projects: Option<crate::project::Projects>,
     /// Forced inputs (see [`forces`]); `None`: those routes answer 404.
     forces: Option<Arc<crate::force::Forces>>,
+    /// Who stopped which module (see [`control`]).
+    stops: Mutex<control::Stops>,
     /// The box's driver folder (see [`drivers`]); `None`: those routes
     /// answer 404, and only a project's drivers load.
     driver_dir: Option<crate::driver_dir::DriverDir>,
@@ -643,6 +647,7 @@ impl Api {
             mcp: Mutex::new(mcp::Workspace::default()),
             projects,
             forces,
+            stops: Mutex::new(control::Stops::new()),
             driver_dir,
             running_drivers: Mutex::new(running_drivers),
             trends: Mutex::new(trend_pins.map_or_else(trend::Trends::default, trend::Trends::in_file)),
@@ -1282,6 +1287,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
     let (r, detail) = match (req.method.as_str(), segs.as_slice()) {
         (_, ["api", "projects", ..]) => return projects::mutate(req, ctx, &segs[1..]),
         (_, ["api", "forces", ..]) => return forces::mutate(req, ctx, &segs[1..]),
+        ("POST", ["api", "modules", name, op]) if *op != "trace" => return control::post(req, ctx, name, op),
         (_, ["api", "drivers", ..]) => return drivers::mutate(req, ctx, &segs[1..]),
         ("PUT", ["api", "trends", "pins"]) => return trend::put_pins(req, ctx),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
@@ -1331,6 +1337,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
     match path {
         ["api", "forces"] => return Some("GET, POST, DELETE"),
         ["api", "forces", _] => return Some("DELETE"),
+        ["api", "modules", _, "stop" | "run" | "restart"] => return Some("POST"),
         ["api", "drivers" | "trends"] => return Some("GET"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
         ["api", "trends", "pins"] => return Some("GET, PUT"),
@@ -1644,9 +1651,9 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
             ),
             None => Response::error(404, "no such signal"),
         },
-        ["api", "modules"] => Response::json(200, &render::modules(c, &view)),
+        ["api", "modules"] => Response::json(200, &control::modules(ctx, c, &view)),
         ["api", "modules", name] => match module(name) {
-            Some(k) => Response::json(200, &render::module_detail(&c.modules[k], view.modules.get(k))),
+            Some(k) => Response::json(200, &control::detail(ctx, c, &view, k)),
             None => Response::error(404, "no such module"),
         },
         ["api", "modules", name, "trace"] => match module(name) {
@@ -1789,6 +1796,9 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/modules/{name}", false, "one module with ports, source and manifest"),
             e("GET", "/api/modules/{name}/trace", false, "request a traced scan; 200 with the newest, 202 until one lands"),
             e("GET", "/api/modules/{name}/trace/events", false, "event stream of traced scans"),
+            e("POST", "/api/modules/{name}/stop", true, "engineer session (the policy's output-affecting role): stop the module; outputs zero, signals safe, until run or restart"),
+            e("POST", "/api/modules/{name}/run", true, "engineer session: run a stopped or faulted module again, its state as it was"),
+            e("POST", "/api/modules/{name}/restart", true, "engineer session: cold restart, initial values, then run"),
             e(
                 "GET",
                 "/api/traces/events",
@@ -1891,12 +1901,13 @@ fn site_route(ctx: &Ctx, c: &Catalog, view: &View) -> Response {
 fn site_json(site: &crate::site::Handle, c: &Catalog, view: &View, devices: &Devices) -> Json {
     let me = site.me();
     let (peers, counts, now) = site.snapshot();
-    let (mut running, mut held, mut faulted) = (0usize, 0usize, 0usize);
+    let (mut running, mut held, mut faulted, mut stopped) = (0usize, 0usize, 0usize, 0usize);
     for k in 0..c.modules.len() {
         match view.modules.get(k).map(|m| m.status) {
             Some(crate::Status::Running) => running += 1,
             Some(crate::Status::Held) => held += 1,
             Some(crate::Status::Faulted(_)) => faulted += 1,
+            Some(crate::Status::Stopped) => stopped += 1,
             None => {}
         }
     }
@@ -1922,6 +1933,7 @@ fn site_json(site: &crate::site::Handle, c: &Catalog, view: &View, devices: &Dev
                 "running": running,
                 "held": held,
                 "faulted": faulted,
+                "stopped": stopped,
                 "devices": { "up": up, "down": down, "unknown": unknown },
             },
         },
@@ -2078,7 +2090,7 @@ fn value_stream(stream: &mut Conn, ctx: &Ctx) -> io::Result<()> {
                 "seq": view.seq,
                 "at_ms": u64::try_from(view.at.as_millis()).unwrap_or(u64::MAX),
                 "signals": forces::mark(ctx, render::signals(c, &view)),
-                "modules": render::modules(c, &view),
+                "modules": control::modules(ctx, c, &view),
                 "outputs": view.outputs,
                 "forces": forces::list(ctx),
             }),
