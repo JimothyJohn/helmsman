@@ -224,14 +224,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **Help mode on the Agent, box side** — Nick's interview (2026-11-07): a Help mode beside the coding mode, for a third-party user. The box attaches context automatically (recent Messages as text (`messages::Log::text`), device states and their current errors from /api/devices, the running project and snapshot, the box's build commit, OS), never secrets (tokens, PINs, the relay token) — a test asserts the redaction. The answer is a plain-language diagnosis plus a copyable Markdown issue (title, what happened, expected, steps, the attached context, suspected files linked to github.com/JimothyJohn/helmsman/blob/dev/...), with a Copy button (messages::copyable). Nothing is filed automatically. The relay side is help-mode-relay; build against a relay fixture until it is served.
-  result: a user in trouble gets a diagnosis and an issue to paste to another agent or to GitHub
-  est: 1d
-  difficulty: med
-  id: help-mode-box
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Help mode on the relay: a profile that reads the repo** — in ../agent-relay (separate repo and session; SAM deploy, deploy-chain edits as a draft PR): a new profile id (e.g. helmsman/help-v1; a served profile never changes) whose model gets read-only tools over JimothyJohn/helmsman@dev through the GitHub API: list a directory, read a file (size-capped), search code. The repo is PUBLIC (checked 2026-11-07), so no token is needed to start; a fine-grained read-only token in Secrets Manager raises the rate limit (60/h unauthenticated). The system prompt: diagnose for a third-party user, cite the files it read, end with the Markdown issue; docs/ARCHITECTURE.md and docs/help are the starting points. Tests against recorded GitHub responses; refuse paths outside the repo.
   needs: a session in ../agent-relay (this repo's sessions cannot write there); Nick's go for the deploy
   result: the relay serves the Help profile the box's Help mode asks for

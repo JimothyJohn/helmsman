@@ -49,6 +49,7 @@ mod devices;
 mod editor;
 mod find;
 mod glyphs;
+mod help;
 mod history_ui;
 mod hotkeys;
 mod icons;
