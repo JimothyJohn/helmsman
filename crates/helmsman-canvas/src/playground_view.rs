@@ -1544,7 +1544,8 @@ impl Body for PlaygroundView {
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = &self.session.fault {
-            ui.colored_label(RED, format!("Fault: {f}. Run or Step restarts the program."));
+            let text = format!("Fault: {f}. Run or Step restarts the program.");
+            crate::messages::copyable(ui, chrome, "fault", &text, RED);
         }
         if self.session.paused.is_some() {
             let at = self
@@ -1563,8 +1564,12 @@ impl Body for PlaygroundView {
             ui.label(RichText::new(n).color(t.muted));
         }
         if let Some((n, error)) = self.proj.notice.clone() {
-            let r = ui.label(RichText::new(n).color(if error { RED } else { t.muted }));
-            chrome.hit("notice", r.rect);
+            if error {
+                crate::messages::copyable(ui, chrome, "notice", &n, RED);
+            } else {
+                let r = ui.label(RichText::new(n).color(t.muted));
+                chrome.hit("notice", r.rect);
+            }
             if error && self.proj.pending.is_some() {
                 let r = ui
                     .button("Replace")
@@ -2012,7 +2017,10 @@ impl PlaygroundView {
         });
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
-        self.trend_plot(ui);
+        let plot = self.trend_plot(ui);
+        if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
+            self.session.trend.move_signal(from, to);
+        }
     }
 
     fn claude(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -2155,7 +2163,9 @@ impl PlaygroundView {
         ui.add_space(6.0);
     }
 
-    fn trend_plot(&self, ui: &mut egui::Ui) {
+    /// Draws the trend; returns the rect it filled (the lanes' handles go
+    /// over it).
+    fn trend_plot(&self, ui: &mut egui::Ui) -> Rect {
         let t = theme(ui);
         let trend = &self.session.trend;
         let rect = ui.available_rect_before_wrap();
@@ -2170,7 +2180,7 @@ impl PlaygroundView {
                 FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );
-            return;
+            return rect;
         }
         let n = trend.signals.len();
         #[allow(clippy::cast_precision_loss)]
@@ -2235,6 +2245,7 @@ impl PlaygroundView {
                 painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
             }
         }
+        rect
     }
 }
 
@@ -2260,6 +2271,66 @@ pub fn window_label(ms: u64) -> String {
     } else {
         format!("{secs} s")
     }
+}
+
+/// Width of a lane's label column, which is also its drag handle.
+const LANE_HANDLE_W: f32 = 88.0;
+
+/// The lane labels of a trend drawn in `rect`, one lane per name, as
+/// drag handles (both trends; Nick, 2026-11-07): drag a label up or down
+/// and its signal moves to the lane it is dropped on, a bar marking
+/// where it will land. The hits are `trend lane <name>`. Returns
+/// `(from, to)` when a drag ends on another lane.
+pub fn lane_handles(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    rect: Rect,
+    names: &[String],
+) -> Option<(usize, usize)> {
+    let n = names.len();
+    if n == 0 {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let lane = rect.height() / n as f32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let lane_at = |y: f32| (((y - rect.top()) / lane).floor().max(0.0) as usize).min(n - 1);
+    let accent = theme(ui).accent;
+    let mut moved = None;
+    for (k, name) in names.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let top = rect.top() + lane * k as f32;
+        let handle = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(LANE_HANDLE_W, lane));
+        let r = ui
+            .interact(handle, ui.scope_id().with(("trend lane", k)), Sense::drag())
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .tip("Drag up or down to move this signal to another lane.");
+        chrome.hit(format!("trend lane {}", name.to_ascii_lowercase()), handle);
+        let at = ui.ctx().input(|i| i.pointer.latest_pos());
+        if r.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            if let Some(p) = at {
+                let to = lane_at(p.y);
+                // The bar sits on the edge the signal will take: above
+                // the target lane moving up, below it moving down.
+                #[allow(clippy::cast_precision_loss)]
+                let y = rect.top() + lane * (if to > k { to + 1 } else { to }) as f32;
+                ui.painter_at(rect).line_segment(
+                    [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                    Stroke::new(3.0, accent),
+                );
+            }
+        }
+        if r.drag_stopped()
+            && let Some(p) = at
+        {
+            let to = lane_at(p.y);
+            if to != k {
+                moved = Some((k, to));
+            }
+        }
+    }
+    moved
 }
 
 /// The window's width as one slider, logarithmic from [`WINDOW_MIN_MS`]

@@ -18,6 +18,8 @@ struct Harness {
     shapes: Vec<egui::epaint::ClippedShape>,
     /// The pointer the last frame asked for.
     cursor: egui::CursorIcon,
+    /// Text the app put on the clipboard, newest last.
+    copied: Vec<String>,
 }
 
 impl Harness {
@@ -29,6 +31,7 @@ impl Harness {
             size: Vec2::new(1400.0, 860.0),
             shapes: Vec::new(),
             cursor: egui::CursorIcon::Default,
+            copied: Vec::new(),
         };
         // Two frames: panels settle their sizes, the view fits the graph.
         h.frame(vec![]);
@@ -50,6 +53,11 @@ impl Harness {
         out.textures_delta.clear();
         self.shapes = out.shapes;
         self.cursor = out.platform_output.cursor_icon;
+        for c in out.platform_output.commands {
+            if let egui::OutputCommand::CopyText(t) = c {
+                self.copied.push(t);
+            }
+        }
     }
 
     /// Every piece of text the last frame drew outside the diagram (which
@@ -112,6 +120,18 @@ impl Harness {
         self.frame(vec![Event::PointerMoved(at)]);
         self.frame(vec![Self::button(at, true)]);
         self.frame(vec![Self::button(at, false)]);
+    }
+
+    /// A press at `from`, moved in steps to `to`, released there.
+    fn drag(&mut self, from: Pos2, to: Pos2) {
+        self.frame(vec![Event::PointerMoved(from)]);
+        self.frame(vec![Self::button(from, true)]);
+        for k in 1..=8 {
+            #[allow(clippy::cast_precision_loss)]
+            self.frame(vec![Event::PointerMoved(from.lerp(to, k as f32 / 8.0))]);
+        }
+        self.frame(vec![Self::button(to, false)]);
+        self.frame(vec![]);
     }
 
     /// A right click at `at` (opens a context menu).
@@ -246,6 +266,42 @@ mod glyphs_and_help {
         assert_eq!(log.show, [false, true, true], "info filtered out");
         assert_eq!(h.app.chrome.bottom, Bottom::Messages);
         assert!(!h.has("st"), "no Files header row either");
+    }
+
+    /// Nick, 2026-11-07: "I really need to be able to copy and paste
+    /// errors". An error line under the header has a Copy button, the
+    /// Messages tab a Copy all, and both put the whole text on the
+    /// clipboard.
+    #[test]
+    fn errors_copy_to_the_clipboard() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.2);
+        h.app.sim.as_mut().unwrap().session.fault = Some("division by zero at line 7".into());
+        h.wait(0.2);
+        h.press("fault copy");
+        assert_eq!(
+            h.copied.last().map(String::as_str),
+            Some("Fault: division by zero at line 7. Run or Step restarts the program.")
+        );
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .log
+            .error(1.0, "deploy refused: no engineer session");
+        h.press("bottom messages");
+        h.frame(vec![]);
+        h.press("messages copy");
+        let all = h.copied.last().expect("Copy all copied").clone();
+        assert!(
+            all.contains("error   deploy refused: no engineer session"),
+            "{all}"
+        );
+        assert_eq!(
+            all,
+            h.app.sim.as_ref().unwrap().log.text(),
+            "what is shown, as text"
+        );
     }
 
     #[test]
@@ -2663,6 +2719,35 @@ mod simulated {
         assert!(!h.app.chrome.trend, "Alt+2 folds it");
     }
 
+    /// Nick, 2026-11-07: drag a lane's label up or down to reorder the
+    /// trend. A drag that ends on its own lane moves nothing.
+    #[test]
+    fn dragging_a_trend_label_moves_its_lane() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        // Lanes are drawn by name; a name the program lacks records as no
+        // value, which is all this needs.
+        let s = &mut h.app.sim.as_mut().unwrap().session;
+        s.trend.signals = vec!["FIRST".into(), "SECOND".into(), "THIRD".into()];
+        s.trend.samples.clear();
+        h.wait(0.3);
+        let order = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.signals.clone();
+        let [a, b, c] = <[String; 3]>::try_from(order(&h)).unwrap();
+        let handle = |h: &Harness, n: &str| h.rect(&format!("trend lane {}", n.to_ascii_lowercase()));
+        // The first lane's label onto the third lane.
+        let (from, to) = (handle(&h, &a).center(), handle(&h, &c).center());
+        h.drag(from, to);
+        assert_eq!(order(&h), [b.clone(), c.clone(), a.clone()]);
+        // Back up to the top.
+        let (from, to) = (handle(&h, &a).center(), handle(&h, &b).center());
+        h.drag(from, to);
+        assert_eq!(order(&h), [a.clone(), b.clone(), c.clone()]);
+        // A small drag inside its own lane.
+        let r = handle(&h, &b);
+        h.drag(r.center(), r.center() + Vec2::new(4.0, r.height() * 0.3));
+        assert_eq!(order(&h), [a, b, c]);
+    }
+
     /// Nick, 2026-11-01: the trend's window is 1, 10 or 100 s, so the
     /// line can cross the pane fast or slow; the history is kept for the
     /// widest, so widening shows what already ran. Nick, 2026-11-02: one
@@ -2676,7 +2761,7 @@ mod simulated {
         assert!(h.has("trend window"), "the slider");
         assert!(!h.has("trend window 10"), "the buttons are gone");
         let window = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.window_ms;
-        assert_eq!(window(&h), 10_000, "opens on 10 s");
+        assert_eq!(window(&h), 30_000, "opens on 30 s");
         let slider = h.rect("trend window");
         h.click(Pos2::new(slider.left() + 1.0, slider.center().y));
         assert_eq!(window(&h), WINDOW_MIN_MS, "the left end is 100 ms");

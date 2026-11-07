@@ -183,6 +183,32 @@ impl App {
         }
     }
 
+    /// The desk (`crate::desk`) and the App: the screen and the sign-in
+    /// name come back once from before a reload, and are handed to the box
+    /// view to keep every frame. A password or PIN never is.
+    fn desk(&mut self) {
+        let Some(b) = &mut self.boxv else { return };
+        if let Some(d) = b.restored.take() {
+            if self.screen == Screen::Editor && d.screen.as_deref() == Some("monitor") {
+                self.screen = Screen::Monitor;
+            }
+            if !d.user.is_empty() {
+                let r = self.review.get_or_insert_with(ReviewView::new);
+                if r.user_input.is_empty() {
+                    r.user_input = d.user;
+                }
+            }
+        }
+        b.desk_screen = match self.screen {
+            Screen::Editor => Some("editor".into()),
+            Screen::Monitor => Some("monitor".into()),
+            Screen::Proposals => b.desk_screen.take(),
+        };
+        if let Some(r) = &self.review {
+            b.desk_user.clone_from(&r.user_input);
+        }
+    }
+
     /// Opens on the Monitor, whatever the window's width.
     #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
     pub fn open_monitor(&mut self) {
@@ -304,6 +330,7 @@ impl App {
         if let Some(b) = &mut self.boxv {
             b.session = session;
         }
+        self.desk();
         // No box ever answered this page: it is the simulation then, by
         // itself (Nick, 2026-11-01). A box that answered and went away
         // stays the box: its last diagram is worth more than a demo.

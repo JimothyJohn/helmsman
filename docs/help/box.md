@@ -46,7 +46,9 @@ field opens for the value), and <kbd>Ctrl</kbd> <kbd>Shift</kbd>
 ## The trend
 
 The Trend tab opens with the box's own history of each pinned signal,
-the last ten minutes, then streams. Pins are yours while you are signed
+the last ten minutes, then streams. The window opens on 30 s and widens
+to the whole ten minutes. Drag a lane's name up or down to change the
+order of the lanes. Pins and their order are yours while you are signed
 in and come back on any screen; the box keeps them across a restart
 (the history starts over).
 
@@ -56,6 +58,17 @@ If the box stops answering, the state in the header says so and the last
 diagram stays up; the page keeps trying. "Simulate in this browser"
 offers to run the program in the page instead. A page that never reached
 a box at its address goes to the simulation by itself and says so.
+
+## Your work survives a reload
+
+This browser keeps what you had in front of you: the project and file
+you had open, every edit you had not saved yet, what you had typed into
+the Agent and Requirements boxes, whether you were on the Monitor, and
+the name in the sign-in form (never a password or PIN). Reload the page,
+or come back after the box restarts, and it is all where you left it; a
+note says when unsaved edits came back. If someone saved the same file
+since, saving your edits asks which version to keep instead of
+overwriting theirs. Edits still need an engineer signed in to be saved.
 
 ## The Monitor
 

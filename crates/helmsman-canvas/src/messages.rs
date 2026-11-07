@@ -132,11 +132,30 @@ impl Log {
         n
     }
 
+    /// The shown messages as plain text, one a line, as Copy all copies
+    /// them: `  12.3s error   the text`.
+    #[must_use]
+    pub fn text(&self) -> String {
+        self.shown()
+            .map(|m| {
+                let tag = match m.level {
+                    Level::Info => "info",
+                    Level::Warning => "warning",
+                    Level::Error => "error",
+                };
+                format!("{:>8.1}s {tag:<7} {}", m.at, m.text)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// The filter row (Nick, 2026-11-01: see any or all of info, warnings
     /// and errors) and the list, newest at the bottom and scrolled there.
+    /// The rows are selectable and Copy all puts them on the clipboard
+    /// (Nick, 2026-11-07: errors must paste into a bug report).
     pub fn ui(&mut self, ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome) {
         let counts = self.counts();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (k, (name, color)) in [("info", GREEN), ("warnings", WARN), ("errors", RED)]
                 .into_iter()
                 .enumerate()
@@ -148,6 +167,15 @@ impl Log {
                 chrome.hit(format!("messages {name}"), r.rect);
                 if r.clicked() {
                     self.show[k] = !self.show[k];
+                }
+            }
+            if !self.items.is_empty() {
+                let r = ui
+                    .button("Copy all")
+                    .tip("Copies the messages shown, as text, to paste into a bug report or to the Agent.");
+                chrome.hit("messages copy", r.rect);
+                if r.clicked() {
+                    ui.ctx().copy_text(self.text());
                 }
             }
         });
@@ -178,11 +206,37 @@ impl Log {
                                 .strong()
                                 .color(color),
                         );
-                        ui.label(RichText::new(&m.text).color(t.fg));
+                        ui.add(egui::Label::new(RichText::new(&m.text).color(t.fg)).selectable(true));
                     });
                 }
             });
     }
+}
+
+/// An error or notice line someone may need to paste elsewhere: the text,
+/// selectable, and a Copy button after it that puts the whole text on the
+/// clipboard (Nick, 2026-11-07). Labels are otherwise not selectable
+/// (theme.rs). The hits are `key` (the text) and `<key> copy`.
+pub fn copyable(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    key: &str,
+    text: &str,
+    color: egui::Color32,
+) -> egui::Response {
+    ui.horizontal_wrapped(|ui| {
+        let r = ui.add(egui::Label::new(RichText::new(text).color(color)).selectable(true));
+        chrome.hit(key, r.rect);
+        let b = ui
+            .button("Copy")
+            .tip("Copies this message, to paste into a bug report or to the Agent.");
+        chrome.hit(format!("{key} copy"), b.rect);
+        if b.clicked() {
+            ui.ctx().copy_text(text.to_string());
+        }
+        r
+    })
+    .inner
 }
 
 #[cfg(test)]

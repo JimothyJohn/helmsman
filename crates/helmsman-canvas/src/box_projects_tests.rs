@@ -1776,6 +1776,192 @@ fn a_requirement_added_on_a_box_without_an_agent_is_listed_with_no_test_yet() {
     );
 }
 
+/// Nick, 2026-11-07: inputs must not disappear on a state change. A
+/// requirement the box finished adding reads the project again for the
+/// new test file; that read used to replace every buffer, so an unsaved
+/// edit to another file was lost. Now the edit stays and the new file
+/// comes in beside it.
+#[test]
+fn a_finished_requirement_keeps_unsaved_edits() {
+    use crate::box_agent::Incoming;
+    use crate::requirements::Adding;
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    settle(&b, &jar, &mut v.projects);
+    let edited = format!("{MAIN}\n(* not saved yet *)\n");
+    v.projects
+        .open
+        .as_mut()
+        .unwrap()
+        .bufs
+        .get_mut("main.st")
+        .unwrap()
+        .text = edited.clone();
+
+    // The box adds the test file, as the requirement's POST would.
+    let (a, req) = Adding::to_box("line", "The conveyor runs after start", "conveyor_runs", 7);
+    let head = format!(
+        "POST {} HTTP/1.1\r\nHost: box\r\nX-Helmsman-Request: 1\r\nOrigin: http://box\r\nCookie: helmsman_session={}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        req.url,
+        jar.get().unwrap(),
+        req.body.len()
+    );
+    let (status, _, body) = b.raw(&head, req.body.as_bytes());
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    v.adding = Some(a);
+    v.requirement_answer(Incoming::Chunk {
+        seq: 7,
+        text: unchunk(&body),
+    });
+    v.requirement_answer(Incoming::End { seq: 7 });
+    settle(&b, &jar, &mut v.projects);
+
+    let o = v.projects.open.as_ref().unwrap();
+    assert_eq!(o.bufs["main.st"].text, edited, "the unsaved edit stays");
+    assert!(o.bufs["main.st"].dirty());
+    assert!(
+        o.bufs.contains_key("test_conveyor_runs.st"),
+        "{:?}",
+        o.bufs.keys()
+    );
+}
+
+/// Nick, 2026-11-07: "the interface and inputs need to be more
+/// persistent so they don't just disappear during a refresh". A page
+/// reloaded on the same browser comes back on the project and file it
+/// showed, with its unsaved edit and its half-typed inputs; an edit made
+/// against a file someone has saved since is refused as stale on save
+/// rather than overwriting their change.
+#[test]
+fn a_reload_puts_back_the_project_the_file_the_edits_and_the_inputs() {
+    use crate::desk::{Desk, MAX_BYTES};
+    use crate::sim_projects::MemStorage;
+    let b = Bench::new();
+    let (ja, jb) = (Jar::default(), Jar::default());
+    let mut a = page(&b, &ja, Some(("alice", ALICE)));
+    make(&b, &ja, &mut a.projects, "aaa", &[("main.st", MAIN)]);
+    make(
+        &b,
+        &ja,
+        &mut a.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    a.projects.open_project("line");
+    settle(&b, &ja, &mut a.projects);
+    a.projects.open_file("blocks.st");
+    let edited = format!("{BLOCKS}\n(* half done *)\n");
+    a.projects.current_mut().unwrap().text = edited.clone();
+    a.instruct.draft = "make the lamp blink at 2 Hz".into();
+    a.req_ui.draft = "The lamp blinks while running".into();
+    let (kept, dropped) = a.desk().text_within(MAX_BYTES);
+    assert_eq!(dropped, Vec::<String>::new());
+    assert!(!kept.contains(ALICE), "no password in the desk");
+
+    // The reload: a new page on the same browser.
+    let mut r = BoxView::new().with_desk(Box::new(MemStorage(Some(kept.clone()))));
+    r.session = Some(b.login(&ja, "alice", ALICE));
+    settle(&b, &ja, &mut r.projects);
+    let o = r.projects.open.as_ref().expect("a project open");
+    assert_eq!(o.name, "line", "the project it showed, not the first");
+    assert_eq!(o.current.as_deref(), Some("blocks.st"));
+    assert_eq!(o.bufs["blocks.st"].text, edited);
+    assert!(r.projects.dirty(), "still an edit to save");
+    assert!(
+        r.projects
+            .notice
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("blocks.st are back")
+    );
+    assert_eq!(r.instruct.draft, "make the lamp blink at 2 Hz");
+    assert_eq!(r.req_ui.draft, "The lamp blinks while running");
+    // Saved, the draft is gone from the desk.
+    r.projects.save();
+    settle(&b, &ja, &mut r.projects);
+    assert_eq!(
+        b.json("/api/projects/line/files/blocks.st")["text"],
+        edited.as_str()
+    );
+    assert!(r.desk().drafts.is_empty(), "{:?}", r.desk().drafts);
+
+    // Someone saves the file while this page's edit waits in the desk.
+    let mut stale = Desk::parse(&kept);
+    stale
+        .drafts
+        .get_mut("line")
+        .unwrap()
+        .get_mut("blocks.st")
+        .unwrap()
+        .text = format!("{BLOCKS}\n(* mine *)\n");
+    let mut other = page(&b, &jb, Some(("alice", ALICE)));
+    other.projects.open_project("line");
+    settle(&b, &jb, &mut other.projects);
+    other.projects.open_file("blocks.st");
+    other.projects.current_mut().unwrap().text = format!("{BLOCKS}\n(* theirs *)\n");
+    other.projects.save();
+    settle(&b, &jb, &mut other.projects);
+    let mut r = BoxView::new().with_desk(Box::new(MemStorage(Some(stale.text_within(MAX_BYTES).0))));
+    r.session = Some(b.login(&ja, "alice", ALICE));
+    settle(&b, &ja, &mut r.projects);
+    assert!(r.projects.notice.as_ref().unwrap().0.contains("changed since"));
+    r.projects.save();
+    settle(&b, &ja, &mut r.projects);
+    assert_eq!(
+        r.projects.conflict.as_deref(),
+        Some("blocks.st"),
+        "{:?}",
+        r.projects.notice
+    );
+    assert!(
+        b.json("/api/projects/line/files/blocks.st")["text"]
+            .as_str()
+            .unwrap()
+            .contains("theirs"),
+        "their save stands"
+    );
+
+    // Signed out, the edit still comes back; saving it waits for a sign-in.
+    let mut r = BoxView::new().with_desk(Box::new(MemStorage(Some(stale.text_within(MAX_BYTES).0))));
+    settle(&b, &Jar::default(), &mut r.projects);
+    assert!(r.projects.dirty());
+}
+
+/// The screen and the sign-in name come back after a reload too; a
+/// password typed into the form is never kept.
+#[test]
+fn a_reload_comes_back_on_the_monitor_with_the_sign_in_name() {
+    use crate::app::Screen;
+    use crate::desk::{Desk, MAX_BYTES};
+    use crate::sim_projects::MemStorage;
+    let d = Desk {
+        screen: Some("monitor".into()),
+        user: "alice".into(),
+        ..Desk::default()
+    };
+    let bv = BoxView::new().with_desk(Box::new(MemStorage(Some(d.text_within(MAX_BYTES).0))));
+    let mut h = Harness::new(bv, None);
+    assert_eq!(h.app.screen, Screen::Monitor);
+    let r = h.app.review.as_mut().unwrap();
+    assert_eq!(r.user_input, "alice");
+    r.password_input = "hunter2-secret".into();
+    h.app.screen = Screen::Editor;
+    h.frame(vec![]);
+    let kept = h.bv().desk();
+    assert_eq!(kept.screen.as_deref(), Some("editor"));
+    assert_eq!(kept.user, "alice");
+    assert!(!kept.text_within(MAX_BYTES).0.contains("hunter2"), "no password");
+}
+
 /// The box's Agent tab takes the page's path (`crate::instruct`, Nick
 /// 2026-11-05): the instruction goes to `POST /api/chat` with the answer
 /// format and the whole file in a new conversation; a checked answer is

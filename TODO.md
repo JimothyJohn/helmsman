@@ -4,16 +4,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **ST lints: shown only, or do some block Deploy?** — INVESTIGATION.md §1 proposes PLCopen coding-guideline lints in `check.rs` (warnings with stable IDs, fed into the agent's retry message in `verify::next`). Open: does a lint finding stop "Use this code" and Deploy the way a red requirement test does? **Recommendation: show every lint and give them all to the agent's retry loop, and make two of them block: an FB instance called inside a conditional (the TON-inside-IF bug) and an output written in more than one place.** Both make the live diagram's "on because" wrong, which is the thing an engineer validates against, so passing them would let a misleading diagram through. Give each blocking lint a per-line pragma an engineer can add with a reason (logged in the audit trail), so imported code that is right on purpose is not stuck. The other lints (read before set, REAL equality, FOR bounds changed, unused, unreachable, recursion) stay advisory until the ST corpus shows how noisy they are.
-  needs: your call on blocking; the PLCopen guidelines document for the SOURCES.md entries (an agent checks whether plcopen.org needs a login)
-  result: the lint card gets its blocking rule; about 3d of work for the first 6-8 lints
-  options: shown, two block, pragma to override (recommended) | shown only, none block | every lint blocks
-  est: 10m
-  difficulty: low
-  id: st-lints-blocking
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Where is the line on the ST dialect?** — INVESTIGATION.md §4 takes a position on each missing feature: yes to VAR_IN_OUT, function outputs, STRING[n] and TOD/DATE/DT; maybe VAR_GLOBAL, only inside one module; METHOD/PROPERTY later; INTERFACE/EXTENDS not for now; POINTER/REFERENCE never. **Recommendation: take the table as it stands, with VAR_GLOBAL allowed inside one module and refused across modules (imported CODESYS and Beremiz code uses it all the time, and signals stay the only way modules talk).** Leave OOP out until the corpus ranking says imports fail mostly on it: METHOD needs a diagram story first, and dynamic dispatch would break the per-statement tracing behind "on because". POINTER/REFERENCE stays out for good, since the memory-safety and isolation claims depend on it. Let the corpus test (about 1d) put the yeses in order. Each yes adds oracle cases, property tests, a no_std build check and a new relay profile id.
   needs: your call on the table, VAR_GLOBAL in particular
   result: the dialect cards (VAR_IN_OUT and function outputs 2d, STRING[n] 4d, TOD/DATE later) get carded in corpus order
@@ -31,6 +21,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 10m
   difficulty: low
   id: st-library-names
+  notes: FEEDBACK.md 2026-11-07: OSCAT has no warranty, a 2024 out-of-bounds read in MONTH_TO_STRING (VDE-2024-046), and breaks on new CODESYS service packs. Supports writing our own small tested set.
   asked: 2026-11-07
   by: claude-session
 
@@ -41,6 +32,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 10m
   difficulty: low
   id: st-edit-outside-canvas
+  notes: FEEDBACK.md 2026-11-07: vscode-st's most-discussed issue (26 comments) asks for a real linter from a real parser; HN praises Siemens AX for being "just vscode". The `helmsman-plc test` half is now its own card, `cli-test-runner`.
   asked: 2026-11-07
   by: claude-session
 
@@ -65,12 +57,32 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **Adopt the ST investigation's order and card it?** — INVESTIGATION.md ends with "Suggested order, if we agree": ruSTy 1.0.8 bump (2h, the existing `rusty-bump`), ST corpus test and refusal ranking (1d), the first 6-8 PLCopen lints (3d), `helmsman-plc test` plus JUnit XML (1d), VAR_IN_OUT and function outputs (2d), STRING[n] then typed asserts (4d), process-control library (4d), matiec oracle (1d); TOD/DATE, TcPOU import, LSP and formatter later. About 16d in total. **Recommendation: agree, and card it in that order.** The ruSTy bump and the corpus are cheap and turn the rest into measured decisions, and the lints give every agent turn a better retry from the first one. Answer the five questions above first, since they set the lint, dialect and library cards' scope. Things an agent checks while carding, without you: whether ruSTy 1.0.8 really carries the #2015 fix (the investigation's changelog read), OSCAT BASIC's license, whether the PLCopen guidelines need a login, and the number and scope of the PLCopen/OPC Foundation companion spec for IEC 61131-3 (unverified).
-  needs: answers to st-lints-blocking, st-dialect-line and st-library-names
+  needs: answers to st-dialect-line and st-library-names (lints decided 2026-11-07: INVESTIGATION.md §1)
   result: about nine cards in "Next to build", in order, with depends lines
   options: agree, card it in this order (recommended) | agree, lints before the corpus | discuss first
   est: 10m
   difficulty: low
   id: st-plan-order
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Which user-feedback cards go first?** — FEEDBACK.md (2026-11-07) collects what engineers like and hate about TIA, Studio 5000, CODESYS, TwinCAT, PLCnext, Sysmac, Control Expert, B&R, OpenPLC, Beremiz and the ST tooling. Its gaps are now cards in "From user feedback: do now" (about 8d in all) and "From user feedback: plan for later". **Recommendation: do now, in this order: `retain-persist` (a RETAIN that is quietly lost on power-up is a trust-breaker the first time an engineer meets it; ship the check-time warning the same day), `deploy-state-preview` (Sysmac users asked for exactly this), `cli-test-runner` (the most-asked-for tool in the research), `scan-stats`, `modbus-shared-connection`, then the small ones.** All of them are plain engineering with no open design question. The ST plan (`st-plan-order`) runs beside it, not after: the lints card is the same trust argument.
+  needs: your call on the order
+  result: the do-now cards get worked top to bottom; the later ones stay parked until their depends land
+  options: this order, beside the ST plan (recommended) | ST plan first, feedback after | pick per card on the board
+  est: 10m
+  difficulty: low
+  id: feedback-order
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Secure defaults: lock down reads and the CIP adapter?** — checked in code 2026-11-07: there is no default account or password, writes need a session or token, and only a PIN or account can approve. Three things are open by default, though. Every GET endpoint answers without auth, so anyone on the LAN can read the programs, I/O map and live values. The EtherNet/IP adapter listens on 0.0.0.0:44818 from boot. OPC UA is on (loopback only, anonymous, read-only). OpenPLC v3's default `openplc:openplc` and its unauthenticated API (an auth-bypass CVE) are what a buyer's IT will compare us to. **Recommendation: require a session for every GET except the canvas assets and a health check, and leave the CIP adapter on**, because appearing to an existing PLC as an adapter is the job, and it never writes to other controllers. Show its bind address on the Monitor. Keep OPC UA loopback-only as now. The read lock is a breaking change for anything that polls the API today: the try box, scripts/ and the node.
+  needs: your call
+  result: a card for the read lock (about 1d: middleware, a canvas sign-in before the Monitor, tests that every GET route refuses without a session) or the current posture written down in docs/ARCHITECTURE.md as deliberate
+  options: lock GETs, keep CIP on (recommended) | lock GETs and make CIP opt-in | keep as is, document it
+  est: 10m
+  difficulty: med
+  id: secure-defaults
   asked: 2026-11-07
   by: claude-session
 
@@ -90,6 +102,8 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   result: the Pi's Devices scan finds devices
   est: 10m
   difficulty: low
+  status: blocked
+  notes: parked: the Pi is out of the loop (Nick, 2026-11-07); only when Nick asks for the Pi
   id: pr-245
   asked: 2026-11-06
   by: claude-session
@@ -107,9 +121,10 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 - [ ] **Look at the box UI on the Pi, with projects** — the bench Pi (nick@192.168.3.20, on the Studio link) runs helmsman-plc with the relay on agent v7 (a real turn 2026-11-04). Its API and canvas do not answer on the LAN (8080 and 443 closed from the Studio, 2026-11-06), so reach it through SSH. Whether it already runs `--projects` and has an engineer account is unchecked (the agent's SSH has no key loaded).
   needs: your key in the agent (`ssh-add --apple-use-keychain ~/.ssh/id_ed25519`)
   result: you sign in on the Pi as an engineer and edit, deploy and force a project
-  notes: connect from the Studio: `ssh -L 8080:127.0.0.1:8080 nick@192.168.3.20`, then http://127.0.0.1:8080/ ; from the Air: `ssh -J nick@10.0.0.41 -L 8080:127.0.0.1:8080 nick@192.168.3.20`, same URL. Not on projects yet: `scripts/pi-deploy-plc.sh nick@192.168.3.20` (projects is its default; RESTARTS helmsman-plc; keep PLC_API as the unit has it), then `scripts/pi-account.sh nick@192.168.3.20 nick engineer`.
+  notes: parked: the Pi is out of the loop (Nick, 2026-11-07); only when Nick asks for the Pi. connect from the Studio: `ssh -L 8080:127.0.0.1:8080 nick@192.168.3.20`, then http://127.0.0.1:8080/ ; from the Air: `ssh -J nick@10.0.0.41 -L 8080:127.0.0.1:8080 nick@192.168.3.20`, same URL. Not on projects yet: `scripts/pi-deploy-plc.sh nick@192.168.3.20` (projects is its default; RESTARTS helmsman-plc; keep PLC_API as the unit has it), then `scripts/pi-account.sh nick@192.168.3.20 nick engineer`.
   est: 15m
   difficulty: low
+  status: blocked
   id: pi-ui-demo
   asked: 2026-10-31
   by: claude-session
@@ -117,9 +132,10 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 - [ ] **Check the board backend on the Pi** — run the GPIO / I2C check against the pick PC: finds the header's GPIO chip (gpiochip0 or gpiochip4 on a Pi 5, by kernel), lists /dev/i2c-1, builds and runs `board_check` (helmsman-io's Linux backend, the code behind `helmsman-plc --gpio-chip`) reading `di:4` by default. Add `READ="di:4 i2c:1:0x48:0:i16"` for a sensor, and `LOOP="do:17=di:27"` only with a jumper from that output to that input (it drives the output).
   needs: on the Pi `sudo apt install gpiod i2c-tools`, `dtparam=i2c_arm=on` and a reboot, the SSH user in the gpio and i2c groups; Docker here
   result: the board backend proven on real GPIO (and I2C if a sensor is wired); then `--gpio-chip` goes into the deploy unit
-  notes: `! scripts/pi-gpio-check.sh nick@192.168.3.20` (runs here, not in the native terminal; read-only unless LOOP is set)
+  notes: parked: the Pi is out of the loop (Nick, 2026-11-07); only when Nick asks for the Pi. `! scripts/pi-gpio-check.sh nick@192.168.3.20` (runs here, not in the native terminal; read-only unless LOOP is set)
   est: 30m
   difficulty: low
+  status: blocked
   id: pi-gpio-check
 
 - [ ] **Supply the datasheet image** — docs/helmsman-datasheet.pdf (docs/datasheet.html) has no picture yet. Nick 2026-11-01: card it, place it when the file exists. Drop the file under docs/brand/ (PNG or SVG; a photo at 1200 px wide or more, or a render) and say where it goes: in the top band right of the wordmark (about 45 mm wide, the lede moves down) or as a strip under the lede. The build (`make datasheet`) refuses a second page, so the slot comes out of the spec table's air.
@@ -146,6 +162,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 15m
   difficulty: low
   id: canvas-try
+
+- [ ] **Prune the stray branch docs/studio-runs-plc** — created by mistake 2026-11-07 (no commits of its own, its worktree already removed). Branch deletion is always a hand-off.
+  needs: run `scripts/prune-branches.sh` from the main checkout, or `git push origin --delete docs/studio-runs-plc && git branch -D docs/studio-runs-plc`
+  result: the branch list is clean
+  est: 2m
+  difficulty: low
+  id: prune-studio-runs-plc
+  asked: 2026-11-07
+  by: claude-session
 
 ## Next to build
 
@@ -186,6 +211,166 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 1h
   difficulty: low
   id: rusty-bump
+
+- [ ] **Persistence 2: the desk on the box, per person** — slice 1 (#276, crates/helmsman-canvas/src/desk.rs) keeps the box page's desk in this browser: open project and file, unsaved edits with the box version they were made against, Agent and Requirements inputs, screen, sign-in name. Nick's interview (2026-11-07): kept on the box per person when signed in, browser as the fallback, so it follows him between the Studio and the Air. Add `GET`/`PUT /api/desk` behind `box` (per account, or per role for a PIN session, as /api/trends/pins does in box_trend.rs and its box side), size-capped and audited like the pins; the canvas reads it on sign-in, prefers the newer of box and browser (a `saved_at` in the desk), and writes it through the same Keeper throttle. Negative tests: another person's desk is never readable (IDOR), no password or PIN is ever stored, oversized bodies refused, signed out falls back to the browser.
+  result: a draft started on the Studio is there on the Air after signing in; a role switch keeps the same desk
+  est: 1d
+  difficulty: med
+  id: desk-on-box
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Persistence 3: the Agent conversation and the device form survive a reload** — still lost on reload after #276: the Agent transcript (`BoxAgent.turns`, box_agent.rs; Turn/Item/End need serde, MAX_TURNS 50, the box has no transcript GET today, so keep the rendered turns in the desk, capped) and the half-filled device form (`DevicesUi.adding: NewDevice`, devices.rs:210, with its points; drop the EDS bytes, keep a reference). Restore both through the desk (browser now, the box once desk-on-box lands). Tests: a reload mid-conversation shows the same turns and a pending proposal link; a half-filled form comes back; a proposal already decided shows as decided, not re-offered.
+  result: nothing typed or read in the Agent tab or the device form is lost to a refresh
+  est: 1d
+  difficulty: med
+  depends: desk-on-box
+  id: desk-agent-and-forms
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Help mode on the Agent, box side** — Nick's interview (2026-11-07): a Help mode beside the coding mode, for a third-party user. The box attaches context automatically (recent Messages as text (`messages::Log::text`), device states and their current errors from /api/devices, the running project and snapshot, the box's build commit, OS), never secrets (tokens, PINs, the relay token) — a test asserts the redaction. The answer is a plain-language diagnosis plus a copyable Markdown issue (title, what happened, expected, steps, the attached context, suspected files linked to github.com/JimothyJohn/helmsman/blob/dev/...), with a Copy button (messages::copyable). Nothing is filed automatically. The relay side is help-mode-relay; build against a relay fixture until it is served.
+  result: a user in trouble gets a diagnosis and an issue to paste to another agent or to GitHub
+  est: 1d
+  difficulty: med
+  id: help-mode-box
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Help mode on the relay: a profile that reads the repo** — in ../agent-relay (separate repo and session; SAM deploy, deploy-chain edits as a draft PR): a new profile id (e.g. helmsman/help-v1; a served profile never changes) whose model gets read-only tools over JimothyJohn/helmsman@dev through the GitHub API: list a directory, read a file (size-capped), search code. The repo is PUBLIC (checked 2026-11-07), so no token is needed to start; a fine-grained read-only token in Secrets Manager raises the rate limit (60/h unauthenticated). The system prompt: diagnose for a third-party user, cite the files it read, end with the Markdown issue; docs/ARCHITECTURE.md and docs/help are the starting points. Tests against recorded GitHub responses; refuse paths outside the repo.
+  needs: a session in ../agent-relay (this repo's sessions cannot write there); Nick's go for the deploy
+  result: the relay serves the Help profile the box's Help mode asks for
+  est: 2d
+  difficulty: med
+  id: help-mode-relay
+  asked: 2026-11-07
+  by: claude-session
+
+## From user feedback: do now
+
+The gaps in FEEDBACK.md's design table, each checked against the code at dev 997bedc (2026-11-07). These are small, need no design decision, and answer a complaint engineers make about every platform. Order: `feedback-order`.
+
+- [ ] **RETAIN survives a power cycle** — `RETAIN` and `NON_RETAIN` are parsed and ignored (helmsman-iec parser.rs). Values carry across a deploy but are lost on a reboot or power loss. An engineer who writes `VAR RETAIN` expects the opposite, and OpenPLC lost trust for silently dropping retained values past the first 128. Day one: the checker warns "RETAIN is not kept across a restart yet" so nothing is silent. Then persist RETAIN variables per module to the state dir with the snapshot fsync discipline, at a bounded rate (on change, at most every N scans, plus on clean shutdown), and restore them by name and type at start, the way a deploy carries state. No count cap other than a size cap that refuses loudly.
+  result: a RETAIN counter reads the same after the box is power-cycled; a test kills the process mid-run and checks the restored values
+  est: 2d
+  difficulty: med
+  id: retain-persist
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Show what a deploy keeps and resets, before approving** — a deploy already carries state by name and type (timers and counters keep their values, new or retyped variables reset), and `Carry {kept, reset, dropped}` is computed in helmsman-iec state.rs, but no API or UI shows it. Sysmac users: "The software should warn the user if the variables will be cleared." Put the carry on the proposal (a dry run against the running state), show it on the approval screen in plain words ("keeps 12 values, resets `count` (type changed), drops `old_flag`"), and record it in the audit entry.
+  result: the engineer sees which values reset before entering the PIN; the audit says what the deploy did to state
+  est: 1d
+  difficulty: med
+  id: deploy-state-preview
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **`helmsman-plc test PROJECT_DIR` with JUnit XML** — the most-requested missing tool in FEEDBACK.md: TcUnit-Runner died driving Visual Studio, and every vendor's compiler lives inside its GUI. Today the requirement tests run headless only through `POST /api/projects/{p}/tests`. Add a subcommand next to `account` and `bundle` that checks and runs a project's `test_*.st` with no box running, exits non-zero on a red or failing check, and writes JUnit XML (`--junit FILE`). Add a template GitHub Actions workflow in docs/ for a project kept in git. (INVESTIGATION §5; it is the "build `helmsman-plc test`" half of `st-edit-outside-canvas`.)
+  result: any CI runner gates an engineer's project; the same tests the box runs
+  est: 1d
+  difficulty: low
+  id: cli-test-runner
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Scan time, jitter and overruns on the Monitor** — the runtime counts `scans`, `overruns` and `held` (`/api/modules`), and the watchdog is an instruction budget, but scan time and jitter are not measured, and the Monitor shows only the period and the scan count. OpenPLC users ask how to see scan load and get "There is no straightforward way to do what you want." Measure each module's execution time and the tick's start lateness (monotonic clock, min, mean, max, and a p99 over a window), expose it in `/api/modules`, and show it with overruns on the Monitor, with a tooltip on what each means.
+  result: an engineer sees scan load and jitter per module; an overrun is visible, not just counted
+  est: 1d
+  difficulty: low
+  id: scan-stats
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **One Modbus connection per gateway, shared across unit IDs** — helmsman-io opens one TCP connection per device (`Client` is "a Modbus TCP connection to one unit"), so two units behind one Modbus TCP gateway open two connections. Many gateways cap at 2-4 connections; OpenPLC v3 did the same thing and users reported "dropping connection, reconnecting and generally poor performance". Pool one connection per host:port, serialize requests on it by transaction id, keep per-unit errors per unit, and test against the simulator with several unit ids and a connection cap.
+  result: eight RTU devices behind one gateway use one TCP connection
+  est: 1d
+  difficulty: med
+  id: modbus-shared-connection
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **The canvas and the box say if they are different builds** — the box serves the canvas from `--ui DIR`, built separately; nothing checks they match. That is the one place Helmsman could grow the "project only opens in version X" problem every vendor has. Stamp both with the git describe at build time, return it in an API header, and show a plain banner in the canvas on a mismatch ("this editor is from a different release than the controller; reload").
+  result: a stale canvas after an update is visible at once
+  est: 2h
+  difficulty: low
+  id: build-match
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Every release opens every older project** — project files have no version field except `diagram.layout`'s `helmsman-layout 1`, and nothing pins that a project written by an older release still loads. Version lock-in is the top complaint on every vendor platform. Add tests/fixtures/projects/<release>/ (one representative project per tagged release, starting now) and a test that loads, checks and runs each one on the current build. A construct a newer release no longer accepts becomes a listed problem, and the project still opens.
+  result: version lock-in is a test failure, not a support ticket
+  est: 4h
+  difficulty: low
+  id: project-compat-fixtures
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **A typo gives one error, at the right line, in plain words** — matiec's top complaints are the wrong line ("The error is on line 23, and matiec outputs what is on line 26") and twenty errors from one `ELSE IF`. Helmsman already stops at the first syntax error, and positions are tested (tests/st.rs `errors_are_sorted_and_positioned`). Pin it with a corpus of the twenty most common ST typos (`ELSE IF`, `=` for `:=`, missing `;`, missing `END_IF`, `:=` in a condition, a misspelled keyword or FB) and assert each one's line, column and a message that names the fix.
+  result: error quality is measured, and a regression in it fails CI
+  est: 1d
+  difficulty: low
+  id: typo-corpus
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **The canvas stays usable over a slow link** — PLCnext Engineer's online layer "will freeze 99.9% of the time" over VPN, and Phoenix said that is by design. Run the canvas against a box behind a throttled proxy (300 ms RTT, 1 Mbit/s, 2 % loss) in a test, and check the Monitor's polling never queues requests behind each other and the UI never blocks on the network.
+  result: remote support over a site VPN works; a regression fails a test
+  est: 4h
+  difficulty: low
+  id: canvas-slow-link
+  asked: 2026-11-07
+  by: claude-session
+
+## From user feedback: plan for later
+
+Long-term items FEEDBACK.md points to. Each waits on a card already on the board, or on a decision.
+
+- [ ] **The agent writes tests for abnormal sequences by default** — engineers expect AI code to fail at edge cases and timing ("Bubba on 3rd shift can't be predicted"), and their condition for trusting it is that checking costs less than writing. Next relay profile: for every requirement the agent also proposes tests for a stuck sensor, both buttons at once, a timeout, a restart mid-sequence and comms loss, each as a plain-words requirement the engineer accepts or drops. A new profile id, since a served profile never changes.
+  needs: the relay profile work; lints and these tests are the same retry loop (lint rule decided 2026-11-07, INVESTIGATION.md §1)
+  result: a draft arrives with the abnormal cases already tested; the engineer reads requirements, not code
+  est: 1d
+  difficulty: med
+  id: agent-abnormal-tests
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Explain mode answers timing questions** — arpus4KM on PLCTalk wants to ask "How many milliseconds will this logic take to execute". With `scan-stats` the box knows each module's measured time, and the instruction budget gives a worst case. Let explain mode answer "how long does this take", "what is the longest path" and "when does this timer finish", with the numbers from the box.
+  needs: scan-stats
+  result: the timing questions engineers ask an AI get real numbers
+  est: 2d
+  difficulty: med
+  depends: scan-stats
+  id: explain-timing
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **One page that is the ST dialect** — every third-party tool (blark, iec-checker, UniTest, vscode-st, STweep) breaks on vendor dialects. A single, written description of what Helmsman's ST accepts and refuses, with the IEC section for each (once `iec-standard-source` lands), is useful to the agent, to an engineer importing code, and to anyone building a tool for it. Generate the "refused" list from the checker's messages so it cannot drift.
+  needs: iec-standard-source answered
+  result: docs/help/st-dialect, linked from every "not supported" message
+  est: 4h
+  difficulty: low
+  id: dialect-page
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **A project pins the library version it was built with** — TwinCAT users report library mismatches that block going online "even with otherwise identical code", and OSCAT breaks on new CODESYS service packs. Once the process-control library (INVESTIGATION §6) exists, `library.st` will change between releases. A project records the library version it was approved with, keeps that behaviour until an engineer upgrades it as a proposal, and the diff shows which blocks changed.
+  needs: the process-control library carded and started (`st-plan-order`)
+  result: a project approved last year behaves the same after a box update
+  est: 1d
+  difficulty: med
+  id: library-pin
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Accounts as the default sign-off, PINs as the fallback** — the liability fear ("a tort lawyer will argue you don't know what you're doing") is answered by a named person signing off. With PINs only, the audit records a role ("engineer (PIN)"), not a person. Make first-run setup create a named engineer account, show the approver's name on every version in the history, and keep role PINs for sites that want them.
+  needs: the first-boot flow (`box-sku`)
+  result: every change in the audit trail names the person who approved it
+  est: 1d
+  difficulty: low
+  id: named-signoff
+  asked: 2026-11-07
+  by: claude-session
 
 ## Product vision (interview 2026-10-29)
 

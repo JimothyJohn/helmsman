@@ -80,6 +80,14 @@ pub struct BoxView {
     pub req_ui: crate::requirements::ReqUi,
     /// The requirement being added on the box, and the last one's outcome.
     pub adding: Option<crate::requirements::Adding>,
+    /// Keeps what is in front of the person in this browser (`crate::desk`).
+    desk: crate::desk::Keeper,
+    /// The desk as it was before the page loaded, for the App to take
+    /// the screen and the sign-in name from (once).
+    pub restored: Option<crate::desk::Desk>,
+    /// The screen and the sign-in name, as the App last set them.
+    pub desk_screen: Option<String>,
+    pub desk_user: String,
     req_seq: u64,
     #[cfg(target_arch = "wasm32")]
     req_http: crate::web::ChatHttp,
@@ -144,7 +152,45 @@ impl BoxView {
         let tweaks: Box<dyn Storage> = Box::new(crate::sim_projects::MemStorage::default());
         #[cfg(not(target_arch = "wasm32"))]
         let pins: Box<dyn Storage> = Box::new(crate::sim_projects::MemStorage::default());
-        Self::with_stores(tweaks, pins)
+        #[cfg(target_arch = "wasm32")]
+        let desk: Box<dyn Storage> = Box::new(crate::web::LocalSlot(crate::desk::SLOT));
+        #[cfg(not(target_arch = "wasm32"))]
+        let desk: Box<dyn Storage> = Box::new(crate::sim_projects::MemStorage::default());
+        Self::with_stores(tweaks, pins).with_desk(desk)
+    }
+
+    /// Keeps the desk in `store`, and puts back what it holds: the
+    /// project, the file, the unsaved edits (as the box's answers come
+    /// in), and the Agent's and the Requirements' inputs.
+    #[must_use]
+    pub fn with_desk(mut self, store: Box<dyn Storage>) -> Self {
+        let (keeper, d) = crate::desk::Keeper::load(store);
+        self.desk = keeper;
+        self.projects.restore = crate::box_projects::Restore {
+            project: d.project.clone(),
+            file: d.project.clone().zip(d.file.clone()),
+            drafts: d.drafts.clone(),
+        };
+        self.instruct.draft.clone_from(&d.agent);
+        self.req_ui.draft.clone_from(&d.requirement);
+        self.desk_screen.clone_from(&d.screen);
+        self.desk_user.clone_from(&d.user);
+        self.restored = Some(d);
+        self
+    }
+
+    /// What the desk keeps, as it stands now.
+    #[must_use]
+    pub fn desk(&self) -> crate::desk::Desk {
+        let mut d = crate::desk::Desk {
+            agent: self.instruct.draft.clone(),
+            requirement: self.req_ui.draft.clone(),
+            screen: self.desk_screen.clone(),
+            user: self.desk_user.clone(),
+            ..crate::desk::Desk::default()
+        };
+        self.projects.to_desk(&mut d);
+        d
     }
 
     /// The Editor, the Trend's pins kept in `pins` while signed out.
@@ -189,6 +235,10 @@ impl BoxView {
             wants_review: None,
             req_ui: crate::requirements::ReqUi::default(),
             adding: None,
+            desk: crate::desk::Keeper::load(Box::new(crate::sim_projects::MemStorage::default())).0,
+            restored: None,
+            desk_screen: None,
+            desk_user: String::new(),
             req_seq: 0,
             #[cfg(target_arch = "wasm32")]
             req_http: crate::web::ChatHttp::default(),
@@ -231,6 +281,8 @@ impl BoxView {
         let cmds = self.state.poll(now);
         self.run(ctx, cmds);
         self.trend.step(self.session.as_ref(), &self.state, now);
+        let desk = self.desk();
+        self.desk.keep(&desk, now);
         let mut reqs = self.projects.poll();
         reqs.extend(self.trend.poll());
         self.send(ctx, reqs);
@@ -469,11 +521,8 @@ impl BoxView {
             Incoming::End { .. } => {
                 a.end(None);
                 // The new test file is on the box: read the list again, which
-                // runs the tests.
-                if let Some(o) = &self.projects.open {
-                    let name = o.name.clone();
-                    self.projects.open_project(&name);
-                }
+                // runs the tests, keeping any unsaved edit (Nick, 2026-11-07).
+                self.projects.reread();
             }
             Incoming::Failed { why, .. } => a.end(Some(&why)),
         }
@@ -1551,12 +1600,13 @@ impl Body for BoxView {
         self.state.scan.as_ref().is_some_and(|s| s.fault.is_some())
             || self.projects.deploy != Deploy::Idle
             || self.projects.notice.is_some()
+            || self.desk.problem.is_some()
     }
 
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {
-            ui.colored_label(RED, format!("fault: {f}"));
+            crate::messages::copyable(ui, chrome, "fault", &format!("fault: {f}"), RED);
         }
         match &self.projects.deploy {
             Deploy::Idle => {}
@@ -1577,14 +1627,22 @@ impl Body for BoxView {
                 chrome.hit("deployed", r.rect);
             }
             Deploy::Failed(why) => {
-                let r = ui.label(RichText::new(format!("✖ {why}")).color(RED));
-                chrome.hit("deploy failed", r.rect);
+                let why = format!("✖ {why}");
+                crate::messages::copyable(ui, chrome, "deploy failed", &why, RED);
             }
+        }
+        if let Some(p) = &self.desk.problem {
+            let r = ui.label(RichText::new(format!("⚠ {p}")).color(t.muted));
+            chrome.hit("desk problem", r.rect);
         }
         if let Some((text, error)) = self.projects.notice.clone() {
             ui.separator();
-            let r = ui.label(RichText::new(text).color(if error { RED } else { t.muted }));
-            chrome.hit("notice", r.rect);
+            if error {
+                crate::messages::copyable(ui, chrome, "notice", &text, RED);
+            } else {
+                let r = ui.label(RichText::new(text).color(t.muted));
+                chrome.hit("notice", r.rect);
+            }
             if self.projects.pending.is_some() && error {
                 let r = ui
                     .button("Replace")
