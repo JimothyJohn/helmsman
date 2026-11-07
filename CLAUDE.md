@@ -32,11 +32,20 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
 - **Timing in tests.** No fixed sleeps before an assertion: wait with a
   deadline (`wait(...)` in tests/reload.rs). Watchers start once the state
   they watch holds. The suite must pass with 6 copies running at once.
+  A box's reads (`/api/modules`, `/api/signals`, the values stream) are
+  the live view the scan thread publishes every few ms, so they lag a
+  control or a deploy by a tick: wait for the new state, never read it
+  right after the reply (a stop test did and failed CI on 2026-11-07).
 - **dev no longer requires branches to be up to date** (turned off
   2026-11-06): a green PR lands without re-running behind each merge; the
   push run on dev catches a clash. .github/workflows/update-branches.yml
   still updates auto-merge PRs when dev moves.
 - **Protocol claims** get a docs/SOURCES.md entry and a § / page citation.
+- **A device reply that will not decode: capture it before theorising.** A
+  20 s `tcpdump` (sudo, so a hand-off script) settled the E1213's echoed
+  socket-address item and showed the refusal the strict decode hid
+  (2026-11-07, docs/devices/moxa-iologik-e1213.md). Hold the captured bytes
+  as a regression test, and make the device's own answer readable.
 - **A resizable egui panel grows to any row that overflows it, every
   frame.** A label in a plain `horizontal`, a combo box or field at full
   width beside a scroll bar, a grid cell with a full-width button: each
@@ -79,17 +88,26 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
   worktree.** Today there is one:
   - Try box, `../helmsman-try` (locked), https :8081, state
     `scratch/try-state` and the relay token in that checkout's scratch/
-    (sign-in in .claude/handoff.md). Rebuild there:
-    `git checkout --detach origin/dev`, `./scripts/canvas-web.sh`,
-    `cargo build --release --locked -p helmsman-plc`; restart:
-    `scratch/11-try-box-relay.sh` (main checkout). Stop: `kill $(lsof
-    -tiTCP:8081 -sTCP:LISTEN)`.
+    (sign-in in .claude/handoff.md). Rebuild at the dev tip and restart
+    with one command: `~/github/helmsman-try/scratch/16-rebuild.sh`
+    (untracked, in that checkout). From an `EnterWorktree` session that
+    is a hand-off: its paths contain "github", which the isolation check
+    reads as git. Stop: `kill $(lsof -tiTCP:8081 -sTCP:LISTEN)`.
   - A new service (board, mock-up server) gets its own entry here first.
   - Anything else running is a leftover: `scripts/dev-processes.sh` lists
     every Helmsman process with its port and checkout, `--stop` stops all
     but a locked service checkout. Run it before you stop a session.
 - **`wip/recovered-*` snapshots expire.** One older than 7 days gets a
   board card: keep (merge it somewhere) or drop.
+- **The bench Pi**, `nick@192.168.3.20` (hostname `codesys-pi`, on the
+  Studio link), runs `helmsman-plc` as a service. SSH works only with
+  Nick's key in the agent: he runs `ssh-add --apple-use-keychain
+  ~/.ssh/id_ed25519` (2026-11-07); ask him to when SSH says "Permission
+  denied (publickey)". Restarting its service asks every time.
+- **One EtherNet/IP owner per E1213.** The Pi's box holds the E1213's
+  exclusive-owner connection (192.168.3.60); any other box's
+  `Forward_Open` is refused, 0x0106 ownership conflict or 0x0100
+  connection in use. A second box reads the same unit over Modbus TCP.
 
 ## Next door
 
