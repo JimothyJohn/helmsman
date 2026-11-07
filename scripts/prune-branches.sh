@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Delete the branches whose work has landed. On origin: every branch except
+# Remove the worktrees and delete the branches whose work has landed.
+# Worktrees first: every worktree but the main checkout and this one that
+# is clean (no changes, no untracked files) and whose HEAD is in origin/dev
+# or origin/master, unless it is locked (`git worktree lock --reason ...`
+# keeps a service's checkout, such as the try box's ../helmsman-try).
+# Branches: on origin, every branch except
 # dev, master and the head of an open PR, when its PR is merged or closed.
 # Locally: every branch merged into origin/dev or origin/master, or whose
 # upstream is gone, except dev, master and anything a worktree has checked
@@ -13,6 +18,35 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 git fetch -q --prune origin
+
+main_tree="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"
+here="$(pwd -P)"
+trees=()
+while IFS=$'\t' read -r path locked; do
+    case "$path" in "$main_tree"|"$here") continue ;; esac
+    if [ -n "$locked" ]; then echo "keep worktree $path: locked"; continue; fi
+    if [ ! -d "$path" ]; then continue; fi   # `git worktree prune` drops it
+    if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then
+        echo "keep worktree $path: uncommitted or untracked files"; continue
+    fi
+    head="$(git -C "$path" rev-parse HEAD)"
+    if git merge-base --is-ancestor "$head" origin/dev \
+        || git merge-base --is-ancestor "$head" origin/master; then
+        trees+=("$path")
+    else
+        echo "keep worktree $path: HEAD not in origin/dev or origin/master"
+    fi
+done < <(git worktree list --porcelain | awk '
+    /^worktree /{ if (p != "") print p "\t" l; p = substr($0, 10); l = "" }
+    /^locked/{ l = "locked" }
+    END { if (p != "") print p "\t" l }')
+
+echo "worktrees: ${#trees[@]} to remove"
+if [ "${DRY_RUN:-0}" = 1 ]; then
+    [ ${#trees[@]} -eq 0 ] || printf '  %s\n' "${trees[@]}"
+else
+    for t in ${trees[@]+"${trees[@]}"}; do git worktree remove "$t"; done
+fi
 
 open_heads="$(gh pr list --state open --json headRefName --jq '.[].headRefName')"
 checked_out="$(git worktree list --porcelain | sed -n 's#^branch refs/heads/##p')"

@@ -69,16 +69,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: l5x-real-export
   notes: source (l5x-source, 2026-10-31): Nick exports one from his bench project. Later 2026-10-31: RM014 is read and cited; the ladder converter (l5x-import) also needs the real export: run `POST .../import?file=X.L5X` on it and check the refusal list (or the ST) against the project, the neutral text of each instruction it uses (JSR's `JSR(Name,0)` form, `?` pseudo-operands, v36 mnemonics such as EQ/MOVE), decorated data of TIMER/COUNTER tags, and rung Type attributes other than N. The fixtures (line3.L5X, ladder.L5X) are hand-written, not exports.
 
-- [ ] **Remove the dead tcpethernet worktrees** — `git worktree list` still names /Users/nick/github/tcpethernet-pi-demo (a checkout from before the rename whose .git file points at the old /Users/nick/github/tcpethernet path, so git cannot read it; it still holds HOWTO.md and a crates/ tree) and tcpethernet/.claude/worktrees/retro-20261030 (directory gone). Look at pi-demo for anything worth keeping, then remove both.
-  needs: a look at the pi-demo directory
-  result: `git worktree list` shows the main checkout and live worktrees only
-  notes: `ls /Users/nick/github/tcpethernet-pi-demo` then `git worktree remove --force /Users/nick/github/tcpethernet-pi-demo` and `git worktree prune`
-  est: 5m
-  difficulty: low
-  id: dead-worktrees
-  asked: 2026-11-01
-  by: claude-session
-
 - [ ] **Try the node canvas** — ComfyUI/Node-RED style editor in Rust (egui, wasm): nested function blocks, live scan sim, not wired to the PLC. Kept as a lab tool (2026-10-29); per canvas-edit-scope the operator canvas is the read-only ST view (st-graph-view), which reuses tcpethernet-graph and this renderer. Serve it: `make canvas-web`, then `python3 -m http.server 8790 --bind 0.0.0.0 --directory target/canvas-dist` and open http://10.0.0.41:8790/ from the Air (stop: `kill $(lsof -tiTCP:8790 -sTCP:LISTEN)`). In it: hold a start button, double-click a motor to go inside, select nodes + Cmd+G to make a block, `?` lists the controls.
   needs: your eyes on the UI
   result: a list of changes, or none
