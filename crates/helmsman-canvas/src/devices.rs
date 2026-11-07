@@ -789,33 +789,37 @@ impl DevicesUi {
             let declared = self.map.devices.iter().any(|d| d.name == n.name);
             let editable = crate::devices::NewDevice::from_map(&self.map, &n.name, &self.program);
             let mut asked = (false, false);
+            // Edit and Delete laid out from the right edge first, then the
+            // name in exactly what is left, cut at its end: a guessed width
+            // for the buttons overflowed by a few points, and a resizable
+            // pane grows to any row that overflows it, every frame (Nick,
+            // 2026-11-07: the pane kept widening to the cip= address).
             let r = ui.horizontal(|ui| {
                 ui.label(dot);
-                let room = if declared {
-                    (ui.available_width() - 130.0).max(40.0)
-                } else {
-                    ui.available_width()
+                let name_row = |ui: &mut egui::Ui| {
+                    let h = ui.spacing().interact_size.y;
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(ui.available_width(), h),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.add(
+                                egui::Label::new(RichText::new(head.as_str()).monospace().strong())
+                                    .truncate()
+                                    .sense(Sense::click()),
+                            )
+                        },
+                    )
+                    .inner
                 };
-                let l = ui
-                    .scope(|ui| {
-                        ui.set_max_width(room);
-                        ui.add(
-                            egui::Label::new(RichText::new(head).monospace().strong())
-                                .truncate()
-                                .sense(Sense::click()),
-                        )
-                    })
-                    .inner;
-                if declared {
+                if !declared {
+                    return name_row(ui);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let edit_tip = match (write, &editable) {
                         (Err(why), _) => why.clone(),
                         (Ok(()), None) => "This form edits Modbus TCP and EtherNet/IP devices: change this one in io.map.".to_string(),
                         (Ok(()), Some(_)) => "Opens the device's form: its settings, and its inputs and outputs to tick, name or add.".to_string(),
                     };
-                    let e = ui
-                        .add_enabled(write.is_ok() && editable.is_some(), egui::Button::new("Edit").small())
-                        .tip(edit_tip);
-                    chrome.hit(format!("edit device {}", n.name), e.rect);
                     let d = ui
                         .add_enabled(write.is_ok(), egui::Button::new("Delete").small())
                         .tip(write.as_ref().err().map_or(
@@ -823,9 +827,14 @@ impl DevicesUi {
                             String::as_str,
                         ));
                     chrome.hit(format!("delete device {}", n.name), d.rect);
+                    let e = ui
+                        .add_enabled(write.is_ok() && editable.is_some(), egui::Button::new("Edit").small())
+                        .tip(edit_tip);
+                    chrome.hit(format!("edit device {}", n.name), e.rect);
                     asked = (e.clicked(), d.clicked());
-                }
-                l
+                    name_row(ui)
+                })
+                .inner
             });
             let r = r.inner;
             chrome.hit(format!("device {}", n.name), r.rect);
