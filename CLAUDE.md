@@ -46,6 +46,14 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   socket-address item and showed the refusal the strict decode hid
   (2026-11-07, docs/devices/moxa-iologik-e1213.md). Hold the captured bytes
   as a regression test, and make the device's own answer readable.
+- **A device that will not come back: look at the box before the
+  network.** `sample <pid>` (no sudo) shows what each link thread is
+  doing, and `scripts/enip-probe.py` asks the E1213 for its identity
+  from the same launch context. On 2026-11-07 the link thread looped on
+  a ListIdentity sweep whose send failed, and the probe run with
+  Homebrew's python said `No route to host`: macOS Local Network
+  privacy, not the firewall or the driver. Any box that talks to bench
+  devices runs as a LaunchAgent (the try box's entry below).
 - **A resizable egui panel grows to any row that overflows it, every
   frame.** A label in a plain `horizontal`, a combo box or field at full
   width beside a scroll bar, a grid cell with a full-width button: each
