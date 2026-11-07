@@ -86,6 +86,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-07
   by: claude-session
 
+- [ ] **Negate SINT/INT in DINT, as ruSTy 1.0.8 now does?** — the ruSTy 1.0.8 bump (unsigned compares fixed, workaround dropped) passes the CI sweep, but a widened sweep (3000 cases, seeds default and 7) finds a new disagreement every time: unary minus on a type's minimum. ruSTy 1.0.8 (rusty#2016) negates a SINT or INT variable or literal in DINT, so `(-v) / 2` on an INT of -32768 gives 16384 there and -16384 here, because ours negates in the operand's width and wraps. Ours already negates an arithmetic result in DINT "as ruSTy" (check.rs, `widened`); only a plain variable or literal differs, and only when the negation feeds another operation before the assignment truncates it. `rusty_negates_small_ints_in_dint` (tests/oracle.rs) pins both sides. **Recommendation: follow ruSTy**, i.e. widen every SINT/INT negation with `arith()` in check.rs, flip the pin to agreement and widen the sweep again. That makes negation consistent with how we already carry +, -, * and / results, and the change only shows in a program that negates a type's minimum. It does change what such a program computes, which is why it's your call.
+  needs: your call
+  result: the oracle agrees on 3000-case sweeps with any seed (about 1h with the regression test), or the generator stops negating a possible minimum and the difference is written down
+  options: follow ruSTy, widen in check.rs (recommended) | keep ours, dodge it in the generator | keep both as is, the pin is enough
+  est: 10m
+  difficulty: low
+  id: rusty-negation-width
+  asked: 2026-11-07
+  by: claude-session
+
 ## Needs your hands
 
 - [ ] **Promote the guided tour** — #248 (the playground tour) is in dev but landed one minute after your dev → master merge, so the live playground does not have it, and docs/playground on dev is still the build without it. An agent rebuilds docs/playground on a PR into dev; then the next dev → master merge (yours) puts /playground/?tour live with the help links that point to it.
@@ -205,22 +215,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   notes: box side merged in #219 (FC 43/14 codec and probe, modbus= endpoints, discover ?modbus=1, spec §6.21). Left: the Devices tab asking ?modbus=1 and showing the list; identity.modbus in helmsman-devices build-index.py; a Modbus-identity query on GET /api/devices/library; whether the E1213 answers FC 43/14 (unchecked: it was off the LAN 2026-11-04).
 
-- [ ] **Bump ruSTy past 1.0.7 and drop the unsigned-compare workaround** — PLC-lang/rusty#2015 fixes signed compares of UDINT/ULINT (and unsigned division, CASE, negation) on master; no release carries it yet. When one does: new version + SHA-256 digests in docker/rusty/Dockerfile, flip `rusty_unsigned_compare_bug` to assert agreement, drop the UDINT/ULINT dodge in `cond` (tests/oracle.rs), widen the sweep once.
-  needs: a ruSTy release after 2026-10-21 (`gh release list -R PLC-lang/rusty`)
-  result: oracle compares unsigned conditions directly
-  est: 1h
-  difficulty: low
-  id: rusty-bump
-
-- [ ] **Persistence 3: the Agent conversation and the device form survive a reload** — still lost on reload after #276: the Agent transcript (`BoxAgent.turns`, box_agent.rs; Turn/Item/End need serde, MAX_TURNS 50, the box has no transcript GET today, so keep the rendered turns in the desk, capped) and the half-filled device form (`DevicesUi.adding: NewDevice`, devices.rs:210, with its points; drop the EDS bytes, keep a reference). Restore both through the desk (browser now, the box once desk-on-box lands). Tests: a reload mid-conversation shows the same turns and a pending proposal link; a half-filled form comes back; a proposal already decided shows as decided, not re-offered.
-  result: nothing typed or read in the Agent tab or the device form is lost to a refresh
-  est: 1d
-  difficulty: med
-  depends: desk-on-box
-  id: desk-agent-and-forms
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Help mode on the relay: a profile that reads the repo** — in ../agent-relay (separate repo and session; SAM deploy, deploy-chain edits as a draft PR): a new profile id (e.g. helmsman/help-v1; a served profile never changes) whose model gets read-only tools over JimothyJohn/helmsman@dev through the GitHub API: list a directory, read a file (size-capped), search code. The repo is PUBLIC (checked 2026-11-07), so no token is needed to start; a fine-grained read-only token in Secrets Manager raises the rate limit (60/h unauthenticated). The system prompt: diagnose for a third-party user, cite the files it read, end with the Markdown issue; docs/ARCHITECTURE.md and docs/help are the starting points. Tests against recorded GitHub responses; refuse paths outside the repo.
   needs: a session in ../agent-relay (this repo's sessions cannot write there); Nick's go for the deploy
   result: the relay serves the Help profile the box's Help mode asks for
@@ -271,22 +265,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   est: 1d
   difficulty: med
   id: modbus-shared-connection
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Every release opens every older project** — project files have no version field except `diagram.layout`'s `helmsman-layout 1`, and nothing pins that a project written by an older release still loads. Version lock-in is the top complaint on every vendor platform. Add tests/fixtures/projects/<release>/ (one representative project per tagged release, starting now) and a test that loads, checks and runs each one on the current build. A construct a newer release no longer accepts becomes a listed problem, and the project still opens.
-  result: version lock-in is a test failure, not a support ticket
-  est: 4h
-  difficulty: low
-  id: project-compat-fixtures
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **The canvas stays usable over a slow link** — PLCnext Engineer's online layer "will freeze 99.9% of the time" over VPN, and Phoenix said that is by design. Run the canvas against a box behind a throttled proxy (300 ms RTT, 1 Mbit/s, 2 % loss) in a test, and check the Monitor's polling never queues requests behind each other and the UI never blocks on the network.
-  result: remote support over a site VPN works; a regression fails a test
-  est: 4h
-  difficulty: low
-  id: canvas-slow-link
   asked: 2026-11-07
   by: claude-session
 

@@ -841,6 +841,23 @@ the person between screens.
   a desk older than the one it holds (409), and the page then reads the
   newer one. A role change on the same account keeps the desk; signed
   out, or with the box not answering, the browser's is the desk.
+- **The Agent's conversation and the device form** (`desk-agent-and-forms`).
+  The desk also keeps the Agent tab's turns with the box's agent and the
+  last instruction's outcome (`desk::Conversation`), and a half-filled New
+  device form with its points (`devices::NewDevice`; the EDS by its file
+  name in the project, never its bytes). The conversation is capped at
+  128 KiB of the desk: the newest turns first, each with at most 16 KiB of
+  answer, 2 KiB of message and 40 rows (proposals first), and an Undo only
+  while its file is at most 64 KiB. The form keeps 256 rows and 256
+  characters a field, and any setting whose key names a credential
+  (`desk::is_secret_key`: a password, PIN, token, key or secret) is left
+  out. Both count as work, so a change dates the desk. Past the box's
+  512 KiB the edits go first, then the conversation, then the form. After a
+  reload an instruction that was under way is over with nothing written,
+  and the proposals its turn stored are still linked; a proposal decided
+  since (no longer a draft in the Proposals list) shows as decided and is
+  not offered again. The box reads both into their own shape like the rest
+  of the desk, so any other field is dropped.
 
 ## Snapshots (`snapshots`, built)
 
@@ -1235,7 +1252,12 @@ threads, the Modbus simulator over TCP).
 
 The editor's projects (docs/UI.md "Projects", build step 2):
 `helmsman_plc::project` (folders, rules, `build`, `zip`) and
-`api/projects.rs` (routes); contract in `tests/projects.rs`.
+`api/projects.rs` (routes); contract in `tests/projects.rs`. Every
+release opens every older project: `tests/project_compat.rs` lays down
+one frozen project per release (`tests/fixtures/projects/<release>/`,
+the first `unreleased-20261107`) and opens, builds, scans and tests it
+on the current build; a construct the build no longer accepts is a
+listed problem on its file and line, and the project still opens.
 `helmsman-plc --projects` turns it on: projects live in
 `<state-dir>/projects/<name>/` (`/var/lib/helmsman-plc/projects/` on a
 Pi), the store defaults to `<state-dir>/store/`, and the box boots the
@@ -2257,7 +2279,13 @@ agent as ST; nothing here writes ST back).
   path. A program whose newest scan is over 3 s old, or every program
   while the values stream is down or silent for 3 s, is drawn grey with
   the age: never a colour. It sends only GETs and stream opens (tested);
-  leaving it closes the all-modules stream and reopens the Editor's.
+  leaving it closes the all-modules stream and reopens the Editor's. Over
+  a slow link no poll is asked for again while its last ask is on its
+  way: the 5 s device round waits for both its reads (`/api/devices`,
+  `/api/io_map`), the header badge's 30 s proposals round for its list
+  (contract in `slow_link_tests.rs`: the Monitor against the real API
+  through an in-process proxy with a site VPN's 300 ms round trip,
+  1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
 
 ## Explain mode (`explain-mode`, built)
 

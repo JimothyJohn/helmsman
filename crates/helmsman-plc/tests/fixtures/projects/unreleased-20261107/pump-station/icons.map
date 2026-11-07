@@ -1,0 +1,4 @@
+# One rule a line: WHAT = ICON
+motor_starter = M
+latched_alarm = !
+pump_* = P
