@@ -97,6 +97,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-07
   by: claude-session
 
+- [ ] **Which box owns the E1213 over EtherNet/IP?** — 2026-11-07: the bench Pi's box (nick@192.168.3.20, `codesys-pi`) runs a project with device `iologik_e1213` over EtherNet/IP, link up: it holds the E1213's exclusive-owner connection, so the :8081 try box's Forward_Open is refused (0x0106 ownership conflict, then 0x0100 connection in use). Only one originator can own the unit's outputs. The try box reads and drives the same unit over Modbus TCP meanwhile.
+  needs: your call (a change on the Pi restarts its service, which asks first)
+  result: one owner of the E1213 over EtherNet/IP, and the other box on Modbus TCP
+  options: Pi keeps EtherNet/IP, the try box uses Modbus (recommended; nothing to change) | Move the Pi to Modbus, the try box takes EtherNet/IP | Stop the Pi's project while testing on the try box
+  est: 15m
+  difficulty: low
+  id: e1213-enip-owner
+  asked: 2026-11-07
+  by: claude-session
+
 ## Needs your hands
 
 - [ ] **Promote the guided tour** — #248 (the playground tour) is in dev but landed one minute after your dev → master merge, so the live playground does not have it, and docs/playground on dev is still the build without it. An agent rebuilds docs/playground on a PR into dev; then the next dev → master merge (yours) puts /playground/?tour live with the help links that point to it.
@@ -169,15 +179,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 15m
   difficulty: low
   id: canvas-try
-
-- [ ] **Find who holds the E1213's EtherNet/IP connection** — 2026-11-07: the :8081 try box's Forward_Open to the E1213 (192.168.3.60) is refused, general 0x01 with extended 0x0106 (ownership conflict) in Nick's capture and 0x0100 (connection in use) after the box restarted at b14803a, steady across reads. Another originator holds the exclusive-owner connection; the switch hides its T->O traffic from the Studio. The bench Pi (nick@192.168.3.20, same link) is the prime suspect; the :8080 leftover box was stopped earlier. Modbus TCP to the same unit works meanwhile. #263 made the refusal readable (it used to show as "bytes after last CPF item").
-  needs: your key loaded so the agent can read the Pi (`ssh-add --apple-use-keychain ~/.ssh/id_ed25519`), then the Pi's io.map and `systemctl status helmsman-plc`
-  result: one owner of the E1213 over EtherNet/IP, or the Pi moved to Modbus; the try box's enip-io link up
-  est: 30m
-  difficulty: low
-  id: e1213-enip-owner
-  asked: 2026-11-07
-  by: claude-session
 
 ## Next to build
 
