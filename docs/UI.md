@@ -46,6 +46,9 @@ this; change it here first when a decision changes.
   with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
   deploy is still there to read after the line under the header has gone.
+- **Panes collapse** from their chevron, their Alt key, or a double click
+  on any of their tabs (Nick, 2026-11-07), on the left pane and the side
+  panel alike.
 - **Left pane, collapsible, tabs (200 pt):** Files (the projects, the
   open one's files, the program tree; a right-click on a project offers
   Copy, Rename and Delete, on a file Copy, Paste, Duplicate, Rename and

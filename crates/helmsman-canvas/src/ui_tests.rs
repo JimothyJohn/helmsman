@@ -2203,6 +2203,57 @@ mod chrome {
         assert!(h.app.chrome.code_open(), "two open the Code tab");
     }
 
+    /// Nick 2026-11-07: a double click on any pane tab (Files, Devices,
+    /// Code; I/O, Agent and the rest on the right) hides that pane; one
+    /// click only picks the tab.
+    #[test]
+    fn double_clicking_a_tab_hides_its_pane_and_one_click_does_not() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.2);
+        for key in ["pane files", "pane devices", "pane code"] {
+            h.app.chrome.left = true;
+            h.wait(0.2);
+            let at = h.rect(key).center();
+            h.click(at);
+            h.wait(0.5);
+            assert!(h.app.chrome.left, "one click on {key} keeps the pane");
+            h.click(at);
+            h.click(at);
+            h.frame(vec![]);
+            assert!(!h.app.chrome.left, "a double click on {key} hides the pane");
+            h.wait(0.5);
+            h.press("left");
+            h.wait(0.2);
+            assert!(h.app.chrome.left, "the strip brings it back after {key}");
+        }
+        h.app.chrome.right = true;
+        h.wait(0.2);
+        let tabs: Vec<String> = h
+            .app
+            .chrome
+            .hits
+            .iter()
+            .map(|(k, _)| k.clone())
+            .filter(|k| k.starts_with("tab "))
+            .collect();
+        assert!(
+            tabs.iter().any(|k| k == "tab io") && tabs.iter().any(|k| k == "tab claude"),
+            "{tabs:?}"
+        );
+        for key in tabs {
+            h.app.chrome.right = true;
+            h.wait(0.2);
+            let at = h.rect(&key).center();
+            h.click(at);
+            h.wait(0.5);
+            assert!(h.app.chrome.right, "one click on {key} keeps the panel");
+            h.click(at);
+            h.click(at);
+            h.frame(vec![]);
+            assert!(!h.app.chrome.right, "a double click on {key} hides the panel");
+        }
+    }
+
     /// The question is asked wherever the page is, the Files tab shut or
     /// not: the Agent's answer with unsaved edits, say.
     #[test]
