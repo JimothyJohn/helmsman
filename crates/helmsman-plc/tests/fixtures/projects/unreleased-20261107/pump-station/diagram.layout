@@ -1,0 +1,4 @@
+helmsman-layout 1
+# where the engineer moved blocks
+move	pump_station	0	0	80	LAMP_GREEN :=	LAMP_GREEN := LIGHT.GREEN
+move	pump_pair	1	-40	12.5	PUMP_B	PUMP_B(RUN := DUTY.RUN_B)

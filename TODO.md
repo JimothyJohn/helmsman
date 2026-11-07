@@ -298,14 +298,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **Every release opens every older project** — project files have no version field except `diagram.layout`'s `helmsman-layout 1`, and nothing pins that a project written by an older release still loads. Version lock-in is the top complaint on every vendor platform. Add tests/fixtures/projects/<release>/ (one representative project per tagged release, starting now) and a test that loads, checks and runs each one on the current build. A construct a newer release no longer accepts becomes a listed problem, and the project still opens.
-  result: version lock-in is a test failure, not a support ticket
-  est: 4h
-  difficulty: low
-  id: project-compat-fixtures
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **A typo gives one error, at the right line, in plain words** — matiec's top complaints are the wrong line ("The error is on line 23, and matiec outputs what is on line 26") and twenty errors from one `ELSE IF`. Helmsman already stops at the first syntax error, and positions are tested (tests/st.rs `errors_are_sorted_and_positioned`). Pin it with a corpus of the twenty most common ST typos (`ELSE IF`, `=` for `:=`, missing `;`, missing `END_IF`, `:=` in a condition, a misspelled keyword or FB) and assert each one's line, column and a message that names the fix.
   result: error quality is measured, and a regression in it fails CI
   est: 1d

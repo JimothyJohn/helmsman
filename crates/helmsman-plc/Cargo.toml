@@ -169,6 +169,10 @@ name = "projects"
 required-features = ["box"]
 
 [[test]]
+name = "project_compat"
+required-features = ["box"]
+
+[[test]]
 name = "requirements"
 required-features = ["box"]
 

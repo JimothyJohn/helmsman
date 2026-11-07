@@ -1,0 +1,3 @@
+# How the lift station runs.
+author   Helmsman compatibility fixture
+program  pump_station scan_ms=10
