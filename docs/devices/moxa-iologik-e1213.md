@@ -242,6 +242,26 @@ T->O never reaches `conformance` or `helmsman-plc` until each is allowed
 again after every rebuild). Apple's own `python3` is allowed, which is how
 the facts above were taken over SSH.
 
+### The echoed socket-address item (2026-11-07)
+
+Taken with `tcpdump` on the Studio (192.168.3.10) while a box on an I/O
+port other than 2222 opened the E1213 at 192.168.3.60. Such a box's
+`Forward_Open` carries a T->O socket-address item (type `0x8001`, 16
+bytes). The E1213 echoes that item after the unconnected-data item but
+gives the CPF item count as 2, so 20 bytes follow the last item it
+counts:
+
+```text
+reply CPF: count 2, 0x0000 (len 0), 0x00B2 (len 16), then 01 80 10 00 + 16 bytes (the 0x8001 item)
+```
+
+`cpf::decode_reply` reads trailing bytes as items only when they are whole
+socket-address items (`tests/e1213_quirks.rs` holds this reply). In this
+capture the reply was a refusal, general status 0x01 with extended
+0x0106, ownership conflict: another originator held the exclusive-owner
+connection. Before the fix the box reported only
+`decode: invalid: bytes after last CPF item`.
+
 ## Checking it
 
 - Simulated, any machine: `cargo run -p helmsman-io --example conformance
