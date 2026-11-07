@@ -1987,7 +1987,9 @@ fn an_engineer_stops_runs_and_restarts_the_box_program_from_the_monitor() {
         assert_eq!(a.status, 200, "{a:?}");
         h.bv().projects.answer(q.call, &a);
     }
-    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "stopped");
+    wait("the box reports it stopped", || {
+        b.json("/api/modules/conveyor")["status"]["state"] == "stopped"
+    });
     wait("the tile says stopped, by alice", || {
         monitor_pump(&b, &jar, &mut h);
         run_of(&h) == Run::Stopped(Some("alice (engineer)".into()))
@@ -2019,7 +2021,9 @@ fn an_engineer_stops_runs_and_restarts_the_box_program_from_the_monitor() {
         assert_eq!(a.status, 200, "{a:?}");
         h.bv().projects.answer(q.call, &a);
     }
-    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "running");
+    wait("the box reports it running", || {
+        b.json("/api/modules/conveyor")["status"]["state"] == "running"
+    });
     let audit = b.json("/api/audit?limit=1000");
     for want in [
         "module conveyor stopped",
@@ -2077,7 +2081,9 @@ fn the_editor_has_the_box_run_stop_and_restart_for_an_engineer() {
         assert_eq!(a.status, 200, "{a:?}");
         h.bv().projects.answer(q.call, &a);
     }
-    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "stopped");
+    wait("the box reports it stopped", || {
+        b.json("/api/modules/conveyor")["status"]["state"] == "stopped"
+    });
     let t = h.time;
     wait("the page sees it stopped", || {
         values(&b, h.app.boxv.as_mut().unwrap(), t);
@@ -2091,7 +2097,9 @@ fn the_editor_has_the_box_run_stop_and_restart_for_an_engineer() {
         let a = b.send(&jar, &q);
         h.bv().projects.answer(q.call, &a);
     }
-    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "running");
+    wait("the box reports it running", || {
+        b.json("/api/modules/conveyor")["status"]["state"] == "running"
+    });
     h.press("restart");
     let reqs = h.sent();
     assert_eq!(reqs[0].url, "/api/modules/conveyor/restart", "{reqs:?}");
