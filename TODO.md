@@ -86,6 +86,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-07
   by: claude-session
 
+- [ ] **Negate SINT/INT in DINT, as ruSTy 1.0.8 now does?** — the ruSTy 1.0.8 bump (unsigned compares fixed, workaround dropped) passes the CI sweep, but a widened sweep (3000 cases, seeds default and 7) finds a new disagreement every time: unary minus on a type's minimum. ruSTy 1.0.8 (rusty#2016) negates a SINT or INT variable or literal in DINT, so `(-v) / 2` on an INT of -32768 gives 16384 there and -16384 here, because ours negates in the operand's width and wraps. Ours already negates an arithmetic result in DINT "as ruSTy" (check.rs, `widened`); only a plain variable or literal differs, and only when the negation feeds another operation before the assignment truncates it. `rusty_negates_small_ints_in_dint` (tests/oracle.rs) pins both sides. **Recommendation: follow ruSTy**, i.e. widen every SINT/INT negation with `arith()` in check.rs, flip the pin to agreement and widen the sweep again. That makes negation consistent with how we already carry +, -, * and / results, and the change only shows in a program that negates a type's minimum. It does change what such a program computes, which is why it's your call.
+  needs: your call
+  result: the oracle agrees on 3000-case sweeps with any seed (about 1h with the regression test), or the generator stops negating a possible minimum and the difference is written down
+  options: follow ruSTy, widen in check.rs (recommended) | keep ours, dodge it in the generator | keep both as is, the pin is enough
+  est: 10m
+  difficulty: low
+  id: rusty-negation-width
+  asked: 2026-11-07
+  by: claude-session
+
 ## Needs your hands
 
 - [ ] **Promote the guided tour** — #248 (the playground tour) is in dev but landed one minute after your dev → master merge, so the live playground does not have it, and docs/playground on dev is still the build without it. An agent rebuilds docs/playground on a PR into dev; then the next dev → master merge (yours) puts /playground/?tour live with the help links that point to it.
@@ -205,27 +215,12 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   notes: box side merged in #219 (FC 43/14 codec and probe, modbus= endpoints, discover ?modbus=1, spec §6.21). Left: the Devices tab asking ?modbus=1 and showing the list; identity.modbus in helmsman-devices build-index.py; a Modbus-identity query on GET /api/devices/library; whether the E1213 answers FC 43/14 (unchecked: it was off the LAN 2026-11-04).
 
-- [ ] **Bump ruSTy past 1.0.7 and drop the unsigned-compare workaround** — PLC-lang/rusty#2015 fixes signed compares of UDINT/ULINT (and unsigned division, CASE, negation) on master; no release carries it yet. When one does: new version + SHA-256 digests in docker/rusty/Dockerfile, flip `rusty_unsigned_compare_bug` to assert agreement, drop the UDINT/ULINT dodge in `cond` (tests/oracle.rs), widen the sweep once.
-  needs: a ruSTy release after 2026-10-21 (`gh release list -R PLC-lang/rusty`)
-  result: oracle compares unsigned conditions directly
-  est: 1h
-  difficulty: low
-  id: rusty-bump
-
 - [ ] **Persistence 3: the Agent conversation and the device form survive a reload** — still lost on reload after #276: the Agent transcript (`BoxAgent.turns`, box_agent.rs; Turn/Item/End need serde, MAX_TURNS 50, the box has no transcript GET today, so keep the rendered turns in the desk, capped) and the half-filled device form (`DevicesUi.adding: NewDevice`, devices.rs:210, with its points; drop the EDS bytes, keep a reference). Restore both through the desk (browser now, the box once desk-on-box lands). Tests: a reload mid-conversation shows the same turns and a pending proposal link; a half-filled form comes back; a proposal already decided shows as decided, not re-offered.
   result: nothing typed or read in the Agent tab or the device form is lost to a refresh
   est: 1d
   difficulty: med
   depends: desk-on-box
   id: desk-agent-and-forms
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Help mode on the Agent, box side** — Nick's interview (2026-11-07): a Help mode beside the coding mode, for a third-party user. The box attaches context automatically (recent Messages as text (`messages::Log::text`), device states and their current errors from /api/devices, the running project and snapshot, the box's build commit, OS), never secrets (tokens, PINs, the relay token) — a test asserts the redaction. The answer is a plain-language diagnosis plus a copyable Markdown issue (title, what happened, expected, steps, the attached context, suspected files linked to github.com/JimothyJohn/helmsman/blob/dev/...), with a Copy button (messages::copyable). Nothing is filed automatically. The relay side is help-mode-relay; build against a relay fixture until it is served.
-  result: a user in trouble gets a diagnosis and an issue to paste to another agent or to GitHub
-  est: 1d
-  difficulty: med
-  id: help-mode-box
   asked: 2026-11-07
   by: claude-session
 
