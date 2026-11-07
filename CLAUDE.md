@@ -85,6 +85,9 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
     `scratch/11-try-box-relay.sh` (main checkout). Stop: `kill $(lsof
     -tiTCP:8081 -sTCP:LISTEN)`.
   - A new service (board, mock-up server) gets its own entry here first.
+  - Anything else running is a leftover: `scripts/dev-processes.sh` lists
+    every Helmsman process with its port and checkout, `--stop` stops all
+    but a locked service checkout. Run it before you stop a session.
 - **`wip/recovered-*` snapshots expire.** One older than 7 days gets a
   board card: keep (merge it somewhere) or drop.
 
