@@ -103,6 +103,10 @@ pub struct App {
     pub chrome: Chrome,
     /// The sign-in panel under the header is open.
     pub login: bool,
+    /// Who was signed in last frame, so the sign-in panel closes the
+    /// frame a sign-in or sign-out lands (the answer comes frames after
+    /// the panel's button; Nick, 2026-11-07).
+    login_seen: Option<String>,
     /// The box's Editor, built the first time it is shown.
     pub boxv: Option<BoxView>,
     /// The simulation's, likewise.
@@ -166,6 +170,7 @@ impl App {
             served_by_box: false,
             chrome,
             login: false,
+            login_seen: None,
             boxv: None,
             sim: None,
             review: None,
@@ -1384,21 +1389,48 @@ impl App {
         }
     }
 
-    /// Sign in, or who is signed in: on a box only.
+    /// Sign in, or who is signed in: on a box only. Signed in, the role's
+    /// glyph leads the name: a hard hat for an operator, a wrench and a
+    /// screwdriver for an engineer or an integrator (Nick, 2026-11-07).
     fn login_button(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
         if self.source != Source::Box {
             return;
         }
-        let text = self
-            .review
-            .as_ref()
-            .and_then(|r| r.state.signed_in())
-            .map_or_else(|| "Sign in".to_string(), |who| format!("● {who}"));
+        let session = self.review.as_ref().and_then(|r| r.state.session.clone());
+        let who = session.as_ref().map(crate::review::Session::label);
+        if who != self.login_seen {
+            self.login = false;
+            self.login_seen.clone_from(&who);
+        }
+        let icon = session.as_ref().map(|s| match s.role.as_str() {
+            "operator" => (glyphs::Icon::HardHat, YELLOW, "an operator"),
+            _ => (glyphs::Icon::Tools, theme(ui).fg, "an engineer"),
+        });
+        let text = who.clone().unwrap_or_else(|| "Sign in".to_string());
+        let tip = match (&who, icon) {
+            (Some(w), Some((_, _, role))) => {
+                format!("Signed in as {w}, {role}. Click to sign out or change who is signed in.")
+            }
+            _ => "Sign in to edit, deploy, force inputs and approve proposals.".to_string(),
+        };
+        let mut clicked = false;
+        if let Some((icon, color, _)) = icon {
+            let side = ui.spacing().interact_size.y;
+            let (at, r) = ui.allocate_exact_size(Vec2::splat(side), egui::Sense::click());
+            glyphs::paint(ui.painter(), at.shrink(side * 0.12), icon, color);
+            let key = if icon == glyphs::Icon::HardHat {
+                "operator"
+            } else {
+                "engineer"
+            };
+            hits.push((format!("role {key}"), at));
+            clicked |= r.tip(&tip).clicked();
+        }
         let b = ui
             .add(egui::Button::selectable(self.login, RichText::new(text).strong()))
-            .tip("Sign in to edit, deploy, force inputs and approve proposals, or sign out.");
+            .tip(&tip);
         hits.push(("sign in".to_string(), b.rect));
-        if b.clicked() {
+        if clicked || b.clicked() {
             self.login = !self.login;
         }
     }

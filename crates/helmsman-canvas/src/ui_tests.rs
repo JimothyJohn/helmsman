@@ -2875,6 +2875,50 @@ mod simulated {
         assert_eq!((a.min(b), a.max(b)), (chars(last.start), chars(last.end)));
     }
 
+    /// Nick 2026-11-07: the pane kept widening to show a device's whole
+    /// cip= identity. A project with identity-named devices and long
+    /// names must leave both panels their width on every tab.
+    #[test]
+    fn long_device_identities_and_names_leave_the_panels_their_width() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("wide", None);
+            sim.proj.add_file(
+                "io.map",
+                "device e1213 enip-io cip=991:515:0x2A629EAE profile=moxa-e1213 rpi_ms=100 poll_ms=20\n\
+                 device e1213_by_mac_address_on_the_far_side_of_the_plant modbus-tcp mac=00-90-e8-7e-af-be unit=1 timeout_ms=300 poll_ms=20\n\
+                 in  di00_the_part_present_sensor_at_the_infeed_of_station_one bool e1213 di:0\n\
+                 out do0_the_clamp_solenoid_that_holds_the_part_while_it_is_drilled bool e1213 coil:0 safe=false\n\
+                 in  counter_of_parts_seen_by_the_far_sensor int e1213_by_mac_address_on_the_far_side_of_the_plant ir:24:u32\n"
+                    .into(),
+            );
+        }
+        h.wait(0.3);
+        for key in [
+            "pane devices",
+            "pane files",
+            "pane code",
+            "tab io",
+            "tab claude",
+            "pane devices",
+            "tab io",
+        ] {
+            h.press(key);
+            h.wait(0.3);
+            let l = h.rect("left").right() - left.right();
+            let r = right.left() - h.rect("right").left();
+            assert!((0.0..=8.0).contains(&l), "after {key} the left pane grew {l} pt");
+            assert!(
+                (0.0..=8.0).contains(&r),
+                "after {key} the right panel grew {r} pt"
+            );
+        }
+    }
+
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());
@@ -2920,6 +2964,52 @@ mod boxed {
 
     fn boxed(h: &Harness) -> &BoxView {
         h.app.boxv.as_ref().unwrap()
+    }
+
+    /// Nick 2026-11-07: once someone is signed in the sign-in panel
+    /// collapses (the box's answer lands frames after its button), and the
+    /// header shows the role: a hard hat for an operator, a wrench and a
+    /// screwdriver for an engineer.
+    #[test]
+    fn signing_in_collapses_the_panel_and_the_header_shows_the_role() {
+        use crate::review::Session;
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        assert!(
+            !h.has("role operator") && !h.has("role engineer"),
+            "signed out: no role"
+        );
+        h.press("sign in");
+        h.wait(0.2);
+        assert!(h.app.login, "the panel opens");
+        // The answer arrives a few frames later, as from the box.
+        h.wait(0.2);
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: None,
+            role: "operator".into(),
+        });
+        h.wait(0.2);
+        assert!(!h.app.login, "signed in: the panel collapses");
+        assert!(h.has("role operator") && !h.has("role engineer"), "a hard hat");
+        // Opened again while signed in, it stays open (to sign out).
+        h.press("sign in");
+        h.wait(0.2);
+        assert!(h.app.login, "open again on a click");
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("alice".into()),
+            role: "engineer".into(),
+        });
+        h.wait(0.2);
+        assert!(!h.app.login, "a different person signed in: collapses");
+        assert!(h.has("role engineer") && !h.has("role operator"), "the tools");
+        // The glyph opens the panel too.
+        h.press("role engineer");
+        h.wait(0.2);
+        assert!(h.app.login);
+        h.app.review.as_mut().unwrap().state.session = None;
+        h.wait(0.2);
+        assert!(!h.app.login, "signed out: collapses");
+        assert!(!h.has("role engineer"));
     }
 
     /// The minimum holds on a box too: its tabs, signed in, and the
