@@ -1024,6 +1024,16 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   are cached a year (`immutable`), everything else revalidates
   (`no-cache`); HTML carries a CSP of `'self'`, `'wasm-unsafe-eval'` and its
   own inline scripts by SHA-256.
+- **Build match** (`build-match`): the box and the canvas are built
+  separately, so both carry a stamp, `HELMSMAN_BUILD`, baked in by
+  `crates/build_stamp.rs` (the build scripts of helmsman-plc and
+  helmsman-canvas `include!` it): `git describe --always --abbrev=9`,
+  `HELMSMAN_BUILD` from the environment if set, "unknown" without either.
+  Every reply, files and event streams too, carries the box's as
+  `X-Helmsman-Build`; the canvas reads it off its fetches (the device poll
+  every 5 s, so a box restarted on a new build is heard within that) and
+  shows a banner under the header when the two are known and differ
+  (`stamp::differs`; "unknown" on either side is no mismatch).
 
 ## Approval policy (`approval-policy`, built)
 

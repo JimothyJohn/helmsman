@@ -560,9 +560,15 @@ pub const fn reason(code: u16) -> &'static str {
     }
 }
 
-/// The fixed headers every response carries, the UI's files too.
-pub const SECURITY: &str = "Connection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n\
-Referrer-Policy: no-referrer\r\n";
+/// The fixed headers every response carries, the UI's files and the event
+/// streams too: the security ones, and the build stamp
+/// ([`crate::BUILD_HEADER`]) the canvas compares with its own.
+pub const SECURITY: &str = concat!(
+    "Connection: close\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n",
+    "Referrer-Policy: no-referrer\r\nX-Helmsman-Build: ",
+    env!("HELMSMAN_BUILD"),
+    "\r\n"
+);
 
 /// Writes `r` with a `Content-Length`, within the stream's write timeout.
 ///

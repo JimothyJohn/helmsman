@@ -116,6 +116,8 @@ pub enum Msg {
     /// An event's name and data.
     Event(Stream, String, String),
     Failed(Stream),
+    /// The box's build stamp, as a reply's [`crate::stamp::HEADER`] said.
+    Build(String),
 }
 
 /// How the canvas is doing at reaching the box.
@@ -522,6 +524,9 @@ pub struct BoxState {
     pub values_at: Option<f64>,
     /// The box's clock at the newest values event (`at_ms`).
     pub values_at_ms: Option<u64>,
+    /// The box's build stamp, as its newest reply named it (card
+    /// build-match); `None` until one has.
+    pub build: Option<String>,
     /// Every module, as the Monitor watches it (while it shows).
     pub programs: BTreeMap<String, Watched>,
     /// The Monitor shows: every module's traces are streamed.
@@ -564,6 +569,7 @@ impl BoxState {
             seq: None,
             values_at: None,
             values_at_ms: None,
+            build: None,
             programs: BTreeMap::new(),
             monitor: false,
             traces: Retry::default(),
@@ -856,6 +862,7 @@ impl BoxState {
             }
             // Any other stream's events are not this view's.
             Msg::Event(..) => {}
+            Msg::Build(b) => self.build = Some(b),
         }
     }
 

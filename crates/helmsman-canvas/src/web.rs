@@ -64,8 +64,12 @@ impl Driver {
             Cmd::Get(what, url) => {
                 let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
                 wasm_bindgen_futures::spawn_local(async move {
-                    let r = get(&url).await;
-                    inbox.borrow_mut().push(Msg::Got(what, r));
+                    let (build, r) = get(&url).await;
+                    let mut inbox = inbox.borrow_mut();
+                    if let Some(b) = build {
+                        inbox.push(Msg::Build(b));
+                    }
+                    inbox.push(Msg::Got(what, r));
                     ctx.request_repaint();
                 });
             }
@@ -130,18 +134,33 @@ impl Driver {
     }
 }
 
+/// Reloads the page: the box's own canvas, after a different-build banner.
+pub fn reload() {
+    if let Some(w) = web_sys::window() {
+        let _ = w.location().reload();
+    }
+}
+
 fn text(e: &JsValue) -> String {
     e.as_string().unwrap_or_else(|| format!("{e:?}"))
 }
 
-/// `GET url` (same origin): the body of a 2xx, or why not.
-async fn get(url: &str) -> Result<String, String> {
+/// `GET url` (same origin): the box's build stamp if the reply named one
+/// (card build-match), and the body of a 2xx, or why not.
+async fn get(url: &str) -> (Option<String>, Result<String, String>) {
+    let mut build = None;
+    let r = get_body(url, &mut build).await;
+    (build, r)
+}
+
+async fn get_body(url: &str, build: &mut Option<String>) -> Result<String, String> {
     let window = web_sys::window().ok_or("no window")?;
     let resp: web_sys::Response = JsFuture::from(window.fetch_with_str(url))
         .await
         .map_err(|e| text(&e))?
         .dyn_into()
         .map_err(|e| text(&e))?;
+    *build = resp.headers().get(crate::stamp::HEADER).ok().flatten();
     if !resp.ok() {
         return Err(format!("HTTP {}", resp.status()));
     }
@@ -210,7 +229,7 @@ impl ClaudeLink {
             .is_some_and(|h| matches!(h.as_str(), "127.0.0.1" | "localhost" | "[::1]"));
         let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
         wasm_bindgen_futures::spawn_local(async move {
-            let yes = local && get(PROXY_HEALTH).await.is_ok_and(|b| b.trim() == PROXY_HELLO);
+            let yes = local && get(PROXY_HEALTH).await.1.is_ok_and(|b| b.trim() == PROXY_HELLO);
             inbox.borrow_mut().push(Incoming::Proxy(yes));
             ctx.request_repaint();
         });
