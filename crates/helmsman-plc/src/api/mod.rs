@@ -53,6 +53,7 @@
 //! POST /api/projects/{p}/requirements    engineer session: one requirement in words; the agent writes its test (see [`requirements`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
 //! GET  /api/forces                        forced inputs; POST and DELETE need an engineer session (see [`forces`])
+//! GET  /api/desk                        a session: that person's desk; PUT sets it (see [`desk`])
 //! GET  /api/drivers ...                   the box's WASM driver files; list, PUT and DELETE need an engineer session (see [`drivers`])
 //! POST /mcp                               token: MCP Streamable HTTP, the agent's tools for an engineer's own client (see [`mcp`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
@@ -106,6 +107,7 @@ pub mod bundle;
 pub mod catalog;
 pub mod chat;
 mod control;
+pub mod desk;
 pub mod discover;
 pub mod drivers;
 pub mod dropin;
@@ -251,6 +253,10 @@ pub struct More {
     /// (`<state-dir>/trend-pins`, [`trend::Trends::in_file`]). `None`:
     /// memory only.
     pub trend_pins: Option<std::path::PathBuf>,
+    /// Where people's desks are kept across restarts
+    /// (`<state-dir>/desks/`, [`desk::Desks::in_dir`]). `None`: memory
+    /// only.
+    pub desks: Option<std::path::PathBuf>,
     /// How the box scans its network for devices and where its device
     /// library is (see [`discover`]). The default sweeps the LAN's
     /// broadcast and reads the public library.
@@ -352,6 +358,8 @@ struct Ctx {
     running_drivers: Mutex<crate::drivers::Drivers>,
     /// Pinned signals' history ([`trend`]).
     trends: Mutex<trend::Trends>,
+    /// Each person's desk ([`desk`]).
+    desks: Mutex<desk::Desks>,
     /// The box's HTTPS ([`Api::start_secure`]); `None`: plain HTTP only.
     tls: Option<Tls>,
 }
@@ -363,6 +371,10 @@ impl Ctx {
 
     fn trends(&self) -> MutexGuard<'_, trend::Trends> {
         self.trends.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn desks(&self) -> MutexGuard<'_, desk::Desks> {
+        self.desks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn dropins(&self) -> MutexGuard<'_, dropin::Store> {
@@ -610,6 +622,7 @@ impl Api {
             drivers: driver_dir,
             running_drivers,
             trend_pins,
+            desks,
             discovery,
         } = more;
         let listener = TcpListener::bind(cfg.bind)?;
@@ -651,6 +664,7 @@ impl Api {
             driver_dir,
             running_drivers: Mutex::new(running_drivers),
             trends: Mutex::new(trend_pins.map_or_else(trend::Trends::default, trend::Trends::in_file)),
+            desks: Mutex::new(desks.map_or_else(desk::Desks::default, desk::Desks::in_dir)),
             tls,
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
@@ -1290,6 +1304,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         ("POST", ["api", "modules", name, op]) if *op != "trace" => return control::post(req, ctx, name, op),
         (_, ["api", "drivers", ..]) => return drivers::mutate(req, ctx, &segs[1..]),
         ("PUT", ["api", "trends", "pins"]) => return trend::put_pins(req, ctx),
+        ("PUT", ["api", "desk"]) => return desk::put(req, ctx),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
@@ -1340,7 +1355,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "modules", _, "stop" | "run" | "restart"] => return Some("POST"),
         ["api", "drivers" | "trends"] => return Some("GET"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
-        ["api", "trends", "pins"] => return Some("GET, PUT"),
+        ["api", "trends", "pins"] | ["api", "desk"] => return Some("GET, PUT"),
         _ => {}
     }
     match path {
@@ -1711,6 +1726,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "forces"] => forces::get(ctx),
         ["api", "drivers"] => drivers::list(req, ctx),
         ["api", "trends", rest @ ..] => trend::get(req, ctx, rest),
+        ["api", "desk"] => desk::get(req, ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "site"] => site_route(ctx, c, &view),
@@ -1860,6 +1876,8 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/trends?signals=a,b", false, "each signal's history (10 min, on change) on the scheduler's clock; keeps them tracked a day: {now_ms, window_ms, signals: [{name, points: [[t_ms, value]]}], unknown, refused}"),
             e("GET", "/api/trends/pins", false, "the signed-in person's pinned signals"),
             e("PUT", "/api/trends/pins", true, "a login session: {signals: [...]} (at most 16), that person's pins"),
+            e("GET", "/api/desk", false, "the signed-in person's desk (open project and file, unsaved edits, inputs), or null"),
+            e("PUT", "/api/desk", true, "a login session: that person's desk (at most 512 KiB; an older saved_at than the box's is refused, 409)"),
             e("GET", "/api/forces", false, "active forced inputs: {id, signal | address, value, by, at}"),
             e("POST", "/api/forces", true, "engineer session: force an input {signal, value} or {address: %IX0.0 | %IBn | %IWn | %IDn, value}; ends at that session's logout or expiry and on deploy"),
             e("DELETE", "/api/forces/{id}", true, "engineer session: release one force"),
