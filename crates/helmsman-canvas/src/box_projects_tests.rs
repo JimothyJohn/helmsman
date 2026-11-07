@@ -2305,3 +2305,105 @@ fn the_editor_offers_no_box_run_stop_to_anyone_else() {
     let reqs = h.sent();
     assert!(reqs.iter().all(|q| q.method == "GET"), "{reqs:?}");
 }
+/// Card `desk-on-box`: a draft started on one screen (the Studio) is there
+/// on another (the Air) once the person signs in, though that browser held
+/// an older desk of its own; signed out, the other screen keeps its own
+/// and asks the box nothing. A role switch on the same account keeps the
+/// desk, and the box never holds a password.
+#[test]
+fn a_draft_started_on_one_screen_is_there_on_another_after_signing_in() {
+    use crate::box_projects::PCall;
+    use crate::desk::{Desk, MAX_BYTES};
+    use crate::sim_projects::MemStorage;
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let (studio_jar, air_jar) = (Jar::default(), Jar::default());
+    let mut studio = page(&b, &studio_jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &studio_jar,
+        &mut studio.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    studio.projects.open_project("line");
+    settle(&b, &studio_jar, &mut studio.projects);
+    studio.projects.open_file("blocks.st");
+    let edited = format!("{BLOCKS}\n(* started on the Studio *)\n");
+    studio.projects.current_mut().unwrap().text = edited.clone();
+    studio.instruct.draft = "make the lamp blink at 2 Hz".into();
+    let mut now = 0.0;
+    let box_desk = |jar: &Jar| -> Json {
+        let a = b.send(jar, &PReq::get(PCall::Desk, "/api/desk".into()));
+        serde_json::from_str(&a.body).unwrap()
+    };
+    for _ in 0..20 {
+        now += 1.5;
+        pump(&b, &studio_jar, &mut studio, &ctx, now);
+        if box_desk(&studio_jar)["desk"]["agent"] == "make the lamp blink at 2 Hz" {
+            break;
+        }
+    }
+    let held = box_desk(&studio_jar);
+    assert_eq!(held["owner"], "user:alice");
+    assert_eq!(
+        held["desk"]["drafts"]["line"]["blocks.st"]["text"],
+        edited.as_str()
+    );
+    assert!(!held.to_string().contains(ALICE), "no password on the box");
+
+    // The Air: its browser holds an older desk of its own.
+    let old = Desk {
+        saved_at: 5,
+        agent: "yesterday's note".into(),
+        ..Desk::default()
+    };
+    let mut air = BoxView::new().with_desk(Box::new(MemStorage(Some(old.text_within(MAX_BYTES).0))));
+    for _ in 0..3 {
+        now += 1.5;
+        pump(&b, &air_jar, &mut air, &ctx, now);
+        assert!(
+            !air.psent.iter().any(|q| q.url == "/api/desk"),
+            "signed out: the box is not asked"
+        );
+    }
+    assert_eq!(
+        air.instruct.draft, "yesterday's note",
+        "signed out: this browser's"
+    );
+    air.session = Some(b.login(&air_jar, "alice", ALICE));
+    for _ in 0..20 {
+        now += 1.5;
+        pump(&b, &air_jar, &mut air, &ctx, now);
+        let back = air
+            .projects
+            .open
+            .as_ref()
+            .and_then(|o| o.bufs.get("blocks.st"))
+            .is_some_and(|f| f.text == edited);
+        if back {
+            break;
+        }
+    }
+    assert_eq!(air.instruct.draft, "make the lamp blink at 2 Hz");
+    let o = air.projects.open.as_ref().expect("the Studio's project open");
+    assert_eq!(o.name, "line");
+    assert_eq!(o.current.as_deref(), Some("blocks.st"));
+    assert_eq!(o.bufs["blocks.st"].text, edited);
+    assert!(air.projects.dirty(), "still an edit to save");
+
+    // The same account in another role: the same desk, nothing asked.
+    air.session = air.session.take().map(|s| Session {
+        role: "operator".into(),
+        ..s
+    });
+    now += 1.5;
+    pump(&b, &air_jar, &mut air, &ctx, now);
+    assert!(
+        !air.psent.iter().any(|q| q.call == PCall::Desk),
+        "{:?}",
+        air.psent
+    );
+    assert_eq!(air.instruct.draft, "make the lamp blink at 2 Hz");
+    assert_eq!(air.projects.open.as_ref().unwrap().bufs["blocks.st"].text, edited);
+}
