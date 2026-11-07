@@ -93,6 +93,18 @@ over the diagram, for every program the box runs. On a box no key
 stops a program (Ctrl Enter stays the simulation's), so a stray key
 never stops a machine.
 
+A deploy keeps every variable's value where its name and type are the
+same. A box that restarts (a reboot, a power cut) keeps only the
+variables declared in a `VAR RETAIN` block, such as a part counter or a
+recipe step. The box saves them at most once a second when they change,
+so a power cut loses at most the last second, and at start it says in
+its log which values it restored and which start fresh because their
+type changed. `NON_RETAIN` and plain `VAR` variables start from their
+initial values, and Restart resets RETAIN variables too. RETAIN inside
+a function block is not kept yet: the check warns and the program still
+runs (declare the instance RETAIN in the program instead). More than
+65,536 RETAIN values in one program is refused.
+
 ![The Monitor: a tile per program with its state, and a tile of its outputs.](img/monitor.png)
 
 ## HTTPS
