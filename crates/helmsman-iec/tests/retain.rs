@@ -218,7 +218,7 @@ fn retain_where_it_is_not_kept_warns_and_still_compiles() {
         run(&mut p, &mut Image::new(SIZES), 3);
     }
     // A program with RETAIN kept has no warning.
-    assert!(prog(LINE).warnings().is_empty());
+    assert_eq!(prog(LINE).warnings(), &[]);
 }
 
 /// What was never valid stays an error.
