@@ -258,6 +258,14 @@ pub fn compile_plcopen(xml: &str, sizes: ImageSizes) -> Result<Program, Vec<Diag
 }
 
 impl Program {
+    /// What the checker said that did not stop the program (today: RETAIN
+    /// where it is not kept across a restart), in source order. Show them
+    /// beside the program; they never block it.
+    #[must_use]
+    pub fn warnings(&self) -> &[Diagnostic] {
+        &self.code.warnings
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         &self.code.pous[self.code.program].name

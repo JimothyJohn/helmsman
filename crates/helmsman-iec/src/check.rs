@@ -397,6 +397,9 @@ pub struct Checked {
     /// Located variables' initial values, written to the image at a cold
     /// start.
     pub loc_init: Vec<(Loc, Ty, Value)>,
+    /// What the checker has to say that does not stop the program, in
+    /// source order.
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// Type of a synthesized expression: known, or a literal still free to take
@@ -487,6 +490,8 @@ struct Ck<'a> {
     /// Initial values of located variables: (where, type, value).
     loc_init: Vec<(Loc, Ty, Value)>,
     diags: Vec<Diagnostic>,
+    /// Shown, not blocking: the program still compiles.
+    warnings: Vec<Diagnostic>,
 }
 
 /// Per-body context.
@@ -499,6 +504,10 @@ struct Scope {
 impl<'a> Ck<'a> {
     fn err(&mut self, pos: Pos, msg: impl Into<String>) {
         self.diags.push(Diagnostic { pos, msg: msg.into() });
+    }
+
+    fn warn(&mut self, pos: Pos, msg: impl Into<String>) {
+        self.warnings.push(Diagnostic { pos, msg: msg.into() });
     }
 
     /// Whether `name` in POU `pou` failed to declare (and was reported).
@@ -857,25 +866,34 @@ impl<'a> Ck<'a> {
                 ok = false;
                 continue;
             }
+            // RETAIN where it is not kept is a warning, not an error: it
+            // was ignored before RETAIN was kept, and a project that
+            // compiled then must compile now.
+            let mut retain = d.retain;
             if d.retain {
-                let problem = match (kind, d.section) {
+                if d.constant {
+                    self.err(d.pos, format!("{}: a CONSTANT cannot be RETAIN", d.name));
+                    ok = false;
+                    continue;
+                }
+                let not_kept = match (kind, d.section) {
                     (PouType::Function, _) => {
-                        Some("a FUNCTION keeps nothing between calls, so nothing in it is RETAIN")
+                        Some("a FUNCTION keeps nothing between calls, so RETAIN in it is not kept")
                     }
                     (PouType::FunctionBlock, _) => Some(
-                        "RETAIN inside a FUNCTION_BLOCK is not kept across a restart yet: declare the instance RETAIN in the PROGRAM",
+                        "RETAIN inside a function block is not kept across a restart yet: declare the instance RETAIN in the program",
                     ),
-                    (_, Section::Temp) => Some("VAR_TEMP cannot be RETAIN"),
-                    _ if d.constant => Some("a CONSTANT cannot be RETAIN"),
+                    (_, Section::Temp) => {
+                        Some("VAR_TEMP starts fresh on every scan, so RETAIN on it is not kept")
+                    }
                     _ if d.at.is_some() => {
-                        Some("a located variable lives in the process image and cannot be RETAIN")
+                        Some("a located variable lives in the process image, so RETAIN on it is not kept")
                     }
                     _ => None,
                 };
-                if let Some(m) = problem {
-                    self.err(d.pos, format!("{}: {m}", d.name));
-                    ok = false;
-                    continue;
+                if let Some(m) = not_kept {
+                    self.warn(d.pos, format!("{}: {m}", d.name));
+                    retain = false;
                 }
             }
             if vars.iter().any(|v| v.name == d.name) {
@@ -1024,7 +1042,7 @@ impl<'a> Ck<'a> {
                 }
             }
             let len = v.len();
-            if d.retain {
+            if retain {
                 retained += len;
                 if retained > crate::MAX_RETAIN && !too_big {
                     too_big = true;
@@ -1049,7 +1067,7 @@ impl<'a> Ck<'a> {
                 off,
                 section: d.section,
                 constant: d.constant,
-                retain: d.retain,
+                retain,
                 loc: None,
             });
         }
@@ -2589,6 +2607,7 @@ pub fn check(
         dropped: BTreeMap::new(),
         loc_init: Vec::new(),
         diags: Vec::new(),
+        warnings: Vec::new(),
     };
     ck.register_types(&library.types);
     ck.register_types(&user.types);
@@ -2687,6 +2706,11 @@ pub fn check(
             library: ck.srcs.iter().take_while(|s| s.system).count(),
             mem_init,
             loc_init: ck.loc_init,
+            warnings: {
+                ck.warnings.sort_by_key(|d| d.pos);
+                ck.warnings.dedup();
+                ck.warnings
+            },
         }),
         _ => {
             ck.diags.sort_by_key(|d| d.pos);

@@ -100,9 +100,10 @@ recipe step. The box saves them at most once a second when they change,
 so a power cut loses at most the last second, and at start it says in
 its log which values it restored and which start fresh because their
 type changed. `NON_RETAIN` and plain `VAR` variables start from their
-initial values, and Restart resets RETAIN variables too. The check
-refuses RETAIN inside a function block (declare the instance RETAIN in
-the program), and more than 65,536 RETAIN values in one program.
+initial values, and Restart resets RETAIN variables too. RETAIN inside
+a function block is not kept yet: the check warns and the program still
+runs (declare the instance RETAIN in the program instead). More than
+65,536 RETAIN values in one program is refused.
 
 ![The Monitor: a tile per program with its state, and a tile of its outputs.](img/monitor.png)
 

@@ -185,30 +185,49 @@ fn a_truncated_encoding_is_refused() {
     assert!(State::decode(&longer).is_err(), "a trailing byte");
 }
 
+/// RETAIN where it cannot be kept compiled before RETAIN was kept (it was
+/// ignored), so it still compiles and runs: with a warning that names
+/// the variable, and nothing saved for it.
 #[test]
-fn retain_where_it_cannot_be_kept_is_refused() {
+fn retain_where_it_is_not_kept_warns_and_still_compiles() {
     for (src, want) in [
         (
-            "FUNCTION_BLOCK fb VAR RETAIN n : INT; END_VAR END_FUNCTION_BLOCK
+            "FUNCTION_BLOCK fb VAR RETAIN n : INT; END_VAR n := n + 1; END_FUNCTION_BLOCK
              PROGRAM p VAR x : fb; END_VAR x(); END_PROGRAM",
-            "RETAIN inside a FUNCTION_BLOCK is not kept across a restart yet",
+            "N: RETAIN inside a function block is not kept across a restart yet: declare the instance RETAIN in the program",
         ),
         (
             "FUNCTION f : INT VAR RETAIN n : INT; END_VAR f := n; END_FUNCTION
              PROGRAM p VAR x : INT; END_VAR x := f(); END_PROGRAM",
-            "a FUNCTION keeps nothing between calls",
+            "N: a FUNCTION keeps nothing between calls, so RETAIN in it is not kept",
         ),
         (
-            "PROGRAM p VAR_TEMP RETAIN n : INT; END_VAR END_PROGRAM",
-            "VAR_TEMP cannot be RETAIN",
+            "PROGRAM p VAR_TEMP RETAIN n : INT; END_VAR n := 1; END_PROGRAM",
+            "N: VAR_TEMP starts fresh on every scan, so RETAIN on it is not kept",
         ),
+        (
+            "PROGRAM p VAR RETAIN n AT %QX0.0 : BOOL; END_VAR n := TRUE; END_PROGRAM",
+            "N: a located variable lives in the process image, so RETAIN on it is not kept",
+        ),
+    ] {
+        let mut p = prog(src);
+        let warnings: Vec<String> = p.warnings().iter().map(ToString::to_string).collect();
+        assert_eq!(warnings.len(), 1, "{src}\n{warnings:?}");
+        assert!(warnings[0].ends_with(want), "{src}\n gave {}", warnings[0]);
+        assert!(!p.has_retain(), "nothing is saved for it");
+        run(&mut p, &mut Image::new(SIZES), 3);
+    }
+    // A program with RETAIN kept has no warning.
+    assert!(prog(LINE).warnings().is_empty());
+}
+
+/// What was never valid stays an error.
+#[test]
+fn retain_that_was_never_valid_is_refused() {
+    for (src, want) in [
         (
             "PROGRAM p VAR RETAIN CONSTANT n : INT := 1; END_VAR END_PROGRAM",
-            "a CONSTANT cannot be RETAIN",
-        ),
-        (
-            "PROGRAM p VAR RETAIN n AT %QX0.0 : BOOL; END_VAR END_PROGRAM",
-            "a located variable lives in the process image and cannot be RETAIN",
+            "N: a CONSTANT cannot be RETAIN",
         ),
         (
             "PROGRAM p VAR RETAIN NON_RETAIN n : INT; END_VAR END_PROGRAM",

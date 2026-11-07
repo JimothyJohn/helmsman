@@ -254,7 +254,8 @@ const EXIT_WITH_STDIN: &str = "HELMSMAN_EXIT_WITH_STDIN";
 /// Counts every scan into a RETAIN counter; at each start notes the count
 /// it started from, and counts the starts its `NON_RETAIN` and plain flags
 /// saw (each is TRUE only on a fresh start).
-const BOX_COUNTER: &str = "PROGRAM counter
+const BOX_COUNTER: &str = "FUNCTION_BLOCK pulse VAR RETAIN n : INT; END_VAR n := n + 1; END_FUNCTION_BLOCK
+PROGRAM counter
 VAR RETAIN
   count : UDINT;
   at_boot : UDINT;
@@ -262,7 +263,8 @@ VAR RETAIN
   plain_starts : UDINT;
 END_VAR
 VAR NON_RETAIN fresh : BOOL := TRUE; END_VAR
-VAR plain : BOOL := TRUE; END_VAR
+VAR plain : BOOL := TRUE; beat : pulse; END_VAR
+  beat();
   IF fresh THEN fresh_starts := fresh_starts + 1; at_boot := count; fresh := FALSE; END_IF;
   IF plain THEN plain_starts := plain_starts + 1; plain := FALSE; END_IF;
   count := count + 1;
@@ -344,6 +346,10 @@ fn a_killed_box_resumes_its_retain_counter_and_says_what_changed() {
     assert!(
         log.contains("module counter: no saved RETAIN values; starting from initial values"),
         "{log}"
+    );
+    assert!(
+        log.contains("module counter: warning: 1:33: N: RETAIN inside a function block is not kept"),
+        "a RETAIN the box does not keep is shown, and the box runs: {log}"
     );
     let saved = retain::read(&retain_dir, "counter").unwrap().unwrap();
     let kept = int(&saved, "COUNT");

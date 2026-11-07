@@ -1511,6 +1511,11 @@ fn run(o: &Opts) -> Result<(), String> {
         o.gpio_chip.as_deref(),
         cal.as_ref(),
     );
+    for name in rt.names() {
+        for w in rt.program(name).map_or(&[][..], helmsman_iec::Program::warnings) {
+            eprintln!("helmsman-plc: module {name}: warning: {w}");
+        }
+    }
     for line in &restored {
         eprintln!("helmsman-plc: {line}");
     }

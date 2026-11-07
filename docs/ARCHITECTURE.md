@@ -942,10 +942,14 @@ values). Contract in `crates/helmsman-iec/tests/retain.rs` and
 (`Program::retain_state`, `State::encode`/`decode`,
 `Program::restore_retain`) and `helmsman-plc`'s `retain.rs` (`box`).
 
-- **The checker refuses RETAIN where it cannot be kept**: inside a
+- **The checker warns where RETAIN is not kept**: inside a
   `FUNCTION_BLOCK` (declare the instance RETAIN in the program instead) or
-  a `FUNCTION`, on `VAR_TEMP`, a `CONSTANT` or a located variable, and past
-  `MAX_RETAIN` (65 536) values per program. Nothing is kept in part.
+  a `FUNCTION`, on `VAR_TEMP` or a located variable. A warning
+  (`Program::warnings`, the checker's first non-blocking diagnostic; the
+  box logs it at start) never stops the program, since such code compiled
+  when RETAIN was ignored and older projects must still open. Errors only
+  for what was never valid: RETAIN with `NON_RETAIN` or `CONSTANT`, and
+  past `MAX_RETAIN` (65 536) values per program. Nothing is kept in part.
 - **On disk**: `<state-dir>/retain/<module>.ret`, magic `HRT1`, length,
   CRC-32 and the encoded state (each variable's name, type shape and
   values). Written through a temporary file, synced, renamed, folder
