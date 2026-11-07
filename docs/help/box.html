@@ -104,7 +104,9 @@ field opens for the value), and <kbd>Ctrl</kbd> <kbd>Shift</kbd>
 <kbd>U</kbd> releases every force. Both are in the Edit menu.</p>
 <h2 id="the-trend">The trend</h2>
 <p>The Trend tab opens with the box's own history of each pinned signal,
-the last ten minutes, then streams. Pins are yours while you are signed
+the last ten minutes, then streams. The window opens on 30 s and widens
+to the whole ten minutes. Drag a lane's name up or down to change the
+order of the lanes. Pins and their order are yours while you are signed
 in and come back on any screen; the box keeps them across a restart (the
 history starts over).</p>
 <h2 id="lost-the-box">Lost the box</h2>
@@ -112,6 +114,16 @@ history starts over).</p>
 last diagram stays up; the page keeps trying. "Simulate in this browser"
 offers to run the program in the page instead. A page that never reached
 a box at its address goes to the simulation by itself and says so.</p>
+<h2 id="your-work-survives-a-reload">Your work survives a reload</h2>
+<p>This browser keeps what you had in front of you: the project and file
+you had open, every edit you had not saved yet, what you had typed into
+the Agent and Requirements boxes, whether you were on the Monitor, and
+the name in the sign-in form (never a password or PIN). Reload the page,
+or come back after the box restarts, and it is all where you left it; a
+note says when unsaved edits came back. If someone saved the same file
+since, saving your edits asks which version to keep instead of
+overwriting theirs. Edits still need an engineer signed in to be
+saved.</p>
 <h2 id="the-monitor">The Monitor</h2>
 <p>The <strong>Monitor</strong> (the Editor | Monitor toggle, or View ›
 Monitor) is the watch-only screen for a phone, a tablet or a wall
@@ -133,6 +145,17 @@ engineer sees neither button. The Editor has the same two buttons over
 the diagram, for every program the box runs. On a box no key stops a
 program (Ctrl Enter stays the simulation's), so a stray key never stops
 a machine.</p>
+<p>A deploy keeps every variable's value where its name and type are the
+same. A box that restarts (a reboot, a power cut) keeps only the
+variables declared in a <code>VAR RETAIN</code> block, such as a part
+counter or a recipe step. The box saves them at most once a second when
+they change, so a power cut loses at most the last second, and at start
+it says in its log which values it restored and which start fresh
+because their type changed. <code>NON_RETAIN</code> and plain
+<code>VAR</code> variables start from their initial values, and Restart
+resets RETAIN variables too. The check refuses RETAIN inside a function
+block (declare the instance RETAIN in the program), and more than 65,536
+RETAIN values in one program.</p>
 <p><img src="img/monitor.png"
 alt="The Monitor: a tile per program with its state, and a tile of its outputs." /></p>
 <h2 id="https">HTTPS</h2>

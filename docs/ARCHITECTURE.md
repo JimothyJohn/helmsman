@@ -915,6 +915,39 @@ carried as `swap` carries one, new ones start cold, ones dropped have their
 bytes zeroed and signals made safe), run by the scan thread between ticks;
 see the approval policy below.
 
+## RETAIN across a restart (`retain-persist`, built)
+
+A deploy carries every variable; a restart of the box (reboot, power cut,
+killed process) keeps the ones a program declares in a `VAR RETAIN`
+block, and only those (`NON_RETAIN` and plain `VAR` start at their initial
+values). Contract in `crates/helmsman-iec/tests/retain.rs` and
+`crates/helmsman-plc/tests/retain.rs`; code in `helmsman-iec`'s `state.rs`
+(`Program::retain_state`, `State::encode`/`decode`,
+`Program::restore_retain`) and `helmsman-plc`'s `retain.rs` (`box`).
+
+- **The checker refuses RETAIN where it cannot be kept**: inside a
+  `FUNCTION_BLOCK` (declare the instance RETAIN in the program instead) or
+  a `FUNCTION`, on `VAR_TEMP`, a `CONSTANT` or a located variable, and past
+  `MAX_RETAIN` (65 536) values per program. Nothing is kept in part.
+- **On disk**: `<state-dir>/retain/<module>.ret`, magic `HRT1`, length,
+  CRC-32 and the encoded state (each variable's name, type shape and
+  values). Written through a temporary file, synced, renamed, folder
+  synced.
+- **Rate**: the scan thread never writes. At most once a second it hands
+  the modules' RETAIN values to a writer thread through a latest-wins slot
+  it only `try_lock`s; the writer writes a module only when its values
+  changed. A power cut loses at most the last second. A module a deploy
+  removes, or one with no RETAIN left, has its file removed.
+- **At start** each ST module's file is restored by name and type, the
+  rules a deploy carries by; stderr names what was restored, what starts
+  fresh because its type changed or it is new, and what was dropped. A
+  damaged or oversize (over 8 MiB) file is reported, moved aside to
+  `.ret.damaged`, and the module starts cold.
+- A cold restart from the API resets RETAIN too (IEC 61131-3's cold
+  restart). Not yet: a last write on a clean shutdown (the box has no
+  signal handler; the one-second rate bounds the loss), RETAIN inside a
+  function block type, and `%M` retention.
+
 ## Box API (`box-api`, built)
 
 `helmsman-plc --api ADDR` (default `127.0.0.1:8080`, `0.0.0.0:8080` for the
