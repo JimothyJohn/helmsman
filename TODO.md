@@ -282,14 +282,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **A typo gives one error, at the right line, in plain words** — matiec's top complaints are the wrong line ("The error is on line 23, and matiec outputs what is on line 26") and twenty errors from one `ELSE IF`. Helmsman already stops at the first syntax error, and positions are tested (tests/st.rs `errors_are_sorted_and_positioned`). Pin it with a corpus of the twenty most common ST typos (`ELSE IF`, `=` for `:=`, missing `;`, missing `END_IF`, `:=` in a condition, a misspelled keyword or FB) and assert each one's line, column and a message that names the fix.
-  result: error quality is measured, and a regression in it fails CI
-  est: 1d
-  difficulty: low
-  id: typo-corpus
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **The canvas stays usable over a slow link** — PLCnext Engineer's online layer "will freeze 99.9% of the time" over VPN, and Phoenix said that is by design. Run the canvas against a box behind a throttled proxy (300 ms RTT, 1 Mbit/s, 2 % loss) in a test, and check the Monitor's polling never queues requests behind each other and the UI never blocks on the network.
   result: remote support over a site VPN works; a regression fails a test
   est: 4h

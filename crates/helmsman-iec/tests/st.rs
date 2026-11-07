@@ -605,7 +605,10 @@ fn errors_are_sorted_and_positioned() {
     let e = errors("PROGRAM t VAR a : INT; END_VAR\n a := b;\n  a := c;\nEND_PROGRAM");
     assert_eq!(
         e,
-        vec!["2:7: undeclared variable B", "3:8: undeclared variable C"]
+        vec![
+            "2:7: undeclared variable B (declare it in a VAR block)",
+            "3:8: undeclared variable C (declare it in a VAR block)"
+        ]
     );
     let e = errors("PROGRAM t\n x := ;\nEND_PROGRAM");
     assert_eq!(e, vec!["2:7: expected an expression, found ;"]);
