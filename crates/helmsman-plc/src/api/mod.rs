@@ -105,6 +105,7 @@
 
 pub mod approve;
 pub mod bundle;
+mod carry;
 pub mod catalog;
 pub mod chat;
 mod control;
@@ -1460,6 +1461,20 @@ fn check_only(req: &Request, ctx: &Ctx) -> Response {
     }
 }
 
+/// What a module gets for any key its manifest leaves out: the
+/// approval path's, else the box's `%M` size with no windows.
+fn module_defaults(ctx: &Ctx) -> crate::spec::Defaults {
+    ctx.approval.as_ref().map_or(
+        crate::spec::Defaults {
+            period: Duration::from_millis(10),
+            i: crate::Window::new(0, 0),
+            q: crate::Window::new(0, 0),
+            m: ctx.cfg.memory,
+        },
+        |a| a.plant.defaults,
+    )
+}
+
 /// [`proposal::check`], after the drop-in rule: a proposal that names a
 /// PLC drop-in, or one the box no longer holds, must be a watch module
 /// (see [`dropin`]).
@@ -1620,6 +1635,12 @@ fn create(req: &Request, ctx: &Ctx) -> Response {
     p["approval"] = match (&running, &change) {
         (Some(base), Some(cs)) => approve::tier_json(ctx, base, cs, None),
         _ => Json::Null,
+    };
+    // Worked out once, here: see `carry` for why not on every GET.
+    p["state"] = match (&running, &change) {
+        (Some(base), Some(cs)) => carry::preview(base, cs, &module_defaults(ctx)),
+        (None, _) => carry::nothing(true),
+        (Some(_), None) => Json::Null,
     };
     let snap = change.as_ref().map(|cs| cs.id().to_string());
     let what = match (&snap, p["base"].as_str()) {

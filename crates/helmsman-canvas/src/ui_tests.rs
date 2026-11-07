@@ -156,6 +156,18 @@ impl Harness {
         })
     }
 
+    /// Whether the last frame drew a piece of text containing `needle`.
+    fn drew(&self, needle: &str) -> bool {
+        fn walk(shape: &egui::Shape, needle: &str) -> bool {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().any(|s| walk(s, needle)),
+                egui::Shape::Text(t) => t.galley.job.text.contains(needle),
+                _ => false,
+            }
+        }
+        self.shapes.iter().any(|c| walk(&c.shape, needle))
+    }
+
     fn has(&self, key: &str) -> bool {
         self.app.chrome.rect(key).is_some()
     }
@@ -3791,6 +3803,14 @@ mod reviewing {
         ] {
             assert!(keys.contains(&k.to_string()), "no {k}: {keys:?}");
         }
+        // Above the button: what the deploy keeps and resets, in words.
+        assert!(
+            h.drew("Before you approve: this deploy keeps 5 values, starts HORN at the initial value (new)."),
+            "the approval screen shows the preview"
+        );
+        assert!(h.drew("new HORN"), "the reset value is marked apart");
+        let state = rect(&mut h, "state");
+        assert!(state.top() < rect(&mut h, &format!("go {:?}", Target::Proposal(id))).top());
         let t = Target::Proposal(id);
         click(&mut h, &format!("go {t:?}"));
         pump(&mut h, &b);
@@ -3835,6 +3855,10 @@ mod reviewing {
         assert!(
             rv(&mut h).state.open.as_ref().unwrap().undo.is_some(),
             "the undo is offered"
+        );
+        assert!(
+            h.drew("Applied: this deploy keeps 5 values, starts HORN at the initial value (new)."),
+            "what the deploy did, as the box reported it"
         );
         assert_eq!(h.app.waiting(), Some(0), "nothing waits once applied");
 

@@ -50,6 +50,7 @@ use super::approve::{self, Approval, Target};
 use super::{Ctx, Request, Response, audit, audit_full, audited, clean, is_json};
 use crate::policy::Role;
 use crate::project::build::{self, Built, Shape};
+use crate::project::check;
 use crate::project::{self, FileKind, Files, Projects, Refusal, Running};
 use crate::store::SnapshotId;
 
@@ -668,12 +669,7 @@ fn shape(appr: &Approval) -> Shape {
 /// image sizes (the simulation's defaults on a box with no approval path).
 pub(super) fn test_settings(ctx: &Ctx) -> spec::Settings {
     match &ctx.approval {
-        Some(appr) => spec::Settings::new(ImageSizes {
-            i: appr.plant.i_len,
-            q: appr.plant.q_len,
-            m: appr.plant.defaults.m,
-        })
-        .period(appr.plant.defaults.period),
+        Some(appr) => check::test_settings(&shape(appr)),
         None => spec::Settings::new(ImageSizes { i: 32, q: 32, m: 256 }),
     }
 }
@@ -695,8 +691,7 @@ fn run_tests(ctx: &Ctx, name: &str) -> Result<Vec<spec::Verdict>, (u16, Json, St
             r.why.clone(),
         )
     })?;
-    let plan = spec::plan(files.st());
-    Ok(spec::run_all(&plan, test_settings(ctx)))
+    Ok(check::run_tests(&files, test_settings(ctx)))
 }
 
 /// One test's result. `state` is `passed`, `failed` or `untested` (no
