@@ -42,7 +42,7 @@ test-interop:  ## Interop suite against HELMSMAN_OPENER_ADDR (default 127.0.0.1,
 # ---- Structured Text oracle -------------------------------------------------
 
 rusty-image:  ## Build the pinned ruSTy compiler image (test oracle only, never linked).
-	docker build -t helmsman/rusty:1.0.7 docker/rusty
+	docker build -t helmsman/rusty:1.0.8 docker/rusty
 
 test-oracle:  ## Differential test of the ST interpreter against ruSTy (needs Docker).
 	./scripts/test-oracle.sh
