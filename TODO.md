@@ -228,14 +228,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 The gaps in FEEDBACK.md's design table, each checked against the code at dev 997bedc (2026-11-07). These are small, need no design decision, and answer a complaint engineers make about every platform. Order: `feedback-order`.
 
-- [ ] **RETAIN survives a power cycle** — `RETAIN` and `NON_RETAIN` are parsed and ignored (helmsman-iec parser.rs). Values carry across a deploy but are lost on a reboot or power loss. An engineer who writes `VAR RETAIN` expects the opposite, and OpenPLC lost trust for silently dropping retained values past the first 128. Day one: the checker warns "RETAIN is not kept across a restart yet" so nothing is silent. Then persist RETAIN variables per module to the state dir with the snapshot fsync discipline, at a bounded rate (on change, at most every N scans, plus on clean shutdown), and restore them by name and type at start, the way a deploy carries state. No count cap other than a size cap that refuses loudly.
-  result: a RETAIN counter reads the same after the box is power-cycled; a test kills the process mid-run and checks the restored values
-  est: 2d
-  difficulty: med
-  id: retain-persist
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Scan time, jitter and overruns on the Monitor** — the runtime counts `scans`, `overruns` and `held` (`/api/modules`), and the watchdog is an instruction budget, but scan time and jitter are not measured, and the Monitor shows only the period and the scan count. OpenPLC users ask how to see scan load and get "There is no straightforward way to do what you want." Measure each module's execution time and the tick's start lateness (monotonic clock, min, mean, max, and a p99 over a window), expose it in `/api/modules`, and show it with overruns on the Monitor, with a tooltip on what each means.
   result: an engineer sees scan load and jitter per module; an overrun is visible, not just counted
   est: 1d
