@@ -2227,7 +2227,13 @@ agent as ST; nothing here writes ST back).
   path. A program whose newest scan is over 3 s old, or every program
   while the values stream is down or silent for 3 s, is drawn grey with
   the age: never a colour. It sends only GETs and stream opens (tested);
-  leaving it closes the all-modules stream and reopens the Editor's.
+  leaving it closes the all-modules stream and reopens the Editor's. Over
+  a slow link no poll is asked for again while its last ask is on its
+  way: the 5 s device round waits for both its reads (`/api/devices`,
+  `/api/io_map`), the header badge's 30 s proposals round for its list
+  (contract in `slow_link_tests.rs`: the Monitor against the real API
+  through an in-process proxy with a site VPN's 300 ms round trip,
+  1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
 
 ## Explain mode (`explain-mode`, built)
 

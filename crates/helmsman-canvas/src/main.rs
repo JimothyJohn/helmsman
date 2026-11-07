@@ -79,6 +79,8 @@ mod scope_tests;
 mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod slow_link_tests;
 mod st_view;
 mod stamp;
 #[cfg(test)]
