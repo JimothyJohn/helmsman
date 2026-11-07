@@ -753,6 +753,14 @@ fn a_draft_without_a_running_change_set_has_no_snapshot() {
     assert_eq!(r.status, 201, "{r:?}");
     assert_eq!(r.json()["snapshot"], Json::Null);
     assert_eq!(audit(b.addr)[0]["snapshot"], Json::Null);
+    // Nothing runs, so there is nothing to keep: said, not an error.
+    let state = &r.json()["state"];
+    assert_eq!(state["preview"], true, "{state}");
+    assert_eq!(state["running"], false, "{state}");
+    assert_eq!(
+        state["summary"],
+        "nothing running to keep: every value starts at its initial value"
+    );
 }
 
 #[test]

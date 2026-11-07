@@ -1038,7 +1038,13 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   directory's two files, or one param's value): parsed, compiled against its
   windows, held to its manifest, its signals checked against the box, and,
   when the box runs a change set, carrying the change set applying it would
-  commit, its snapshot id, its diff and its tier. The only way a draft runs
+  commit, its snapshot id, its diff, its tier and a preview of what it
+  does to the running values (`state`: which keep, which reset because
+  they are new or their type changed, which are dropped; `api/carry.rs`,
+  worked out once at creation by restoring freshly compiled target
+  programs from freshly compiled running ones, never from the scan
+  thread's state). An apply answers, and audits, the carry the swap
+  actually made (`Runtime::last_carry`). The only way a draft runs
   is `apply`, the only way back `rollback`, both through the approval
   policy (below). A project deploy (`projects`, below) is an apply of
   the project's build, through the same path, by an engineer's session.
@@ -2579,7 +2585,8 @@ prompt. The agent never touches the Rust core.
 ## Where the planned pieces attach
 
 - `approval-policy` (built, above) → `proposal-ui` (built, above): the
-  canvas shows a draft's `approval` (tier, reasons, what it needs), charts
+  canvas shows a draft's `approval` (tier, reasons, what it needs) and
+  its `state` preview in words above the approve button, charts
   its replay, and posts the PIN (or, with accounts, the login session) to
   `apply`. `box-mcp` (built, above) wraps the same routes;
   `local-accounts` (built, above) replaces role PINs with people, keeping

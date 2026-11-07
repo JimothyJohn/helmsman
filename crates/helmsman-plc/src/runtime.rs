@@ -226,6 +226,10 @@ pub struct Runtime {
     i_len: usize,
     /// `now` of the last tick.
     last: Option<Duration>,
+    /// What the last [`Runtime::reconfigure`] or [`Runtime::rebind`] did
+    /// to each kept module's state, by module name in scan order (a new
+    /// module is not here: it starts cold).
+    carried: Vec<(String, Carry)>,
 }
 
 impl Runtime {
@@ -272,6 +276,7 @@ impl Runtime {
             outputs: vec![0; q_len],
             i_len,
             last: None,
+            carried: Vec::new(),
         })
     }
 
@@ -476,6 +481,7 @@ impl Runtime {
     fn carry(&mut self, modules: Vec<Module>, ports: Vec<Vec<PortBinding>>) {
         let mut old: Vec<Option<Slot>> = std::mem::take(&mut self.slots).into_iter().map(Some).collect();
         let now = self.last.unwrap_or(Duration::ZERO);
+        self.carried.clear();
         for (mut module, ports) in modules.into_iter().zip(ports) {
             let mut image = Image::new(module.program.sizes());
             let q = module.q;
@@ -486,7 +492,8 @@ impl Runtime {
                 .and_then(Option::take);
             let slot = match prev {
                 Some(s) => {
-                    let _ = module.program.restore(&s.module.program);
+                    let carry = module.program.restore(&s.module.program);
+                    self.carried.push((module.name.clone(), carry));
                     let m = image.m.len().min(s.image.m.len());
                     image.m[..m].copy_from_slice(&s.image.m[..m]);
                     let mut next = s.next;
@@ -739,6 +746,14 @@ impl Runtime {
     /// Module names, in scan order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.slots.iter().map(|s| s.module.name.as_str())
+    }
+
+    /// What the last [`Runtime::reconfigure`] or [`Runtime::rebind`] did
+    /// to the state of each module it kept, by name in scan order; a module
+    /// it added is not listed (it started cold). Empty before either ran.
+    #[must_use]
+    pub fn last_carry(&self) -> &[(String, Carry)] {
+        &self.carried
     }
 }
 

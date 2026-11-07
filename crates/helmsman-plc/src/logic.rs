@@ -175,10 +175,13 @@ impl Logic {
         }
     }
 
-    #[cfg(feature = "wasm")]
-    fn state_names(&self) -> Vec<String> {
+    /// The names (upper-cased for ST) of the state that carries, in
+    /// declaration order.
+    #[must_use]
+    pub fn state_names(&self) -> Vec<String> {
         match self {
             Self::St(p) => p.state().names().map(str::to_string).collect(),
+            #[cfg(feature = "wasm")]
             Self::Wasm(w) => w.state_names(),
         }
     }
