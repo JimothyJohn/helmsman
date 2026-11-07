@@ -30,6 +30,7 @@
 // Natively nothing carries the answers back but the tests.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
 use crate::claude::{Event, Sse};
@@ -118,7 +119,8 @@ impl Status {
 }
 
 /// A row of a turn other than its text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Item {
     /// A tool the agent ran; `result` once it answered.
     Tool {
@@ -138,7 +140,8 @@ pub enum Item {
 }
 
 /// How a turn ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum End {
     /// `done`: its stop (`end_turn`, `budget`, `refusal`, `offline`) and
     /// the box's words for anything but a plain end.
@@ -149,19 +152,22 @@ pub enum End {
     Stopped,
 }
 
-/// One message and what came back.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One message and what came back (kept in the desk, `crate::desk`,
+/// so a reload shows it again).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Turn {
     pub user: String,
     pub text: String,
     pub items: Vec<Item>,
     /// `None` while it streams.
     pub end: Option<End>,
+    #[serde(skip)]
     cut: bool,
 }
 
 impl Turn {
-    fn new(user: String) -> Self {
+    pub(crate) fn new(user: String) -> Self {
         Self {
             user,
             text: String::new(),

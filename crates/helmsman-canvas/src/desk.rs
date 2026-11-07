@@ -8,7 +8,11 @@
 //! version it was made against, so a file someone changed since comes
 //! back as a conflict instead of overwriting their change), the Agent's
 //! and the Requirements' half-typed inputs, the screen, and the sign-in
-//! name. Never kept: a password or PIN.
+//! name; the Agent's conversation (its turns, the newest first within
+//! [`CONVERSATION_BYTES`], and the last instruction's outcome with its
+//! proposal links) and the half-filled New device form (card
+//! `desk-agent-and-forms`). Never kept: a password or PIN, or a device
+//! setting that names a credential ([`is_secret_key`]).
 //!
 //! One `localStorage` slot (each box serves its own page, so the slot is
 //! per box), written at most every [`EVERY_S`] and only when something
@@ -32,7 +36,10 @@ use serde::{Deserialize, Serialize};
 
 use serde_json::Value as Json;
 
+use crate::box_agent::{BoxAgent, End, Item, Turn};
 use crate::box_projects::{Answer, PCall, PReq};
+use crate::devices::NewDevice;
+use crate::instruct::{Instruct, Kind, Outcome};
 use crate::review::Session;
 use crate::sim_projects::{Storage, wall_ms};
 
@@ -74,6 +81,224 @@ pub struct Desk {
     pub screen: Option<String>,
     /// The sign-in form's name (never a password or PIN).
     pub user: String,
+    /// The Agent tab's conversation and the last instruction's outcome
+    /// ([`Conversation::of`], capped).
+    pub conversation: Option<Conversation>,
+    /// The New device form, half filled ([`form_of`]: no credential, the
+    /// EDS by its file name only).
+    pub device: Option<NewDevice>,
+}
+
+/// The most the Agent's conversation takes of a desk, bytes: past it the
+/// oldest turns go first. Well under [`BOX_BYTES`], so the edits keep room.
+pub const CONVERSATION_BYTES: usize = 128 * 1024;
+/// Of each turn kept: the answer's text and the message, bytes; the
+/// tool, proposal and notice rows (proposals kept first).
+pub const TURN_TEXT: usize = 16 * 1024;
+pub const TURN_USER: usize = 2 * 1024;
+pub const TURN_ITEMS: usize = 40;
+/// Of each row kept, its summary, bytes.
+pub const ITEM_LINE: usize = 240;
+/// Undo is kept with the outcome while the file it puts back is at most
+/// this, bytes (History has the revision either way).
+pub const UNDO_BYTES: usize = 64 * 1024;
+/// The device form: its rows, and the characters of each field kept.
+pub const FORM_POINTS: usize = 256;
+pub const FORM_FIELD: usize = 256;
+
+/// The Agent tab as the desk keeps it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Conversation {
+    /// The turns with the box's agent, oldest first.
+    pub turns: Vec<Turn>,
+    /// How the last instruction came out.
+    pub outcome: Option<Outcome>,
+    /// An instruction was under way (what it changes, in words): after a
+    /// reload it is over, with nothing written.
+    pub interrupted: Option<String>,
+}
+
+/// At most `n` bytes of `s`, cut on a character, `more` added when cut.
+fn clip_bytes(s: &str, n: usize, more: &str) -> String {
+    if s.len() <= n {
+        return s.to_string();
+    }
+    let mut k = n;
+    while !s.is_char_boundary(k) {
+        k -= 1;
+    }
+    format!("{}{more}", &s[..k])
+}
+
+/// `turn` as the desk keeps it: its text and message cut, its rows at most
+/// [`TURN_ITEMS`] with every proposal among them.
+fn kept_turn(turn: &Turn) -> Turn {
+    let offers = |i: &Item| matches!(i, Item::Proposal { .. } | Item::Fallback { .. });
+    let n_offers = turn.items.iter().filter(|i| offers(i)).count().min(TURN_ITEMS);
+    // Room left for the other rows, and for the proposals.
+    let mut room = (TURN_ITEMS - n_offers, n_offers);
+    let mut t = Turn::new(clip_bytes(&turn.user, TURN_USER, " […]"));
+    t.text = clip_bytes(
+        &turn.text,
+        TURN_TEXT,
+        "\n[the rest of this answer is not kept over a reload]",
+    );
+    let line = |s: &str| clip_bytes(s, ITEM_LINE, "…");
+    for i in &turn.items {
+        let left = if offers(i) { &mut room.1 } else { &mut room.0 };
+        if *left == 0 {
+            continue;
+        }
+        *left -= 1;
+        t.items.push(match i {
+            Item::Tool { id, name, result } => Item::Tool {
+                id: line(id),
+                name: line(name),
+                result: result.as_ref().map(|(ok, s)| (*ok, line(s))),
+            },
+            Item::Proposal { ids, summary } => Item::Proposal {
+                ids: ids.iter().copied().take(TURN_ITEMS).collect(),
+                summary: line(summary),
+            },
+            Item::Retrying(s) => Item::Retrying(line(s)),
+            Item::Fallback { .. } => i.clone(),
+        });
+    }
+    t.end = Some(
+        turn.end
+            .clone()
+            .unwrap_or_else(|| End::Failed("the page was reloaded before this answer ended".into())),
+    );
+    t
+}
+
+impl Conversation {
+    /// What the desk keeps of the Agent tab: `turns`, the newest first
+    /// until [`CONVERSATION_BYTES`] (each cut by [`kept_turn`]), the
+    /// `outcome` (its Undo only within [`UNDO_BYTES`]), and the
+    /// instruction `under_way`, if one is. `None`: nothing to keep.
+    #[must_use]
+    pub fn of(turns: &[Turn], outcome: Option<&Outcome>, under_way: Option<String>) -> Option<Self> {
+        if turns.is_empty() && outcome.is_none() && under_way.is_none() {
+            return None;
+        }
+        let outcome = outcome.map(|o| {
+            let mut o = o.clone();
+            o.undo = o.undo.filter(|u| u.text.len() <= UNDO_BYTES);
+            o.problems.truncate(20);
+            for p in &mut o.problems {
+                *p = clip_bytes(p, 1024, "…");
+            }
+            o.status = clip_bytes(&o.status, 1024, "…");
+            o.why = o.why.map(|w| clip_bytes(&w, 1024, "…"));
+            o.review.truncate(TURN_ITEMS);
+            o
+        });
+        let under_way = under_way.map(|w| clip_bytes(&w, FORM_FIELD, "…"));
+        let mut room = CONVERSATION_BYTES
+            .saturating_sub(size(&outcome))
+            .saturating_sub(size(&under_way));
+        let mut kept = Vec::new();
+        for t in turns.iter().rev().take(crate::box_agent::MAX_TURNS) {
+            let t = kept_turn(t);
+            let n = size(&t) + 1;
+            if n > room {
+                break;
+            }
+            room -= n;
+            kept.push(t);
+        }
+        kept.reverse();
+        Some(Self {
+            turns: kept,
+            outcome,
+            interrupted: under_way,
+        })
+    }
+
+    /// Puts the conversation back on the Agent tab: its turns, and its
+    /// outcome; an instruction that was under way ends, nothing written,
+    /// with the proposals its last turn stored still offered.
+    pub fn put_back(self, agent: &mut BoxAgent, instruct: &mut Instruct) {
+        agent.turns = self.turns;
+        instruct.run = None;
+        instruct.outcome = self.outcome;
+        if let Some(target) = self.interrupted {
+            let mut o = Outcome::new(
+                Kind::Failed,
+                format!("The page was reloaded while the Agent worked on {target}: nothing was written."),
+            );
+            o.review = agent.turns.last().map(Turn::proposals).unwrap_or_default();
+            instruct.outcome = Some(o);
+        }
+    }
+}
+
+/// `v`'s size as JSON, bytes.
+fn size<T: Serialize>(v: &T) -> usize {
+    serde_json::to_string(v).map_or(usize::MAX / 4, |t| t.len())
+}
+
+/// Whether a device setting's key names a credential (a password, PIN,
+/// token, key or secret): the desk never keeps its value.
+#[must_use]
+pub fn is_secret_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    [
+        "pass",
+        "pwd",
+        "secret",
+        "token",
+        "auth",
+        "credential",
+        "apikey",
+        "api_key",
+    ]
+    .iter()
+    .any(|s| k.contains(s))
+        || k == "pin"
+        || k == "key"
+        || k.ends_with("_pin")
+        || k.ends_with("_key")
+}
+
+/// The device form as the desk keeps it: every field cut to
+/// [`FORM_FIELD`] characters, at most [`FORM_POINTS`] rows, any credential
+/// setting ([`is_secret_key`]) taken out of its settings, the refusal
+/// left out. The EDS is its file name in the project, never its bytes.
+#[must_use]
+pub fn form_of(f: &NewDevice) -> NewDevice {
+    let cut = |s: &str| s.chars().take(FORM_FIELD).collect::<String>();
+    let params: Vec<&str> = f
+        .params
+        .split_whitespace()
+        .filter(|t| !t.split_once('=').is_some_and(|(k, _)| is_secret_key(k)))
+        .collect();
+    NewDevice {
+        name: cut(&f.name),
+        protocol: f.protocol,
+        endpoint: cut(&f.endpoint),
+        params: cut(&params.join(" ")),
+        error: None,
+        eds: f.eds.as_deref().map(cut),
+        points: f
+            .points
+            .iter()
+            .take(FORM_POINTS)
+            .map(|p| {
+                let mut p = p.clone();
+                p.name = cut(&p.name);
+                p.point = cut(&p.point);
+                if let crate::device_form::Use::Existing(v) = &mut p.use_ {
+                    *v = cut(v);
+                }
+                p
+            })
+            .collect(),
+        catalog: f.catalog,
+        editing: f.editing.as_deref().map(cut),
+    }
 }
 
 impl Desk {
@@ -83,10 +308,18 @@ impl Desk {
         serde_json::from_str(text).unwrap_or_default()
     }
 
-    /// The person's work in it, which `saved_at` dates: the edits and the
-    /// two inputs (the project, file, screen and name follow the work).
+    /// The person's work in it, which `saved_at` dates: the edits, the two
+    /// inputs, the Agent's conversation and the device form (the project,
+    /// file, screen and name follow the work).
     fn work(&self) -> String {
-        serde_json::to_string(&(&self.drafts, &self.agent, &self.requirement)).unwrap_or_default()
+        serde_json::to_string(&(
+            &self.drafts,
+            &self.agent,
+            &self.requirement,
+            &self.conversation,
+            &self.device,
+        ))
+        .unwrap_or_default()
     }
 
     /// As text, at most `max` bytes: past it, whole drafts are dropped
@@ -107,7 +340,16 @@ impl Desk {
                 .flat_map(|(p, m)| m.iter().map(move |(f, dr)| (dr.text.len(), p.clone(), f.clone())))
                 .max();
             let Some((_, p, f)) = biggest else {
-                // No drafts left and still too big: keep nothing.
+                // No drafts left and still too big: the conversation, then
+                // the device form, then nothing.
+                if d.conversation.take().is_some() {
+                    dropped.push("the Agent conversation".into());
+                    continue;
+                }
+                if d.device.take().is_some() {
+                    dropped.push("the New device form".into());
+                    continue;
+                }
                 return ("{}".into(), dropped);
             };
             if let Some(m) = d.drafts.get_mut(&p) {
@@ -178,6 +420,13 @@ impl Keeper {
     pub fn adopt(&mut self, desk: &Desk) {
         self.work = desk.work();
         self.saved_at = desk.saved_at;
+    }
+
+    /// Whether [`Self::keep`] would look at a desk at `now` (the throttle
+    /// lets it through): the desk is only built then.
+    #[must_use]
+    pub fn due(&self, now: f64) -> bool {
+        !self.at.is_some_and(|a| now - a < EVERY_S)
     }
 
     /// Keeps `desk` if it changed and the last write is [`EVERY_S`] old,
@@ -579,5 +828,231 @@ mod tests {
             1.0,
         );
         assert!(k.problem.as_deref().unwrap().contains("quota"));
+    }
+
+    fn turn(user: &str, text: &str, items: Vec<Item>, end: Option<End>) -> Turn {
+        let mut t = Turn::new(user.into());
+        t.text = text.into();
+        t.items = items;
+        t.end = end;
+        t
+    }
+
+    fn done() -> End {
+        End::Done {
+            stop: "end_turn".into(),
+            why: None,
+        }
+    }
+
+    fn form() -> NewDevice {
+        let mut f = NewDevice::from_eds("e1213.eds", "[Device]\nProdName = \"E1213\";\n");
+        f.endpoint = "192.168.1.60".into();
+        f.points[0].on = true;
+        f.points[0].name = "start_pb".into();
+        f.points.push(crate::device_form::PointRow {
+            use_: crate::device_form::Use::Existing("motor".into()),
+            ..crate::device_form::PointRow::custom(crate::device_form::Dir::Out, 1)
+        });
+        f
+    }
+
+    /// The box keeps 512 KiB of a desk: the longest conversation the page
+    /// can hold (every turn the most text and rows it takes, a big Undo)
+    /// keeps its newest turns and their proposals within
+    /// [`CONVERSATION_BYTES`], so with the device form and a large edit
+    /// the whole desk still goes to the box with nothing left out.
+    #[test]
+    fn a_long_conversation_still_fits_on_the_box_with_its_newest_turns() {
+        use crate::box_agent::{MAX_ITEMS, MAX_TEXT};
+        let tool = |n: usize| Item::Tool {
+            id: format!("t{n}"),
+            name: "read_file".into(),
+            result: Some((true, "r".repeat(600))),
+        };
+        let turns: Vec<Turn> = (0..60u64)
+            .map(|k| {
+                let mut items: Vec<Item> = (0..MAX_ITEMS - 1).map(tool).collect();
+                items.push(Item::Proposal {
+                    ids: vec![k],
+                    summary: "speed to 2".into(),
+                });
+                // Two bytes a character: cut on a character, not in one.
+                let text = "é".repeat(MAX_TEXT / 2);
+                turn(&format!("{}{k}", "m".repeat(9000)), &text, items, Some(done()))
+            })
+            .collect();
+        let mut outcome = Outcome::new(Kind::Applied, "Main.st is updated.");
+        outcome.undo = Some(crate::instruct::Undo {
+            project: "line".into(),
+            file: "main.st".into(),
+            revision: 3,
+            text: "x".repeat(UNDO_BYTES + 1),
+        });
+        outcome.review = vec![59];
+        let c = Conversation::of(&turns, Some(&outcome), None).unwrap();
+        assert!(size(&c) <= CONVERSATION_BYTES, "{}", size(&c));
+        assert!(c.turns.len() >= 2, "{}", c.turns.len());
+        let last = c.turns.last().unwrap();
+        assert_eq!(last.proposals(), [59], "the newest turn, its proposal kept");
+        assert!(c.turns.iter().all(|t| t.items.len() <= TURN_ITEMS));
+        assert!(c.turns.iter().all(|t| t.text.len() <= TURN_TEXT + 64));
+        assert!(last.text.ends_with("is not kept over a reload]"));
+        assert_eq!(c.outcome.as_ref().unwrap().undo, None, "too big an Undo");
+        let mut small = outcome.clone();
+        small.undo.as_mut().unwrap().text = "x".into();
+        let kept = Conversation::of(&turns[..1], Some(&small), None).unwrap();
+        assert!(kept.outcome.unwrap().undo.is_some(), "a small Undo is kept");
+
+        let mut d = Desk {
+            conversation: Some(c.clone()),
+            device: Some(form_of(&form())),
+            ..Desk::default()
+        };
+        d.drafts
+            .entry("line".into())
+            .or_default()
+            .insert("main.st".into(), draft(&"y".repeat(300 * 1024)));
+        let (t, dropped) = d.text_within(BOX_BYTES);
+        assert_eq!(dropped, Vec::<String>::new());
+        assert!(t.len() <= BOX_BYTES);
+        let back = Desk::parse(&t);
+        assert_eq!(back.conversation, Some(c));
+        assert_eq!(back.device, d.device);
+        // Past the limit with no edits left, the conversation goes, then
+        // the form, and the inputs stay.
+        let (t, dropped) = Desk {
+            drafts: BTreeMap::new(),
+            agent: "half typed".into(),
+            ..d
+        }
+        .text_within(1000);
+        assert_eq!(dropped, ["the Agent conversation", "the New device form"]);
+        assert_eq!(Desk::parse(&t).agent, "half typed");
+    }
+
+    /// The conversation and the device form are work: a change to either
+    /// dates the desk, like an edit.
+    #[test]
+    fn a_new_turn_or_a_form_change_moves_saved_at() {
+        let (mut k, mut d) = Keeper::load(Box::new(MemStorage(None)));
+        d.agent = "a".into();
+        let t0 = k.keep(&d, 1.0).unwrap().saved_at;
+        assert!(!k.due(1.5) && k.due(2.1), "the throttle");
+        assert_eq!(k.keep(&d, 3.0).unwrap().saved_at, t0, "nothing changed");
+        d.conversation = Conversation::of(
+            &[turn("speed up", "", vec![], None)],
+            None,
+            Some("main.st".into()),
+        );
+        let t1 = k.keep(&d, 5.0).unwrap().saved_at;
+        assert!(t1 > t0);
+        d.conversation = Conversation::of(
+            &[turn("speed up", "Why: faster", vec![], Some(done()))],
+            None,
+            None,
+        );
+        let t2 = k.keep(&d, 7.0).unwrap().saved_at;
+        assert!(t2 > t1, "the answer streamed in");
+        let mut f = form();
+        d.device = Some(form_of(&f));
+        let t3 = k.keep(&d, 9.0).unwrap().saved_at;
+        assert!(t3 > t2);
+        f.name = "rio".into();
+        d.device = Some(form_of(&f));
+        assert!(k.keep(&d, 11.0).unwrap().saved_at > t3, "a field typed");
+    }
+
+    /// The form has no credential field, and any setting whose key names
+    /// one is left out of the desk, value and all; the EDS is kept by its
+    /// file name, and a refusal is not kept.
+    #[test]
+    fn the_device_form_keeps_no_credential() {
+        let mut f = form();
+        f.params = "eds=e1213.eds password=hunter2 Token=tok-77 api_key=k-55 pin=1234 \
+                    auth_user=au-1 secret=s-9 key=kk-3 rpi_ms=100 poll_ms=20"
+            .into();
+        f.error = Some("the name is taken".into());
+        let kept = form_of(&f);
+        assert_eq!(kept.params, "eds=e1213.eds rpi_ms=100 poll_ms=20");
+        assert_eq!(kept.error, None);
+        assert_eq!(kept.eds.as_deref(), Some("e1213.eds"));
+        let d = Desk {
+            device: Some(kept.clone()),
+            ..Desk::default()
+        };
+        let text = d.text_within(BOX_BYTES).0;
+        for secret in [
+            "hunter2", "tok-77", "k-55", "1234", "au-1", "s-9", "kk-3", "taken",
+        ] {
+            assert!(!text.contains(secret), "{secret} in {text}");
+        }
+        assert_eq!(Desk::parse(&text).device, Some(kept));
+        for (k, secret) in [
+            ("password", true),
+            ("PIN", true),
+            ("ssh_key", true),
+            ("bearer_token", true),
+            ("unit", false),
+            ("poll_ms", false),
+            ("profile", false),
+            ("eds", false),
+            ("timeout_ms", false),
+        ] {
+            assert_eq!(is_secret_key(k), secret, "{k}");
+        }
+        // A form far past its bounds is cut to them.
+        f.name = "n".repeat(10_000);
+        f.points = (0..1000)
+            .map(|n| crate::device_form::PointRow::custom(crate::device_form::Dir::In, n))
+            .collect();
+        let kept = form_of(&f);
+        assert_eq!(kept.name.len(), FORM_FIELD);
+        assert_eq!(kept.points.len(), FORM_POINTS);
+    }
+
+    /// A reload while the Agent answered: the turns come back, the one
+    /// that was streaming ended, the instruction over with nothing
+    /// written, and the proposal its turn stored still offered.
+    #[test]
+    fn a_conversation_cut_by_a_reload_ends_and_keeps_its_proposal() {
+        let turns = [
+            turn("first", "Why: done", vec![], Some(done())),
+            turn(
+                "second",
+                "Looking",
+                vec![Item::Proposal {
+                    ids: vec![7],
+                    summary: "speed to 2".into(),
+                }],
+                None,
+            ),
+        ];
+        let c = Conversation::of(&turns, None, Some("main.st".into())).unwrap();
+        let mut agent = BoxAgent::new();
+        let mut instruct = Instruct::default();
+        Desk::parse(
+            &Desk {
+                conversation: Some(c),
+                ..Desk::default()
+            }
+            .text_within(MAX_BYTES)
+            .0,
+        )
+        .conversation
+        .unwrap()
+        .put_back(&mut agent, &mut instruct);
+        assert_eq!(agent.turns.len(), 2);
+        assert_eq!(agent.turns[0].text, "Why: done");
+        assert!(
+            matches!(&agent.turns[1].end, Some(End::Failed(w)) if w.contains("reloaded")),
+            "{:?}",
+            agent.turns[1].end
+        );
+        assert!(!agent.busy() && !instruct.busy());
+        let o = instruct.outcome.unwrap();
+        assert_eq!(o.kind, Kind::Failed);
+        assert!(o.status.contains("main.st") && o.status.contains("nothing was written"));
+        assert_eq!(o.review, [7]);
     }
 }

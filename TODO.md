@@ -215,15 +215,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
   notes: box side merged in #219 (FC 43/14 codec and probe, modbus= endpoints, discover ?modbus=1, spec §6.21). Left: the Devices tab asking ?modbus=1 and showing the list; identity.modbus in helmsman-devices build-index.py; a Modbus-identity query on GET /api/devices/library; whether the E1213 answers FC 43/14 (unchecked: it was off the LAN 2026-11-04).
 
-- [ ] **Persistence 3: the Agent conversation and the device form survive a reload** — still lost on reload after #276: the Agent transcript (`BoxAgent.turns`, box_agent.rs; Turn/Item/End need serde, MAX_TURNS 50, the box has no transcript GET today, so keep the rendered turns in the desk, capped) and the half-filled device form (`DevicesUi.adding: NewDevice`, devices.rs:210, with its points; drop the EDS bytes, keep a reference). Restore both through the desk (browser now, the box once desk-on-box lands). Tests: a reload mid-conversation shows the same turns and a pending proposal link; a half-filled form comes back; a proposal already decided shows as decided, not re-offered.
-  result: nothing typed or read in the Agent tab or the device form is lost to a refresh
-  est: 1d
-  difficulty: med
-  depends: desk-on-box
-  id: desk-agent-and-forms
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Help mode on the relay: a profile that reads the repo** — in ../agent-relay (separate repo and session; SAM deploy, deploy-chain edits as a draft PR): a new profile id (e.g. helmsman/help-v1; a served profile never changes) whose model gets read-only tools over JimothyJohn/helmsman@dev through the GitHub API: list a directory, read a file (size-capped), search code. The repo is PUBLIC (checked 2026-11-07), so no token is needed to start; a fine-grained read-only token in Secrets Manager raises the rate limit (60/h unauthenticated). The system prompt: diagnose for a third-party user, cite the files it read, end with the Markdown issue; docs/ARCHITECTURE.md and docs/help are the starting points. Tests against recorded GitHub responses; refuse paths outside the repo.
   needs: a session in ../agent-relay (this repo's sessions cannot write there); Nick's go for the deploy
   result: the relay serves the Help profile the box's Help mode asks for
@@ -274,14 +265,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   est: 1d
   difficulty: low
   id: typo-corpus
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **The canvas stays usable over a slow link** — PLCnext Engineer's online layer "will freeze 99.9% of the time" over VPN, and Phoenix said that is by design. Run the canvas against a box behind a throttled proxy (300 ms RTT, 1 Mbit/s, 2 % loss) in a test, and check the Monitor's polling never queues requests behind each other and the UI never blocks on the network.
-  result: remote support over a site VPN works; a regression fails a test
-  est: 4h
-  difficulty: low
-  id: canvas-slow-link
   asked: 2026-11-07
   by: claude-session
 

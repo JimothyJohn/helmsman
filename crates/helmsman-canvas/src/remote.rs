@@ -66,8 +66,30 @@ const DEVICES_EVERY: f64 = 5.0;
 enum DevicesPoll {
     /// Never asked (`None`), or last answered at this page time.
     Answered(Option<f64>),
-    /// Asked, not answered yet.
-    Asking,
+    /// Asked; whether the devices and the map are still on their way.
+    /// The next round waits for both, so a slow link never has two of
+    /// either in flight (card canvas-slow-link).
+    Asking { devices: bool, io_map: bool },
+}
+
+impl DevicesPoll {
+    /// One of the two answered at `now`.
+    fn answered(&mut self, devices: bool, now: f64) {
+        if let Self::Asking {
+            devices: d,
+            io_map: m,
+        } = self
+        {
+            if devices {
+                *d = false;
+            } else {
+                *m = false;
+            }
+            if !*d && !*m {
+                *self = Self::Answered(Some(now));
+            }
+        }
+    }
 }
 
 /// An event stream.
@@ -599,7 +621,10 @@ impl BoxState {
         if let DevicesPoll::Answered(at) = self.devs
             && at.is_none_or(|t| now - t >= DEVICES_EVERY)
         {
-            self.devs = DevicesPoll::Asking;
+            self.devs = DevicesPoll::Asking {
+                devices: true,
+                io_map: true,
+            };
             self.queue.push(Cmd::Get(Fetch::Devices, "/api/devices".into()));
             self.queue.push(Cmd::Get(Fetch::IoMap, "/api/io_map".into()));
         }
@@ -742,7 +767,7 @@ impl BoxState {
             }
             Msg::Got(Fetch::Modules, Err(_)) => self.list.failed(now),
             Msg::Got(Fetch::Devices, r) => {
-                self.devs = DevicesPoll::Answered(Some(now));
+                self.devs.answered(true, now);
                 if let Some(list) = r
                     .ok()
                     .as_deref()
@@ -753,6 +778,7 @@ impl BoxState {
                 }
             }
             Msg::Got(Fetch::IoMap, r) => {
+                self.devs.answered(false, now);
                 self.io_map = r
                     .ok()
                     .as_deref()
@@ -1071,6 +1097,39 @@ mod tests {
             "{:?}",
             s.link()
         );
+    }
+
+    #[test]
+    fn a_slow_io_map_is_not_asked_for_again_while_it_is_on_its_way() {
+        // Over a slow link the map's reply can trail the devices' by more
+        // than DEVICES_EVERY: the next round waits for both, or the reads
+        // stack up behind each other (card canvas-slow-link).
+        let mut s = BoxState::new();
+        let gets = |cmds: Vec<Cmd>| -> Vec<Fetch> {
+            cmds.into_iter()
+                .filter_map(|c| match c {
+                    Cmd::Get(f @ (Fetch::Devices | Fetch::IoMap), _) => Some(f),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(gets(s.poll(0.0)), [Fetch::Devices, Fetch::IoMap]);
+        s.apply(Msg::Got(Fetch::Devices, Ok("[]".into())), 0.3);
+        for now in [5.3, 10.0, 60.0] {
+            assert_eq!(gets(s.poll(now)), [], "the map is still on its way at {now}");
+        }
+        s.apply(Msg::Got(Fetch::IoMap, Err("HTTP 404".into())), 61.0);
+        assert_eq!(
+            gets(s.poll(65.9)),
+            [],
+            "a round every DEVICES_EVERY after the last answer"
+        );
+        assert_eq!(gets(s.poll(66.0)), [Fetch::Devices, Fetch::IoMap]);
+        // Either may come first.
+        s.apply(Msg::Got(Fetch::IoMap, Err("HTTP 404".into())), 66.2);
+        assert_eq!(gets(s.poll(80.0)), [], "the devices are still on their way");
+        s.apply(Msg::Got(Fetch::Devices, Ok("[]".into())), 80.0);
+        assert_eq!(gets(s.poll(85.0)), [Fetch::Devices, Fetch::IoMap]);
     }
 
     #[test]

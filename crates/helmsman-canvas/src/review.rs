@@ -745,6 +745,8 @@ pub struct Review {
     pub login_problem: Option<String>,
     /// A login is on its way.
     pub logging_in: bool,
+    /// A list is on its way: the badge's round waits for it.
+    listing: bool,
     queue: Vec<Request>,
 }
 
@@ -757,9 +759,19 @@ impl Review {
         r
     }
 
-    /// Asks for the list again, alone (the header's badge).
+    /// Asks for the list again, alone.
     pub fn relist(&mut self) {
+        self.listing = true;
         self.queue.push(Request::get(Call::List, "/api/proposals".into()));
+    }
+
+    /// The header badge's round: the list again, unless one is still on
+    /// its way (over a slow link the rounds would stack up behind each
+    /// other, card canvas-slow-link).
+    pub fn badge_relist(&mut self) {
+        if !self.listing {
+            self.relist();
+        }
     }
 
     /// Proposals waiting for a decision: the drafts.
@@ -914,6 +926,9 @@ impl Review {
     pub fn answer(&mut self, call: Call, a: &Answer, now: f64) {
         let ok = (200..300).contains(&a.status);
         let j: Option<Json> = serde_json::from_str(&a.body).ok();
+        if call == Call::List {
+            self.listing = false;
+        }
         match call {
             Call::List => match j.as_ref().and_then(Json::as_array) {
                 Some(list) if ok => {
@@ -1006,7 +1021,7 @@ impl Review {
                     }
                     self.queue
                         .push(Request::get(Call::Snapshots, "/api/snapshots".into()));
-                    self.queue.push(Request::get(Call::List, "/api/proposals".into()));
+                    self.relist();
                 } else {
                     let r = refusal(a, now);
                     let ended = r.why == Why::SignIn;

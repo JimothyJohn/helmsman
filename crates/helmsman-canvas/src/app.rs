@@ -207,6 +207,13 @@ impl App {
         };
         if let Some(r) = &self.review {
             b.desk_user.clone_from(&r.user_input);
+            b.decided = r
+                .state
+                .list
+                .iter()
+                .filter(|p| p.status != "draft")
+                .map(|p| (p.id, p.status.clone()))
+                .collect();
         }
     }
 
@@ -315,7 +322,7 @@ impl App {
             let r = self.review.get_or_insert_with(ReviewView::new);
             if self.listed.is_none_or(|t| now - t >= PROPOSALS_EVERY) {
                 if self.listed.is_some() {
-                    r.state.relist();
+                    r.state.badge_relist();
                 }
                 self.listed = Some(now);
             }

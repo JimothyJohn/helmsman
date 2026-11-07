@@ -10,7 +10,8 @@ use std::fmt::Write as _;
 use helmsman_project::iomap::MapText;
 
 /// An input or an output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Dir {
     In,
     Out,
@@ -36,7 +37,8 @@ impl Dir {
 }
 
 /// A signal's type in the map.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SigTy {
     Bool,
     Int,
@@ -116,7 +118,8 @@ pub fn ports_of(src: &str) -> Vec<Port> {
 }
 
 /// What a point row does in the program.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Use {
     /// A line in io.map only; the program does not read or drive it yet.
     Wiring,
@@ -127,7 +130,7 @@ pub enum Use {
 }
 
 /// One input or output in the form.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PointRow {
     pub on: bool,
     pub dir: Dir,
@@ -135,6 +138,7 @@ pub struct PointRow {
     pub ty: SigTy,
     /// In the driver's syntax: `di:0`, `coil:3`, `hr:5:i16`.
     pub point: String,
+    #[serde(rename = "use")]
     pub use_: Use,
     /// A known device's channel: its type and point are fixed.
     pub fixed: bool,
@@ -174,7 +178,8 @@ impl PointRow {
 }
 
 /// A device the form knows the channels of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Catalog {
     /// Moxa ioLogik E1213: DI-00..11, DO-00..07 (the four DIO as DO, the
     /// factory jumper); docs/devices/moxa-iologik-e1213.md.
