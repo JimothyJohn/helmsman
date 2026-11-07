@@ -159,7 +159,7 @@ header.top .gh:hover{color:var(--yellow)}
     <p>Tell Helmsman what the machine should do, in plain language. Drop in a P&amp;ID, an electrical drawing or a photo of the panel and it reads them. The agent drafts the program and you check how it behaves.</p>
     <ol class="rules steps">
       <li><b>Describe</b>State the sequence, the interlocks and the alarms the way you would to a colleague. Attach the drawings.</li>
-      <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see exactly what drives it.</li>
+      <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see exactly what drives it. Write each requirement in plain words: the agent writes a test for it, and a failing test stops the deploy.</li>
       <li><b>Approve</b>An engineer signs off with a PIN. The change goes live between scans; every version is kept and can be rolled back.</li>
     </ol>
     <div class="two" style="margin-top:40px">
@@ -185,10 +185,10 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
   <div class="wrap">
     <h2>Standards and interoperability</h2>
     <h3>A pure soft PLC on your network.</h3>
-    <p>Helmsman is only the controller. Field I/O stays in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols.</p>
+    <p>Helmsman is only the controller. Field I/O stays in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols. It scans the network for devices and looks each one up in a public device library, or reads the vendor's EDS file.</p>
     <ul class="rules">
       <li><b>IEC 61131-3</b>Structured Text, the proven standard, plus PLCopen XML import from other tools.</li>
-      <li><b>EtherNet/IP (CIP)</b>Appears to your existing PLCs as a standard adapter, and reads their tags without ever writing to them.</li>
+      <li><b>EtherNet/IP (CIP)</b>Drives remote I/O over cyclic Class 1 connections. Your existing PLCs see it as a standard adapter, and it reads their tags without ever writing to them.</li>
       <li><b>Modbus TCP</b>Drives remote I/O blocks and devices directly, through a named I/O map.</li>
     </ul>
     <p class="muted" style="margin-top:24px">Ethernet protocols today; others as customers need them.</p>
@@ -206,7 +206,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
       <tbody>
         <tr><td>OpENer reference adapter</td><td>EtherNet/IP device under continuous test</td><td><span class="chip ok">verified</span></td></tr>
         <tr><td>Helmsman's own adapter</td><td>Same interoperability suite</td><td><span class="chip ok">verified</span></td></tr>
-        <tr><td>Moxa ioLogik E1213</td><td>Remote I/O over Modbus TCP</td><td><span class="chip pending">bench pending</span></td></tr>
+        <tr><td>Moxa ioLogik E1213</td><td>Remote I/O over EtherNet/IP and Modbus TCP</td><td><span class="chip ok">verified</span></td></tr>
         <tr><td>Rockwell CompactLogix</td><td>Existing PLC, read without writing</td><td><span class="chip pending">bench pending</span></td></tr>
       </tbody>
     </table>

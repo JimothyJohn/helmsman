@@ -105,7 +105,7 @@ label is drawn, the icon stands alone at a readable size.
 ## The panes
 
 - **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>0</kbd>):
-  the project's files, the examples and starters, and the program tree
+  the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
   next. **Devices** (<kbd>Alt</kbd> <kbd>4</kbd>): at the top, **I/O
@@ -163,7 +163,7 @@ label is drawn, the icon stands alone at a readable size.
   and **Agent**, where you type what the open file should do and it
   is updated (see [The Agent](agent.html)).
 
-<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
+<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 
 <img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">
 

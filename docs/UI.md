@@ -110,43 +110,38 @@ this; change it here first when a decision changes.
   list. The page runs the tests after every build change and before
   Deploy and "Use this code", a box when a project opens, after each save
   and before a deploy; a red one refuses both, naming the test, a grey one
-  does not), Agent (Nick,
-  2026-11-01: the conversation is pages, ‹ › walk them, Delete drops
-  one, every kept page goes to the model as context each time, and the
-  pages live with the project as `agent.md`, so a reload or a download
-  keeps them; an earlier page's code has its own Use this code. On a box
-  (card `agent-on-box`, first cut) the Agent tab talks to the agent the
-  box runs through its relay, `POST /api/chat` with the session cookie:
-  the reply streams in with each tool it ran, ✓ or ✗ and a summary, and
-  each change it stored as a proposal with a Review #n button that opens
-  it under Proposals, where it is replayed, approved or left like any
-  other; nothing on the tab applies a change. A line on top says whether
-  the agent is online, offline (a message is then read by rule: a param
-  edit becomes a proposal, nothing else) or not configured; signed out,
-  Send stays off. Stop ends the answer on the page; New conversation
-  starts one of its own on the box. Pages, iterations and the edit scope
-  are the page's alone for now. The agent edits only what is in focus (Nick 2026-11-01,
+  does not), Agent (Nick, 2026-11-05, `crate::instruct`, the
+  same on the page and on a box: no conversation. The tab is an
+  instruction box, Send or Stop, Undo, and after an answer a status line
+  and the Agent's one-sentence reason. Send updates the open file: one
+  request carries the whole file in its scope, the program and its
+  errors, and the last 5 instructions carried out on that file, read back
+  from its History revisions. `verify::check` runs the answer on a copy
+  with its scenarios and the requirement tests; a red one goes back with
+  what failed, up to `verify::RETRIES` times, and if it is still red
+  nothing is written and the tab says why. Green is written into the file
+  as one revision whose History entry records the instruction, the
+  reason, the scenarios and the failed attempts; the scenarios are kept
+  as test files, and Undo restores the revision before. On a box (card
+  `agent-on-box`) the same message goes to `POST /api/chat` with the
+  session cookie, a new conversation per instruction; the change is a
+  PUT, Undo the box's restore, and a proposal the box stores instead is
+  offered for review under Proposals with nothing written. A line on top
+  says whether the box's agent is online, offline or not configured;
+  signed out, Send stays off. The agent edits only what is in focus (Nick 2026-11-01,
   interview 2026-11-02, card `agent-scoped-edits`): the open file by
   default, the lines selected in the Code tab or the block picked in the
   diagram (its statement, while the diagram is of the editor's text) when
-  there is one; a line above the question says which ("Editing: main.st",
+  there is one; a line above the instruction says which ("Editing: main.st",
   "Editing: lines 12–30 of main.st", "Editing: block Motor1") and by which
   rule, with Whole file to drop the selection or pick. The scope goes to
-  the model in an `<edit_scope>` envelope and back with the page; Use
-  this code takes the answer into that scope only (`scope.rs`,
-  `apply`): another file, lines outside the selection, a block's
-  neighbour, several code blocks, the page's envelope markers or no
-  change at all are refused, saying what it tried to touch, and nothing
-  outside the scope changes, byte for byte. A taken change must keep the
-  requirement tests green; unsaved edits are saved first, then the
-  change is one revision with its page. A whole `main.st` with its
-  PROGRAM lands as an iteration; lines and blocks are edited in place.
-  With a built-in example open (read-only) the scope is a new project:
-  Use this code on a PROGRAM asks for the program's name once per
-  conversation; the answers after it land in that project with the
-  newest as `main.st` and the file it replaced kept as the next `vN.st`,
-  serially, however many; `vN.st` is never built, and past the project's
-  size the oldest go first). On a Pi the Trend opens with
+  the model in an `<edit_scope>` envelope (`scope.rs`, `apply`): another
+  file, lines outside the selection, a block's neighbour, several code
+  blocks, the envelope markers or no change at all are refused, saying
+  what it tried to touch, and nothing outside the scope changes, byte for
+  byte. With a built-in example open (read-only) the scope is a new
+  project: the first answer asks for the program's name in a popup
+  ("Use this code") and lands in that project as `main.st`). On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.
