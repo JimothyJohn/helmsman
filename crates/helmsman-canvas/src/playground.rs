@@ -26,8 +26,9 @@ pub const MAX_PERIOD: u64 = 1000;
 pub const MAX_CATCH_UP: u64 = 500;
 /// The window a project opens with, ms of program time (the slider goes
 /// from `playground_view::WINDOW_MIN_MS` to `WINDOW_MAX_MS`; Nick,
-/// 2026-11-01: how fast the line crosses the pane).
-pub const TREND_MS: u64 = 10_000;
+/// 2026-11-01: how fast the line crosses the pane). Both trends, the
+/// box's too (Nick, 2026-11-07: 30 s).
+pub const TREND_MS: u64 = 30_000;
 /// The trend keeps this much history, ms of program time: the widest
 /// window (10 min), so widening it shows what already ran.
 pub const TREND_KEEP_MS: u64 = 600_000;
@@ -461,6 +462,23 @@ impl Trend {
             self.signals.push(name.to_string());
         }
         self.samples.clear();
+    }
+
+    /// Moves the signal in lane `from` to lane `to`, the others closing
+    /// up; the history moves with it. Out of range does nothing.
+    pub fn move_signal(&mut self, from: usize, to: usize) {
+        let n = self.signals.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        let s = self.signals.remove(from);
+        self.signals.insert(to, s);
+        for sample in &mut self.samples {
+            if from < sample.values.len() && to < sample.values.len() {
+                let v = sample.values.remove(from);
+                sample.values.insert(to, v);
+            }
+        }
     }
 }
 

@@ -483,6 +483,37 @@ fn the_trend_axis_is_a_nice_range_that_holds_between_steps() {
     assert_eq!(tick_label(-5.0, 5.0), "-5");
 }
 
+/// Nick, 2026-11-07: the lanes reorder. Each signal's history moves with
+/// it (the samples hold values in lane order), and recording goes on in
+/// the new order.
+#[test]
+fn moving_a_trend_signal_carries_its_history() {
+    let mut s = Session::new(example("traffic"));
+    scans(&mut s, 300);
+    let col = |s: &Session, k: usize| -> Vec<f64> { s.trend.samples.iter().map(|x| x.values[k]).collect() };
+    let before: Vec<Vec<f64>> = (0..4).map(|k| col(&s, k)).collect();
+    s.trend.move_signal(0, 2);
+    assert_eq!(s.trend.signals, ["YELLOW", "GREEN", "RED", "RUN"]);
+    for (k, from) in [(0, 1), (1, 2), (2, 0), (3, 3)] {
+        assert_eq!(col(&s, k), before[from], "lane {k}");
+    }
+    for (from, to) in [(4, 0), (0, 4), (1, 1), (usize::MAX, 0)] {
+        s.trend.move_signal(from, to);
+        assert_eq!(
+            s.trend.signals,
+            ["YELLOW", "GREEN", "RED", "RUN"],
+            "{from} -> {to}"
+        );
+    }
+    let n = s.trend.samples.len();
+    scans(&mut s, 10);
+    assert_eq!(s.trend.samples.len(), n + 10, "the history stays and grows");
+    let red = s.trend.samples.back().unwrap().values[2];
+    let point = s.outputs().find(|p| p.name == "RED").unwrap().number();
+    // RED is a BOOL: 0 or 1, exact.
+    assert_eq!(red.to_bits(), point.to_bits(), "lane 2 records RED");
+}
+
 #[test]
 fn the_trend_records_chosen_signals_in_a_bounded_window() {
     let mut s = Session::new(example("traffic"));
@@ -506,7 +537,7 @@ fn the_trend_records_chosen_signals_in_a_bounded_window() {
     );
     assert!(last - first <= crate::playground::TREND_KEEP_MS);
     assert!(last - first > 90_000, "{first}..{last}");
-    assert_eq!(s.trend.window_ms, crate::playground::TREND_MS, "opens on 10 s");
+    assert_eq!(s.trend.window_ms, 30_000, "opens on 30 s");
     // The buttons read in seconds unless the width is whole minutes
     // (100 s read as "1 min" on 2026-11-01).
     assert_eq!(window_label(1_000), "1 s");
