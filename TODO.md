@@ -276,14 +276,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **The canvas stays usable over a slow link** — PLCnext Engineer's online layer "will freeze 99.9% of the time" over VPN, and Phoenix said that is by design. Run the canvas against a box behind a throttled proxy (300 ms RTT, 1 Mbit/s, 2 % loss) in a test, and check the Monitor's polling never queues requests behind each other and the UI never blocks on the network.
-  result: remote support over a site VPN works; a regression fails a test
-  est: 4h
-  difficulty: low
-  id: canvas-slow-link
-  asked: 2026-11-07
-  by: claude-session
-
 ## From user feedback: plan for later
 
 Long-term items FEEDBACK.md points to. Each waits on a card already on the board, or on a decision.

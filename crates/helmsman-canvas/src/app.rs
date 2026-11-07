@@ -322,7 +322,7 @@ impl App {
             let r = self.review.get_or_insert_with(ReviewView::new);
             if self.listed.is_none_or(|t| now - t >= PROPOSALS_EVERY) {
                 if self.listed.is_some() {
-                    r.state.relist();
+                    r.state.badge_relist();
                 }
                 self.listed = Some(now);
             }
