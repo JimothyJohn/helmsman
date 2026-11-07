@@ -163,6 +163,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: canvas-try
 
+- [ ] **Prune the stray branch docs/studio-runs-plc** — created by mistake 2026-11-07 (no commits of its own, its worktree already removed). Branch deletion is always a hand-off.
+  needs: run `scripts/prune-branches.sh` from the main checkout, or `git push origin --delete docs/studio-runs-plc && git branch -D docs/studio-runs-plc`
+  result: the branch list is clean
+  est: 2m
+  difficulty: low
+  id: prune-studio-runs-plc
+  asked: 2026-11-07
+  by: claude-session
+
 ## Next to build
 
 - [ ] **The Agent on a box** — left out of agent-scoped-edits (#207): a box's canvas has no Agent tab (BoxView::tabs() is I/O and Requirements; a ui_test pins it), its page's CSP is connect-src 'self', and the box's agent runs through the relay as proposals (POST /api/chat). Give the box an Agent tab that talks to /api/chat, with the pages (#187), iterations (#201), the requirement gate (red_tests) and the edit scope (`scope::apply` takes plain files, so it is reusable) on the box side.
@@ -202,6 +211,40 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 1h
   difficulty: low
   id: rusty-bump
+
+- [ ] **Persistence 2: the desk on the box, per person** — slice 1 (#276, crates/helmsman-canvas/src/desk.rs) keeps the box page's desk in this browser: open project and file, unsaved edits with the box version they were made against, Agent and Requirements inputs, screen, sign-in name. Nick's interview (2026-11-07): kept on the box per person when signed in, browser as the fallback, so it follows him between the Studio and the Air. Add `GET`/`PUT /api/desk` behind `box` (per account, or per role for a PIN session, as /api/trends/pins does in box_trend.rs and its box side), size-capped and audited like the pins; the canvas reads it on sign-in, prefers the newer of box and browser (a `saved_at` in the desk), and writes it through the same Keeper throttle. Negative tests: another person's desk is never readable (IDOR), no password or PIN is ever stored, oversized bodies refused, signed out falls back to the browser.
+  result: a draft started on the Studio is there on the Air after signing in; a role switch keeps the same desk
+  est: 1d
+  difficulty: med
+  id: desk-on-box
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Persistence 3: the Agent conversation and the device form survive a reload** — still lost on reload after #276: the Agent transcript (`BoxAgent.turns`, box_agent.rs; Turn/Item/End need serde, MAX_TURNS 50, the box has no transcript GET today, so keep the rendered turns in the desk, capped) and the half-filled device form (`DevicesUi.adding: NewDevice`, devices.rs:210, with its points; drop the EDS bytes, keep a reference). Restore both through the desk (browser now, the box once desk-on-box lands). Tests: a reload mid-conversation shows the same turns and a pending proposal link; a half-filled form comes back; a proposal already decided shows as decided, not re-offered.
+  result: nothing typed or read in the Agent tab or the device form is lost to a refresh
+  est: 1d
+  difficulty: med
+  depends: desk-on-box
+  id: desk-agent-and-forms
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Help mode on the Agent, box side** — Nick's interview (2026-11-07): a Help mode beside the coding mode, for a third-party user. The box attaches context automatically (recent Messages as text (`messages::Log::text`), device states and their current errors from /api/devices, the running project and snapshot, the box's build commit, OS), never secrets (tokens, PINs, the relay token) — a test asserts the redaction. The answer is a plain-language diagnosis plus a copyable Markdown issue (title, what happened, expected, steps, the attached context, suspected files linked to github.com/JimothyJohn/helmsman/blob/dev/...), with a Copy button (messages::copyable). Nothing is filed automatically. The relay side is help-mode-relay; build against a relay fixture until it is served.
+  result: a user in trouble gets a diagnosis and an issue to paste to another agent or to GitHub
+  est: 1d
+  difficulty: med
+  id: help-mode-box
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Help mode on the relay: a profile that reads the repo** — in ../agent-relay (separate repo and session; SAM deploy, deploy-chain edits as a draft PR): a new profile id (e.g. helmsman/help-v1; a served profile never changes) whose model gets read-only tools over JimothyJohn/helmsman@dev through the GitHub API: list a directory, read a file (size-capped), search code. The repo is PUBLIC (checked 2026-11-07), so no token is needed to start; a fine-grained read-only token in Secrets Manager raises the rate limit (60/h unauthenticated). The system prompt: diagnose for a third-party user, cite the files it read, end with the Markdown issue; docs/ARCHITECTURE.md and docs/help are the starting points. Tests against recorded GitHub responses; refuse paths outside the repo.
+  needs: a session in ../agent-relay (this repo's sessions cannot write there); Nick's go for the deploy
+  result: the relay serves the Help profile the box's Help mode asks for
+  est: 2d
+  difficulty: med
+  id: help-mode-relay
+  asked: 2026-11-07
+  by: claude-session
 
 ## From user feedback: do now
 
