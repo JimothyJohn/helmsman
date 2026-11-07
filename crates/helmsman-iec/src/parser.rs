@@ -210,6 +210,9 @@ pub struct VarDecl {
     pub pos: Pos,
     pub section: Section,
     pub constant: bool,
+    /// Declared in a `RETAIN` block: kept across a restart of the box, not
+    /// only across a deploy. `NON_RETAIN` (and no qualifier) is false.
+    pub retain: bool,
     pub ty: TypeRef,
     pub at: Option<(String, Pos)>,
     pub init: Option<Init>,
@@ -888,12 +891,23 @@ impl Parser {
     }
 
     fn var_block(&mut self, section: Section, out: &mut Vec<VarDecl>) -> R<()> {
-        let mut constant = false;
+        let (mut constant, mut retain, mut non_retain) = (false, false, false);
         loop {
+            let pos = self.pos();
             if self.eat_kw("CONSTANT") {
                 constant = true;
-            } else if !(self.eat_kw("RETAIN") || self.eat_kw("NON_RETAIN")) {
+            } else if self.eat_kw("RETAIN") {
+                retain = true;
+            } else if self.eat_kw("NON_RETAIN") {
+                non_retain = true;
+            } else {
                 break;
+            }
+            if retain && non_retain {
+                return Err(ParseError {
+                    pos,
+                    msg: "a block is RETAIN or NON_RETAIN, not both".into(),
+                });
             }
         }
         while !self.eat_kw("END_VAR") {
@@ -955,6 +969,7 @@ impl Parser {
                     pos,
                     section,
                     constant,
+                    retain,
                     ty: ty.clone(),
                     at: at.clone(),
                     init: init.clone(),
