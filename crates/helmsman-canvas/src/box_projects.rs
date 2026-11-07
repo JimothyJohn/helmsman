@@ -325,7 +325,21 @@ pub struct BoxProjects {
     pub tests: crate::requirements::Results,
     /// A test run is on its way.
     pub testing: bool,
+    /// What the desk (`crate::desk`) had from before a reload, put back
+    /// as the box's answers come in: the project to open, the file to
+    /// show, and the unsaved edits, each used once.
+    pub restore: Restore,
     queue: Vec<PReq>,
+}
+
+/// The desk's part in [`BoxProjects`]: taken as it is used.
+#[derive(Debug, Default)]
+pub struct Restore {
+    pub project: Option<String>,
+    /// The file to show, with its project.
+    pub file: Option<(String, String)>,
+    /// Project, then file, then the edit.
+    pub drafts: BTreeMap<String, BTreeMap<String, crate::desk::Draft>>,
 }
 
 fn error_of(a: &Answer) -> String {
@@ -446,6 +460,32 @@ impl BoxProjects {
                 .push(PReq::get(PCall::Project(name.clone()), project_url(&name)));
             self.read_history(&name);
         }
+    }
+
+    /// Puts the open project, the shown file and every unsaved edit on
+    /// `desk`: the open project's edits as they stand, and any restored
+    /// edit not yet put back (another project's, or a file not read yet).
+    pub fn to_desk(&self, desk: &mut crate::desk::Desk) {
+        desk.project = self.open.as_ref().map(|o| o.name.clone());
+        desk.file = self.open.as_ref().and_then(|o| o.current.clone());
+        desk.drafts = self.restore.drafts.clone();
+        if let Some(o) = &self.open {
+            let mine = desk.drafts.entry(o.name.clone()).or_default();
+            for (f, b) in &o.bufs {
+                if b.dirty() {
+                    mine.insert(
+                        f.clone(),
+                        crate::desk::Draft {
+                            text: b.text.clone(),
+                            version: b.version.clone(),
+                        },
+                    );
+                } else if b.loaded {
+                    mine.remove(f);
+                }
+            }
+        }
+        desk.drafts.retain(|_, m| !m.is_empty());
     }
 
     /// Asks for project `name`'s revisions (the Files tab's History row).
@@ -932,9 +972,14 @@ impl BoxProjects {
                     .as_ref()
                     .is_some_and(|o| self.projects.iter().any(|p| p.name == o.name));
                 if !keep {
-                    let first = self
-                        .running
-                        .clone()
+                    // The project open before a reload, while it exists.
+                    let before = self
+                        .restore
+                        .project
+                        .take()
+                        .filter(|n| self.projects.iter().any(|p| &p.name == n));
+                    let first = before
+                        .or_else(|| self.running.clone())
                         .or_else(|| self.projects.first().map(|p| p.name.clone()));
                     match first {
                         Some(n) => self.open_project(&n),
@@ -980,6 +1025,12 @@ impl BoxProjects {
                         ));
                     }
                 }
+                // The file shown before a reload, once its project opens.
+                if let Some((_, f)) = self.restore.file.take_if(|(p, _)| *p == name)
+                    && o.bufs.contains_key(&f)
+                {
+                    o.current = Some(f);
+                }
                 if o.current.as_ref().is_none_or(|c| !o.bufs.contains_key(c)) {
                     // main.st, else the first program file, else the first file.
                     o.current = o
@@ -1016,11 +1067,36 @@ impl BoxProjects {
                     return;
                 }
                 let text = j["text"].as_str().unwrap_or_default().to_string();
-                let b = o.bufs.entry(file).or_default();
+                let draft = self
+                    .restore
+                    .drafts
+                    .get_mut(&project)
+                    .and_then(|m| m.remove(&file));
+                let b = o.bufs.entry(file.clone()).or_default();
                 b.text.clone_from(&text);
                 b.base = text;
                 b.version = j["version"].as_str().map(str::to_string);
                 b.loaded = true;
+                // An edit not saved before the page reloaded comes back as
+                // an edit. Made against an older version of the file, it
+                // keeps that version, so saving it is refused as stale and
+                // the person chooses (Reload or Replace) instead of
+                // overwriting a change made since.
+                if let Some(d) = draft.filter(|d| d.text != b.base) {
+                    let stale = d.version != b.version;
+                    b.text = d.text;
+                    if stale {
+                        b.version = d.version;
+                    }
+                    let msg = if stale {
+                        format!(
+                            "Your unsaved edits to {file} are back from before the page reloaded; the box's copy changed since, so saving will ask which to keep."
+                        )
+                    } else {
+                        format!("Your unsaved edits to {file} are back from before the page reloaded.")
+                    };
+                    self.note(msg, false);
+                }
             }
             PCall::Create(name) => {
                 if ok {

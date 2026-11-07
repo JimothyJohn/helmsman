@@ -59,6 +59,17 @@ diagram stays up; the page keeps trying. "Simulate in this browser"
 offers to run the program in the page instead. A page that never reached
 a box at its address goes to the simulation by itself and says so.
 
+## Your work survives a reload
+
+This browser keeps what you had in front of you: the project and file
+you had open, every edit you had not saved yet, what you had typed into
+the Agent and Requirements boxes, whether you were on the Monitor, and
+the name in the sign-in form (never a password or PIN). Reload the page,
+or come back after the box restarts, and it is all where you left it; a
+note says when unsaved edits came back. If someone saved the same file
+since, saving your edits asks which version to keep instead of
+overwriting theirs. Edits still need an engineer signed in to be saved.
+
 ## The Monitor
 
 The **Monitor** (the Editor | Monitor toggle, or View › Monitor) is the

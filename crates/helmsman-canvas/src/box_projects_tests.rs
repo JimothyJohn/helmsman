@@ -1834,6 +1834,134 @@ fn a_finished_requirement_keeps_unsaved_edits() {
     );
 }
 
+/// Nick, 2026-11-07: "the interface and inputs need to be more
+/// persistent so they don't just disappear during a refresh". A page
+/// reloaded on the same browser comes back on the project and file it
+/// showed, with its unsaved edit and its half-typed inputs; an edit made
+/// against a file someone has saved since is refused as stale on save
+/// rather than overwriting their change.
+#[test]
+fn a_reload_puts_back_the_project_the_file_the_edits_and_the_inputs() {
+    use crate::desk::{Desk, MAX_BYTES};
+    use crate::sim_projects::MemStorage;
+    let b = Bench::new();
+    let (ja, jb) = (Jar::default(), Jar::default());
+    let mut a = page(&b, &ja, Some(("alice", ALICE)));
+    make(&b, &ja, &mut a.projects, "aaa", &[("main.st", MAIN)]);
+    make(
+        &b,
+        &ja,
+        &mut a.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    a.projects.open_project("line");
+    settle(&b, &ja, &mut a.projects);
+    a.projects.open_file("blocks.st");
+    let edited = format!("{BLOCKS}\n(* half done *)\n");
+    a.projects.current_mut().unwrap().text = edited.clone();
+    a.instruct.draft = "make the lamp blink at 2 Hz".into();
+    a.req_ui.draft = "The lamp blinks while running".into();
+    let (kept, dropped) = a.desk().text_within(MAX_BYTES);
+    assert_eq!(dropped, Vec::<String>::new());
+    assert!(!kept.contains(ALICE), "no password in the desk");
+
+    // The reload: a new page on the same browser.
+    let mut r = BoxView::new().with_desk(Box::new(MemStorage(Some(kept.clone()))));
+    r.session = Some(b.login(&ja, "alice", ALICE));
+    settle(&b, &ja, &mut r.projects);
+    let o = r.projects.open.as_ref().expect("a project open");
+    assert_eq!(o.name, "line", "the project it showed, not the first");
+    assert_eq!(o.current.as_deref(), Some("blocks.st"));
+    assert_eq!(o.bufs["blocks.st"].text, edited);
+    assert!(r.projects.dirty(), "still an edit to save");
+    assert!(
+        r.projects
+            .notice
+            .as_ref()
+            .unwrap()
+            .0
+            .contains("blocks.st are back")
+    );
+    assert_eq!(r.instruct.draft, "make the lamp blink at 2 Hz");
+    assert_eq!(r.req_ui.draft, "The lamp blinks while running");
+    // Saved, the draft is gone from the desk.
+    r.projects.save();
+    settle(&b, &ja, &mut r.projects);
+    assert_eq!(
+        b.json("/api/projects/line/files/blocks.st")["text"],
+        edited.as_str()
+    );
+    assert!(r.desk().drafts.is_empty(), "{:?}", r.desk().drafts);
+
+    // Someone saves the file while this page's edit waits in the desk.
+    let mut stale = Desk::parse(&kept);
+    stale
+        .drafts
+        .get_mut("line")
+        .unwrap()
+        .get_mut("blocks.st")
+        .unwrap()
+        .text = format!("{BLOCKS}\n(* mine *)\n");
+    let mut other = page(&b, &jb, Some(("alice", ALICE)));
+    other.projects.open_project("line");
+    settle(&b, &jb, &mut other.projects);
+    other.projects.open_file("blocks.st");
+    other.projects.current_mut().unwrap().text = format!("{BLOCKS}\n(* theirs *)\n");
+    other.projects.save();
+    settle(&b, &jb, &mut other.projects);
+    let mut r = BoxView::new().with_desk(Box::new(MemStorage(Some(stale.text_within(MAX_BYTES).0))));
+    r.session = Some(b.login(&ja, "alice", ALICE));
+    settle(&b, &ja, &mut r.projects);
+    assert!(r.projects.notice.as_ref().unwrap().0.contains("changed since"));
+    r.projects.save();
+    settle(&b, &ja, &mut r.projects);
+    assert_eq!(
+        r.projects.conflict.as_deref(),
+        Some("blocks.st"),
+        "{:?}",
+        r.projects.notice
+    );
+    assert!(
+        b.json("/api/projects/line/files/blocks.st")["text"]
+            .as_str()
+            .unwrap()
+            .contains("theirs"),
+        "their save stands"
+    );
+
+    // Signed out, the edit still comes back; saving it waits for a sign-in.
+    let mut r = BoxView::new().with_desk(Box::new(MemStorage(Some(stale.text_within(MAX_BYTES).0))));
+    settle(&b, &Jar::default(), &mut r.projects);
+    assert!(r.projects.dirty());
+}
+
+/// The screen and the sign-in name come back after a reload too; a
+/// password typed into the form is never kept.
+#[test]
+fn a_reload_comes_back_on_the_monitor_with_the_sign_in_name() {
+    use crate::app::Screen;
+    use crate::desk::{Desk, MAX_BYTES};
+    use crate::sim_projects::MemStorage;
+    let d = Desk {
+        screen: Some("monitor".into()),
+        user: "alice".into(),
+        ..Desk::default()
+    };
+    let bv = BoxView::new().with_desk(Box::new(MemStorage(Some(d.text_within(MAX_BYTES).0))));
+    let mut h = Harness::new(bv, None);
+    assert_eq!(h.app.screen, Screen::Monitor);
+    let r = h.app.review.as_mut().unwrap();
+    assert_eq!(r.user_input, "alice");
+    r.password_input = "hunter2-secret".into();
+    h.app.screen = Screen::Editor;
+    h.frame(vec![]);
+    let kept = h.bv().desk();
+    assert_eq!(kept.screen.as_deref(), Some("editor"));
+    assert_eq!(kept.user, "alice");
+    assert!(!kept.text_within(MAX_BYTES).0.contains("hunter2"), "no password");
+}
+
 /// The box's Agent tab takes the page's path (`crate::instruct`, Nick
 /// 2026-11-05): the instruction goes to `POST /api/chat` with the answer
 /// format and the whole file in a new conversation; a checked answer is
