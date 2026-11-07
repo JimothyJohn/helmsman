@@ -170,6 +170,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: canvas-try
 
+- [ ] **Find who holds the E1213's EtherNet/IP connection** — 2026-11-07: the :8081 try box's Forward_Open to the E1213 (192.168.3.60) is refused, general 0x01 with extended 0x0106 (ownership conflict) in Nick's capture and 0x0100 (connection in use) after the box restarted at b14803a, steady across reads. Another originator holds the exclusive-owner connection; the switch hides its T->O traffic from the Studio. The bench Pi (nick@192.168.3.20, same link) is the prime suspect; the :8080 leftover box was stopped earlier. Modbus TCP to the same unit works meanwhile. #263 made the refusal readable (it used to show as "bytes after last CPF item").
+  needs: your key loaded so the agent can read the Pi (`ssh-add --apple-use-keychain ~/.ssh/id_ed25519`), then the Pi's io.map and `systemctl status helmsman-plc`
+  result: one owner of the E1213 over EtherNet/IP, or the Pi moved to Modbus; the try box's enip-io link up
+  est: 30m
+  difficulty: low
+  id: e1213-enip-owner
+  asked: 2026-11-07
+  by: claude-session
+
 ## Next to build
 
 - [ ] **The Agent on a box** — left out of agent-scoped-edits (#207): a box's canvas has no Agent tab (BoxView::tabs() is I/O and Requirements; a ui_test pins it), its page's CSP is connect-src 'self', and the box's agent runs through the relay as proposals (POST /api/chat). Give the box an Agent tab that talks to /api/chat, with the pages (#187), iterations (#201), the requirement gate (red_tests) and the edit scope (`scope::apply` takes plain files, so it is reusable) on the box side.
