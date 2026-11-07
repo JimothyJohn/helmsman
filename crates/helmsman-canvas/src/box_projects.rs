@@ -1292,7 +1292,7 @@ impl BoxProjects {
             }
             PCall::Control(module, op) => {
                 if ok {
-                    let did = match op.as_ref() {
+                    let did = match op {
                         "stop" => "stopped: its outputs are at their safe values",
                         "restart" => "restarted from its initial values",
                         _ => "running again",
