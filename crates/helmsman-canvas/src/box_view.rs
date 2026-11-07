@@ -469,11 +469,8 @@ impl BoxView {
             Incoming::End { .. } => {
                 a.end(None);
                 // The new test file is on the box: read the list again, which
-                // runs the tests.
-                if let Some(o) = &self.projects.open {
-                    let name = o.name.clone();
-                    self.projects.open_project(&name);
-                }
+                // runs the tests, keeping any unsaved edit (Nick, 2026-11-07).
+                self.projects.reread();
             }
             Incoming::Failed { why, .. } => a.end(Some(&why)),
         }

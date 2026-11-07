@@ -1776,6 +1776,64 @@ fn a_requirement_added_on_a_box_without_an_agent_is_listed_with_no_test_yet() {
     );
 }
 
+/// Nick, 2026-11-07: inputs must not disappear on a state change. A
+/// requirement the box finished adding reads the project again for the
+/// new test file; that read used to replace every buffer, so an unsaved
+/// edit to another file was lost. Now the edit stays and the new file
+/// comes in beside it.
+#[test]
+fn a_finished_requirement_keeps_unsaved_edits() {
+    use crate::box_agent::Incoming;
+    use crate::requirements::Adding;
+    let b = Bench::build(true);
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    settle(&b, &jar, &mut v.projects);
+    let edited = format!("{MAIN}\n(* not saved yet *)\n");
+    v.projects
+        .open
+        .as_mut()
+        .unwrap()
+        .bufs
+        .get_mut("main.st")
+        .unwrap()
+        .text = edited.clone();
+
+    // The box adds the test file, as the requirement's POST would.
+    let (a, req) = Adding::to_box("line", "The conveyor runs after start", "conveyor_runs", 7);
+    let head = format!(
+        "POST {} HTTP/1.1\r\nHost: box\r\nX-Helmsman-Request: 1\r\nOrigin: http://box\r\nCookie: helmsman_session={}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        req.url,
+        jar.get().unwrap(),
+        req.body.len()
+    );
+    let (status, _, body) = b.raw(&head, req.body.as_bytes());
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    v.adding = Some(a);
+    v.requirement_answer(Incoming::Chunk {
+        seq: 7,
+        text: unchunk(&body),
+    });
+    v.requirement_answer(Incoming::End { seq: 7 });
+    settle(&b, &jar, &mut v.projects);
+
+    let o = v.projects.open.as_ref().unwrap();
+    assert_eq!(o.bufs["main.st"].text, edited, "the unsaved edit stays");
+    assert!(o.bufs["main.st"].dirty());
+    assert!(
+        o.bufs.contains_key("test_conveyor_runs.st"),
+        "{:?}",
+        o.bufs.keys()
+    );
+}
+
 /// The box's Agent tab takes the page's path (`crate::instruct`, Nick
 /// 2026-11-05): the instruction goes to `POST /api/chat` with the answer
 /// format and the whole file in a new conversation; a checked answer is
