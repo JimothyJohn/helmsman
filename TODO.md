@@ -282,14 +282,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **The canvas and the box say if they are different builds** — the box serves the canvas from `--ui DIR`, built separately; nothing checks they match. That is the one place Helmsman could grow the "project only opens in version X" problem every vendor has. Stamp both with the git describe at build time, return it in an API header, and show a plain banner in the canvas on a mismatch ("this editor is from a different release than the controller; reload").
-  result: a stale canvas after an update is visible at once
-  est: 2h
-  difficulty: low
-  id: build-match
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Every release opens every older project** — project files have no version field except `diagram.layout`'s `helmsman-layout 1`, and nothing pins that a project written by an older release still loads. Version lock-in is the top complaint on every vendor platform. Add tests/fixtures/projects/<release>/ (one representative project per tagged release, starting now) and a test that loads, checks and runs each one on the current build. A construct a newer release no longer accepts becomes a listed problem, and the project still opens.
   result: version lock-in is a test failure, not a support ticket
   est: 4h

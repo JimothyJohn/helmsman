@@ -12,7 +12,7 @@
 //! for help changes nothing. Every call is audited.
 //!
 //! **The context** is the box's own ([`gather`]): its build (version,
-//! commit, OS), the project it runs and that snapshot, each device link
+//! stamp, OS), the project it runs and that snapshot, each device link
 //! with its state and error, and the Messages sent. Every text in it goes
 //! through [`redact`] first, and so does the issue the box writes: the box
 //! token, the relay token, session tokens, PINs and passwords never leave
@@ -153,7 +153,7 @@ fn clip(s: &str, n: usize) -> String {
     out
 }
 
-/// The short form of a snapshot id or a commit, as an issue shows it.
+/// The short form of a snapshot id, as an issue shows it.
 fn short(id: &str) -> String {
     id.chars().take(12).collect()
 }
@@ -340,12 +340,13 @@ fn redact_json(j: &mut Json, known: &[&str]) {
 
 // ---------------------------------------------------------------- context
 
-/// The build this box runs: its version, commit and platform.
+/// The build this box runs: its version, its stamp ([`crate::BUILD`]:
+/// `git describe`, the one the API sends as `X-Helmsman-Build`) and platform.
 #[must_use]
 pub fn build() -> Json {
     json!({
         "version": env!("CARGO_PKG_VERSION"),
-        "commit": short(env!("HELMSMAN_COMMIT")),
+        "stamp": crate::BUILD,
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
     })
@@ -573,9 +574,9 @@ fn context_markdown(context: &Json) -> String {
     let mut out = String::from("### Context from the box\n\n");
     let _ = writeln!(
         out,
-        "- Build: helmsman-plc {}, commit {}, {} {}",
+        "- Build: helmsman-plc {}, build {}, {} {}",
         s(&b["version"]),
-        s(&b["commit"]),
+        s(&b["stamp"]),
         s(&b["os"]),
         s(&b["arch"])
     );

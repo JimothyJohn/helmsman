@@ -532,10 +532,10 @@ fn help_answers_with_a_diagnosis_and_an_issue_carrying_the_box_context() {
     let c = &evs[0].1["context"];
     assert_eq!(c["build"]["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(c["build"]["os"], std::env::consts::OS);
-    let commit = c["build"]["commit"].as_str().unwrap();
+    let stamp = c["build"]["stamp"].as_str().unwrap();
     assert!(
-        commit == "unknown" || (commit.len() == 12 && commit.bytes().all(|b| b.is_ascii_hexdigit())),
-        "{commit}"
+        stamp == helmsman_plc::BUILD && !stamp.is_empty() && !stamp.contains("[redacted]"),
+        "{stamp}"
     );
     assert_eq!(c["running"]["project"], Json::Null);
     assert_eq!(c["devices"][0]["name"], "rio");
@@ -571,7 +571,7 @@ fn help_answers_with_a_diagnosis_and_an_issue_carrying_the_box_context() {
         "### Suspected files\n\n- [crates/helmsman-plc/src/link.rs:120](https://github.com/JimothyJohn/helmsman/blob/dev/crates/helmsman-plc/src/link.rs#L120)\n- [docs/devices/moxa-iologik-e1213.md](https://github.com/JimothyJohn/helmsman/blob/dev/docs/devices/moxa-iologik-e1213.md)\n",
         "### Context from the box\n",
         &format!(
-            "- Build: helmsman-plc {}, commit {commit}, ",
+            "- Build: helmsman-plc {}, build {stamp}, ",
             env!("CARGO_PKG_VERSION")
         ),
         "- Project: none deployed\n",

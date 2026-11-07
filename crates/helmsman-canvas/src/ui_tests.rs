@@ -3045,6 +3045,7 @@ mod boxed {
     use crate::box_view::BoxView;
     use crate::editor::Tab;
     use crate::remote::{Link, Msg, Stream};
+    use crate::stamp;
     use crate::theme::Theme;
 
     fn boxed(h: &Harness) -> &BoxView {
@@ -3095,6 +3096,58 @@ mod boxed {
         h.wait(0.2);
         assert!(!h.app.login, "signed out: collapses");
         assert!(!h.has("role engineer"));
+    }
+
+    /// Card build-match: a box that answers as another build gets the
+    /// banner, on the Editor and the Monitor alike, and the panels keep
+    /// their width under it.
+    #[test]
+    fn a_box_of_another_build_shows_the_banner() {
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.3);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        assert!(!h.has("build banner"), "no stamp heard yet");
+        h.app.boxv.as_mut().unwrap().state.build = Some(format!("{}-other", stamp::CANVAS));
+        h.wait(0.3);
+        assert!(h.has("build banner") && h.has("reload"));
+        assert!(
+            h.rect("build banner").top() >= h.rect("header").bottom() - 1.0,
+            "under the header"
+        );
+        assert!((h.rect("left").width() - left.width()).abs() <= 1.0);
+        assert!((h.rect("right").width() - right.width()).abs() <= 1.0);
+        h.app.screen = crate::app::Screen::Monitor;
+        h.wait(0.3);
+        assert!(h.has("build banner"), "on the Monitor too");
+    }
+
+    /// Nothing to compare is no mismatch: the same build, a box built
+    /// without git ("unknown"), and the simulation show no banner.
+    #[test]
+    fn the_same_build_or_an_unknown_one_shows_no_banner() {
+        let mut h = Harness::new(App::boxed());
+        for build in [stamp::CANVAS, stamp::UNKNOWN, ""] {
+            h.app.boxv.as_mut().unwrap().state.build = Some(build.to_string());
+            h.wait(0.3);
+            assert!(!h.has("build banner"), "{build:?}");
+        }
+        h.app.boxv.as_mut().unwrap().state.build = Some("other".into());
+        h.app.source = Source::Sim;
+        h.wait(0.3);
+        assert!(!h.has("build banner"), "the simulation has no box to differ from");
+    }
+
+    /// The real box API names its build on the replies the canvas
+    /// fetches, and a box and canvas from one checkout match.
+    #[test]
+    fn a_box_of_this_build_is_heard_and_matches() {
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        assert_eq!(state.build.as_deref(), Some(stamp::CANVAS));
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.wait(0.3);
+        assert!(!h.has("build banner"));
     }
 
     /// The minimum holds on a box too: its tabs, signed in, and the

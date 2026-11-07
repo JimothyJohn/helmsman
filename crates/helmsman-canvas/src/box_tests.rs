@@ -212,13 +212,25 @@ impl Bench {
 
     /// `GET path`: the status and body.
     pub fn get(&self, path: &str) -> (u16, String) {
+        let (status, _, body) = self.get_build(path);
+        (status, body)
+    }
+
+    /// [`Self::get`], with the build stamp the reply named (the header a
+    /// browser's `fetch` reads, card build-match).
+    pub fn get_build(&self, path: &str) -> (u16, Option<String>, String) {
         let mut s = TcpStream::connect(self.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         write!(s, "GET {path} HTTP/1.1\r\nHost: box\r\n\r\n").unwrap();
         let mut out = String::new();
         s.read_to_string(&mut out).unwrap();
         let (head, body) = out.split_once("\r\n\r\n").unwrap();
-        (head[9..12].parse().unwrap(), body.to_string())
+        let build = head.split("\r\n").skip(1).find_map(|l| {
+            let (k, v) = l.split_once(':')?;
+            k.eq_ignore_ascii_case(crate::stamp::HEADER)
+                .then(|| v.trim().to_string())
+        });
+        (head[9..12].parse().unwrap(), build, body.to_string())
     }
 
     /// Opens the event stream at `path` and returns its first `n` events
@@ -283,7 +295,10 @@ pub fn watch(b: &Bench) -> (BoxState, Vec<Msg>) {
         for cmd in s.poll(now) {
             match cmd {
                 Cmd::Get(what, url) => {
-                    let (status, body) = b.get(&url);
+                    let (status, build, body) = b.get_build(&url);
+                    if let Some(build) = build {
+                        feed(&mut s, Msg::Build(build), now);
+                    }
                     let r = if status == 200 {
                         Ok(body)
                     } else {
