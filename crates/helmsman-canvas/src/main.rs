@@ -23,6 +23,7 @@
     clippy::similar_names
 )]
 
+mod agent_marks;
 mod app;
 mod arrange;
 #[cfg(test)]

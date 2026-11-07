@@ -98,6 +98,9 @@ pub struct PlaygroundView {
     seen: Seen,
     /// The diagram of the program running, rebuilt when it changes.
     pub viewer: Option<Viewer>,
+    /// The Agent's last change, marked on the diagram and in the code
+    /// until the file is edited ([`crate::agent_marks`]).
+    pub agent_change: Option<crate::agent_marks::AgentChange>,
     /// Its shared default layout (the project's) and this browser's
     /// tweaks (`arrange.rs`).
     pub layers: Layers,
@@ -188,6 +191,7 @@ impl PlaygroundView {
         let mut v = Self {
             session: Session::new(&proj.build_src()),
             viewer: None,
+            agent_change: None,
             layers: Layers::load(tweaks),
             fresh: false,
             viewer_of: String::new(),
@@ -1069,6 +1073,31 @@ impl PlaygroundView {
         }
     }
 
+    /// The Agent's last change, marked while its file is what the Agent
+    /// wrote: the editor's line marks for the file open, the diagram's
+    /// baseline. The first edit (any other text) clears them.
+    pub(crate) fn agent_marks(&mut self, chrome: &mut Chrome) {
+        let text = self
+            .agent_change
+            .as_ref()
+            .and_then(|c| self.proj.files.get(&c.file))
+            .map(String::as_str);
+        if self
+            .agent_change
+            .as_ref()
+            .is_some_and(|c| !c.holds(&self.proj.open, text))
+        {
+            self.agent_change = None;
+        }
+        let c = self.agent_change.as_ref();
+        chrome.st_marks = c
+            .filter(|c| c.file == self.proj.current)
+            .map(|c| c.lines().clone());
+        if let Some(v) = &mut self.viewer {
+            v.baseline = c.and_then(|c| c.baseline.clone());
+        }
+    }
+
     /// A checked answer into the open project: unsaved edits are saved
     /// first as their own revision, so the version before the change is
     /// one; then the file (and the scenarios it passed, as requirement
@@ -1101,6 +1130,15 @@ impl PlaygroundView {
             self.proj.save_as("saved before the Agent's change", None);
         }
         let before = self.proj.revisions().last().map(|r| r.n);
+        let was = self.proj.files.get(&apply.file).cloned().unwrap_or_default();
+        let baseline = self.viewer.as_ref().map(|v| std::rc::Rc::new(v.module.clone()));
+        self.agent_change = Some(crate::agent_marks::AgentChange::new(
+            &apply.project,
+            &apply.file,
+            &was,
+            apply.text.clone(),
+            baseline,
+        ));
         self.proj.files.insert(apply.file.clone(), apply.text.clone());
         for (f, t) in &apply.tests {
             self.proj.files.insert(f.clone(), t.clone());
@@ -1249,6 +1287,7 @@ impl PlaygroundView {
     /// One frame of the Editor.
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
+        self.agent_marks(chrome);
         editor::show(ui, chrome, self);
         if self.devices_ui.take_import() {
             #[cfg(target_arch = "wasm32")]

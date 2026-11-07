@@ -59,6 +59,10 @@ pub struct BoxView {
     /// before every frame.
     pub session: Option<Session>,
     pub view: Option<Viewer>,
+    /// The Agent's last change, marked in the code until the file is
+    /// edited, and on the diagram once the box runs it
+    /// ([`crate::agent_marks`]).
+    pub agent_change: Option<crate::agent_marks::AgentChange>,
     /// The Trend tab: pinned signals from the box's history.
     pub trend: BoxTrend,
     /// The way to the agent the box runs (`POST /api/chat`).
@@ -164,6 +168,7 @@ impl BoxView {
             devices_ui: crate::devices::DevicesUi::default(),
             session: None,
             view: None,
+            agent_change: None,
             layers: Layers::load(tweaks),
             generation: 0,
             wants_sim: false,
@@ -639,6 +644,35 @@ impl BoxView {
         }
     }
 
+    /// The Agent's last change, marked while its file is what the Agent
+    /// wrote: the editor's line marks for the file open, the diagram's
+    /// baseline (the diagram is what runs, so its marks show once the
+    /// change is deployed). The first edit clears them.
+    fn agent_marks(&mut self, chrome: &mut Chrome) {
+        let open = self.projects.open.as_ref();
+        let text = self
+            .agent_change
+            .as_ref()
+            .and_then(|c| open.and_then(|o| o.bufs.get(&c.file)))
+            .map(|b| b.text.as_str());
+        let project = open.map_or("", |o| o.name.as_str());
+        if self
+            .agent_change
+            .as_ref()
+            .is_some_and(|c| !c.holds(project, text))
+        {
+            self.agent_change = None;
+        }
+        let current = open.and_then(|o| o.current.as_deref());
+        let c = self.agent_change.as_ref();
+        chrome.st_marks = c
+            .filter(|c| Some(c.file.as_str()) == current)
+            .map(|c| c.lines().clone());
+        if let Some(v) = &mut self.view {
+            v.baseline = c.and_then(|c| c.baseline.clone());
+        }
+    }
+
     /// A checked answer saved into the box's project: the file with the
     /// change's History entry, then its scenarios as requirement tests.
     fn agent_write(&mut self, apply: &crate::instruct::Apply) {
@@ -653,6 +687,21 @@ impl BoxView {
             return self.log_agent();
         }
         let before = self.projects.history.last().map(|r| r.n);
+        let was = self
+            .projects
+            .open
+            .as_ref()
+            .and_then(|o| o.bufs.get(&apply.file))
+            .map(|b| b.text.clone())
+            .unwrap_or_default();
+        let baseline = self.view.as_ref().map(|v| std::rc::Rc::new(v.module.clone()));
+        self.agent_change = Some(crate::agent_marks::AgentChange::new(
+            &apply.project,
+            &apply.file,
+            &was,
+            apply.text.clone(),
+            baseline,
+        ));
         self.projects
             .save_agent(&apply.file, &apply.text, &apply.record, &apply.tests);
         let undo = before.map(|revision| crate::instruct::Undo {
@@ -802,6 +851,7 @@ impl BoxView {
     /// One frame of the Editor.
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
+        self.agent_marks(chrome);
         editor::show(ui, chrome, self);
         if self.devices_ui.take_import() {
             #[cfg(target_arch = "wasm32")]

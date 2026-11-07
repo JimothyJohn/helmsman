@@ -182,6 +182,14 @@ pub struct Viewer {
     pub breaks: Vec<StmtId>,
     /// The statement a paused scan stopped before.
     pub paused: Option<StmtId>,
+    /// The program as the diagram showed it when the Agent's last change
+    /// landed ([`crate::agent_marks`]): what that change added is outlined
+    /// green and what it removed drawn as red ghosts, against it. The host
+    /// sets it each frame and clears it at the engineer's next edit.
+    pub baseline: Option<std::rc::Rc<Module>>,
+    /// The diff of `baseline` to `module`, kept while neither changes:
+    /// (the baseline's address, the source it was made against, the diff).
+    change: Option<(usize, String, helmsman_diagram::diff::ModuleDiff)>,
 }
 
 /// One row of the program tree.
@@ -350,7 +358,36 @@ impl Viewer {
             icons: crate::icons::Icons::default(),
             breaks: Vec::new(),
             paused: None,
+            baseline: None,
+            change: None,
         }
+    }
+
+    /// What the Agent's last change added on the diagram shown (block
+    /// ids of the new diagram) and what it removed (block ids of the old
+    /// one, with the old diagram): empty with no baseline.
+    pub(crate) fn agent_change(&mut self) -> (Vec<NodeId>, Vec<NodeId>) {
+        let Some(base) = self.baseline.clone() else {
+            self.change = None;
+            return (Vec::new(), Vec::new());
+        };
+        let key = std::rc::Rc::as_ptr(&base) as usize;
+        if self
+            .change
+            .as_ref()
+            .is_none_or(|(k, src, _)| *k != key || *src != self.src)
+        {
+            let d = helmsman_diagram::diff::modules(&base, &self.module);
+            self.change = Some((key, self.src.clone(), d));
+        }
+        let Some((_, _, d)) = &self.change else {
+            return (Vec::new(), Vec::new());
+        };
+        let pou = &self.module.pous[self.scopes[self.scope].pou].name;
+        (
+            d.new_nodes(pou, helmsman_diagram::diff::Change::Added),
+            d.removed_nodes(pou),
+        )
     }
 
     /// The picked block if it reads a variable: its path and its index
@@ -1071,6 +1108,13 @@ impl Viewer {
             .map(|h| self.references(h))
             .filter(|r| !r.is_empty())
             .or_else(|| self.path(scan));
+        let (added, removed) = self.agent_change();
+        let pou = &self.module.pous[self.scopes[self.scope].pou].name;
+        let old = self
+            .baseline
+            .as_ref()
+            .and_then(|b| b.pou(pou))
+            .map(|p| &p.diagram);
         draw(
             &painter,
             &t,
@@ -1086,6 +1130,8 @@ impl Viewer {
                 icons: &self.icons,
                 breaks: &self.breaks,
                 paused: self.paused,
+                added: &added,
+                ghosts: old.map(|o| (o, removed.as_slice())),
             },
         );
     }
@@ -1166,6 +1212,55 @@ pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
     })
 }
 
+/// The Agent's added blocks and wires (the brand green), and its
+/// removed ones (the brand red, ghosted).
+const ADDED: Color32 = brand::GREEN;
+
+/// Blocks the Agent's change removed, drawn where they were in the old
+/// diagram: a faint red fill, a red outline and their label, and the old
+/// wires between two removed blocks, so what went is seen in place.
+fn draw_ghosts(painter: &egui::Painter, cam: Cam, old: &Diagram, removed: &[NodeId]) {
+    let z = cam.zoom;
+    let red = brand::RED;
+    for w in &old.wires {
+        if removed.contains(&w.from) && removed.contains(&w.to) {
+            let (a, b) = (old.node(w.from), old.node(w.to));
+            let (ax, ay) = out_port(a, w.out);
+            let (bx, by) = in_port(b, w.inp);
+            bezier(
+                painter,
+                cam.to_screen(ax, ay),
+                cam.to_screen(bx, by),
+                z,
+                red.gamma_multiply(0.45),
+                1.2,
+            );
+        }
+    }
+    for id in removed {
+        let Some(n) = old.nodes.get(id.0 as usize) else {
+            continue;
+        };
+        let r = cam.rect(&n.rect);
+        painter.rect_filled(r, CornerRadius::same(4), red.gamma_multiply(0.12));
+        painter.rect_stroke(
+            r,
+            CornerRadius::same(4),
+            Stroke::new(1.5 * z.max(0.6), red.gamma_multiply(0.7)),
+            StrokeKind::Outside,
+        );
+        if z > 0.35 {
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                &n.label,
+                font(11.5 * z),
+                red.gamma_multiply(0.75),
+            );
+        }
+    }
+}
+
 /// What [`draw`] marks on the diagram beside the scan.
 #[derive(Clone, Copy)]
 struct Marks<'a> {
@@ -1184,6 +1279,11 @@ struct Marks<'a> {
     breaks: &'a [StmtId],
     /// The statement a paused scan stopped before: outlined.
     paused: Option<StmtId>,
+    /// Blocks the Agent's last change added: outlined green.
+    added: &'a [NodeId],
+    /// Blocks it removed, in the old diagram: drawn as red ghosts where
+    /// they were.
+    ghosts: Option<(&'a Diagram, &'a [NodeId])>,
 }
 
 /// Where a statement is marked on the diagram: the blocks it ends in, or
@@ -1311,6 +1411,8 @@ fn draw(
         icons,
         breaks,
         paused,
+        added,
+        ghosts,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -1438,6 +1540,9 @@ fn draw(
         if w.negated {
             bubble(painter, t, pb, z, live.and_then(|l| l.input(d, k)), f);
         }
+        if added.contains(&w.from) || added.contains(&w.to) {
+            bezier(painter, pa, end, z, ADDED.gamma_multiply(0.85), 1.5);
+        }
         if text
             && let Some(v) = v
             && !matches!(v, Value::Bool(_))
@@ -1507,6 +1612,14 @@ fn draw(
             Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
+        if added.contains(&n.id) {
+            painter.rect_stroke(
+                r.expand(3.0 * z),
+                CornerRadius::same(6),
+                Stroke::new(2.5 * z.max(0.6), ADDED),
+                StrokeKind::Outside,
+            );
+        }
         if here_nodes.contains(&n.id) {
             paused_outline(painter, r, z);
         }
@@ -1598,6 +1711,10 @@ fn draw(
                 );
             }
         }
+    }
+    // Last, so what the Agent removed shows over whatever took its place.
+    if let Some((old, removed)) = ghosts {
+        draw_ghosts(painter, cam, old, removed);
     }
 }
 
