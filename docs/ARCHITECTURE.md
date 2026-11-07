@@ -812,6 +812,36 @@ signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
 - **The tab** draws up to six pins as steps over the box's window,
   extended by each values event (`at_ms`), the last value held to now.
 
+## The desk (`desk-on-box`, built)
+
+What a person had in front of them on the box's page (the open project
+and file, unsaved edits with the box version each was made against, the
+Agent's and the Requirements' inputs, the screen, the sign-in name, never
+a password or PIN): `crates/helmsman-canvas/src/desk.rs` keeps it in the
+browser (`localStorage`, at most 1 MiB, written at most once a second when
+it changed) and, signed in, on the box per person (`OnBox`), so it follows
+the person between screens.
+
+- **On the box** (`api/desk.rs`): `GET /api/desk` answers the session's
+  own desk (`{owner, desk}`, `desk` null when there is none; 401 signed
+  out) and `PUT /api/desk` sets it (a login session; the box token is no
+  one, 400). The owner is the session's, as for the trend pins (an
+  account, or the role for a role-PIN session); neither route takes one
+  from the request. The body is read into the desk's own fields and
+  written back from them, so anything else in it is dropped. At most
+  512 KiB (413 past it), 64 people (507 for a new one past that, rather
+  than dropping someone's unsaved work); every PUT is audited. Kept in
+  the state directory's `desks/` (0700, one file per owner named by the
+  owner in hex, written atomically, read under the same bound).
+- **Newer wins.** The desk carries `saved_at`, when its work (the edits
+  and the inputs) last changed, never moving back. On sign-in the page
+  asks for the box's desk before sending any, and takes it when it is
+  newer than its own (the project opens again with its file and edits,
+  as after a reload); otherwise its own goes to the box. The box refuses
+  a desk older than the one it holds (409), and the page then reads the
+  newer one. A role change on the same account keeps the desk; signed
+  out, or with the box not answering, the browser's is the desk.
+
 ## Snapshots (`snapshots`, built)
 
 `helmsman_plc::store` (`store.rs`; contract in `tests/store.rs`) keeps
@@ -2275,6 +2305,47 @@ path that drives an output).
   route's profile, see Requirement tests). `GET /api` says whether the box has an
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.
+
+## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
+
+For someone in trouble who did not write the program (Nick, 2026-11-07,
+interview). The box's Agent tab has two modes, "Change the program" (the
+instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`):
+the person says what went wrong, and the answer is a plain-language
+diagnosis and a Markdown issue with a Copy button, to paste into a GitHub
+issue or to another agent. Nothing is filed.
+
+- **`POST /api/help {question, messages?}`** (`api::help`; any
+  credential, the box token or any login session, since it changes
+  nothing; audited). `messages` is the page's Messages as text
+  (`messages::Log::text`); the box keeps the newest 16 KiB. The box adds
+  its own context: build (version, the build stamp `helmsman_plc::BUILD`
+  that the API sends as `X-Helmsman-Build`, OS, arch), the project it runs and that snapshot
+  (12 hex digits), and each device link with its state, error and
+  address (as `GET /api/devices`).
+- **Redaction** (`help::redact`): every string of the context, the
+  question, and the finished issue (whoever wrote it) lose the box
+  token, the relay token, any run of 32+ hex digits (session tokens,
+  keys), `hmr1_...`, the word after `Bearer`, the value after a secret
+  key and `:` or `=` (`token`, `pin`, `password`, `cookie`,
+  `helmsman_session`, `*_key`, ...) and the digits after `PIN`. A
+  property test and `tests/help.rs` assert that none reaches the relay
+  or the answer.
+- **The agent** is the relay's help profile (`--relay-help-agent V`,
+  default `helmsman/help-v1`, not served yet) with one tool,
+  `submit_issue {diagnosis, title, what_happened, expected?, steps?,
+  suspected_files?}`, run in process (`Agent::chat_local`). The box
+  checks it (lengths; a suspected file is a relative repository path,
+  optionally `:LINE`) and links each file to
+  `github.com/JimothyJohn/helmsman/blob/dev/...`. One user message: the
+  fixed `help::ASK`, then the question and context in the `<box-data>`
+  envelope. Budget: 4 turns, 32k output tokens, 3 min.
+- **Without the agent** (no relay, offline, the relay answering
+  `unknown_agent_version`, or no `submit_issue`) the box writes the
+  issue from the question and its context, and `done` says why there is
+  no diagnosis (`stop: "unavailable"` for a profile the relay does not
+  serve). Events: `help` (the context), `text`, `tool_call`,
+  `tool_result`, `retrying`, `issue` (always, once), `done` or `error`.
 
 ## Proposal review (`proposal-ui`, built)
 

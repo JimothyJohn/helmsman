@@ -69,6 +69,14 @@ pub struct BoxView {
     pub agent: crate::box_agent::BoxAgent,
     /// The Agent tab (`crate::instruct`, as in the page).
     pub instruct: crate::instruct::Instruct,
+    /// The Agent tab's Help mode (`POST /api/help`).
+    pub help: crate::help::HelpUi,
+    help_seq: u64,
+    #[cfg(target_arch = "wasm32")]
+    help_http: crate::web::ChatHttp,
+    /// Natively: the help requests asked for.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub help_sent: Vec<crate::box_agent::Request>,
     /// The agent turn [`Self::settle_agent`] last took.
     answered_seq: u64,
     /// Page time of the last frame, s (for Messages).
@@ -82,6 +90,8 @@ pub struct BoxView {
     pub adding: Option<crate::requirements::Adding>,
     /// Keeps what is in front of the person in this browser (`crate::desk`).
     desk: crate::desk::Keeper,
+    /// Keeps it on the box too, for whoever is signed in.
+    pub on_box: crate::desk::OnBox,
     /// The desk as it was before the page loaded, for the App to take
     /// the screen and the sign-in name from (once).
     pub restored: Option<crate::desk::Desk>,
@@ -129,6 +139,15 @@ impl Default for BoxView {
     }
 }
 
+/// What the projects put back from `d`: its project, file and edits.
+fn restore_of(d: &crate::desk::Desk) -> crate::box_projects::Restore {
+    crate::box_projects::Restore {
+        project: d.project.clone(),
+        file: d.project.clone().zip(d.file.clone()),
+        drafts: d.drafts.clone(),
+    }
+}
+
 /// Whether `s` may edit, save, deploy and force: an engineer or above.
 pub fn is_engineer(s: Option<&Session>) -> Result<(), String> {
     match s {
@@ -166,17 +185,26 @@ impl BoxView {
     pub fn with_desk(mut self, store: Box<dyn Storage>) -> Self {
         let (keeper, d) = crate::desk::Keeper::load(store);
         self.desk = keeper;
-        self.projects.restore = crate::box_projects::Restore {
-            project: d.project.clone(),
-            file: d.project.clone().zip(d.file.clone()),
-            drafts: d.drafts.clone(),
-        };
+        self.projects.restore = restore_of(&d);
+        self.put_back(d);
+        self
+    }
+
+    /// The inputs, the screen and the sign-in name from `d`.
+    fn put_back(&mut self, d: crate::desk::Desk) {
         self.instruct.draft.clone_from(&d.agent);
         self.req_ui.draft.clone_from(&d.requirement);
         self.desk_screen.clone_from(&d.screen);
         self.desk_user.clone_from(&d.user);
         self.restored = Some(d);
-        self
+    }
+
+    /// Puts the box's desk, newer than the one in front of the person, in
+    /// its place (the person signed in on another screen since).
+    fn adopt(&mut self, d: crate::desk::Desk) {
+        self.desk.adopt(&d);
+        self.projects.adopt(restore_of(&d));
+        self.put_back(d);
     }
 
     /// What the desk keeps, as it stands now.
@@ -230,12 +258,19 @@ impl BoxView {
             chat_sent: Vec::new(),
             agent: crate::box_agent::BoxAgent::new(),
             instruct: crate::instruct::Instruct::default(),
+            help: crate::help::HelpUi::default(),
+            help_seq: 0,
+            #[cfg(target_arch = "wasm32")]
+            help_http: crate::web::ChatHttp::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            help_sent: Vec::new(),
             answered_seq: 0,
             agent_at: 0.0,
             wants_review: None,
             req_ui: crate::requirements::ReqUi::default(),
             adding: None,
             desk: crate::desk::Keeper::load(Box::new(crate::sim_projects::MemStorage::default())).0,
+            on_box: crate::desk::OnBox::default(),
             restored: None,
             desk_screen: None,
             desk_user: String::new(),
@@ -265,6 +300,11 @@ impl BoxView {
         for (call, a) in answers {
             match call {
                 PCall::TrendPins | PCall::SavePins | PCall::Trend => self.trend.answer(&call, &a, now),
+                PCall::Desk | PCall::SaveDesk => {
+                    if let Some(d) = self.on_box.answer(&call, &a, self.desk.saved_at()) {
+                        self.adopt(d);
+                    }
+                }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
                 call => self.projects.answer(call, &a),
             }
@@ -281,10 +321,14 @@ impl BoxView {
         let cmds = self.state.poll(now);
         self.run(ctx, cmds);
         self.trend.step(self.session.as_ref(), &self.state, now);
+        self.on_box.step(self.session.as_ref());
         let desk = self.desk();
-        self.desk.keep(&desk, now);
+        if let Some(d) = self.desk.keep(&desk, now) {
+            self.on_box.keep(&d, now);
+        }
         let mut reqs = self.projects.poll();
         reqs.extend(self.trend.poll());
+        reqs.extend(self.on_box.poll());
         self.send(ctx, reqs);
         self.downloads();
         let mut fresh = false;
@@ -403,6 +447,11 @@ impl BoxView {
         for i in self.req_http.drain() {
             if let crate::web::ChatIn::Turn(inc) = i {
                 self.requirement_answer(inc);
+            }
+        }
+        for i in self.help_http.drain() {
+            if let crate::web::ChatIn::Turn(inc) = i {
+                self.help_answer(inc);
             }
         }
         for i in self.chat.drain() {
@@ -804,9 +853,50 @@ impl BoxView {
         self.log_agent();
     }
 
-    /// The Agent tab: the agent's state on one line, then the shared tab.
+    /// A piece of the box's answer to the help request under way.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn help_answer(&mut self, inc: crate::box_agent::Incoming) {
+        let Some(h) = self.help.helping.as_mut() else {
+            return;
+        };
+        let was = h.busy();
+        h.apply(inc);
+        if was && let crate::help::Phase::Answered { issue, .. } = &h.phase {
+            let line = format!("Help: an issue was written ({}).", issue.title);
+            self.log.info(self.agent_at, line);
+        }
+    }
+
+    /// Why Help cannot be asked now, if it cannot: the box takes a request
+    /// from someone signed in, whatever their role.
+    fn help_blocked(&self) -> Option<String> {
+        self.session
+            .is_none()
+            .then(|| "Sign in (top right) to ask for help.".to_string())
+    }
+
+    /// Help mode's Ask: the question and the page's Messages to the box.
+    pub fn ask_help(&mut self, ctx: &egui::Context) {
+        if self.help_blocked().is_some() || crate::help::refusal(&self.help.draft).is_some() {
+            return;
+        }
+        self.help_seq += 1;
+        let req = crate::help::request(&self.help.draft, &self.log.text(), self.help_seq);
+        self.help.helping = Some(crate::help::Helping::new(self.help_seq));
+        #[cfg(target_arch = "wasm32")]
+        self.help_http.send(req, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = ctx;
+            self.help_sent.push(req);
+        }
+    }
+
+    /// The Agent tab: the agent's state on one line, the mode, then the
+    /// shared tab (changing the program) or Help.
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::box_agent::Status;
+        use crate::help::Mode;
         use crate::instruct::Act;
 
         if self.agent.status == Status::Unread && !self.agent.status_asked {
@@ -823,7 +913,10 @@ impl BoxView {
             blocked: self.agent_blocked(),
             undo_blocked: self.undo_blocked(),
         };
-        let act = egui::ScrollArea::vertical()
+        let help_view = crate::help::View {
+            blocked: self.help_blocked(),
+        };
+        let (act, help_act) = egui::ScrollArea::vertical()
             .id_salt("box-agent")
             .show(ui, |ui| {
                 // Room for the scroll bar (a resizable panel grows to any
@@ -834,9 +927,25 @@ impl BoxView {
                     .tip(self.agent.status.line());
                 chrome.hit("agent status", l.rect);
                 ui.add_space(4.0);
-                crate::instruct::ui(ui, chrome, &mut self.instruct, &view)
+                crate::help::mode_ui(ui, chrome, &mut self.help.mode);
+                ui.add_space(4.0);
+                match self.help.mode {
+                    Mode::Code => (crate::instruct::ui(ui, chrome, &mut self.instruct, &view), None),
+                    Mode::Help => (None, crate::help::ui(ui, chrome, &mut self.help, &help_view)),
+                }
             })
             .inner;
+        match help_act {
+            Some(crate::help::Act::Ask) => self.ask_help(&ctx),
+            Some(crate::help::Act::Stop) => {
+                #[cfg(target_arch = "wasm32")]
+                self.help_http.abort();
+                if let Some(h) = self.help.helping.as_mut() {
+                    h.stop();
+                }
+            }
+            None => {}
+        }
         match act {
             Some(Act::Send) => self.send_instruction(&ctx),
             Some(Act::Stop) => {
@@ -1601,6 +1710,7 @@ impl Body for BoxView {
             || self.projects.deploy != Deploy::Idle
             || self.projects.notice.is_some()
             || self.desk.problem.is_some()
+            || self.on_box.problem.is_some()
     }
 
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -1634,6 +1744,10 @@ impl Body for BoxView {
         if let Some(p) = &self.desk.problem {
             let r = ui.label(RichText::new(format!("⚠ {p}")).color(t.muted));
             chrome.hit("desk problem", r.rect);
+        }
+        if let Some(p) = &self.on_box.problem {
+            let r = ui.label(RichText::new(format!("⚠ {p}")).color(t.muted));
+            chrome.hit("desk on the box problem", r.rect);
         }
         if let Some((text, error)) = self.projects.notice.clone() {
             ui.separator();

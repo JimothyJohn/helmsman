@@ -173,7 +173,15 @@ name = "requirements"
 required-features = ["box"]
 
 [[test]]
+name = "help"
+required-features = ["box"]
+
+[[test]]
 name = "trend"
+required-features = ["box"]
+
+[[test]]
+name = "desk"
 required-features = ["box"]
 
 [[test]]

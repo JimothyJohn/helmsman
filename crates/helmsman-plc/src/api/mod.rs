@@ -42,6 +42,7 @@
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
+//! POST /api/help                          token or session: what went wrong in words; a diagnosis and a Markdown issue with the box's context, redacted (see [`help`])
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
 //! GET  /api/site                          this box and the boxes it heard on the LAN (with --site NAME; see [`crate::site`])
 //! POST /api/dropins?name=N&kind=K         token: a document, a photo or a PDF for the agent, stored in memory (see [`dropin`], [`photo`], [`pdf`])
@@ -53,6 +54,7 @@
 //! POST /api/projects/{p}/requirements    engineer session: one requirement in words; the agent writes its test (see [`requirements`])
 //! GET  /api/running                       the project deployed last, and whether it is what runs
 //! GET  /api/forces                        forced inputs; POST and DELETE need an engineer session (see [`forces`])
+//! GET  /api/desk                        a session: that person's desk; PUT sets it (see [`desk`])
 //! GET  /api/drivers ...                   the box's WASM driver files; list, PUT and DELETE need an engineer session (see [`drivers`])
 //! POST /mcp                               token: MCP Streamable HTTP, the agent's tools for an engineer's own client (see [`mcp`])
 //! GET  /, /{file}                          the canvas (with --ui DIR; see [`ui`])
@@ -106,11 +108,13 @@ pub mod bundle;
 pub mod catalog;
 pub mod chat;
 mod control;
+pub mod desk;
 pub mod discover;
 pub mod drivers;
 pub mod dropin;
 pub mod explain;
 pub mod forces;
+pub mod help;
 pub mod http;
 pub mod live;
 pub mod login;
@@ -251,6 +255,10 @@ pub struct More {
     /// (`<state-dir>/trend-pins`, [`trend::Trends::in_file`]). `None`:
     /// memory only.
     pub trend_pins: Option<std::path::PathBuf>,
+    /// Where people's desks are kept across restarts
+    /// (`<state-dir>/desks/`, [`desk::Desks::in_dir`]). `None`: memory
+    /// only.
+    pub desks: Option<std::path::PathBuf>,
     /// How the box scans its network for devices and where its device
     /// library is (see [`discover`]). The default sweeps the LAN's
     /// broadcast and reads the public library.
@@ -352,6 +360,8 @@ struct Ctx {
     running_drivers: Mutex<crate::drivers::Drivers>,
     /// Pinned signals' history ([`trend`]).
     trends: Mutex<trend::Trends>,
+    /// Each person's desk ([`desk`]).
+    desks: Mutex<desk::Desks>,
     /// The box's HTTPS ([`Api::start_secure`]); `None`: plain HTTP only.
     tls: Option<Tls>,
 }
@@ -363,6 +373,10 @@ impl Ctx {
 
     fn trends(&self) -> MutexGuard<'_, trend::Trends> {
         self.trends.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn desks(&self) -> MutexGuard<'_, desk::Desks> {
+        self.desks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn dropins(&self) -> MutexGuard<'_, dropin::Store> {
@@ -610,6 +624,7 @@ impl Api {
             drivers: driver_dir,
             running_drivers,
             trend_pins,
+            desks,
             discovery,
         } = more;
         let listener = TcpListener::bind(cfg.bind)?;
@@ -651,6 +666,7 @@ impl Api {
             driver_dir,
             running_drivers: Mutex::new(running_drivers),
             trends: Mutex::new(trend_pins.map_or_else(trend::Trends::default, trend::Trends::in_file)),
+            desks: Mutex::new(desks.map_or_else(desk::Desks::default, desk::Desks::in_dir)),
             tls,
         });
         let watcher = ctx.chat.as_ref().map(|c| c.watch(Arc::clone(&stop)));
@@ -765,6 +781,8 @@ enum Reply {
     Explain(explain::Job),
     /// One requirement: the agent writes its test.
     Requirement(Box<requirements::Job>),
+    /// One help request: a diagnosis and an issue.
+    Help(Box<help::Job>),
     /// A file of the UI.
     File(ui::Asset),
 }
@@ -902,6 +920,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
             }
         }
         Reply::Requirement(job) => requirements::serve(ctx, &mut stream, &job),
+        Reply::Help(job) => help::serve(ctx, &mut stream, &job),
         Reply::File(asset) => {
             let _ = ui::send(&mut stream, asset);
         }
@@ -918,6 +937,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 | Reply::Chat(_)
                 | Reply::Explain(_)
                 | Reply::Requirement(_)
+                | Reply::Help(_)
                 | Reply::File(_) => Ok(()),
             };
         }
@@ -1020,6 +1040,12 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         && req.segments[1] == "explain"
     {
         return start_explain(req, ctx);
+    }
+    if req.method == "POST" && req.segments == ["api", "help"] {
+        return match help::start(req, ctx) {
+            Ok(job) => Reply::Help(Box::new(job)),
+            Err(r) => Reply::Once(r),
+        };
     }
     if let [api, projects, name, requirements] = req.segments.as_slice()
         && req.method == "POST"
@@ -1290,6 +1316,7 @@ fn mutate(req: &Request, ctx: &Ctx) -> Response {
         ("POST", ["api", "modules", name, op]) if *op != "trace" => return control::post(req, ctx, name, op),
         (_, ["api", "drivers", ..]) => return drivers::mutate(req, ctx, &segs[1..]),
         ("PUT", ["api", "trends", "pins"]) => return trend::put_pins(req, ctx),
+        ("PUT", ["api", "desk"]) => return desk::put(req, ctx),
         ("POST", ["api", "proposals"]) => return create(req, ctx),
         ("POST", ["api", "logout"]) => return login::logout(req, ctx),
         ("POST", ["api", "bundles"]) => return bundle::import(req, ctx),
@@ -1340,7 +1367,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "modules", _, "stop" | "run" | "restart"] => return Some("POST"),
         ["api", "drivers" | "trends"] => return Some("GET"),
         ["api", "drivers", _] => return Some("PUT, DELETE"),
-        ["api", "trends", "pins"] => return Some("GET, PUT"),
+        ["api", "trends", "pins"] | ["api", "desk"] => return Some("GET, PUT"),
         _ => {}
     }
     match path {
@@ -1348,7 +1375,10 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat" | "explain" | "bundles" | "login" | "logout"]
+        | [
+            "api",
+            "chat" | "explain" | "help" | "bundles" | "login" | "logout",
+        ]
         | ["api", "devices", "discover"]
         | ["api", "market", "list" | "install"]
         | ["api", "devices", _, "browse"] => Some("POST"),
@@ -1711,6 +1741,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "forces"] => forces::get(ctx),
         ["api", "drivers"] => drivers::list(req, ctx),
         ["api", "trends", rest @ ..] => trend::get(req, ctx, rest),
+        ["api", "desk"] => desk::get(req, ctx),
         ["api", "dropins", rest @ ..] => dropin::get(ctx, req, rest),
         ["api", "chat", "status"] => Response::json(200, &chat_status(ctx)),
         ["api", "site"] => site_route(ctx, c, &view),
@@ -1834,6 +1865,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/events", false, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
+            e("POST", "/api/help", true, "{question, messages?}: what went wrong, in words (1 to 2000 characters) with the page's recent messages; the box attaches its build, the running project, its devices and their errors, all redacted of secrets. An event stream: help, text, tool_call, tool_result, retrying, issue (a diagnosis and a Markdown issue to copy; nothing is filed), done or error"),
             e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB), a photo (PNG, JPEG, WebP; at most 512 KiB, 8000 px a side) or a PDF (at most 2 MiB, passed to the model unread): stored in memory, 201 with its id"),
             e("GET", "/api/dropins", false, "the drop-ins held: id, name, kind, size, chunks"),
             e("GET", "/api/dropins/{id}?chunk=K", false, "one chunk of a drop-in's text"),
@@ -1860,6 +1892,8 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/trends?signals=a,b", false, "each signal's history (10 min, on change) on the scheduler's clock; keeps them tracked a day: {now_ms, window_ms, signals: [{name, points: [[t_ms, value]]}], unknown, refused}"),
             e("GET", "/api/trends/pins", false, "the signed-in person's pinned signals"),
             e("PUT", "/api/trends/pins", true, "a login session: {signals: [...]} (at most 16), that person's pins"),
+            e("GET", "/api/desk", false, "the signed-in person's desk (open project and file, unsaved edits, inputs), or null"),
+            e("PUT", "/api/desk", true, "a login session: that person's desk (at most 512 KiB; an older saved_at than the box's is refused, 409)"),
             e("GET", "/api/forces", false, "active forced inputs: {id, signal | address, value, by, at}"),
             e("POST", "/api/forces", true, "engineer session: force an input {signal, value} or {address: %IX0.0 | %IBn | %IWn | %IDn, value}; ends at that session's logout or expiry and on deploy"),
             e("DELETE", "/api/forces/{id}", true, "engineer session: release one force"),
