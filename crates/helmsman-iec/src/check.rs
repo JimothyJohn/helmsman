@@ -601,7 +601,11 @@ impl<'a> Ck<'a> {
                             "STRING" | "WSTRING" => " (STRING is not supported yet)".to_string(),
                             "DATE" | "DT" | "TOD" | "DATE_AND_TIME" | "TIME_OF_DAY" | "LDATE" | "LDT"
                             | "LTOD" | "LTIME" => format!(" ({n} is not supported yet)"),
-                            _ => String::new(),
+                            _ => {
+                                let mut known: Vec<&str> = Ty::names().collect();
+                                known.extend(self.named.keys().map(String::as_str));
+                                crate::suggest::hint(n, known)
+                            }
                         };
                         self.err(*pos, format!("unknown type {n}{hint}"));
                         None
@@ -1177,9 +1181,14 @@ impl<'a> Ck<'a> {
                         return None;
                     }
                     let hint = if self.pou_index.contains_key(name) {
-                        " (a function is called with parentheses)"
+                        " (a function is called with parentheses)".to_string()
                     } else {
-                        ""
+                        let near = crate::suggest::hint(name, sc.vars.keys().map(String::as_str));
+                        if near.is_empty() {
+                            " (declare it in a VAR block)".to_string()
+                        } else {
+                            near
+                        }
                     };
                     self.err(e.pos, format!("undeclared variable {name}{hint}"));
                     return None;
@@ -1826,7 +1835,7 @@ impl<'a> Ck<'a> {
             let rt = self.pous[p].vars[0].ty;
             return Some((Ex::Call(Box::new(call)), T::Known(rt)));
         }
-        self.builtin(name, args, want, pos, sc)
+        self.builtin(name, args, want, pos, sc, callee.pos)
     }
 
     fn positional(&mut self, name: &str, args: &[Arg], pos: Pos) -> bool {
@@ -1841,9 +1850,18 @@ impl<'a> Ck<'a> {
         true
     }
 
-    /// Standard functions and conversions.
+    /// Standard functions and conversions. `at` is where the function's
+    /// name is, for an unknown one.
     #[allow(clippy::too_many_lines)]
-    fn builtin(&mut self, name: &str, args: &[Arg], want: Option<Type>, pos: Pos, sc: &Scope) -> O<(Ex, T)> {
+    fn builtin(
+        &mut self,
+        name: &str,
+        args: &[Arg],
+        want: Option<Type>,
+        pos: Pos,
+        sc: &Scope,
+        at: Pos,
+    ) -> O<(Ex, T)> {
         if let Some(conv) = self.conversion(name, args, pos, sc) {
             return conv;
         }
@@ -1866,7 +1884,14 @@ impl<'a> Ck<'a> {
         }
         let Some(&(_, b)) = BUILTINS.iter().find(|(n, _)| *n == name) else {
             if !self.was_dropped(sc.pou, name) {
-                self.err(pos, format!("unknown function {name}"));
+                let functions = self
+                    .pou_index
+                    .iter()
+                    .filter(|&(_, &p)| self.pous[p].kind == PouType::Function)
+                    .map(|(n, _)| n.as_str());
+                let known = BUILTINS.iter().map(|(n, _)| *n).chain(["EXPT", "MOVE"]);
+                let hint = crate::suggest::hint(name, known.chain(functions));
+                self.err(at, format!("unknown function {name}{hint}"));
             }
             return None;
         };

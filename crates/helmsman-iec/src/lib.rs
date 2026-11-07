@@ -104,6 +104,7 @@ pub mod plcopen;
 mod rename;
 pub mod spec;
 mod state;
+mod suggest;
 pub mod trace;
 mod types;
 mod xml;

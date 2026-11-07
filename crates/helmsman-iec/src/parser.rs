@@ -7,7 +7,7 @@
 //! left to right. Unary minus binding tighter than `**` (`-2.0 ** 2` is 4)
 //! follows ruSTy; see tests/oracle.rs.
 
-use crate::lexer::{LexError, Pos, Tok, lex};
+use crate::lexer::{LexError, Pos, Tok, lex_spans};
 #[cfg(not(feature = "std"))]
 use crate::prelude::*;
 
@@ -280,6 +280,13 @@ impl From<LexError> for ParseError {
 
 type R<T> = Result<T, ParseError>;
 
+/// A declaration list that runs into the statements.
+const MISSING_END_VAR: &str = "missing END_VAR: add END_VAR before this line to end the declarations";
+
+/// Words that start a compilation unit's next POU or TYPE block, so end
+/// whatever is still open before them.
+const POU_START: &[&str] = &["PROGRAM", "FUNCTION", "FUNCTION_BLOCK", "TYPE"];
+
 /// Words that end a statement list.
 const BLOCK_END: &[&str] = &[
     "END_IF",
@@ -365,14 +372,195 @@ pub const MAX_NESTING: usize = 200;
 /// for it.
 const EXPR_COST: usize = 3;
 
+/// Words a statement can start with or a block ends with: what a
+/// misspelled statement keyword is checked against.
+const STMT_KEYWORDS: &[&str] = &[
+    "IF",
+    "THEN",
+    "ELSIF",
+    "ELSE",
+    "END_IF",
+    "CASE",
+    "END_CASE",
+    "FOR",
+    "END_FOR",
+    "WHILE",
+    "END_WHILE",
+    "REPEAT",
+    "UNTIL",
+    "END_REPEAT",
+    "EXIT",
+    "CONTINUE",
+    "RETURN",
+    "END_PROGRAM",
+    "END_FUNCTION",
+    "END_FUNCTION_BLOCK",
+];
+
+/// Whether `word` ends or continues the block `opener` started.
+fn owns(opener: &str, word: &str) -> bool {
+    matches!(
+        (opener, word),
+        ("IF", "END_IF" | "ELSIF" | "ELSE")
+            | ("CASE", "END_CASE" | "ELSE")
+            | ("FOR", "END_FOR")
+            | ("WHILE", "END_WHILE")
+            | ("REPEAT", "UNTIL" | "END_REPEAT")
+            | ("PROGRAM", "END_PROGRAM")
+            | ("FUNCTION", "END_FUNCTION")
+            | ("FUNCTION_BLOCK", "END_FUNCTION_BLOCK")
+    )
+}
+
+/// What closes a block, as the fix tells the user to write it.
+fn closing(opener: &str) -> &'static str {
+    match opener {
+        "IF" => "END_IF; after its last statement",
+        "CASE" => "END_CASE; after its last statement",
+        "FOR" => "END_FOR; after its last statement",
+        "WHILE" => "END_WHILE; after its last statement",
+        "REPEAT" => "UNTIL <condition> END_REPEAT; after its last statement",
+        "FUNCTION" => "END_FUNCTION at its end",
+        "FUNCTION_BLOCK" => "END_FUNCTION_BLOCK at its end",
+        _ => "END_PROGRAM at its end",
+    }
+}
+
+/// The block a stray closing word belongs to.
+fn opener_of(word: &str) -> &'static str {
+    match word {
+        "END_IF" | "ELSIF" => "IF",
+        "ELSE" => "IF or CASE",
+        "END_CASE" => "CASE",
+        "END_FOR" => "FOR",
+        "END_WHILE" => "WHILE",
+        "UNTIL" | "END_REPEAT" => "REPEAT",
+        "END_FUNCTION" => "FUNCTION",
+        "END_FUNCTION_BLOCK" => "FUNCTION_BLOCK",
+        _ => "PROGRAM",
+    }
+}
+
+/// The error for a block that is never closed, reported at its opener.
+fn never_closed(opener: &str) -> String {
+    format!("this {opener} is never closed: add {}", closing(opener))
+}
+
 struct Parser {
     toks: Vec<(Tok, Pos)>,
+    /// Where each token ends.
+    ends: Vec<Pos>,
     i: usize,
     /// Current nesting, against [`MAX_NESTING`].
     depth: usize,
+    /// The blocks open around the current token, innermost last: the
+    /// opening word and where it is.
+    open: Vec<(&'static str, Pos)>,
 }
 
 impl Parser {
+    fn new(src: &str, system: bool) -> R<Self> {
+        let (toks, ends) = lex_spans(src, system)?;
+        Ok(Self {
+            toks,
+            ends,
+            i: 0,
+            depth: 0,
+            open: Vec::new(),
+        })
+    }
+
+    /// Where the previous token ends: where a missing `;` or `THEN` goes.
+    fn prev_end(&self) -> Pos {
+        if self.i == 0 {
+            self.pos()
+        } else {
+            self.ends[self.i - 1]
+        }
+    }
+
+    /// Whether the current token starts a line after the previous one.
+    fn on_new_line(&self) -> bool {
+        self.i > 0 && self.pos().line > self.ends[self.i - 1].line
+    }
+
+    fn err_at<T>(pos: Pos, msg: impl Into<String>) -> R<T> {
+        Err(ParseError { pos, msg: msg.into() })
+    }
+
+    /// The `;` that ends a statement or declaration (`what`). Missing at
+    /// the end of a line, it is reported there, not at the next line.
+    fn expect_semi(&mut self, what: &str) -> R<()> {
+        if self.eat(&Tok::Semi) {
+            return Ok(());
+        }
+        if *self.tok() == Tok::RParen {
+            return self.err("unmatched ): remove it, or add the ( it closes");
+        }
+        if self.on_new_line() || (*self.tok() == Tok::Eof && self.i > 0) {
+            let msg = match &self.toks[self.i - 1].0 {
+                Tok::Ident(kw) if kw.starts_with("END_") => format!("missing ; after {kw}"),
+                _ => format!("missing ; at the end of this {what}"),
+            };
+            return Self::err_at(self.prev_end(), msg);
+        }
+        self.err(format!("expected ;, found {}", self.tok()))
+    }
+
+    /// `THEN`, `DO` or `OF` after `what` (the condition, the FOR range).
+    fn expect_kw_after(&mut self, kw: &str, what: &str) -> R<()> {
+        if self.eat_kw(kw) {
+            return Ok(());
+        }
+        if self.on_new_line() {
+            return Self::err_at(self.prev_end(), format!("missing {kw} after {what}"));
+        }
+        if *self.tok() == Tok::Assign {
+            return self.err(format!(
+                "expected {kw}, found :=; write = to compare (:= assigns)"
+            ));
+        }
+        self.err(format!("expected {kw}, found {}", self.tok()))
+    }
+
+    /// Opens a block at `pos`, for [`Self::close`].
+    fn open(&mut self, opener: &'static str, pos: Pos) {
+        self.open.push((opener, pos));
+    }
+
+    /// The word `end` that closes the innermost open block. Without it,
+    /// the error is at the block that is never closed when what follows
+    /// belongs to a block around it (or is the end of the file), and at
+    /// the stray word otherwise.
+    fn close(&mut self, end: &str) -> R<()> {
+        let (opener, at) = self.open.pop().unwrap_or(("PROGRAM", self.pos()));
+        if self.eat_kw(end) {
+            return Ok(());
+        }
+        let word = match self.tok() {
+            Tok::Eof => return Self::err_at(at, never_closed(opener)),
+            Tok::Ident(w) if POU_START.contains(&w.as_str()) => {
+                return Self::err_at(at, never_closed(opener));
+            }
+            Tok::Ident(w) if BLOCK_END.contains(&w.as_str()) => w.clone(),
+            t => return self.err(format!("expected {end}, found {t}")),
+        };
+        if self.open.iter().any(|(o, _)| owns(o, &word)) {
+            return Self::err_at(at, never_closed(opener));
+        }
+        if owns(opener, &word) {
+            return self.err(match word.as_str() {
+                "ELSIF" => "ELSIF after ELSE: move this branch before the ELSE",
+                "ELSE" => "a second ELSE: there is one, and it comes last",
+                _ => "missing UNTIL <condition> before END_REPEAT",
+            });
+        }
+        self.err(format!(
+            "{word} without a matching {}: remove it",
+            opener_of(&word)
+        ))
+    }
+
     /// Enters `n` more levels of nesting.
     fn deeper(&mut self, n: usize) -> R<()> {
         self.depth += n;
@@ -447,6 +635,11 @@ impl Parser {
         }
     }
 
+    /// " (did you mean X?)" for a misspelled keyword among `keywords`.
+    fn keyword_hint(name: &str, keywords: &[&'static str]) -> String {
+        crate::suggest::hint(name, keywords.iter().copied())
+    }
+
     fn ident(&mut self) -> R<(String, Pos)> {
         match self.tok().clone() {
             Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => {
@@ -491,11 +684,25 @@ impl Parser {
             } else if self.eat_kw("FUNCTION") {
                 (Some(Some(())), "END_FUNCTION")
             } else {
+                let hint = match self.tok() {
+                    Tok::Ident(w) => {
+                        Self::keyword_hint(w, &["PROGRAM", "FUNCTION", "FUNCTION_BLOCK", "TYPE"])
+                    }
+                    _ => String::new(),
+                };
                 return self.err(format!(
-                    "expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found {}",
+                    "expected PROGRAM, FUNCTION, FUNCTION_BLOCK or TYPE, found {}{hint}",
                     self.tok()
                 ));
             };
+            self.open(
+                match kind {
+                    None => "PROGRAM",
+                    Some(None) => "FUNCTION_BLOCK",
+                    Some(Some(())) => "FUNCTION",
+                },
+                pos,
+            );
             let (name, _) = self.ident()?;
             let kind = match kind {
                 None => PouKind::Program,
@@ -507,7 +714,7 @@ impl Parser {
             };
             let vars = self.var_sections()?;
             let body = self.block()?;
-            self.expect_kw(end)?;
+            self.close(end)?;
             u.pous.push(Pou {
                 name,
                 pos,
@@ -704,9 +911,29 @@ impl Parser {
             }
         }
         while !self.eat_kw("END_VAR") {
+            if self.statement_starts_here() {
+                return self.err(MISSING_END_VAR);
+            }
             let mut names = vec![self.ident()?];
             while self.eat(&Tok::Comma) {
                 names.push(self.ident()?);
+            }
+            if names.len() == 1 && !matches!(self.tok(), Tok::Colon) && !self.is_kw("AT") {
+                let (name, at) = &names[0];
+                if matches!(self.tok(), Tok::Assign | Tok::LParen | Tok::Dot | Tok::LBracket) {
+                    return Self::err_at(*at, MISSING_END_VAR);
+                }
+                let hint = Self::keyword_hint(name, &["END_VAR"]);
+                if !hint.is_empty() {
+                    return Self::err_at(*at, format!("{name} is not a keyword{hint}"));
+                }
+                if let Tok::Ident(ty) = self.tok()
+                    && !self.on_new_line()
+                {
+                    return self.err(format!(
+                        "expected : between the name and its type: write {name} : {ty}"
+                    ));
+                }
             }
             let at = if self.eat_kw("AT") {
                 let p = self.pos();
@@ -735,7 +962,7 @@ impl Parser {
             } else {
                 None
             };
-            self.expect(&Tok::Semi)?;
+            self.expect_semi("declaration")?;
             for (name, pos) in names {
                 out.push(VarDecl {
                     name,
@@ -750,6 +977,21 @@ impl Parser {
             }
         }
         Ok(())
+    }
+
+    /// Whether the current token starts a statement or ends the POU, so
+    /// a declaration list it stands in is missing its `END_VAR`. A reserved
+    /// word followed by `:` or `,` is a declaration with a reserved name.
+    fn statement_starts_here(&self) -> bool {
+        match self.tok() {
+            Tok::Eof => true,
+            Tok::Ident(w) => {
+                w != "END_VAR"
+                    && RESERVED.contains(&w.as_str())
+                    && !matches!(self.tok_at(1), Tok::Colon | Tok::Comma)
+            }
+            _ => false,
+        }
     }
 
     // ---- statements ----
@@ -775,7 +1017,9 @@ impl Parser {
                 };
             match self.tok() {
                 Tok::Eof => return Ok(out),
-                Tok::Ident(s) if BLOCK_END.contains(&s.as_str()) => return Ok(out),
+                Tok::Ident(s) if BLOCK_END.contains(&s.as_str()) || POU_START.contains(&s.as_str()) => {
+                    return Ok(out);
+                }
                 _ if label_start => return Ok(out),
                 _ => out.push(self.stmt()?),
             }
@@ -807,16 +1051,18 @@ impl Parser {
                 "FOR" => self.for_stmt()?,
                 "WHILE" => {
                     self.advance();
+                    self.open("WHILE", pos);
                     let c = self.expr()?;
-                    self.expect_kw("DO")?;
+                    self.expect_kw_after("DO", "the condition")?;
                     let body = self.block()?;
-                    self.expect_kw("END_WHILE")?;
+                    self.close("END_WHILE")?;
                     StmtKind::While(c, body)
                 }
                 "REPEAT" => {
                     self.advance();
+                    self.open("REPEAT", pos);
                     let body = self.block()?;
-                    self.expect_kw("UNTIL")?;
+                    self.close("UNTIL")?;
                     let c = self.expr()?;
                     self.expect_kw("END_REPEAT")?;
                     StmtKind::Repeat(body, c)
@@ -838,7 +1084,7 @@ impl Parser {
             Tok::Direct(_) => self.assign_or_call()?,
             t => return self.err(format!("expected a statement, found {t}")),
         };
-        self.expect(&Tok::Semi)?;
+        self.expect_semi("statement")?;
         Ok(Stmt { kind, pos })
     }
 
@@ -864,27 +1110,51 @@ impl Parser {
         if matches!(target.kind, ExprKind::Call(..)) {
             return Ok(StmtKind::Call(target));
         }
+        if let ExprKind::Var(name) = &target.kind {
+            let hint = Self::keyword_hint(name, STMT_KEYWORDS);
+            if !hint.is_empty() {
+                return Self::err_at(pos, format!("{name} is not a keyword{hint}"));
+            }
+        }
+        if *self.tok() == Tok::Eq {
+            return self.err("expected := or a call, found =; write := to assign (= compares)");
+        }
         self.err(format!("expected := or a call, found {}", self.tok()))
     }
 
     fn if_stmt(&mut self) -> R<StmtKind> {
+        let pos = self.pos();
         self.expect_kw("IF")?;
+        self.open("IF", pos);
         let mut arms = Vec::new();
         loop {
             let c = self.expr()?;
-            self.expect_kw("THEN")?;
+            self.expect_kw_after("THEN", "the condition")?;
             arms.push((c, self.block()?));
             if !self.eat_kw("ELSIF") {
                 break;
             }
         }
-        let other = if self.eat_kw("ELSE") {
+        // `ELSE IF` nests a second IF, which needs its own END_IF; meant
+        // as ELSIF, the missing END_IF is this IF's, and the fix is here.
+        let mut else_if = None;
+        let other = if self.is_kw("ELSE") {
+            let at = self.pos();
+            self.advance();
+            if self.is_kw("IF") {
+                else_if = Some(at);
+            }
             self.block()?
         } else {
             Vec::new()
         };
-        self.expect_kw("END_IF")?;
-        Ok(StmtKind::If(arms, other))
+        match (self.close("END_IF"), else_if) {
+            (Err(e), Some(at)) if e.pos == pos => Self::err_at(
+                at,
+                "ELSE IF opens a second IF, which needs its own END_IF: write ELSIF to continue this IF",
+            ),
+            (r, _) => r.map(|()| StmtKind::If(arms, other)),
+        }
     }
 
     fn case_value(&mut self) -> R<LabelValue> {
@@ -905,11 +1175,18 @@ impl Parser {
     }
 
     fn case_stmt(&mut self) -> R<StmtKind> {
+        let pos = self.pos();
         self.expect_kw("CASE")?;
+        self.open("CASE", pos);
         let sel = self.expr()?;
-        self.expect_kw("OF")?;
+        self.expect_kw_after("OF", "the CASE selector")?;
         let mut arms = Vec::new();
         while !self.is_kw("ELSE") && !self.is_kw("END_CASE") {
+            if matches!(self.tok(), Tok::Ident(w) if BLOCK_END.contains(&w.as_str()))
+                || *self.tok() == Tok::Eof
+            {
+                break;
+            }
             let mut labels = Vec::new();
             loop {
                 let pos = self.pos();
@@ -940,12 +1217,14 @@ impl Parser {
         } else {
             Vec::new()
         };
-        self.expect_kw("END_CASE")?;
+        self.close("END_CASE")?;
         Ok(StmtKind::Case(sel, arms, other))
     }
 
     fn for_stmt(&mut self) -> R<StmtKind> {
+        let pos = self.pos();
         self.expect_kw("FOR")?;
+        self.open("FOR", pos);
         let (var, _) = self.ident()?;
         self.expect(&Tok::Assign)?;
         let from = self.expr()?;
@@ -956,9 +1235,9 @@ impl Parser {
         } else {
             None
         };
-        self.expect_kw("DO")?;
+        self.expect_kw_after("DO", "the FOR range")?;
         let body = self.block()?;
-        self.expect_kw("END_FOR")?;
+        self.close("END_FOR")?;
         Ok(StmtKind::For {
             var,
             from,
@@ -1009,6 +1288,13 @@ impl Parser {
         let mut chain = 0;
         while let Some(op) = self.binop(level) {
             let pos = self.pos();
+            if self.tok_at(1) == self.tok() {
+                match self.tok() {
+                    Tok::Eq => return self.err("write = to compare, not =="),
+                    Tok::Amp => return self.err("write AND (or a single &), not &&"),
+                    _ => {}
+                }
+            }
             self.advance();
             self.deeper(1)?;
             chain += 1;
@@ -1207,7 +1493,14 @@ impl Parser {
             Tok::Direct(d) => ExprKind::Direct(d),
             Tok::LParen => {
                 let e = self.expr()?;
-                self.expect(&Tok::RParen)?;
+                if !self.eat(&Tok::RParen) {
+                    let at = if self.on_new_line() {
+                        self.prev_end()
+                    } else {
+                        self.pos()
+                    };
+                    return Self::err_at(at, format!("missing ): the ( at {pos} is never closed"));
+                }
                 return Ok(e);
             }
             Tok::Ident(s) if !RESERVED.contains(&s.as_str()) => ExprKind::Var(s),
@@ -1224,14 +1517,12 @@ impl Parser {
 
 /// Parses a compilation unit. `system` admits `__` names.
 pub fn parse(src: &str, system: bool) -> R<Unit> {
-    let toks = lex(src, system)?;
-    Parser { toks, i: 0, depth: 0 }.unit()
+    Parser::new(src, system)?.unit()
 }
 
 /// Parses `src` as exactly one expression.
 pub fn parse_expr(src: &str) -> R<Expr> {
-    let toks = lex(src, false)?;
-    let mut p = Parser { toks, i: 0, depth: 0 };
+    let mut p = Parser::new(src, false)?;
     let e = p.expr()?;
     if *p.tok() != Tok::Eof {
         return p.err(format!("expected the end of the expression, found {}", p.tok()));
@@ -1244,8 +1535,7 @@ mod tests {
     use super::*;
 
     fn expr(src: &str) -> Expr {
-        let toks = lex(src, false).unwrap();
-        let mut p = Parser { toks, i: 0, depth: 0 };
+        let mut p = Parser::new(src, false).unwrap();
         let e = p.expr().unwrap();
         assert_eq!(*p.tok(), Tok::Eof, "trailing input in {src:?}");
         e

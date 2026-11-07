@@ -260,14 +260,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **A typo gives one error, at the right line, in plain words** — matiec's top complaints are the wrong line ("The error is on line 23, and matiec outputs what is on line 26") and twenty errors from one `ELSE IF`. Helmsman already stops at the first syntax error, and positions are tested (tests/st.rs `errors_are_sorted_and_positioned`). Pin it with a corpus of the twenty most common ST typos (`ELSE IF`, `=` for `:=`, missing `;`, missing `END_IF`, `:=` in a condition, a misspelled keyword or FB) and assert each one's line, column and a message that names the fix.
-  result: error quality is measured, and a regression in it fails CI
-  est: 1d
-  difficulty: low
-  id: typo-corpus
-  asked: 2026-11-07
-  by: claude-session
-
 ## From user feedback: plan for later
 
 Long-term items FEEDBACK.md points to. Each waits on a card already on the board, or on a decision.
