@@ -260,14 +260,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **One Modbus connection per gateway, shared across unit IDs** — helmsman-io opens one TCP connection per device (`Client` is "a Modbus TCP connection to one unit"), so two units behind one Modbus TCP gateway open two connections. Many gateways cap at 2-4 connections; OpenPLC v3 did the same thing and users reported "dropping connection, reconnecting and generally poor performance". Pool one connection per host:port, serialize requests on it by transaction id, keep per-unit errors per unit, and test against the simulator with several unit ids and a connection cap.
-  result: eight RTU devices behind one gateway use one TCP connection
-  est: 1d
-  difficulty: med
-  id: modbus-shared-connection
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **A typo gives one error, at the right line, in plain words** — matiec's top complaints are the wrong line ("The error is on line 23, and matiec outputs what is on line 26") and twenty errors from one `ELSE IF`. Helmsman already stops at the first syntax error, and positions are tested (tests/st.rs `errors_are_sorted_and_positioned`). Pin it with a corpus of the twenty most common ST typos (`ELSE IF`, `=` for `:=`, missing `;`, missing `END_IF`, `:=` in a condition, a misspelled keyword or FB) and assert each one's line, column and a message that names the fix.
   result: error quality is measured, and a regression in it fails CI
   est: 1d

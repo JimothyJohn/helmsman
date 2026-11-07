@@ -414,6 +414,18 @@ into the code.
 - **Leaned on by** `modbus.rs` and `sim.rs`: the 7-byte MBAP header
   (transaction id, protocol id 0, length counting unit id + PDU, unit id;
   §3.1.3 p.5) and port 502 (p.5).
+- **Leaned on by** `modbus.rs`'s shared connection (`Client`, `Line`) and
+  `sim.rs`'s `Gateway`, read again 2026-11-07 (same sha256, `pdftotext
+  -layout`, the page footer's "n/46"): the server copies the transaction
+  id back "for transaction pairing", and the unit id routes a request to
+  a serial slave "through a gateway" (§3.1.3 pp.5-6); a client should
+  open few connections to one server, "one connection per application",
+  and transactions sharing a connection are told apart by transaction id
+  (§4.2.1.1 p.10, implementation rules 3 and 4); past a server's
+  connection limit "the oldest unused connection is closed" (§4.2.1.2
+  p.12); a transaction id "must be unique" on a connection at a time,
+  and the TCP-to-serial gateway reconciles TCP's several requests in
+  flight with the serial line's one (§4.4.1.2 p.23).
 - **How to cite:** `TCP §<x> p.<n>`.
 
 ### Modbus Organization, MODBUS over Serial Line Specification and Implementation Guide V1.02 (2006-12-20, 44 pp)

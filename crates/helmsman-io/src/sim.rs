@@ -3,11 +3,14 @@
 //! cross-wires (a coil driving a discrete input, as a wire from an output
 //! terminal to an input terminal would), and injectable faults. It answers
 //! the function codes [`crate::modbus`] uses and refuses the rest with the
-//! spec's exceptions.
+//! spec's exceptions. [`Sim::gateway`] is a TCP-to-serial gateway instead:
+//! several units, each with its own tables and faults, one request at a
+//! time, a cap on connections, and units that can be muted.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{ErrorKind, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -315,36 +318,113 @@ impl State {
     }
 }
 
+/// What a server does with one connection more than it takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cap {
+    /// Takes the new one and closes the oldest open one: what the guide
+    /// prescribes ("the oldest unused connection is closed", TCP §4.2.1.2
+    /// p.12).
+    CloseOldest,
+    /// Closes the new one at once, unanswered: what a gateway that
+    /// refuses past its limit does.
+    Refuse,
+}
+
+/// A Modbus TCP gateway to a serial line: several units behind one
+/// address (the unit id routes the request, TCP §3.1.3 pp.5-6). It
+/// answers one request at a time across all its connections, as the line
+/// behind it does, and never answers a unit it does not have.
+#[derive(Clone, Debug, Default)]
+pub struct Gateway {
+    /// The units behind it, each with its own tables and faults.
+    pub units: Vec<(u8, State)>,
+    /// Most connections open at once, and what one more meets.
+    pub max_connections: Option<(usize, Cap)>,
+}
+
+enum Units {
+    /// The plain simulator: one device, whatever unit id is asked.
+    Any(Arc<Mutex<State>>),
+    /// A gateway's units.
+    Each(BTreeMap<u8, Arc<Mutex<State>>>),
+}
+
+struct Shared {
+    units: Units,
+    max_connections: Option<(usize, Cap)>,
+    /// Units that never answer (a unit unplugged from the line).
+    muted: Mutex<BTreeSet<u8>>,
+    /// A gateway's serial line: one request at a time.
+    line: Mutex<()>,
+    accepted: AtomicUsize,
+    refused: AtomicUsize,
+    /// Open connections, oldest first, by accept number.
+    open: Mutex<Vec<(usize, TcpStream)>>,
+}
+
 /// A running simulator on 127.0.0.1. Stops when dropped.
 pub struct Sim {
     pub addr: SocketAddr,
-    state: Arc<Mutex<State>>,
+    shared: Arc<Shared>,
     stop: Arc<AtomicBool>,
     accept: Option<JoinHandle<()>>,
 }
 
-pub(crate) fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
+pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Sim {
-    /// Starts serving `state` on an ephemeral loopback port.
+    /// Starts serving `state` on an ephemeral loopback port, for any unit
+    /// id, on as many connections as are opened.
     ///
     /// # Errors
     /// The listener could not be bound.
     pub fn start(state: State) -> std::io::Result<Self> {
+        Self::listen(Units::Any(Arc::new(Mutex::new(state))), None)
+    }
+
+    /// Starts a [`Gateway`] on an ephemeral loopback port.
+    ///
+    /// # Errors
+    /// The listener could not be bound.
+    pub fn gateway(g: Gateway) -> std::io::Result<Self> {
+        let units = g
+            .units
+            .into_iter()
+            .map(|(u, s)| (u, Arc::new(Mutex::new(s))))
+            .collect();
+        Self::listen(Units::Each(units), g.max_connections)
+    }
+
+    fn listen(units: Units, max_connections: Option<(usize, Cap)>) -> std::io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
-        let state = Arc::new(Mutex::new(state));
+        let shared = Arc::new(Shared {
+            units,
+            max_connections,
+            muted: Mutex::new(BTreeSet::new()),
+            line: Mutex::new(()),
+            accepted: AtomicUsize::new(0),
+            refused: AtomicUsize::new(0),
+            open: Mutex::new(Vec::new()),
+        });
         let stop = Arc::new(AtomicBool::new(false));
-        let (st, sp) = (Arc::clone(&state), Arc::clone(&stop));
+        let (sh, sp) = (Arc::clone(&shared), Arc::clone(&stop));
         let accept = thread::spawn(move || {
             while !sp.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((conn, _)) => {
-                        let (st, sp) = (Arc::clone(&st), Arc::clone(&sp));
-                        thread::spawn(move || serve(conn, &st, &sp));
+                        let Some(id) = admit(&sh, &conn) else {
+                            let _ = conn.shutdown(Shutdown::Both);
+                            continue;
+                        };
+                        let (sh, sp) = (Arc::clone(&sh), Arc::clone(&sp));
+                        thread::spawn(move || {
+                            serve(conn, &sh, &sp);
+                            lock(&sh.open).retain(|(i, _)| *i != id);
+                        });
                     }
                     Err(e) if e.kind() == ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(2)),
                     Err(_) => break,
@@ -353,29 +433,117 @@ impl Sim {
         });
         Ok(Self {
             addr,
-            state,
+            shared,
             stop,
             accept: Some(accept),
         })
     }
 
     /// The simulator's tables, to set up or inspect.
+    ///
+    /// # Panics
+    /// A gateway: its units each have their own ([`Self::unit`]).
     pub fn state(&self) -> MutexGuard<'_, State> {
-        lock(&self.state)
+        match &self.shared.units {
+            Units::Any(s) => lock(s),
+            Units::Each(_) => panic!("a gateway's tables are per unit: Sim::unit"),
+        }
     }
 
+    /// Unit `unit`'s tables (the plain simulator's one set for any unit).
+    ///
+    /// # Panics
+    /// A gateway without that unit.
+    pub fn unit(&self, unit: u8) -> MutexGuard<'_, State> {
+        match &self.shared.units {
+            Units::Any(s) => lock(s),
+            Units::Each(m) => lock(m.get(&unit).expect("a unit the gateway has")),
+        }
+    }
+
+    /// Unit `unit` stops answering (`true`), as one unplugged from the
+    /// line, or answers again.
+    pub fn mute(&self, unit: u8, muted: bool) {
+        let mut m = lock(&self.shared.muted);
+        if muted {
+            m.insert(unit);
+        } else {
+            m.remove(&unit);
+        }
+    }
+
+    /// Connections taken so far (refused ones not counted).
+    #[must_use]
+    pub fn accepted(&self) -> usize {
+        self.shared.accepted.load(Ordering::Relaxed)
+    }
+
+    /// Connections refused for the cap ([`Cap::Refuse`]).
+    #[must_use]
+    pub fn refused(&self) -> usize {
+        self.shared.refused.load(Ordering::Relaxed)
+    }
+
+    /// Connections open now.
+    #[must_use]
+    pub fn open_connections(&self) -> usize {
+        lock(&self.shared.open).len()
+    }
+
+    /// Closes every open connection, as a gateway that restarts does.
+    pub fn drop_connections(&self) {
+        for (_, c) in lock(&self.shared.open).drain(..) {
+            let _ = c.shutdown(Shutdown::Both);
+        }
+    }
+
+    /// Applies `fault` to the next request (on a gateway, to each unit's
+    /// next request).
     pub fn inject(&self, fault: Fault) {
-        self.state().faults.push(fault);
+        match &self.shared.units {
+            Units::Any(s) => lock(s).faults.push(fault),
+            Units::Each(m) => m.values().for_each(|s| lock(s).faults.push(fault)),
+        }
     }
 
     pub fn clear_faults(&self) {
-        self.state().faults.clear();
+        match &self.shared.units {
+            Units::Any(s) => lock(s).faults.clear(),
+            Units::Each(m) => m.values().for_each(|s| lock(s).faults.clear()),
+        }
     }
 
     #[must_use]
     pub fn endpoint(&self) -> String {
         self.addr.to_string()
     }
+}
+
+/// Takes a connection under the cap: its accept number, or `None` when
+/// it is refused.
+fn admit(sh: &Shared, conn: &TcpStream) -> Option<usize> {
+    let mut open = lock(&sh.open);
+    if let Some((max, cap)) = sh.max_connections
+        && open.len() >= max
+    {
+        match cap {
+            Cap::Refuse => {
+                sh.refused.fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
+            Cap::CloseOldest => {
+                while !open.is_empty() && open.len() >= max {
+                    let (_, old) = open.remove(0);
+                    let _ = old.shutdown(Shutdown::Both);
+                }
+            }
+        }
+    }
+    let id = sh.accepted.fetch_add(1, Ordering::Relaxed);
+    if let Ok(c) = conn.try_clone() {
+        open.push((id, c));
+    }
+    Some(id)
 }
 
 /// The TCP fault checks.
@@ -429,7 +597,7 @@ fn read_full(conn: &mut TcpStream, buf: &mut [u8], stop: &AtomicBool) -> bool {
     true
 }
 
-fn serve(mut conn: TcpStream, state: &Mutex<State>, stop: &AtomicBool) {
+fn serve(mut conn: TcpStream, sh: &Shared, stop: &AtomicBool) {
     let _ = conn.set_read_timeout(Some(Duration::from_millis(20)));
     let _ = conn.set_nodelay(true);
     loop {
@@ -446,6 +614,17 @@ fn serve(mut conn: TcpStream, state: &Mutex<State>, stop: &AtomicBool) {
         if !read_full(&mut conn, &mut pdu, stop) {
             return;
         }
+        let unit = head[6];
+        let state = match &sh.units {
+            Units::Any(s) => Some(s),
+            Units::Each(m) => m.get(&unit),
+        };
+        // A unit the gateway lacks, or one muted, never answers.
+        let Some(state) = state.filter(|_| !lock(&sh.muted).contains(&unit)) else {
+            continue;
+        };
+        // A gateway's line carries one request at a time.
+        let _line = matches!(sh.units, Units::Each(_)).then(|| lock(&sh.line));
         let (fault, mut reply) = {
             let mut s = lock(state);
             let fault = s.next_fault();
@@ -478,7 +657,7 @@ fn serve(mut conn: TcpStream, state: &Mutex<State>, stop: &AtomicBool) {
         frame.extend(tid);
         frame.extend([0, 0]);
         frame.extend(u16::try_from(reply.len() + 1).expect("pdu fits").to_be_bytes());
-        frame.push(head[6]);
+        frame.push(unit);
         frame.extend(reply);
         if fault == Some(Fault::Garbage) {
             // Garbage in the header too: protocol id 0xBEEF.
