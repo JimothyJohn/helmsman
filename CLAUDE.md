@@ -60,11 +60,38 @@ by name. Claims must be true of what is built. Write like an engineer, with
 no AI tells: no "you don't X, you Y", "X, not Y" contrasts used as flourish,
 staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
 
+## Checkouts and services (Nick, 2026-11-06)
+
+- **The main checkout stays on `dev`.** No feature work in
+  /Users/nick/github/helmsman itself: every branch gets a worktree.
+- **Worktrees live under `.claude/worktrees/` only** (the Agent tool's and
+  hand-made ones alike: `git worktree add .claude/worktrees/<topic> -b
+  <branch> origin/dev`). No `../helmsman-*` siblings, except the service
+  checkouts below.
+- **One branch, one worktree.** Never `worktree add -f` or
+  `--ignore-other-worktrees`: a branch checked out twice moves under the
+  other copy, which then shows every file of the newer commit as a change
+  (three such trees, 100+ "changed" files each, on 2026-11-06).
+- **`scripts/prune-branches.sh` removes merged worktrees** (clean, HEAD in
+  origin/dev or origin/master) before it deletes branches; a locked
+  worktree is kept. Remove yours when its PR merges anyway.
+- **Services run from a locked, dedicated checkout, never from an agent's
+  worktree.** Today there is one:
+  - Try box, `../helmsman-try` (locked), https :8081, state
+    `scratch/try-state` and the relay token in that checkout's scratch/
+    (sign-in in .claude/handoff.md). Rebuild there:
+    `git checkout --detach origin/dev`, `./scripts/canvas-web.sh`,
+    `cargo build --release --locked -p helmsman-plc`; restart:
+    `scratch/11-try-box-relay.sh` (main checkout). Stop: `kill $(lsof
+    -tiTCP:8081 -sTCP:LISTEN)`.
+  - A new service (board, mock-up server) gets its own entry here first.
+- **`wip/recovered-*` snapshots expire.** One older than 7 days gets a
+  board card: keep (merge it somewhere) or drop.
+
 ## Next door
 
-- `../agent-relay`: the relay (Rust, SAM, private, not deployed; local only
-  until Nick runs its `scripts/create-github-repo.sh`, which creates
-  JimothyJohn/agent-relay). Client-agnostic; the box↔relay contract is its
+- `../agent-relay`: the relay (Rust, SAM, private repo JimothyJohn/agent-relay,
+  deployed: serves helmsman/v7). Client-agnostic; the box↔relay contract is its
   `docs/relay-protocol.md`. Helmsman's agent profiles are
   `agents/helmsman/<name>/` (ids `helmsman/v6`, ...); the bare `v6` and
   `explain-v2` the box asks for are aliases. A served profile never
