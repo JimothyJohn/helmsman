@@ -383,7 +383,14 @@ impl App {
         }
         match self.monitor.wish.take() {
             Some(Wish::Diagram { program, prefix }) => self.open_diagram(&program, &prefix),
-            Some(Wish::Act(a)) if self.source == Source::Box => self.box_control(a),
+            Some(Wish::Act(a)) if self.source == Source::Box => {
+                let targets = self
+                    .boxv
+                    .as_ref()
+                    .map(|b| self.monitor.targets(&b.state.modules))
+                    .unwrap_or_default();
+                self.box_control(a, targets);
+            }
             Some(Wish::Act(a)) => self.act(a, &ctx),
             None => {}
         }
@@ -533,14 +540,14 @@ impl App {
 
     /// The Editor's diagram of `program` (empty: the one open), at the
     /// instance `prefix` (empty: the program).
-    /// The box Monitor's transport (card monitor-box-run-stop): Run/Stop
-    /// stops every running target, or runs them all when none runs;
-    /// Restart restarts each. The box checks the session and audits.
-    fn box_control(&mut self, a: Action) {
+    /// A box's transport, from the Monitor or the Editor (card
+    /// monitor-box-run-stop): Run/Stop stops every running one of
+    /// `targets`, or runs them all when none runs; Restart restarts each.
+    /// The box checks the session and audits.
+    fn box_control(&mut self, a: Action, targets: Vec<String>) {
         let Some(b) = self.boxv.as_mut() else {
             return;
         };
-        let targets = self.monitor.targets(&b.state.modules);
         let running: Vec<String> = b
             .state
             .modules
@@ -705,8 +712,11 @@ impl App {
     }
 
     /// The glyph buttons over the diagram's top-right corner: run/stop,
-    /// step and restart in the simulation, then save, upload, download
-    /// and help. Drawn after the screen, so they sit on top.
+    /// step and restart in the simulation (on a box, an engineer's stop or
+    /// run and restart of what it runs, card monitor-box-run-stop; no key
+    /// does it there, so a stray Ctrl+Enter never stops a machine), then
+    /// save, upload, download and help. Drawn after the screen, so they
+    /// sit on top.
     fn glyphs(&mut self, ui: &mut egui::Ui) {
         if self.screen != Screen::Editor || self.chrome.diagram == Rect::NOTHING {
             return;
@@ -739,6 +749,16 @@ impl App {
                 .map(|s| (s.session.build.is_some(), s.session.running))
                 .unwrap_or_default()
         });
+        let engineer = is_engineer(self.session().as_ref()).is_ok();
+        let on_box = self
+            .boxv
+            .as_ref()
+            .filter(|_| self.source == Source::Box && engineer)
+            .map(|b| {
+                let m = &b.state.modules;
+                (!m.is_empty(), m.iter().any(|m| m.state != "stopped"))
+            });
+
         egui::Area::new(egui::Id::unique("glyphs"))
             .order(egui::Order::Foreground)
             .pivot(egui::Align2::RIGHT_TOP)
@@ -794,6 +814,30 @@ impl App {
                                 );
                                 ui.separator();
                             }
+                            if let Some((any, running)) = on_box {
+                                let (icon, tip) = if running {
+                                    (
+                                        glyphs::Icon::Stop,
+                                        "Stop on the box: the program stops scanning and its outputs go to their safe values until you run it again (an engineer's; audited).",
+                                    )
+                                } else {
+                                    (
+                                        glyphs::Icon::Run,
+                                        "Run on the box: the program scans again from where it stopped (an engineer's; audited).",
+                                    )
+                                };
+                                g(ui, "run", icon, any, false, tip, Action::RunStop);
+                                g(
+                                    ui,
+                                    "restart",
+                                    glyphs::Icon::Restart,
+                                    any,
+                                    false,
+                                    "Restart on the box: every variable back to its initial value, then run (an engineer's; audited).",
+                                    Action::Restart,
+                                );
+                                ui.separator();
+                            }
                             g(
                                 ui,
                                 "save",
@@ -826,7 +870,18 @@ impl App {
             });
         let ctx = ui.ctx().clone();
         for a in act {
-            self.act(a, &ctx);
+            // On a box the run and restart glyphs are the box's (the
+            // simulation's are not drawn there): every module it runs.
+            if on_box.is_some() && matches!(a, Action::RunStop | Action::Restart) {
+                let all = self
+                    .boxv
+                    .as_ref()
+                    .map(|b| b.state.modules.iter().map(|m| m.name.clone()).collect())
+                    .unwrap_or_default();
+                self.box_control(a, all);
+            } else {
+                self.act(a, &ctx);
+            }
         }
         self.chrome.hits.extend(hits);
     }

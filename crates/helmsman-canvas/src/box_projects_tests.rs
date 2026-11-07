@@ -2048,3 +2048,66 @@ fn signed_out_or_an_operator_sees_no_stop_and_sends_nothing() {
         assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "running");
     }
 }
+
+#[test]
+fn the_editor_has_the_box_run_stop_and_restart_for_an_engineer() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let v = drawn(&b, &jar);
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.frame(vec![]);
+    assert!(h.app.chrome.rect("step").is_none(), "a box has no step");
+    // Ctrl+Enter, the simulation's Run/Stop, never stops a machine.
+    h.chord(Modifiers::CTRL, egui::Key::Enter);
+    let reqs = h.sent();
+    assert!(reqs.iter().all(|q| q.method == "GET"), "{reqs:?}");
+
+    h.press("run");
+    let reqs = h.sent();
+    assert_eq!(
+        reqs.iter()
+            .map(|q| (q.method, q.url.as_str()))
+            .collect::<Vec<_>>(),
+        [("POST", "/api/modules/conveyor/stop")],
+        "{reqs:?}"
+    );
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        assert_eq!(a.status, 200, "{a:?}");
+        h.bv().projects.answer(q.call, &a);
+    }
+    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "stopped");
+    let t = h.time;
+    wait("the page sees it stopped", || {
+        values(&b, h.app.boxv.as_mut().unwrap(), t);
+        h.app.boxv.as_ref().unwrap().state.modules[0].state == "stopped"
+    });
+    h.frame(vec![]);
+    h.press("run");
+    let reqs = h.sent();
+    assert_eq!(reqs[0].url, "/api/modules/conveyor/run", "{reqs:?}");
+    for q in reqs {
+        let a = b.send(&jar, &q);
+        h.bv().projects.answer(q.call, &a);
+    }
+    assert_eq!(b.json("/api/modules/conveyor")["status"]["state"], "running");
+    h.press("restart");
+    let reqs = h.sent();
+    assert_eq!(reqs[0].url, "/api/modules/conveyor/restart", "{reqs:?}");
+}
+
+#[test]
+fn the_editor_offers_no_box_run_stop_to_anyone_else() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let v = page(&b, &jar, Some(("bob", BOB)));
+    let session = v.session.clone();
+    let mut h = Harness::new(v, session);
+    h.wait(0.2);
+    assert!(h.app.chrome.rect("run").is_none());
+    assert!(h.app.chrome.rect("restart").is_none());
+    h.chord(Modifiers::CTRL, egui::Key::Enter);
+    let reqs = h.sent();
+    assert!(reqs.iter().all(|q| q.method == "GET"), "{reqs:?}");
+}
