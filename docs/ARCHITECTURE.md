@@ -2300,6 +2300,47 @@ path that drives an output).
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.
 
+## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
+
+For someone in trouble who did not write the program (Nick, 2026-11-07,
+interview). The box's Agent tab has two modes, "Change the program" (the
+instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`):
+the person says what went wrong, and the answer is a plain-language
+diagnosis and a Markdown issue with a Copy button, to paste into a GitHub
+issue or to another agent. Nothing is filed.
+
+- **`POST /api/help {question, messages?}`** (`api::help`; any
+  credential, the box token or any login session, since it changes
+  nothing; audited). `messages` is the page's Messages as text
+  (`messages::Log::text`); the box keeps the newest 16 KiB. The box adds
+  its own context: build (version, the build stamp `helmsman_plc::BUILD`
+  that the API sends as `X-Helmsman-Build`, OS, arch), the project it runs and that snapshot
+  (12 hex digits), and each device link with its state, error and
+  address (as `GET /api/devices`).
+- **Redaction** (`help::redact`): every string of the context, the
+  question, and the finished issue (whoever wrote it) lose the box
+  token, the relay token, any run of 32+ hex digits (session tokens,
+  keys), `hmr1_...`, the word after `Bearer`, the value after a secret
+  key and `:` or `=` (`token`, `pin`, `password`, `cookie`,
+  `helmsman_session`, `*_key`, ...) and the digits after `PIN`. A
+  property test and `tests/help.rs` assert that none reaches the relay
+  or the answer.
+- **The agent** is the relay's help profile (`--relay-help-agent V`,
+  default `helmsman/help-v1`, not served yet) with one tool,
+  `submit_issue {diagnosis, title, what_happened, expected?, steps?,
+  suspected_files?}`, run in process (`Agent::chat_local`). The box
+  checks it (lengths; a suspected file is a relative repository path,
+  optionally `:LINE`) and links each file to
+  `github.com/JimothyJohn/helmsman/blob/dev/...`. One user message: the
+  fixed `help::ASK`, then the question and context in the `<box-data>`
+  envelope. Budget: 4 turns, 32k output tokens, 3 min.
+- **Without the agent** (no relay, offline, the relay answering
+  `unknown_agent_version`, or no `submit_issue`) the box writes the
+  issue from the question and its context, and `done` says why there is
+  no diagnosis (`stop: "unavailable"` for a profile the relay does not
+  serve). Events: `help` (the context), `text`, `tool_call`,
+  `tool_result`, `retrying`, `issue` (always, once), `done` or `error`.
+
 ## Proposal review (`proposal-ui`, built)
 
 The screen an engineer approves on: "Proposals" in the header's ⋯ menu,

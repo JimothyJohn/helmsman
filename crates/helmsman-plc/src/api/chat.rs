@@ -87,6 +87,12 @@ pub struct Setup {
     /// What writing one requirement's test may cost (its turns bound the
     /// resubmissions).
     pub tests_budget: Budget,
+    /// The agent version `POST /api/help` asks the relay for (a help
+    /// profile whose one tool is `submit_issue`). The box runs only
+    /// `submit_issue` for it either way ([`super::help`]).
+    pub help_agent: String,
+    /// What one help request may cost.
+    pub help_budget: Budget,
     /// How often the relay is probed while the agent is not online.
     pub probe_every: Duration,
 }
@@ -106,6 +112,8 @@ impl Setup {
             explain_budget: super::explain::budget(),
             tests_agent: None,
             tests_budget: super::requirements::budget(),
+            help_agent: super::help::PROFILE.into(),
+            help_budget: super::help::budget(),
             probe_every: Duration::from_secs(15),
         }
     }
@@ -615,6 +623,21 @@ impl Chat {
             relay,
             api: self.api.clone(),
             budget: self.setup.tests_budget,
+            retry: self.setup.retry,
+            limits: self.setup.limits,
+        }
+    }
+
+    /// The agent Help mode runs: the help profile's version, the help
+    /// budget. Its one tool runs in process
+    /// ([`helmsman_agent::Agent::chat_local`]).
+    pub(super) fn help_agent(&self) -> Agent {
+        let mut relay = self.setup.relay.clone();
+        relay.version.clone_from(&self.setup.help_agent);
+        Agent {
+            relay,
+            api: self.api.clone(),
+            budget: self.setup.help_budget,
             retry: self.setup.retry,
             limits: self.setup.limits,
         }
