@@ -65,27 +65,31 @@ boundary, or from what "Bubba on 3rd shift" does to the machine.
 
 ## What this means for Helmsman
 
-Each row is a recurring complaint, what Helmsman already answers (from
-CLAUDE.md and ARCHITECTURE.md, not re-verified here), and the gap. The gap
-column is where design attention should go.
+Each row is a recurring complaint, what Helmsman does today, and the gap.
+The "today" column was checked against the code at dev 997bedc on
+2026-11-07; file references are under `crates/`. The gap column is where
+design attention should go. TODO.md carries each gap as a card.
 
-| complaint | Helmsman today | gap / design rule |
+| complaint | Helmsman today (verified) | gap / design rule |
 | --- | --- | --- |
-| Version lock-in, 500 VMs | one binary; the box serves the canvas | **Never make a project version-gated.** A project from any release opens in every later one. Refuse an unknown construct with a message, and never refuse the whole file. Pin `library.st` behaviour per project (INVESTIGATION §10) before §6 changes it. |
-| Binary / noisy project files | ST files are plain text | Keep every project artifact (signals, devices, bindings, layout) as stable-ordered text: no GUIDs, no LineIDs, no reorder on save. DMC's worst TwinCAT bug was "variable links silently deleted after a merge", so I/O bindings must not be hidden state. |
-| Slow IDE, worst online | egui canvas, native | Keep monitoring cheap over a slow link. PLCnext's online layer "will freeze 99.9% of the time" on VPN. Test the canvas against a throttled relay connection. |
-| Licensing / paywalls | none | Stay that way: every feature on every box, no dongle, no demo timer. Users name all of these as betrayals ("pay-to-play entry barrier"). |
-| No headless build / test / CI | requirement tests run in `spec` | **`helmsman-plc test` + JUnit XML (INVESTIGATION §5) is the most-requested missing thing on this list.** TcUnit-Runner died on Visual Studio automation, and Sagatowski called CI "so much more challenging than I could ever have imagined". |
-| Tests need hardware | tests run against the interpreter | Simulated I/O is built in. Make it obvious: tests never need the remote modules connected, and no one ever "disables IO before running tests". |
-| Online-change surprises | approval flow; module stop/run/restart (PR #253) | **Show what a deploy does to state before it happens:** which retained values survive, which reset, whether any module stops. Sysmac users: "The software should warn the user if the variables will be cleared." |
-| Install breakage | one static binary | This is the biggest open-source pain, and Helmsman's strongest answer. Say so in the voice (robust, few dependencies). |
-| Insecure defaults | accounts, approval, audit | No default password ever. The API is authenticated from first boot, and Modbus/CIP servers are off unless configured. OpenPLC v3's CVE history (§ OpenPLC) is the cautionary tale an engineer will compare against. |
-| Compiler error quality | checker with inline diagnostics | matiec's worst complaint is the wrong line and a cascade from one `ELSE IF` typo. **One error at the right line, with the fix in plain words**, and recovery so one typo doesn't produce twenty errors. Worth a test corpus of typical typos. |
-| No scan-time / jitter view | fixed scan, watchdog | Show scan time, jitter and overruns on the Monitor. OpenPLC's "There is no straightforward way to do what you want" is the complaint. Show FB instance and STRUCT values live (an OpenPLC v4 regression). |
-| Fieldbus edge cases | EtherNet/IP, Modbus TCP | Check against the OpenPLC failures: one TCP connection per host, not per slave (gateways cap at 2–4); unit IDs behind gateways; graceful handling of unsupported function codes; no silent retain truncation (OpenPLC dropped retained variables past the first 128). |
+| Version lock-in, 500 VMs | no workstation install: the box serves the canvas from `--ui DIR` (`helmsman-plc/src/api/ui.rs`). Project files carry no version field except `diagram.layout`. | **Nothing checks that the canvas and the box are the same build.** Stamp both and warn on a mismatch. **Never make a project version-gated:** keep a fixture project per release that every later release must open. Pin `library.st` behaviour per project (INVESTIGATION §10) before §6 changes it. |
+| Binary / noisy project files | plain-text folders (`*.st`, `io.map`, `project.settings`, `diagram.layout`), no GUIDs. Every deploy is a snapshot with rollback; the deploy store itself is one SQLite file. | Keep project files stable-ordered text. DMC's worst TwinCAT bug was "variable links silently deleted after a merge"; signals live in `io.map`, so keep it that way. |
+| Slow IDE, worst online | egui canvas, native | Keep monitoring cheap over a slow link. PLCnext's online layer "will freeze 99.9% of the time" on VPN. Test the canvas against a throttled connection. |
+| Licensing / paywalls | no licence key, activation or trial code anywhere; Apache-2.0 | Stay that way: every feature on every box, no dongle, no demo timer. Users name all of these as betrayals ("pay-to-play entry barrier"). |
+| No headless build / test / CI | requirement tests run in `helmsman_iec::spec`; headless only through `POST /api/projects/{p}/tests` | **`helmsman-plc test` + JUnit XML (INVESTIGATION §5) is the most-requested missing thing on this list.** TcUnit-Runner died on Visual Studio automation, and Sagatowski called CI "so much more challenging than I could ever have imagined". |
+| Tests need hardware | tests are deterministic, need no I/O, drive the program's `VAR_INPUT`s, and a red test refuses the deploy (409) | Tests drive inputs directly, not through the I/O map. Fine for logic. Sequences over time and abnormal inputs are where the trust findings point (agent card). |
+| Online-change surprises | a deploy is taken between scans and other modules keep running. State carries by name and type: timers and counters keep their values, new or retyped variables reset. Per-module stop/run/restart (PR #253). | **No preview of what a deploy keeps or resets.** `Carry {kept, reset, dropped}` exists (`helmsman-iec/src/state.rs`) but nothing shows it. Sysmac users: "The software should warn the user if the variables will be cleared." |
+| RETAIN expectations | `RETAIN` is parsed and ignored. Values survive deploys, not a reboot or power loss. | **An engineer who writes RETAIN expects it to survive a power cycle.** Persist it, or warn at check time until it does. |
+| Install breakage | one binary for the runtime | This is the biggest open-source pain, and Helmsman's strongest answer. Say so in the voice (robust, few dependencies). |
+| Insecure defaults | no default account or password; the API token is random per box; writes need a session or token, and the token can draft but never apply; PINs or accounts are required to approve | **GET endpoints are unauthenticated.** The EtherNet/IP adapter listens on 0.0.0.0:44818 from boot. OPC UA is on by default but loopback-only, anonymous and read-only. OpenPLC v3's CVE history is the comparison an engineer will make. |
+| Compiler error quality | a syntax error gives one error at its line (no cascade); semantic errors come together, sorted and positioned (tested) | matiec's complaint is the wrong line and a cascade from one `ELSE IF` typo. Helmsman already avoids the cascade. Add a corpus of typical typos that pins the line and the plain-words message. |
+| No scan-time / jitter view | `Stats {scans, overruns, held}` in `/api/modules`; the watchdog is an instruction budget; a faulted module stops alone with outputs zeroed | **Scan time and jitter are not measured, and the Monitor doesn't show overruns.** OpenPLC's "There is no straightforward way to do what you want" is the complaint. |
+| Fieldbus edge cases | Modbus: one connection per device; `unit=` supported; an exception is a point error and the link stays up; comms loss holds the modules reading those inputs, outputs safe | **Two unit IDs behind one gateway open two connections.** Gateways cap at 2–4, which was OpenPLC's failure. Share one connection per host:port. |
 | Dialects break all tooling | one dialect, one parser | Document the dialect as one page (INVESTIGATION §9). That fixed, written target is a selling point to tool builders and to the agent. |
 | Abstraction vs the maintenance tech | no OOP, flat ST, explain mode | This supports the INVESTIGATION §4 "no / later" on OOP. Sysmac maintenance staff "hate FBs as well". The live diagram and explain mode are the answer: the technician reads behaviour, not class hierarchies. |
 | Windows coupling | runs on Linux; canvas in the browser | Never require Windows anywhere. TwinCAT BSODs after a Windows update, and Control Expert's speed depends on the Windows version. |
+| Cloud dependence | the scan never depends on the relay; without it chat returns 503 and falls back to rule-based param edits | Already answered. Say so where a buyer asks. |
+| Who signed off | snapshots record author, approver and time; the audit log is hash-chained and append-only | With PINs only, the approver is a role ("engineer (PIN)"), not a person. Accounts name the person. Push accounts as the default for the liability question. |
 
 **For the agent specifically**, where the AI-trust findings point:
 
