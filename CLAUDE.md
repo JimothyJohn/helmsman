@@ -32,9 +32,10 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
 - **Timing in tests.** No fixed sleeps before an assertion: wait with a
   deadline (`wait(...)` in tests/reload.rs). Watchers start once the state
   they watch holds. The suite must pass with 6 copies running at once.
-- **PRs land one at a time.** dev requires branches to be up to date, and
-  .github/workflows/update-branches.yml updates auto-merge PRs when dev
-  moves (drafts stay behind until they leave draft).
+- **dev no longer requires branches to be up to date** (turned off
+  2026-11-06): a green PR lands without re-running behind each merge; the
+  push run on dev catches a clash. .github/workflows/update-branches.yml
+  still updates auto-merge PRs when dev moves.
 - **Protocol claims** get a docs/SOURCES.md entry and a § / page citation.
 - **A resizable egui panel grows to any row that overflows it, every
   frame.** A label in a plain `horizontal`, a combo box or field at full

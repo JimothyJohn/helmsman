@@ -4,48 +4,10 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **Turn off "require up to date" on dev?** — #244 (cache + path-skipped gate) is in, so the gate is quicker, but every merge into dev still puts each open PR behind and re-runs its gate (update-branches.yml does that for auto-merge PRs; #245 needed it today). Turning the rule off lets green PRs land without the re-run; the push run on dev still catches a semantic clash, at the cost of dev being red for one merge now and then.
-  needs: your call (repo settings: dev's branch protection)
-  result: PRs stop queueing behind each other's merges
-  options: turn it off (recommended) | keep it | a merge queue (unverified on this plan)
-  est: 5m
-  difficulty: low
-  id: ci-up-to-date
-  asked: 2026-11-06
-  by: claude-session
-
-- [ ] **F2 / Shift F2 reserved for the Agent** — Nick 2026-11-01: reserve the keys only. F2 would focus the Agent prompt with the picked block or the ST selection as context; Shift F2 would ask it to declare the identifier under the caret, as a proposal. Nothing bound until decided.
-  needs: a decision to build
-  result: the keys stay free (docs/UI.md lists them as reserved)
-  est: 2d
-  difficulty: med
-  id: hotkey-agent-reserved
-  asked: 2026-11-01
-  by: claude-session
-
-- [ ] **Run, stop and restart a box's program from the Monitor** — Nick 2026-11-01: the Monitor needs play, start, stop. The simulation's transport (run or stop, step, restart) is on the Monitor now; a box has no such endpoint: a module runs from deploy until the next one. This adds `POST /api/modules/{name}/run|stop|restart` behind an engineer session and the approval policy, audited like a force, with HELD shown while stopped (outputs at their safe values), and the Monitor's buttons use it when signed in.
-  needs: a decision that an engineer may stop a running module from the page (the policy says who); the runtime's held state exposed per module
-  result: the same three buttons on a box's Monitor, audited; the module's state shows HELD while stopped
-  est: 2d
-  difficulty: med
-  id: monitor-box-run-stop
-  asked: 2026-11-01
-  by: claude-session
-
-- [ ] **Resume the edge node: faster scans, PSRAM, and the network receive path** — parked by Nick 2026-11-03 after the first runs on the boards (docs/EDGE.md Phase 1 and 2). Three open threads, in order: (1) the network: on the POE2 frames from the Studio never register (ARP replies unanswered, no UDP report sent) and the POE-ISO gets no DHCP lease; first flash supervictor's known-good POE-ISO firmware on the same board to tell this firmware from the board or switch, then compare the executor and interrupt setup (esp-rtos) and the main task's share of the CPU; (2) scan speed: 28 ms for the 4k-statement bench against < 5 ms; measure flash at 80 MHz QIO (it boots at 40 MHz DIO), the interpreter's i128 `Value::Int` on a 32-bit core, the no_std BTreeMap lookups, esp-alloc heap-stats, before any rewrite (a compact compiled form or compile-on-laptop is the bigger lever); (3) the PSRAM corruption: compiling the batch-mixer starter with PSRAM asks for 0x3F40D781 bytes (a rodata address read as a length).
-  needs: Nick's call to resume; the POE-ISO (WROOM, /dev/cu.usbserial-1130 on 2026-11-03) for the network thread since USB can stay on with PoE; the POE2 for PSRAM
-  result: a node that scans a realistic program inside its period and talks to the Studio, or a firm no with numbers for each thread
-  notes: the Studio's en0 has 10.0.0.241 (scratch/04-studio-wired-10net.sh; `off` removes it, a reboot too); LOG_SINK=10.0.0.241:9514 puts the reports on the wired side. Builds: scripts/node-build.sh [net], NODE_BOARD=poe-iso; flash: scripts/node-flash.sh [bench|modbus], Nick's step.
-  est: 1w
-  difficulty: high
-  id: node-resume
-  asked: 2026-11-03
-  by: claude-session
-
 ## Needs your hands
 
 - [ ] **Promote the guided tour** — #248 (the playground tour) is in dev but landed one minute after your dev → master merge, so the live playground does not have it, and docs/playground on dev is still the build without it. An agent rebuilds docs/playground on a PR into dev; then the next dev → master merge (yours) puts /playground/?tour live with the help links that point to it.
-  needs: the playground rebuild PR merged into dev, then your dev → master merge
+  needs: the playground rebuild PR (build/playground-tour) merged into dev, then your dev → master merge
   result: helmsman.advin.io/playground/?tour runs the tour
   est: 15m
   difficulty: low
@@ -53,7 +15,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-06
   by: claude-session
 
-- [ ] **Review the Pi firewall fix (#245)** — draft PR fix/pi-scan-replies: the Devices scan on the Pi hears the answers through its firewall. Updated with dev 2026-11-06; leave draft or flip it to ready (auto-merge then lands it).
+- [ ] **Review the Pi firewall fix (#245)** — draft PR fix/pi-scan-replies: the Devices scan on the Pi hears the answers through its firewall. Updated with dev 2026-11-06 (its TODO.md conflict with #249 resolved: the e1213-address card it annotated is done and gone); leave draft or flip it to ready (auto-merge then lands it).
   needs: your eyes on the PR
   result: the Pi's Devices scan finds devices
   est: 10m
@@ -126,6 +88,17 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: canvas-try
 
 ## Next to build
+
+- [ ] **Run, stop and restart a box's program from the Monitor** — Nick 2026-11-01: the Monitor needs play, start, stop. The simulation's transport (run or stop, step, restart) is on the Monitor now; a box has no such endpoint: a module runs from deploy until the next one. This adds `POST /api/modules/{name}/run|stop|restart` behind an engineer session and the approval policy, audited like a force, with HELD shown while stopped (outputs at their safe values), and the Monitor's buttons use it when signed in.
+  needs: the runtime's held state exposed per module
+  result: the same three buttons on a box's Monitor, audited; the module's state shows HELD while stopped
+  est: 2d
+  difficulty: med
+  id: monitor-box-run-stop
+  asked: 2026-11-01
+  by: claude-session
+  notes: Nick 2026-11-06: yes, an engineer may stop and restart a program from the Monitor.
+  status: ready
 
 - [ ] **The Agent on a box** — left out of agent-scoped-edits (#207): a box's canvas has no Agent tab (BoxView::tabs() is I/O and Requirements; a ui_test pins it), its page's CSP is connect-src 'self', and the box's agent runs through the relay as proposals (POST /api/chat). Give the box an Agent tab that talks to /api/chat, with the pages (#187), iterations (#201), the requirement gate (red_tests) and the edit scope (`scope::apply` takes plain files, so it is reusable) on the box side.
   needs: the relay deployed (relay-deploy) to try it against a real model; the rest builds against the relay fixtures
@@ -275,6 +248,17 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   needs: a decision taken (interview 2026-11-02): no console host at all; see notes
   notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (signed, A/B slots) once the node runs; depends on the edge spike (`node-modbus`) for the node half.
   status: ready
+
+- [ ] **Resume the edge node: faster scans, PSRAM, and the network receive path** — parked by Nick 2026-11-03 after the first runs on the boards (docs/EDGE.md Phase 1 and 2). Three open threads, in order: (1) the network: on the POE2 frames from the Studio never register (ARP replies unanswered, no UDP report sent) and the POE-ISO gets no DHCP lease; first flash supervictor's known-good POE-ISO firmware on the same board to tell this firmware from the board or switch, then compare the executor and interrupt setup (esp-rtos) and the main task's share of the CPU; (2) scan speed: 28 ms for the 4k-statement bench against < 5 ms; measure flash at 80 MHz QIO (it boots at 40 MHz DIO), the interpreter's i128 `Value::Int` on a 32-bit core, the no_std BTreeMap lookups, esp-alloc heap-stats, before any rewrite (a compact compiled form or compile-on-laptop is the bigger lever); (3) the PSRAM corruption: compiling the batch-mixer starter with PSRAM asks for 0x3F40D781 bytes (a rodata address read as a length).
+  needs: Nick's call to resume (2026-11-06: stays parked); the POE-ISO (WROOM, /dev/cu.usbserial-1130 on 2026-11-03) for the network thread since USB can stay on with PoE; the POE2 for PSRAM
+  result: a node that scans a realistic program inside its period and talks to the Studio, or a firm no with numbers for each thread
+  notes: the Studio's en0 has 10.0.0.241 (scratch/04-studio-wired-10net.sh; `off` removes it, a reboot too); LOG_SINK=10.0.0.241:9514 puts the reports on the wired side. Builds: scripts/node-build.sh [net], NODE_BOARD=poe-iso; flash: scripts/node-flash.sh [bench|modbus], Nick's step.
+  est: 1w
+  difficulty: high
+  id: node-resume
+  asked: 2026-11-03
+  by: claude-session
+  status: blocked
 
 - [ ] **Vision sources** — deferred per interview; card kept so the signal model leaves room for camera-derived signals.
   est: 2w
