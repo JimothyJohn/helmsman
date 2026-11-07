@@ -359,7 +359,11 @@ fn nap(until: Instant, stop: &AtomicBool) {
 }
 
 /// Runs `link` on its own thread until `stop` is set, calling `report` on
-/// every change between up and down (with the error when it went down).
+/// every change between up and down (with the error when it went down),
+/// and again whenever a down link fails for another reason, so the
+/// Devices tab and the log say why it is down now, not why it first went
+/// down (2026-11-07: a stale "no T->O data" hid "No route to host"). The
+/// same reason again is not reported.
 /// The thread hands the link back when it ends: set `stop`, unpark the
 /// thread (so a slow poll does not have to run out) and join.
 pub fn spawn(
@@ -369,14 +373,16 @@ pub fn spawn(
     report: impl Fn(&str, Option<&Error>, Option<String>) + Send + 'static,
 ) -> JoinHandle<Link> {
     thread::spawn(move || {
-        let mut was_up = None;
+        // What was last reported: `Some(None)` up, `Some(Some(why))` down.
+        let mut said: Option<Option<String>> = None;
         let start = Instant::now();
         let mut next = start;
         while !stop.load(Ordering::Acquire) {
             let r = link.cycle_at(&table, start.elapsed());
-            if was_up != Some(r.is_ok()) {
+            let now = r.as_ref().err().map(ToString::to_string);
+            if said.as_ref() != Some(&now) {
                 report(&link.name, r.as_ref().err(), link.driver.address());
-                was_up = Some(r.is_ok());
+                said = Some(now);
             }
             next += link.poll;
             let now = Instant::now();
