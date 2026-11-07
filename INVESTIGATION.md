@@ -114,8 +114,14 @@ stand on it.
   embedded. Use iec-checker the way we use ruSTy: dev-time, in docker, as
   a reference that both tools flag the same corpus the same way. Warnings
   go into the agent's retry message in `verify::next` alongside compile
-  errors. Open question: does a warning block "Use this code", or only get
-  shown?
+  errors.
+- **Decided** (Nick, 2026-11-07): every lint is shown and goes into the
+  agent's retry message. Two block "Use this code" and Deploy the way a
+  red requirement test does: an FB instance called inside a conditional,
+  and an output written in more than one place. Each blocking lint can be
+  overridden on its line by a pragma the engineer adds with a reason,
+  logged in the audit trail. The rest stay advisory until the ST corpus
+  shows how noisy they are.
 - **Needs**: the PLCopen guidelines document itself, for a SOURCES.md entry
   per lint ID. I haven't checked whether plcopen.org needs a login to
   download it.
@@ -361,10 +367,8 @@ profile. That means a new profile id, since a served profile never changes.
 
 ## Questions for the discussion
 
-1. Lints: shown only, or does some subset block "Use this code" and
-   Deploy the way red tests do? My view: shown, with two blocking
-   (conditional FB call, output written twice) because they break the
-   diagram's explanations.
+1. Lints: decided 2026-11-07, see §1 (all shown, two block, a pragma
+   with a reason overrides).
 2. The dialect: is the table in §4 the line? In particular VAR_GLOBAL
    inside one module, and whether OOP is ever on the table.
 3. Process-control library: OSCAT-compatible pin names, or names in our
