@@ -114,6 +114,18 @@ impl Harness {
         self.frame(vec![Self::button(at, false)]);
     }
 
+    /// A press at `from`, moved in steps to `to`, released there.
+    fn drag(&mut self, from: Pos2, to: Pos2) {
+        self.frame(vec![Event::PointerMoved(from)]);
+        self.frame(vec![Self::button(from, true)]);
+        for k in 1..=8 {
+            #[allow(clippy::cast_precision_loss)]
+            self.frame(vec![Event::PointerMoved(from.lerp(to, k as f32 / 8.0))]);
+        }
+        self.frame(vec![Self::button(to, false)]);
+        self.frame(vec![]);
+    }
+
     /// A right click at `at` (opens a context menu).
     fn right_click(&mut self, at: Pos2) {
         let press = |pressed| Event::PointerButton {
@@ -2663,6 +2675,35 @@ mod simulated {
         assert!(!h.app.chrome.trend, "Alt+2 folds it");
     }
 
+    /// Nick, 2026-11-07: drag a lane's label up or down to reorder the
+    /// trend. A drag that ends on its own lane moves nothing.
+    #[test]
+    fn dragging_a_trend_label_moves_its_lane() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        // Lanes are drawn by name; a name the program lacks records as no
+        // value, which is all this needs.
+        let s = &mut h.app.sim.as_mut().unwrap().session;
+        s.trend.signals = vec!["FIRST".into(), "SECOND".into(), "THIRD".into()];
+        s.trend.samples.clear();
+        h.wait(0.3);
+        let order = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.signals.clone();
+        let [a, b, c] = <[String; 3]>::try_from(order(&h)).unwrap();
+        let handle = |h: &Harness, n: &str| h.rect(&format!("trend lane {}", n.to_ascii_lowercase()));
+        // The first lane's label onto the third lane.
+        let (from, to) = (handle(&h, &a).center(), handle(&h, &c).center());
+        h.drag(from, to);
+        assert_eq!(order(&h), [b.clone(), c.clone(), a.clone()]);
+        // Back up to the top.
+        let (from, to) = (handle(&h, &a).center(), handle(&h, &b).center());
+        h.drag(from, to);
+        assert_eq!(order(&h), [a.clone(), b.clone(), c.clone()]);
+        // A small drag inside its own lane.
+        let r = handle(&h, &b);
+        h.drag(r.center(), r.center() + Vec2::new(4.0, r.height() * 0.3));
+        assert_eq!(order(&h), [a, b, c]);
+    }
+
     /// Nick, 2026-11-01: the trend's window is 1, 10 or 100 s, so the
     /// line can cross the pane fast or slow; the history is kept for the
     /// widest, so widening shows what already ran. Nick, 2026-11-02: one
@@ -2676,7 +2717,7 @@ mod simulated {
         assert!(h.has("trend window"), "the slider");
         assert!(!h.has("trend window 10"), "the buttons are gone");
         let window = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.window_ms;
-        assert_eq!(window(&h), 10_000, "opens on 10 s");
+        assert_eq!(window(&h), 30_000, "opens on 30 s");
         let slider = h.rect("trend window");
         h.click(Pos2::new(slider.left() + 1.0, slider.center().y));
         assert_eq!(window(&h), WINDOW_MIN_MS, "the left end is 100 ms");
