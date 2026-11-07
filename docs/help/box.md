@@ -11,7 +11,9 @@ need an engineer's sign in: **Sign in** in the header, or <kbd>Alt</kbd>
 <kbd>F8</kbd>; <kbd>Ctrl</kbd> <kbd>F8</kbd> signs out. A fresh box with
 no accounts yet takes a role and its PIN; once an account exists, only
 accounts sign in. A session ends when you sign out, when it has been idle
-a while, or when it is a day old.
+a while, or when it is a day old. Once you are signed in the panel
+closes, and the header shows who is signed in with the role's mark: a
+hard hat for an operator, a wrench and a screwdriver for an engineer.
 
 ## Deploying
 
