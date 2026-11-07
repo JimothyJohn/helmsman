@@ -11,6 +11,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 10m
   difficulty: low
   id: st-lints-blocking
+  notes: FEEDBACK.md 2026-11-07: engineers fear AI code with "very hard to find mistakes"; LLM4PLC (compiler + model checker in the loop) raised success from 47% to 72%; iec-checker leaves CP12 (outputs written once per cycle) as an open issue. Supports making the two lints block.
   asked: 2026-11-07
   by: claude-session
 
@@ -31,6 +32,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 10m
   difficulty: low
   id: st-library-names
+  notes: FEEDBACK.md 2026-11-07: OSCAT has no warranty, a 2024 out-of-bounds read in MONTH_TO_STRING (VDE-2024-046), and breaks on new CODESYS service packs. Supports writing our own small tested set.
   asked: 2026-11-07
   by: claude-session
 
@@ -41,6 +43,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 10m
   difficulty: low
   id: st-edit-outside-canvas
+  notes: FEEDBACK.md 2026-11-07: vscode-st's most-discussed issue (26 comments) asks for a real linter from a real parser; HN praises Siemens AX for being "just vscode". The `helmsman-plc test` half is now its own card, `cli-test-runner`.
   asked: 2026-11-07
   by: claude-session
 
@@ -71,6 +74,26 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 10m
   difficulty: low
   id: st-plan-order
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Which user-feedback cards go first?** — FEEDBACK.md (2026-11-07) collects what engineers like and hate about TIA, Studio 5000, CODESYS, TwinCAT, PLCnext, Sysmac, Control Expert, B&R, OpenPLC, Beremiz and the ST tooling. Its gaps are now cards in "From user feedback: do now" (about 8d in all) and "From user feedback: plan for later". **Recommendation: do now, in this order: `retain-persist` (a RETAIN that is quietly lost on power-up is a trust-breaker the first time an engineer meets it; ship the check-time warning the same day), `deploy-state-preview` (Sysmac users asked for exactly this), `cli-test-runner` (the most-asked-for tool in the research), `scan-stats`, `modbus-shared-connection`, then the small ones.** All of them are plain engineering with no open design question. The ST plan (`st-plan-order`) runs beside it, not after: the lints card is the same trust argument.
+  needs: your call on the order
+  result: the do-now cards get worked top to bottom; the later ones stay parked until their depends land
+  options: this order, beside the ST plan (recommended) | ST plan first, feedback after | pick per card on the board
+  est: 10m
+  difficulty: low
+  id: feedback-order
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Secure defaults: lock down reads and the CIP adapter?** — checked in code 2026-11-07: there is no default account or password, writes need a session or token, and only a PIN or account can approve. Three things are open by default, though. Every GET endpoint answers without auth, so anyone on the LAN can read the programs, I/O map and live values. The EtherNet/IP adapter listens on 0.0.0.0:44818 from boot. OPC UA is on (loopback only, anonymous, read-only). OpenPLC v3's default `openplc:openplc` and its unauthenticated API (an auth-bypass CVE) are what a buyer's IT will compare us to. **Recommendation: require a session for every GET except the canvas assets and a health check, and leave the CIP adapter on**, because appearing to an existing PLC as an adapter is the job, and it never writes to other controllers. Show its bind address on the Monitor. Keep OPC UA loopback-only as now. The read lock is a breaking change for anything that polls the API today: the try box, scripts/ and the node.
+  needs: your call
+  result: a card for the read lock (about 1d: middleware, a canvas sign-in before the Monitor, tests that every GET route refuses without a session) or the current posture written down in docs/ARCHITECTURE.md as deliberate
+  options: lock GETs, keep CIP on (recommended) | lock GETs and make CIP opt-in | keep as is, document it
+  est: 10m
+  difficulty: med
+  id: secure-defaults
   asked: 2026-11-07
   by: claude-session
 
@@ -186,6 +209,132 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 1h
   difficulty: low
   id: rusty-bump
+
+## From user feedback: do now
+
+The gaps in FEEDBACK.md's design table, each checked against the code at dev 997bedc (2026-11-07). These are small, need no design decision, and answer a complaint engineers make about every platform. Order: `feedback-order`.
+
+- [ ] **RETAIN survives a power cycle** — `RETAIN` and `NON_RETAIN` are parsed and ignored (helmsman-iec parser.rs). Values carry across a deploy but are lost on a reboot or power loss. An engineer who writes `VAR RETAIN` expects the opposite, and OpenPLC lost trust for silently dropping retained values past the first 128. Day one: the checker warns "RETAIN is not kept across a restart yet" so nothing is silent. Then persist RETAIN variables per module to the state dir with the snapshot fsync discipline, at a bounded rate (on change, at most every N scans, plus on clean shutdown), and restore them by name and type at start, the way a deploy carries state. No count cap other than a size cap that refuses loudly.
+  result: a RETAIN counter reads the same after the box is power-cycled; a test kills the process mid-run and checks the restored values
+  est: 2d
+  difficulty: med
+  id: retain-persist
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Show what a deploy keeps and resets, before approving** — a deploy already carries state by name and type (timers and counters keep their values, new or retyped variables reset), and `Carry {kept, reset, dropped}` is computed in helmsman-iec state.rs, but no API or UI shows it. Sysmac users: "The software should warn the user if the variables will be cleared." Put the carry on the proposal (a dry run against the running state), show it on the approval screen in plain words ("keeps 12 values, resets `count` (type changed), drops `old_flag`"), and record it in the audit entry.
+  result: the engineer sees which values reset before entering the PIN; the audit says what the deploy did to state
+  est: 1d
+  difficulty: med
+  id: deploy-state-preview
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **`helmsman-plc test PROJECT_DIR` with JUnit XML** — the most-requested missing tool in FEEDBACK.md: TcUnit-Runner died driving Visual Studio, and every vendor's compiler lives inside its GUI. Today the requirement tests run headless only through `POST /api/projects/{p}/tests`. Add a subcommand next to `account` and `bundle` that checks and runs a project's `test_*.st` with no box running, exits non-zero on a red or failing check, and writes JUnit XML (`--junit FILE`). Add a template GitHub Actions workflow in docs/ for a project kept in git. (INVESTIGATION §5; it is the "build `helmsman-plc test`" half of `st-edit-outside-canvas`.)
+  result: any CI runner gates an engineer's project; the same tests the box runs
+  est: 1d
+  difficulty: low
+  id: cli-test-runner
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Scan time, jitter and overruns on the Monitor** — the runtime counts `scans`, `overruns` and `held` (`/api/modules`), and the watchdog is an instruction budget, but scan time and jitter are not measured, and the Monitor shows only the period and the scan count. OpenPLC users ask how to see scan load and get "There is no straightforward way to do what you want." Measure each module's execution time and the tick's start lateness (monotonic clock, min, mean, max, and a p99 over a window), expose it in `/api/modules`, and show it with overruns on the Monitor, with a tooltip on what each means.
+  result: an engineer sees scan load and jitter per module; an overrun is visible, not just counted
+  est: 1d
+  difficulty: low
+  id: scan-stats
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **One Modbus connection per gateway, shared across unit IDs** — helmsman-io opens one TCP connection per device (`Client` is "a Modbus TCP connection to one unit"), so two units behind one Modbus TCP gateway open two connections. Many gateways cap at 2-4 connections; OpenPLC v3 did the same thing and users reported "dropping connection, reconnecting and generally poor performance". Pool one connection per host:port, serialize requests on it by transaction id, keep per-unit errors per unit, and test against the simulator with several unit ids and a connection cap.
+  result: eight RTU devices behind one gateway use one TCP connection
+  est: 1d
+  difficulty: med
+  id: modbus-shared-connection
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **The canvas and the box say if they are different builds** — the box serves the canvas from `--ui DIR`, built separately; nothing checks they match. That is the one place Helmsman could grow the "project only opens in version X" problem every vendor has. Stamp both with the git describe at build time, return it in an API header, and show a plain banner in the canvas on a mismatch ("this editor is from a different release than the controller; reload").
+  result: a stale canvas after an update is visible at once
+  est: 2h
+  difficulty: low
+  id: build-match
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Every release opens every older project** — project files have no version field except `diagram.layout`'s `helmsman-layout 1`, and nothing pins that a project written by an older release still loads. Version lock-in is the top complaint on every vendor platform. Add tests/fixtures/projects/<release>/ (one representative project per tagged release, starting now) and a test that loads, checks and runs each one on the current build. A construct a newer release no longer accepts becomes a listed problem, and the project still opens.
+  result: version lock-in is a test failure, not a support ticket
+  est: 4h
+  difficulty: low
+  id: project-compat-fixtures
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **A typo gives one error, at the right line, in plain words** — matiec's top complaints are the wrong line ("The error is on line 23, and matiec outputs what is on line 26") and twenty errors from one `ELSE IF`. Helmsman already stops at the first syntax error, and positions are tested (tests/st.rs `errors_are_sorted_and_positioned`). Pin it with a corpus of the twenty most common ST typos (`ELSE IF`, `=` for `:=`, missing `;`, missing `END_IF`, `:=` in a condition, a misspelled keyword or FB) and assert each one's line, column and a message that names the fix.
+  result: error quality is measured, and a regression in it fails CI
+  est: 1d
+  difficulty: low
+  id: typo-corpus
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **The canvas stays usable over a slow link** — PLCnext Engineer's online layer "will freeze 99.9% of the time" over VPN, and Phoenix said that is by design. Run the canvas against a box behind a throttled proxy (300 ms RTT, 1 Mbit/s, 2 % loss) in a test, and check the Monitor's polling never queues requests behind each other and the UI never blocks on the network.
+  result: remote support over a site VPN works; a regression fails a test
+  est: 4h
+  difficulty: low
+  id: canvas-slow-link
+  asked: 2026-11-07
+  by: claude-session
+
+## From user feedback: plan for later
+
+Long-term items FEEDBACK.md points to. Each waits on a card already on the board, or on a decision.
+
+- [ ] **The agent writes tests for abnormal sequences by default** — engineers expect AI code to fail at edge cases and timing ("Bubba on 3rd shift can't be predicted"), and their condition for trusting it is that checking costs less than writing. Next relay profile: for every requirement the agent also proposes tests for a stuck sensor, both buttons at once, a timeout, a restart mid-sequence and comms loss, each as a plain-words requirement the engineer accepts or drops. A new profile id, since a served profile never changes.
+  needs: the relay profile work; ideally `st-lints-blocking` decided, since lints and these tests are the same retry loop
+  result: a draft arrives with the abnormal cases already tested; the engineer reads requirements, not code
+  est: 1d
+  difficulty: med
+  id: agent-abnormal-tests
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Explain mode answers timing questions** — arpus4KM on PLCTalk wants to ask "How many milliseconds will this logic take to execute". With `scan-stats` the box knows each module's measured time, and the instruction budget gives a worst case. Let explain mode answer "how long does this take", "what is the longest path" and "when does this timer finish", with the numbers from the box.
+  needs: scan-stats
+  result: the timing questions engineers ask an AI get real numbers
+  est: 2d
+  difficulty: med
+  depends: scan-stats
+  id: explain-timing
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **One page that is the ST dialect** — every third-party tool (blark, iec-checker, UniTest, vscode-st, STweep) breaks on vendor dialects. A single, written description of what Helmsman's ST accepts and refuses, with the IEC section for each (once `iec-standard-source` lands), is useful to the agent, to an engineer importing code, and to anyone building a tool for it. Generate the "refused" list from the checker's messages so it cannot drift.
+  needs: iec-standard-source answered
+  result: docs/help/st-dialect, linked from every "not supported" message
+  est: 4h
+  difficulty: low
+  id: dialect-page
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **A project pins the library version it was built with** — TwinCAT users report library mismatches that block going online "even with otherwise identical code", and OSCAT breaks on new CODESYS service packs. Once the process-control library (INVESTIGATION §6) exists, `library.st` will change between releases. A project records the library version it was approved with, keeps that behaviour until an engineer upgrades it as a proposal, and the diff shows which blocks changed.
+  needs: the process-control library carded and started (`st-plan-order`)
+  result: a project approved last year behaves the same after a box update
+  est: 1d
+  difficulty: med
+  id: library-pin
+  asked: 2026-11-07
+  by: claude-session
+
+- [ ] **Accounts as the default sign-off, PINs as the fallback** — the liability fear ("a tort lawyer will argue you don't know what you're doing") is answered by a named person signing off. With PINs only, the audit records a role ("engineer (PIN)"), not a person. Make first-run setup create a named engineer account, show the approver's name on every version in the history, and keep role PINs for sites that want them.
+  needs: the first-boot flow (`box-sku`)
+  result: every change in the audit trail names the person who approved it
+  est: 1d
+  difficulty: low
+  id: named-signoff
+  asked: 2026-11-07
+  by: claude-session
 
 ## Product vision (interview 2026-10-29)
 
