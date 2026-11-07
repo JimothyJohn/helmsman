@@ -4,17 +4,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **ST lints: shown only, or do some block Deploy?** — INVESTIGATION.md §1 proposes PLCopen coding-guideline lints in `check.rs` (warnings with stable IDs, fed into the agent's retry message in `verify::next`). Open: does a lint finding stop "Use this code" and Deploy the way a red requirement test does? **Recommendation: show every lint and give them all to the agent's retry loop, and make two of them block: an FB instance called inside a conditional (the TON-inside-IF bug) and an output written in more than one place.** Both make the live diagram's "on because" wrong, which is the thing an engineer validates against, so passing them would let a misleading diagram through. Give each blocking lint a per-line pragma an engineer can add with a reason (logged in the audit trail), so imported code that is right on purpose is not stuck. The other lints (read before set, REAL equality, FOR bounds changed, unused, unreachable, recursion) stay advisory until the ST corpus shows how noisy they are.
-  needs: your call on blocking; the PLCopen guidelines document for the SOURCES.md entries (an agent checks whether plcopen.org needs a login)
-  result: the lint card gets its blocking rule; about 3d of work for the first 6-8 lints
-  options: shown, two block, pragma to override (recommended) | shown only, none block | every lint blocks
-  est: 10m
-  difficulty: low
-  id: st-lints-blocking
-  notes: FEEDBACK.md 2026-11-07: engineers fear AI code with "very hard to find mistakes"; LLM4PLC (compiler + model checker in the loop) raised success from 47% to 72%; iec-checker leaves CP12 (outputs written once per cycle) as an open issue. Supports making the two lints block.
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Where is the line on the ST dialect?** — INVESTIGATION.md §4 takes a position on each missing feature: yes to VAR_IN_OUT, function outputs, STRING[n] and TOD/DATE/DT; maybe VAR_GLOBAL, only inside one module; METHOD/PROPERTY later; INTERFACE/EXTENDS not for now; POINTER/REFERENCE never. **Recommendation: take the table as it stands, with VAR_GLOBAL allowed inside one module and refused across modules (imported CODESYS and Beremiz code uses it all the time, and signals stay the only way modules talk).** Leave OOP out until the corpus ranking says imports fail mostly on it: METHOD needs a diagram story first, and dynamic dispatch would break the per-statement tracing behind "on because". POINTER/REFERENCE stays out for good, since the memory-safety and isolation claims depend on it. Let the corpus test (about 1d) put the yeses in order. Each yes adds oracle cases, property tests, a no_std build check and a new relay profile id.
   needs: your call on the table, VAR_GLOBAL in particular
   result: the dialect cards (VAR_IN_OUT and function outputs 2d, STRING[n] 4d, TOD/DATE later) get carded in corpus order
@@ -68,7 +57,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **Adopt the ST investigation's order and card it?** — INVESTIGATION.md ends with "Suggested order, if we agree": ruSTy 1.0.8 bump (2h, the existing `rusty-bump`), ST corpus test and refusal ranking (1d), the first 6-8 PLCopen lints (3d), `helmsman-plc test` plus JUnit XML (1d), VAR_IN_OUT and function outputs (2d), STRING[n] then typed asserts (4d), process-control library (4d), matiec oracle (1d); TOD/DATE, TcPOU import, LSP and formatter later. About 16d in total. **Recommendation: agree, and card it in that order.** The ruSTy bump and the corpus are cheap and turn the rest into measured decisions, and the lints give every agent turn a better retry from the first one. Answer the five questions above first, since they set the lint, dialect and library cards' scope. Things an agent checks while carding, without you: whether ruSTy 1.0.8 really carries the #2015 fix (the investigation's changelog read), OSCAT BASIC's license, whether the PLCopen guidelines need a login, and the number and scope of the PLCopen/OPC Foundation companion spec for IEC 61131-3 (unverified).
-  needs: answers to st-lints-blocking, st-dialect-line and st-library-names
+  needs: answers to st-dialect-line and st-library-names (lints decided 2026-11-07: INVESTIGATION.md §1)
   result: about nine cards in "Next to build", in order, with depends lines
   options: agree, card it in this order (recommended) | agree, lints before the corpus | discuss first
   est: 10m
@@ -295,7 +284,7 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
 Long-term items FEEDBACK.md points to. Each waits on a card already on the board, or on a decision.
 
 - [ ] **The agent writes tests for abnormal sequences by default** — engineers expect AI code to fail at edge cases and timing ("Bubba on 3rd shift can't be predicted"), and their condition for trusting it is that checking costs less than writing. Next relay profile: for every requirement the agent also proposes tests for a stuck sensor, both buttons at once, a timeout, a restart mid-sequence and comms loss, each as a plain-words requirement the engineer accepts or drops. A new profile id, since a served profile never changes.
-  needs: the relay profile work; ideally `st-lints-blocking` decided, since lints and these tests are the same retry loop
+  needs: the relay profile work; lints and these tests are the same retry loop (lint rule decided 2026-11-07, INVESTIGATION.md §1)
   result: a draft arrives with the abnormal cases already tested; the engineer reads requirements, not code
   est: 1d
   difficulty: med
