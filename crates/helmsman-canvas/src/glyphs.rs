@@ -28,6 +28,10 @@ pub enum Icon {
     Download,
     /// ? in a ring.
     Help,
+    /// A hard hat: an operator is signed in (Nick, 2026-11-07).
+    HardHat,
+    /// A wrench crossed with a screwdriver: an engineer is signed in.
+    Tools,
 }
 
 /// The side of a glyph button, points.
@@ -58,6 +62,12 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, on: bool, tip: &str)
     };
     draw(painter, rect.shrink(SIZE * 0.26), icon, color);
     r
+}
+
+/// `icon` drawn in `rect` in `color`, outside a button (the header's
+/// signed-in role).
+pub fn paint(p: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
+    draw(p, rect, icon, color);
 }
 
 fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
@@ -141,6 +151,56 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             let dir = if up { -1.0 } else { 1.0 };
             p.line_segment([z, z + Vec2::new(-head, -dir * head)], stroke);
             p.line_segment([z, z + Vec2::new(head, -dir * head)], stroke);
+        }
+        Icon::HardHat => {
+            // The dome over the brim, a ridge up its middle.
+            let radius = b.width() * 0.4;
+            let base = bt - b.height() * 0.22;
+            let n = 16;
+            let mut dome: Vec<Pos2> = (0..=n)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let a = std::f32::consts::PI * (k as f32 / n as f32);
+                    Pos2::new(c.x - radius * a.cos(), base - radius * a.sin())
+                })
+                .collect();
+            dome.push(Pos2::new(c.x + radius, base));
+            p.add(egui::Shape::convex_polygon(dome, color, Stroke::NONE));
+            let brim = Rect::from_min_max(Pos2::new(l, base), Pos2::new(r, base + w * 1.4));
+            p.rect_filled(brim, CornerRadius::same(1), color);
+            p.line_segment(
+                [Pos2::new(c.x, base - radius), Pos2::new(c.x, base)],
+                Stroke::new(w * 0.7, Color32::from_black_alpha(90)),
+            );
+        }
+        Icon::Tools => {
+            // The screwdriver from top left to bottom right: a thick
+            // handle low, a thin shaft up to its tip.
+            let thin = Stroke::new(w, color);
+            let thick = Stroke::new(w * 2.6, color);
+            let a = Pos2::new(l + w, t + w);
+            let z = Pos2::new(r - w, bt - w);
+            let mid = a + (z - a) * 0.55;
+            p.line_segment([a, mid], thin);
+            p.line_segment([mid, z], thick);
+            // The wrench from bottom left to top right: a shaft and an
+            // open jaw at the top.
+            let wa = Pos2::new(l + w * 1.5, bt - w * 1.5);
+            let jaw = Pos2::new(r - b.width() * 0.22, t + b.height() * 0.22);
+            p.line_segment([wa, jaw], Stroke::new(w * 1.4, color));
+            let radius = b.width() * 0.2;
+            let n = 12;
+            let ring: Vec<Pos2> = (0..=n)
+                .map(|k| {
+                    // From the shaft's side round to the gap facing up-right.
+                    #[allow(clippy::cast_precision_loss)]
+                    let ang = std::f32::consts::FRAC_PI_4
+                        + 0.9
+                        + (k as f32 / n as f32) * (std::f32::consts::TAU - 1.8);
+                    Pos2::new(jaw.x + radius * ang.cos(), jaw.y - radius * ang.sin())
+                })
+                .collect();
+            p.add(egui::Shape::line(ring, Stroke::new(w * 1.2, color)));
         }
         Icon::Help => {
             p.circle_stroke(c, b.width() * 0.5, stroke);

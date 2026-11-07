@@ -2966,6 +2966,52 @@ mod boxed {
         h.app.boxv.as_ref().unwrap()
     }
 
+    /// Nick 2026-11-07: once someone is signed in the sign-in panel
+    /// collapses (the box's answer lands frames after its button), and the
+    /// header shows the role: a hard hat for an operator, a wrench and a
+    /// screwdriver for an engineer.
+    #[test]
+    fn signing_in_collapses_the_panel_and_the_header_shows_the_role() {
+        use crate::review::Session;
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        assert!(
+            !h.has("role operator") && !h.has("role engineer"),
+            "signed out: no role"
+        );
+        h.press("sign in");
+        h.wait(0.2);
+        assert!(h.app.login, "the panel opens");
+        // The answer arrives a few frames later, as from the box.
+        h.wait(0.2);
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: None,
+            role: "operator".into(),
+        });
+        h.wait(0.2);
+        assert!(!h.app.login, "signed in: the panel collapses");
+        assert!(h.has("role operator") && !h.has("role engineer"), "a hard hat");
+        // Opened again while signed in, it stays open (to sign out).
+        h.press("sign in");
+        h.wait(0.2);
+        assert!(h.app.login, "open again on a click");
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("alice".into()),
+            role: "engineer".into(),
+        });
+        h.wait(0.2);
+        assert!(!h.app.login, "a different person signed in: collapses");
+        assert!(h.has("role engineer") && !h.has("role operator"), "the tools");
+        // The glyph opens the panel too.
+        h.press("role engineer");
+        h.wait(0.2);
+        assert!(h.app.login);
+        h.app.review.as_mut().unwrap().state.session = None;
+        h.wait(0.2);
+        assert!(!h.app.login, "signed out: collapses");
+        assert!(!h.has("role engineer"));
+    }
+
     /// The minimum holds on a box too: its tabs, signed in, and the
     /// Proposals screen.
     #[test]
