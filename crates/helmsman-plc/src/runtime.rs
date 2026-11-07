@@ -10,6 +10,9 @@
 //! - a module's outputs reach the image only when its scan completes;
 //! - a module that faults has its output window zeroed and is stopped, and
 //!   the others keep their schedule;
+//! - an engineer may stop a module ([`Runtime::stop`]), which then is not
+//!   scanned, its output window zero and its output signals safe, until
+//!   [`Runtime::run`] or [`Runtime::restart`]; a deploy leaves it stopped;
 //! - a module that falls behind skips the periods it missed (counted as
 //!   overruns) instead of bursting to catch up;
 //! - a module's `VAR_INPUT`s and `VAR_OUTPUT`s are bound to signals by name
@@ -99,6 +102,10 @@ pub enum Status {
     Held,
     /// Stopped by this fault; its outputs are zero.
     Faulted(Fault),
+    /// Stopped by an engineer ([`Runtime::stop`]): not scanned, its outputs
+    /// zero and its output signals safe, until [`Runtime::run`] or
+    /// [`Runtime::restart`]. A deploy or reload keeps it stopped.
+    Stopped,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -290,7 +297,8 @@ impl Runtime {
     ///   to zero and signals it stops driving go safe now, as no module
     ///   drives them any more.
     /// - A faulted or held module restarts ([`Status::Running`]): the fault
-    ///   is cleared and its state carries like any other. A faulted module
+    ///   is cleared and its state carries like any other; a stopped one
+    ///   stays [`Status::Stopped`]. A faulted module
     ///   is next due at its first deadline after the last tick, so the time
     ///   it spent stopped is not counted as overruns. Otherwise the next
     ///   deadline stays as scheduled and a new period applies after it.
@@ -332,17 +340,12 @@ impl Runtime {
         let m = image.m.len().min(s.image.m.len());
         image.m[..m].copy_from_slice(&s.image.m[..m]);
 
-        if let (Status::Faulted(_), Some(last)) = (s.status, self.last)
-            && s.next <= last
-        {
-            let period = module.period.as_nanos();
-            let rem = u64::try_from(last.saturating_sub(s.next).as_nanos() % period)
-                .expect("remainder below a 24 h period");
-            s.next = last
-                .saturating_add(module.period)
-                .saturating_sub(Duration::from_nanos(rem));
+        if let (Status::Faulted(_), Some(last)) = (s.status, self.last) {
+            s.next = resumed(s.next, last, module.period);
         }
-        s.status = Status::Running;
+        if s.status != Status::Stopped {
+            s.status = Status::Running;
+        }
         s.module = module;
         s.ports = ports;
         s.image = image;
@@ -358,7 +361,7 @@ impl Runtime {
     /// - A module whose name was running before is carried exactly as
     ///   [`Runtime::swap`] carries it: retained state by name and type,
     ///   `%M` over the shared length, its trace tap, its schedule (a
-    ///   faulted or held one restarts Running).
+    ///   faulted or held one restarts Running, a stopped one stays stopped).
     /// - A new module starts cold and is due at the last tick's `now`.
     /// - No glitch: `%Q` bytes and output signals that some module of the
     ///   new set drives hold their last values until that module's first
@@ -487,21 +490,18 @@ impl Runtime {
                     let m = image.m.len().min(s.image.m.len());
                     image.m[..m].copy_from_slice(&s.image.m[..m]);
                     let mut next = s.next;
-                    if let (Status::Faulted(_), Some(last)) = (s.status, self.last)
-                        && next <= last
-                    {
-                        let rem =
-                            u64::try_from(last.saturating_sub(next).as_nanos() % module.period.as_nanos())
-                                .expect("remainder below a 24 h period");
-                        next = last
-                            .saturating_add(module.period)
-                            .saturating_sub(Duration::from_nanos(rem));
+                    if let (Status::Faulted(_), Some(last)) = (s.status, self.last) {
+                        next = resumed(next, last, module.period);
                     }
                     Slot {
                         module,
                         ports,
                         image,
-                        status: Status::Running,
+                        status: if s.status == Status::Stopped {
+                            Status::Stopped
+                        } else {
+                            Status::Running
+                        },
                         next,
                         stats: s.stats,
                         tap: s.tap,
@@ -542,7 +542,7 @@ impl Runtime {
         let mut faults = Vec::new();
         self.last = Some(now);
         for s in &mut self.slots {
-            if matches!(s.status, Status::Faulted(_)) || s.next > now {
+            if matches!(s.status, Status::Faulted(_) | Status::Stopped) || s.next > now {
                 continue;
             }
             let q = &mut self.outputs[s.module.q.start..][..s.module.q.len];
@@ -615,14 +615,81 @@ impl Runtime {
     }
 
     /// When the next running or held module is due; `None` once all have
-    /// stopped.
+    /// stopped (by a fault or an engineer).
     #[must_use]
     pub fn next_deadline(&self) -> Option<Duration> {
         self.slots
             .iter()
-            .filter(|s| !matches!(s.status, Status::Faulted(_)))
+            .filter(|s| !matches!(s.status, Status::Faulted(_) | Status::Stopped))
             .map(|s| s.next)
             .min()
+    }
+
+    /// Stops `name` between scans (an engineer's Stop): it is not scanned,
+    /// its `%Q` window goes to zero and its output signals to their safe
+    /// values in `table` now, and the other modules keep their schedule.
+    /// Stopping a stopped module changes nothing.
+    ///
+    /// # Errors
+    /// [`ConfigError::UnknownModule`]: nothing changed.
+    pub fn stop(&mut self, name: &str, table: &mut SignalTable) -> Result<(), ConfigError> {
+        let s = self.slot_mut(name)?;
+        let q = s.module.q;
+        s.status = Status::Stopped;
+        make_safe(s, table);
+        self.outputs[q.start..][..q.len].fill(0);
+        Ok(())
+    }
+
+    /// Runs `name` again (an engineer's Run): a stopped or faulted module
+    /// is [`Status::Running`] with its state as it was, due at its first
+    /// deadline after the last tick on its own phase, so the time it was
+    /// stopped counts as neither scans nor overruns. A fault is cleared. A
+    /// running or held module is left as it is.
+    ///
+    /// # Errors
+    /// [`ConfigError::UnknownModule`]: nothing changed.
+    pub fn run(&mut self, name: &str) -> Result<(), ConfigError> {
+        let last = self.last;
+        let s = self.slot_mut(name)?;
+        if matches!(s.status, Status::Stopped | Status::Faulted(_)) {
+            if let Some(last) = last {
+                s.next = resumed(s.next, last, s.module.period);
+            }
+            s.status = Status::Running;
+        }
+        Ok(())
+    }
+
+    /// A cold restart of `name` (an engineer's Restart): every variable at
+    /// its initial value, `%M` zero, a fault cleared, a stop ended, and due
+    /// at the next tick. Its outputs hold what they hold until that scan.
+    ///
+    /// # Errors
+    /// [`ConfigError::UnknownModule`]: nothing changed.
+    pub fn restart(&mut self, name: &str) -> Result<(), ConfigError> {
+        let last = self.last.unwrap_or(Duration::ZERO);
+        let k = self
+            .slots
+            .iter()
+            .position(|s| s.module.name == name)
+            .ok_or_else(|| ConfigError::UnknownModule(name.into()))?;
+        let s = &mut self.slots[k];
+        s.module.program.reset();
+        let q = s.module.q;
+        let mut image = Image::new(s.module.program.sizes());
+        image.q.copy_from_slice(&self.outputs[q.start..][..q.len]);
+        s.image = image;
+        s.status = Status::Running;
+        s.next = last;
+        Ok(())
+    }
+
+    fn slot_mut(&mut self, name: &str) -> Result<&mut Slot, ConfigError> {
+        self.slots
+            .iter_mut()
+            .find(|s| s.module.name == name)
+            .ok_or_else(|| ConfigError::UnknownModule(name.into()))
     }
 
     fn slot(&self, name: &str) -> Option<&Slot> {
@@ -872,6 +939,17 @@ fn signal_ty(st: helmsman_iec::Ty) -> helmsman_io::Ty {
     } else {
         helmsman_io::Ty::Int
     }
+}
+
+/// A stopped module's next deadline: `next` if it is still ahead of
+/// `last`, else its first deadline after `last` on the same phase.
+fn resumed(next: Duration, last: Duration, period: Duration) -> Duration {
+    if next > last {
+        return next;
+    }
+    let rem = u64::try_from(last.saturating_sub(next).as_nanos() % period.as_nanos())
+        .expect("remainder below a 24 h period");
+    last.saturating_add(period).saturating_sub(Duration::from_nanos(rem))
 }
 
 fn make_safe(s: &Slot, table: &mut SignalTable) {

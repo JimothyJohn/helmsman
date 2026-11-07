@@ -1891,12 +1891,13 @@ fn site_route(ctx: &Ctx, c: &Catalog, view: &View) -> Response {
 fn site_json(site: &crate::site::Handle, c: &Catalog, view: &View, devices: &Devices) -> Json {
     let me = site.me();
     let (peers, counts, now) = site.snapshot();
-    let (mut running, mut held, mut faulted) = (0usize, 0usize, 0usize);
+    let (mut running, mut held, mut faulted, mut stopped) = (0usize, 0usize, 0usize, 0usize);
     for k in 0..c.modules.len() {
         match view.modules.get(k).map(|m| m.status) {
             Some(crate::Status::Running) => running += 1,
             Some(crate::Status::Held) => held += 1,
             Some(crate::Status::Faulted(_)) => faulted += 1,
+            Some(crate::Status::Stopped) => stopped += 1,
             None => {}
         }
     }
@@ -1922,6 +1923,7 @@ fn site_json(site: &crate::site::Handle, c: &Catalog, view: &View, devices: &Dev
                 "running": running,
                 "held": held,
                 "faulted": faulted,
+                "stopped": stopped,
                 "devices": { "up": up, "down": down, "unknown": unknown },
             },
         },

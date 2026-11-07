@@ -154,6 +154,7 @@ fn status(live: Option<&ModuleLive>) -> Json {
         None => json!({ "state": "starting" }),
         Some(Status::Running) => json!({ "state": "running" }),
         Some(Status::Held) => json!({ "state": "held" }),
+        Some(Status::Stopped) => json!({ "state": "stopped" }),
         Some(Status::Faulted(f)) => json!({ "state": "faulted", "fault": fault(f) }),
     }
 }
