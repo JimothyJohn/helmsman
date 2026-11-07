@@ -43,7 +43,7 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use helmsman_iec::{ImageSizes, compile};
+use helmsman_iec::{Carry, ImageSizes, compile};
 
 use super::catalog::{Catalog, ModuleInfo};
 use crate::calendar::Source;
@@ -160,6 +160,9 @@ pub struct Swapped {
     pub table: Option<SignalTable>,
     /// After a reload: the new recorder's tap, if the scan loop records.
     pub record: Option<RecordTap>,
+    /// What the swap did to each kept module's state
+    /// ([`Runtime::last_carry`]); a new module is not listed.
+    pub carry: Vec<(String, Carry)>,
 }
 
 /// One change for the scan thread.
@@ -301,6 +304,7 @@ impl Swapper {
                             catalog: catalog_of(rt, table, &job.change),
                             table: None,
                             record: None,
+                            carry: rt.last_carry().to_vec(),
                         })
                     }
                     Err(errs) => Err(errs.iter().map(ToString::to_string).collect()),
@@ -315,6 +319,7 @@ impl Swapper {
                         catalog: catalog_of(rt, table, &job.change),
                         table: Some(table.clone()),
                         record,
+                        carry: rt.last_carry().to_vec(),
                     }
                 }),
             };
@@ -435,12 +440,12 @@ impl SwapHandle {
     }
 
     /// Hands `modules` (compiled from `change`) to the scan thread and
-    /// waits for it.
+    /// waits for it: the new catalog and what the swap did to state.
     ///
     /// # Errors
     /// [`SwapError`]; in every case the running box is as it was.
-    pub fn run(&self, modules: Vec<Module>, change: ChangeSet) -> Result<Catalog, SwapError> {
-        self.send(modules, change, None).map(|s| s.catalog)
+    pub fn run(&self, modules: Vec<Module>, change: ChangeSet) -> Result<Swapped, SwapError> {
+        self.send(modules, change, None)
     }
 
     /// Reloads the box onto `layout` (built from `change`'s map and
