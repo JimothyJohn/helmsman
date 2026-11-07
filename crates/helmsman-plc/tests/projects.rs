@@ -30,7 +30,7 @@ use helmsman_plc::force::{self, Forces};
 use helmsman_plc::manifest::ModuleDir;
 use helmsman_plc::policy::account::{self, Accounts, Logins};
 use helmsman_plc::policy::pin::{Gate, Pins};
-use helmsman_plc::policy::{FLOOR, Role};
+use helmsman_plc::policy::{FLOOR, Policy, Role};
 use helmsman_plc::project::build::{self, Shape};
 use helmsman_plc::project::{self, Files, Projects};
 use helmsman_plc::record::{RecordConfig, Recorder};
@@ -159,8 +159,12 @@ struct Bench {
 }
 
 impl Bench {
-    #[allow(clippy::too_many_lines)]
     fn new() -> Self {
+        Self::with_policy(FLOOR)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn with_policy(policy: Policy) -> Self {
         let d = defaults();
         let md = ModuleDir::from_text(Path::new("conveyor"), MANIFEST, SOURCE.into(), &d).unwrap();
         let sizes = ImageSizes {
@@ -203,11 +207,11 @@ impl Bench {
         let now: helmsman_plc::policy::pin::Clock =
             Arc::new(move || t0 + Duration::from_secs(c.load(Ordering::SeqCst)));
         let approval = Approval {
-            policy: FLOOR,
-            gate: Gate::new(Pins::default(), FLOOR.lockout, Arc::clone(&now)).with_logins(Logins::new(
+            policy,
+            gate: Gate::new(Pins::default(), policy.lockout, Arc::clone(&now)).with_logins(Logins::new(
                 state.clone(),
                 1,
-                FLOOR.lockout,
+                policy.lockout,
                 now,
             )),
             plant: Plant {
@@ -2431,4 +2435,191 @@ fn every_save_is_a_revision_an_engineer_can_read_and_restore() {
         json!({ "text": "x", "pages": "no" }).to_string().as_bytes(),
     );
     assert_eq!(r.status, 400, "{r:?}");
+}
+
+fn control(addr: SocketAddr, s: Option<&str>, module: &str, op: &str) -> Resp {
+    send(
+        addr,
+        "POST",
+        &format!("/api/modules/{module}/{op}"),
+        s,
+        "application/json",
+        b"{}",
+    )
+}
+
+impl Bench {
+    fn conveyor(&self) -> Json {
+        get(self.addr, "/api/modules/conveyor").json()
+    }
+
+    fn state(&self) -> String {
+        self.conveyor()["status"]["state"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string()
+    }
+}
+
+#[test]
+fn an_engineer_stops_runs_and_restarts_a_module_and_each_is_audited() {
+    let b = Bench::new();
+    let a = b.alice();
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+
+    let r = control(b.addr, Some(&a), "conveyor", "stop");
+    assert_eq!(r.status, 200, "{r:?}");
+    let j = r.json();
+    assert_eq!(j["status"]["state"], "stopped", "{j}");
+    assert_eq!(j["status"]["stopped_by"], "alice (engineer)", "{j}");
+    assert_eq!(
+        b.cmd("lamp"),
+        Some(Value::Bool(false)),
+        "safe at once, before the reply"
+    );
+    b.holds(30, "the lamp held at its safe value", || {
+        b.cmd("lamp") == Some(Value::Bool(false))
+    });
+    wait("reads say stopped", || b.state() == "stopped");
+    let m = b.conveyor();
+    assert_eq!(m["status"]["stopped_by"], "alice (engineer)", "{m}");
+    assert!(m["status"]["stopped_at"].as_u64().is_some(), "{m}");
+    let scans = m["stats"]["scans"].as_u64().unwrap();
+    b.holds(20, "not scanned while stopped", || {
+        b.conveyor()["stats"]["scans"].as_u64() == Some(scans)
+    });
+    let listed = get(b.addr, "/api/modules").json();
+    assert_eq!(listed[0]["status"]["state"], "stopped", "{listed}");
+
+    let r = control(b.addr, Some(&a), "conveyor", "run");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["status"]["state"], "running");
+    wait("the lamp on again", || b.cmd("lamp") == Some(Value::Bool(true)));
+    wait("reads say running", || b.state() == "running");
+    assert!(b.conveyor()["status"].get("stopped_by").is_none());
+
+    let carol = b.login("carol", CAROL);
+    let r = control(b.addr, Some(&carol), "conveyor", "restart");
+    assert_eq!(r.status, 200, "an integrator may too: {r:?}");
+    wait("running after the restart", || b.state() == "running");
+    wait("the lamp on after the restart", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
+
+    assert!(b.audited("module conveyor stopped"));
+    assert!(b.audited("module conveyor run"));
+    assert!(b.audited("module conveyor restarted"));
+}
+
+#[test]
+fn stopping_a_module_needs_an_engineer_session() {
+    let b = Bench::new();
+    let bob = b.login("bob", BOB);
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+    for op in ["stop", "run", "restart"] {
+        let r = control(b.addr, None, "conveyor", op);
+        assert_eq!(r.status, 401, "{op}: {r:?}");
+        let r = control(b.addr, Some(TOKEN), "conveyor", op);
+        assert_eq!(r.status, 403, "the box token does not {op}: {r:?}");
+        let r = control(b.addr, Some(&bob), "conveyor", op);
+        assert_eq!(r.status, 403, "an operator does not {op}: {r:?}");
+        let r = control(b.addr, Some("not-a-session"), "conveyor", op);
+        assert_eq!(r.status, 401, "a made-up bearer: {r:?}");
+    }
+    b.holds(20, "the lamp stays on", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
+    assert_eq!(b.state(), "running");
+    assert!(b.audited("module control: stop refused, role below engineer"));
+    assert!(b.audited("module control: stop refused, no session"));
+}
+
+#[test]
+fn unknown_modules_and_controls_change_nothing_and_cannot_inject_the_audit() {
+    let b = Bench::new();
+    let a = b.alice();
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+    for (module, op, status) in [
+        ("nope", "stop", 404),
+        ("Conveyor", "stop", 404),
+        ("conveyor", "pause", 404),
+        ("conveyor", "STOP", 404),
+        ("conveyor%0Amodule%20conveyor%20stopped", "stop", 404),
+        ("..%2Fconveyor", "stop", 404),
+        ("%00", "stop", 404),
+    ] {
+        let r = control(b.addr, Some(&a), module, op);
+        assert_eq!(r.status, status, "{module}/{op}: {r:?}");
+    }
+    // A read of it is no route (reads 404 what they do not serve), never a stop.
+    let r = send(
+        b.addr,
+        "GET",
+        "/api/modules/conveyor/stop",
+        Some(&a),
+        "application/json",
+        b"",
+    );
+    assert_eq!(r.status, 404, "{r:?}");
+    let r = send(
+        b.addr,
+        "DELETE",
+        "/api/modules/conveyor/stop",
+        Some(&a),
+        "application/json",
+        b"",
+    );
+    assert_eq!(r.status, 405, "{r:?}");
+    b.holds(20, "the lamp stays on", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
+    let log = get(b.addr, "/api/audit?limit=1000").json();
+    for e in log.as_array().unwrap() {
+        let d = e["detail"].as_str().unwrap_or_default();
+        assert!(!d.contains('\n'), "a newline reached the audit: {d:?}");
+        assert!(!d.ends_with("module conveyor stopped"), "an injected line: {d:?}");
+    }
+}
+
+#[test]
+fn a_stricter_policy_asks_its_output_affecting_role() {
+    let policy = Policy::parse("helmsman-policy 1\noutput-affecting integrator replay=yes\n").unwrap();
+    let b = Bench::with_policy(policy);
+    let a = b.alice();
+    let r = control(b.addr, Some(&a), "conveyor", "stop");
+    assert_eq!(r.status, 403, "an engineer is not enough here: {r:?}");
+    assert!(
+        r.json()["error"].as_str().unwrap().contains("integrator"),
+        "{r:?}"
+    );
+    assert_eq!(b.state(), "running");
+    let carol = b.login("carol", CAROL);
+    let r = control(b.addr, Some(&carol), "conveyor", "stop");
+    assert_eq!(r.status, 200, "{r:?}");
+    wait("stopped", || b.state() == "stopped");
+}
+
+#[test]
+fn a_deploy_keeps_a_stopped_module_stopped() {
+    let b = Bench::new();
+    let a = b.alice();
+    wait("the lamp on", || b.cmd("lamp") == Some(Value::Bool(true)));
+    let r = control(b.addr, Some(&a), "conveyor", "stop");
+    assert_eq!(r.status, 200, "{r:?}");
+    b.project(
+        &a,
+        "p",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
+    );
+    let r = b.deploy(&a, "p");
+    assert_eq!(r.status, 200, "{r:?}");
+    b.holds(30, "still stopped after the deploy, the lamp safe", || {
+        b.cmd("lamp") == Some(Value::Bool(false))
+    });
+    wait("reads say stopped", || b.state() == "stopped");
+    let r = control(b.addr, Some(&a), "conveyor", "run");
+    assert_eq!(r.status, 200, "{r:?}");
+    wait("the new program drives the lamp", || {
+        b.cmd("lamp") == Some(Value::Bool(true))
+    });
 }

@@ -12,6 +12,7 @@ use std::time::Duration;
 use helmsman_iec::{ImageSizes, Value as St, compile};
 use helmsman_io::{Binding, Dir, IoMap, Signal, Ty, Value};
 use helmsman_plc::{ConfigError, Module, Runtime, SignalTable, Status, Window};
+use proptest::prelude::*;
 
 fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
@@ -99,7 +100,7 @@ fn run_resumes_on_the_modules_phase_with_its_state_and_counts_no_overruns() {
 }
 
 #[test]
-fn restart_is_cold_and_scans_at_the_next_tick() {
+fn restart_is_cold_and_scans_at_its_next_deadline() {
     let mut rt = two();
     for at in [0, 10, 20] {
         tick(&mut rt, at);
@@ -108,10 +109,13 @@ fn restart_is_cold_and_scans_at_the_next_tick() {
     rt.restart("a").unwrap();
     assert_eq!(rt.status("a"), Some(Status::Running));
     assert_eq!(count(&rt, "a"), 0, "initial values");
-    tick(&mut rt, 21);
-    assert_eq!(count(&rt, "a"), 1, "due at once after a restart");
+    tick(&mut rt, 25);
+    assert_eq!(count(&rt, "a"), 0, "not before its next deadline");
+    tick(&mut rt, 30);
+    assert_eq!(count(&rt, "a"), 1, "scans at its next deadline");
     assert_eq!(rt.outputs()[0], 1);
-    assert_eq!(count(&rt, "b"), 3, "b untouched");
+    assert_eq!(rt.stats("a").unwrap().overruns, 0, "a restart is not an overrun");
+    assert_eq!(count(&rt, "b"), 4, "b untouched");
 }
 
 #[test]
@@ -240,14 +244,14 @@ END_PROGRAM";
     let mut rt =
         Runtime::with_signals(0, 0, vec![module("drive", src, 10, Window::new(0, 0))], &table).unwrap();
     let (brake, lamp) = (table.index("brake").unwrap(), table.index("lamp").unwrap());
-    assert!(rt.tick_with(ms(0), &[], &mut table).is_empty());
+    assert_eq!(rt.tick_with(ms(0), &[], &mut table), Vec::new());
     assert_eq!(table.command(brake), Some(Value::Bool(false)));
     assert_eq!(table.command(lamp), Some(Value::Bool(true)));
 
     rt.stop("drive", &mut table).unwrap();
     assert_eq!(table.command(brake), Some(Value::Bool(true)), "declared safe");
     assert_eq!(table.command(lamp), Some(Value::Bool(false)), "default safe");
-    assert!(rt.tick_with(ms(10), &[], &mut table).is_empty());
+    assert_eq!(rt.tick_with(ms(10), &[], &mut table), Vec::new());
     assert_eq!(
         table.command(brake),
         Some(Value::Bool(true)),
@@ -255,6 +259,77 @@ END_PROGRAM";
     );
 
     rt.run("drive").unwrap();
-    assert!(rt.tick_with(ms(20), &[], &mut table).is_empty());
+    assert_eq!(rt.tick_with(ms(20), &[], &mut table), Vec::new());
     assert_eq!(table.command(brake), Some(Value::Bool(false)), "driven again");
+}
+
+/// Writes its tag to its output byte every scan and counts its scans.
+fn tagged(tag: u8) -> String {
+    format!(
+        "PROGRAM t{tag}
+VAR n : USINT; o AT %QB0 : USINT; END_VAR
+  n := n + 1;
+  o := {tag};
+END_PROGRAM"
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Op {
+    Tick,
+    Stop(usize),
+    Run(usize),
+    Restart(usize),
+}
+
+fn op() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        3 => Just(Op::Tick),
+        1 => (0usize..4).prop_map(Op::Stop),
+        1 => (0usize..4).prop_map(Op::Run),
+        1 => (0usize..4).prop_map(Op::Restart),
+    ]
+}
+
+proptest! {
+    /// Any mix of stops, runs, restarts and ticks across four modules: a
+    /// stopped module's byte is zero and it is never scanned; every other
+    /// module's byte is its tag once it has scanned; no stop ever counts
+    /// as an overrun.
+    #[test]
+    fn stops_runs_and_restarts_in_any_order_hold_the_invariants(ops in proptest::collection::vec(op(), 1..60)) {
+        let modules: Vec<Module> = (0..4u8)
+            .map(|n| module(&format!("m{n}"), &tagged(n + 1), 10, Window::new(usize::from(n), 1)))
+            .collect();
+        let mut rt = Runtime::new(0, 4, modules).unwrap();
+        let mut t = SignalTable::default();
+        let mut now = 0u64;
+        prop_assert!(rt.tick(ms(now), &[]).is_empty());
+        for op in ops {
+            let before: Vec<u64> = (0..4).map(|n| rt.stats(&format!("m{n}")).unwrap().scans).collect();
+            match op {
+                Op::Tick => {
+                    now += 10;
+                    prop_assert!(rt.tick(ms(now), &[]).is_empty());
+                }
+                Op::Stop(n) => rt.stop(&format!("m{n}"), &mut t).unwrap(),
+                Op::Run(n) => rt.run(&format!("m{n}")).unwrap(),
+                Op::Restart(n) => rt.restart(&format!("m{n}")).unwrap(),
+            }
+            for n in 0..4u8 {
+                let name = format!("m{n}");
+                let stats = rt.stats(&name).unwrap();
+                let byte = rt.outputs()[usize::from(n)];
+                match rt.status(&name).unwrap() {
+                    Status::Stopped => {
+                        prop_assert_eq!(byte, 0, "{} stopped", name);
+                        prop_assert_eq!(stats.scans, before[usize::from(n)], "{} scanned while stopped", name);
+                    }
+                    Status::Running => prop_assert!(byte == 0 || byte == n + 1, "{} wrote {}", name, byte),
+                    other => prop_assert!(false, "{} is {:?}", name, other),
+                }
+                prop_assert_eq!(stats.overruns, 0, "{}", name);
+            }
+        }
+    }
 }

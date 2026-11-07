@@ -663,12 +663,13 @@ impl Runtime {
 
     /// A cold restart of `name` (an engineer's Restart): every variable at
     /// its initial value, `%M` zero, a fault cleared, a stop ended, and due
-    /// at the next tick. Its outputs hold what they hold until that scan.
+    /// at its next deadline on its own phase, so a restart is never counted
+    /// as an overrun. Its outputs hold what they hold until that scan.
     ///
     /// # Errors
     /// [`ConfigError::UnknownModule`]: nothing changed.
     pub fn restart(&mut self, name: &str) -> Result<(), ConfigError> {
-        let last = self.last.unwrap_or(Duration::ZERO);
+        let last = self.last;
         let k = self
             .slots
             .iter()
@@ -681,7 +682,9 @@ impl Runtime {
         image.q.copy_from_slice(&self.outputs[q.start..][..q.len]);
         s.image = image;
         s.status = Status::Running;
-        s.next = last;
+        if let Some(last) = last {
+            s.next = resumed(s.next, last, s.module.period);
+        }
         Ok(())
     }
 
@@ -949,7 +952,8 @@ fn resumed(next: Duration, last: Duration, period: Duration) -> Duration {
     }
     let rem = u64::try_from(last.saturating_sub(next).as_nanos() % period.as_nanos())
         .expect("remainder below a 24 h period");
-    last.saturating_add(period).saturating_sub(Duration::from_nanos(rem))
+    last.saturating_add(period)
+        .saturating_sub(Duration::from_nanos(rem))
 }
 
 fn make_safe(s: &Slot, table: &mut SignalTable) {

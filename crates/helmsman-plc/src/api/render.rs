@@ -150,12 +150,17 @@ pub fn outputs(c: &Catalog, view: &View) -> Json {
 }
 
 fn status(live: Option<&ModuleLive>) -> Json {
-    match live.map(|l| l.status) {
-        None => json!({ "state": "starting" }),
-        Some(Status::Running) => json!({ "state": "running" }),
-        Some(Status::Held) => json!({ "state": "held" }),
-        Some(Status::Stopped) => json!({ "state": "stopped" }),
-        Some(Status::Faulted(f)) => json!({ "state": "faulted", "fault": fault(f) }),
+    live.map_or_else(|| json!({ "state": "starting" }), |l| state(l.status))
+}
+
+/// A module's `status` object: `state`, and `fault` when it faulted.
+#[must_use]
+pub fn state(s: Status) -> Json {
+    match s {
+        Status::Running => json!({ "state": "running" }),
+        Status::Held => json!({ "state": "held" }),
+        Status::Stopped => json!({ "state": "stopped" }),
+        Status::Faulted(f) => json!({ "state": "faulted", "fault": fault(f) }),
     }
 }
 
