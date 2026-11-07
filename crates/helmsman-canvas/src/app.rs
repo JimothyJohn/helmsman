@@ -17,6 +17,7 @@ use crate::projects::Workspace;
 use crate::review_view::ReviewView;
 use crate::st_view::TAP;
 use crate::st_view::brand::{BLACK, GRAPHITE, YELLOW};
+use crate::stamp;
 use crate::theme::{self, theme};
 use crate::tips::Tip;
 
@@ -350,7 +351,8 @@ impl App {
                 "No box answered at this address: simulating in this browser (⋯ › Back to this box).".into(),
             );
         }
-        let header = self.header(ui);
+        let mut header = self.header(ui);
+        header.extend(self.build_banner(ui));
         self.chrome.hits.clear();
         match (self.screen, self.source) {
             (Screen::Proposals, _) => {
@@ -694,6 +696,52 @@ impl App {
         hits
     }
 
+    /// Card build-match: a strip under the header, on every screen, when
+    /// the box answers as a different build from this page (a page left
+    /// open over an update, or a `--ui` built from another release).
+    /// Nothing to compare ([`stamp::differs`]) shows nothing.
+    fn build_banner(&self, ui: &mut egui::Ui) -> Vec<(String, Rect)> {
+        let mut hits = Vec::new();
+        let theirs = match (&self.source, &self.boxv) {
+            (Source::Box, Some(b)) => b.state.build.as_deref(),
+            _ => None,
+        };
+        let Some(theirs) = theirs.filter(|t| stamp::differs(stamp::CANVAS, Some(t))) else {
+            return hits;
+        };
+        let frame = egui::Frame::new()
+            .fill(YELLOW)
+            .inner_margin(egui::Margin::symmetric(8, 4));
+        let panel = egui::Panel::top("build-match").frame(frame).show(ui, |ui| {
+            // Wrapped, so a narrow window grows the strip's height and
+            // never a panel's width.
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    RichText::new(
+                        "This editor is from a different release than the controller. \
+                         Reload the page to get the controller's own.",
+                    )
+                    .color(BLACK),
+                )
+                .tip(format!(
+                    "This page is build {}; the controller is build {theirs}. A page left open \
+                     over an update keeps the old editor until it reloads.",
+                    stamp::CANVAS
+                ));
+                let r = ui
+                    .add(egui::Button::new(RichText::new("Reload").strong()))
+                    .tip("Reloads this page from the controller.");
+                hits.push(("reload".to_string(), r.rect));
+                if r.clicked() {
+                    #[cfg(target_arch = "wasm32")]
+                    crate::web::reload();
+                }
+            });
+        });
+        hits.push(("build banner".to_string(), panel.response.rect));
+        hits
+    }
+
     /// Editor | Monitor as one two-way toggle: the active side filled.
     fn screen_toggle(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
         let half = Vec2::new(TAP * 1.6, TAP * 0.62);
@@ -934,7 +982,7 @@ impl App {
                 ui.label(format!(
                     "Version {} (build {})",
                     env!("CARGO_PKG_VERSION"),
-                    env!("HELMSMAN_GIT_SHA")
+                    stamp::CANVAS
                 ));
                 ui.label("Early release. Licensed under the Apache License, Version 2.0.");
                 // The box's HTTPS certificate, to compare with the

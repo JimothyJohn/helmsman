@@ -208,6 +208,11 @@ fn the_box_serves_the_canvas_beside_the_api() {
         assert_eq!(r.header("X-Content-Type-Options"), Some("nosniff"));
         assert_eq!(r.header("X-Frame-Options"), Some("DENY"));
         assert_eq!(
+            r.header(helmsman_plc::BUILD_HEADER),
+            Some(helmsman_plc::BUILD),
+            "the page names the box's build too"
+        );
+        assert_eq!(
             r.header("Access-Control-Allow-Origin"),
             None,
             "same origin, no CORS"
