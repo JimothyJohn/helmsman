@@ -1235,7 +1235,12 @@ threads, the Modbus simulator over TCP).
 
 The editor's projects (docs/UI.md "Projects", build step 2):
 `helmsman_plc::project` (folders, rules, `build`, `zip`) and
-`api/projects.rs` (routes); contract in `tests/projects.rs`.
+`api/projects.rs` (routes); contract in `tests/projects.rs`. Every
+release opens every older project: `tests/project_compat.rs` lays down
+one frozen project per release (`tests/fixtures/projects/<release>/`,
+the first `unreleased-20261107`) and opens, builds, scans and tests it
+on the current build; a construct the build no longer accepts is a
+listed problem on its file and line, and the project still opens.
 `helmsman-plc --projects` turns it on: projects live in
 `<state-dir>/projects/<name>/` (`/var/lib/helmsman-plc/projects/` on a
 Pi), the store defaults to `<state-dir>/store/`, and the box boots the
