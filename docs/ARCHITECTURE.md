@@ -812,6 +812,36 @@ signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
 - **The tab** draws up to six pins as steps over the box's window,
   extended by each values event (`at_ms`), the last value held to now.
 
+## The desk (`desk-on-box`, built)
+
+What a person had in front of them on the box's page (the open project
+and file, unsaved edits with the box version each was made against, the
+Agent's and the Requirements' inputs, the screen, the sign-in name, never
+a password or PIN): `crates/helmsman-canvas/src/desk.rs` keeps it in the
+browser (`localStorage`, at most 1 MiB, written at most once a second when
+it changed) and, signed in, on the box per person (`OnBox`), so it follows
+the person between screens.
+
+- **On the box** (`api/desk.rs`): `GET /api/desk` answers the session's
+  own desk (`{owner, desk}`, `desk` null when there is none; 401 signed
+  out) and `PUT /api/desk` sets it (a login session; the box token is no
+  one, 400). The owner is the session's, as for the trend pins (an
+  account, or the role for a role-PIN session); neither route takes one
+  from the request. The body is read into the desk's own fields and
+  written back from them, so anything else in it is dropped. At most
+  512 KiB (413 past it), 64 people (507 for a new one past that, rather
+  than dropping someone's unsaved work); every PUT is audited. Kept in
+  the state directory's `desks/` (0700, one file per owner named by the
+  owner in hex, written atomically, read under the same bound).
+- **Newer wins.** The desk carries `saved_at`, when its work (the edits
+  and the inputs) last changed, never moving back. On sign-in the page
+  asks for the box's desk before sending any, and takes it when it is
+  newer than its own (the project opens again with its file and edits,
+  as after a reload); otherwise its own goes to the box. The box refuses
+  a desk older than the one it holds (409), and the page then reads the
+  newer one. A role change on the same account keeps the desk; signed
+  out, or with the box not answering, the browser's is the desk.
+
 ## Snapshots (`snapshots`, built)
 
 `helmsman_plc::store` (`store.rs`; contract in `tests/store.rs`) keeps
@@ -1024,6 +1054,16 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   are cached a year (`immutable`), everything else revalidates
   (`no-cache`); HTML carries a CSP of `'self'`, `'wasm-unsafe-eval'` and its
   own inline scripts by SHA-256.
+- **Build match** (`build-match`): the box and the canvas are built
+  separately, so both carry a stamp, `HELMSMAN_BUILD`, baked in by
+  `crates/build_stamp.rs` (the build scripts of helmsman-plc and
+  helmsman-canvas `include!` it): `git describe --always --abbrev=9`,
+  `HELMSMAN_BUILD` from the environment if set, "unknown" without either.
+  Every reply, files and event streams too, carries the box's as
+  `X-Helmsman-Build`; the canvas reads it off its fetches (the device poll
+  every 5 s, so a box restarted on a new build is heard within that) and
+  shows a banner under the header when the two are known and differ
+  (`stamp::differs`; "unknown" on either side is no mismatch).
 
 ## Approval policy (`approval-policy`, built)
 

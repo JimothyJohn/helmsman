@@ -1148,6 +1148,7 @@ fn start_api(
         drivers: Some(helmsman_plc::driver_dir::DriverDir::in_state_dir(&dir)),
         running_drivers,
         trend_pins: Some(dir.join("trend-pins")),
+        desks: Some(dir.join("desks")),
         discovery: api::discover::Discovery::lan(match o.devices_index.as_deref() {
             Some("off") => None,
             Some(url) => Some(url.to_string()),

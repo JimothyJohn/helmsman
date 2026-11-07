@@ -393,7 +393,7 @@ pub(super) fn get(req: &Request, ctx: &Ctx, rest: &[&str]) -> Response {
 }
 
 /// Who pins: a person (an account) or, for a role-PIN session, the role.
-fn owner_of(p: &crate::policy::account::Principal) -> String {
+pub(super) fn owner_of(p: &crate::policy::account::Principal) -> String {
     match p.person() {
         Some(u) => format!("user:{u}"),
         None => format!("role:{}", p.role.as_str()),
@@ -401,7 +401,7 @@ fn owner_of(p: &crate::policy::account::Principal) -> String {
 }
 
 /// The session a `GET` sent (cookie or bearer), as an owner.
-fn owner(req: &Request, ctx: &Ctx) -> Option<String> {
+pub(super) fn owner(req: &Request, ctx: &Ctx) -> Option<String> {
     let token = if req.authorization {
         req.bearer.as_deref()
     } else {

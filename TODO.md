@@ -212,14 +212,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: rusty-bump
 
-- [ ] **Persistence 2: the desk on the box, per person** — slice 1 (#276, crates/helmsman-canvas/src/desk.rs) keeps the box page's desk in this browser: open project and file, unsaved edits with the box version they were made against, Agent and Requirements inputs, screen, sign-in name. Nick's interview (2026-11-07): kept on the box per person when signed in, browser as the fallback, so it follows him between the Studio and the Air. Add `GET`/`PUT /api/desk` behind `box` (per account, or per role for a PIN session, as /api/trends/pins does in box_trend.rs and its box side), size-capped and audited like the pins; the canvas reads it on sign-in, prefers the newer of box and browser (a `saved_at` in the desk), and writes it through the same Keeper throttle. Negative tests: another person's desk is never readable (IDOR), no password or PIN is ever stored, oversized bodies refused, signed out falls back to the browser.
-  result: a draft started on the Studio is there on the Air after signing in; a role switch keeps the same desk
-  est: 1d
-  difficulty: med
-  id: desk-on-box
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Persistence 3: the Agent conversation and the device form survive a reload** — still lost on reload after #276: the Agent transcript (`BoxAgent.turns`, box_agent.rs; Turn/Item/End need serde, MAX_TURNS 50, the box has no transcript GET today, so keep the rendered turns in the desk, capped) and the half-filled device form (`DevicesUi.adding: NewDevice`, devices.rs:210, with its points; drop the EDS bytes, keep a reference). Restore both through the desk (browser now, the box once desk-on-box lands). Tests: a reload mid-conversation shows the same turns and a pending proposal link; a half-filled form comes back; a proposal already decided shows as decided, not re-offered.
   result: nothing typed or read in the Agent tab or the device form is lost to a refresh
   est: 1d
@@ -287,14 +279,6 @@ The gaps in FEEDBACK.md's design table, each checked against the code at dev 997
   est: 1d
   difficulty: med
   id: modbus-shared-connection
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **The canvas and the box say if they are different builds** — the box serves the canvas from `--ui DIR`, built separately; nothing checks they match. That is the one place Helmsman could grow the "project only opens in version X" problem every vendor has. Stamp both with the git describe at build time, return it in an API header, and show a plain banner in the canvas on a mismatch ("this editor is from a different release than the controller; reload").
-  result: a stale canvas after an update is visible at once
-  est: 2h
-  difficulty: low
-  id: build-match
   asked: 2026-11-07
   by: claude-session
 

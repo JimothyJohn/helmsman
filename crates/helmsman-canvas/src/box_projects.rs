@@ -107,6 +107,10 @@ pub enum PCall {
     SavePins,
     /// The pins' history.
     Trend,
+    /// The signed-in person's desk on the box (`crate::desk::OnBox`), read.
+    Desk,
+    /// ... and saved.
+    SaveDesk,
     /// The running project's shared diagram layout, read.
     Layout(String),
     /// ... and saved.
@@ -466,8 +470,20 @@ impl BoxProjects {
     /// `desk`: the open project's edits as they stand, and any restored
     /// edit not yet put back (another project's, or a file not read yet).
     pub fn to_desk(&self, desk: &mut crate::desk::Desk) {
-        desk.project = self.open.as_ref().map(|o| o.name.clone());
-        desk.file = self.open.as_ref().and_then(|o| o.current.clone());
+        // Until the box's answers put them back, the restored project and
+        // file stand.
+        desk.project = self
+            .open
+            .as_ref()
+            .map(|o| o.name.clone())
+            .or_else(|| self.restore.project.clone());
+        desk.file = self.open.as_ref().and_then(|o| o.current.clone()).or_else(|| {
+            self.restore
+                .file
+                .as_ref()
+                .filter(|(p, _)| desk.project.as_ref() == Some(p))
+                .map(|(_, f)| f.clone())
+        });
         desk.drafts = self.restore.drafts.clone();
         if let Some(o) = &self.open {
             let mine = desk.drafts.entry(o.name.clone()).or_default();
@@ -486,6 +502,19 @@ impl BoxProjects {
             }
         }
         desk.drafts.retain(|_, m| !m.is_empty());
+    }
+
+    /// Puts `restore` (a newer desk, the box's) in front of the person:
+    /// its project opens again, with its file and edits, as after a
+    /// reload. What was open here goes; the newer desk wins.
+    pub fn adopt(&mut self, restore: Restore) {
+        let reopen = restore.project.is_some();
+        self.restore = restore;
+        if reopen {
+            self.open = None;
+            self.conflict = None;
+            self.relist();
+        }
     }
 
     /// Asks for project `name`'s revisions (the Files tab's History row).
@@ -1398,7 +1427,12 @@ impl BoxProjects {
             }
             // The Trend tab's (`box_trend.rs`) and the Devices tab's scan
             // (`box_view.rs`).
-            PCall::TrendPins | PCall::SavePins | PCall::Trend | PCall::Discover => {}
+            PCall::TrendPins
+            | PCall::SavePins
+            | PCall::Trend
+            | PCall::Discover
+            | PCall::Desk
+            | PCall::SaveDesk => {}
             PCall::Layout(p) => {
                 if self.running.as_deref() != Some(p.as_str()) {
                     return;
