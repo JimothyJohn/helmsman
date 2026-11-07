@@ -82,6 +82,8 @@ pub struct BoxView {
     pub adding: Option<crate::requirements::Adding>,
     /// Keeps what is in front of the person in this browser (`crate::desk`).
     desk: crate::desk::Keeper,
+    /// Keeps it on the box too, for whoever is signed in.
+    pub on_box: crate::desk::OnBox,
     /// The desk as it was before the page loaded, for the App to take
     /// the screen and the sign-in name from (once).
     pub restored: Option<crate::desk::Desk>,
@@ -129,6 +131,15 @@ impl Default for BoxView {
     }
 }
 
+/// What the projects put back from `d`: its project, file and edits.
+fn restore_of(d: &crate::desk::Desk) -> crate::box_projects::Restore {
+    crate::box_projects::Restore {
+        project: d.project.clone(),
+        file: d.project.clone().zip(d.file.clone()),
+        drafts: d.drafts.clone(),
+    }
+}
+
 /// Whether `s` may edit, save, deploy and force: an engineer or above.
 pub fn is_engineer(s: Option<&Session>) -> Result<(), String> {
     match s {
@@ -166,17 +177,26 @@ impl BoxView {
     pub fn with_desk(mut self, store: Box<dyn Storage>) -> Self {
         let (keeper, d) = crate::desk::Keeper::load(store);
         self.desk = keeper;
-        self.projects.restore = crate::box_projects::Restore {
-            project: d.project.clone(),
-            file: d.project.clone().zip(d.file.clone()),
-            drafts: d.drafts.clone(),
-        };
+        self.projects.restore = restore_of(&d);
+        self.put_back(d);
+        self
+    }
+
+    /// The inputs, the screen and the sign-in name from `d`.
+    fn put_back(&mut self, d: crate::desk::Desk) {
         self.instruct.draft.clone_from(&d.agent);
         self.req_ui.draft.clone_from(&d.requirement);
         self.desk_screen.clone_from(&d.screen);
         self.desk_user.clone_from(&d.user);
         self.restored = Some(d);
-        self
+    }
+
+    /// Puts the box's desk, newer than the one in front of the person, in
+    /// its place (the person signed in on another screen since).
+    fn adopt(&mut self, d: crate::desk::Desk) {
+        self.desk.adopt(&d);
+        self.projects.adopt(restore_of(&d));
+        self.put_back(d);
     }
 
     /// What the desk keeps, as it stands now.
@@ -236,6 +256,7 @@ impl BoxView {
             req_ui: crate::requirements::ReqUi::default(),
             adding: None,
             desk: crate::desk::Keeper::load(Box::new(crate::sim_projects::MemStorage::default())).0,
+            on_box: crate::desk::OnBox::default(),
             restored: None,
             desk_screen: None,
             desk_user: String::new(),
@@ -265,6 +286,11 @@ impl BoxView {
         for (call, a) in answers {
             match call {
                 PCall::TrendPins | PCall::SavePins | PCall::Trend => self.trend.answer(&call, &a, now),
+                PCall::Desk | PCall::SaveDesk => {
+                    if let Some(d) = self.on_box.answer(&call, &a, self.desk.saved_at()) {
+                        self.adopt(d);
+                    }
+                }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
                 call => self.projects.answer(call, &a),
             }
@@ -281,10 +307,14 @@ impl BoxView {
         let cmds = self.state.poll(now);
         self.run(ctx, cmds);
         self.trend.step(self.session.as_ref(), &self.state, now);
+        self.on_box.step(self.session.as_ref());
         let desk = self.desk();
-        self.desk.keep(&desk, now);
+        if let Some(d) = self.desk.keep(&desk, now) {
+            self.on_box.keep(&d, now);
+        }
         let mut reqs = self.projects.poll();
         reqs.extend(self.trend.poll());
+        reqs.extend(self.on_box.poll());
         self.send(ctx, reqs);
         self.downloads();
         let mut fresh = false;
@@ -1601,6 +1631,7 @@ impl Body for BoxView {
             || self.projects.deploy != Deploy::Idle
             || self.projects.notice.is_some()
             || self.desk.problem.is_some()
+            || self.on_box.problem.is_some()
     }
 
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -1634,6 +1665,10 @@ impl Body for BoxView {
         if let Some(p) = &self.desk.problem {
             let r = ui.label(RichText::new(format!("⚠ {p}")).color(t.muted));
             chrome.hit("desk problem", r.rect);
+        }
+        if let Some(p) = &self.on_box.problem {
+            let r = ui.label(RichText::new(format!("⚠ {p}")).color(t.muted));
+            chrome.hit("desk on the box problem", r.rect);
         }
         if let Some((text, error)) = self.projects.notice.clone() {
             ui.separator();

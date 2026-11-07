@@ -177,6 +177,10 @@ name = "trend"
 required-features = ["box"]
 
 [[test]]
+name = "desk"
+required-features = ["box"]
+
+[[test]]
 name = "https"
 required-features = ["box", "https"]
 

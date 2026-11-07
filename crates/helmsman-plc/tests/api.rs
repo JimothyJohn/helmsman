@@ -343,6 +343,53 @@ fn module_draft(manifest: &str, source: &str) -> Json {
 
 // ---- reads ----------------------------------------------------------------
 
+/// Card build-match: every reply names the build that answered it (a
+/// read, a miss, a refusal, an event stream), so a canvas from another
+/// build can say so.
+#[test]
+fn every_reply_names_the_build() {
+    assert_ne!(helmsman_plc::BUILD, "");
+    assert!(
+        helmsman_plc::BUILD
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b)),
+        "a stamp a header can carry: {:?}",
+        helmsman_plc::BUILD
+    );
+    let b = Bench::new();
+    let replies = [
+        get(b.addr, "/api"),
+        get(b.addr, "/api/no-such-route"),
+        request(b.addr, "POST", "/api/forces", None, "application/json", "{}"),
+    ];
+    let statuses: Vec<u16> = replies.iter().map(|r| r.status).collect();
+    assert_eq!(statuses[..2], [200, 404], "{replies:?}");
+    assert!(
+        statuses[2] >= 400,
+        "a write without the token is refused: {replies:?}"
+    );
+    for r in &replies {
+        assert_eq!(
+            r.header(helmsman_plc::BUILD_HEADER).as_deref(),
+            Some(helmsman_plc::BUILD),
+            "{r:?}"
+        );
+    }
+
+    let mut s = TcpStream::connect(b.addr).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    s.write_all(b"GET /api/events HTTP/1.1\r\n\r\n").unwrap();
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        s.read_exact(&mut byte).unwrap();
+        head.push(byte[0]);
+    }
+    let head = String::from_utf8(head).unwrap();
+    let line = format!("\r\n{}: {}\r\n", helmsman_plc::BUILD_HEADER, helmsman_plc::BUILD);
+    assert!(head.contains(&line), "{head}");
+}
+
 #[test]
 fn reads_are_open_and_describe_the_box() {
     let b = Bench::new();

@@ -80,6 +80,7 @@ mod sim_projects;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod sim_projects_tests;
 mod st_view;
+mod stamp;
 #[cfg(test)]
 mod test_programs;
 mod theme;
