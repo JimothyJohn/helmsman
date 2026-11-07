@@ -269,7 +269,8 @@ Each menu item prints its key. Reserved, not built (TODO card
   through the box's audited routes (card `monitor-box-run-stop`, Nick
   2026-11-06). A stopped program's tile says STOPPED, "outputs at safe
   values" and who stopped it. For anyone else the Monitor writes
-  nothing.
+  nothing. The Editor's glyph strip carries the same Stop or Run and
+  Restart for every program the box runs; no key does it on a box.
 
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
