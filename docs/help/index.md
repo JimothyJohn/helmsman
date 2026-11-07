@@ -61,5 +61,5 @@ simulation by itself and says so.
   forcing, the Monitor.
 - [The Agent](agent.html): writing and changing programs from a
   description.
-- [Keyboard](keyboard.html) and [Examples and starters](starters.html),
+- [Keyboard](keyboard.html) and [Examples](starters.html),
   generated from the program itself.

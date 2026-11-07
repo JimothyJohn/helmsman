@@ -11,8 +11,8 @@ shows them.
 
 - **New project** and **Copy project** are in the File menu; a right-click
   on the pane's blank space offers New project too, and a right-click on a
-  project offers Copy, Rename and Delete. A copy of an example or a
-  starter is how you begin from one.
+  project offers Copy, Rename and Delete. A copy of an example is how
+  you begin from one.
 - **New file** is the button under the files. A file is Structured Text
   (`.st`), the I/O map, or one of the editor's own. A double click on a
   file opens it on the Code tab.
@@ -111,13 +111,13 @@ give it a name: it becomes a program of your own to change. On a box the
 same list makes the program on the box, its inputs and outputs on the
 box's own channels so it runs with nothing wired.
 
-[Examples and starters](starters.html) lists them, generated from the
+[Examples](starters.html) lists them, generated from the
 program itself.
 
 ## The I/O map
 
 `io.map` binds the program's inputs and outputs to channels: a line per
 signal with its direction, name, type, the device and the channel, and
-for an output its safe value. The starters' maps use the box's own
+for an output its safe value. The examples' maps use the box's own
 channels and say in a comment to check them before deploying to a box
 with anything wired.

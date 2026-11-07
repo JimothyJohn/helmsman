@@ -166,29 +166,29 @@ the label is drawn, the icon stands alone at a readable size.</p>
 <ul>
 <li><strong>The left pane</strong> has three tabs.
 <strong>Files</strong> (<kbd>Alt</kbd> <kbd>0</kbd>): the project's
-files, the examples and starters, and the program tree under them; a
-right-click on a file offers Copy, Paste, Duplicate, Rename and Delete,
-and what you copy pastes into any project you open next.
-<strong>Devices</strong> (<kbd>Alt</kbd> <kbd>4</kbd>): at the top,
-<strong>I/O wiring</strong> links to the project's <code>io.map</code>,
-the file that says which program variable is wired to which device
-point; then the devices it names, each with its points under it, their
-live values, and whether the link is up; a right-click on the blank
-space adds a device (name, protocol, address, settings) as a line of the
-map; Import device… takes the vendor's EDS file, keeps it in the project
-and fills the form in from it. Under the map's devices, <strong>On the
-network</strong>: Scan lists every EtherNet/IP device that answers on
-the LAN, says whether the map already has it, and shows what the public
-device library knows of it (in the simulation, one simulated E1213).
-<strong>Use this device</strong> under one opens the form filled in, the
-device named by its identity so a changed address never loses it; on a
-read-only example it copies the project first. The form has a field for
-each of the protocol's settings, filled in with the usual values and
-checked against the driver's ranges, with the device's io.map line under
-them. Below that are its inputs and outputs: a known device (the ioLogik
-E1213) lists every channel, and the program's inputs and outputs that
-were on the box's own channels are already ticked on the first free
-ones. Tick any other channel and name it, or add rows with
+files, the examples, and the program tree under them; a right-click on a
+file offers Copy, Paste, Duplicate, Rename and Delete, and what you copy
+pastes into any project you open next. <strong>Devices</strong>
+(<kbd>Alt</kbd> <kbd>4</kbd>): at the top, <strong>I/O wiring</strong>
+links to the project's <code>io.map</code>, the file that says which
+program variable is wired to which device point; then the devices it
+names, each with its points under it, their live values, and whether the
+link is up; a right-click on the blank space adds a device (name,
+protocol, address, settings) as a line of the map; Import device… takes
+the vendor's EDS file, keeps it in the project and fills the form in
+from it. Under the map's devices, <strong>On the network</strong>: Scan
+lists every EtherNet/IP device that answers on the LAN, says whether the
+map already has it, and shows what the public device library knows of it
+(in the simulation, one simulated E1213). <strong>Use this
+device</strong> under one opens the form filled in, the device named by
+its identity so a changed address never loses it; on a read-only example
+it copies the project first. The form has a field for each of the
+protocol's settings, filled in with the usual values and checked against
+the driver's ranges, with the device's io.map line under them. Below
+that are its inputs and outputs: a known device (the ioLogik E1213)
+lists every channel, and the program's inputs and outputs that were on
+the box's own channels are already ticked on the first free ones. Tick
+any other channel and name it, or add rows with
 <ul>
 <li>Input and + Output for any other device. For each row, Program picks
 what the program does with it: one of its own variables, a new variable
@@ -230,7 +230,7 @@ href="projects.html#requirement-tests">Requirement tests</a>); and
 <strong>Agent</strong>, where you type what the open file should do and
 it is updated (see <a href="agent.html">The Agent</a>).</li>
 </ul>
-<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
+<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 
 <img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">
 

@@ -16,6 +16,11 @@ questions. Read the architecture note before a change that crosses a crate.
   `make test-interop`) and the ST oracle (`make test-oracle`).
 - The canvas runs natively (`make canvas`) or in the browser
   (`make canvas-web`, then `make canvas-serve`).
+- Some docs are built, and the output is committed: edit
+  `docs/help/*.md`, then `make help-site` (needs pandoc;
+  `make help-site-check` says whether the pages are current); edit
+  `docs/datasheet.html`, then `make datasheet` (needs Chrome or Chromium)
+  for the PDF.
 
 ## The gate
 
@@ -53,8 +58,9 @@ Rules the gate enforces or that cost a day to learn:
 - Branch from `dev`: `git fetch origin && git switch -c <topic> origin/dev`.
 - Open the PR against `dev`. Green required checks are the approval; a PR
   that needs discussion stays a draft.
-- `dev` requires branches to be up to date. Merge `origin/dev` in (no
-  rebase, no force push) before pushing a PR that has been open a while.
+- `dev` does not require a branch to be up to date: a green PR lands as
+  it is, and the push run on `dev` catches a clash. When a PR conflicts,
+  merge `origin/dev` in (no rebase, no force push).
 - Pull requests land one at a time. Two PRs that each pass can break `dev`
   together (a new enum variant against a new exhaustive match merges cleanly
   and does not compile), so overlapping PRs are test-merged on a throwaway

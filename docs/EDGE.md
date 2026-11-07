@@ -535,7 +535,8 @@ Pico, enclosures, a PCB. Any field power from the node.
 - This repo: `crates/helmsman-iec` (`lib.rs`, `interp.rs`, `state.rs`,
   `trace.rs`, `check.rs`, `examples/trace_bench.rs`),
   `crates/helmsman-io/src/{modbus.rs, driver.rs}`,
-  `crates/helmsman-plc/src/runtime.rs`, `crates/helmsman-project/starters/`.
+  `crates/helmsman-plc/src/runtime.rs`, `crates/helmsman-project/starters/`
+  (as of 2026-10-25; the batch mixer now lives in `crates/helmsman-node/bench/`).
 - `core` float method availability: a `#![no_std]` crate calling the
   twelve `f64` methods named above, `cargo check` on rustc 1.99.1
   (2026-10-13), twelve `E0599` errors.
