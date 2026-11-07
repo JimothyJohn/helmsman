@@ -41,3 +41,12 @@ pub use logic::Logic;
 pub use runtime::{ConfigError, MAX_PERIOD, Module, Runtime, Stats, Status, Window};
 pub use signals::{BindError, SignalTable, TableError};
 pub use tap::{Sample, TraceTap};
+
+/// This build's stamp: the checkout's `git describe` when it was built
+/// (`crates/build_stamp.rs`), or "unknown". The API sends it on every reply
+/// as [`BUILD_HEADER`]; the canvas it serves carries its own and says when
+/// the two differ.
+pub const BUILD: &str = env!("HELMSMAN_BUILD");
+
+/// The response header that carries [`BUILD`].
+pub const BUILD_HEADER: &str = "X-Helmsman-Build";
