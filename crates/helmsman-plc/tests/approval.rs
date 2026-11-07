@@ -629,9 +629,9 @@ fn names(j: &Json) -> Vec<String> {
 #[test]
 fn a_proposal_previews_what_it_keeps_resets_and_drops_and_the_audit_says_what_it_did() {
     let b = Bench::new();
-    let (id, d) = b.module(MANIFEST, SOURCE_RETYPED);
-    let state = &d["state"];
-    assert_eq!(state["preview"], true, "{d}");
+    let (id, draft) = b.module(MANIFEST, SOURCE_RETYPED);
+    let state = &draft["state"];
+    assert_eq!(state["preview"], true, "{draft}");
     assert_eq!(state["running"], true, "{state}");
     let m = &state["modules"][0];
     assert_eq!(m["module"], "conveyor", "{state}");
@@ -647,15 +647,18 @@ fn a_proposal_previews_what_it_keeps_resets_and_drops_and_the_audit_says_what_it
         state["summary"],
         "keeps 3 values, resets N (type changed), starts COUNT at the initial value (new)"
     );
-    assert_eq!(get(b.addr, &format!("/api/proposals/{id}")).json()["state"], *state);
+    assert_eq!(
+        get(b.addr, &format!("/api/proposals/{id}")).json()["state"],
+        *state
+    );
 
     // A removed variable is dropped; the unchanged ones count as kept.
     let (_, gone) = b.module(MANIFEST, SOURCE_NO_N);
-    let g = &gone["state"];
-    assert_eq!(names(&g["modules"][0]["dropped"]), ["N"], "{g}");
-    assert_eq!(g["modules"][0]["reset"], json!([]), "{g}");
-    assert_eq!(g["kept"], 3, "{g}");
-    assert_eq!(g["summary"], "keeps 3 values, drops N");
+    let dropped = &gone["state"];
+    assert_eq!(names(&dropped["modules"][0]["dropped"]), ["N"], "{dropped}");
+    assert_eq!(dropped["modules"][0]["reset"], json!([]), "{dropped}");
+    assert_eq!(dropped["kept"], 3, "{dropped}");
+    assert_eq!(dropped["summary"], "keeps 3 values, drops N");
 
     // A param change keeps everything.
     let p = b.param(2.0);
@@ -669,7 +672,10 @@ fn a_proposal_previews_what_it_keeps_resets_and_drops_and_the_audit_says_what_it
     assert_eq!(r.status, 200, "{r:?}");
     let done = &r.json()["state"];
     assert_eq!(done["preview"], false, "{done}");
-    assert_eq!(done["modules"], state["modules"], "the deploy did what the preview said");
+    assert_eq!(
+        done["modules"], state["modules"],
+        "the deploy did what the preview said"
+    );
     assert_eq!(
         get(b.addr, &format!("/api/proposals/{id}")).json()["applied_state"],
         *done
@@ -706,7 +712,10 @@ fn a_new_module_has_nothing_running_to_keep_and_the_running_ones_keep_theirs() {
     assert_eq!(mixer["new"], true, "{state}");
     assert_eq!(state["kept"], 4, "conveyor keeps all of its own: {state}");
     let text = state["summary"].as_str().unwrap();
-    assert!(text.contains("new module mixer: nothing running to keep"), "{text}");
+    assert!(
+        text.contains("new module mixer: nothing running to keep"),
+        "{text}"
+    );
     assert!(text.starts_with("keeps 4 values"), "{text}");
 }
 

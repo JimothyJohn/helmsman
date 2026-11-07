@@ -15,8 +15,8 @@ use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, in_port_at, out_port, o
 use helmsman_diagram::{Diagram, NodeId};
 
 use crate::review::{
-    Answer, Call, Chart, Delta, Drawn, Open, Phase, ROLES, Refusal, Replay, Request, Review, SignalChart,
-    SHOWN, Step, Target, Track, Values, Why,
+    Answer, Call, Chart, Delta, Drawn, Open, Phase, ROLES, Refusal, Replay, Request, Review, SHOWN,
+    SignalChart, Step, Target, Track, Values, Why,
 };
 use crate::st_view::brand::{BLACK, YELLOW};
 use crate::theme::{Theme, theme};
@@ -999,8 +999,13 @@ fn values_rows(ui: &mut egui::Ui, v: &Values, out: &mut Out) {
         }
         more(ui, v.reset.iter().skip(SHOWN).map(|(n, _)| n.as_str()), "reset");
         for name in v.dropped.iter().take(SHOWN) {
-            ui.label(RichText::new(format!("drop {name}")).monospace().strikethrough().color(GONE))
-                .tip("No longer declared: its value is gone after the deploy.");
+            ui.label(
+                RichText::new(format!("drop {name}"))
+                    .monospace()
+                    .strikethrough()
+                    .color(GONE),
+            )
+            .tip("No longer declared: its value is gone after the deploy.");
         }
         more(ui, v.dropped.iter().skip(SHOWN).map(String::as_str), "dropped");
     });

@@ -135,7 +135,7 @@ fn list(names: &[String]) -> String {
 }
 
 /// The plain sentence for a state JSON (as [`describe`] makes it): "keeps
-/// 12 values, resets COUNT (type changed), drops OLD_FLAG". Names are
+/// 12 values, resets `COUNT` (type changed), drops `OLD_FLAG`". Names are
 /// `MODULE.NAME` when more than one module is in the step.
 #[must_use]
 pub fn summary(j: &Json) -> String {

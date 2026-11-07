@@ -32,7 +32,9 @@ use helmsman_plc::store::{ChangeSet, Meta, ModuleFiles, Store};
 use helmsman_plc::{Runtime, SignalTable, Window};
 use serde_json::{Value as Json, json};
 
-use crate::review::{Answer, Call, Delta, Method, Phase, Replay, Request, Review, SHOWN, Target, Values, Why};
+use crate::review::{
+    Answer, Call, Delta, Method, Phase, Replay, Request, Review, SHOWN, Target, Values, Why,
+};
 
 #[test]
 fn explain_rides_the_same_cookie_and_is_refused_without_it() {
@@ -492,7 +494,12 @@ fn the_review_shows_the_box_s_preview_of_what_the_deploy_keeps() {
     settle(&b, &mut r, 0.0);
     r.open(id);
     settle(&b, &mut r, 0.0);
-    let v = r.open.as_ref().unwrap().values().expect("the box sent its preview");
+    let v = r
+        .open
+        .as_ref()
+        .unwrap()
+        .values()
+        .expect("the box sent its preview");
     assert!(v.preview && v.running, "{v:?}");
     assert_eq!(v.kept, 5, "START, SPEED, LAMP, N and the BLINK timer: {v:?}");
     assert_eq!(v.reset, [("HORN".to_string(), "new".to_string())]);
@@ -521,10 +528,16 @@ fn values_name_modules_when_several_and_say_when_nothing_runs() {
     assert_eq!(v.reset, [("a.COUNT".to_string(), "type changed".to_string())]);
     assert_eq!(v.dropped.len(), 40, "all kept; the screen lists {SHOWN}");
     assert_eq!(v.dropped[0], "a.V0");
-    assert!(v.sentence().starts_with("Applied: this deploy keeps 2 values"), "{}", v.sentence());
+    assert!(
+        v.sentence().starts_with("Applied: this deploy keeps 2 values"),
+        "{}",
+        v.sentence()
+    );
 
-    let none = Values::parse(&json!({ "preview": true, "running": false, "kept": 0, "modules": [],
-        "summary": "nothing running to keep: every value starts at its initial value" }))
+    let none = Values::parse(
+        &json!({ "preview": true, "running": false, "kept": 0, "modules": [],
+        "summary": "nothing running to keep: every value starts at its initial value" }),
+    )
     .unwrap();
     assert_eq!(
         none.sentence(),

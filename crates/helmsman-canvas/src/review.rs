@@ -633,7 +633,12 @@ impl Values {
                 let v = name(m, r["name"].as_str().unwrap_or("?"));
                 reset.push((v, r["why"].as_str().unwrap_or("new").to_string()));
             }
-            for d in m["dropped"].as_array().into_iter().flatten().filter_map(Json::as_str) {
+            for d in m["dropped"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Json::as_str)
+            {
                 dropped.push(name(m, d));
             }
         }
@@ -650,7 +655,11 @@ impl Values {
     /// The line the approval screen shows above the button.
     #[must_use]
     pub fn sentence(&self) -> String {
-        let when = if self.preview { "Before you approve" } else { "Applied" };
+        let when = if self.preview {
+            "Before you approve"
+        } else {
+            "Applied"
+        };
         if self.running {
             format!("{when}: this deploy {}.", self.summary)
         } else {

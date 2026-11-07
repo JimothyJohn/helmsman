@@ -42,8 +42,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
-use super::store::Stored;
 use super::carry;
+use super::store::Stored;
 use super::swap::{Plant, Reloaded, SwapHandle, compile_set};
 use super::{Ctx, Note, Request, Response, audit_full, record, wall};
 use crate::driver_dir::Found;
