@@ -42,6 +42,7 @@
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
+//! POST /api/help                          token or session: what went wrong in words; a diagnosis and a Markdown issue with the box's context, redacted (see [`help`])
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
 //! GET  /api/site                          this box and the boxes it heard on the LAN (with --site NAME; see [`crate::site`])
 //! POST /api/dropins?name=N&kind=K         token: a document, a photo or a PDF for the agent, stored in memory (see [`dropin`], [`photo`], [`pdf`])
@@ -111,6 +112,7 @@ pub mod drivers;
 pub mod dropin;
 pub mod explain;
 pub mod forces;
+pub mod help;
 pub mod http;
 pub mod live;
 pub mod login;
@@ -765,6 +767,8 @@ enum Reply {
     Explain(explain::Job),
     /// One requirement: the agent writes its test.
     Requirement(Box<requirements::Job>),
+    /// One help request: a diagnosis and an issue.
+    Help(Box<help::Job>),
     /// A file of the UI.
     File(ui::Asset),
 }
@@ -902,6 +906,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
             }
         }
         Reply::Requirement(job) => requirements::serve(ctx, &mut stream, &job),
+        Reply::Help(job) => help::serve(ctx, &mut stream, &job),
         Reply::File(asset) => {
             let _ = ui::send(&mut stream, asset);
         }
@@ -918,6 +923,7 @@ fn serve(stream: TcpStream, peer: SocketAddr, ctx: &Ctx, accepted: Instant) {
                 | Reply::Chat(_)
                 | Reply::Explain(_)
                 | Reply::Requirement(_)
+                | Reply::Help(_)
                 | Reply::File(_) => Ok(()),
             };
         }
@@ -1020,6 +1026,12 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         && req.segments[1] == "explain"
     {
         return start_explain(req, ctx);
+    }
+    if req.method == "POST" && req.segments == ["api", "help"] {
+        return match help::start(req, ctx) {
+            Ok(job) => Reply::Help(Box::new(job)),
+            Err(r) => Reply::Once(r),
+        };
     }
     if let [api, projects, name, requirements] = req.segments.as_slice()
         && req.method == "POST"
@@ -1348,7 +1360,10 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | ["api", "chat" | "explain" | "bundles" | "login" | "logout"]
+        | [
+            "api",
+            "chat" | "explain" | "help" | "bundles" | "login" | "logout",
+        ]
         | ["api", "devices", "discover"]
         | ["api", "market", "list" | "install"]
         | ["api", "devices", _, "browse"] => Some("POST"),
@@ -1834,6 +1849,7 @@ fn index(agent: bool) -> Json {
             e("GET", "/api/events", false, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
+            e("POST", "/api/help", true, "{question, messages?}: what went wrong, in words (1 to 2000 characters) with the page's recent messages; the box attaches its build, the running project, its devices and their errors, all redacted of secrets. An event stream: help, text, tool_call, tool_result, retrying, issue (a diagnosis and a Markdown issue to copy; nothing is filed), done or error"),
             e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB), a photo (PNG, JPEG, WebP; at most 512 KiB, 8000 px a side) or a PDF (at most 2 MiB, passed to the model unread): stored in memory, 201 with its id"),
             e("GET", "/api/dropins", false, "the drop-ins held: id, name, kind, size, chunks"),
             e("GET", "/api/dropins/{id}?chunk=K", false, "one chunk of a drop-in's text"),
