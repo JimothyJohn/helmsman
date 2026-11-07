@@ -106,7 +106,7 @@ pre .k{color:var(--yellow)}
       <tr><th>EtherNet/IP scanner</th><td>CIP Class 1 exclusive owner and input only · Forward_Open, Large_Forward_Open, Forward_Close · RPI from the device's EDS · ListIdentity, Get_Attribute_Single, Get_Attributes_All, Multiple Service Packet · TCP/UDP 44818, UDP 2222</td></tr>
       <tr><th>EtherNet/IP adapter</th><td>Identity object · input and output assemblies · Forward_Open · cyclic Class 1 I/O · verified against the OpENer reference stack on every change</td></tr>
       <tr><th>Logix tags</th><td>Read Tag (0x4C), Read Tag Fragmented (0x52), symbol browse, backplane routing · CompactLogix, ControlLogix · read only: no write service in the controller build</td></tr>
-      <tr><th>Modbus</th><td>TCP master, port 502 · RTU over a serial port · FC 01, 02, 03, 04, 05, 06, 16 · named I/O map, bit and register points, scaling</td></tr>
+      <tr><th>Modbus</th><td>TCP master, port 502 · RTU over a serial port · FC 01, 02, 03, 04, 05, 06, 16, 43/14 · named I/O map, bit and register points, scaling</td></tr>
       <tr><th>Controller I/O</th><td>Digital inputs and outputs on the header · WebAssembly drivers, sandboxed to their own device's socket</td></tr>
       <tr><th>OPC UA</th><td>Server · opc.tcp, port 4840 · SecurityPolicy None, anonymous · loopback by default, LAN by choice</td></tr>
       <tr><th>Webhooks, trends</th><td>HTTP and HTTPS POST, JSON, on events · trends on the controller: 10 min window, 2 400 points per signal · snapshots with rollback</td></tr>
@@ -131,7 +131,7 @@ pre .k{color:var(--yellow)}
     <table class="tested">
       <tr><td>OpENer reference adapter</td><td><span class="ok">verified</span></td></tr>
       <tr><td>Helmsman's own adapter, same suite</td><td><span class="ok">verified</span></td></tr>
-      <tr><td>Moxa ioLogik E1213, Modbus TCP and EtherNet/IP</td><td><span class="pending">bench pending</span></td></tr>
+      <tr><td>Moxa ioLogik E1213, Modbus TCP and EtherNet/IP</td><td><span class="ok">verified</span></td></tr>
       <tr><td>Rockwell CompactLogix, read without writing</td><td><span class="pending">bench pending</span></td></tr>
     </table>
     <p class="note">Each verified row is a passing test or a capture; the suite runs on every change against an open-source EtherNet/IP device in a container. Ethernet protocols today; others as customers need them.</p>
