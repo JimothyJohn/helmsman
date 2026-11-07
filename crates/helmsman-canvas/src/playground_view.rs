@@ -1544,7 +1544,8 @@ impl Body for PlaygroundView {
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = &self.session.fault {
-            ui.colored_label(RED, format!("Fault: {f}. Run or Step restarts the program."));
+            let text = format!("Fault: {f}. Run or Step restarts the program.");
+            crate::messages::copyable(ui, chrome, "fault", &text, RED);
         }
         if self.session.paused.is_some() {
             let at = self
@@ -1563,8 +1564,12 @@ impl Body for PlaygroundView {
             ui.label(RichText::new(n).color(t.muted));
         }
         if let Some((n, error)) = self.proj.notice.clone() {
-            let r = ui.label(RichText::new(n).color(if error { RED } else { t.muted }));
-            chrome.hit("notice", r.rect);
+            if error {
+                crate::messages::copyable(ui, chrome, "notice", &n, RED);
+            } else {
+                let r = ui.label(RichText::new(n).color(t.muted));
+                chrome.hit("notice", r.rect);
+            }
             if error && self.proj.pending.is_some() {
                 let r = ui
                     .button("Replace")

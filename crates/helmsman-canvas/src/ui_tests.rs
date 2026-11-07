@@ -18,6 +18,8 @@ struct Harness {
     shapes: Vec<egui::epaint::ClippedShape>,
     /// The pointer the last frame asked for.
     cursor: egui::CursorIcon,
+    /// Text the app put on the clipboard, newest last.
+    copied: Vec<String>,
 }
 
 impl Harness {
@@ -29,6 +31,7 @@ impl Harness {
             size: Vec2::new(1400.0, 860.0),
             shapes: Vec::new(),
             cursor: egui::CursorIcon::Default,
+            copied: Vec::new(),
         };
         // Two frames: panels settle their sizes, the view fits the graph.
         h.frame(vec![]);
@@ -50,6 +53,11 @@ impl Harness {
         out.textures_delta.clear();
         self.shapes = out.shapes;
         self.cursor = out.platform_output.cursor_icon;
+        for c in out.platform_output.commands {
+            if let egui::OutputCommand::CopyText(t) = c {
+                self.copied.push(t);
+            }
+        }
     }
 
     /// Every piece of text the last frame drew outside the diagram (which
@@ -258,6 +266,42 @@ mod glyphs_and_help {
         assert_eq!(log.show, [false, true, true], "info filtered out");
         assert_eq!(h.app.chrome.bottom, Bottom::Messages);
         assert!(!h.has("st"), "no Files header row either");
+    }
+
+    /// Nick, 2026-11-07: "I really need to be able to copy and paste
+    /// errors". An error line under the header has a Copy button, the
+    /// Messages tab a Copy all, and both put the whole text on the
+    /// clipboard.
+    #[test]
+    fn errors_copy_to_the_clipboard() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.2);
+        h.app.sim.as_mut().unwrap().session.fault = Some("division by zero at line 7".into());
+        h.wait(0.2);
+        h.press("fault copy");
+        assert_eq!(
+            h.copied.last().map(String::as_str),
+            Some("Fault: division by zero at line 7. Run or Step restarts the program.")
+        );
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .log
+            .error(1.0, "deploy refused: no engineer session");
+        h.press("bottom messages");
+        h.frame(vec![]);
+        h.press("messages copy");
+        let all = h.copied.last().expect("Copy all copied").clone();
+        assert!(
+            all.contains("error   deploy refused: no engineer session"),
+            "{all}"
+        );
+        assert_eq!(
+            all,
+            h.app.sim.as_ref().unwrap().log.text(),
+            "what is shown, as text"
+        );
     }
 
     #[test]

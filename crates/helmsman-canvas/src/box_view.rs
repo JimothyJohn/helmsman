@@ -1556,7 +1556,7 @@ impl Body for BoxView {
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {
-            ui.colored_label(RED, format!("fault: {f}"));
+            crate::messages::copyable(ui, chrome, "fault", &format!("fault: {f}"), RED);
         }
         match &self.projects.deploy {
             Deploy::Idle => {}
@@ -1577,14 +1577,18 @@ impl Body for BoxView {
                 chrome.hit("deployed", r.rect);
             }
             Deploy::Failed(why) => {
-                let r = ui.label(RichText::new(format!("✖ {why}")).color(RED));
-                chrome.hit("deploy failed", r.rect);
+                let why = format!("✖ {why}");
+                crate::messages::copyable(ui, chrome, "deploy failed", &why, RED);
             }
         }
         if let Some((text, error)) = self.projects.notice.clone() {
             ui.separator();
-            let r = ui.label(RichText::new(text).color(if error { RED } else { t.muted }));
-            chrome.hit("notice", r.rect);
+            if error {
+                crate::messages::copyable(ui, chrome, "notice", &text, RED);
+            } else {
+                let r = ui.label(RichText::new(text).color(t.muted));
+                chrome.hit("notice", r.rect);
+            }
             if self.projects.pending.is_some() && error {
                 let r = ui
                     .button("Replace")
