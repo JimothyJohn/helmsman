@@ -97,16 +97,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **Which box owns the E1213 over EtherNet/IP?** — 2026-11-07: the bench Pi's box (nick@192.168.3.20, `codesys-pi`) runs a project with device `iologik_e1213` over EtherNet/IP, link up: it holds the E1213's exclusive-owner connection, so the :8081 try box's Forward_Open is refused (0x0106 ownership conflict, then 0x0100 connection in use). Only one originator can own the unit's outputs. The try box reads and drives the same unit over Modbus TCP meanwhile.
-  needs: your call (a change on the Pi restarts its service, which asks first)
-  result: one owner of the E1213 over EtherNet/IP, and the other box on Modbus TCP
-  options: Pi keeps EtherNet/IP, the try box uses Modbus (recommended; nothing to change) | Move the Pi to Modbus, the try box takes EtherNet/IP | Stop the Pi's project while testing on the try box
-  est: 15m
-  difficulty: low
-  id: e1213-enip-owner
-  asked: 2026-11-07
-  by: claude-session
-
 ## Needs your hands
 
 - [ ] **Promote the guided tour** — #248 (the playground tour) is in dev but landed one minute after your dev → master merge, so the live playground does not have it, and docs/playground on dev is still the build without it. An agent rebuilds docs/playground on a PR into dev; then the next dev → master merge (yours) puts /playground/?tour live with the help links that point to it.
@@ -123,6 +113,8 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   result: the Pi's Devices scan finds devices
   est: 10m
   difficulty: low
+  status: blocked
+  notes: parked: the Pi is out of the loop (Nick, 2026-11-07); only when Nick asks for the Pi
   id: pr-245
   asked: 2026-11-06
   by: claude-session
@@ -140,9 +132,10 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 - [ ] **Look at the box UI on the Pi, with projects** — the bench Pi (nick@192.168.3.20, on the Studio link) runs helmsman-plc with the relay on agent v7 (a real turn 2026-11-04). Its API and canvas do not answer on the LAN (8080 and 443 closed from the Studio, 2026-11-06), so reach it through SSH. Whether it already runs `--projects` and has an engineer account is unchecked (the agent's SSH has no key loaded).
   needs: your key in the agent (`ssh-add --apple-use-keychain ~/.ssh/id_ed25519`)
   result: you sign in on the Pi as an engineer and edit, deploy and force a project
-  notes: connect from the Studio: `ssh -L 8080:127.0.0.1:8080 nick@192.168.3.20`, then http://127.0.0.1:8080/ ; from the Air: `ssh -J nick@10.0.0.41 -L 8080:127.0.0.1:8080 nick@192.168.3.20`, same URL. Not on projects yet: `scripts/pi-deploy-plc.sh nick@192.168.3.20` (projects is its default; RESTARTS helmsman-plc; keep PLC_API as the unit has it), then `scripts/pi-account.sh nick@192.168.3.20 nick engineer`.
+  notes: parked: the Pi is out of the loop (Nick, 2026-11-07); only when Nick asks for the Pi. connect from the Studio: `ssh -L 8080:127.0.0.1:8080 nick@192.168.3.20`, then http://127.0.0.1:8080/ ; from the Air: `ssh -J nick@10.0.0.41 -L 8080:127.0.0.1:8080 nick@192.168.3.20`, same URL. Not on projects yet: `scripts/pi-deploy-plc.sh nick@192.168.3.20` (projects is its default; RESTARTS helmsman-plc; keep PLC_API as the unit has it), then `scripts/pi-account.sh nick@192.168.3.20 nick engineer`.
   est: 15m
   difficulty: low
+  status: blocked
   id: pi-ui-demo
   asked: 2026-10-31
   by: claude-session
@@ -150,9 +143,10 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 - [ ] **Check the board backend on the Pi** — run the GPIO / I2C check against the pick PC: finds the header's GPIO chip (gpiochip0 or gpiochip4 on a Pi 5, by kernel), lists /dev/i2c-1, builds and runs `board_check` (helmsman-io's Linux backend, the code behind `helmsman-plc --gpio-chip`) reading `di:4` by default. Add `READ="di:4 i2c:1:0x48:0:i16"` for a sensor, and `LOOP="do:17=di:27"` only with a jumper from that output to that input (it drives the output).
   needs: on the Pi `sudo apt install gpiod i2c-tools`, `dtparam=i2c_arm=on` and a reboot, the SSH user in the gpio and i2c groups; Docker here
   result: the board backend proven on real GPIO (and I2C if a sensor is wired); then `--gpio-chip` goes into the deploy unit
-  notes: `! scripts/pi-gpio-check.sh nick@192.168.3.20` (runs here, not in the native terminal; read-only unless LOOP is set)
+  notes: parked: the Pi is out of the loop (Nick, 2026-11-07); only when Nick asks for the Pi. `! scripts/pi-gpio-check.sh nick@192.168.3.20` (runs here, not in the native terminal; read-only unless LOOP is set)
   est: 30m
   difficulty: low
+  status: blocked
   id: pi-gpio-check
 
 - [ ] **Supply the datasheet image** — docs/helmsman-datasheet.pdf (docs/datasheet.html) has no picture yet. Nick 2026-11-01: card it, place it when the file exists. Drop the file under docs/brand/ (PNG or SVG; a photo at 1200 px wide or more, or a render) and say where it goes: in the top band right of the wordmark (about 45 mm wide, the lede moves down) or as a strip under the lede. The build (`make datasheet`) refuses a second page, so the slot comes out of the spec table's air.

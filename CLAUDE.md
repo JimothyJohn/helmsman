@@ -99,15 +99,20 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
     but a locked service checkout. Run it before you stop a session.
 - **`wip/recovered-*` snapshots expire.** One older than 7 days gets a
   board card: keep (merge it somewhere) or drop.
-- **The bench Pi**, `nick@192.168.3.20` (hostname `codesys-pi`, on the
-  Studio link), runs `helmsman-plc` as a service. SSH works only with
-  Nick's key in the agent: he runs `ssh-add --apple-use-keychain
-  ~/.ssh/id_ed25519` (2026-11-07); ask him to when SSH says "Permission
-  denied (publickey)". Restarting its service asks every time.
-- **One EtherNet/IP owner per E1213.** The Pi's box holds the E1213's
-  exclusive-owner connection (192.168.3.60); any other box's
-  `Forward_Open` is refused, 0x0106 ownership conflict or 0x0100
-  connection in use. A second box reads the same unit over Modbus TCP.
+- **The soft PLC runs on the Studio, not the Pi** (Nick, 2026-11-07).
+  Every box you start, test against hardware or demo runs on this Mac
+  Studio (the try box is the standing one). The bench Pi
+  (`nick@192.168.3.20`, `codesys-pi`) is out of the loop, its
+  `helmsman-plc` service stopped and disabled, so no two platforms claim
+  the same devices. Don't deploy to it, start it or point a device at it
+  unless Nick asks for the Pi by name in that session; the Pi cards on
+  the board are parked until then. (SSH to it needs Nick's key in the
+  agent: `ssh-add --apple-use-keychain ~/.ssh/id_ed25519`.)
+- **One EtherNet/IP owner per E1213.** The unit (192.168.3.60) takes one
+  exclusive-owner connection; a second box's `Forward_Open` is refused,
+  0x0106 ownership conflict or 0x0100 connection in use. With the Pi
+  out, the owner is a Studio box; a second Studio box reads the unit
+  over Modbus TCP.
 
 ## Next door
 
