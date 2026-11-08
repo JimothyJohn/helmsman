@@ -42,7 +42,7 @@
 //! GET  /api/events                        event stream of live values and module status
 //! POST /api/chat                          token: one message to the agent; its progress as an event stream
 //! POST /api/explain                       token: why a variable is in its state: the box's own answer, then the agent's (read-only tools)
-//! POST /api/help                          token or session: what went wrong in words; a diagnosis and a Markdown issue with the box's context, redacted (see [`help`])
+//! POST /api/help                          token or session: what went wrong, or a question, in words; a diagnosis and a Markdown issue with the box's context, redacted, or an answer from the help pages (see [`help`])
 //! GET  /api/chat/status                   the agent: online, offline since T (why), unknown; offline chat reads param edits by rule
 //! GET  /api/site                          this box and the boxes it heard on the LAN (with --site NAME; see [`crate::site`])
 //! POST /api/dropins?name=N&kind=K         token: a document, a photo or a PDF for the agent, stored in memory (see [`dropin`], [`photo`], [`pdf`])
