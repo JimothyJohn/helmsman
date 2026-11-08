@@ -17,7 +17,12 @@
 //! 32-bit values; at most three dimensions; bit suffix kept out of the
 //! path). Read for layouts only; no code taken. See `docs/SOURCES.md`.
 
-use std::fmt;
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
+use core::fmt;
 
 use crate::codec::{DecodeError, Reader, Writer};
 
@@ -64,7 +69,7 @@ impl fmt::Display for PathError {
     }
 }
 
-impl std::error::Error for PathError {}
+impl core::error::Error for PathError {}
 
 /// One `.`-separated part of a path: a name and its array indexes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

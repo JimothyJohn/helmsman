@@ -63,7 +63,7 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="projects">Projects</h1>
 <p>A project is a folder of files: the program's Structured Text (one or
@@ -116,10 +116,12 @@ diagram.</li>
 <p><strong>Save</strong> (<kbd>Ctrl</kbd> <kbd>S</kbd>, File › Save, the
 glyph) writes every file with unsaved edits. A mark in the header shows
 there are some. Saving changes nothing about what runs.</p>
-<p><strong>Deploy</strong> (<kbd>Ctrl</kbd> <kbd>D</kbd>, File › Deploy)
-saves first, then compiles the project and runs it: in the page in the
-simulation, on the box through its approval policy on a box. A project
-that does not compile is refused with its errors by file and line.</p>
+<p><strong>Deploy</strong> (<kbd>Ctrl</kbd> <kbd>D</kbd>, File › Deploy,
+or the → arrow right of the Structured Text header and beside the
+running program in Files) saves first, then compiles the project and
+runs it: in the page in the simulation, on the box through its approval
+policy on a box. A project that does not compile is refused with its
+errors by file and line.</p>
 <p>On a box, a file someone else saved since you opened it is refused
 alone and offers Reload; the other files land.</p>
 <h2 id="requirement-tests">Requirement tests</h2>

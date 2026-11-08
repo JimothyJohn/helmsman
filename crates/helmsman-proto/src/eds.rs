@@ -29,9 +29,10 @@
 //! line) and bounded ([`MAX_TEXT`], [`MAX_FIELDS`]). It never panics,
 //! whatever the input: `tests/eds.rs` checks that on arbitrary text.
 
-use std::fmt;
-use std::fmt::Write as _;
-use std::time::Duration;
+use alloc::{format, string::String, string::ToString, vec::Vec};
+use core::fmt;
+use core::fmt::Write as _;
+use core::time::Duration;
 
 use crate::codec::Reader;
 use crate::io::ConnectionPath;
@@ -54,7 +55,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 fn err<T>(line: usize, what: impl Into<String>) -> Result<T, Error> {
     Err(Error {

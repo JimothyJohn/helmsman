@@ -192,8 +192,8 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **docs/help/simulation.html is stale** — on dev it no longer matches simulation.md (noticed by #288's worker; `scripts/build-help.sh --check` would flag it). Rebuild it, and add `build-help.sh --check` to the gate if it is not there.
-  result: the help pages match their source, and drift fails CI
+- [ ] **`build-help.sh --check` is not in CI** — the help pages were rebuilt with the Load a program page (2026-11-08), so they are current again, but only `make help-check` runs the check: nothing in .github/workflows does, which is how simulation.html drifted after #288. Add it to the CI gate (a workflow edit: draft PR).
+  result: drift between docs/help/*.md and the committed .html fails CI
   est: 30m
   difficulty: low
   id: help-html-drift
