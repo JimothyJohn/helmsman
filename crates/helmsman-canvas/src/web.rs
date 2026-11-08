@@ -315,7 +315,7 @@ async fn claude(
             .await
             .map_err(|e| text(&e))?;
         let mut body = b.as_string().unwrap_or_default();
-        body.truncate(crate::claude::MAX_ANSWER);
+        crate::claude::truncate_at_boundary(&mut body, crate::claude::MAX_ANSWER);
         push(Incoming::Status {
             seq,
             status: resp.status(),

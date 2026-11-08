@@ -915,9 +915,10 @@ END_PROGRAM",
             assert!((right.left() - h.rect("right").left()).abs() <= 8.0, "{key}");
         }
         // Fixing an answer: what failed is the tooltip, not a page of text.
+        let open = h.app.sim.as_ref().unwrap().proj.open.clone();
         h.app.sim.as_mut().unwrap().instruct.run = Some(Run {
             instruction: word.clone(),
-            project: "p".into(),
+            project: open,
             scope: crate::scope::Scope::File(format!("{word}.st")),
             earlier: Vec::new(),
             asked: String::new(),
@@ -3260,6 +3261,7 @@ mod boxed {
                 )]
                 .into(),
                 current: Some("main.st".into()),
+                runs: None,
             });
         }
         h.frame(vec![]);

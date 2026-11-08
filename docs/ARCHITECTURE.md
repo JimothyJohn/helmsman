@@ -625,7 +625,10 @@ copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
 `ASSERT` failed (named as words, with its declaration line's comment, and
 when), either side faulted or does not compile, a shared port's types
 differ, `DONE` never came within the limit (two minutes of simulated
-time), or the test holds no `ASSERT` at all. The test's first comment is
+time), the test holds no `ASSERT` at all, a declared `ASSERT` was never
+called (the block latches `CHECKED` on its first call), or the test
+shares no port with the program (reads no output, drives no input), so
+it could pass whatever the program does. The test's first comment is
 the requirement in the engineer's words. Deterministic: no wall clock, no
 I/O.
 
@@ -730,7 +733,18 @@ written (`verify::check`): the code taken into a copy through
 `scope::apply`, the scenarios added, compiled, the scenarios run with
 the project's own tests, and the whole-file rule (`verify::full_copy`: no
 elision markers, every POU with its header and END_ line, the landed file
-equal to the code). A failure goes back with what failed, up to two
+equal to the code). Three more rules keep a scenario honest: when the
+answer changes what the file does, a scenario must fail on the file as it
+was (`verify::indistinct`); a scenario marked `replaces test_X` stands only
+when X is red with the new code, and the outcome keeps both wordings
+(`verify::contradicted`, `Check::replaced`); a block that never closes
+means the answer was cut off and is red. A stop for `max_tokens` (page) or
+`budget` (box) is a failed run, never a complete answer. The file goes
+once: when the program is that one file, `<current_program>` points at the
+`text:` in `<edit_scope>`. On a box the check runs at the image sizes and
+scan period the box reports for the project (`tests` in `GET
+/api/projects/{p}`), and an instruction ends if another project is opened
+before its answer is in. A failure goes back with what failed, up to two
 retries (`verify::next`); still red, nothing is written and the tab says
 why. Green is written into the file at once and saved as one revision
 whose Agent page is `instruct::record` (instruction, reason, scenarios,
