@@ -1668,7 +1668,7 @@ impl Body for BoxView {
                 let r = ui.label(RichText::new(text).color(t.muted));
                 chrome.hit("notice", r.rect);
             }
-            if self.projects.pending.is_some() && error {
+            if self.projects.replace_offered() && error {
                 let r = ui
                     .button("Replace")
                     .tip("Saves your version over the one on the box.");
@@ -1684,7 +1684,7 @@ impl Body for BoxView {
                 chrome.hit("reload", r.rect);
                 if r.clicked() {
                     self.projects.reload(&f);
-                    self.projects.notice = None;
+                    self.projects.clear_notice();
                 }
             }
         }
