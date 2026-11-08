@@ -2330,8 +2330,16 @@ agent as ST; nothing here writes ST back).
   proven by rendering every scan of a run with the API's own renderer and
   comparing annotations and explanations. Connection status: connecting,
   connected, reconnecting, unreachable after 3 failures; a failed stream
-  is closed and reopened after 2 s doubling to 30 s (the canvas's backoff,
-  not the browser's). The decisions (`remote::BoxState`) are free of I/O
+  is closed and reopened after a steady 5 s (the canvas's backoff, not the
+  browser's). The box ends each stream at 600 s, so one that was
+  delivering is reopened at once and the link stays connected; a values
+  stream that opens and then says nothing for 5 s is closed and opened
+  again (and counted), since a half-open connection raises no error. A box
+  that answers `GET /api/modules` is a box even when its 8 stream slots are
+  taken. The page takes the box's streams while it shows any screen, and
+  closes them while it simulates in the browser; the transport keeps only
+  the newest values (and each module's newest trace) of an unread backlog.
+  The decisions (`remote::BoxState`) are free of I/O
   and tested natively against the real API. **Simulation** (the ST
   playground below: docs/playground/, `?playground` or `?demo`, native,
   or "Simulate in this browser" from the ⋯ menu or when the box is

@@ -3024,6 +3024,116 @@ mod boxed {
         assert!(!h.has("role engineer"));
     }
 
+    /// The box is read whichever screen shows: on Proposals nothing else
+    /// draws it, and its streams carry on, so an unread backlog of values
+    /// events (a JSON string each) would pile up and be parsed in one frame.
+    #[test]
+    fn the_box_is_kept_up_on_the_proposals_screen() {
+        use crate::app::Screen;
+        use crate::remote::{Cmd, Fetch};
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        let b = h.app.boxv.as_mut().unwrap();
+        b.sent.clear();
+        // Something the box view has to carry out when it is ticked.
+        b.state.relist();
+        h.app.screen = Screen::Proposals;
+        h.wait(0.2);
+        let sent = &h.app.boxv.as_ref().unwrap().sent;
+        assert!(
+            sent.contains(&Cmd::Get(Fetch::Modules, "/api/modules".into())),
+            "{sent:?}"
+        );
+    }
+
+    /// Simulating in the browser leaves the box with nobody to read its
+    /// streams: they are closed, and open again when the page goes back.
+    #[test]
+    fn simulating_in_the_browser_closes_the_boxs_streams_and_going_back_opens_them() {
+        use crate::remote::{Cmd, Stream};
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        h.app.boxv.as_mut().unwrap().sent.clear();
+        h.app.source = Source::Sim;
+        h.wait(12.0);
+        let sent = std::mem::take(&mut h.app.boxv.as_mut().unwrap().sent);
+        for s in [Stream::Values, Stream::Trace, Stream::Traces] {
+            assert!(sent.contains(&Cmd::Close(s)), "{s:?} closed: {sent:?}");
+        }
+        assert!(
+            sent.iter().all(|c| matches!(c, Cmd::Close(_))),
+            "nothing is asked of a box nobody watches: {sent:?}"
+        );
+        h.app.source = Source::Box;
+        h.wait(0.2);
+        let sent = std::mem::take(&mut h.app.boxv.as_mut().unwrap().sent);
+        assert!(
+            sent.contains(&Cmd::Listen(Stream::Values, "/api/events".into())),
+            "{sent:?}"
+        );
+    }
+
+    /// The Editor's Run and Stop act on what the Monitor's do (the program
+    /// shown), not on every module: a module left stopped on purpose is not
+    /// started by a click meant for another, and a second click before the
+    /// box's list shows the first one's effect does not send again.
+    #[test]
+    fn the_editors_run_glyph_acts_on_the_program_shown_and_only_once() {
+        use crate::remote::ModuleRow;
+        use crate::review::Session;
+        let row = |name: &str, state: &str| ModuleRow {
+            name: name.into(),
+            state: state.into(),
+            fault: None,
+            stopped_by: None,
+            scans: 0,
+            scan_ms: Some(10.0),
+            overruns: 0,
+            overrun_ago: None,
+            timing: None,
+        };
+        let mut h = Harness::new(App::boxed());
+        h.app
+            .review
+            .get_or_insert_with(crate::review_view::ReviewView::new)
+            .state
+            .session = Some(Session {
+            user: Some("alice".into()),
+            role: "engineer".into(),
+        });
+        h.app.boxv.as_mut().unwrap().state.modules = vec![row("a", "running"), row("b", "stopped")];
+        // The program shown is b, which an engineer left stopped.
+        h.app.monitor.at = Some(("b".into(), String::new()));
+        h.wait(0.2);
+        h.app.boxv.as_mut().unwrap().psent.clear();
+        h.press("run");
+        let urls = |h: &mut Harness| -> Vec<String> {
+            h.wait(0.1);
+            std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
+                .into_iter()
+                .filter(|q| q.method == "POST")
+                .map(|q| q.url)
+                .collect()
+        };
+        assert_eq!(
+            urls(&mut h),
+            ["/api/modules/b/run"],
+            "b alone, and run, not a's stop"
+        );
+        // The box's list lags: b still reads stopped.
+        h.press("run");
+        assert_eq!(
+            urls(&mut h),
+            Vec::<String>::new(),
+            "the first click is still on its way"
+        );
+        // Once the list shows it, the next click decides afresh.
+        h.app.boxv.as_mut().unwrap().state.modules = vec![row("a", "running"), row("b", "running")];
+        h.wait(0.2);
+        h.press("run");
+        assert_eq!(urls(&mut h), ["/api/modules/b/stop"]);
+    }
+
     /// Card build-match: a box that answers as another build gets the
     /// banner, on the Editor and the Monitor alike, and the panels keep
     /// their width under it.
@@ -3541,6 +3651,8 @@ mod boxed {
         // The box goes away: reconnecting, then unreachable, still drawn.
         let t = h.time;
         let b = h.app.boxv.as_mut().unwrap();
+        // The first end of a stream that was delivering is reopened quietly.
+        b.state.apply(Msg::Failed(Stream::Values), t);
         b.state.apply(Msg::Failed(Stream::Values), t);
         assert!(
             b.status(t, &Theme::dark())
