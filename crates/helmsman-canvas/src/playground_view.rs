@@ -268,6 +268,57 @@ impl PlaygroundView {
         results.refusal()
     }
 
+    /// Checks a PROGRAM answer (`text`) landing as `main.st` of the saved
+    /// project `name`, with the answer's `scenarios` added: the project's
+    /// own files with them, compiled and its requirement tests run, as the
+    /// project will stand. The scenarios come back named free among the
+    /// project's files (they were named free among the files of the open
+    /// example the answer was checked against). Why not, if it must not land.
+    fn program_into(
+        &self,
+        name: &str,
+        text: &str,
+        scenarios: &[(String, String)],
+    ) -> Result<Vec<(String, String)>, String> {
+        let Some(target) = self.proj.saved.get(name) else {
+            return Ok(scenarios.to_vec());
+        };
+        let mut files = target.0.clone();
+        files.insert(helmsman_project::MAIN.to_string(), text.to_string());
+        let mut taken: Vec<String> = files.keys().cloned().collect();
+        let mut named = Vec::new();
+        for (file, t) in scenarios {
+            let want = file
+                .trim_end_matches(".st")
+                .trim_start_matches(helmsman_iec::spec::TEST_PREFIX);
+            let free = format!(
+                "{}{}.st",
+                helmsman_iec::spec::TEST_PREFIX,
+                crate::requirements::name_for(want, &taken)
+            );
+            taken.push(free.clone());
+            files.insert(free.clone(), t.clone());
+            named.push((free, t.clone()));
+        }
+        let plan = helmsman_iec::spec::plan(
+            files
+                .iter()
+                .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
+        if let Err(d) = helmsman_iec::compile(&plan.main, crate::playground::SIZES) {
+            let first = d.first().map_or_else(String::new, ToString::to_string);
+            return Err(format!(
+                "Refused: with {name}'s other files the program does not compile: {first}"
+            ));
+        }
+        let verdicts = helmsman_iec::spec::run_all(&plan, self.test_settings());
+        match crate::requirements::Results::from_verdicts(&verdicts).refusal() {
+            Some(why) => Err(format!("{why} (the program would replace main.st of {name})")),
+            None => Ok(named),
+        }
+    }
+
     /// Loads the open project's build into the session, compiled and
     /// stopped.
     fn reload(&mut self) {
@@ -344,6 +395,23 @@ impl PlaygroundView {
                         return;
                     }
                 }
+                // A PROGRAM answer into a project that exists replaces its
+                // main.st: that project's own tests must hold with it, and
+                // the scenarios take names free there.
+                let mut scenarios = self.to_name.as_ref().map(|a| a.tests.clone()).unwrap_or_default();
+                if text.to_ascii_uppercase().contains("PROGRAM ") && self.proj.saved.contains_key(&name) {
+                    match self.program_into(&name, &text, &scenarios) {
+                        Ok(named) => scenarios = named,
+                        Err(why) => {
+                            self.notice = Some(why.clone());
+                            self.log.error(
+                                self.session.now_ms as f64 / 1000.0,
+                                format!("Use this code: {why}"),
+                            );
+                            return;
+                        }
+                    }
+                }
                 // Unsaved edits first (a save is a revision: none when
                 // there is nothing to save).
                 if save && self.proj.dirty() {
@@ -356,8 +424,7 @@ impl PlaygroundView {
                 if text.to_ascii_uppercase().contains("PROGRAM ") {
                     dropped = self.land_program(&name, text);
                     // The scenarios its answer passed, kept as its tests.
-                    let tests = self.to_name.as_ref().map(|a| a.tests.clone()).unwrap_or_default();
-                    for (f, t) in tests {
+                    for (f, t) in scenarios {
                         self.proj.files.insert(f, t);
                     }
                 } else {
