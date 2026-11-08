@@ -119,6 +119,9 @@ pub struct PlaygroundView {
     library: crate::web::TextFetch,
     /// A one-line note under the top bar (loaded an example, …).
     pub notice: Option<String>,
+    /// The text of `notice` while it says the program is running in this
+    /// page: it goes when the program stops, faults or restarts.
+    running_notice: Option<String>,
     /// The projects, kept in the browser's storage.
     pub proj: SimProjects,
     pub files_ui: FilesUi,
@@ -198,6 +201,7 @@ impl PlaygroundView {
             log: crate::messages::Log::default(),
             seen: Seen::default(),
             notice: None,
+            running_notice: None,
             proj,
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
@@ -554,11 +558,12 @@ impl PlaygroundView {
             .iter()
             .map(|(n, t)| (n.as_str(), t.as_str()))
             .collect();
-        let value = |name: &str| {
-            self.session
-                .trace
-                .as_ref()
-                .and_then(|t| crate::plant::value_in_trace(t, name))
+        let unit = std::cell::OnceCell::new();
+        let value = |pou: &str, name: &str| {
+            let trace = self.session.trace.as_ref()?;
+            let src = self.session.build.as_ref().map_or("", |b| b.src.as_str());
+            let unit = unit.get_or_init(|| helmsman_iec::ast::parse(src).ok()).as_ref()?;
+            crate::plant::value_in_trace(trace, unit, pou, name)
         };
         let live = |name: &str| self.session.value(name);
         let mut states = crate::plant::states(&files, map, &value, &live);
@@ -1292,6 +1297,7 @@ struct Seen {
     notice: Option<String>,
     storage: Option<String>,
     running: Option<bool>,
+    scans: u64,
 }
 
 impl PlaygroundView {
@@ -1300,6 +1306,18 @@ impl PlaygroundView {
     /// the program starting or stopping.
     fn watch(&mut self, t: f64) {
         let fault = self.session.fault.as_ref().map(ToString::to_string);
+        let ended = (self.seen.running == Some(true) && !self.session.running)
+            || (fault.is_some() && fault != self.seen.fault)
+            || self.session.scans < self.seen.scans;
+        self.seen.scans = self.session.scans;
+        if ended
+            && self
+                .running_notice
+                .take()
+                .is_some_and(|n| self.notice.as_ref() == Some(&n))
+        {
+            self.notice = None;
+        }
         if fault != self.seen.fault {
             if let Some(f) = &fault {
                 self.log
@@ -1780,7 +1798,9 @@ impl PlaygroundView {
                 }
             });
             for (name, v) in set {
-                self.session.set_input(&name, v);
+                if let Err(why) = self.session.try_input(&name, v) {
+                    self.notice = Some(why);
+                }
             }
             ui.add_space(8.0);
             let outputs_tip = if outputs.is_empty() {
@@ -2681,18 +2701,26 @@ impl Workspace for PlaygroundView {
             return;
         }
         let src = self.proj.build_src();
-        let ok = self.session.set_source(&src);
+        let carried = self.session.deploy(&src);
         self.pending = None;
         self.sync_viewer();
-        if ok {
+        if let Some(carried) = carried {
             self.session.set_running(true);
+            self.seen.running = Some(true);
+            self.seen.scans = self.session.scans;
             self.proj.running = Some(self.proj.open.clone());
             let program = self
                 .viewer
                 .as_ref()
                 .and_then(|v| v.module.program())
                 .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
-            self.notice = Some(format!("{} is running in this page{program}.", self.proj.open));
+            let note = format!(
+                "{} is running in this page{program}.{}",
+                self.proj.open,
+                carried.describe()
+            );
+            self.running_notice = Some(note.clone());
+            self.notice = Some(note);
             self.log.info(
                 self.session.now_ms as f64 / 1000.0,
                 format!("Deployed {}: running in this page{program}.", self.proj.open),
@@ -2814,10 +2842,14 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 _ => 0,
             };
             let before = v;
-            ui.add(egui::Slider::new(&mut v, slo..=shi).show_value(false))
-                .tip(format!(
-                    "Drag to set the input, {slo} to {shi}. Type any value in the box."
-                ));
+            ui.add(
+                egui::Slider::new(&mut v, slo..=shi)
+                    .clamping(egui::SliderClamping::Edits)
+                    .show_value(false),
+            )
+            .tip(format!(
+                "Drag to set the input, {slo} to {shi}. Type any value in the box."
+            ));
             if v != before {
                 out = Some(Value::Int(i128::from(v)));
             }
@@ -2843,8 +2875,12 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 _ => 0.0,
             };
             let before = v;
-            ui.add(egui::Slider::new(&mut v, -100.0..=100.0).show_value(false))
-                .tip("Drag to set the input, -100 to 100. Type any value in the box.");
+            ui.add(
+                egui::Slider::new(&mut v, -100.0..=100.0)
+                    .clamping(egui::SliderClamping::Edits)
+                    .show_value(false),
+            )
+            .tip("Drag to set the input, -100 to 100. Type any value in the box.");
             if v.to_bits() != before.to_bits() && v.is_finite() {
                 out = Some(Value::Real(v));
             }
@@ -2870,8 +2906,12 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 _ => 0,
             };
             let before = ms;
-            ui.add(egui::Slider::new(&mut ms, 0..=10_000).show_value(false))
-                .tip("Drag to set the time, up to 10 s.");
+            ui.add(
+                egui::Slider::new(&mut ms, 0..=10_000)
+                    .clamping(egui::SliderClamping::Edits)
+                    .show_value(false),
+            )
+            .tip("Drag to set the time, up to 10 s.");
             ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"))
                 .tip("The time in ms. Drag, or double-click to type it, up to a day.");
             if ms != before {

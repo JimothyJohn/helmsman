@@ -1825,7 +1825,7 @@ impl Body for BoxView {
             .unwrap_or_default();
         let refs: Vec<(&str, &str)> = files.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect();
         let signal_value = |name: &str| live(name).and_then(|l| l.value);
-        self.devices_ui.plant.states = crate::plant::states(&refs, &map, &|_| None, &signal_value);
+        self.devices_ui.plant.states = crate::plant::states(&refs, &map, &|_, _| None, &signal_value);
         self.devices_ui.plant.devices = crate::plant::device_choices(&map);
         self.devices_ui.plant.simulated = false;
         self.devices_ui.copy_first = false;

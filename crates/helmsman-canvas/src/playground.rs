@@ -36,8 +36,9 @@ pub const TREND_KEEP_MS: u64 = 600_000;
 pub const TREND_CAP: usize = 60_000;
 /// Signals the trend draws at most.
 pub const TREND_SIGNALS: usize = 6;
-/// The editor refuses text past this.
-pub const MAX_SOURCE: usize = 64 * 1024;
+/// The editor refuses text past this: a project's total, so a program
+/// the project accepts deploys whole.
+pub const MAX_SOURCE: usize = helmsman_project::MAX_TOTAL;
 
 /// A starter program.
 #[derive(Clone, Copy, Debug)]
@@ -252,33 +253,15 @@ fn parse_bit(addr: &str) -> Option<(Dir, usize, u8)> {
 }
 
 /// Direct `%IXn.m` / `%QXn.m` addresses written in the code itself (not
-/// in an `AT`), outside comments, in order of first use.
+/// in an `AT`), outside comments and strings, in order of first use.
 fn direct_bits(src: &str) -> Vec<(Dir, usize, u8)> {
-    let b = src.as_bytes();
     let mut out = Vec::new();
-    let mut k = 0;
-    while k < b.len() {
-        if b[k..].starts_with(b"(*") {
-            k = src[k + 2..].find("*)").map_or(b.len(), |e| k + 2 + e + 2);
-            continue;
+    for d in helmsman_iec::ast::direct_addresses(src) {
+        if let Some(p) = parse_bit(&d)
+            && !out.contains(&p)
+        {
+            out.push(p);
         }
-        if b[k..].starts_with(b"//") {
-            k = src[k..].find('\n').map_or(b.len(), |e| k + e);
-            continue;
-        }
-        if b[k] == b'%' {
-            let end = src[k + 1..]
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
-                .map_or(b.len(), |e| k + 1 + e);
-            if let Some(p) = parse_bit(&src[k..end])
-                && !out.contains(&p)
-            {
-                out.push(p);
-            }
-            k = end;
-            continue;
-        }
-        k += 1;
     }
     out
 }
@@ -402,6 +385,52 @@ fn moved_breaks(old: &Build, new: &Build, breaks: &[StmtId]) -> Vec<StmtId> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+/// The output points as the program and the image hold them now.
+fn read_outputs(b: &mut Build) {
+    for p in b.points.iter_mut().filter(|p| p.dir == Dir::Out) {
+        p.value = match p.place {
+            Place::Port => b.program.get(&p.name).unwrap_or(p.value),
+            Place::Bit(byte, bit) => Value::Bool(b.image.q[byte] >> bit & 1 == 1),
+        };
+    }
+}
+
+/// What a deploy did not carry into the new program ([`Session::deploy`]).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Carried {
+    /// Variables whose type changed: they start from their initial value.
+    pub fresh: Vec<String>,
+    /// Variables the new program no longer has: their values are gone.
+    pub gone: Vec<String>,
+}
+
+impl Carried {
+    /// A sentence for the notice, empty when everything was carried.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        let list = |v: &[String]| {
+            v.iter()
+                .map(|n| n.to_ascii_lowercase())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut out = String::new();
+        if !self.fresh.is_empty() {
+            out.push_str(&format!(
+                " Started fresh, their type changed: {}.",
+                list(&self.fresh)
+            ));
+        }
+        if !self.gone.is_empty() {
+            out.push_str(&format!(
+                " Not carried, no longer declared: {}.",
+                list(&self.gone)
+            ));
+        }
+        out
+    }
 }
 
 /// One trend sample: program time and each trended signal's value.
@@ -599,22 +628,33 @@ impl Session {
         self.build.as_ref().is_none_or(|b| b.src != self.src)
     }
 
-    /// Takes `src` as the editor's text, cut at [`MAX_SOURCE`].
-    fn take(&mut self, src: &str) {
-        let mut cut = MAX_SOURCE.min(src.len());
-        while !src.is_char_boundary(cut) {
-            cut -= 1;
+    /// Takes `src` as the editor's text. Over [`MAX_SOURCE`] it is kept
+    /// whole (so line numbers stay the editor's) but not compiled: `diags`
+    /// name the limit. Whether it may be compiled.
+    fn take(&mut self, src: &str) -> bool {
+        self.src = src.to_string();
+        if src.len() <= MAX_SOURCE {
+            return true;
         }
-        self.src = src[..cut].to_string();
+        self.diags = vec![Diagnostic {
+            pos: helmsman_iec::Pos { line: 1, col: 1 },
+            msg: format!(
+                "the program is {} bytes; at most {MAX_SOURCE} are compiled",
+                src.len()
+            ),
+        }];
+        false
     }
 
-    /// Checks `src` (cut at [`MAX_SOURCE`]): `diags` say whether it
-    /// compiles. What runs is untouched either way, as on a box, where an
-    /// edit runs only once deployed ([`Self::set_source`]).
+    /// Checks `src`: `diags` say whether it compiles. What runs is
+    /// untouched either way, as on a box, where an edit runs only once
+    /// deployed ([`Self::deploy`]).
     ///
     /// Returns whether it compiles.
     pub fn check(&mut self, src: &str) -> bool {
-        self.take(src);
+        if !self.take(src) {
+            return false;
+        }
         match compile(&self.src, SIZES) {
             Ok(_) => {
                 self.diags.clear();
@@ -627,15 +667,31 @@ impl Session {
         }
     }
 
-    /// Compiles `src` (cut at [`MAX_SOURCE`]). If it compiles, it replaces
-    /// the program from a cold start, keeping the panel's input values
-    /// where a point of the same name and type survives, and the trend's
-    /// signals that still exist; `running` is unchanged. If not, the
-    /// previous program keeps running and `diags` say why.
+    /// Compiles `src`. If it compiles, it replaces the program from a
+    /// cold start, keeping the panel's input values where a point of the
+    /// same name and type survives, and the trend's signals that still
+    /// exist; `running` is unchanged. If not (or if it is over
+    /// [`MAX_SOURCE`]), the previous program keeps running and `diags`
+    /// say why.
     ///
     /// Returns whether it compiled.
     pub fn set_source(&mut self, src: &str) -> bool {
-        self.take(src);
+        self.install(src, false).is_some()
+    }
+
+    /// Deploys `src` as the box does: the new program replaces the old
+    /// one with its retained state carried by name and type (timers,
+    /// counters, `RETAIN`), the process image kept and the clock running.
+    /// What could not be carried is in the answer. `None` when it does not
+    /// compile: the previous program keeps running and `diags` say why.
+    pub fn deploy(&mut self, src: &str) -> Option<Carried> {
+        self.install(src, true)
+    }
+
+    fn install(&mut self, src: &str, hot: bool) -> Option<Carried> {
+        if !self.take(src) {
+            return None;
+        }
         match Build::new(&self.src) {
             Ok(mut b) => {
                 self.breaks = self
@@ -643,6 +699,7 @@ impl Session {
                     .as_ref()
                     .map_or_else(Vec::new, |old| moved_breaks(old, &b, &self.breaks));
                 self.paused = None;
+                let mut carried = Carried::default();
                 if let Some(old) = &self.build {
                     for p in b.points.iter_mut().filter(|p| p.dir == Dir::In) {
                         if let Some(o) = old
@@ -653,7 +710,24 @@ impl Session {
                             p.value = o.value;
                         }
                     }
+                    if hot {
+                        let state = old.program.state();
+                        let c = b.program.restore(&state);
+                        carried.fresh = c
+                            .reset
+                            .into_iter()
+                            .filter(|n| state.names().any(|o| o == n))
+                            .collect();
+                        carried.gone = c.dropped;
+                        b.image = old.image.clone();
+                        read_outputs(&mut b);
+                    }
                 }
+                let kept = if hot {
+                    self.trend.signals.clone()
+                } else {
+                    Vec::new()
+                };
                 let names: Vec<String> = b.points.iter().map(|p| p.name.clone()).collect();
                 self.trend.signals.retain(|s| names.contains(s));
                 if self.trend.signals.is_empty() {
@@ -662,19 +736,24 @@ impl Session {
                     let ins = b.points.iter().filter(|p| p.dir == Dir::In);
                     self.trend.signals = outs.chain(ins).take(4).map(|p| p.name.clone()).collect();
                 }
-                self.trend.samples.clear();
+                if self.trend.signals != kept {
+                    self.trend.samples.clear();
+                }
                 self.diags.clear();
+                let had = self.build.is_some();
                 self.build = Some(b);
-                self.now_ms = 0;
-                self.scans = 0;
                 self.fault = None;
                 self.trace = None;
-                self.acc_ms = 0.0;
-                true
+                if !(hot && had) {
+                    self.now_ms = 0;
+                    self.scans = 0;
+                    self.acc_ms = 0.0;
+                }
+                Some(carried)
             }
             Err(d) => {
                 self.diags = d;
-                false
+                None
             }
         }
     }
@@ -694,27 +773,40 @@ impl Session {
     /// Sets an input point by name; ignored for outputs, unknown names,
     /// and values of the wrong kind or out of the type's range.
     pub fn set_input(&mut self, name: &str, v: Value) -> bool {
-        let Some(b) = &mut self.build else { return false };
+        self.try_input(name, v).is_ok()
+    }
+
+    /// [`Self::set_input`], with the reason it refused. A REAL is stored
+    /// as the program holds it (a REAL is an `f32`), so the panel never
+    /// shows a value the program does not have.
+    ///
+    /// # Errors
+    /// No such input, or a value of the wrong kind or out of range.
+    pub fn try_input(&mut self, name: &str, v: Value) -> Result<(), String> {
+        let Some(b) = &mut self.build else {
+            return Err("no program is running".into());
+        };
         let Some(p) = b
             .points
             .iter_mut()
             .find(|p| p.dir == Dir::In && p.name.eq_ignore_ascii_case(name))
         else {
-            return false;
+            return Err(format!("no input named {name}"));
         };
-        let ok = match (p.ty, v) {
-            (Ty::Bool, Value::Bool(_)) => true,
-            (t, Value::Real(x)) if t.is_real() => x.is_finite(),
-            (t, Value::Int(n)) if t != Ty::Bool && !t.is_real() => {
-                let (lo, hi) = t.range();
-                (lo..=hi).contains(&n)
-            }
-            _ => false,
+        let stored = match (&p.place, p.ty, v) {
+            (Place::Port, _, _) => b
+                .program
+                .set_input(&p.name, v)
+                .ok()
+                .and_then(|()| b.program.get(&p.name)),
+            (_, Ty::Bool, Value::Bool(_)) => Some(v),
+            _ => None,
         };
-        if ok {
-            p.value = v;
-        }
-        ok
+        let Some(stored) = stored else {
+            return Err(format!("{} refused {v}: not a {} value in range", p.name, p.ty));
+        };
+        p.value = stored;
+        Ok(())
     }
 
     /// The value of a point by name.
@@ -738,6 +830,9 @@ impl Session {
             self.restart();
         }
         self.last = None;
+        if !on && self.running {
+            self.silence();
+        }
         if on
             && let Some(skip) = self.paused
             && self.scan_or_pause(skip + 1)
@@ -765,11 +860,23 @@ impl Session {
         self.trace.as_ref()?.paused_at()
     }
 
+    /// Outputs off, as the box leaves them when a module stops or
+    /// faults: every output point reads zero and the `%Q` image is
+    /// cleared, until the next scan writes them again.
+    fn silence(&mut self) {
+        let Some(b) = &mut self.build else { return };
+        b.image.q.fill(0);
+        for p in b.points.iter_mut().filter(|p| p.dir == Dir::Out) {
+            p.value = Value::zero(p.ty);
+        }
+    }
+
     /// Cold restart: initial values, clock to zero, trend cleared.
     pub fn restart(&mut self) {
         if let Some(b) = &mut self.build {
             b.program.reset();
             b.image = Image::new(SIZES);
+            read_outputs(b);
         }
         self.now_ms = 0;
         self.scans = 0;
@@ -910,18 +1017,14 @@ impl Session {
         } else {
             b.program.scan_at(&mut b.image, now)
         };
-        for p in b.points.iter_mut().filter(|p| p.dir == Dir::Out) {
-            p.value = match p.place {
-                Place::Port => b.program.get(&p.name).unwrap_or(p.value),
-                Place::Bit(byte, bit) => Value::Bool(b.image.q[byte] >> bit & 1 == 1),
-            };
-        }
+        read_outputs(b);
         self.scans += 1;
         self.trend.record(self.now_ms, &b.points);
         self.now_ms += self.period_ms;
         if let Err(f) = r {
             self.fault = Some(f.to_string());
             self.running = false;
+            self.silence();
         }
     }
 
