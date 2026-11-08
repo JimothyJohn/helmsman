@@ -183,7 +183,7 @@ async fn main(spawner: Spawner) -> ! {
             live.module.name = name.clone();
             live.module.source = source.clone();
             live.module.state = Some(State::Running);
-            live.module.signals = state::signals_of(p);
+            live.module.signals = state::signals_of(p, &[0; IO_BYTES], &[0; IO_BYTES]);
         }
     });
 
@@ -351,7 +351,7 @@ async fn main(spawner: Spawner) -> ! {
             scan_count += 1;
             let outputs: [u8; IO_BYTES] = image.q[..IO_BYTES].try_into().unwrap_or([0; IO_BYTES]);
             let refresh = scan_count.is_multiple_of(10);
-            let signals = refresh.then(|| state::signals_of(p));
+            let signals = refresh.then(|| state::signals_of(p, &inputs, &outputs));
             let faulted = result.as_ref().err().map(|f| alloc::format!("{f}"));
             state::with(shared, |live| {
                 live.module.scans += 1;

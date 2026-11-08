@@ -205,30 +205,45 @@ pub fn view(
     })
 }
 
-/// A program's located variables and ports as signals, with their values.
+/// The node's signals: the block's points as the I/O task moves them
+/// (`di0`..`di7` from the inputs' first byte, `do0`..`do3` from the
+/// outputs'), then the program's ports with their values. The runtime does
+/// not list located variables (`AT %IX0.0`), so the points are named here
+/// from the image; an I/O map setting will name them later.
 #[must_use]
-pub fn signals_of(program: &Program) -> Vec<SignalView> {
-    program
-        .ports()
-        .iter()
-        .map(|p| {
-            let value = match program.get(&p.name) {
-                Some(helmsman_iec::Value::Bool(b)) => Some(SignalValue::Bool(b)),
-                Some(helmsman_iec::Value::Int(i)) => {
-                    Some(SignalValue::Int(i64::try_from(i).unwrap_or(i64::MAX)))
-                }
-                _ => None,
-            };
-            SignalView {
-                name: p.name.clone(),
-                dir: match p.dir {
-                    helmsman_iec::PortDir::Input => "in",
-                    helmsman_iec::PortDir::Output => "out",
-                },
-                value,
-                quality: "good",
-                point_error: None,
-            }
+pub fn signals_of(program: &Program, inputs: &[u8; IO_BYTES], outputs: &[u8; IO_BYTES]) -> Vec<SignalView> {
+    let mut out: Vec<SignalView> = (0..8)
+        .map(|bit| SignalView {
+            name: alloc::format!("di{bit}"),
+            dir: "in",
+            value: Some(SignalValue::Bool(inputs[0] & (1 << bit) != 0)),
+            quality: "good",
+            point_error: None,
         })
-        .collect()
+        .chain((0..4).map(|bit| SignalView {
+            name: alloc::format!("do{bit}"),
+            dir: "out",
+            value: Some(SignalValue::Bool(outputs[0] & (1 << bit) != 0)),
+            quality: "good",
+            point_error: None,
+        }))
+        .collect();
+    out.extend(program.ports().iter().map(|p| {
+        let value = match program.get(&p.name) {
+            Some(helmsman_iec::Value::Bool(b)) => Some(SignalValue::Bool(b)),
+            Some(helmsman_iec::Value::Int(i)) => Some(SignalValue::Int(i64::try_from(i).unwrap_or(i64::MAX))),
+            _ => None,
+        };
+        SignalView {
+            name: p.name.clone(),
+            dir: match p.dir {
+                helmsman_iec::PortDir::Input => "in",
+                helmsman_iec::PortDir::Output => "out",
+            },
+            value,
+            quality: "good",
+            point_error: None,
+        }
+    }));
+    out
 }
