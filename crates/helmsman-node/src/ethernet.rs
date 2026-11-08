@@ -14,7 +14,7 @@
 //! DHCP starts only after link-up, with promiscuous mode held until a lease
 //! is in (MAC filtering during DHCP was unreliable on real hardware).
 
-use embassy_net::{Config, ConfigV4, DhcpConfig, Runner, Stack};
+use embassy_net::{Config, ConfigV4, DhcpConfig, Runner, Stack, StaticConfigV4};
 use embassy_time::{Duration, Timer};
 use esp_hal::delay::Delay;
 use esp_hal::gpio::Output;
@@ -174,12 +174,29 @@ pub async fn eth_link_task(emac_ptr: *mut EthEmac) -> ! {
     }
 }
 
-/// Starts DHCP once the link is up and re-arms it if the lease is lost.
+/// How the node gets its address: a lease, or a fixed one (most plants
+/// commission controllers on static networks with no DHCP server; Nick,
+/// 2026-11-08).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Addressing {
+    Dhcp,
+    Static(StaticConfigV4),
+}
+
+/// Applies the address once the link is up: a static one at once, or
+/// DHCP, re-armed if the lease is lost.
 #[embassy_executor::task]
-pub async fn eth_dhcp_task(stack: Stack<'static>, emac_ptr: *mut EthEmac) -> ! {
+pub async fn eth_dhcp_task(stack: Stack<'static>, emac_ptr: *mut EthEmac, addressing: Addressing) -> ! {
     let mut promisc = false;
     loop {
         stack.wait_link_up().await;
+        if let Addressing::Static(fixed) = &addressing {
+            println!("ethernet: link up, static {}", fixed.address);
+            stack.set_config_v4(ConfigV4::Static(fixed.clone()));
+            stack.wait_link_down().await;
+            println!("ethernet: link down");
+            continue;
+        }
         println!("ethernet: link up, starting DHCP");
         Timer::after(Duration::from_secs(1)).await;
 
