@@ -34,7 +34,11 @@ this; change it here first when a decision changes.
   either side flips it), Sign in on a box, and ? in the very corner (help
   on the site). Proposals and "Simulate in this browser / Back to this
   box" are View items. A fault, a deploy under way or a stale file shows
-  on a line under the header only while it lasts.
+  on a line under the header only while it lasts. Below the narrow width
+  (a phone) the wordmark, the state and the "simulation" tag are hidden,
+  the four menus fold into one Menu button with File, Edit, View and Help
+  as submenus, and the project's name is truncated, so the two groups
+  never overlap (2026-11-08).
 - **Glyphs over the diagram's top-right corner:** run/stop, step and
   restart (the simulation), then save, upload, download. Strokes in the
   brand colours; each tells its key on hover.
@@ -220,6 +224,12 @@ CODESYS's default keys where the browser leaves them alone (its
 "Shortcuts" help page, checked 2026-11-01); nothing on a key the browser
 owns (F5 and Ctrl+R reload, F11 goes full screen, Ctrl+F5 reloads hard).
 The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
+Save, Deploy, Upload, Download, Force, Release all, Undo, Redo, Go to
+definition, Cross references, the step chords and Breakpoint act only on
+the Editor screen; on the Monitor or Proposals they do nothing (a Ctrl D
+there used to deploy the hidden project). Ctrl Z and Ctrl Y go to the
+focused text field alone, never to the editor's history as well
+(2026-11-08).
 
 | key | does | CODESYS command on that key |
 |---|---|---|
