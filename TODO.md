@@ -4,78 +4,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **Where is the line on the ST dialect?** — INVESTIGATION.md §4 takes a position on each missing feature: yes to VAR_IN_OUT, function outputs, STRING[n] and TOD/DATE/DT; maybe VAR_GLOBAL, only inside one module; METHOD/PROPERTY later; INTERFACE/EXTENDS not for now; POINTER/REFERENCE never. **Recommendation: take the table as it stands, with VAR_GLOBAL allowed inside one module and refused across modules (imported CODESYS and Beremiz code uses it all the time, and signals stay the only way modules talk).** Leave OOP out until the corpus ranking says imports fail mostly on it: METHOD needs a diagram story first, and dynamic dispatch would break the per-statement tracing behind "on because". POINTER/REFERENCE stays out for good, since the memory-safety and isolation claims depend on it. Let the corpus test (about 1d) put the yeses in order. Each yes adds oracle cases, property tests, a no_std build check and a new relay profile id.
-  needs: your call on the table, VAR_GLOBAL in particular
-  result: the dialect cards (VAR_IN_OUT and function outputs 2d, STRING[n] 4d, TOD/DATE later) get carded in corpus order
-  options: the §4 table, VAR_GLOBAL inside one module (recommended) | the table, no VAR_GLOBAL at all | the table, and plan OOP now
-  est: 15m
-  difficulty: med
-  id: st-dialect-line
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Process-control blocks: OSCAT-style names, or our own plain words?** — INVESTIGATION.md §6 proposes 10-15 blocks in `library.st` (PID with anti-windup and bumpless transfer, RAMP, HYST, SCALE, LIMIT_ALARM, FILTER_PT1, DEBOUNCE, PULSE_COUNT, sequence helpers), each with requirement tests, written by us rather than imported (OSCAT's license is unverified). **Recommendation: use the names engineers and the model already know (OSCAT's where they exist, the standard's otherwise), and put the plain words in each block's tooltip and its help page.** The agent writes a correct call the first time when the pins match what it has read, and an engineer coming from CODESYS recognises them. The UI rule is "tooltips on everything", so the plain-words explanation lands where the engineer reads it. Avoid aliases: two names for one pin doubles what the agent can get wrong. Mark the non-IEC blocks in the docs, as BLINK_PATTERN already is.
-  needs: your call on naming
-  result: the library card (about 4d, after VAR_IN_OUT) gets its naming rule
-  options: OSCAT/standard names, plain words in tooltips (recommended) | our own plain names | both, as aliases
-  est: 10m
-  difficulty: low
-  id: st-library-names
-  notes: FEEDBACK.md 2026-11-07: OSCAT has no warranty, a 2024 out-of-bounds read in MONTH_TO_STRING (VDE-2024-046), and breaks on new CODESYS service packs. Supports writing our own small tested set.
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Do engineers edit ST outside the canvas?** — the answer decides whether a language server on helmsman-iec (diagnostics, hover types, go to definition and the lints in VS Code, Neovim or Zed) and a canonical formatter are worth building (INVESTIGATION.md §7). The formatter needs a lossless token layer first (the lexer drops comments and upper-cases identifiers), and agent prompt Rule 2 means it could only run as an explicit Format command. **Recommendation: not yet. Revisit once `version-control` (git on the controller) ships and an engineer actually clones a project.** Before that, the only way into the code is the canvas, so an LSP has no users. Build `helmsman-plc test PROJECT_DIR` with JUnit XML output (about 1d) instead: it is useful either way and gives a project in git a CI gate from day one.
-  needs: your read on how your engineers work
-  result: LSP and formatter either carded or parked behind version-control; `helmsman-plc test` carded either way
-  options: not yet, revisit after version-control (recommended) | yes, card the LSP now | no, the canvas is the only editor
-  est: 10m
-  difficulty: low
-  id: st-edit-outside-canvas
-  notes: FEEDBACK.md 2026-11-07: vscode-st's most-discussed issue (26 comments) asks for a real linter from a real parser; HN praises Siemens AX for being "just vscode". The `helmsman-plc test` half is now its own card, `cli-test-runner`.
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Siemens SCL import for the early release?** — SCL (TIA Portal) is an ST dialect with `#local`, `"DB".member`, REGION, IEC_TIMER instances and its own instructions. A source-level SCL→ST converter would follow the L5X pattern (convert, refuse what does not map, list every problem). It is real work, and it opens the largest installed base outside North America (INVESTIGATION.md §8). **Recommendation: not for the early release.** The bench, the demo and the Rockwell path (L5X import, CompactLogix read-only) all point at North American plants first, and SCL would compete with the dialect work for the same weeks. If you want a second vendor sooner, the TwinCAT `.TcPOU` importer is the cheap one (ST in CDATA, the parser does the work), though Beckhoff code will lean on OOP and VAR_GLOBAL. Card SCL when a customer brings TIA code.
-  needs: your market call
-  result: SCL either carded with an estimate (likely 1-2w) or parked until a customer asks
-  options: not for the early release (recommended) | yes, card SCL now | TcPOU import first, SCL later
-  est: 10m
-  difficulty: med
-  id: st-scl-import
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **IEC 61131-3: buy the standard, or cite secondary references?** — Helmsman cites no edition of IEC 61131-3 anywhere, and docs/SOURCES.md has no entry for the language (INVESTIGATION.md §9). Today the semantics are pinned by agreeing with ruSTy. The CLAUDE.md rule "protocol claims get a SOURCES.md entry and a § citation" should cover the language too. **Recommendation: buy the current edition.** "Proven IEC 61131-3 Structured Text" is the headline claim to a controls audience, the dialect work in `st-dialect-line` needs the normative text to settle edge cases (STRING length, TOD arithmetic, VAR_IN_OUT aliasing), and section numbers are what an auditor or a customer's engineer will check. Use a secondary reference (the Fernhill ST reference), marked as secondary, until the copy arrives. The current edition and the price are unverified: check the IEC webstore before buying.
-  needs: the current edition and its price from webstore.iec.ch (unverified); your purchase
-  result: a SOURCES.md entry for IEC 61131-3, and § citations on the dialect cards
-  options: buy the current edition, secondary refs until then (recommended) | secondary references only, marked as such | decide after the corpus ranking
-  est: 15m
-  difficulty: low
-  id: iec-standard-source
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Adopt the ST investigation's order and card it?** — INVESTIGATION.md ends with "Suggested order, if we agree": ruSTy 1.0.8 bump (2h, the existing `rusty-bump`), ST corpus test and refusal ranking (1d), the first 6-8 PLCopen lints (3d), `helmsman-plc test` plus JUnit XML (1d), VAR_IN_OUT and function outputs (2d), STRING[n] then typed asserts (4d), process-control library (4d), matiec oracle (1d); TOD/DATE, TcPOU import, LSP and formatter later. About 16d in total. **Recommendation: agree, and card it in that order.** The ruSTy bump and the corpus are cheap and turn the rest into measured decisions, and the lints give every agent turn a better retry from the first one. Answer the five questions above first, since they set the lint, dialect and library cards' scope. Things an agent checks while carding, without you: whether ruSTy 1.0.8 really carries the #2015 fix (the investigation's changelog read), OSCAT BASIC's license, whether the PLCopen guidelines need a login, and the number and scope of the PLCopen/OPC Foundation companion spec for IEC 61131-3 (unverified).
-  needs: answers to st-dialect-line and st-library-names (lints decided 2026-11-07: INVESTIGATION.md §1)
-  result: about nine cards in "Next to build", in order, with depends lines
-  options: agree, card it in this order (recommended) | agree, lints before the corpus | discuss first
-  est: 10m
-  difficulty: low
-  id: st-plan-order
-  asked: 2026-11-07
-  by: claude-session
-
-- [ ] **Secure defaults: lock down reads and the CIP adapter?** — checked in code 2026-11-07: there is no default account or password, writes need a session or token, and only a PIN or account can approve. Three things are open by default, though. Every GET endpoint answers without auth, so anyone on the LAN can read the programs, I/O map and live values. The EtherNet/IP adapter listens on 0.0.0.0:44818 from boot. OPC UA is on (loopback only, anonymous, read-only). OpenPLC v3's default `openplc:openplc` and its unauthenticated API (an auth-bypass CVE) are what a buyer's IT will compare us to. **Recommendation: require a session for every GET except the canvas assets and a health check, and leave the CIP adapter on**, because appearing to an existing PLC as an adapter is the job, and it never writes to other controllers. Show its bind address on the Monitor. Keep OPC UA loopback-only as now. The read lock is a breaking change for anything that polls the API today: the try box, scripts/ and the node.
-  needs: your call
-  result: a card for the read lock (about 1d: middleware, a canvas sign-in before the Monitor, tests that every GET route refuses without a session) or the current posture written down in docs/ARCHITECTURE.md as deliberate
-  options: lock GETs, keep CIP on (recommended) | lock GETs and make CIP opt-in | keep as is, document it
-  est: 10m
-  difficulty: med
-  id: secure-defaults
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Negate SINT/INT in DINT, as ruSTy 1.0.8 now does?** — the ruSTy 1.0.8 bump (unsigned compares fixed, workaround dropped) passes the CI sweep, but a widened sweep (3000 cases, seeds default and 7) finds a new disagreement every time: unary minus on a type's minimum. ruSTy 1.0.8 (rusty#2016) negates a SINT or INT variable or literal in DINT, so `(-v) / 2` on an INT of -32768 gives 16384 there and -16384 here, because ours negates in the operand's width and wraps. Ours already negates an arithmetic result in DINT "as ruSTy" (check.rs, `widened`); only a plain variable or literal differs, and only when the negation feeds another operation before the assignment truncates it. `rusty_negates_small_ints_in_dint` (tests/oracle.rs) pins both sides. **Recommendation: follow ruSTy**, i.e. widen every SINT/INT negation with `arith()` in check.rs, flip the pin to agreement and widen the sweep again. That makes negation consistent with how we already carry +, -, * and / results, and the change only shows in a program that negates a type's minimum. It does change what such a program computes, which is why it's your call.
   needs: your call
   result: the oracle agrees on 3000-case sweeps with any seed (about 1h with the regression test), or the generator stops negating a possible minimum and the difference is written down
@@ -272,9 +200,78 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-08
   by: claude-session
 
-## From user feedback: do now
+- [ ] **Every read needs a session** — decided 2026-11-08 (`secure-defaults`: lock GETs, keep CIP on). Today every `GET /api/...` answers whoever reaches the socket (api/mod.rs "Auth"), so on a LAN bind anyone reads the programs, the I/O map, live values, the audit log and the snapshots. Require a session (cookie or bearer; the box token counts, as it does for POST) on every GET except the canvas itself (`/`, `/{file}`), `GET /api` (the route list) and one health route (`GET /api/health`: up, build, nothing else) for a monitor to poll. The canvas signs in before the Monitor shows anything (the sign-in panel already exists), and a 401 on the first read opens it. The EtherNet/IP adapter stays on at boot (being an adapter to another PLC is the job, and it never writes to other controllers), and the Monitor shows its bind address beside the devices. OPC UA stays loopback-only, anonymous, read-only. It is a breaking change for anything that polls today: the try box check (`curl -sk .../api/devices` in the handoff needs a token), `scripts/`, the node, the MCP tests, docs/ARCHITECTURE.md's Auth paragraph and api/mod.rs's. Tests: a sweep over every route in the `/api` list asserting 401 without a session, 200 with one, and that the three exceptions answer without; the CSRF rules unchanged for the cookie.
+  result: a buyer's IT finds nothing readable without signing in, and the CIP adapter is visible rather than silent
+  est: 1d
+  difficulty: med
+  id: read-lock
+  asked: 2026-11-08
+  by: claude-session
 
-The gaps in FEEDBACK.md's design table, each checked against the code at dev 997bedc (2026-11-07). These are small, need no design decision, and answer a complaint engineers make about every platform. All shipped 2026-11-07 night (#279-#291).
+## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
+
+The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
+
+- [ ] **ST corpus test and refusal ranking** — `tests/st_corpus.rs` in helmsman-iec plus `scripts/st-corpus.sh`, the `plcopen-corpus.sh` pattern: fetch real ST by pinned commit and SHA-256 into `target/st-corpus/`, never vendor it, and report per file whether it lexes, parses, checks and compiles, with a total and the refusals ranked by cause ("STRING: n files, VAR_IN_OUT: m, METHOD: k, ..."). Sources, in INVESTIGATION.md §3: `WengerAG/structured-text-utilities` (MIT) and `tkucic/UniTest` (MIT) can be fetched freely; the test directories of ruSTy (LGPL), matiec (GPL), iec-checker (LGPL) and blark (GPL-2.0) are fetch-by-hash only; OSCAT BASIC only after its license and download terms are read (unverified: skip it if that takes more than a look). Each source gets a docs/SOURCES.md entry under "Test corpora". The ranking is printed by the test and pasted into INVESTIGATION.md §3 so the dialect cards below can be reordered by it.
+  result: the order of the dialect work is measured, not guessed
+  est: 1d
+  difficulty: low
+  id: st-corpus
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **PLCopen guideline lints in the checker, the first 6-8** — in `crates/helmsman-iec/src/check.rs` as `Diagnostic`s with stable IDs (`PLCOPEN-CP<n>` where the guideline has a number, `HELMSMAN-L<n>` otherwise), on the warnings path `checker-warnings-shown` builds, fed into the agent's retry message in `verify::next` beside compile errors. The picks (INVESTIGATION.md §1): an FB instance called inside a conditional (the TON-inside-IF bug), an output written in more than one place, a variable read before it is assigned with no initial value, `=` or `<>` on REAL, a FOR variable or its bounds changed in the body, unused variables and unreachable code, recursion. Decided (Nick, 2026-11-07): every lint is shown and goes to the agent; the first two block "Use this code" and Deploy the way a red requirement test does; a blocking lint is overridden on its line by a pragma with a reason (`{lint: off CP-x "imported, the branch is the enable"}`: the lexer skips `{ }` pragmas today, so it has to keep this one), and the override is written to the audit trail with the reason. The others stay advisory until `st-corpus` shows how noisy they are. Source: the PLCopen Coding Guidelines v1.0 PDF, a free download from plcopen.org (checked 2026-11-08, no login: `https://www.plcopen.org/download_file/force/ff60e817-eee5-442d-b718-a357a7279c7e/342/`); a docs/SOURCES.md entry with the rule number and page per lint ID. iec-checker in docker as a dev-time cross-check (both tools flag the same corpus files) is optional.
+  result: the agent's first retry already knows about the timer-in-IF and the double-written output; an engineer sees why a draft is held, and can override with a reason on record
+  est: 3d
+  difficulty: med
+  depends: checker-warnings-shown
+  id: st-lints
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **VAR_IN_OUT and VAR_OUTPUT on FUNCTION** — the two cheap "yes" rows of the §4 table. VAR_IN_OUT on a FUNCTION_BLOCK passes a struct or array by reference inside one module (the standard way every library takes a buffer); a FUNCTION gets VAR_OUTPUT beside its return value. Oracle cases in tests/oracle.rs (ruSTy accepts both), property tests, the no_std build, the playground SYSTEM prompt and a new relay profile id listing them. Refuse anything that would alias across modules (the isolation claim).
+  result: imported FB libraries and agent-written helpers stop failing on the most common refusal
+  est: 2d
+  difficulty: med
+  depends: st-corpus
+  id: st-var-in-out
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **VAR_GLOBAL inside one module** — decided (Nick, 2026-11-08: `st-dialect-line`): VAR_GLOBAL is accepted at CONFIGURATION / RESOURCE scope inside one module and refused across modules, with a message that says signals are how modules talk. Imported CODESYS and Beremiz code uses it everywhere; the corpus will show how often. Oracle cases, property tests, the PLCopen importer's lowering of global variable lists, a relay profile id.
+  result: a CODESYS or Beremiz project with globals imports into one module unchanged
+  est: 1d
+  difficulty: med
+  depends: st-corpus
+  id: st-var-global
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **STRING[n], then typed asserts** — fixed-length `STRING[n]` (default 80 as the standard), with concatenation, LEN, LEFT/RIGHT/MID, CONCAT, FIND, comparisons and the conversions, bounded so the scan stays bounded and the edge node still builds (no_std: no heap). WSTRING later. Then the TcUnit idea from §5: `ASSERT_EQ_<TYPE>(Expected, Actual, Message)` (one block per type, no generics) so a red requirement test reads "speed was 40, expected 50 at 3.2 s" in the Requirements tab and in the agent's retry message. Oracle cases, property tests (every length boundary, invalid UTF-8 refused at the lexer), relay profile id.
+  result: messages, recipe names, device IDs and OPC UA / webhook payloads can be written in ST; a failed test says what it saw
+  est: 4d
+  difficulty: high
+  depends: st-var-in-out
+  id: st-string
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **Process-control library: 10-15 blocks with tests** — in `crates/helmsman-iec/src/library.st`, written here (OSCAT's license is unverified and it leans on pointers): `PID` with anti-windup and bumpless manual/auto transfer, `RAMP`, `HYST`, `SCALE` (raw to engineering units, using the signal's `unit`), `LIMIT_ALARM`, `FILTER_PT1`, `DEBOUNCE`, `PULSE_COUNT` and a rate, sequence helpers. Decided (Nick, 2026-11-08: `st-library-names`): OSCAT's pin and block names where they exist, the standard's otherwise, no aliases; the plain-words explanation of every block and pin goes in its tooltip and its help page, the way the UI rule "tooltips on everything" already works. Each block gets requirement tests of its own, the non-IEC ones are marked in the docs as `BLINK_PATTERN` is, and the agent's profile gets the list (a new id).
+  result: an analog loop the agent writes calls a tested PID instead of a hand-rolled PI with its own windup bug
+  est: 4d
+  difficulty: med
+  depends: st-var-in-out
+  id: st-library
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **matiec as a second oracle** — the ruSTy pattern (docker/rusty, `HELMSMAN_RUSTY`, tests/oracle.rs) for `beremiz/matiec` (GPL-3.0, the compiler inside OpenPLC and Beremiz): `docker/matiec/`, `HELMSMAN_MATIEC`, a harness that wraps the generated C in a scan loop and prints the variables, and the oracle corpus run through both. Where helmsman and ruSTy disagree a third vote says which is wrong, and "your OpenPLC project runs here unchanged" becomes a tested claim (with the PLCopen corpus that exists). Executed only, never linked.
+  result: a disagreement with ruSTy is settled by a vote, and OpenPLC agreement is measured
+  est: 1d
+  difficulty: med
+  id: matiec-oracle
+  asked: 2026-11-08
+  by: claude-session
 
 ## From user feedback: plan for later
 
@@ -324,6 +321,43 @@ Long-term items FEEDBACK.md points to. Each waits on a card already on the board
   difficulty: low
   id: named-signoff
   asked: 2026-11-07
+  by: claude-session
+
+- [ ] **TOD, DATE and DT** — the last "yes" row of INVESTIGATION.md §4: time-of-day and date types and their arithmetic, from the clock `scan_at` already has (the shift calendar uses it), so "after 22:00" can be written in ST. Oracle cases (ruSTy accepts them), property tests across midnight and the year end, no_std, a relay profile id. After `st-string`, which the formatting functions need.
+  result: schedule logic is written in ST instead of worked around with the calendar
+  est: 2d
+  difficulty: med
+  depends: st-string
+  id: st-tod-date
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **TwinCAT .TcPOU / .TcDUT / .TcGVL import** — INVESTIGATION.md §8: XML wrapping ST in CDATA, so the ST parser does the work and the importer is small; the L5X pattern (convert, refuse what does not map, list every problem). Beckhoff code leans on METHOD / PROPERTY and VAR_GLOBAL, so wait for `st-corpus` to say how much of it would import before spending the day.
+  result: a TwinCAT project's POUs open in the editor with every refusal listed
+  est: 1d
+  difficulty: low
+  depends: st-corpus, st-var-global
+  id: tcpou-import
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **A language server and a formatter on helmsman-iec** — decided (Nick, 2026-11-08: `st-edit-outside-canvas`): not yet. Until `version-control` puts a project in git the canvas is the only way into the code, so an LSP (diagnostics, hover types, go to definition, the lints) has no users, and the formatter needs a lossless token layer first (the lexer drops comments and folds case) and could only ever run as an explicit Format command (agent prompt Rule 2). Revisit once an engineer has cloned a project.
+  result: VS Code, Neovim and Zed get Helmsman's dialect and lints; proposal diffs show only real changes
+  est: 1w
+  difficulty: high
+  depends: version-control, st-lints
+  id: st-lsp-formatter
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **Siemens SCL import** — decided (Nick, 2026-11-08: `st-scl-import`): not for the early release. SCL (TIA Portal) is an ST dialect (`#local`, `"DB".member`, REGION, IEC_TIMER instances, its own instructions); a source-level converter would follow the L5X pattern. Carded here so it is not lost: pick it up when a customer brings TIA code, and estimate then (likely 1-2 weeks).
+  needs: a customer with TIA Portal code to import
+  result: an SCL block converts to ST with every problem listed
+  est: 2w
+  difficulty: high
+  status: blocked
+  id: scl-import
+  asked: 2026-11-08
   by: claude-session
 
 ## Product vision (interview 2026-10-29)

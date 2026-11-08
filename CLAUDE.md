@@ -41,6 +41,10 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   push run on dev catches a clash. .github/workflows/update-branches.yml
   still updates auto-merge PRs when dev moves.
 - **Protocol claims** get a docs/SOURCES.md entry and a § / page citation.
+  Language claims too, but IEC 61131-3 itself is not held (Nick,
+  2026-11-08): cite the secondary references in its SOURCES.md entry,
+  marked secondary, or the oracle test that pins the behaviour, never a §
+  of the standard.
 - **A device reply that will not decode: capture it before theorising.** A
   20 s `tcpdump` (sudo, so a hand-off script) settled the E1213's echoed
   socket-address item and showed the refusal the strict decode hid
