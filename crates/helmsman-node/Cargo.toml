@@ -14,6 +14,11 @@ publish = false
 [workspace]
 
 [features]
+default = ["psram"]
+# `psram`: the WROVER-E's 8 MB on the POE2 as a second heap region (the
+# bench's round 2). Never on the POE-ISO: `--no-default-features --features
+# poe-iso` (scripts/node-build.sh does that).
+psram = ["esp-hal/psram"]
 # `poe-iso`: the image for an Olimex ESP32-POE-ISO (WROOM) instead of the
 # POE2: the RMII clock on GPIO17 (src/board.rs). Implies `net`.
 poe-iso = ["net"]
@@ -56,7 +61,11 @@ helmsman-modbus = { path = "../helmsman-modbus" }
 # heap statistics (max usage: the G3 number; the per-alloc bookkeeping
 # costs a little scan time, named in the output), esp-println on UART0
 # (USB serial), esp-backtrace as the panic handler.
-esp-hal = { version = "=1.0.0", features = ["esp32", "unstable", "psram", "rt"] }
+# No `psram` here: it is the `psram` feature below, on by default for the
+# POE2 (WROVER-E) and OFF for the POE-ISO (WROOM): with it on, esp_hal::init
+# brings up a PSRAM the WROOM does not have over GPIO16/17, and GPIO17 is
+# that board's RMII clock pin (the no-lease run of 2026-11-03).
+esp-hal = { version = "=1.0.0", default-features = false, features = ["esp32", "unstable", "rt"] }
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32"] }
 esp-alloc = { version = "0.9.0", features = ["internal-heap-stats"] }
 esp-println = { version = "0.16.1", features = ["esp32"] }

@@ -71,10 +71,19 @@ case "${2:-${1:-}}" in
 esac
 # NODE_BOARD=poe-iso builds for the ESP32-POE-ISO (RMII clock on GPIO17);
 # the default is the ESP32-POE2.
+# The POE-ISO is a WROOM: no PSRAM, so the default `psram` feature is off
+# (with it on, esp_hal::init brings up PSRAM over GPIO16/17, and GPIO17 is
+# that board's RMII clock pin; docs/EDGE.md, 2026-11-08).
 case "${NODE_BOARD:-poe2}" in
   poe2) ;;
-  poe-iso) [ ${#features[@]} -gt 0 ] && features=(--features net,poe-iso) ;;
-  *) echo "NODE_BOARD: poe2 or poe-iso, not ${NODE_BOARD}" >&2; exit 2 ;;
+  poe-iso)
+    if [ ${#features[@]} -gt 0 ]; then
+      features=(--no-default-features --features poe-iso)
+    else
+      features=(--no-default-features)
+    fi
+    ;;
+  *) echo "NODE_BOARD: poe2, poe-iso or p4-eth, not ${NODE_BOARD}" >&2; exit 2 ;;
 esac
 case "$mode" in
   build|net) cargo build --release ${features[@]+"${features[@]}"} ;;
