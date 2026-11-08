@@ -290,8 +290,14 @@ pub fn heading(
         ui.painter().circle_filled(rect.center(), rect.width() * 0.3, dot);
         let r = r.tip(dot_tip.to_string());
         chrome.hit("agent status", r.rect);
-        ui.label(RichText::new(mode.title()).strong().color(t.fg))
-            .tip("What the Agent does here. The toggle at the right switches it.");
+        // The title is capped to the room left of the toggle: a resizable
+        // panel grows to any row that overflows it.
+        let room = ui.available_width() - 2.0 * glyphs::ROW - 2.0 - 2.0 * ui.spacing().item_spacing.x;
+        ui.scope(|ui| {
+            ui.set_max_width(room.max(40.0));
+            ui.add(egui::Label::new(RichText::new(mode.title()).strong().color(t.fg)).truncate())
+                .tip("What the Agent does here. The toggle at the right switches it.");
+        });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (m, icon, key, tip) in [
@@ -330,7 +336,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
         .add(
             egui::TextEdit::multiline(&mut s.draft)
                 .id_salt("agent-help")
-                .hint_text("What went wrong? e.g. The conveyor stopped and the panel lamp is red")
+                .hint_text("What went wrong? e.g. The conveyor stopped, the lamp is red")
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         )

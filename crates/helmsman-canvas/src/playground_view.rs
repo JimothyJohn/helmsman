@@ -143,13 +143,6 @@ pub struct PlaygroundView {
     /// (`crate::requirements`): after every build change, before Deploy
     /// and "Use this code".
     pub tests: crate::requirements::Results,
-    /// The Requirements tab's field and open row.
-    pub req_ui: crate::requirements::ReqUi,
-    /// The requirement being added, and the last one's outcome.
-    pub adding: Option<crate::requirements::Adding>,
-    /// The next requirement request's seq: far from the Agent's, so the
-    /// shared transport's answers go to the right one.
-    req_seq: u64,
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
@@ -216,9 +209,6 @@ impl PlaygroundView {
             to_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
-            req_ui: crate::requirements::ReqUi::default(),
-            adding: None,
-            req_seq: 1 << 40,
             selection: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
@@ -238,7 +228,7 @@ impl PlaygroundView {
     }
 
     /// Runs the open project's requirement tests against its build and
-    /// keeps the results for the Requirements tab.
+    /// keeps the results (the deploy gate reads them).
     pub fn run_tests(&mut self) {
         let plan = self.proj.test_plan();
         let v = helmsman_iec::spec::run_all(&plan, self.test_settings());
@@ -662,125 +652,6 @@ impl PlaygroundView {
             Ok((seq, req)) => self.link.send(seq, req, ctx),
             Err(why) => self.instruct.failed(&why),
         }
-    }
-
-    /// Adds a requirement: the Agent writes its test when it can be
-    /// reached (the visitor's key or the local proxy); else it is written
-    /// as "no test yet".
-    pub fn add_requirement(&mut self, text: &str, ctx: &egui::Context) {
-        use crate::requirements::{Adding, Phase, name_for, page_request};
-        if self.proj.is_example() || crate::requirements::refusal(text).is_some() {
-            return;
-        }
-        let taken: Vec<String> = self.proj.files.keys().cloned().collect();
-        let name = name_for(text, &taken);
-        self.req_seq += 1;
-        let seq = self.req_seq;
-        let mut a = Adding::in_page(text, &name, seq);
-        match self.chat.route() {
-            Ok(route) => {
-                let programs: Vec<(String, String)> = self
-                    .proj
-                    .files
-                    .iter()
-                    .filter(|(f, _)| {
-                        helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
-                            && !helmsman_iec::spec::is_test(f)
-                    })
-                    .map(|(f, t)| (f.clone(), t.clone()))
-                    .collect();
-                let req = page_request(&route, self.chat.model, text, &name, &programs);
-                self.link.send(seq, req, ctx);
-            }
-            Err(why) if matches!(self.chat.proxy, crate::claude::Proxy::Checking) => {
-                a.phase = Phase::Failed(why.into());
-            }
-            Err(_) => {
-                let file = self.write_test(&name, &helmsman_iec::spec::placeholder(&name, text));
-                a.phase = Phase::Untested {
-                    file,
-                    why: "No agent here: paste an API key in the Agent tab, or open the row and write the test yourself."
-                        .into(),
-                };
-            }
-        }
-        self.adding = Some(a);
-    }
-
-    /// Writes `test_<name>.st` into the open project, saved, and runs the
-    /// tests; the file's name.
-    fn write_test(&mut self, name: &str, text: &str) -> String {
-        let file = format!("test_{name}.st");
-        self.proj.files.insert(file.clone(), text.to_string());
-        self.proj.save();
-        self.run_tests();
-        file
-    }
-
-    /// An answer for the requirement being added: taken (`true`) or not
-    /// one of its pieces.
-    fn requirement_answer(&mut self, m: &crate::claude::Incoming) -> bool {
-        use crate::claude::Incoming;
-        use crate::requirements::{Phase, State};
-        let Some(a) = self.adding.as_mut() else {
-            return false;
-        };
-        let seq = match m {
-            Incoming::Status { seq, .. }
-            | Incoming::Chunk { seq, .. }
-            | Incoming::End { seq }
-            | Incoming::Unreachable { seq, .. } => *seq,
-            Incoming::Proxy(_) => return false,
-        };
-        if seq != a.seq {
-            return seq > 1 << 40;
-        }
-        match m {
-            Incoming::Chunk { text, .. } => a.chunk(text),
-            Incoming::Status { status, body, .. } => {
-                a.phase = Phase::Failed(format!(
-                    "the Agent answered {status}: {}",
-                    body.chars().take(200).collect::<String>()
-                ));
-            }
-            Incoming::Unreachable { why, .. } => a.end(Some(why)),
-            Incoming::End { .. } => {
-                a.end(None);
-                if a.busy() {
-                    let (name, requirement) = (a.name.clone(), a.requirement.clone());
-                    let program = a.page_program();
-                    let text = match &program {
-                        Some(p) => format!("{}{}", helmsman_iec::spec::header(&requirement), p.trim_start()),
-                        None => helmsman_iec::spec::placeholder(&name, &requirement),
-                    };
-                    let file = self.write_test(&name, &text);
-                    let row = self.tests.rows.iter().find(|r| r.file == file).cloned();
-                    let a = self.adding.as_mut().expect("still adding");
-                    a.phase = match (program, row) {
-                        (None, _) => Phase::Untested {
-                            file,
-                            why: "the Agent's answer held no test; open the row to write one".into(),
-                        },
-                        (Some(_), Some(r)) if r.state == State::Untested => Phase::Untested {
-                            file,
-                            why: String::new(),
-                        },
-                        (Some(_), Some(r)) => Phase::Written {
-                            file,
-                            state: r.state,
-                            why: r.why,
-                        },
-                        (Some(_), None) => Phase::Written {
-                            file,
-                            state: State::Failed,
-                            why: "it did not run".into(),
-                        },
-                    };
-                }
-            }
-            Incoming::Proxy(_) => {}
-        }
-        true
     }
 
     /// Stop: the answer under way is dropped and nothing is written.
@@ -1359,9 +1230,7 @@ impl PlaygroundView {
             }
         }
         for m in self.link.drain() {
-            if !self.requirement_answer(&m) {
-                self.chat.receive(m);
-            }
+            self.chat.receive(m);
         }
         self.settle(ctx);
         let t = ctx.input(|i| i.time);
@@ -1808,59 +1677,12 @@ impl Body for PlaygroundView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Requirements, Tab::Claude]
+        &[Tab::Io, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         match tab {
             Tab::Io => self.io(ui, chrome),
-            Tab::Requirements => {
-                let ctx = ui.ctx().clone();
-                let act = egui::ScrollArea::vertical()
-                    .id_salt("pg-tests")
-                    .show(ui, |ui| {
-                        let files = &self.proj.files;
-                        let source = |f: &str| files.get(f).cloned();
-                        let cannot_add = self.proj.is_example().then(|| {
-                            "Make this example your own first: click it in Files and name it.".to_string()
-                        });
-                        let view = crate::requirements::View {
-                            results: &self.tests,
-                            adding: self.adding.as_ref(),
-                            busy: false,
-                            cannot_add,
-                            source: &source,
-                            agent: "the Agent (your API key or the local proxy)",
-                        };
-                        crate::requirements::ui(ui, chrome, &view, &mut self.req_ui)
-                    })
-                    .inner;
-                match act {
-                    Some(crate::requirements::Act::Add(text)) => self.add_requirement(&text, &ctx),
-                    Some(crate::requirements::Act::Run) => self.run_tests(),
-                    Some(crate::requirements::Act::Edit(f)) => {
-                        self.proj.open_file(&f);
-                        self.reload();
-                        chrome.show_code();
-                    }
-                    Some(crate::requirements::Act::Delete(f)) => {
-                        self.proj.delete_file(&f);
-                        self.req_ui.open = None;
-                        self.run_tests();
-                    }
-                    Some(crate::requirements::Act::Reword { file, text }) => {
-                        self.proj.files.insert(file, text);
-                        self.proj.save();
-                        self.run_tests();
-                    }
-                    Some(crate::requirements::Act::Rewrite { file, requirement }) => {
-                        self.proj.delete_file(&file);
-                        self.req_ui.open = None;
-                        self.add_requirement(&requirement, &ctx);
-                    }
-                    None => {}
-                }
-            }
             Tab::Claude => self.claude(ui, chrome),
         }
     }
@@ -2057,9 +1879,12 @@ impl PlaygroundView {
                 ui.label(RichText::new("Model").color(t.muted))
                     .tip("The model that answers. A larger one is slower and costs more.");
                 // No wider than the panel: a row that overflows a resizable
-                // panel widens it every frame.
+                // panel widens it every frame. `width` is only a floor, so
+                // the selected text is truncated to the room (2026-11-08:
+                // with two tabs the panel is narrower than this row was).
                 egui::ComboBox::from_id_salt("pg-model")
                     .width((ui.available_width() - 40.0).max(60.0))
+                    .wrap_mode(egui::TextWrapMode::Truncate)
                     .selected_text(self.chat.model.label())
                     .show_ui(ui, |ui| {
                         for m in Model::ALL {

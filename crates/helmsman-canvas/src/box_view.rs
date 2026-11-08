@@ -88,10 +88,6 @@ pub struct BoxView {
     /// their status: the app sets it from the Proposals list, so a link
     /// the Agent tab kept over a reload is not offered again.
     pub decided: std::collections::BTreeMap<u64, String>,
-    /// The Requirements tab's field and open row.
-    pub req_ui: crate::requirements::ReqUi,
-    /// The requirement being added on the box, and the last one's outcome.
-    pub adding: Option<crate::requirements::Adding>,
     /// Keeps what is in front of the person in this browser (`crate::desk`).
     desk: crate::desk::Keeper,
     /// Keeps it on the box too, for whoever is signed in.
@@ -102,12 +98,6 @@ pub struct BoxView {
     /// The screen and the sign-in name, as the App last set them.
     pub desk_screen: Option<String>,
     pub desk_user: String,
-    req_seq: u64,
-    #[cfg(target_arch = "wasm32")]
-    req_http: crate::web::ChatHttp,
-    /// Natively: the requirement requests asked for.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub req_sent: Vec<crate::requirements::AddRequest>,
     /// The diagram's shared default and this browser's tweaks.
     pub layers: Layers,
     /// The lowering the view was built from.
@@ -184,7 +174,7 @@ impl BoxView {
 
     /// Keeps the desk in `store`, and puts back what it holds: the
     /// project, the file, the unsaved edits (as the box's answers come
-    /// in), and the Agent's and the Requirements' inputs.
+    /// in), and the Agent's input.
     #[must_use]
     pub fn with_desk(mut self, store: Box<dyn Storage>) -> Self {
         let (keeper, d) = crate::desk::Keeper::load(store);
@@ -199,7 +189,6 @@ impl BoxView {
     /// left as it is.
     fn put_back(&mut self, d: crate::desk::Desk) {
         self.instruct.draft.clone_from(&d.agent);
-        self.req_ui.draft.clone_from(&d.requirement);
         if !self.instruct.busy() && !self.agent.busy() {
             let c = d.conversation.clone().unwrap_or_default();
             c.put_back(&mut self.agent, &mut self.instruct);
@@ -223,7 +212,6 @@ impl BoxView {
     pub fn desk(&self) -> crate::desk::Desk {
         let mut d = crate::desk::Desk {
             agent: self.instruct.draft.clone(),
-            requirement: self.req_ui.draft.clone(),
             screen: self.desk_screen.clone(),
             user: self.desk_user.clone(),
             conversation: crate::desk::Conversation::of(
@@ -285,18 +273,11 @@ impl BoxView {
             agent_at: 0.0,
             wants_review: None,
             decided: std::collections::BTreeMap::new(),
-            req_ui: crate::requirements::ReqUi::default(),
-            adding: None,
             desk: crate::desk::Keeper::load(Box::new(crate::sim_projects::MemStorage::default())).0,
             on_box: crate::desk::OnBox::default(),
             restored: None,
             desk_screen: None,
             desk_user: String::new(),
-            req_seq: 0,
-            #[cfg(target_arch = "wasm32")]
-            req_http: crate::web::ChatHttp::default(),
-            #[cfg(not(target_arch = "wasm32"))]
-            req_sent: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             sent: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -464,11 +445,6 @@ impl BoxView {
 
     #[cfg(target_arch = "wasm32")]
     fn chat_inbox(&mut self) {
-        for i in self.req_http.drain() {
-            if let crate::web::ChatIn::Turn(inc) = i {
-                self.requirement_answer(inc);
-            }
-        }
         for i in self.help_http.drain() {
             if let crate::web::ChatIn::Turn(inc) = i {
                 self.help_answer(inc);
@@ -492,110 +468,6 @@ impl BoxView {
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::unused_self)]
     const fn chat_inbox(&mut self) {}
-
-    /// The Requirements tab: the box ran the tests (POST
-    /// /api/projects/{p}/tests) when the project opened and after each
-    /// save; a new requirement goes to the box's agent.
-    fn requirements_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        use crate::requirements::{Act, Adding, View, name_for};
-        let cannot_add = if !self.has_projects() || self.projects.open.is_none() {
-            Some("Open a program first: its requirements are kept with it.".to_string())
-        } else {
-            is_engineer(self.session.as_ref()).err()
-        };
-        let act = egui::ScrollArea::vertical()
-            .id_salt("box-tests")
-            .show(ui, |ui| {
-                let open = self.projects.open.as_ref();
-                let source = |f: &str| {
-                    open.and_then(|o| o.bufs.get(f))
-                        .filter(|b| b.loaded)
-                        .map(|b| b.text.clone())
-                };
-                let view = View {
-                    results: &self.projects.tests,
-                    adding: self.adding.as_ref(),
-                    busy: self.projects.testing,
-                    cannot_add: cannot_add.clone(),
-                    source: &source,
-                    agent: "the agent on this box",
-                };
-                crate::requirements::ui(ui, chrome, &view, &mut self.req_ui)
-            })
-            .inner;
-        let act = match act {
-            Some(Act::Rewrite { file, requirement }) if cannot_add.is_none() => {
-                self.projects.delete_file(&file);
-                self.req_ui.open = None;
-                Some(Act::Add(requirement))
-            }
-            a => a,
-        };
-        match act {
-            Some(Act::Add(text)) if cannot_add.is_none() => {
-                let Some(o) = &self.projects.open else { return };
-                let taken: Vec<String> = o.bufs.keys().cloned().collect();
-                let name = name_for(&text, &taken);
-                self.req_seq += 1;
-                let (a, req) = Adding::to_box(&o.name, &text, &name, self.req_seq);
-                self.adding = Some(a);
-                #[cfg(target_arch = "wasm32")]
-                self.req_http.send(
-                    crate::box_agent::Request {
-                        seq: req.seq,
-                        url: req.url,
-                        body: req.body,
-                    },
-                    ui.ctx(),
-                );
-                #[cfg(not(target_arch = "wasm32"))]
-                self.req_sent.push(req);
-            }
-            Some(Act::Run) => self.projects.run_tests(),
-            Some(Act::Edit(f)) => {
-                self.projects.open_file(&f);
-                chrome.show_code();
-            }
-            Some(Act::Delete(f)) if cannot_add.is_none() => {
-                self.projects.delete_file(&f);
-                self.req_ui.open = None;
-            }
-            Some(Act::Reword { file, text }) if cannot_add.is_none() => {
-                if let Some(b) = self.projects.open.as_mut().and_then(|o| o.bufs.get_mut(&file)) {
-                    b.text = text;
-                }
-                self.save();
-            }
-            _ => {}
-        }
-    }
-
-    /// A piece of the box's answer to the requirement being added.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-    pub fn requirement_answer(&mut self, inc: crate::box_agent::Incoming) {
-        use crate::box_agent::Incoming;
-        let Some(a) = self.adding.as_mut() else { return };
-        let seq = match &inc {
-            Incoming::Status { seq, .. }
-            | Incoming::Chunk { seq, .. }
-            | Incoming::End { seq }
-            | Incoming::Failed { seq, .. } => *seq,
-        };
-        if seq != a.seq {
-            return;
-        }
-        match inc {
-            Incoming::Status { status, body, .. } => a.refused(status, &body),
-            Incoming::Chunk { text, .. } => a.chunk(&text),
-            Incoming::End { .. } => {
-                a.end(None);
-                // The new test file is on the box: read the list again, which
-                // runs the tests, keeping any unsaved edit (Nick, 2026-11-07).
-                self.projects.reread();
-            }
-            Incoming::Failed { why, .. } => a.end(Some(&why)),
-        }
-    }
 
     /// The project as the agent sees it, in the scope of an instruction:
     /// the open file (else its first program file), every file as read,
@@ -2094,16 +1966,12 @@ impl Body for BoxView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Requirements, Tab::Claude]
+        &[Tab::Io, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         if tab == Tab::Claude {
             self.agent_tab(ui, chrome);
-            return;
-        }
-        if tab == Tab::Requirements {
-            self.requirements_tab(ui, chrome);
             return;
         }
         let t = theme(ui);
