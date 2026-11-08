@@ -5,7 +5,8 @@
 //! exception is the socket-address item, which carries the BSD `sockaddr_in`
 //! fields in network (big-endian) order; see [`crate::identity`].
 
-use std::fmt;
+use alloc::vec::Vec;
+use core::fmt;
 
 /// Why a byte sequence could not be decoded.
 ///
@@ -35,7 +36,7 @@ impl fmt::Display for DecodeError {
     }
 }
 
-impl std::error::Error for DecodeError {}
+impl core::error::Error for DecodeError {}
 
 /// Cursor over an input slice. Every read is bounds-checked.
 #[derive(Debug, Clone, Copy)]

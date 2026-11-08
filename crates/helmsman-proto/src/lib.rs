@@ -26,17 +26,31 @@
 //!
 //! [`eds`] reads Electronic Data Sheets: text, no sockets, no feature.
 //!
+//! Without the default `std` feature the crate is the bytes alone
+//! (`no_std + alloc`, no dependencies): encapsulation, CPF, CIP, the
+//! identity item, `Forward_Open`/`Forward_Close` and the Class 1 packet, the Logix
+//! read layouts and the EDS parser. The edge node (crates/helmsman-node,
+//! docs/EDGE.md) builds it that way; `session`, `discover`, `endpoint`,
+//! `scanner` and `logix::reader` are the socket and thread half and need
+//! `std`.
+//!
 //! This crate is not an ODVA product and conveys no license to the
 //! EtherNet/IP technology or marks.
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 
+extern crate alloc;
+
 pub mod cip;
+pub mod class1;
 pub mod codec;
 pub mod cpf;
+#[cfg(feature = "std")]
 pub mod discover;
 pub mod eds;
 pub mod encap;
+#[cfg(feature = "std")]
 pub mod endpoint;
 pub mod explicit;
 pub mod identity;
@@ -44,6 +58,7 @@ pub mod io;
 pub mod logix;
 #[cfg(feature = "scanner")]
 pub mod scanner;
+#[cfg(feature = "std")]
 pub mod session;
 
 pub use codec::DecodeError;

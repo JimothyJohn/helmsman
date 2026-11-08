@@ -8,6 +8,7 @@
 //! Port 44818").
 
 use crate::codec::{DecodeError, Reader, Writer};
+use alloc::vec::Vec;
 
 /// TCP and UDP port for encapsulation commands and explicit messaging.
 pub const PORT: u16 = 44818;
