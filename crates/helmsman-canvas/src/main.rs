@@ -57,6 +57,8 @@ mod icons;
 mod instruct;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod instruct_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod link_tests;
 mod messages;
 mod monitor;
 #[cfg(all(test, not(target_arch = "wasm32")))]

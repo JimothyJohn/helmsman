@@ -311,6 +311,9 @@ impl BoxView {
         if std::mem::take(&mut self.projects.deployed) {
             self.state.relist();
         }
+        if let Some(j) = self.state.take_agent() {
+            self.agent.status = crate::box_agent::Status::parse(&j);
+        }
         if let Some(f) = self.projects.forces.take() {
             for s in &mut self.state.signals {
                 s.forced = f.iter().any(|f| f.signal.as_deref() == Some(s.name.as_str()));
@@ -431,6 +434,15 @@ impl BoxView {
         (Vec::new(), Vec::new())
     }
 
+    /// Closes the box's streams while the page simulates in the browser:
+    /// nobody would take what they carry.
+    pub fn park(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        self.state.pause();
+        let cmds = self.state.poll(now);
+        self.run(ctx, cmds);
+    }
+
     /// Takes in what arrived and carries out what is due, with nothing
     /// drawn (the Monitor draws from the same state).
     pub fn tick(&mut self, ctx: &egui::Context) {
@@ -460,7 +472,9 @@ impl BoxView {
                         self.agent.status = crate::box_agent::Status::Unread;
                     }
                 }
-                crate::web::ChatIn::Status(status, body) => self.agent.status_answer(status, &body),
+                crate::web::ChatIn::Status(status, body) => {
+                    self.agent.status_answer(status, &body, self.agent_at);
+                }
             }
         }
     }
@@ -823,12 +837,10 @@ impl BoxView {
     /// name, the mode toggle), then the shared tab (changing the program)
     /// or Help.
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        use crate::box_agent::Status;
         use crate::help::Mode;
         use crate::instruct::Act;
 
-        if self.agent.status == Status::Unread && !self.agent.status_asked {
-            self.agent.status_asked = true;
+        if self.agent.status_due(ui.ctx().input(|i| i.time)) {
             #[cfg(target_arch = "wasm32")]
             self.chat.status(ui.ctx());
         }
@@ -1810,6 +1822,10 @@ impl Body for BoxView {
             .map(|b| b.text.clone());
         let (text, source) = match (draft, &self.state.io_map) {
             (Some(t), _) => (t, format!("io.map of {}", open.map_or("", |o| o.name.as_str()))),
+            (None, Some(t)) if self.state.io_map_stale() => (
+                t.clone(),
+                "the map this box runs, as last read (the box did not answer the newest read)".to_string(),
+            ),
             (None, Some(t)) => (t.clone(), "the map this box runs".to_string()),
             (None, None) => (String::new(), String::new()),
         };
@@ -1826,10 +1842,14 @@ impl Body for BoxView {
                 })
         };
         let devices = &self.state.devices;
+        // Link states the newest read failed to renew are not shown as
+        // current: they read as unknown, as a stale value greys out.
+        let devices_stale = self.state.devices_stale();
         let state = |name: &str| {
             devices
                 .iter()
                 .find(|d| d.name == name)
+                .filter(|_| !devices_stale)
                 .map_or(LinkState::Unknown, |d| match d.state.as_str() {
                     "up" => LinkState::Up(d.address.clone()),
                     "down" => LinkState::Down(d.error.clone().unwrap_or_default()),

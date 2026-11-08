@@ -125,6 +125,10 @@ impl Feed for BoxState {
             .map(|m| {
                 let w = self.programs.get(&m.name);
                 let at = w.and_then(|w| w.at);
+                // A module that scans slower than the limit sends a scan
+                // that seldom: three of its periods is as long as it may
+                // be quiet.
+                let limit = STALE_AFTER.max(m.scan_ms.map_or(0.0, |ms| 3.0 * ms / 1000.0));
                 Program {
                     name: m.name.clone(),
                     run: match m.state.as_str() {
@@ -139,7 +143,7 @@ impl Feed for BoxState {
                     src: w.and_then(|w| w.lowered.as_ref()).map(|l| l.src.as_str()),
                     values: w.and_then(|w| w.scan.as_ref()).map(|s| s as &dyn Scan),
                     fresh: match at {
-                        Some(t) if now - t <= STALE_AFTER => Fresh::Live,
+                        Some(t) if now - t <= limit => Fresh::Live,
                         Some(t) => Fresh::Stale {
                             age: Some(now - t),
                             why: "no new scan".into(),
