@@ -471,6 +471,43 @@ fn a_scenario_that_passes_on_the_old_file_does_not_distinguish_the_change() {
     assert!(check(&file(), &project(), &a, settings()).green());
 }
 
+/// A rename keeps the behaviour, so no scenario can fail on the old file:
+/// refused as indistinct unless the answer claims it, and then the status
+/// line says it is the Agent's claim; scenarios must still pass.
+#[test]
+fn a_behaviour_preserving_change_passes_only_with_the_unchanged_behaviour_line() {
+    let old = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nVAR t : BOOL; END_VAR\nt := start;\nlamp := t;\nEND_PROGRAM\n";
+    let renamed = old
+        .replace("t :=", "pressed :=")
+        .replace("lamp := t", "lamp := pressed")
+        .replace("VAR t :", "VAR pressed :");
+    let files = Files::from([("main.st".to_string(), old.to_string())]);
+    let follows = FOLLOWS.replace("test_lamp", "test_follows");
+    let plain = answer_with(&renamed, std::slice::from_ref(&follows));
+    let c = check(&file(), &files, &plain, settings());
+    assert!(
+        c.problems().join("\n").contains("does not distinguish"),
+        "{:?}",
+        c.problems()
+    );
+    let claimed = plain.replacen(
+        "It now says why.",
+        "Why: the variable is named for what it holds.\nUnchanged behaviour: only a local variable's name changes.",
+        1,
+    );
+    let c = check(&file(), &files, &claimed, settings());
+    assert!(c.green(), "{:?}", c.problems());
+    assert!(c.unchanged);
+    assert!(crate::instruct::status("main.st", &c).contains("behaviour unchanged (the Agent's claim)"));
+    // The claim does not excuse a failing scenario.
+    let broken = claimed.replace("lamp := pressed", "lamp := NOT pressed");
+    assert!(check(&file(), &files, &broken, settings()).red());
+    // A claim with no reason is no claim.
+    assert!(!crate::verify::claims_unchanged(
+        "Why: x.\nUnchanged behaviour:\n"
+    ));
+}
+
 /// A block that never closes was cut off: the answer is red and goes
 /// back, not checked as if the block were not there.
 #[test]

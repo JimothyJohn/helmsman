@@ -32,6 +32,10 @@
 //! after): when the answer changes what the file does, at least one of
 //! its scenarios must fail on the file as it was. Scenarios that pass on
 //! the old file prove nothing about the change and go back to the Agent.
+//! A change that keeps the behaviour (a rename, a tidy) says so in an
+//! `Unchanged behaviour: <why>` line after its `Why:` line; the rule is
+//! skipped then, every test and scenario must still pass, and the status
+//! line calls it the Agent's claim.
 //!
 //! Plain data and text, so it is tested natively and runs in the page.
 
@@ -384,6 +388,23 @@ pub struct Check {
     pub tests_green: usize,
     /// Requirement tests a scenario replaces, old wording and new.
     pub replaced: Vec<Replaced>,
+    /// The answer claims the change keeps the behaviour (an `Unchanged
+    /// behaviour:` line), so no scenario has to fail on the old file.
+    pub unchanged: bool,
+}
+
+/// Whether the answer's prose carries an `Unchanged behaviour: <why>` line
+/// with a reason.
+#[must_use]
+pub fn claims_unchanged(answer: &str) -> bool {
+    const KEY: &str = "unchanged behaviour:";
+    segments(answer).iter().any(|s| match s {
+        Segment::Prose(p) => p.lines().any(|l| {
+            let l = l.trim_start_matches(['*', '_', '#', ' ']).to_ascii_lowercase();
+            l.strip_prefix(KEY).is_some_and(|r| !r.trim().is_empty())
+        }),
+        Segment::Code { .. } => false,
+    })
 }
 
 /// A requirement test a scenario took the place of.
@@ -537,7 +558,10 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
         }
     }
     if c.failures.is_empty() && c.scenarios.iter().all(|r| r.passed) {
-        c.failures.extend(indistinct(scope, files, &all, &scen, settings));
+        c.unchanged = claims_unchanged(answer);
+        if !c.unchanged {
+            c.failures.extend(indistinct(scope, files, &all, &scen, settings));
+        }
     }
     c.replaced = replaced;
     c.add = scen.into_iter().map(|s| (s.file, s.text)).collect();
