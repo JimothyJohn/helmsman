@@ -66,16 +66,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **Which user-feedback cards go first?** — FEEDBACK.md (2026-11-07) collects what engineers like and hate about TIA, Studio 5000, CODESYS, TwinCAT, PLCnext, Sysmac, Control Expert, B&R, OpenPLC, Beremiz and the ST tooling. Its gaps are now cards in "From user feedback: do now" (about 8d in all) and "From user feedback: plan for later". **Recommendation: do now, in this order: `retain-persist` (a RETAIN that is quietly lost on power-up is a trust-breaker the first time an engineer meets it; ship the check-time warning the same day), `deploy-state-preview` (Sysmac users asked for exactly this), `cli-test-runner` (the most-asked-for tool in the research), `scan-stats`, `modbus-shared-connection`, then the small ones.** All of them are plain engineering with no open design question. The ST plan (`st-plan-order`) runs beside it, not after: the lints card is the same trust argument.
-  needs: your call on the order
-  result: the do-now cards get worked top to bottom; the later ones stay parked until their depends land
-  options: this order, beside the ST plan (recommended) | ST plan first, feedback after | pick per card on the board
-  est: 10m
-  difficulty: low
-  id: feedback-order
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **Secure defaults: lock down reads and the CIP adapter?** — checked in code 2026-11-07: there is no default account or password, writes need a session or token, and only a PIN or account can approve. Three things are open by default, though. Every GET endpoint answers without auth, so anyone on the LAN can read the programs, I/O map and live values. The EtherNet/IP adapter listens on 0.0.0.0:44818 from boot. OPC UA is on (loopback only, anonymous, read-only). OpenPLC v3's default `openplc:openplc` and its unauthenticated API (an auth-bypass CVE) are what a buyer's IT will compare us to. **Recommendation: require a session for every GET except the canvas assets and a health check, and leave the CIP adapter on**, because appearing to an existing PLC as an adapter is the job, and it never writes to other controllers. Show its bind address on the Monitor. Keep OPC UA loopback-only as now. The read lock is a breaking change for anything that polls the API today: the try box, scripts/ and the node.
   needs: your call
   result: a card for the read lock (about 1d: middleware, a canvas sign-in before the Monitor, tests that every GET route refuses without a session) or the current posture written down in docs/ARCHITECTURE.md as deliberate
@@ -94,6 +84,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: rusty-negation-width
   asked: 2026-11-07
+  by: claude-session
+
+- [ ] **RETAIN on a clean shutdown: catch SIGTERM?** — retain-persist (#288) writes RETAIN values at most once a second from a writer thread, so a clean stop (launchctl, systemd, Ctrl-C) can lose up to the last second of changes. The box has no signal handler: catching SIGTERM/SIGINT needs either a new dependency (e.g. `signal-hook`, small, widely used) or `unsafe` (the crate forbids it). **Recommendation: add `signal-hook` behind `box`, flush the retain writer and the snapshot on SIGTERM/SIGINT, then exit.** A second of loss on a power cut is the honest IEC trade; on a planned stop it is avoidable, and a service manager always sends SIGTERM first.
+  needs: your call on the dependency
+  result: a planned stop keeps every RETAIN value; a test sends SIGTERM mid-count and checks the last value
+  options: signal-hook behind box (recommended) | keep the 1 s bound, document it | lower the rate instead
+  est: 10m
+  difficulty: low
+  id: retain-shutdown
+  asked: 2026-11-08
   by: claude-session
 
 ## Needs your hands
@@ -224,9 +224,57 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-07
   by: claude-session
 
+- [ ] **Show the checker's warnings in the canvas and the check API** — #288 added the first non-blocking warnings (RETAIN where it cannot be kept yet: in a function block, a FUNCTION, VAR_TEMP, a located variable), as `Program::warnings()`. Today the box only logs them at start. Show them where errors show (the editor's marks, the Messages, `POST .../check`, the CLI `helmsman-plc test`), visibly different from errors, and never blocking a deploy. The ST lints decision (#272: all shown, two block) will use the same path.
+  result: an engineer sees "RETAIN here is not kept yet" while typing, not only in a log
+  est: 4h
+  difficulty: low
+  id: checker-warnings-shown
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **The desk is per person on a shared browser too** — after #280, when a second person signs in on a browser the first one used, and the box has nothing newer for them, the desk on screen (the first person's unsaved edits) is written to the second person's box desk. Slice 1 (#276) already shared the browser desk between everyone on one browser. Key the browser desk by the signed-in name, and on a sign-in by a different person start from that person's box desk or an empty one, never the previous person's.
+  result: one person's draft never lands in another's desk
+  est: 2h
+  difficulty: low
+  id: desk-person-switch
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **A project keeps the files this build does not know** — found by project-compat-fixtures (#283): reading a project skips a file whose name this build does not recognise without a word, a replace-upload then loses it, and an uploaded .zip holding one is refused outright. List such a file as a problem ("not used by this release: kept"), keep it through reads and uploads, and add it to the compat fixtures.
+  result: a newer release's file survives a trip through an older box
+  est: 4h
+  difficulty: low
+  id: project-unknown-files
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **A broken diagram.layout does not block the build** — found by #283: a layout that will not parse stops the build although the build never reads it, and its problem has no file and line of its own. Make it a listed problem on `diagram.layout` at its line, fall back to the automatic layout, and build.
+  result: a bad layout costs the drawing, not the deploy
+  est: 2h
+  difficulty: low
+  id: layout-not-blocking
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **A gateway's "unit not answering" marks the device down** — after #290, a Modbus TCP gateway that answers for a dead serial unit with exception 0x0A (gateway path unavailable) or 0x0B (target device failed to respond) counts as a point error, so the device stays "up" with every point bad. Treat those two as link errors for that unit only (the connection and the other units stay up), with the device's reason in plain words. Cite the Modbus Application Protocol spec's exception table in docs/SOURCES.md.
+  result: a dead RTU behind a gateway shows as down, with why
+  est: 2h
+  difficulty: low
+  id: gateway-unit-down
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **docs/help/simulation.html is stale** — on dev it no longer matches simulation.md (noticed by #288's worker; `scripts/build-help.sh --check` would flag it). Rebuild it, and add `build-help.sh --check` to the gate if it is not there.
+  result: the help pages match their source, and drift fails CI
+  est: 30m
+  difficulty: low
+  id: help-html-drift
+  asked: 2026-11-08
+  by: claude-session
+
 ## From user feedback: do now
 
-The gaps in FEEDBACK.md's design table, each checked against the code at dev 997bedc (2026-11-07). These are small, need no design decision, and answer a complaint engineers make about every platform. Order: `feedback-order`.
+The gaps in FEEDBACK.md's design table, each checked against the code at dev 997bedc (2026-11-07). These are small, need no design decision, and answer a complaint engineers make about every platform. All shipped 2026-11-07 night (#279-#291).
 
 ## From user feedback: plan for later
 
