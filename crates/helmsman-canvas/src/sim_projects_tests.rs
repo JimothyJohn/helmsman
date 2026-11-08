@@ -685,3 +685,138 @@ fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
     );
     assert!(!v.proj.files.contains_key("v2.st"), "nothing landed yet");
 }
+
+/// A storage with a backup slot beside the main one, both readable after
+/// the projects took them.
+#[derive(Clone, Default)]
+struct Backed {
+    main: Rc<RefCell<Option<String>>>,
+    backup: Rc<RefCell<Option<String>>>,
+}
+
+impl Storage for Backed {
+    fn load(&self) -> Result<Option<String>, String> {
+        Ok(self.main.borrow().clone())
+    }
+
+    fn save(&mut self, text: &str) -> Result<(), String> {
+        *self.main.borrow_mut() = Some(text.to_string());
+        Ok(())
+    }
+
+    fn backup(&mut self, text: &str) -> Result<(), String> {
+        *self.backup.borrow_mut() = Some(text.to_string());
+        Ok(())
+    }
+}
+
+/// 2026-11-08 review: what the browser stored in a format this page does
+/// not read (a newer page's, or one bad top-level field) is not written
+/// over by the first project opened. It is kept as a backup and left alone
+/// until the person saves, and the same for a store whose projects broke a
+/// rule and were left out.
+#[test]
+fn a_store_this_page_cannot_read_is_backed_up_and_left_alone_until_a_save() {
+    let ok = "PROGRAM fine\nEND_PROGRAM\n";
+    let newer = serde_json::json!({
+        "format": "helmsman-projects 2",
+        "open": "mine",
+        "projects": { "mine": { "main.st": ok } },
+    })
+    .to_string();
+    let partly = serde_json::json!({
+        "format": "helmsman-projects 1",
+        "open": "mine",
+        "projects": {
+            "mine": { "main.st": ok },
+            "broken": { "main.st": ok, "../x.st": "y" },
+        },
+    })
+    .to_string();
+    for raw in [newer, partly, "{not json".to_string()] {
+        let store = Backed::default();
+        *store.main.borrow_mut() = Some(raw.clone());
+        let mut s = SimProjects::load(Box::new(store.clone()));
+        assert!(s.storage_problem.is_some(), "said: {raw}");
+        s.open_project(&example_project(crate::playground::EXAMPLES[1].src).0);
+        assert_eq!(
+            store.main.borrow().as_deref(),
+            Some(raw.as_str()),
+            "opening a project writes nothing: {raw}"
+        );
+        assert_eq!(store.backup.borrow().as_deref(), Some(raw.as_str()), "backed up");
+        // The person saves: now the store is written, the backup stays.
+        s.create("fresh", None);
+        let now = store.main.borrow().clone().unwrap();
+        assert_ne!(now, raw);
+        assert!(now.contains("\"fresh\""), "{now}");
+        assert_eq!(
+            store.backup.borrow().as_deref(),
+            Some(raw.as_str()),
+            "backup kept"
+        );
+    }
+}
+
+/// A project's revisions go with its name, and a deleted project's do not
+/// come back under a new project of the same name.
+#[test]
+fn renaming_keeps_a_projects_history_and_deleting_drops_it() {
+    let store = Shared::default();
+    let mut s = SimProjects::load(Box::new(store.clone()));
+    s.create("a", None);
+    s.current_text_mut().unwrap().push_str("(* one *)\n");
+    s.save();
+    s.current_text_mut().unwrap().push_str("(* two *)\n");
+    s.save();
+    assert_eq!(s.revisions().len(), 2);
+    s.rename("a", "b");
+    assert_eq!(s.open, "b");
+    assert_eq!(s.revisions().len(), 2, "the revisions went with it");
+    assert!(!s.history.contains_key("a"));
+    let again = SimProjects::load(Box::new(store.clone()));
+    assert_eq!(
+        again.history["b"].len(),
+        2,
+        "and survive the next persist and reload"
+    );
+    s.delete("b");
+    assert!(!s.history.contains_key("b"), "gone with the project");
+    s.create("b", None);
+    s.save();
+    assert_eq!(
+        s.revisions().iter().map(|r| r.n).collect::<Vec<_>>(),
+        [1],
+        "a new project of that name starts its own history"
+    );
+}
+
+/// The box refuses a file name that differs only by case (409) and an
+/// import onto a name that is taken, offering Replace; so does the
+/// simulation.
+#[test]
+fn files_follow_the_boxs_rules_for_case_and_for_imports_onto_a_taken_name() {
+    let mut s = SimProjects::load(Box::new(Shared::default()));
+    s.create("p", None);
+    s.add_file("blocks.st", "(* blocks *)\n".into());
+    s.rename_file("blocks.st", "MAIN.st");
+    assert!(s.files.contains_key("blocks.st") && !s.files.contains_key("MAIN.st"));
+    assert!(s.notice.as_ref().unwrap().1, "{:?}", s.notice);
+
+    // The same name: refused and offered, not overwritten.
+    let before = s.files.clone();
+    s.upload("blocks.st", b"(* imported *)\n");
+    assert_eq!(s.files, before, "nothing overwritten");
+    let (msg, err) = s.notice.clone().unwrap();
+    assert!(err && msg.contains("already has that file"), "{msg}");
+    assert!(s.pending_file.is_some());
+    s.replace();
+    assert_eq!(s.files["blocks.st"], "(* imported *)\n");
+    assert!(s.pending_file.is_none());
+
+    // A name that differs only by case is refused and not offered.
+    s.upload("BLOCKS.st", b"(* other *)\n");
+    assert!(!s.files.contains_key("BLOCKS.st"));
+    assert!(s.pending_file.is_none());
+    assert!(s.notice.as_ref().unwrap().1);
+}

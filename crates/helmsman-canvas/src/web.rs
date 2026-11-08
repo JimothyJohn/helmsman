@@ -18,15 +18,16 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::box_projects::{PCall, PReq};
 use crate::claude::{Incoming, KeyStore, PROXY_HEALTH, PROXY_HELLO, Request as ClaudeRequest};
-use crate::remote::{Cmd, Msg, Stream};
+use crate::remote::{Cmd, Gets, Inbox, Msg, Stream};
 use crate::review::{Answer, Call, Request as ReviewRequest};
 
-type Inbox = Rc<RefCell<Vec<Msg>>>;
+/// Longest a read of the box may take before it is given up as failed, s.
+const GET_TIMEOUT_S: i32 = 15;
 
 /// An open `EventSource` and the callbacks it holds; closed when dropped.
 struct Source {
     es: web_sys::EventSource,
-    event: &'static str,
+    events: &'static [&'static str],
     on_open: Closure<dyn FnMut(web_sys::Event)>,
     on_error: Closure<dyn FnMut(web_sys::Event)>,
     on_event: Closure<dyn FnMut(web_sys::MessageEvent)>,
@@ -37,9 +38,11 @@ impl Drop for Source {
         self.es.close();
         self.es.set_onopen(None);
         self.es.set_onerror(None);
-        let _ = self
-            .es
-            .remove_event_listener_with_callback(self.event, self.on_event.as_ref().unchecked_ref());
+        for event in self.events {
+            let _ = self
+                .es
+                .remove_event_listener_with_callback(event, self.on_event.as_ref().unchecked_ref());
+        }
         // Keep the closures alive until here: `close` stops further calls.
         let _ = (&self.on_open, &self.on_error);
     }
@@ -47,7 +50,8 @@ impl Drop for Source {
 
 #[derive(Default)]
 pub struct Driver {
-    inbox: Inbox,
+    inbox: Rc<RefCell<Inbox>>,
+    gets: Rc<RefCell<Gets>>,
     values: Option<Source>,
     trace: Option<Source>,
     traces: Option<Source>,
@@ -56,15 +60,20 @@ pub struct Driver {
 impl Driver {
     /// What arrived since the last call.
     pub fn drain(&mut self) -> Vec<Msg> {
-        std::mem::take(&mut *self.inbox.borrow_mut())
+        self.inbox.borrow_mut().take()
     }
 
     pub fn run(&mut self, cmd: Cmd, ctx: &egui::Context) {
         match cmd {
             Cmd::Get(what, url) => {
-                let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+                let (inbox, gets, ctx) = (Rc::clone(&self.inbox), Rc::clone(&self.gets), ctx.clone());
+                let n = gets.borrow_mut().issue(&what);
                 wasm_bindgen_futures::spawn_local(async move {
                     let (build, r) = get(&url).await;
+                    // A slow, old answer must not overwrite a newer one.
+                    if !gets.borrow_mut().accept(&what, n) {
+                        return;
+                    }
                     let mut inbox = inbox.borrow_mut();
                     if let Some(b) = build {
                         inbox.push(Msg::Build(b));
@@ -114,19 +123,21 @@ impl Driver {
                 push(Msg::Failed(stream));
             })
         };
-        let event = stream.event();
+        let events = stream.events();
         let on_event = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
             if let Some(data) = e.data().as_string() {
-                push(Msg::Event(stream, event.to_string(), data));
+                push(Msg::Event(stream, e.type_(), data));
             }
         });
         es.set_onopen(Some(on_open.as_ref().unchecked_ref()));
         es.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-        es.add_event_listener_with_callback(event, on_event.as_ref().unchecked_ref())
-            .ok()?;
+        for event in events {
+            es.add_event_listener_with_callback(event, on_event.as_ref().unchecked_ref())
+                .ok()?;
+        }
         Some(Source {
             es,
-            event,
+            events,
             on_open,
             on_error,
             on_event,
@@ -155,7 +166,17 @@ async fn get(url: &str) -> (Option<String>, Result<String, String>) {
 
 async fn get_body(url: &str, build: &mut Option<String>) -> Result<String, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str(url))
+    let (init, headers) = init("GET")?;
+    init.set_headers(&headers);
+    // A reply that never comes would leave its read "asked" for ever.
+    let controller = web_sys::AbortController::new().map_err(|e| text(&e))?;
+    init.set_signal(Some(&controller.signal()));
+    let abort = Closure::once_into_js(move || controller.abort());
+    window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(abort.unchecked_ref(), GET_TIMEOUT_S * 1000)
+        .map_err(|e| text(&e))?;
+    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(|e| text(&e))?;
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|e| text(&e))?
         .dyn_into()
@@ -294,7 +315,7 @@ async fn claude(
             .await
             .map_err(|e| text(&e))?;
         let mut body = b.as_string().unwrap_or_default();
-        body.truncate(crate::claude::MAX_ANSWER);
+        crate::claude::truncate_at_boundary(&mut body, crate::claude::MAX_ANSWER);
         push(Incoming::Status {
             seq,
             status: resp.status(),
@@ -551,7 +572,7 @@ async fn chat(
             .await
             .map_err(|e| text(&e))?;
         let mut body = b.as_string().unwrap_or_default();
-        body.truncate(64 << 10);
+        crate::box_agent::cut(&mut body, 64 << 10);
         push(Incoming::Status {
             seq,
             status: resp.status(),
@@ -784,6 +805,8 @@ pub fn download_bytes(name: &str, bytes: &[u8], mime: &str) {
 pub struct LocalProjects;
 
 const PROJECTS_SLOT: &str = "helmsman-canvas/projects";
+/// What the projects slot held when this page could not read it.
+const PROJECTS_BACKUP_SLOT: &str = "helmsman-canvas/projects.backup";
 
 fn storage() -> Result<web_sys::Storage, String> {
     web_sys::window()
@@ -834,5 +857,11 @@ impl crate::sim_projects::Storage for LocalProjects {
 
     fn save(&mut self, value: &str) -> Result<(), String> {
         storage()?.set_item(PROJECTS_SLOT, value).map_err(|e| text(&e))
+    }
+
+    fn backup(&mut self, value: &str) -> Result<(), String> {
+        storage()?
+            .set_item(PROJECTS_BACKUP_SLOT, value)
+            .map_err(|e| text(&e))
     }
 }

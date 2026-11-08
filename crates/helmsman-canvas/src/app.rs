@@ -31,6 +31,19 @@ pub const HELP_URL: &str = "https://helmsman.advin.io/help/";
 /// Seconds between re-reads of the proposal list for the ⋯ badge.
 const PROPOSALS_EVERY: f64 = 30.0;
 
+/// Longest a Run, Stop or Restart sent to a box holds the next one back
+/// while the box's list still shows the state it was decided from, s.
+const CONTROL_HOLD: f64 = 5.0;
+
+/// A Run, Stop or Restart sent to a box, until the box's list shows it.
+struct ControlSent {
+    /// Page time the hold ends.
+    until: f64,
+    op: &'static str,
+    /// The targets' (name, state) it was decided from.
+    states: Vec<(String, String)>,
+}
+
 /// What Upload's file picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub const UPLOAD_ACCEPT: &str = ".zip,.st,.xml,.l5x,.eds";
@@ -169,6 +182,11 @@ pub struct App {
     fell_back: bool,
     /// When the proposal list was last asked for (page time, s).
     listed: Option<f64>,
+    /// The last Run, Stop or Restart sent to the box: until when it holds,
+    /// which, and the targets' states it was decided from. The box's list lags a
+    /// command by a publish, so a second click on the same state would
+    /// decide, and send, again.
+    ctl: Option<ControlSent>,
     /// The guided tour, while it runs (`?tour`, Help › Take the tour).
     pub tour: Option<crate::tour::Tour>,
 }
@@ -224,6 +242,7 @@ impl App {
             about: false,
             fell_back: false,
             listed: None,
+            ctl: None,
             tour: None,
         }
     }
@@ -378,8 +397,13 @@ impl App {
                 self.screen = Screen::Monitor;
             }
         }
-        if let Some(b) = &mut self.boxv {
-            b.state.set_monitor(self.screen == Screen::Monitor);
+        if self.source == Source::Box {
+            if let Some(b) = &mut self.boxv {
+                b.state.resume();
+                b.state.set_monitor(self.screen == Screen::Monitor);
+            }
+        } else if let Some(b) = self.boxv.as_mut().filter(|b| !b.state.paused()) {
+            b.park(&ctx);
         }
         // Proposals are read from the start, so the badge knows.
         if self.source == Source::Box {
@@ -390,7 +414,11 @@ impl App {
                 }
                 self.listed = Some(now);
             }
-            if self.screen != Screen::Proposals {
+            if self.screen == Screen::Proposals {
+                // Nothing else draws the box here, and its streams carry
+                // on: take what they bring, or it piles up unread.
+                self.boxv.get_or_insert_with(BoxView::new).tick(&ctx);
+            } else {
                 r.tick(&ctx, now);
             }
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(PROPOSALS_EVERY));
@@ -497,7 +525,7 @@ impl App {
                     .as_ref()
                     .map(|b| self.monitor.targets(&b.state.modules))
                     .unwrap_or_default();
-                self.box_control(a, targets);
+                self.box_control(a, &targets, now);
             }
             Some(Wish::Act(a)) => self.act(a, &ctx),
             None => {}
@@ -651,11 +679,20 @@ impl App {
     /// A box's transport, from the Monitor or the Editor (card
     /// monitor-box-run-stop): Run/Stop stops every running one of
     /// `targets`, or runs them all when none runs; Restart restarts each.
-    /// The box checks the session and audits.
-    fn box_control(&mut self, a: Action, targets: Vec<String>) {
+    /// A second click before the box shows the first one's effect (or
+    /// [`CONTROL_HOLD`] seconds) is ignored. The box checks the session
+    /// and audits.
+    fn box_control(&mut self, a: Action, targets: &[String], now: f64) {
         let Some(b) = self.boxv.as_mut() else {
             return;
         };
+        let states: Vec<(String, String)> = b
+            .state
+            .modules
+            .iter()
+            .filter(|m| targets.contains(&m.name))
+            .map(|m| (m.name.clone(), m.state.clone()))
+            .collect();
         let running: Vec<String> = b
             .state
             .modules
@@ -664,11 +701,23 @@ impl App {
             .map(|m| m.name.clone())
             .collect();
         let (op, names) = match a {
-            Action::RunStop if running.is_empty() => ("run", targets),
+            Action::RunStop if running.is_empty() => ("run", targets.to_vec()),
             Action::RunStop => ("stop", running),
-            Action::Restart => ("restart", targets),
+            Action::Restart => ("restart", targets.to_vec()),
             _ => return,
         };
+        if self
+            .ctl
+            .as_ref()
+            .is_some_and(|c| now < c.until && c.op == op && c.states == states)
+        {
+            return;
+        }
+        self.ctl = Some(ControlSent {
+            until: now + CONTROL_HOLD,
+            op,
+            states,
+        });
         for n in names {
             b.projects.control(&n, op);
         }
@@ -919,13 +968,20 @@ impl App {
                 .unwrap_or_default()
         });
         let engineer = is_engineer(self.session().as_ref()).is_ok();
+        // What the glyphs act on is what the Monitor's do.
+        let targets = self
+            .boxv
+            .as_ref()
+            .map(|b| self.monitor.targets(&b.state.modules))
+            .unwrap_or_default();
         let on_box = self
             .boxv
             .as_ref()
             .filter(|_| self.source == Source::Box && engineer)
             .map(|b| {
-                let m = &b.state.modules;
-                (!m.is_empty(), m.iter().any(|m| m.state != "stopped"))
+                let m = b.state.modules.iter().filter(|m| targets.contains(&m.name));
+                let (any, running) = m.fold((false, false), |(_, r), m| (true, r || m.state != "stopped"));
+                (any, running)
             });
 
         egui::Area::new(egui::Id::unique("glyphs"))
@@ -1042,12 +1098,7 @@ impl App {
             // On a box the run and restart glyphs are the box's (the
             // simulation's are not drawn there): every module it runs.
             if on_box.is_some() && matches!(a, Action::RunStop | Action::Restart) {
-                let all = self
-                    .boxv
-                    .as_ref()
-                    .map(|b| b.state.modules.iter().map(|m| m.name.clone()).collect())
-                    .unwrap_or_default();
-                self.box_control(a, all);
+                self.box_control(a, &targets, ctx.input(|i| i.time));
             } else {
                 self.act(a, &ctx);
             }

@@ -98,6 +98,8 @@ pub struct BoxView {
     /// The screen and the sign-in name, as the App last set them.
     pub desk_screen: Option<String>,
     pub desk_user: String,
+    /// Whose work the desk on this page is: the last person signed in.
+    desk_owner: Option<String>,
     /// The diagram's shared default and this browser's tweaks.
     pub layers: Layers,
     /// The lowering the view was built from.
@@ -179,32 +181,67 @@ impl BoxView {
     pub fn with_desk(mut self, store: Box<dyn Storage>) -> Self {
         let (keeper, d) = crate::desk::Keeper::load(store);
         self.desk = keeper;
+        self.desk_owner.clone_from(&d.owner);
         self.projects.restore = restore_of(&d);
-        self.put_back(d);
+        self.put_back(d, false);
         self
     }
 
     /// The inputs, the Agent's conversation, the device form, the screen
     /// and the sign-in name from `d`. A conversation under way here is
-    /// left as it is.
-    fn put_back(&mut self, d: crate::desk::Desk) {
-        self.instruct.draft.clone_from(&d.agent);
-        if !self.instruct.busy() && !self.agent.busy() {
+    /// left as it is. With `keep_here`, what this page holds (an input
+    /// typed, a conversation, a half-filled form) stays and `d` only
+    /// fills what is empty.
+    fn put_back(&mut self, d: crate::desk::Desk, keep_here: bool) {
+        if !keep_here || self.instruct.draft.is_empty() {
+            self.instruct.draft.clone_from(&d.agent);
+        }
+        let has_conversation = !self.agent.turns.is_empty() || self.instruct.outcome.is_some();
+        let keep_conversation = keep_here && has_conversation;
+        if !self.instruct.busy() && !self.agent.busy() && !keep_conversation {
             let c = d.conversation.clone().unwrap_or_default();
             c.put_back(&mut self.agent, &mut self.instruct);
         }
-        self.devices_ui.adding.clone_from(&d.device);
+        if !(keep_here && self.devices_ui.adding.is_some()) {
+            self.devices_ui.adding.clone_from(&d.device);
+        }
         self.desk_screen.clone_from(&d.screen);
         self.desk_user.clone_from(&d.user);
         self.restored = Some(d);
     }
 
     /// Puts the box's desk, newer than the one in front of the person, in
-    /// its place (the person signed in on another screen since).
+    /// its place (the person signed in on another screen since): the
+    /// edits merged with this page's, which stay.
     fn adopt(&mut self, d: crate::desk::Desk) {
+        let edited_here = self.desk.changed(&self.desk());
         self.desk.adopt(&d);
         self.projects.adopt(restore_of(&d));
-        self.put_back(d);
+        self.put_back(d, edited_here);
+    }
+
+    /// Another person signed in on this page: the last one's open project,
+    /// edits, inputs, conversation and form are not theirs. They stay on
+    /// the last one's desk (the box's, as of the last second), and this
+    /// page starts empty and asks for the new person's.
+    fn start_over(&mut self) {
+        self.agent.stop();
+        self.agent.turns.clear();
+        self.instruct = crate::instruct::Instruct::default();
+        self.devices_ui.adding = None;
+        self.projects.start_over();
+        self.desk.adopt(&crate::desk::Desk::default());
+    }
+
+    /// Follows who is signed in: the desk on this page belongs to the last
+    /// person to sign in on it, and a different one starts over.
+    fn follow_owner(&mut self) {
+        let Some(who) = crate::desk::owner(self.session.as_ref()) else {
+            return;
+        };
+        if self.desk_owner.replace(who.clone()).is_some_and(|was| was != who) {
+            self.start_over();
+        }
     }
 
     /// What the desk keeps, as it stands now.
@@ -214,6 +251,7 @@ impl BoxView {
             agent: self.instruct.draft.clone(),
             screen: self.desk_screen.clone(),
             user: self.desk_user.clone(),
+            owner: self.desk_owner.clone(),
             conversation: crate::desk::Conversation::of(
                 &self.agent.turns,
                 self.instruct.outcome.as_ref(),
@@ -278,6 +316,7 @@ impl BoxView {
             restored: None,
             desk_screen: None,
             desk_user: String::new(),
+            desk_owner: None,
             #[cfg(not(target_arch = "wasm32"))]
             sent: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -293,6 +332,10 @@ impl BoxView {
 
     /// [`Self::step`], with the project and force answers too.
     pub fn step_all(&mut self, ctx: &egui::Context, msgs: Vec<Msg>, answers: Vec<(PCall, Answer)>, now: f64) {
+        // Who is signed in first, so an answer for the person before is
+        // told from one for this person.
+        self.follow_owner();
+        self.on_box.step(self.session.as_ref());
         for m in msgs {
             self.state.apply(m, now);
         }
@@ -311,6 +354,9 @@ impl BoxView {
         if std::mem::take(&mut self.projects.deployed) {
             self.state.relist();
         }
+        if let Some(j) = self.state.take_agent() {
+            self.agent.status = crate::box_agent::Status::parse(&j);
+        }
         if let Some(f) = self.projects.forces.take() {
             for s in &mut self.state.signals {
                 s.forced = f.iter().any(|f| f.signal.as_deref() == Some(s.name.as_str()));
@@ -320,7 +366,6 @@ impl BoxView {
         let cmds = self.state.poll(now);
         self.run(ctx, cmds);
         self.trend.step(self.session.as_ref(), &self.state, now);
-        self.on_box.step(self.session.as_ref());
         if self.desk.due(now) {
             let desk = self.desk();
             if let Some(d) = self.desk.keep(&desk, now) {
@@ -431,6 +476,15 @@ impl BoxView {
         (Vec::new(), Vec::new())
     }
 
+    /// Closes the box's streams while the page simulates in the browser:
+    /// nobody would take what they carry.
+    pub fn park(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        self.state.pause();
+        let cmds = self.state.poll(now);
+        self.run(ctx, cmds);
+    }
+
     /// Takes in what arrived and carries out what is due, with nothing
     /// drawn (the Monitor draws from the same state).
     pub fn tick(&mut self, ctx: &egui::Context) {
@@ -460,7 +514,9 @@ impl BoxView {
                         self.agent.status = crate::box_agent::Status::Unread;
                     }
                 }
-                crate::web::ChatIn::Status(status, body) => self.agent.status_answer(status, &body),
+                crate::web::ChatIn::Status(status, body) => {
+                    self.agent.status_answer(status, &body, self.agent_at);
+                }
             }
         }
     }
@@ -515,13 +571,20 @@ impl BoxView {
         f: impl FnOnce(&mut crate::instruct::Instruct, &crate::instruct::Env<'_>) -> R,
     ) -> Option<R> {
         let (project, open_scope, files) = self.agent_files()?;
+        // Checked the way the box will run it: its image sizes and scan
+        // period, as it reported them for this project (the page's
+        // simulation sizes only until it has).
+        let settings = self.projects.open.as_ref().and_then(|o| o.runs).map_or_else(
+            || helmsman_iec::spec::Settings::new(crate::playground::SIZES),
+            |r| helmsman_iec::spec::Settings::new(r.sizes).period(r.period),
+        );
         let plan = helmsman_iec::spec::plan(
             files
                 .iter()
                 .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
                 .map(|(n, t)| (n.as_str(), t.as_str())),
         );
-        let diags: Vec<String> = helmsman_iec::compile(&plan.main, crate::playground::SIZES)
+        let diags: Vec<String> = helmsman_iec::compile(&plan.main, settings.sizes)
             .err()
             .map(|d| d.iter().map(ToString::to_string).collect())
             .unwrap_or_default();
@@ -534,7 +597,7 @@ impl BoxView {
             source: &plan.main,
             diagnostics: &diags,
             devices: &devices,
-            settings: helmsman_iec::spec::Settings::new(crate::playground::SIZES),
+            settings,
         };
         Some(f(&mut self.instruct, &env))
     }
@@ -593,7 +656,27 @@ impl BoxView {
     fn settle_agent(&mut self, ctx: &egui::Context) {
         use crate::box_agent::End;
         use crate::instruct::Step;
-        if !self.instruct.busy() || self.agent.seq() == self.answered_seq {
+        if !self.instruct.busy() {
+            return;
+        }
+        // An instruction belongs to the project it was typed in: another
+        // open before the answer is in ends the run with nothing written,
+        // so no retry is built from the other project's files.
+        let open = self.projects.open.as_ref().map(|o| o.name.as_str());
+        if self
+            .instruct
+            .run
+            .as_ref()
+            .is_some_and(|r| Some(r.project.as_str()) != open)
+        {
+            self.agent.stop();
+            #[cfg(target_arch = "wasm32")]
+            self.chat.abort();
+            self.instruct
+                .failed("the open project changed while the Agent was answering");
+            return self.log_agent();
+        }
+        if self.agent.seq() == self.answered_seq {
             return;
         }
         let Some(turn) = self.agent.turns.last().filter(|t| t.end.is_some()).cloned() else {
@@ -602,12 +685,15 @@ impl BoxView {
         self.answered_seq = self.agent.seq();
         let proposals = turn.proposals();
         match turn.end {
-            Some(End::Done { stop, why }) if stop == "end_turn" || !turn.text.trim().is_empty() => {
-                let _ = why;
-            }
+            Some(End::Done { stop, .. }) if stop == "end_turn" => {}
             Some(End::Done { why, stop }) => {
-                self.instruct
-                    .failed(&why.unwrap_or_else(|| format!("the agent stopped ({stop})")));
+                // Any other stop ended the turn early: whatever text there
+                // is may be half an answer, and half a file is never written.
+                let said = match stop.as_str() {
+                    "budget" | "max_tokens" => format!("the answer was cut off ({stop})"),
+                    _ => format!("the agent stopped ({stop})"),
+                };
+                self.instruct.failed(&why.unwrap_or(said));
                 self.instruct.proposed(&proposals);
                 return;
             }
@@ -793,12 +879,10 @@ impl BoxView {
     /// name, the mode toggle), then the shared tab (changing the program)
     /// or Help.
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
-        use crate::box_agent::Status;
         use crate::help::Mode;
         use crate::instruct::Act;
 
-        if self.agent.status == Status::Unread && !self.agent.status_asked {
-            self.agent.status_asked = true;
+        if self.agent.status_due(ui.ctx().input(|i| i.time)) {
             #[cfg(target_arch = "wasm32")]
             self.chat.status(ui.ctx());
         }
@@ -1780,6 +1864,10 @@ impl Body for BoxView {
             .map(|b| b.text.clone());
         let (text, source) = match (draft, &self.state.io_map) {
             (Some(t), _) => (t, format!("io.map of {}", open.map_or("", |o| o.name.as_str()))),
+            (None, Some(t)) if self.state.io_map_stale() => (
+                t.clone(),
+                "the map this box runs, as last read (the box did not answer the newest read)".to_string(),
+            ),
             (None, Some(t)) => (t.clone(), "the map this box runs".to_string()),
             (None, None) => (String::new(), String::new()),
         };
@@ -1796,10 +1884,14 @@ impl Body for BoxView {
                 })
         };
         let devices = &self.state.devices;
+        // Link states the newest read failed to renew are not shown as
+        // current: they read as unknown, as a stale value greys out.
+        let devices_stale = self.state.devices_stale();
         let state = |name: &str| {
             devices
                 .iter()
                 .find(|d| d.name == name)
+                .filter(|_| !devices_stale)
                 .map_or(LinkState::Unknown, |d| match d.state.as_str() {
                     "up" => LinkState::Up(d.address.clone()),
                     "down" => LinkState::Down(d.error.clone().unwrap_or_default()),

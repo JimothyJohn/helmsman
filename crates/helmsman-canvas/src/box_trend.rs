@@ -90,6 +90,8 @@ pub struct BoxTrend {
     /// Page time of the last history ask.
     asked: Option<f64>,
     seq: Option<u64>,
+    /// The box's restarts seen so far ([`BoxState::epoch`]).
+    epoch: u64,
     queue: Vec<PReq>,
 }
 
@@ -116,6 +118,7 @@ impl BoxTrend {
             loaded: None,
             asked: None,
             seq: None,
+            epoch: 0,
             queue: Vec::new(),
         }
     }
@@ -170,6 +173,14 @@ impl BoxTrend {
                 self.pins = self.browser_pins();
                 self.ask(now);
             }
+        }
+        if state.epoch() != self.epoch {
+            // The box restarted: its clock starts again, so what was drawn
+            // (on the old one) would interleave with the new.
+            self.epoch = state.epoch();
+            self.series.clear();
+            self.now_ms = 0;
+            self.ask(now);
         }
         if self.asked.is_some_and(|a| now - a >= RENEW_S) {
             self.ask(now);
@@ -503,6 +514,41 @@ mod tests {
         t.poll();
         t.step(None, &s, RENEW_S + 1.0);
         assert_eq!(t.poll().len(), 1);
+    }
+
+    /// The values stream's `at_ms` is the box's clock since its process
+    /// started: after a restart it is small again, and a series that kept
+    /// the old (larger) times would drop every new point.
+    #[test]
+    fn a_box_restart_starts_the_trend_over() {
+        use crate::remote::{Msg, Stream};
+        let mut t = BoxTrend::new(Box::new(MemStorage(Some(r#"["lamp"]"#.into()))));
+        let mut s = BoxState::new();
+        let ev = |seq: u64, at: u64| {
+            Msg::Event(
+                Stream::Values,
+                "values".into(),
+                json!({ "seq": seq, "at_ms": at, "modules": [],
+                        "signals": [{ "name": "lamp", "dir": "out", "value": true, "quality": "good" }] })
+                .to_string(),
+            )
+        };
+        t.step(None, &s, 0.0);
+        t.poll();
+        for (k, at) in [(100, 600_000), (101, 600_100)] {
+            s.apply(ev(k, at), 1.0);
+            t.step(None, &s, 1.0);
+        }
+        assert_eq!(t.series["lamp"].last(), Some(&(600_100, 1.0)));
+        // The box restarts; its clock is at 200 ms.
+        s.apply(ev(1, 200), 2.0);
+        t.step(None, &s, 2.0);
+        assert_eq!(t.series["lamp"], [(200, 1.0)], "the old clock's points are void");
+        assert_eq!(t.now_ms, 200);
+        assert_eq!(t.poll().len(), 1, "the box's history is asked for again");
+        s.apply(ev(2, 300), 2.1);
+        t.step(None, &s, 2.1);
+        assert_eq!(t.series["lamp"], [(200, 1.0), (300, 1.0)], "and it extends");
     }
 
     #[test]

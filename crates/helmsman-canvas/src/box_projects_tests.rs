@@ -1972,6 +1972,179 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     );
 }
 
+/// A program file of realistic size (60 KiB) goes to the box's agent once,
+/// with the answer format and its tests, inside what the box takes; before,
+/// the format and two copies of the file went over 8000 characters at
+/// about 2.5 KB (review 2026-11-08).
+#[test]
+fn a_realistic_file_reaches_the_box_agent_once() {
+    use crate::box_agent::MAX_MESSAGE;
+    use crate::instruct::BOX_RULES;
+    use crate::instruct_tests::{FOLLOWS, LAMP};
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let big = format!("{}{LAMP}", "(* plant notes for the next shift *)\n".repeat(1_600));
+    assert!(big.len() > 58_000, "{}", big.len());
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "big",
+        &[("main.st", big.as_str()), ("test_lamp.st", FOLLOWS)],
+    );
+    v.projects.open_file("main.st");
+    v.tick(&ctx);
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let m: Json = serde_json::from_str(&v.chat_sent[0].body).unwrap();
+    let message = m["message"].as_str().unwrap();
+    assert!(message.chars().count() < MAX_MESSAGE / 2, "{}", message.len());
+    assert!(message.starts_with(BOX_RULES));
+    assert_eq!(message.matches("lamp := start;").count(), 1, "the file goes once");
+    assert!(message.contains("<requirement_tests>"));
+}
+
+/// The Agent checks an answer against the box's own image sizes and scan
+/// period, not the page's simulation (8 bytes of I and Q, 64 of M, 10 ms):
+/// a valid program that reads an input at byte 20 (the page has 8) failed
+/// to compile there and the model was told to fix it (review 2026-11-08).
+#[test]
+fn the_agent_on_a_box_checks_against_the_boxs_sizes_and_period() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::LAMP;
+    use serde_json::json;
+    let big = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; kept : BOOL; END_VAR\nVAR sensor AT %IX20.0 : BOOL; END_VAR\nlamp := start;\nkept := start OR sensor;\nEND_PROGRAM\n";
+    let scenario = "```st scenario\n(* The kept flag follows start. *)\nPROGRAM test_kept\nVAR_INPUT kept : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; kept_on : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN kept_on(COND := kept); done := TRUE; END_IF;\nEND_PROGRAM\n```\n";
+    // The page's simulation cannot hold it; the box can.
+    assert!(helmsman_iec::compile(big, crate::playground::SIZES).is_err());
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    v.tick(&ctx);
+    let runs = v
+        .projects
+        .open
+        .as_ref()
+        .and_then(|o| o.runs)
+        .expect("the box reported its sizes");
+    assert_eq!((runs.sizes.i, runs.sizes.q), (32, 32), "{runs:?}");
+    assert_eq!(
+        runs.period,
+        Duration::from_millis(2),
+        "the bench box scans at 2 ms"
+    );
+    v.instruct.draft = "keep a counter word".into();
+    v.send_instruction(&ctx);
+    let seq = v.chat_sent.last().expect("a message").seq;
+    let answer = format!("Why: it keeps a word.\n\n```st\n{big}```\n\n{scenario}");
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev("text", json!({ "delta": answer })),
+        ev("done", json!({"stop": "end_turn", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+}
+
+/// An instruction belongs to the project it was typed in: opening another
+/// while the box's agent answers ends the run, and a failing first answer
+/// is not sent back with the other project's files.
+#[test]
+fn opening_another_project_ends_the_boxs_run_and_sends_no_retry() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::LAMP;
+    use serde_json::json;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    make(&b, &jar, &mut v.projects, "second", &[("main.st", LAMP)]);
+    v.projects.open_project("line");
+    for _ in 0..20 {
+        pump(&b, &jar, &mut v, &ctx, 1.0);
+        if v.psent.is_empty() {
+            break;
+        }
+    }
+    v.projects.open_file("main.st");
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let seq = v.chat_sent[0].seq;
+    v.projects.open_project("second");
+    v.tick(&ctx);
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev(
+            "text",
+            json!({ "delta": "Why: x.\n\n```st\nPROGRAM broken\n```\n" }),
+        ),
+        ev("done", json!({"stop": "end_turn", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "no retry from the other project");
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Failed, "{o:?}");
+    assert!(o.status.contains("project changed"), "{}", o.status);
+}
+
+/// A turn the box ended early (`budget`) with a whole-looking answer in
+/// it is cut off, not complete: nothing is written (review 2026-11-08).
+#[test]
+fn an_answer_the_box_cut_off_is_never_written() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::{LAMP, st};
+    use serde_json::json;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    v.tick(&ctx);
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    let seq = v.chat_sent.last().expect("a message").seq;
+    let new = LAMP.replace("lamp := start;", "lamp := start; (* follows start *)");
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev("text", json!({ "delta": st(&new) })),
+        ev("done", json!({"stop": "budget", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Failed, "{o:?}");
+    assert!(o.status.contains("cut off"), "{}", o.status);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "never written"
+    );
+}
+
 // ---- the Monitor's Stop, Run and Restart on a box (card monitor-box-run-stop) ----
 
 /// The page on the Monitor, its requests carried out against the box until
@@ -2267,6 +2440,170 @@ fn a_draft_started_on_one_screen_is_there_on_another_after_signing_in() {
     );
     assert_eq!(air.instruct.draft, "make the lamp blink at 2 Hz");
     assert_eq!(air.projects.open.as_ref().unwrap().bufs["blocks.st"].text, edited);
+}
+
+/// 2026-11-08 review: two screens of one account, each with an unsaved
+/// edit to a different file. The screen whose desk the box refuses as older
+/// reads the other's and takes it, and its own edit is still there, still
+/// unsaved, next to the other screen's.
+#[test]
+fn taking_a_newer_desk_from_another_screen_keeps_this_screens_unsaved_edit() {
+    use crate::box_projects::PCall;
+    use crate::sim_projects::wall_ms;
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let (ja, js) = (Jar::default(), Jar::default());
+    let mut a = page(&b, &ja, Some(("alice", ALICE)));
+    make(
+        &b,
+        &ja,
+        &mut a.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    let mut s = page(&b, &js, Some(("alice", ALICE)));
+    for (v, j) in [(&mut a, &ja), (&mut s, &js)] {
+        v.projects.open_project("line");
+        settle(&b, j, &mut v.projects);
+    }
+    let mut now = 0.0;
+    for _ in 0..3 {
+        now += 1.5;
+        pump(&b, &ja, &mut a, &ctx, now);
+        pump(&b, &js, &mut s, &ctx, now);
+    }
+    a.projects.open_file("blocks.st");
+    let from_a = format!("{BLOCKS}\n(* from the first screen *)\n");
+    a.projects.current_mut().unwrap().text = from_a.clone();
+    s.projects.open_file("main.st");
+    let from_s = format!("{MAIN}\n(* from the second screen *)\n");
+    s.projects.current_mut().unwrap().text = from_s.clone();
+    s.instruct.draft = "the second screen's note".into();
+
+    // The second screen dates its desk first but its PUT is slow; the
+    // first screen's, dated later, lands before it.
+    now += 1.5;
+    s.step_all(&ctx, vec![], vec![], now);
+    let held = std::mem::take(&mut s.psent);
+    let put = held.iter().find(|q| q.call == PCall::SaveDesk).expect("a PUT");
+    let dated: Json = serde_json::from_slice(put.body.as_ref().unwrap()).unwrap();
+    let t = dated["saved_at"].as_u64().unwrap();
+    wait("the clock to move on", || wall_ms() > t);
+    a.step_all(&ctx, vec![], vec![], now);
+    let first = std::mem::take(&mut a.psent);
+    let kept = first
+        .iter()
+        .find(|q| q.call == PCall::SaveDesk)
+        .expect("the first screen's PUT");
+    let ans = b.send(&ja, kept);
+    assert_eq!(ans.status, 200, "{}", ans.body);
+    for q in held {
+        let ans = b.send(&js, &q);
+        if q.call == PCall::SaveDesk {
+            assert_eq!(ans.status, 409, "{}", ans.body);
+        }
+        s.step_all(&ctx, vec![], vec![(q.call, ans)], now);
+    }
+    for _ in 0..10 {
+        now += 1.5;
+        pump(&b, &js, &mut s, &ctx, now);
+    }
+    let o = s.projects.open.as_ref().expect("the project stays open");
+    assert_eq!(o.name, "line");
+    assert_eq!(o.current.as_deref(), Some("main.st"), "the file it was on");
+    assert_eq!(o.bufs["main.st"].text, from_s, "its own edit is not discarded");
+    assert!(o.bufs["main.st"].dirty());
+    assert_eq!(
+        o.bufs["blocks.st"].text, from_a,
+        "the other screen's edit arrived"
+    );
+    assert_eq!(
+        s.instruct.draft, "the second screen's note",
+        "the typed input stays"
+    );
+    let box_desk = |jar: &Jar| -> Json {
+        let a = b.send(jar, &PReq::get(PCall::Desk, "/api/desk".into()));
+        serde_json::from_str(&a.body).unwrap()
+    };
+    let held = box_desk(&js);
+    assert_eq!(held["desk"]["drafts"]["line"]["main.st"]["text"], from_s.as_str());
+    assert_eq!(
+        held["desk"]["drafts"]["line"]["blocks.st"]["text"],
+        from_a.as_str()
+    );
+}
+
+/// 2026-11-08 review: another person signing in on the same page does not
+/// inherit the last one's open project, unsaved edits and inputs, and the
+/// last one's desk does not go over theirs on the box.
+#[test]
+fn another_person_signing_in_on_the_page_does_not_inherit_the_last_ones_desk() {
+    use crate::box_projects::PCall;
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    v.projects.open_project("line");
+    settle(&b, &jar, &mut v.projects);
+    v.projects.open_file("blocks.st");
+    let edited = format!("{BLOCKS}\n(* alice's *)\n");
+    v.projects.current_mut().unwrap().text = edited.clone();
+    v.instruct.draft = "alice's note".into();
+    let box_desk = |jar: &Jar| -> Json {
+        let a = b.send(jar, &PReq::get(PCall::Desk, "/api/desk".into()));
+        serde_json::from_str(&a.body).unwrap()
+    };
+    let mut now = 0.0;
+    for _ in 0..20 {
+        now += 1.5;
+        pump(&b, &jar, &mut v, &ctx, now);
+        if box_desk(&jar)["desk"]["agent"] == "alice's note" {
+            break;
+        }
+    }
+    assert_eq!(box_desk(&jar)["desk"]["agent"], "alice's note");
+
+    // Bob has an older desk of his own on the box, from another screen.
+    let jb = Jar::default();
+    b.login(&jb, "bob", BOB);
+    let ans = b.send(
+        &jb,
+        &PReq {
+            call: PCall::SaveDesk,
+            method: "PUT",
+            url: "/api/desk".into(),
+            body: Some(br#"{"saved_at":5,"agent":"bob's note"}"#.to_vec()),
+            ctype: "application/json",
+        },
+    );
+    assert!(ans.status < 300, "{}", ans.body);
+
+    // Alice signs out and Bob signs in on the same page.
+    v.session = Some(b.login(&jar, "bob", BOB));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &jar, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "bob's note", "his own desk, not alice's input");
+    assert!(!v.projects.dirty(), "alice's unsaved edit is not on his screen");
+    assert!(v.desk().drafts.is_empty(), "{:?}", v.desk().drafts);
+    assert_eq!(box_desk(&jb)["desk"]["agent"], "bob's note");
+    assert_eq!(box_desk(&jb)["desk"]["drafts"], serde_json::json!({}));
+    // Alice's desk on the box is hers still.
+    let ja = Jar::default();
+    b.login(&ja, "alice", ALICE);
+    let hers = box_desk(&ja);
+    assert_eq!(
+        hers["desk"]["drafts"]["line"]["blocks.st"]["text"],
+        edited.as_str()
+    );
 }
 
 /// An instruction under way on the box's agent, with a proposal stored

@@ -625,7 +625,10 @@ copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
 `ASSERT` failed (named as words, with its declaration line's comment, and
 when), either side faulted or does not compile, a shared port's types
 differ, `DONE` never came within the limit (two minutes of simulated
-time), or the test holds no `ASSERT` at all. The test's first comment is
+time), the test holds no `ASSERT` at all, a declared `ASSERT` was never
+called (the block latches `CHECKED` on its first call), or the test
+shares no port with the program (reads no output, drives no input), so
+it could pass whatever the program does. The test's first comment is
 the requirement in the engineer's words. Deterministic: no wall clock, no
 I/O.
 
@@ -730,7 +733,18 @@ written (`verify::check`): the code taken into a copy through
 `scope::apply`, the scenarios added, compiled, the scenarios run with
 the project's own tests, and the whole-file rule (`verify::full_copy`: no
 elision markers, every POU with its header and END_ line, the landed file
-equal to the code). A failure goes back with what failed, up to two
+equal to the code). Three more rules keep a scenario honest: when the
+answer changes what the file does, a scenario must fail on the file as it
+was (`verify::indistinct`); a scenario marked `replaces test_X` stands only
+when X is red with the new code, and the outcome keeps both wordings
+(`verify::contradicted`, `Check::replaced`); a block that never closes
+means the answer was cut off and is red. A stop for `max_tokens` (page) or
+`budget` (box) is a failed run, never a complete answer. The file goes
+once: when the program is that one file, `<current_program>` points at the
+`text:` in `<edit_scope>`. On a box the check runs at the image sizes and
+scan period the box reports for the project (`tests` in `GET
+/api/projects/{p}`), and an instruction ends if another project is opened
+before its answer is in. A failure goes back with what failed, up to two
 retries (`verify::next`); still red, nothing is written and the tab says
 why. Green is written into the file at once and saved as one revision
 whose Agent page is `instruct::record` (instruction, reason, scenarios,
@@ -869,6 +883,20 @@ the person between screens.
   a desk older than the one it holds (409), and the page then reads the
   newer one. A role change on the same account keeps the desk; signed
   out, or with the box not answering, the browser's is the desk.
+- **Taking a newer desk never drops an unsaved edit.** The edits are
+  merged per file: one edited here stays as it is here (for a file edited
+  on both screens this page's text stays, and saving it is refused as
+  stale if the box's copy moved), and the other screen's other edits come
+  in. With an unsaved edit in the open project the page stays on that
+  project and file; typed inputs, a conversation and a half-filled form
+  stay too. A different person signing in on the same page (the desk
+  names its owner in this browser) starts the page empty and asks for
+  their desk; an answer for the person before is dropped by its `owner`.
+- **A desk this page cannot read in full.** Each field is read on its own,
+  so a newer page's conversation does not take the edits down. A browser
+  slot that did not read in full is left as it is until the person
+  changes something, and a box desk that is not a desk at all is not
+  fought over: the browser keeps it and the page says so.
 - **The Agent's conversation and the device form** (`desk-agent-and-forms`).
   The desk also keeps the Agent tab's turns with the box's agent and the
   last instruction's outcome (`desk::Conversation`), and a half-filled New
@@ -880,7 +908,8 @@ the person between screens.
   characters a field, and any setting whose key names a credential
   (`desk::is_secret_key`: a password, PIN, token, key or secret) is left
   out. Both count as work, so a change dates the desk. Past the box's
-  512 KiB the edits go first, then the conversation, then the form. After a
+  512 KiB the conversation goes first, then the form, then the biggest
+  edits. After a
   reload an instruction that was under way is over with nothing written,
   and the proposals its turn stored are still linked; a proposal decided
   since (no longer a draft in the Proposals list) shows as decided and is
@@ -2330,8 +2359,16 @@ agent as ST; nothing here writes ST back).
   proven by rendering every scan of a run with the API's own renderer and
   comparing annotations and explanations. Connection status: connecting,
   connected, reconnecting, unreachable after 3 failures; a failed stream
-  is closed and reopened after 2 s doubling to 30 s (the canvas's backoff,
-  not the browser's). The decisions (`remote::BoxState`) are free of I/O
+  is closed and reopened after a steady 5 s (the canvas's backoff, not the
+  browser's). The box ends each stream at 600 s, so one that was
+  delivering is reopened at once and the link stays connected; a values
+  stream that opens and then says nothing for 5 s is closed and opened
+  again (and counted), since a half-open connection raises no error. A box
+  that answers `GET /api/modules` is a box even when its 8 stream slots are
+  taken. The page takes the box's streams while it shows any screen, and
+  closes them while it simulates in the browser; the transport keeps only
+  the newest values (and each module's newest trace) of an unread backlog.
+  The decisions (`remote::BoxState`) are free of I/O
   and tested natively against the real API. **Simulation** (the ST
   playground below: docs/playground/, `?playground` or `?demo`, native,
   or "Simulate in this browser" from the ⋯ menu or when the box is

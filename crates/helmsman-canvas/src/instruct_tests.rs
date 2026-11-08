@@ -41,6 +41,17 @@ pub(crate) fn follows() -> String {
     "```st scenario\n(* The lamp follows start. *)\nPROGRAM test_lamp_follows\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_on : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_on(COND := lamp); done := TRUE; END_IF;\nEND_PROGRAM\n```\n".into()
 }
 
+/// A scenario that fails on `LAMP` and holds once the lamp latches: start
+/// is pressed for a few scans, released, and the lamp must stay on.
+pub(crate) fn latches() -> String {
+    "```st scenario\n(* The lamp stays on after start is released. *)\nPROGRAM test_lamp_latches\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; stays_on : ASSERT; END_VAR\nn := n + 1;\nstart := n < 3;\nIF n > 6 THEN stays_on(COND := lamp); done := TRUE; END_IF;\nEND_PROGRAM\n```\n".into()
+}
+
+/// A scenario that fails on `LAMP` and holds once a `horn` follows start.
+pub(crate) fn horn_follows() -> String {
+    "```st scenario\n(* The horn sounds with start. *)\nPROGRAM test_horn\nVAR_INPUT horn : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; horn_on : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN horn_on(COND := horn); done := TRUE; END_IF;\nEND_PROGRAM\n```\n".into()
+}
+
 /// An answer: its reason, the whole file `code`, and [`follows`].
 pub(crate) fn st(code: &str) -> String {
     format!("Why: it says so.\n\n```st\n{code}```\n\n{}", follows())
@@ -580,7 +591,14 @@ fn the_agents_change_is_marked_on_the_diagram_and_the_code_until_the_next_edit()
             "VAR_OUTPUT lamp : BOOL; horn : BOOL; END_VAR",
         )
         .replace("lamp := start;\n", "lamp := start;\nhorn := start;\n");
-    instruct(&mut v, "sound the horn with the lamp", &[&st(&horn)]);
+    instruct(
+        &mut v,
+        "sound the horn with the lamp",
+        &[&format!(
+            "Why: it says so.\n\n```st\n{horn}```\n\n{}",
+            horn_follows()
+        )],
+    );
     assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
     v.agent_marks(&mut chrome);
     let m = chrome.st_marks.clone().expect("the code's marks");
@@ -602,7 +620,12 @@ fn the_agents_change_is_marked_on_the_diagram_and_the_code_until_the_next_edit()
     assert!(labels.iter().any(|l| l.contains("horn")), "{labels:?}");
 
     // The next answer takes the horn out again: its blocks are ghosts.
-    instruct(&mut v, "no horn after all", &[&st(LAMP)]);
+    let silent = "```st scenario replaces test_horn\n(* The horn stays silent. *)\nPROGRAM test_horn\nVAR_INPUT horn : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; horn_off : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN horn_off(COND := NOT horn); done := TRUE; END_IF;\nEND_PROGRAM\n```\n";
+    instruct(
+        &mut v,
+        "no horn after all",
+        &[&format!("Why: it says so.\n\n```st\n{LAMP}```\n\n{silent}")],
+    );
     assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
     v.agent_marks(&mut chrome);
     let (added, removed) = v.viewer.as_mut().unwrap().agent_change();
@@ -622,4 +645,37 @@ fn the_agents_change_is_marked_on_the_diagram_and_the_code_until_the_next_edit()
     assert!(v.agent_change.is_none());
     assert!(chrome.st_marks.is_none());
     assert!(v.viewer.as_ref().unwrap().baseline.is_none());
+}
+
+/// An instruction belongs to the project it was typed in: opening another
+/// while the Agent answers ends the run, so a failing first answer is not
+/// retried with the other project's source and tests (review 2026-11-08).
+#[test]
+fn opening_another_project_ends_the_run_and_sends_no_retry() {
+    let mut v = mine();
+    v.proj.create("other", None);
+    v.proj.save();
+    v.open_project("mine");
+    v.proj.open_file("main.st");
+    v.instruct.draft = "invert it".into();
+    v.send_instruction(&egui::Context::default());
+    assert!(v.instruct.busy());
+    let sent = v.link.sent.len();
+    // The engineer opens another project while the answer is on its way.
+    v.open_project("other");
+    reply(&mut v, &st(&LAMP.replace("lamp := start;", "lamp := NOT start;")));
+    assert!(!v.instruct.busy());
+    assert_eq!(
+        v.link.sent.len(),
+        sent,
+        "no retry is built from the other project"
+    );
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Failed, "{o:?}");
+    assert!(o.status.contains("project changed"), "{}", o.status);
+    assert_ne!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(LAMP),
+        "other is untouched by it"
+    );
 }
