@@ -273,8 +273,7 @@ Each menu item prints its key. Reserved, not built (TODO card
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
 period and count only while an engineer is signed in and this browser's
-"Scan detail" is on, kept with the Editor's layout; nothing is measured
-box-side), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
+"Scan detail" is on, kept with the Editor's layout), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
 and located `%Q` variables), then a tile per user function block
 instance in declaration order (standard blocks such as TON are not
 tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
@@ -283,6 +282,16 @@ Editor's diagram at the level shown. Stale data is never a colour: a
 program with no new scan for 3 s, or every program while the box is out
 of reach, goes grey with "stale" and the age, under a red NO DATA banner
 when the box itself is the problem; a stopped simulation is grey too.
+
+Scan load (card `scan-stats`): on a box, "Scan detail" also puts three
+lines on each status tile, each with a tooltip on what it means and
+what is normal: the scan time (average and peak over the module's last
+1000 scans; the tooltip adds the p99 and the shortest), the jitter (how
+late each scan started after its deadline, the same way), and the
+overruns with how long ago the last one was. An overrun in the last
+minute shows on the tile for everyone, in yellow, Scan detail or not.
+The simulation runs in the page on no real clock and shows none of
+these.
 Phones (under 600 points wide), `?monitor` and the old `?andon` open on
 it; the header switches either way. Tiles are at least a finger wide,
 one column on a phone, and grow with the screen up to 4K.

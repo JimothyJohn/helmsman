@@ -17,13 +17,18 @@ use std::time::Duration;
 use helmsman_io::Value;
 
 use crate::signals::SignalTable;
-use crate::{Runtime, Stats, Status};
+use crate::{Runtime, Stats, Status, Timing};
 
 /// One module's state at publication.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ModuleLive {
     pub status: Status,
     pub stats: Stats,
+    /// Scan load over the newest scans ([`Runtime::timing`]).
+    pub timing: Timing,
+    /// How long before this publication the module last overran; `None`:
+    /// never.
+    pub overrun_ago: Option<Duration>,
 }
 
 /// The box as the scheduler last published it.
@@ -118,9 +123,14 @@ impl Publisher {
                 .collect(),
             modules: rt
                 .names()
-                .map(|n| ModuleLive {
-                    status: rt.status(n).unwrap_or(Status::Held),
-                    stats: rt.stats(n).unwrap_or_default(),
+                .map(|n| {
+                    let timing = rt.timing(n).unwrap_or_default();
+                    ModuleLive {
+                        status: rt.status(n).unwrap_or(Status::Held),
+                        stats: rt.stats(n).unwrap_or_default(),
+                        overrun_ago: timing.last_overrun.map(|t| now.saturating_sub(t)),
+                        timing,
+                    }
                 })
                 .collect(),
             outputs: rt.outputs().to_vec(),

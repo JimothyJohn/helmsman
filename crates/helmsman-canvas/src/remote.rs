@@ -301,6 +301,54 @@ pub struct ModuleRow {
     pub scan_ms: Option<f64>,
     /// Deadlines missed because a scan ran late.
     pub overruns: u64,
+    /// How long before the box's last publication it last overran, s;
+    /// `None`: never, or a box too old to say.
+    pub overrun_ago: Option<f64>,
+    /// Scan load over the newest scans; `None` before the first scan, or
+    /// from a box too old to measure it.
+    pub timing: Option<ScanTiming>,
+}
+
+/// Smallest, mean, largest and 99th percentile of a set of times, µs.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SpreadUs {
+    pub min: f64,
+    pub mean: f64,
+    pub max: f64,
+    pub p99: f64,
+}
+
+impl SpreadUs {
+    fn parse(j: &Json) -> Option<Self> {
+        Some(Self {
+            min: j["min"].as_f64()?,
+            mean: j["mean"].as_f64()?,
+            max: j["max"].as_f64()?,
+            p99: j["p99"].as_f64()?,
+        })
+    }
+}
+
+/// A module's scan load as the box measured it (`timing` on
+/// `/api/modules`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ScanTiming {
+    /// Scans the numbers cover: the module's newest, up to 1000.
+    pub window: u64,
+    /// How long each scan ran.
+    pub exec: SpreadUs,
+    /// How late each scan started after its deadline.
+    pub late: SpreadUs,
+}
+
+impl ScanTiming {
+    fn parse(j: &Json) -> Option<Self> {
+        Some(Self {
+            window: j["window"].as_u64().filter(|&n| n > 0)?,
+            exec: SpreadUs::parse(&j["exec_us"])?,
+            late: SpreadUs::parse(&j["late_us"])?,
+        })
+    }
 }
 
 impl ModuleRow {
@@ -313,6 +361,8 @@ impl ModuleRow {
             scans: j["stats"]["scans"].as_u64().unwrap_or(0),
             scan_ms: j["scan_ms"].as_f64(),
             overruns: j["stats"]["overruns"].as_u64().unwrap_or(0),
+            overrun_ago: j["stats"]["last_overrun_ms_ago"].as_f64().map(|ms| ms / 1000.0),
+            timing: ScanTiming::parse(&j["timing"]),
         })
     }
 }
