@@ -11,6 +11,8 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Vec2,
 };
 use helmsman_diagram::diff::{self, Change, Line};
+
+use crate::diff_ui::Kind;
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, in_port_at, out_port, out_port_at};
 use helmsman_diagram::{Diagram, NodeId};
 
@@ -604,7 +606,7 @@ fn source(ui: &mut egui::Ui, lines: &[Line]) {
         .collect();
     egui::Frame::new()
         .fill(t.bg)
-        .inner_margin(egui::Margin::same(6))
+        .inner_margin(egui::Margin::symmetric(2, 6))
         .show(ui, |ui| {
             let mut skipped = false;
             for (k, l) in lines.iter().enumerate() {
@@ -616,21 +618,14 @@ fn source(ui: &mut egui::Ui, lines: &[Line]) {
                     continue;
                 }
                 skipped = false;
-                let (gutter, fg, bg) = match l {
-                    Line::Same { new, .. } => (format!("{new:>4}  "), t.muted, None),
-                    Line::Added { new, .. } => (format!("{new:>4} +"), BLACK, Some(YELLOW)),
-                    Line::Removed { old, .. } => (format!("{old:>4} −"), t.fg, Some(t.rule)),
+                // As GitHub draws a diff: + on green, − on red, the row
+                // the pane's width (Nick, 2026-11-08).
+                let (kind, n) = match l {
+                    Line::Same { new, .. } => (Kind::Same, *new),
+                    Line::Added { new, .. } => (Kind::Added, *new),
+                    Line::Removed { old, .. } => (Kind::Removed, *old),
                 };
-                let mut t = RichText::new(format!("{gutter} {}", l.text()))
-                    .monospace()
-                    .color(fg);
-                if let Some(bg) = bg {
-                    t = t.background_color(bg);
-                }
-                if matches!(l, Line::Removed { .. }) {
-                    t = t.strikethrough();
-                }
-                ui.label(t);
+                crate::diff_ui::row(ui, kind, &format!("{n:>4}"), l.text());
             }
         });
 }

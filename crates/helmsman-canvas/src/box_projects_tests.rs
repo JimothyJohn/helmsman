@@ -1124,6 +1124,10 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
         // ... and a file's right-click menu's (disabled here too).
         h.right_click(h.rect("file main.st").center());
         h.press("menu deploy");
+        // ... and the arrow by the Structured Text header (disabled here).
+        h.app.chrome.show_code();
+        h.wait(0.3);
+        h.press("code deploy");
         // Reads (the Trend's pins) go; no write does.
         let sent: Vec<PReq> = h.sent().into_iter().filter(|q| q.method != "GET").collect();
         assert!(sent.is_empty(), "{sent:?}");
@@ -1159,6 +1163,23 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
     h.frame(vec![]);
     assert!(h.app.chrome.rect("dirty").is_some(), "the header marks it");
     h.press("save");
+    let sent = h.sent();
+    assert!(sent.iter().any(|q| q.method == "PUT"), "{sent:?}");
+    // The arrow right of the Structured Text header deploys too (Nick,
+    // 2026-11-08). That save is still on its way (the arrow waits while
+    // one is); done, the edit is still dirty, so the deploy saves first.
+    h.bv().projects.deploy = Deploy::Idle;
+    for b in h.bv().projects.open.as_mut().unwrap().bufs.values_mut() {
+        b.saving = None;
+    }
+    h.app.chrome.show_code();
+    h.wait(0.3);
+    h.press("code deploy");
+    assert_eq!(
+        h.bv().projects.deploy,
+        Deploy::Saving,
+        "saves, then checks and deploys"
+    );
     let sent = h.sent();
     assert!(sent.iter().any(|q| q.method == "PUT"), "{sent:?}");
 }

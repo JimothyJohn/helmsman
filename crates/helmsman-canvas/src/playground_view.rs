@@ -1594,9 +1594,18 @@ impl Body for PlaygroundView {
         let errors = self.session.diags.len();
         // An edit is only checked: what runs is the last deploy, as on a box.
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
+        let mut go = false;
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new("Structured Text").strong())
                 .tip("The open file. It is checked as you type; Deploy runs it.");
+            // The → deploys this version (Nick, 2026-11-08).
+            go = crate::projects::deploy_arrow(
+                ui,
+                chrome,
+                "code deploy",
+                &Ok(()),
+                "Deploys this version: compiles the open project and runs it in the page (Ctrl D, File › Deploy).",
+            );
             if self.pending.is_some() {
                 ui.label(RichText::new("…").color(t.muted))
                     .tip("Checking the edit.");
@@ -1616,6 +1625,9 @@ impl Body for PlaygroundView {
                 ui.label(RichText::new("· not deployed").color(t.muted)).tip(note);
             }
         });
+        if go {
+            self.deploy();
+        }
         let all = self.diags();
         let current = self.proj.current.clone();
         let diags: Vec<(u32, u32)> = all
