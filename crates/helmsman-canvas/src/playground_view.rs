@@ -2043,11 +2043,10 @@ impl PlaygroundView {
         let n = trend.signals.len();
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / n as f32;
-        let end = trend.samples.back().map_or(0, |s| s.t_ms);
+        let end = trend.samples.last_t().unwrap_or(0);
         let window = trend.window_ms.max(1);
         let start = end.saturating_sub(window);
         // Samples older than the window are kept for a wider one: not drawn.
-        let shown = trend.samples.iter().filter(|s| s.t_ms >= start);
         #[allow(clippy::cast_precision_loss)]
         let x_of = |t: u64| rect.left() + 90.0 + (rect.width() - 96.0) * ((t - start) as f32 / window as f32);
         for (k, name) in trend.signals.iter().enumerate() {
@@ -2057,13 +2056,15 @@ impl PlaygroundView {
                 5 if !t.dark => t.fg,
                 i => TREND[i],
             };
-            let (lo, hi) = shown
-                .clone()
-                .filter_map(|s| s.values.get(k).copied().filter(|v| v.is_finite()))
+            let (lo, hi) = trend
+                .samples
+                .lane(k, start)
+                .map(|(_, v)| v)
+                .filter(|v| v.is_finite())
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
                 });
-            let last = trend.samples.back().and_then(|s| s.values.get(k).copied());
+            let last = trend.samples.last_value(k);
             painter.text(
                 Pos2::new(rect.left() + 6.0, top + lane / 2.0),
                 egui::Align2::LEFT_CENTER,
@@ -2087,24 +2088,99 @@ impl PlaygroundView {
                 let f = ((v - lo) / (hi - lo)) as f32;
                 top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
             };
-            let mut pts: Vec<Pos2> = Vec::new();
-            for s in shown.clone() {
-                let Some(v) = s.values.get(k).copied().filter(|v| v.is_finite()) else {
-                    continue;
-                };
-                let p = Pos2::new(x_of(s.t_ms), y_of(v));
-                // Steps, not slopes: a PLC value holds until the next scan.
-                if let Some(prev) = pts.last().copied() {
-                    pts.push(Pos2::new(p.x, prev.y));
-                }
-                pts.push(p);
-            }
+            let pts = lane_points(
+                trend
+                    .samples
+                    .lane(k, start)
+                    .filter(|(_, v)| v.is_finite())
+                    .map(|(t, v)| (x_of(t), y_of(v))),
+            );
             if pts.len() > 1 {
                 painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
             }
         }
         rect
     }
+}
+
+/// One pixel column of a lane's samples: its first, lowest, highest and
+/// last, each with its place in the column's order.
+struct Column {
+    x: f32,
+    n: usize,
+    first: (usize, f32, f32),
+    lo: (usize, f32, f32),
+    hi: (usize, f32, f32),
+    last: (usize, f32, f32),
+}
+
+impl Column {
+    fn new(c: f32, x: f32, y: f32) -> Self {
+        let e = (0, x, y);
+        Self {
+            x: c,
+            n: 1,
+            first: e,
+            lo: e,
+            hi: e,
+            last: e,
+        }
+    }
+
+    fn add(&mut self, x: f32, y: f32) {
+        let e = (self.n, x, y);
+        self.n += 1;
+        if y < self.lo.2 {
+            self.lo = e;
+        }
+        if y > self.hi.2 {
+            self.hi = e;
+        }
+        self.last = e;
+    }
+
+    /// Its kept samples onto `pts`, in time order, each as a step.
+    fn flush(&self, pts: &mut Vec<Pos2>) {
+        let mut kept = [self.first, self.lo, self.hi, self.last];
+        kept.sort_by_key(|e| e.0);
+        let mut prev = None;
+        for (k, x, y) in kept {
+            if prev == Some(k) {
+                continue;
+            }
+            prev = Some(k);
+            // Steps, not slopes: a PLC value holds until the next scan.
+            if let Some(before) = pts.last().copied() {
+                pts.push(Pos2::new(x, before.y));
+            }
+            pts.push(Pos2::new(x, y));
+        }
+    }
+}
+
+/// The polyline of a lane drawn from its samples (x, y in points, x
+/// rising): a step per sample, but each pixel column of them reduced to
+/// its first, lowest, highest and last, in time order. A 10 minute
+/// window of 10 ms scans is 60 000 samples and draws a few thousand
+/// points, the same picture.
+pub fn lane_points(samples: impl Iterator<Item = (f32, f32)>) -> Vec<Pos2> {
+    let mut pts = Vec::new();
+    let mut column: Option<Column> = None;
+    for (x, y) in samples {
+        match &mut column {
+            Some(c) if c.x == x.floor() => c.add(x, y),
+            _ => {
+                if let Some(c) = column.take() {
+                    c.flush(&mut pts);
+                }
+                column = Some(Column::new(x.floor(), x, y));
+            }
+        }
+    }
+    if let Some(c) = column {
+        c.flush(&mut pts);
+    }
+    pts
 }
 
 /// The narrowest trend window, ms (Nick, 2026-11-02: down to 100 ms).

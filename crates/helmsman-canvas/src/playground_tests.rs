@@ -19,7 +19,7 @@ use crate::playground::{
     Carried, Dir, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget, nice_range,
     tick_label,
 };
-use crate::playground_view::{PlaygroundView, window_label};
+use crate::playground_view::{PlaygroundView, lane_points, window_label};
 use crate::projects::Workspace;
 use crate::sim_projects::Storage;
 
@@ -476,7 +476,11 @@ fn the_trend_axis_is_a_nice_range_that_holds_between_steps() {
 fn moving_a_trend_signal_carries_its_history() {
     let mut s = Session::new(example("traffic"));
     scans(&mut s, 300);
-    let col = |s: &Session, k: usize| -> Vec<f64> { s.trend.samples.iter().map(|x| x.values[k]).collect() };
+    let col = |s: &Session, k: usize| -> Vec<f64> {
+        (0..s.trend.samples.len())
+            .map(|i| s.trend.samples.value(i, k).unwrap())
+            .collect()
+    };
     let before: Vec<Vec<f64>> = (0..4).map(|k| col(&s, k)).collect();
     s.trend.move_signal(0, 2);
     assert_eq!(s.trend.signals, ["YELLOW", "GREEN", "RED", "RUN"]);
@@ -494,7 +498,7 @@ fn moving_a_trend_signal_carries_its_history() {
     let n = s.trend.samples.len();
     scans(&mut s, 10);
     assert_eq!(s.trend.samples.len(), n + 10, "the history stays and grows");
-    let red = s.trend.samples.back().unwrap().values[2];
+    let red = s.trend.samples.last_value(2).unwrap();
     let point = s.outputs().find(|p| p.name == "RED").unwrap().number();
     // RED is a BOOL: 0 or 1, exact.
     assert_eq!(red.to_bits(), point.to_bits(), "lane 2 records RED");
@@ -506,7 +510,7 @@ fn the_trend_records_chosen_signals_in_a_bounded_window() {
     assert_eq!(s.trend.signals, ["RED", "YELLOW", "GREEN", "RUN"]);
     scans(&mut s, 50);
     assert_eq!(s.trend.samples.len(), 50);
-    assert_eq!(s.trend.samples[0].values.len(), 4);
+    assert!(s.trend.samples.value(0, 3).is_some() && s.trend.samples.value(0, 4).is_none());
     s.trend.toggle("RUN");
     assert_eq!(s.trend.signals.len(), 3);
     assert_eq!(s.trend.samples.len(), 0, "history restarts on a change");
@@ -518,8 +522,8 @@ fn the_trend_records_chosen_signals_in_a_bounded_window() {
     let mut s = Session::new(example("traffic"));
     scans(&mut s, 15_000);
     let (first, last) = (
-        s.trend.samples.front().unwrap().t_ms,
-        s.trend.samples.back().unwrap().t_ms,
+        s.trend.samples.first_t().unwrap(),
+        s.trend.samples.last_t().unwrap(),
     );
     assert!(last - first <= crate::playground::TREND_KEEP_MS);
     assert!(last - first > 90_000, "{first}..{last}");
@@ -2381,4 +2385,21 @@ fn the_running_notice_goes_when_the_program_stops_or_faults() {
     s.wait(0.5);
     assert!(s.view.session.fault.is_some());
     assert_eq!(s.view.notice, None);
+}
+#[test]
+fn a_long_trend_draws_a_polyline_bounded_by_the_lane_width() {
+    // 10 minutes of 10 ms scans across a 600 pt lane, with one spike.
+    let n = 60_000u16;
+    let samples = (0..u32::from(n)).map(|i| {
+        let y = if i == 31_234 { 0.0 } else { 5.0 + (i % 3) as f32 };
+        (i as f32 * 0.01, y)
+    });
+    let pts = lane_points(samples);
+    assert!(pts.len() <= 8 * 601, "{} points", pts.len());
+    assert!(pts.iter().any(|p| p.y == 0.0), "the spike survives the thinning");
+    assert!(pts.windows(2).all(|w| w[0].x <= w[1].x), "time order");
+    // Few samples draw as they are: a step to each.
+    let few = lane_points([(10.0, 1.0), (20.0, 2.0), (30.0, 1.0)].into_iter());
+    assert_eq!(few.len(), 5);
+    assert!(lane_points(std::iter::empty()).is_empty());
 }

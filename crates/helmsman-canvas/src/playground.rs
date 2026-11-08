@@ -433,11 +433,98 @@ impl Carried {
     }
 }
 
-/// One trend sample: program time and each trended signal's value.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Sample {
-    pub t_ms: u64,
-    pub values: Vec<f64>,
+/// The trend's history: one time per scan and, for each, every trended
+/// signal's value, in two flat buffers (a scan allocates nothing).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Samples {
+    t_ms: VecDeque<u64>,
+    /// Row after row, `width` values each.
+    values: VecDeque<f64>,
+    width: usize,
+}
+
+impl Samples {
+    /// How many scans are held.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.t_ms.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.t_ms.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.t_ms.clear();
+        self.values.clear();
+    }
+
+    /// Program time of the oldest scan held, ms.
+    #[must_use]
+    pub fn first_t(&self) -> Option<u64> {
+        self.t_ms.front().copied()
+    }
+
+    /// Program time of the newest scan held, ms.
+    #[must_use]
+    pub fn last_t(&self) -> Option<u64> {
+        self.t_ms.back().copied()
+    }
+
+    /// Signal `k`'s value at scan `i`.
+    #[must_use]
+    pub fn value(&self, i: usize, k: usize) -> Option<f64> {
+        (k < self.width).then(|| self.values.get(i * self.width + k).copied())?
+    }
+
+    /// Signal `k`'s newest value.
+    #[must_use]
+    pub fn last_value(&self, k: usize) -> Option<f64> {
+        self.value(self.len().checked_sub(1)?, k)
+    }
+
+    /// Signal `k`'s history from time `from_ms` on: (time, value).
+    pub fn lane(&self, k: usize, from_ms: u64) -> impl Iterator<Item = (u64, f64)> + '_ {
+        let first = self.t_ms.partition_point(|&t| t < from_ms);
+        (first..self.len()).filter_map(move |i| Some((self.t_ms[i], self.value(i, k)?)))
+    }
+
+    fn push(&mut self, t_ms: u64, values: impl ExactSizeIterator<Item = f64>) {
+        if self.is_empty() {
+            self.width = values.len();
+        }
+        self.t_ms.push_back(t_ms);
+        self.values.extend(values);
+    }
+
+    fn pop_front(&mut self) {
+        if self.t_ms.pop_front().is_some() {
+            self.values.drain(..self.width.min(self.values.len()));
+        }
+    }
+
+    /// Lane `from`'s column moves to `to` in every scan.
+    fn move_lane(&mut self, from: usize, to: usize) {
+        let w = self.width;
+        if from >= w || to >= w {
+            return;
+        }
+        for i in 0..self.len() {
+            let row = i * w;
+            let v = self.values[row + from];
+            if from < to {
+                for j in from..to {
+                    self.values[row + j] = self.values[row + j + 1];
+                }
+            } else {
+                for j in (to + 1..=from).rev() {
+                    self.values[row + j] = self.values[row + j - 1];
+                }
+            }
+            self.values[row + to] = v;
+        }
+    }
 }
 
 /// The trend: which signals, their recent history, and how much of it
@@ -445,7 +532,7 @@ pub struct Sample {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trend {
     pub signals: Vec<String>,
-    pub samples: VecDeque<Sample>,
+    pub samples: Samples,
     /// The width of the window drawn, ms (`WINDOW_MIN_MS..=WINDOW_MAX_MS`).
     pub window_ms: u64,
 }
@@ -454,7 +541,7 @@ impl Default for Trend {
     fn default() -> Self {
         Self {
             signals: Vec::new(),
-            samples: VecDeque::new(),
+            samples: Samples::default(),
             window_ms: TREND_MS,
         }
     }
@@ -462,22 +549,18 @@ impl Default for Trend {
 
 impl Trend {
     fn record(&mut self, t_ms: u64, points: &[Point]) {
-        let values = self
-            .signals
-            .iter()
-            .map(|s| {
-                points
-                    .iter()
-                    .find(|p| &p.name == s)
-                    .map_or(f64::NAN, Point::number)
-            })
-            .collect();
-        self.samples.push_back(Sample { t_ms, values });
+        let values = self.signals.iter().map(|s| {
+            points
+                .iter()
+                .find(|p| &p.name == s)
+                .map_or(f64::NAN, Point::number)
+        });
+        self.samples.push(t_ms, values);
         while self.samples.len() > TREND_CAP
             || self
                 .samples
-                .front()
-                .is_some_and(|f| t_ms.saturating_sub(f.t_ms) > TREND_KEEP_MS)
+                .first_t()
+                .is_some_and(|f| t_ms.saturating_sub(f) > TREND_KEEP_MS)
         {
             self.samples.pop_front();
         }
@@ -502,12 +585,7 @@ impl Trend {
         }
         let s = self.signals.remove(from);
         self.signals.insert(to, s);
-        for sample in &mut self.samples {
-            if from < sample.values.len() && to < sample.values.len() {
-                let v = sample.values.remove(from);
-                sample.values.insert(to, v);
-            }
-        }
+        self.samples.move_lane(from, to);
     }
 }
 
