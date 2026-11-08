@@ -646,3 +646,36 @@ fn the_agents_change_is_marked_on_the_diagram_and_the_code_until_the_next_edit()
     assert!(chrome.st_marks.is_none());
     assert!(v.viewer.as_ref().unwrap().baseline.is_none());
 }
+
+/// An instruction belongs to the project it was typed in: opening another
+/// while the Agent answers ends the run, so a failing first answer is not
+/// retried with the other project's source and tests (review 2026-11-08).
+#[test]
+fn opening_another_project_ends_the_run_and_sends_no_retry() {
+    let mut v = mine();
+    v.proj.create("other", None);
+    v.proj.save();
+    v.open_project("mine");
+    v.proj.open_file("main.st");
+    v.instruct.draft = "invert it".into();
+    v.send_instruction(&egui::Context::default());
+    assert!(v.instruct.busy());
+    let sent = v.link.sent.len();
+    // The engineer opens another project while the answer is on its way.
+    v.open_project("other");
+    reply(&mut v, &st(&LAMP.replace("lamp := start;", "lamp := NOT start;")));
+    assert!(!v.instruct.busy());
+    assert_eq!(
+        v.link.sent.len(),
+        sent,
+        "no retry is built from the other project"
+    );
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Failed, "{o:?}");
+    assert!(o.status.contains("project changed"), "{}", o.status);
+    assert_ne!(
+        v.proj.files.get("main.st").map(String::as_str),
+        Some(LAMP),
+        "other is untouched by it"
+    );
+}

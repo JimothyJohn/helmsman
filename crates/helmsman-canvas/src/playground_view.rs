@@ -656,10 +656,15 @@ impl PlaygroundView {
 
     /// Stop: the answer under way is dropped and nothing is written.
     pub fn stop_answer(&mut self) {
+        self.stop_answer_with("stopped");
+    }
+
+    /// [`Self::stop_answer`], saying `why` in the instruction's outcome.
+    fn stop_answer_with(&mut self, why: &str) {
         self.chat.stop();
         self.link.abort();
         if self.instruct.busy() {
-            self.instruct.failed("stopped");
+            self.instruct.failed(why);
         }
     }
 
@@ -882,6 +887,21 @@ impl PlaygroundView {
         editor::deselect(ctx, egui::Id::unique(SOURCE_ID));
         if let Some(v) = &mut self.viewer {
             v.pick = None;
+        }
+    }
+
+    /// An instruction belongs to the project it was typed in: when another
+    /// is open before the answer is in, the run ends with nothing written,
+    /// so no retry is built from the other project's source and tests.
+    fn drop_run_of_another_project(&mut self) {
+        let moved = self
+            .instruct
+            .run
+            .as_ref()
+            .is_some_and(|r| r.project != self.proj.open);
+        if moved {
+            self.stop_answer_with("the open project changed while the Agent was answering");
+            self.log_outcome();
         }
     }
 
@@ -1232,6 +1252,7 @@ impl PlaygroundView {
         for m in self.link.drain() {
             self.chat.receive(m);
         }
+        self.drop_run_of_another_project();
         self.settle(ctx);
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);

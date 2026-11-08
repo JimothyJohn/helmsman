@@ -2007,6 +2007,105 @@ fn a_realistic_file_reaches_the_box_agent_once() {
     assert!(message.contains("<requirement_tests>"));
 }
 
+/// The Agent checks an answer against the box's own image sizes and scan
+/// period, not the page's simulation (8 bytes of I and Q, 64 of M, 10 ms):
+/// a valid program that reads an input at byte 20 (the page has 8) failed
+/// to compile there and the model was told to fix it (review 2026-11-08).
+#[test]
+fn the_agent_on_a_box_checks_against_the_boxs_sizes_and_period() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::LAMP;
+    use serde_json::json;
+    let big = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; kept : BOOL; END_VAR\nVAR sensor AT %IX20.0 : BOOL; END_VAR\nlamp := start;\nkept := start OR sensor;\nEND_PROGRAM\n";
+    let scenario = "```st scenario\n(* The kept flag follows start. *)\nPROGRAM test_kept\nVAR_INPUT kept : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; kept_on : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN kept_on(COND := kept); done := TRUE; END_IF;\nEND_PROGRAM\n```\n";
+    // The page's simulation cannot hold it; the box can.
+    assert!(helmsman_iec::compile(big, crate::playground::SIZES).is_err());
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    v.tick(&ctx);
+    let runs = v
+        .projects
+        .open
+        .as_ref()
+        .and_then(|o| o.runs)
+        .expect("the box reported its sizes");
+    assert_eq!((runs.sizes.i, runs.sizes.q), (32, 32), "{runs:?}");
+    assert_eq!(
+        runs.period,
+        Duration::from_millis(2),
+        "the bench box scans at 2 ms"
+    );
+    v.instruct.draft = "keep a counter word".into();
+    v.send_instruction(&ctx);
+    let seq = v.chat_sent.last().expect("a message").seq;
+    let answer = format!("Why: it keeps a word.\n\n```st\n{big}```\n\n{scenario}");
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev("text", json!({ "delta": answer })),
+        ev("done", json!({"stop": "end_turn", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+}
+
+/// An instruction belongs to the project it was typed in: opening another
+/// while the box's agent answers ends the run, and a failing first answer
+/// is not sent back with the other project's files.
+#[test]
+fn opening_another_project_ends_the_boxs_run_and_sends_no_retry() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::LAMP;
+    use serde_json::json;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    make(&b, &jar, &mut v.projects, "second", &[("main.st", LAMP)]);
+    v.projects.open_project("line");
+    for _ in 0..20 {
+        pump(&b, &jar, &mut v, &ctx, 1.0);
+        if v.psent.is_empty() {
+            break;
+        }
+    }
+    v.projects.open_file("main.st");
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let seq = v.chat_sent[0].seq;
+    v.projects.open_project("second");
+    v.tick(&ctx);
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev(
+            "text",
+            json!({ "delta": "Why: x.\n\n```st\nPROGRAM broken\n```\n" }),
+        ),
+        ev("done", json!({"stop": "end_turn", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "no retry from the other project");
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Failed, "{o:?}");
+    assert!(o.status.contains("project changed"), "{}", o.status);
+}
+
 /// A turn the box ended early (`budget`) with a whole-looking answer in
 /// it is cut off, not complete: nothing is written (review 2026-11-08).
 #[test]

@@ -515,13 +515,20 @@ impl BoxView {
         f: impl FnOnce(&mut crate::instruct::Instruct, &crate::instruct::Env<'_>) -> R,
     ) -> Option<R> {
         let (project, open_scope, files) = self.agent_files()?;
+        // Checked the way the box will run it: its image sizes and scan
+        // period, as it reported them for this project (the page's
+        // simulation sizes only until it has).
+        let settings = self.projects.open.as_ref().and_then(|o| o.runs).map_or_else(
+            || helmsman_iec::spec::Settings::new(crate::playground::SIZES),
+            |r| helmsman_iec::spec::Settings::new(r.sizes).period(r.period),
+        );
         let plan = helmsman_iec::spec::plan(
             files
                 .iter()
                 .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
                 .map(|(n, t)| (n.as_str(), t.as_str())),
         );
-        let diags: Vec<String> = helmsman_iec::compile(&plan.main, crate::playground::SIZES)
+        let diags: Vec<String> = helmsman_iec::compile(&plan.main, settings.sizes)
             .err()
             .map(|d| d.iter().map(ToString::to_string).collect())
             .unwrap_or_default();
@@ -534,7 +541,7 @@ impl BoxView {
             source: &plan.main,
             diagnostics: &diags,
             devices: &devices,
-            settings: helmsman_iec::spec::Settings::new(crate::playground::SIZES),
+            settings,
         };
         Some(f(&mut self.instruct, &env))
     }
@@ -593,7 +600,27 @@ impl BoxView {
     fn settle_agent(&mut self, ctx: &egui::Context) {
         use crate::box_agent::End;
         use crate::instruct::Step;
-        if !self.instruct.busy() || self.agent.seq() == self.answered_seq {
+        if !self.instruct.busy() {
+            return;
+        }
+        // An instruction belongs to the project it was typed in: another
+        // open before the answer is in ends the run with nothing written,
+        // so no retry is built from the other project's files.
+        let open = self.projects.open.as_ref().map(|o| o.name.as_str());
+        if self
+            .instruct
+            .run
+            .as_ref()
+            .is_some_and(|r| Some(r.project.as_str()) != open)
+        {
+            self.agent.stop();
+            #[cfg(target_arch = "wasm32")]
+            self.chat.abort();
+            self.instruct
+                .failed("the open project changed while the Agent was answering");
+            return self.log_agent();
+        }
+        if self.agent.seq() == self.answered_seq {
             return;
         }
         let Some(turn) = self.agent.turns.last().filter(|t| t.end.is_some()).cloned() else {

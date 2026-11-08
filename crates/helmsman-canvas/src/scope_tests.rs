@@ -670,8 +670,8 @@ mod in_the_page {
             &st(&LAMP.replace("lamp := start;", "lamp := start; (* x *)")),
         );
         let o = v.instruct.outcome.clone().unwrap();
-        assert_eq!(o.kind, Kind::Refused, "{o:?}");
-        assert!(o.problems[0].contains("mine is no longer open"), "{o:?}");
+        assert_eq!(o.kind, Kind::Failed, "{o:?}");
+        assert!(o.status.contains("project changed"), "{o:?}");
         assert_eq!(v.proj.files, other);
     }
 

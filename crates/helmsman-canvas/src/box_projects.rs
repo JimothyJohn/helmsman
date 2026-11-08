@@ -245,6 +245,31 @@ pub struct OpenProject {
     pub bufs: BTreeMap<String, Buf>,
     /// The file in the ST editor.
     pub current: Option<String>,
+    /// How the box runs this project's requirement tests (its image sizes
+    /// and scan period), as it reported them when the project was read.
+    pub runs: Option<Runs>,
+}
+
+/// How a box runs requirement tests: what a change is checked against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Runs {
+    pub sizes: helmsman_iec::ImageSizes,
+    pub period: std::time::Duration,
+}
+
+impl Runs {
+    /// From the `tests` object of `GET /api/projects/{name}`.
+    fn parse(j: &Json) -> Option<Self> {
+        let n = |k: &str| j[k].as_u64().and_then(|n| usize::try_from(n).ok());
+        Some(Self {
+            sizes: helmsman_iec::ImageSizes {
+                i: n("i")?,
+                q: n("q")?,
+                m: n("m")?,
+            },
+            period: std::time::Duration::from_millis(j["scan_ms"].as_u64().filter(|ms| *ms > 0)?),
+        })
+    }
 }
 
 /// Where a Deploy is.
@@ -1026,6 +1051,7 @@ impl BoxProjects {
                             .collect()
                     })
                     .unwrap_or_default();
+                o.runs = Runs::parse(&j["tests"]);
                 // Files gone from the box go, unless edited here.
                 o.bufs
                     .retain(|n, b| b.dirty() || files.iter().any(|(f, _)| f == n));
