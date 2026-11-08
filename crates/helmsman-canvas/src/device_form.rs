@@ -142,6 +142,11 @@ pub struct PointRow {
     pub use_: Use,
     /// A known device's channel: its type and point are fixed.
     pub fixed: bool,
+    /// The rest of the row's line in io.map as it is (`safe=true unit=mm`),
+    /// for a signal read back to edit: Save writes it as it was. `None`
+    /// for a row made here, which gets the defaults.
+    #[serde(default)]
+    pub tail: Option<String>,
 }
 
 impl PointRow {
@@ -156,6 +161,7 @@ impl PointRow {
             point: String::new(),
             use_: Use::Declare,
             fixed: false,
+            tail: None,
         }
     }
 
@@ -169,9 +175,16 @@ impl PointRow {
             self.ty.word(),
             self.point
         );
-        if self.dir == Dir::Out {
-            l.push(' ');
-            l.push_str(self.ty.safe());
+        match &self.tail {
+            Some(t) if !t.is_empty() => {
+                l.push(' ');
+                l.push_str(t);
+            }
+            None if self.dir == Dir::Out => {
+                l.push(' ');
+                l.push_str(self.ty.safe());
+            }
+            _ => {}
         }
         l
     }
@@ -213,6 +226,7 @@ impl Catalog {
             point,
             use_: Use::Declare,
             fixed: true,
+            tail: None,
         };
         let out_kind = out_bit(driver);
         (0..12)
@@ -436,6 +450,71 @@ pub fn prebind(rows: &mut [PointRow], ports: &[Port], map: &MapText) {
     }
 }
 
+/// Whether `point` is an address `driver` reads (the drivers' own
+/// syntax, helmsman-io's `modbus::Point::parse` and `enip::Point::parse`,
+/// which the page cannot link): `coil:N`, `di:N`, `hr:N[:FMT]`,
+/// `ir:N[:FMT]` on Modbus; `di:N`, `do:N`, `in:BYTE.BIT`, `out:BYTE.BIT`,
+/// `in:OFFSET:FMT`, `out:OFFSET:FMT` on EtherNet/IP. Any other driver's
+/// points are the box's to check.
+///
+/// # Errors
+/// What is wrong with it, in words.
+pub fn point_ok(driver: &str, point: &str) -> Result<(), String> {
+    let num = |s: &str| {
+        !s.is_empty() && s.len() <= 5 && s.bytes().all(|b| b.is_ascii_digit()) && s.parse::<u16>().is_ok()
+    };
+    match driver {
+        "modbus-tcp" => {
+            let mut it = point.split(':');
+            let (table, addr, fmt) = (it.next().unwrap_or(""), it.next(), it.next());
+            let words = match (table, fmt) {
+                ("coil" | "di", None) | ("hr" | "ir", None | Some("u16" | "i16")) => 1,
+                ("hr" | "ir", Some("u32" | "u32sw" | "i32" | "i32sw" | "f32" | "f32sw")) => 2,
+                _ => {
+                    return Err(format!(
+                        "{point:?} is not a Modbus point: coil:N, di:N, hr:N[:FMT] or ir:N[:FMT]"
+                    ));
+                }
+            };
+            let addr = addr.filter(|a| num(a)).and_then(|a| a.parse::<u16>().ok());
+            match addr {
+                Some(a) if it.next().is_none() && u32::from(a) + words <= 65536 => Ok(()),
+                _ => Err(format!(
+                    "{point:?} is not a Modbus point: an address from 0 to 65535 follows the table"
+                )),
+            }
+        }
+        "enip-io" => {
+            let bad = || {
+                format!(
+                    "{point:?} is not an EtherNet/IP point: di:N, do:N, in:BYTE.BIT, out:BYTE.BIT, in:OFFSET:FMT or out:OFFSET:FMT"
+                )
+            };
+            let (head, rest) = point.split_once(':').ok_or_else(bad)?;
+            match head {
+                "di" | "do" if num(rest) => Ok(()),
+                "in" | "out" => match rest.split_once('.') {
+                    Some((byte, bit)) if num(byte) && num(bit) && bit.parse::<u8>().is_ok_and(|b| b < 8) => {
+                        Ok(())
+                    }
+                    Some(_) => Err(bad()),
+                    None => match rest.split_once(':') {
+                        Some((off, fmt))
+                            if num(off)
+                                && matches!(fmt, "u8" | "i8" | "u16" | "i16" | "u32" | "i32" | "f32") =>
+                        {
+                            Ok(())
+                        }
+                        _ => Err(bad()),
+                    },
+                },
+                _ => Err(bad()),
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 /// What Add does: the device and its signals into io.map, the lines of
 /// the program's variables taken from where they were, new variables
 /// declared in the program.
@@ -490,6 +569,7 @@ pub fn wiring(
         declare: Vec::new(),
         replaces: None,
     };
+    let driver = w.device_line.split_whitespace().nth(2).unwrap_or("").to_string();
     let mut seen: Vec<String> = Vec::new();
     for r in rows.iter().filter(|r| r.on) {
         let what = format!("{} {}", r.dir.word(), r.point);
@@ -506,6 +586,18 @@ pub fn wiring(
         seen.push(low.clone());
         if r.point.trim().is_empty() || r.point.contains(char::is_whitespace) {
             return Err(format!("{}: give its point, e.g. di:0.", r.name));
+        }
+        if r.point.contains('#') {
+            return Err(format!(
+                "{}: a # starts a comment in io.map, so a point cannot hold one.",
+                r.name
+            ));
+        }
+        point_ok(&driver, &r.point).map_err(|e| format!("{}: {e}", r.name))?;
+        if let Some(t) = &r.tail
+            && t.contains('#')
+        {
+            return Err(format!("{}: a # starts a comment in io.map.", r.name));
         }
         let wired = map.signals.iter().any(|s| s.name.eq_ignore_ascii_case(&r.name));
         let port = ports.iter().find(|p| p.name.eq_ignore_ascii_case(&r.name));
@@ -551,11 +643,12 @@ pub fn wiring(
 }
 
 /// `map` with the replaced signals' lines taken out and the device and
-/// its signals added at the end.
+/// its signals added at the end. An edit (`replaces`) is made in place:
+/// the device's line and each of its signals' lines keep their place and
+/// their trailing comment, the lines above them stay above them, signals
+/// it no longer has go, and new ones follow the last it had.
 #[must_use]
 pub fn apply_map(map: &str, w: &Wiring) -> String {
-    let edited = w.replaces.as_deref().map(|d| remove_device(map, d));
-    let map = edited.as_deref().unwrap_or(map);
     let mut out = String::new();
     for line in map.lines() {
         let t: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
@@ -564,6 +657,14 @@ pub fn apply_map(map: &str, w: &Wiring) -> String {
             out.push_str(line);
             out.push('\n');
         }
+    }
+    if let Some(old) = &w.replaces
+        && let Some(edited) = edit_device(&out, old, w)
+    {
+        return edited;
+    }
+    if let Some(old) = &w.replaces {
+        out = remove_device(&out, old);
     }
     if !out.is_empty() && !out.ends_with("\n\n") {
         out.push('\n');
@@ -577,16 +678,76 @@ pub fn apply_map(map: &str, w: &Wiring) -> String {
     out
 }
 
+/// `line` (one line of io.map, its newline included) with `new` in place
+/// of what is before its comment, the comment kept.
+fn with_comment_of(line: &str, new: &str) -> String {
+    match line.find('#') {
+        Some(at) => format!("{new}  {}", line[at..].trim_end_matches(['\n', '\r']).trim_end()) + "\n",
+        None => format!("{new}\n"),
+    }
+}
+
+/// `map` with device `old` rewritten as `w` has it, in place; `None` when
+/// the map has no such device line.
+fn edit_device(map: &str, old: &str, w: &Wiring) -> Option<String> {
+    // A row is the line it was read from by its name, else by its point.
+    let key = |l: &str| {
+        let t: Vec<&str> = l.split_whitespace().collect();
+        (
+            t.get(1).map(|n| n.to_ascii_lowercase()),
+            t.first()
+                .map(|d| (*d).to_string())
+                .zip(t.get(4).map(|p| (*p).to_string())),
+        )
+    };
+    let mut fresh: Vec<_> = w.signals.iter().map(|l| (key(l), l)).collect();
+    let mut out = String::with_capacity(map.len() + 64);
+    // Where the device's last line ends in `out`.
+    let mut after = None;
+    for line in map.split_inclusive('\n') {
+        let t: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        match t.as_slice() {
+            ["device", d, ..] if *d == old && after.is_none() => {
+                out.push_str(&with_comment_of(line, w.device_line.trim_end()));
+                after = Some(out.len());
+            }
+            [dir, name, _, d, point, ..] if (*dir == "in" || *dir == "out") && *d == old => {
+                let lower = name.to_ascii_lowercase();
+                let by_point = ((*dir).to_string(), (*point).to_string());
+                let found = fresh
+                    .iter()
+                    .position(|((n, _), _)| n.as_deref() == Some(lower.as_str()))
+                    .or_else(|| fresh.iter().position(|((_, p), _)| p.as_ref() == Some(&by_point)));
+                if let Some(k) = found {
+                    let (_, new) = fresh.remove(k);
+                    out.push_str(&with_comment_of(line, new));
+                    after = Some(out.len());
+                }
+            }
+            _ => out.push_str(line),
+        }
+    }
+    let at = after?;
+    let mut added = String::new();
+    for (_, l) in fresh {
+        added.push_str(l);
+        added.push('\n');
+    }
+    out.insert_str(at, &added);
+    Some(out)
+}
+
 /// `map` without device `name`: its `device` line and every signal on it.
-/// Comments, blank lines and everything else stay as they were.
+/// Comments, blank lines and everything else stay as they were. Device ids
+/// are exact, as on the box (`Pump` and `pump` are two devices).
 #[must_use]
 pub fn remove_device(map: &str, name: &str) -> String {
     let mut out = String::with_capacity(map.len());
     for line in map.split_inclusive('\n') {
         let t: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
         let gone = match t.as_slice() {
-            ["device", d, ..] => d.eq_ignore_ascii_case(name),
-            [dir, _, _, d, ..] if *dir == "in" || *dir == "out" => d.eq_ignore_ascii_case(name),
+            ["device", d, ..] => *d == name,
+            [dir, _, _, d, ..] if *dir == "in" || *dir == "out" => *d == name,
             _ => false,
         };
         if !gone {
@@ -601,8 +762,8 @@ pub fn remove_device(map: &str, name: &str) -> String {
 #[must_use]
 pub fn map_without(map: &MapText, device: &str) -> MapText {
     let mut m = map.clone();
-    m.devices.retain(|d| !d.name.eq_ignore_ascii_case(device));
-    m.signals.retain(|s| !s.device.eq_ignore_ascii_case(device));
+    m.devices.retain(|d| d.name != device);
+    m.signals.retain(|s| s.device != device);
     m
 }
 
@@ -617,12 +778,7 @@ impl crate::devices::NewDevice {
         use crate::devices::PROTOCOLS;
         let dev = map.devices.iter().find(|d| d.name == name)?;
         let protocol = PROTOCOLS.iter().position(|p| p.0 == dev.driver)?;
-        let mut params: String = dev
-            .params
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join(" ");
+        let mut params: String = dev.settings.join(" ");
         let (vendor, product) = dev
             .endpoint
             .strip_prefix("cip=")
@@ -666,6 +822,7 @@ impl crate::devices::NewDevice {
                 r.on = true;
                 r.name.clone_from(&s.name);
                 r.use_ = use_;
+                r.tail = Some(s.tail.join(" "));
             } else {
                 let mut r = PointRow::custom(dir, extra);
                 extra += 1;
@@ -673,6 +830,7 @@ impl crate::devices::NewDevice {
                 r.ty = ty;
                 r.point.clone_from(&s.point);
                 r.use_ = use_;
+                r.tail = Some(s.tail.join(" "));
                 points.push(r);
             }
         }
@@ -704,18 +862,26 @@ pub fn declare_var(src: &str, dir: Dir, name: &str, ty: SigTy) -> Option<String>
     let mut out = String::with_capacity(src.len() + decl.len() + 24);
     let mut done = false;
     let mut program_at = None;
+    // Only the program's own sections count: a function block ahead of it
+    // has a VAR_INPUT of its own.
+    let mut in_program = false;
     for line in src.split_inclusive('\n') {
         out.push_str(line);
         if !line.ends_with('\n') {
             out.push('\n');
         }
         let w = first_word(line);
-        if !done && w.as_deref() == Some(dir.section()) {
+        if in_program && !done && w.as_deref() == Some(dir.section()) {
             out.push_str(&decl);
             done = true;
         }
-        if program_at.is_none() && w.as_deref() == Some("PROGRAM") {
-            program_at = Some(out.len());
+        match w.as_deref() {
+            Some("PROGRAM") if program_at.is_none() => {
+                program_at = Some(out.len());
+                in_program = true;
+            }
+            Some("END_PROGRAM") => in_program = false,
+            _ => {}
         }
     }
     if done {
@@ -1053,10 +1219,11 @@ mod tests {
     #[test]
     fn delete_takes_the_device_and_its_signals_and_nothing_else() {
         let map = "# bench\ndevice e1213 enip-io 10.0.0.57 profile=moxa-e1213\nin  start bool e1213 di:0\nout lamp bool box do:0 safe=false\nout motor bool E1213 do:0 # caps\n\ndevice rio modbus-tcp 10.0.0.9 unit=1\nin  e1213x bool rio di:3\n";
+        // Exact, as the box reads ids: `E1213` is another device.
         let out = remove_device(map, "e1213");
         assert_eq!(
             out,
-            "# bench\nout lamp bool box do:0 safe=false\n\ndevice rio modbus-tcp 10.0.0.9 unit=1\nin  e1213x bool rio di:3\n"
+            "# bench\nout lamp bool box do:0 safe=false\nout motor bool E1213 do:0 # caps\n\ndevice rio modbus-tcp 10.0.0.9 unit=1\nin  e1213x bool rio di:3\n"
         );
         assert_eq!(remove_device(map, "nothing"), map);
         assert_eq!(remove_device("", "x"), "");
@@ -1107,7 +1274,7 @@ mod tests {
         w.replaces = Some("e1213".into());
         let out = apply_map(text, &w);
         assert!(!out.contains("device e1213") && !out.contains(" e1213 "), "{out}");
-        assert!(out.contains("device rio enip-io 10.0.0.57 profile=moxa-e1213\nin  start bool rio di:0\nin  stop bool rio di:1\n"), "{out}");
+        assert!(out.contains("device rio enip-io 10.0.0.57 profile=moxa-e1213\nin  start bool rio di:0\nin  parts int rio in:2:u32\nin  stop bool rio di:1\n"), "{out}");
         assert!(!out.contains("box di:1"), "stop moved off the box: {out}");
         assert!(out.contains("in  parts int rio in:2:u32\n"), "{out}");
         assert_eq!(skim(&out).odd, 0, "{out}");
@@ -1126,5 +1293,218 @@ mod tests {
             plan.files[0].1,
             "in   go bool box di:0 unit=st\nin start bool box di:1\n"
         );
+    }
+
+    const BLOCK_FIRST: &str = "FUNCTION_BLOCK fb\nVAR_INPUT\n  a : INT;\nEND_VAR\nEND_FUNCTION_BLOCK\n\nPROGRAM p\nVAR_INPUT\n  s : BOOL;\nEND_VAR\nVAR_OUTPUT\n  o : BOOL;\nEND_VAR\no := s;\nEND_PROGRAM\n";
+
+    #[test]
+    fn a_variable_goes_in_the_programs_section_not_a_function_blocks_ahead_of_it() {
+        let out = declare_var(BLOCK_FIRST, Dir::In, "door", SigTy::Bool).unwrap();
+        assert!(
+            out.starts_with("FUNCTION_BLOCK fb\nVAR_INPUT\n  a : INT;\nEND_VAR\n"),
+            "the block's inputs are as they were: {out}"
+        );
+        assert!(
+            out.contains("PROGRAM p\nVAR_INPUT\n  door : BOOL;\n  s : BOOL;\n"),
+            "{out}"
+        );
+        let ports = ports_of(&out);
+        assert!(
+            ports.iter().any(|p| p.name == "door" && p.dir == Dir::In),
+            "{ports:?}"
+        );
+        // No section of that kind in the program: a new one after PROGRAM.
+        let no_out = BLOCK_FIRST.replace("VAR_OUTPUT\n  o : BOOL;\nEND_VAR\no := s;\n", "");
+        let no_out = no_out.replace(
+            "FUNCTION_BLOCK fb\n",
+            "FUNCTION_BLOCK fb\nVAR_OUTPUT\n  q : BOOL;\nEND_VAR\n",
+        );
+        let out = declare_var(&no_out, Dir::Out, "lamp", SigTy::Bool).unwrap();
+        assert!(
+            out.contains("PROGRAM p\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\n"),
+            "{out}"
+        );
+        assert!(
+            out.starts_with("FUNCTION_BLOCK fb\nVAR_OUTPUT\n  q : BOOL;\nEND_VAR\n"),
+            "{out}"
+        );
+        assert!(helmsman_iec::ast::parse(&out).is_ok(), "{out}");
+        // A function block after the program is left alone too.
+        let after =
+            "PROGRAM p\nEND_PROGRAM\nFUNCTION_BLOCK fb\nVAR_INPUT\n  a : INT;\nEND_VAR\nEND_FUNCTION_BLOCK\n";
+        let out = declare_var(after, Dir::In, "x", SigTy::Int).unwrap();
+        assert!(
+            out.starts_with("PROGRAM p\nVAR_INPUT\n  x : INT;\nEND_VAR\nEND_PROGRAM\n"),
+            "{out}"
+        );
+    }
+
+    const RICH: &str = "# the bench\ndevice other modbus-tcp 10.0.0.1:502\n\n# the pump's I/O block\ndevice Rio modbus-tcp 10.0.0.57:502 unit=1 timeout_ms=300\nin  start bool Rio di:0  # green\nout motor bool Rio coil:0 safe=true unit=run\nin  level real Rio ir:2:f32 unit=mm poll_ms=500\n\nin  stop bool other di:1\n";
+
+    #[test]
+    fn saving_an_edit_keeps_what_the_form_has_no_field_for_and_the_lines_where_they_were() {
+        use crate::devices::NewDevice;
+        let map = skim(RICH);
+        let ports = ports_of(LATCH);
+        let d = NewDevice::from_map(&map, "Rio", &ports).unwrap();
+        let tails: Vec<_> = d.points.iter().map(|r| r.tail.clone()).collect();
+        assert_eq!(
+            tails,
+            [
+                Some(String::new()),
+                Some("safe=true unit=run".into()),
+                Some("unit=mm poll_ms=500".into())
+            ]
+        );
+        // Save with the endpoint changed and nothing else.
+        let w = wiring(
+            "Rio",
+            "device Rio modbus-tcp 10.0.0.58:502 unit=1 timeout_ms=300\n".into(),
+            &d.points,
+            &ports,
+            &map_without(&map, "Rio"),
+        )
+        .map(|mut w| {
+            w.replaces = Some("Rio".into());
+            w
+        })
+        .unwrap();
+        let out = apply_map(RICH, &w);
+        assert_eq!(out, RICH.replace("10.0.0.57:502 unit=1", "10.0.0.58:502 unit=1"));
+        // A safe value, a unit and the comments survive a rename of a signal's row too.
+        let mut rows = d.points.clone();
+        rows[0].name = "go".into();
+        rows[0].use_ = Use::Wiring;
+        let mut w = wiring(
+            "Rio",
+            "device Rio modbus-tcp 10.0.0.57:502 unit=1 timeout_ms=300\n".into(),
+            &rows[..2],
+            &ports,
+            &map_without(&map, "Rio"),
+        )
+        .unwrap();
+        w.replaces = Some("Rio".into());
+        let out = apply_map(RICH, &w);
+        assert!(out.contains("# the pump's I/O block\ndevice Rio modbus-tcp 10.0.0.57:502 unit=1 timeout_ms=300\nin  go bool Rio di:0  # green\nout motor bool Rio coil:0 safe=true unit=run\n"), "{out}");
+        assert!(!out.contains("level"), "the row left out is gone: {out}");
+        assert!(out.contains("# the bench\ndevice other"), "{out}");
+        assert!(out.ends_with("in  stop bool other di:1\n"), "{out}");
+        assert_eq!(skim(&out).odd, 0, "{out}");
+        // A new row follows the device's last line.
+        let mut rows = d.points.clone();
+        let mut extra = PointRow::custom(Dir::In, 0);
+        extra.name = "door".into();
+        extra.point = "di:5".into();
+        rows.push(extra);
+        let mut w = wiring(
+            "Rio",
+            "device Rio modbus-tcp 10.0.0.57:502 unit=1 timeout_ms=300\n".into(),
+            &rows,
+            &ports,
+            &map_without(&map, "Rio"),
+        )
+        .unwrap();
+        w.replaces = Some("Rio".into());
+        let out = apply_map(RICH, &w);
+        assert!(
+            out.contains("poll_ms=500\nin  door bool Rio di:5\n\nin  stop bool other di:1\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_device_line_keeps_a_setting_the_form_does_not_know_and_says_when_one_is_not_a_pair() {
+        use crate::devices::NewDevice;
+        let map = skim("device Rio modbus-tcp 10.0.0.57:502 unit=1 vendor_flag=7 stray\n");
+        let d = NewDevice::from_map(&map, "Rio", &[]).unwrap();
+        assert_eq!(d.params, "unit=1 vendor_flag=7 stray", "nothing dropped");
+        assert!(d.line().unwrap_err().contains("KEY=VALUE"), "so the form says so");
+    }
+
+    #[test]
+    fn device_names_are_exact_as_on_the_box() {
+        use crate::devices::NewDevice;
+        let text = "device Pump modbus-tcp 10.0.0.9:502\nin  run bool Pump di:0\nin  spare bool pump di:1\ndevice pump modbus-tcp 10.0.0.10:502\n";
+        assert_eq!(
+            remove_device(text, "Pump"),
+            "in  spare bool pump di:1\ndevice pump modbus-tcp 10.0.0.10:502\n"
+        );
+        let map = skim(text);
+        let d = NewDevice::from_map(&map, "Pump", &[]).unwrap();
+        let w = wiring(
+            "Pump",
+            "device Pump modbus-tcp 10.0.0.9:503\n".into(),
+            &d.points,
+            &[],
+            &map_without(&map, "Pump"),
+        )
+        .map(|mut w| {
+            w.replaces = Some("Pump".into());
+            w
+        })
+        .unwrap();
+        let out = apply_map(text, &w);
+        assert!(out.contains("in  spare bool pump di:1\n"), "{out}");
+        assert!(out.contains("device pump modbus-tcp 10.0.0.10:502\n"), "{out}");
+        assert!(
+            out.contains("device Pump modbus-tcp 10.0.0.9:503\nin  run bool Pump di:0\n"),
+            "{out}"
+        );
+        assert_eq!(map_without(&map, "Pump").devices.len(), 1);
+    }
+
+    #[test]
+    fn points_are_checked_against_the_drivers_syntax_and_a_hash_is_refused() {
+        let ports = ports_of(LATCH);
+        let map = skim("");
+        let line = |driver: &str| format!("device d {driver} 10.0.0.9\n");
+        let w = |driver: &str, point: &str| {
+            let mut r = PointRow::custom(Dir::In, 0);
+            r.name = "level".into();
+            r.point = point.into();
+            wiring("d", line(driver), &[r], &ports, &map).map(|_| ())
+        };
+        for good in [
+            "coil:0",
+            "di:65535",
+            "hr:5",
+            "hr:5:i16",
+            "ir:7:f32",
+            "ir:65534:u32sw",
+        ] {
+            assert_eq!(w("modbus-tcp", good), Ok(()), "{good}");
+        }
+        for bad in [
+            "coil",
+            "coil:",
+            "coil:x",
+            "coil:65536",
+            "coil:1:u16",
+            "hr:1:q",
+            "hr:65535:f32",
+            "hr:1:i16:x",
+            "xx:1",
+            "di:0#",
+            "# di:0",
+            "hr:-1",
+        ] {
+            assert!(w("modbus-tcp", bad).is_err(), "{bad}");
+        }
+        for good in ["di:3", "do:7", "in:2.1", "out:0.7", "in:4:u32", "out:0:f32"] {
+            assert_eq!(w("enip-io", good), Ok(()), "{good}");
+        }
+        for bad in [
+            "di", "di:x", "in:2.8", "in:2", "in:2:q", "in:x.1", "out", "a:1", "do:99999",
+        ] {
+            assert!(w("enip-io", bad).is_err(), "{bad}");
+        }
+        // A driver the page has no checker for is the box's to judge.
+        assert_eq!(w("logix-tag", "Program:Main.Tag[3]"), Ok(()));
+        assert!(w("logix-tag", "Tag#1").unwrap_err().contains('#'));
+        let mut r = PointRow::custom(Dir::Out, 0);
+        r.name = "lamp".into();
+        r.point = "coil:0".into();
+        r.tail = Some("safe=true # x".into());
+        assert!(wiring("d", line("modbus-tcp"), &[r], &ports, &map).is_err());
     }
 }
