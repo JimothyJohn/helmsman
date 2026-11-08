@@ -38,6 +38,13 @@ pub const SITE_MAX: usize = 32;
 pub const TOKEN_MAX: usize = 64;
 /// The API port a fresh node listens on, the box's default.
 pub const DEFAULT_API_PORT: u16 = 8080;
+/// The address a node answers on when nothing is on its flash: fixed and
+/// documented, the way Moxa ships a block at 192.168.127.254 (Nick,
+/// 2026-11-08: most plants commission on static networks with no DHCP).
+/// On the same /24 as a fresh Moxa, so one laptop setting reaches both,
+/// and never that address.
+pub const FACTORY_IP: [u8; 4] = [192, 168, 127, 250];
+pub const FACTORY_PREFIX: u8 = 24;
 
 const OFF_VERSION: usize = 4;
 const OFF_MODE: usize = 6;
@@ -127,6 +134,21 @@ fn plain(s: &str) -> bool {
 }
 
 impl Settings {
+    /// What a node runs on before anyone has set it: the factory address,
+    /// no name, no site, no token (so every write is refused until the
+    /// page sets one), no log sink.
+    #[must_use]
+    pub fn factory() -> Self {
+        Self {
+            net: Net::Static {
+                ip: FACTORY_IP,
+                prefix: FACTORY_PREFIX,
+                gateway: [0; 4],
+            },
+            ..Self::default()
+        }
+    }
+
     /// Checks every field against what the record holds and what the
     /// beacon's alphabet allows (`crates/helmsman-plc/src/site.rs`:
     /// letters, digits, `-`, `_`, `.`).

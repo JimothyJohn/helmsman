@@ -56,7 +56,8 @@ else
   case "$bin" in
     bench) build_mode="" ;;
     modbus) build_mode="net" ;;
-    *) echo "usage: $0 [bench|modbus]" >&2; exit 2 ;;
+    node) build_mode="api" ;;
+    *) echo "usage: $0 [bench|modbus|node]" >&2; exit 2 ;;
   esac
   crate=crates/helmsman-node
   target_dir=target/xtensa-esp32-none-elf/release
@@ -145,6 +146,9 @@ if [ "$board" = p4-eth ]; then
 elif [ "$bin" = modbus ] && [ "$board" = poe-iso ]; then
   echo "now: start the sink (/usr/bin/python3 -I scripts/node-log-sink.py), plug PoE (USB may stay),"
   echo "     and rerun: espflash monitor --port $SERIAL_PORT to watch the console."
+elif [ "$bin" = node ]; then
+  echo "now: plug the cable (USB may stay on an ISO). First boot answers at http://192.168.127.250:8080/"
+  echo "     (the factory record) unless flash already holds settings; set name, address and token there."
 elif [ "$bin" = modbus ]; then
   echo "now: unplug USB, start the sink (/usr/bin/python3 -I scripts/node-log-sink.py), plug PoE."
 else

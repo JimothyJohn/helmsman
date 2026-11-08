@@ -36,6 +36,9 @@ net = [
   "dep:ph-esp32-mac",
   "dep:static_cell",
 ]
+# `api`: the `node` binary: settings on flash, the HTTP server with the box
+# API subset, the beacon, program deploy (docs/EDGE.md Phase 4).
+api = ["net", "dep:esp-storage", "dep:embedded-storage", "dep:embassy-sync"]
 
 [[bin]]
 name = "bench"
@@ -46,6 +49,11 @@ name = "modbus"
 path = "src/bin/modbus.rs"
 required-features = ["net"]
 
+[[bin]]
+name = "node"
+path = "src/bin/node.rs"
+required-features = ["api"]
+
 [dependencies]
 # The runtime, without std: the clock comes in through `scan_at`, the
 # float functions from libm (helmsman-iec's `libm` feature).
@@ -53,6 +61,9 @@ helmsman-iec = { path = "../helmsman-iec", default-features = false, features = 
 # The Modbus codec (PDUs, reply checks, MBAP), no_std, no deps: the same
 # bytes the box puts on the wire.
 helmsman-modbus = { path = "../helmsman-modbus" }
+# What a node serves and stores (settings record, program slots, HTTP, the
+# box API subset, the router), no_std, host-tested.
+helmsman-nodecore = { path = "../helmsman-nodecore" }
 
 # The esp-rs stack, at the versions supervictor's edge crate pins (its
 # Cargo.lock, 2026-11-02): esp-hal 1.0.0 exactly (1.1 removed unstable
@@ -89,6 +100,14 @@ esp-rtos = { version = "0.2", features = ["embassy", "esp32"], optional = true }
 esp32 = { version = "0.42", optional = true }
 ph-esp32-mac = { git = "https://github.com/photon-circus/ph-esp32-mac", rev = "b05d53ade4224361175283ac1b65c7504a029301", features = ["esp-hal", "embassy-net", "log"], optional = true }
 static_cell = { version = "2.1.0", features = ["nightly"], optional = true }
+
+# `api` only: the flash behind the settings and program slots in the nvs
+# partition (esp-storage's driver through the embedded-storage traits, the
+# partition table read by esp-bootloader-esp-idf), and embassy-sync's
+# blocking mutex for the state the scan loop and the server share.
+esp-storage = { version = "0.8.1", features = ["esp32"], optional = true }
+embedded-storage = { version = "0.3.2", optional = true }
+embassy-sync = { version = "0.7", optional = true }
 
 [profile.release]
 # Speed is what is measured; frame pointers stay for esp-backtrace.

@@ -171,7 +171,9 @@ async fn main(spawner: Spawner) -> ! {
             }
         },
     };
-    spawner.spawn(ethernet::eth_dhcp_task(stack, emac_ptr, addressing)).ok();
+    spawner
+        .spawn(ethernet::eth_dhcp_task(stack, emac_ptr, addressing))
+        .ok();
 
     println!("waiting for the link and a lease...");
     stack.wait_config_up().await;
@@ -389,4 +391,3 @@ fn parse_endpoint_port(s: &str) -> Option<IpEndpoint> {
     let (host, port) = s.rsplit_once(':')?;
     parse_endpoint(host, port.parse().ok()?)
 }
-
