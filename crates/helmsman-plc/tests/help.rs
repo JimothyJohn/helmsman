@@ -863,18 +863,20 @@ fn a_box_without_a_relay_points_a_question_at_the_help_pages() {
     assert_eq!(s, 200, "{evs:?}");
     assert_eq!(names(&evs), ["help", "pages", "issue", "done"], "{evs:?}");
     let pages = last(&evs, "pages")["pages"].as_array().unwrap().clone();
-    assert!(pages.len() >= 2 && pages.len() <= 5, "{pages:?}");
-    // The two sections about deploying lead, as the unit test pins.
-    let urls: Vec<&str> = pages[..2].iter().map(|p| p["url"].as_str().unwrap()).collect();
+    assert!(pages.len() >= 3 && pages.len() <= 5, "{pages:?}");
+    // The Load page, then the two sections about deploying, as the unit
+    // test pins.
+    let urls: Vec<&str> = pages[..3].iter().map(|p| p["url"].as_str().unwrap()).collect();
     assert_eq!(
         urls,
         [
+            format!("{}load.html", help::HELP_SITE),
             format!("{}projects.html#save-and-deploy", help::HELP_SITE),
             format!("{}box.html#deploying", help::HELP_SITE)
         ],
         "{pages:?}"
     );
-    assert_eq!(pages[1]["title"], "On a box: Deploying");
+    assert_eq!(pages[2]["title"], "On a box: Deploying");
     assert_eq!(last(&evs, "issue")["by"], "box");
     assert_eq!(last(&evs, "done")["stop"], "offline");
     // A report of trouble gets no guess: the events are as before.

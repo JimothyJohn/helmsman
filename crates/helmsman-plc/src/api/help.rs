@@ -508,8 +508,9 @@ pub mod pages {
 
     /// Every page, in the site's order (keyboard and starters are
     /// generated from the code and change with it, so they are left out).
-    pub const ALL: [Page; 6] = [
+    pub const ALL: [Page; 7] = [
         page!("index"),
+        page!("load"),
         page!("editor"),
         page!("simulation"),
         page!("projects"),
@@ -710,7 +711,8 @@ pub mod pages {
                 assert!(!p.title().is_empty() && p.title() != p.name, "{}", p.name);
                 assert!(p.sections().len() > 1, "{} has no ## sections", p.name);
             }
-            assert_eq!(by_name("box").map(|p| p.title()), Some("On a box"));
+            assert_eq!(by_name("box").map(Page::title), Some("On a box"));
+            assert_eq!(by_name("load").map(Page::title), Some("Load a program"));
             assert_eq!(by_name("nope").map(|p| p.name), None);
         }
 
@@ -729,31 +731,46 @@ pub mod pages {
         fn a_how_to_question_finds_the_section_by_its_heading() {
             let hits = suggest("How do I deploy a program onto the box?");
             assert!(
-                hits.len() >= 2 && hits.len() <= super::super::MAX_PAGES,
+                hits.len() >= 3 && hits.len() <= super::super::MAX_PAGES,
                 "{hits:?}"
             );
-            // The two sections about deploying come first (they tie: a
+            // The Load page first (its title and body carry the most
+            // words), then the two sections about deploying (they tie: a
             // heading word each, the same body words), the site's order
             // between them.
             let site = super::super::HELP_SITE;
             assert_eq!(
-                hits[..2].iter().map(|h| h.url.as_str()).collect::<Vec<_>>(),
+                hits[..3].iter().map(|h| h.url.as_str()).collect::<Vec<_>>(),
                 [
+                    format!("{site}load.html"),
                     format!("{site}projects.html#save-and-deploy"),
                     format!("{site}box.html#deploying")
                 ],
                 "{hits:?}"
             );
-            assert_eq!(hits[1].title, "On a box: Deploying");
+            assert_eq!(hits[2].title, "On a box: Deploying");
             // Deterministic: the same question, the same order.
             assert_eq!(suggest("How do I deploy a program onto the box?"), hits);
         }
 
+        /// The question that started this (Nick, 2026-11-08) lands on the
+        /// page written for it.
+        #[test]
+        fn how_do_i_load_a_program_finds_the_load_page() {
+            let hits = suggest("How do I load a program?");
+            assert_eq!(hits.first().map(|h| h.page), Some("load"), "{hits:?}");
+            assert_eq!(hits[0].url, format!("{}load.html", super::super::HELP_SITE));
+        }
+
         #[test]
         fn a_report_of_trouble_gets_no_guess() {
-            assert!(suggest("The conveyor stopped and the lamp on the panel is red.").is_empty());
-            assert!(suggest("").is_empty());
-            assert!(suggest("???").is_empty());
+            let none: Vec<Hit> = Vec::new();
+            assert_eq!(
+                suggest("The conveyor stopped and the lamp on the panel is red."),
+                none
+            );
+            assert_eq!(suggest(""), none);
+            assert_eq!(suggest("???"), none);
             assert!(
                 suggest("Why is the sky blue?").is_empty(),
                 "no heading has these words"
