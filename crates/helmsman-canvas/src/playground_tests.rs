@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use eframe::egui::{self, Event, Id, PointerButton, Pos2, RawInput, Rect, Vec2};
+use eframe::egui::{self, Event, PointerButton, Pos2, RawInput, Rect, Vec2};
 use helmsman_iec::{Ty, Value};
 
 use crate::app::{App, Source};
@@ -1473,13 +1473,6 @@ impl Screen {
         while self.time < end {
             self.frame(vec![]);
         }
-    }
-
-    fn rect(&self, id: &str) -> Rect {
-        self.ctx
-            .read_response(Id::unique(id))
-            .unwrap_or_else(|| panic!("no widget {id}"))
-            .rect
     }
 
     /// Where the ST editor of the open file is.
