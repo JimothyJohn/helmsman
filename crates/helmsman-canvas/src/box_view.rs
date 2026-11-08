@@ -98,6 +98,8 @@ pub struct BoxView {
     /// The screen and the sign-in name, as the App last set them.
     pub desk_screen: Option<String>,
     pub desk_user: String,
+    /// Whose work the desk on this page is: the last person signed in.
+    desk_owner: Option<String>,
     /// The diagram's shared default and this browser's tweaks.
     pub layers: Layers,
     /// The lowering the view was built from.
@@ -179,32 +181,67 @@ impl BoxView {
     pub fn with_desk(mut self, store: Box<dyn Storage>) -> Self {
         let (keeper, d) = crate::desk::Keeper::load(store);
         self.desk = keeper;
+        self.desk_owner.clone_from(&d.owner);
         self.projects.restore = restore_of(&d);
-        self.put_back(d);
+        self.put_back(d, false);
         self
     }
 
     /// The inputs, the Agent's conversation, the device form, the screen
     /// and the sign-in name from `d`. A conversation under way here is
-    /// left as it is.
-    fn put_back(&mut self, d: crate::desk::Desk) {
-        self.instruct.draft.clone_from(&d.agent);
-        if !self.instruct.busy() && !self.agent.busy() {
+    /// left as it is. With `keep_here`, what this page holds (an input
+    /// typed, a conversation, a half-filled form) stays and `d` only
+    /// fills what is empty.
+    fn put_back(&mut self, d: crate::desk::Desk, keep_here: bool) {
+        if !keep_here || self.instruct.draft.is_empty() {
+            self.instruct.draft.clone_from(&d.agent);
+        }
+        let has_conversation = !self.agent.turns.is_empty() || self.instruct.outcome.is_some();
+        let keep_conversation = keep_here && has_conversation;
+        if !self.instruct.busy() && !self.agent.busy() && !keep_conversation {
             let c = d.conversation.clone().unwrap_or_default();
             c.put_back(&mut self.agent, &mut self.instruct);
         }
-        self.devices_ui.adding.clone_from(&d.device);
+        if !(keep_here && self.devices_ui.adding.is_some()) {
+            self.devices_ui.adding.clone_from(&d.device);
+        }
         self.desk_screen.clone_from(&d.screen);
         self.desk_user.clone_from(&d.user);
         self.restored = Some(d);
     }
 
     /// Puts the box's desk, newer than the one in front of the person, in
-    /// its place (the person signed in on another screen since).
+    /// its place (the person signed in on another screen since): the
+    /// edits merged with this page's, which stay.
     fn adopt(&mut self, d: crate::desk::Desk) {
+        let edited_here = self.desk.changed(&self.desk());
         self.desk.adopt(&d);
         self.projects.adopt(restore_of(&d));
-        self.put_back(d);
+        self.put_back(d, edited_here);
+    }
+
+    /// Another person signed in on this page: the last one's open project,
+    /// edits, inputs, conversation and form are not theirs. They stay on
+    /// the last one's desk (the box's, as of the last second), and this
+    /// page starts empty and asks for the new person's.
+    fn start_over(&mut self) {
+        self.agent.stop();
+        self.agent.turns.clear();
+        self.instruct = crate::instruct::Instruct::default();
+        self.devices_ui.adding = None;
+        self.projects.start_over();
+        self.desk.adopt(&crate::desk::Desk::default());
+    }
+
+    /// Follows who is signed in: the desk on this page belongs to the last
+    /// person to sign in on it, and a different one starts over.
+    fn follow_owner(&mut self) {
+        let Some(who) = crate::desk::owner(self.session.as_ref()) else {
+            return;
+        };
+        if self.desk_owner.replace(who.clone()).is_some_and(|was| was != who) {
+            self.start_over();
+        }
     }
 
     /// What the desk keeps, as it stands now.
@@ -214,6 +251,7 @@ impl BoxView {
             agent: self.instruct.draft.clone(),
             screen: self.desk_screen.clone(),
             user: self.desk_user.clone(),
+            owner: self.desk_owner.clone(),
             conversation: crate::desk::Conversation::of(
                 &self.agent.turns,
                 self.instruct.outcome.as_ref(),
@@ -278,6 +316,7 @@ impl BoxView {
             restored: None,
             desk_screen: None,
             desk_user: String::new(),
+            desk_owner: None,
             #[cfg(not(target_arch = "wasm32"))]
             sent: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -293,6 +332,10 @@ impl BoxView {
 
     /// [`Self::step`], with the project and force answers too.
     pub fn step_all(&mut self, ctx: &egui::Context, msgs: Vec<Msg>, answers: Vec<(PCall, Answer)>, now: f64) {
+        // Who is signed in first, so an answer for the person before is
+        // told from one for this person.
+        self.follow_owner();
+        self.on_box.step(self.session.as_ref());
         for m in msgs {
             self.state.apply(m, now);
         }
@@ -320,7 +363,6 @@ impl BoxView {
         let cmds = self.state.poll(now);
         self.run(ctx, cmds);
         self.trend.step(self.session.as_ref(), &self.state, now);
-        self.on_box.step(self.session.as_ref());
         if self.desk.due(now) {
             let desk = self.desk();
             if let Some(d) = self.desk.keep(&desk, now) {

@@ -492,17 +492,94 @@ impl BoxProjects {
         desk.drafts.retain(|_, m| !m.is_empty());
     }
 
-    /// Puts `restore` (a newer desk, the box's) in front of the person:
-    /// its project opens again, with its file and edits, as after a
-    /// reload. What was open here goes; the newer desk wins.
-    pub fn adopt(&mut self, restore: Restore) {
-        let reopen = restore.project.is_some();
-        self.restore = restore;
-        if reopen {
-            self.open = None;
-            self.conflict = None;
-            self.relist();
+    /// Puts `incoming` (a newer desk, the box's) in front of the person.
+    /// Edits are merged per file and an unsaved edit here is never
+    /// dropped: for a file edited both here and there, this page's text
+    /// stays (saving it is then refused as stale if the box's copy moved).
+    /// When this page has unsaved edits in the open project it stays on
+    /// that project and file and takes the others' edits in; otherwise the
+    /// newer desk's project opens again with its file and edits, as after
+    /// a reload.
+    pub fn adopt(&mut self, incoming: Restore) {
+        let mut here = crate::desk::Desk::default();
+        self.to_desk(&mut here);
+        let mut drafts = here.drafts;
+        let mut clashes = Vec::new();
+        for (project, files) in incoming.drafts {
+            let slot = drafts.entry(project.clone()).or_default();
+            for (file, d) in files {
+                match slot.get(&file) {
+                    Some(mine) if mine.text != d.text => clashes.push(format!("{project}/{file}")),
+                    Some(_) => {}
+                    None => {
+                        slot.insert(file, d);
+                    }
+                }
+            }
         }
+        if self.dirty() {
+            self.restore.project = None;
+            self.restore.file = None;
+            self.restore.drafts = drafts;
+            if let Some(o) = &self.open {
+                let theirs = self.restore.drafts.get_mut(&o.name);
+                let mut reads = Vec::new();
+                if let Some(theirs) = theirs {
+                    // This page's own are in its buffers already.
+                    theirs.retain(|f, _| o.bufs.get(f).is_none_or(|b| !b.dirty()));
+                    // A file read and unedited takes the other's edit when
+                    // it is read again.
+                    reads.extend(
+                        theirs
+                            .keys()
+                            .filter(|f| o.bufs.get(*f).is_some_and(|b| b.loaded))
+                            .map(|f| {
+                                PReq::get(
+                                    PCall::File {
+                                        project: o.name.clone(),
+                                        file: f.clone(),
+                                    },
+                                    file_url(&o.name, f),
+                                )
+                            }),
+                    );
+                }
+                self.queue.extend(reads);
+            }
+        } else {
+            let reopen = incoming.project.is_some();
+            if reopen {
+                self.restore.project = incoming.project;
+                self.restore.file = incoming.file;
+            }
+            self.restore.drafts = drafts;
+            if reopen {
+                self.open = None;
+                self.conflict = None;
+                self.relist();
+            }
+        }
+        if !clashes.is_empty() {
+            self.note(
+                format!(
+                    "Also edited on another screen: {}. Your version here is kept.",
+                    clashes.join(", ")
+                ),
+                false,
+            );
+        }
+    }
+
+    /// Forgets the open project, the edits and the file to show (another
+    /// person signed in on this page), and asks for the projects again.
+    pub fn start_over(&mut self) {
+        self.open = None;
+        self.restore = Restore::default();
+        self.conflict = None;
+        self.history.clear();
+        self.revision = None;
+        self.pages.clear();
+        self.relist();
     }
 
     /// Asks for project `name`'s revisions (the Files tab's History row).

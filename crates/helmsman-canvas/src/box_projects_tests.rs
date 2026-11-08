@@ -2269,6 +2269,170 @@ fn a_draft_started_on_one_screen_is_there_on_another_after_signing_in() {
     assert_eq!(air.projects.open.as_ref().unwrap().bufs["blocks.st"].text, edited);
 }
 
+/// 2026-11-08 review: two screens of one account, each with an unsaved
+/// edit to a different file. The screen whose desk the box refuses as older
+/// reads the other's and takes it, and its own edit is still there, still
+/// unsaved, next to the other screen's.
+#[test]
+fn taking_a_newer_desk_from_another_screen_keeps_this_screens_unsaved_edit() {
+    use crate::box_projects::PCall;
+    use crate::sim_projects::wall_ms;
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let (ja, js) = (Jar::default(), Jar::default());
+    let mut a = page(&b, &ja, Some(("alice", ALICE)));
+    make(
+        &b,
+        &ja,
+        &mut a.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    let mut s = page(&b, &js, Some(("alice", ALICE)));
+    for (v, j) in [(&mut a, &ja), (&mut s, &js)] {
+        v.projects.open_project("line");
+        settle(&b, j, &mut v.projects);
+    }
+    let mut now = 0.0;
+    for _ in 0..3 {
+        now += 1.5;
+        pump(&b, &ja, &mut a, &ctx, now);
+        pump(&b, &js, &mut s, &ctx, now);
+    }
+    a.projects.open_file("blocks.st");
+    let from_a = format!("{BLOCKS}\n(* from the first screen *)\n");
+    a.projects.current_mut().unwrap().text = from_a.clone();
+    s.projects.open_file("main.st");
+    let from_s = format!("{MAIN}\n(* from the second screen *)\n");
+    s.projects.current_mut().unwrap().text = from_s.clone();
+    s.instruct.draft = "the second screen's note".into();
+
+    // The second screen dates its desk first but its PUT is slow; the
+    // first screen's, dated later, lands before it.
+    now += 1.5;
+    s.step_all(&ctx, vec![], vec![], now);
+    let held = std::mem::take(&mut s.psent);
+    let put = held.iter().find(|q| q.call == PCall::SaveDesk).expect("a PUT");
+    let dated: Json = serde_json::from_slice(put.body.as_ref().unwrap()).unwrap();
+    let t = dated["saved_at"].as_u64().unwrap();
+    wait("the clock to move on", || wall_ms() > t);
+    a.step_all(&ctx, vec![], vec![], now);
+    let first = std::mem::take(&mut a.psent);
+    let kept = first
+        .iter()
+        .find(|q| q.call == PCall::SaveDesk)
+        .expect("the first screen's PUT");
+    let ans = b.send(&ja, kept);
+    assert_eq!(ans.status, 200, "{}", ans.body);
+    for q in held {
+        let ans = b.send(&js, &q);
+        if q.call == PCall::SaveDesk {
+            assert_eq!(ans.status, 409, "{}", ans.body);
+        }
+        s.step_all(&ctx, vec![], vec![(q.call, ans)], now);
+    }
+    for _ in 0..10 {
+        now += 1.5;
+        pump(&b, &js, &mut s, &ctx, now);
+    }
+    let o = s.projects.open.as_ref().expect("the project stays open");
+    assert_eq!(o.name, "line");
+    assert_eq!(o.current.as_deref(), Some("main.st"), "the file it was on");
+    assert_eq!(o.bufs["main.st"].text, from_s, "its own edit is not discarded");
+    assert!(o.bufs["main.st"].dirty());
+    assert_eq!(
+        o.bufs["blocks.st"].text, from_a,
+        "the other screen's edit arrived"
+    );
+    assert_eq!(
+        s.instruct.draft, "the second screen's note",
+        "the typed input stays"
+    );
+    let box_desk = |jar: &Jar| -> Json {
+        let a = b.send(jar, &PReq::get(PCall::Desk, "/api/desk".into()));
+        serde_json::from_str(&a.body).unwrap()
+    };
+    let held = box_desk(&js);
+    assert_eq!(held["desk"]["drafts"]["line"]["main.st"]["text"], from_s.as_str());
+    assert_eq!(
+        held["desk"]["drafts"]["line"]["blocks.st"]["text"],
+        from_a.as_str()
+    );
+}
+
+/// 2026-11-08 review: another person signing in on the same page does not
+/// inherit the last one's open project, unsaved edits and inputs, and the
+/// last one's desk does not go over theirs on the box.
+#[test]
+fn another_person_signing_in_on_the_page_does_not_inherit_the_last_ones_desk() {
+    use crate::box_projects::PCall;
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    v.projects.open_project("line");
+    settle(&b, &jar, &mut v.projects);
+    v.projects.open_file("blocks.st");
+    let edited = format!("{BLOCKS}\n(* alice's *)\n");
+    v.projects.current_mut().unwrap().text = edited.clone();
+    v.instruct.draft = "alice's note".into();
+    let box_desk = |jar: &Jar| -> Json {
+        let a = b.send(jar, &PReq::get(PCall::Desk, "/api/desk".into()));
+        serde_json::from_str(&a.body).unwrap()
+    };
+    let mut now = 0.0;
+    for _ in 0..20 {
+        now += 1.5;
+        pump(&b, &jar, &mut v, &ctx, now);
+        if box_desk(&jar)["desk"]["agent"] == "alice's note" {
+            break;
+        }
+    }
+    assert_eq!(box_desk(&jar)["desk"]["agent"], "alice's note");
+
+    // Bob has an older desk of his own on the box, from another screen.
+    let jb = Jar::default();
+    b.login(&jb, "bob", BOB);
+    let ans = b.send(
+        &jb,
+        &PReq {
+            call: PCall::SaveDesk,
+            method: "PUT",
+            url: "/api/desk".into(),
+            body: Some(br#"{"saved_at":5,"agent":"bob's note"}"#.to_vec()),
+            ctype: "application/json",
+        },
+    );
+    assert!(ans.status < 300, "{}", ans.body);
+
+    // Alice signs out and Bob signs in on the same page.
+    v.session = Some(b.login(&jar, "bob", BOB));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &jar, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "bob's note", "his own desk, not alice's input");
+    assert!(!v.projects.dirty(), "alice's unsaved edit is not on his screen");
+    assert!(v.desk().drafts.is_empty(), "{:?}", v.desk().drafts);
+    assert_eq!(box_desk(&jb)["desk"]["agent"], "bob's note");
+    assert_eq!(box_desk(&jb)["desk"]["drafts"], serde_json::json!({}));
+    // Alice's desk on the box is hers still.
+    let ja = Jar::default();
+    b.login(&ja, "alice", ALICE);
+    let hers = box_desk(&ja);
+    assert_eq!(
+        hers["desk"]["drafts"]["line"]["blocks.st"]["text"],
+        edited.as_str()
+    );
+}
+
 /// An instruction under way on the box's agent, with a proposal stored
 /// and the answer still streaming: `v` signed in, `line` open on
 /// `main.st`.

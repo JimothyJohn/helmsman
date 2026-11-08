@@ -1439,7 +1439,7 @@ impl Body for PlaygroundView {
                 let r = ui.label(RichText::new(n).color(t.muted));
                 chrome.hit("notice", r.rect);
             }
-            if error && self.proj.pending.is_some() {
+            if error && (self.proj.pending.is_some() || self.proj.pending_file.is_some()) {
                 let r = ui
                     .button("Replace")
                     .tip("Saves your version over the one kept in this browser.");
