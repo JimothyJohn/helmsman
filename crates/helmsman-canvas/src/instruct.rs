@@ -713,9 +713,9 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
         .add(
             egui::TextEdit::multiline(&mut s.draft)
                 .id_salt("agent-instruction")
-                .hint_text(format!(
-                    "What should {target} do? e.g. The lamp latches until stop is pressed"
-                ))
+                // Fits three rows at the panel's width: a longer hint made the
+                // empty field taller, and it shrank on the first keystroke.
+                .hint_text(format!("What should {target} do? e.g. Latch the lamp until stop"))
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         )

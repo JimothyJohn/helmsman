@@ -1,0 +1,6 @@
+[toolchain]
+# The ESP32-P4 is RISC-V (riscv32imafc), an upstream tier 2 target: plain
+# stable, no esp channel and no build-std, unlike crates/helmsman-node.
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = ["riscv32imafc-unknown-none-elf"]

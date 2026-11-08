@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Build the edge node's firmware (crates/helmsman-node) for the ESP32-POE2.
+# Build the edge node's firmware: crates/helmsman-node for the ESP32-POE2 /
+# POE-ISO (default), or crates/helmsman-node-p4 for the Waveshare
+# ESP32-P4-ETH with NODE_BOARD=p4-eth.
 #
 # The node crate is not a workspace member: it needs the esp toolchain
 # (`espup install`, rustup channel `esp`) and build-std for the Xtensa
@@ -11,8 +13,47 @@
 #                                              E1213_ADDR=a.b.c.d LOG_SINK=a.b.c.d:port
 #                                              in the environment change the defaults)
 #        scripts/node-build.sh clippy [net]   (the same, through clippy -D warnings)
+#        NODE_BOARD=p4-eth scripts/node-build.sh [build|clippy]   (the P4: `modbus` and `enip`;
+#                                              E1213_ADDR, LOG_SINK and ENIP_INPUT_ONLY=1 apply)
 set -euo pipefail
-cd "$(dirname "$0")/../crates/helmsman-node"
+cd "$(dirname "$0")/.."
+# NODE_BOARD=p4-eth: the Waveshare ESP32-P4-ETH (crates/helmsman-node-p4),
+# RISC-V on upstream stable, no esp toolchain, no build-std; both binaries
+# (`modbus`, `enip`) build in one go. Everything below this block is the
+# Xtensa POE2 / POE-ISO path (crates/helmsman-node).
+if [ "${NODE_BOARD:-poe2}" = p4-eth ]; then
+  cd crates/helmsman-node-p4
+  case "${1:-build}" in
+    build|net) cargo build --release ;;
+    clippy) cargo clippy --release -- -D warnings; exit 0 ;;
+    *) echo "usage: NODE_BOARD=p4-eth $0 [build|clippy]" >&2; exit 2 ;;
+  esac
+  # The main stack is what the statics leave of SRAM; refuse an image that
+  # leaves less than MIN_STACK (the POE2 died on 1.7 KiB, 2026-11-03).
+  MIN_STACK=$((32 * 1024))
+  NM=""
+  for c in llvm-nm /opt/homebrew/opt/llvm/bin/llvm-nm; do
+    command -v "$c" >/dev/null 2>&1 && { NM="$c"; break; }
+  done
+  if [ -z "$NM" ]; then
+    echo "note: no llvm-nm on PATH (brew install llvm); skipping the stack check"
+  else
+    for b in modbus enip; do
+      elf="target/riscv32imafc-unknown-none-elf/release/$b"
+      start=$("$NM" "$elf" | awk '$3 == "_stack_start" { print $1 }')
+      end=$("$NM" "$elf" | awk '$3 == "_stack_end" { print $1 }')
+      [ -n "$start" ] && [ -n "$end" ] || { echo "$b: no stack symbols in $elf" >&2; exit 1; }
+      stack=$(( 0x$start - 0x$end ))
+      echo "$b: main stack $stack bytes"
+      if [ "$stack" -lt "$MIN_STACK" ]; then
+        echo "$b: the main stack is under $MIN_STACK bytes; shrink HEAP_SIZE in src/bin/$b.rs" >&2
+        exit 1
+      fi
+    done
+  fi
+  exit 0
+fi
+cd crates/helmsman-node
 if ! rustup toolchain list | grep -q '^esp'; then
   echo "needs the esp toolchain: cargo install espup --locked && espup install" >&2
   exit 1

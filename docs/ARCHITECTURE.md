@@ -656,8 +656,12 @@ socket. docs/ci/ holds a GitHub Actions template for a project's own
 repository.
 
 **Writing a requirement** (`POST /api/projects/{p}/requirements`,
-`api::requirements`). The Requirements tab becomes a list of plain-words
-requirements; typing one has the agent write the test behind it. The
+`api::requirements`). *The canvas side of this, the Requirements tab, is
+archived since 2026-11-08 (Nick: "not that useful and creates more issues
+than it solves"; the scenarios the Agent writes with each change are the
+tests) under `crates/helmsman-canvas/archive/requirements/`; the route
+stays on the box without a caller.* The Requirements tab was a list of
+plain-words requirements; typing one had the agent write the test behind it. The
 request is `{text, name?}`: one line (no control characters), 1 to 500
 characters trimmed; `name` is snake case (`spec::name_ok`, 1 to 48 of
 `a-z 0-9 _`, starting with a letter), else the box slugs the words
@@ -709,7 +713,7 @@ answer is tested with the candidate file in place); a box runs them when a
 project opens, after each save (`POST /api/projects/{p}/tests`, token or
 session, nothing changes) and inside the deploy's approval path, where a
 red test refuses with 409 before anything builds (`projects::red_tests`).
-The Requirements tab of the right panel shows one row per test, green or
+The Requirements tab of the right panel (archived 2026-11-08) showed one row per test, green or
 red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
 same gate.
 
@@ -840,7 +844,7 @@ signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
 
 What a person had in front of them on the box's page (the open project
 and file, unsaved edits with the box version each was made against, the
-Agent's and the Requirements' inputs, the screen, the sign-in name, never
+Agent's input, the screen, the sign-in name, never
 a password or PIN): `crates/helmsman-canvas/src/desk.rs` keeps it in the
 browser (`localStorage`, at most 1 MiB, written at most once a second when
 it changed) and, signed in, on the box per person (`OnBox`), so it follows

@@ -1,0 +1,14 @@
+# Build from this folder (`scripts/node-build.sh` with NODE_BOARD=p4-eth
+# does): the target and the linker flags apply to cargo invoked here, not
+# to the workspace.
+[build]
+target = "riscv32imafc-unknown-none-elf"
+
+[target.riscv32imafc-unknown-none-elf]
+# esp-hal's linker script set, and frame pointers for esp-backtrace
+# (esp-hal's examples/async/embassy_ethernet/.cargo/config.toml).
+rustflags = ["-C", "link-arg=-Tlinkall.x", "-C", "force-frame-pointers"]
+# `cargo run --release` flashes and attaches the monitor. Flashing is
+# Nick's step (scripts/node-flash.sh prints the power rule and runs this);
+# never run it from an agent session.
+runner = "espflash flash --monitor"

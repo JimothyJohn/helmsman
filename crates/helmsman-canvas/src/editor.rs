@@ -30,20 +30,17 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
-    /// The project's requirement tests, green or red (`helmsman_iec::spec`).
-    Requirements,
     Claude,
 }
 
 impl Tab {
     /// Every tab, in the panel's order.
-    pub const ALL: [Self; 3] = [Self::Io, Self::Requirements, Self::Claude];
+    pub const ALL: [Self; 2] = [Self::Io, Self::Claude];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Requirements => "Requirements",
             Self::Claude => "Agent",
         }
     }
@@ -53,7 +50,6 @@ impl Tab {
     pub const fn tip(self) -> &'static str {
         match self {
             Self::Io => "The program's inputs and outputs with their live values.",
-            Self::Requirements => "The project's requirement tests, green or red. A red test stops Deploy.",
             Self::Claude => "Ask the agent about the program, or have it propose a change.",
         }
     }
@@ -61,7 +57,6 @@ impl Tab {
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
-            Self::Requirements => "tests",
             Self::Claude => "claude",
         }
     }
@@ -133,9 +128,10 @@ impl Pane {
 /// the hide chevron must fit the row, or the pane grows every frame); 240
 /// since 2026-11-05 (Nick: "just a bit wider").
 pub const LEFT_W: f32 = 240.0;
-/// The right panel's width when first opened, points: 236 since the
-/// Requirements tab (three tab buttons and the hide chevron must fit the
-/// row, or the panel grows every frame).
+/// The right panel's width when first opened, points: 236 since
+/// 2026-11-05 (the tab buttons and the hide chevron must fit the row, or
+/// the panel grows every frame; the Requirements tab is archived since
+/// 2026-11-08, the width kept).
 pub const RIGHT_W: f32 = 236.0;
 
 /// The Editor's layout and the Monitor's scan detail (kept per browser)
@@ -420,7 +416,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Side panel",
         right,
         &k(Action::Panel),
-        "Shows or hides the panel on the right: I/O, Requirements, Agent.",
+        "Shows or hides the panel on the right: I/O, Agent.",
     ) {
         chrome.right = !right;
     }

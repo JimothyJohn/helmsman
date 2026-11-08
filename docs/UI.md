@@ -100,19 +100,16 @@ this; change it here first when a decision changes.
   editor). One width
   for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
   pane on its tab, or shut it when that tab shows.
-- **Right panel, collapsible, tabs (236 pt since the third tab):** I/O
-  (values; inputs the diagram does not show), Requirements (Nick, 2026-11-05: a list of requirements in plain words.
-  Type one and Add: the agent writes the test behind it, a
-  `test_NAME.st` PROGRAM whose first comment is the requirement, and runs
-  it; in the simulation through the page's Agent route, on a box through
-  `POST /api/projects/{p}/requirements`, where the box's agent writes and
-  checks it. Each row is green (passing), red (failing, and why) or grey
-  (no test yet: no agent was reachable, or it wrote none); a row opens to
-  its test with Edit test and Delete. Test files stay out of the Files
-  list. The page runs the tests after every build change and before
-  Deploy and "Use this code", a box when a project opens, after each save
-  and before a deploy; a red one refuses both, naming the test, a grey one
-  does not), Agent (Nick, 2026-11-05, `crate::instruct`, the
+- **Right panel, collapsible, tabs (236 pt):** I/O
+  (values; inputs the diagram does not show) and Agent. (The Requirements
+  tab of 2026-11-05, a list of requirements in plain words with the agent
+  writing the test behind each, is archived since 2026-11-08 under
+  `crates/helmsman-canvas/archive/requirements/`: the scenarios the Agent
+  writes with each change are the tests. `test_NAME.st` files still run,
+  after every build change and before Deploy and "Use this code" in the
+  page, when a project opens, after each save and before a deploy on a
+  box; a red one refuses both, naming the test. Test files stay out of
+  the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
   same on the page and on a box: no conversation. The tab is an
   instruction box, Send or Stop, Undo, and after an answer a status line
   and the Agent's one-sentence reason. Send updates the open file: one
