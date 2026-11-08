@@ -111,6 +111,7 @@ pub(super) fn get(ctx: &Ctx, rest: &[&str]) -> Response {
                     "drivers": drivers.iter().map(|(n, b)| json!({
                         "name": n, "bytes": b.len(), "sha256": project::version(b),
                     })).collect::<Vec<_>>(),
+                    "tests": tests_json(&test_settings(ctx)),
                 }),
             ),
             Err(r) => refusal(&r),
@@ -672,6 +673,18 @@ pub(super) fn test_settings(ctx: &Ctx) -> spec::Settings {
         Some(appr) => check::test_settings(&shape(appr)),
         None => spec::Settings::new(ImageSizes { i: 32, q: 32, m: 256 }),
     }
+}
+
+/// How this box runs requirement tests, for a client that checks a change
+/// the way the box will (the canvas's Agent): the scan period and the
+/// image sizes, bytes.
+fn tests_json(s: &spec::Settings) -> Json {
+    json!({
+        "scan_ms": u64::try_from(s.period.as_millis()).unwrap_or(u64::MAX),
+        "i": s.sizes.i,
+        "q": s.sizes.q,
+        "m": s.sizes.m,
+    })
 }
 
 /// Project `name`'s requirement tests, run (`helmsman_iec::spec`), or

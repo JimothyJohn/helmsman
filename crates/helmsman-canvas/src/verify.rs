@@ -23,7 +23,19 @@
 //! the place of that requirement test (kept scenarios are tests too, so
 //! the next instruction that changes their behaviour could never pass
 //! otherwise). It must pass like any scenario, every other test still
-//! must, and the status line names it ([`Check::replaced`]).
+//! must, and the status line names it, old wording and new
+//! ([`Check::replaced`]). A test is replaced only when it is red against
+//! the new code: one that still passes is not contradicted, so it stays
+//! and the replacement is refused.
+//!
+//! **A scenario must tell the change from no change** (red before, green
+//! after): when the answer changes what the file does, at least one of
+//! its scenarios must fail on the file as it was. Scenarios that pass on
+//! the old file prove nothing about the change and go back to the Agent.
+//! A change that keeps the behaviour (a rename, a tidy) says so in an
+//! `Unchanged behaviour: <why>` line after its `Why:` line; the rule is
+//! skipped then, every test and scenario must still pass, and the status
+//! line calls it the Agent's claim.
 //!
 //! Plain data and text, so it is tested natively and runs in the page.
 
@@ -374,8 +386,35 @@ pub struct Check {
     pub add: Vec<(String, String)>,
     /// How many of the project's own requirement tests ran green with it.
     pub tests_green: usize,
-    /// Requirement tests a scenario replaces: (file, its new requirement).
-    pub replaced: Vec<(String, String)>,
+    /// Requirement tests a scenario replaces, old wording and new.
+    pub replaced: Vec<Replaced>,
+    /// The answer claims the change keeps the behaviour (an `Unchanged
+    /// behaviour:` line), so no scenario has to fail on the old file.
+    pub unchanged: bool,
+}
+
+/// Whether the answer's prose carries an `Unchanged behaviour: <why>` line
+/// with a reason.
+#[must_use]
+pub fn claims_unchanged(answer: &str) -> bool {
+    const KEY: &str = "unchanged behaviour:";
+    segments(answer).iter().any(|s| match s {
+        Segment::Prose(p) => p.lines().any(|l| {
+            let l = l.trim_start_matches(['*', '_', '#', ' ']).to_ascii_lowercase();
+            l.strip_prefix(KEY).is_some_and(|r| !r.trim().is_empty())
+        }),
+        Segment::Code { .. } => false,
+    })
+}
+
+/// A requirement test a scenario took the place of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Replaced {
+    pub file: String,
+    /// The requirement the test stated.
+    pub was: String,
+    /// The requirement the scenario states.
+    pub now: String,
 }
 
 impl Check {
@@ -434,6 +473,21 @@ fn the_code(scope: &Scope, answer: &str) -> Option<String> {
 /// requirement tests run with `settings`. Deterministic.
 #[must_use]
 pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> Check {
+    // A block that never closes means the answer was cut off in it; half
+    // a file or half a scenario is not checked as if it were whole.
+    if segments(answer)
+        .iter()
+        .any(|s| matches!(s, Segment::Code { closed: false, .. }))
+    {
+        return Check {
+            code: true,
+            failures: vec![
+                "The answer ends inside a code block that was never closed: it was cut off. Send it again in full, every block closed."
+                    .into(),
+            ],
+            ..Check::default()
+        };
+    }
     if !has_code(answer) {
         return Check::default();
     }
@@ -466,6 +520,7 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
     let taken: Vec<String> = landed.keys().cloned().collect();
     let (scen, problems) = scenarios(answer, &taken);
     c.failures.extend(problems);
+    let (scen, replaced) = contradicted(&landed, scen, settings, &mut c.failures);
     let mut all = landed;
     for s in &scen {
         all.insert(s.file.clone(), s.text.clone());
@@ -502,13 +557,129 @@ pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> 
             c.tests_green += 1;
         }
     }
-    c.replaced = scen
-        .iter()
-        .filter(|s| s.replaces)
-        .map(|s| (s.file.clone(), s.requirement.clone()))
-        .collect();
+    if c.failures.is_empty() && c.scenarios.iter().all(|r| r.passed) {
+        c.unchanged = claims_unchanged(answer);
+        if !c.unchanged {
+            c.failures.extend(indistinct(scope, files, &all, &scen, settings));
+        }
+    }
+    c.replaced = replaced;
     c.add = scen.into_iter().map(|s| (s.file, s.text)).collect();
     c
+}
+
+/// The code of `text` with comments and white space gone: what it does.
+fn bare(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix("(*") {
+            rest = r.find("*)").map_or("", |k| &r[k + 2..]);
+        } else if let Some(r) = rest.strip_prefix("//") {
+            rest = r.find('\n').map_or("", |k| &r[k..]);
+        } else {
+            let mut cs = rest.chars();
+            let c = cs.next().unwrap_or(' ');
+            if !c.is_whitespace() {
+                out.push(c.to_ascii_lowercase());
+            }
+            rest = cs.as_str();
+        }
+    }
+    out
+}
+
+/// The scenarios that replace a requirement test, held against the new
+/// build: a replacement stands only when the test it replaces is red with
+/// the new code (an untested placeholder has nothing to contradict). One
+/// whose test still passes, or that the project does not have, is dropped
+/// and the old test stays, with the reason in `failures`. Returns the
+/// scenarios left and what was replaced.
+fn contradicted(
+    landed: &Files,
+    scen: Vec<Scenario>,
+    settings: Settings,
+    failures: &mut Vec<String>,
+) -> (Vec<Scenario>, Vec<Replaced>) {
+    if !scen.iter().any(|s| s.replaces) {
+        return (scen, Vec::new());
+    }
+    let now = spec::plan(
+        landed
+            .iter()
+            .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
+            .map(|(n, t)| (n.as_str(), t.as_str())),
+    );
+    let mut kept = Vec::new();
+    let mut replaced = Vec::new();
+    for s in scen {
+        let old = s
+            .replaces
+            .then(|| now.tests.iter().find(|t| t.file == s.file))
+            .flatten();
+        let Some(old) = old else {
+            kept.push(s);
+            continue;
+        };
+        let v = spec::run(&now.main, old, settings);
+        if v.red() || v.untested() {
+            replaced.push(Replaced {
+                file: s.file.clone(),
+                was: old.requirement.clone(),
+                now: s.requirement.clone(),
+            });
+            kept.push(s);
+        } else {
+            let name = s.file.trim_end_matches(".st");
+            failures.push(format!(
+                "Scenario {} replaces {name} ({}), but {name} still passes with this code, so the instruction does not contradict it and it stays. Keep {name} passing and give this scenario a name of its own.",
+                s.file, old.requirement
+            ));
+        }
+    }
+    (kept, replaced)
+}
+
+/// Why the scenarios do not tell the change from no change, if they do
+/// not: the answer changes what the file does, and every scenario passes
+/// on the project as it was. `all` is the project with the answer, whose
+/// scenarios `scen` are.
+fn indistinct(
+    scope: &Scope,
+    files: &Files,
+    all: &Files,
+    scen: &[Scenario],
+    settings: Settings,
+) -> Option<String> {
+    let file = scope.file()?;
+    if scen.is_empty() || bare(files.get(file)?) == bare(all.get(file)?) {
+        return None;
+    }
+    let mut before = files.clone();
+    for s in scen {
+        before.insert(s.file.clone(), s.text.clone());
+    }
+    let plan = spec::plan(
+        before
+            .iter()
+            .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
+            .map(|(n, t)| (n.as_str(), t.as_str())),
+    );
+    let ran: Vec<_> = spec::run_all(&plan, settings)
+        .into_iter()
+        .filter(|v| scen.iter().any(|s| s.file == v.file))
+        .collect();
+    if ran.iter().any(spec::Verdict::red) {
+        return None;
+    }
+    let names: Vec<String> = ran
+        .iter()
+        .map(|v| v.file.trim_end_matches(".st").to_string())
+        .collect();
+    Some(format!(
+        "The scenario does not distinguish the change: {} pass on {file} as it was before, so they would pass without the change. Send a scenario that fails on the old file and passes on the new one.",
+        names.join(", ")
+    ))
 }
 
 /// What the page does with a checked answer.
