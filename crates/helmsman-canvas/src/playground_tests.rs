@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use eframe::egui::{self, Event, Id, PointerButton, Pos2, RawInput, Rect, Vec2};
+use eframe::egui::{self, Event, PointerButton, Pos2, RawInput, Rect, Vec2};
 use helmsman_iec::{Ty, Value};
 
 use crate::app::{App, Source};
@@ -1475,10 +1475,11 @@ impl Screen {
         }
     }
 
-    fn rect(&self, id: &str) -> Rect {
+    /// Where the ST editor of the open file is.
+    fn editor_rect(&self) -> Rect {
         self.ctx
-            .read_response(Id::unique(id))
-            .unwrap_or_else(|| panic!("no widget {id}"))
+            .read_response(self.view.source_id())
+            .expect("the ST editor")
             .rect
     }
 
@@ -1818,7 +1819,7 @@ impl Screen {
     /// Clicks into the ST editor's first line, then types a stray
     /// character there: an edit that does not compile.
     fn type_a_stray_character(&mut self) {
-        let editor = self.rect("pg-source");
+        let editor = self.editor_rect();
         self.click(Pos2::new(editor.left() + 60.0, editor.top() + 6.0));
         self.frame(vec![Event::Text("!".into())]);
         assert!(
@@ -1871,7 +1872,7 @@ fn typing_a_working_change_runs_nothing_until_deploy() {
     let diagram = s.view.viewer.as_ref().unwrap().src.clone();
     // Focus the editor, then the caret to the start of END_PROGRAM's line
     // (the last one), and type a statement in front of it.
-    let editor = s.rect("pg-source");
+    let editor = s.editor_rect();
     s.click(Pos2::new(editor.left() + 60.0, editor.top() + 6.0));
     let last = u32::try_from(deployed.lines().count()).unwrap();
     assert!(deployed.lines().last().unwrap().starts_with("END_PROGRAM"));

@@ -47,6 +47,24 @@ struct ControlSent {
 /// What Upload's file picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub const UPLOAD_ACCEPT: &str = ".zip,.st,.xml,.l5x,.eds";
+/// The largest file a picker takes, bytes: read whole into the page, so
+/// checked against the file's size before it is.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub const MAX_PICK: f64 = helmsman_project::devlib::MAX_BYTES as f64;
+
+/// Why a picked file of `size` bytes is not read, if it is not.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[must_use]
+pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
+    (size > MAX_PICK).then(|| {
+        format!(
+            "{name} was not read: it is {:.1} MB and upload takes files up to {:.0} MB.",
+            size / 1_048_576.0,
+            MAX_PICK / 1_048_576.0
+        )
+    })
+}
+
 /// What the Devices tab's "Import device…" picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub const DEVICE_ACCEPT: &str = ".eds";
@@ -58,6 +76,32 @@ pub enum Source {
     Box,
     /// The program running in this page against virtual I/O.
     Sim,
+}
+
+/// Whether the shortcut `a` applies on `screen` of `source`. What acts on
+/// the open project (Save, Deploy, Upload, Force, Undo, the step chords)
+/// does so only where that project is on screen: Ctrl+D on the Monitor or
+/// the Proposals must not deploy a project the engineer cannot see. The
+/// simulation's run controls work on the Editor and the Monitor.
+#[must_use]
+pub fn can_act(a: Action, screen: Screen, source: Source) -> bool {
+    match a {
+        Action::Save
+        | Action::Deploy
+        | Action::Upload
+        | Action::Download
+        | Action::Force
+        | Action::ReleaseAll
+        | Action::Undo
+        | Action::Redo
+        | Action::GoToDefinition
+        | Action::CrossReferences
+        | Action::StepInto
+        | Action::StepOut
+        | Action::Breakpoint => screen == Screen::Editor,
+        Action::RunStop | Action::Stop | Action::Step => source == Source::Sim && screen != Screen::Proposals,
+        _ => true,
+    }
 }
 
 /// Which screen fills the window under the header.
@@ -302,6 +346,26 @@ impl App {
         }
     }
 
+    /// Files the picker could not read, told in Messages (the page used to
+    /// drop them without a word).
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub fn pick_failed(&mut self, errors: Vec<String>, now: f64) {
+        for e in errors {
+            match self.source {
+                Source::Box => {
+                    if let Some(b) = &mut self.boxv {
+                        Body::messages(b).error(now, e);
+                    }
+                }
+                Source::Sim => {
+                    if let Some(s) = &mut self.sim {
+                        Body::messages(s).error(now, e);
+                    }
+                }
+            }
+        }
+    }
+
     /// What the header names: the program or module open.
     #[must_use]
     pub fn title(&self) -> String {
@@ -360,7 +424,10 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(PROPOSALS_EVERY));
         }
         #[cfg(target_arch = "wasm32")]
-        self.uploaded(crate::web::take_picked());
+        {
+            self.uploaded(crate::web::take_picked());
+            self.pick_failed(crate::web::take_pick_errors(), ctx.input(|i| i.time));
+        }
         let session = self.session();
         let engineer = is_engineer(session.as_ref()).is_ok();
         if let Some(b) = &mut self.boxv {
@@ -476,6 +543,9 @@ impl App {
     /// Does what a shortcut (or its menu item) asks; nothing where it
     /// does not apply (Run in a box's page, Sign in in the simulation).
     pub fn act(&mut self, a: Action, ctx: &egui::Context) {
+        if !can_act(a, self.screen, self.source) {
+            return;
+        }
         match a {
             Action::Save => {
                 if let Some(w) = self.workspace()
@@ -496,9 +566,6 @@ impl App {
             }
             Action::RunStop | Action::Stop | Action::Step => {
                 // On the Editor and the Monitor alike (Nick, 2026-11-01).
-                if self.source != Source::Sim || self.screen == Screen::Proposals {
-                    return;
-                }
                 let Some(s) = self.sim.as_mut() else { return };
                 if s.session.build.is_none() {
                     return;
@@ -686,21 +753,33 @@ impl App {
         let waiting = self.waiting();
         let title = self.title();
         let engineer = is_engineer(self.session().as_ref()).is_ok();
+        // A phone's width: the wordmark, the open view's status and the
+        // "simulation" tag give way, so the mark's group and the screens'
+        // never overlap; the title takes what is left and elides.
+        let narrow = ui.ctx().content_rect().width() < NARROW;
         let panel = egui::Panel::top("header").show(ui, |ui| {
             let size = Vec2::new(ui.available_width(), HEADER_H);
             let t = theme(ui);
             ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // The wordmark is the way to the site.
-                let mark = ui
-                    .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent)).frame(false))
-                    .tip(format!("Opens {SITE_URL} in a new tab."));
-                hits.push(("mark".to_string(), mark.rect));
-                if mark.clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
+                // The wordmark is the way to the site (the About window links
+                // it, on a phone).
+                if !narrow {
+                    let mark = ui
+                        .add(
+                            egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent))
+                                .frame(false),
+                        )
+                        .tip(format!("Opens {SITE_URL} in a new tab."));
+                    hits.push(("mark".to_string(), mark.rect));
+                    if mark.clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
+                    }
                 }
                 self.menus(ui, engineer, waiting, &mut hits);
-                ui.separator();
-                self.actions(ui, &mut hits);
+                if !narrow {
+                    ui.separator();
+                    self.actions(ui, &mut hits);
+                }
                 // The right-hand group, laid out from the window's edge
                 // leftwards (the order below is right to left).
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -727,12 +806,15 @@ impl App {
                     }
                     ui.separator();
                     self.dirty_mark(ui, &mut hits);
-                    if self.source == Source::Sim {
+                    if self.source == Source::Sim && !narrow {
                         ui.label(RichText::new("simulation").color(t.muted))
                             .tip("The program runs in this page. Nothing reaches a controller.");
                     }
                     let r = ui
-                        .label(RichText::new(&title).strong().monospace().color(t.fg))
+                        .add(
+                            egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
+                                .truncate(),
+                        )
                         .tip("The open project.");
                     hits.push(("title".to_string(), r.rect));
                     m.rect
@@ -1081,6 +1163,28 @@ impl App {
 
     /// File, Edit and View: what exists today, nothing greyed for later.
     fn menus(
+        &mut self,
+        ui: &mut egui::Ui,
+        engineer: bool,
+        waiting: Option<usize>,
+        hits: &mut Vec<(String, Rect)>,
+    ) {
+        if ui.ctx().content_rect().width() >= NARROW {
+            self.menu_buttons(ui, engineer, waiting, hits);
+            return;
+        }
+        // A phone's width has no room for four menus beside the mark and
+        // the screens: one button holds them as submenus.
+        ui.scope(|ui| {
+            egui::containers::menu::menu_style(ui.style_mut());
+            let m = ui.menu_button("Menu", |ui| self.menu_buttons(ui, engineer, waiting, hits));
+            hits.push(("bar menu".to_string(), m.response.rect));
+        });
+    }
+
+    /// File, Edit, View and Help, as buttons of the row (or, on a phone,
+    /// the submenus of its one Menu button).
+    fn menu_buttons(
         &mut self,
         ui: &mut egui::Ui,
         engineer: bool,

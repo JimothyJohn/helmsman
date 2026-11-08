@@ -194,7 +194,7 @@ impl Log {
                         Level::Warning => ("warning", WARN),
                         Level::Error => ("error", RED),
                     };
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(
                             RichText::new(format!("{:>8.1}s", m.at))
                                 .monospace()
