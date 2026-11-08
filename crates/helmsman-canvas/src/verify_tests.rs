@@ -380,17 +380,20 @@ fn a_test_the_instruction_contradicts_is_replaced_and_said_so() {
     assert!(c.green(), "{:?}", c.problems());
     assert_eq!(
         c.replaced,
-        vec![(
-            "test_lamp.st".to_string(),
-            "The lamp is off while start is on.".to_string()
-        )]
+        vec![crate::verify::Replaced {
+            file: "test_lamp.st".into(),
+            was: "The lamp comes on with start.".into(),
+            now: "The lamp is off while start is on.".into(),
+        }]
     );
     assert_eq!(c.add.len(), 1);
     assert_eq!(c.add[0].0, "test_lamp.st");
     assert!(c.add[0].1.contains("NOT lamp"));
     let s = crate::instruct::status("main.st", &c);
     assert!(
-        s.contains("changed requirement test_lamp: The lamp is off while start is on."),
+        s.contains(
+            "changed requirement test_lamp: The lamp is off while start is on (was: The lamp comes on with start)"
+        ),
         "{s}"
     );
 
@@ -409,4 +412,119 @@ fn a_test_the_instruction_contradicts_is_replaced_and_said_so() {
         "{:?}",
         c.problems()
     );
+}
+
+/// The lamp program with a second output, which leaves `FOLLOWS` green.
+const LAMP_AND_FLAG: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; flag : BOOL; END_VAR\nlamp := start;\nflag := NOT start;\nEND_PROGRAM\n";
+
+/// A scenario that reads `flag` and expects it on while start is off:
+/// false on `LAMP` (no such output), true on `LAMP_AND_FLAG`.
+fn flag_scenario(name: &str) -> String {
+    format!(
+        "(* The flag is on while start is not pressed. *)\nPROGRAM test_{name}\nVAR_INPUT flag : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; flag_on : ASSERT; END_VAR\nstart := FALSE;\nn := n + 1;\nIF n > 3 THEN flag_on(COND := flag); done := TRUE; END_IF;\nEND_PROGRAM"
+    )
+}
+
+/// A test is replaced only when the new code turns it red. A trivial
+/// replacement of a test that still passes is refused and the old test
+/// stays (review of 2026-11-08, hole 2).
+#[test]
+fn a_test_that_still_passes_cannot_be_replaced() {
+    let trivial = "(* Nothing to check. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT done : BOOL; END_VAR\nVAR ok : ASSERT; END_VAR\nok(COND := TRUE);\nlamp := lamp;\ndone := TRUE;\nEND_PROGRAM";
+    let a = replacing(LAMP_AND_FLAG, "st scenario replaces test_lamp", trivial);
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.red(), "{:?}", c.problems());
+    let p = c.problems().join("\n");
+    assert!(p.contains("replaces test_lamp"), "{p}");
+    assert!(p.contains("still passes with this code"), "{p}");
+    assert!(c.replaced.is_empty() && c.add.is_empty(), "the old test stays");
+    // The retry sends the reason back.
+    let Next::Retry(m) = next(&c, 0, false) else {
+        panic!("a retry")
+    };
+    assert!(m.contains("still passes with this code"), "{m}");
+    // A scenario with a name of its own that tells the change apart is green.
+    let a = answer_with(LAMP_AND_FLAG, &[flag_scenario("flag")]);
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.green(), "{:?}", c.problems());
+    assert_eq!(c.tests_green, 1, "test_lamp ran and passed");
+}
+
+/// Red before, green after: scenarios that pass on the old file say
+/// nothing about a change that alters what the file does.
+#[test]
+fn a_scenario_that_passes_on_the_old_file_does_not_distinguish_the_change() {
+    // Both pass on LAMP too: refused, and the retry text says so.
+    let a = answer_with(LAMP_AND_FLAG, &[off("lamp_off", true)]);
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.red(), "{:?}", c.problems());
+    let p = c.problems().join("\n");
+    assert!(p.contains("does not distinguish the change"), "{p}");
+    assert!(p.contains("lamp_off"), "{p}");
+    assert!(matches!(next(&c, 0, false), Next::Retry(m) if m.contains("does not distinguish")));
+    // One that fails on the old file and passes on the new one: green.
+    let a = answer_with(LAMP_AND_FLAG, &[off("lamp_off", true), flag_scenario("flag")]);
+    let c = check(&file(), &project(), &a, settings());
+    assert!(c.green(), "{:?}", c.problems());
+    // A change in comments alone changes nothing to tell apart.
+    let a = answer_with(&commented(), &[off("lamp_off", true)]);
+    assert!(check(&file(), &project(), &a, settings()).green());
+}
+
+/// A rename keeps the behaviour, so no scenario can fail on the old file:
+/// refused as indistinct unless the answer claims it, and then the status
+/// line says it is the Agent's claim; scenarios must still pass.
+#[test]
+fn a_behaviour_preserving_change_passes_only_with_the_unchanged_behaviour_line() {
+    let old = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nVAR t : BOOL; END_VAR\nt := start;\nlamp := t;\nEND_PROGRAM\n";
+    let renamed = old
+        .replace("t :=", "pressed :=")
+        .replace("lamp := t", "lamp := pressed")
+        .replace("VAR t :", "VAR pressed :");
+    let files = Files::from([("main.st".to_string(), old.to_string())]);
+    let follows = FOLLOWS.replace("test_lamp", "test_follows");
+    let plain = answer_with(&renamed, std::slice::from_ref(&follows));
+    let c = check(&file(), &files, &plain, settings());
+    assert!(
+        c.problems().join("\n").contains("does not distinguish"),
+        "{:?}",
+        c.problems()
+    );
+    let claimed = plain.replacen(
+        "It now says why.",
+        "Why: the variable is named for what it holds.\nUnchanged behaviour: only a local variable's name changes.",
+        1,
+    );
+    let c = check(&file(), &files, &claimed, settings());
+    assert!(c.green(), "{:?}", c.problems());
+    assert!(c.unchanged);
+    assert!(crate::instruct::status("main.st", &c).contains("behaviour unchanged (the Agent's claim)"));
+    // The claim does not excuse a failing scenario.
+    let broken = claimed.replace("lamp := pressed", "lamp := NOT pressed");
+    assert!(check(&file(), &files, &broken, settings()).red());
+    // A claim with no reason is no claim.
+    assert!(!crate::verify::claims_unchanged(
+        "Why: x.\nUnchanged behaviour:\n"
+    ));
+}
+
+/// A block that never closes was cut off: the answer is red and goes
+/// back, not checked as if the block were not there.
+#[test]
+fn an_answer_cut_off_inside_a_block_is_red_not_checked_without_it() {
+    let whole = answer_with(&commented(), &[off("lamp_off", true)]);
+    let cut = whole.trim_end().trim_end_matches("```").trim_end().to_string();
+    assert!(!cut.ends_with("```"), "{cut}");
+    let c = check(&file(), &project(), &cut, settings());
+    assert!(c.red(), "{:?}", c.problems());
+    assert!(c.problems()[0].contains("cut off"), "{:?}", c.problems());
+    assert!(matches!(next(&c, 0, false), Next::Retry(m) if m.contains("cut off")));
+    // The same answer closed is checked as before.
+    assert!(check(&file(), &project(), &whole, settings()).green());
+    // The code block closed and only a scenario cut off.
+    let half = format!(
+        "Why: x.\n\n```st\n{}```\n\n```st scenario\n(* a *)\nPROGRAM test_a\n",
+        commented()
+    );
+    assert!(check(&file(), &project(), &half, settings()).red());
 }
