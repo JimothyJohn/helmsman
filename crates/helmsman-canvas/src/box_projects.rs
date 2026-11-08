@@ -50,26 +50,35 @@ pub enum PCall {
         project: String,
         file: String,
     },
+    /// A file made: the text written to it, which the editor then holds.
     NewFile {
         project: String,
         file: String,
+        text: String,
     },
-    /// The first half of a file rename: the new name written.
+    /// The first half of a file rename: the new name written with `text`.
     MoveFile {
         project: String,
         from: String,
         to: String,
+        text: String,
     },
+    /// `moved_to`: the second half of a rename, which wrote that name.
     DeleteFile {
         project: String,
         file: String,
+        moved_to: Option<String>,
     },
     Check(String),
     /// `POST /api/projects/{p}/tests`: its requirement tests, run on the box.
     Tests(String),
     Replay(String),
-    /// `GET .../history`: the project's revisions.
-    History(String),
+    /// `GET .../history`: the project's revisions; `seq` numbers the asks,
+    /// so an older list read late does not replace a newer one.
+    History {
+        project: String,
+        seq: u64,
+    },
     /// `GET .../history/{n}`: one revision, whole.
     Revision {
         project: String,
@@ -305,6 +314,9 @@ pub struct Pending {
     pub bytes: Vec<u8>,
     /// The project it goes to (a `.zip`'s) or into (a file's).
     pub project: String,
+    /// The note on show offers to replace it (the box said the name is
+    /// taken); false while the upload is on its way.
+    pub offered: bool,
 }
 
 /// Everything the Editor knows about the box's projects.
@@ -358,6 +370,9 @@ pub struct BoxProjects {
     /// as the box's answers come in: the project to open, the file to
     /// show, and the unsaved edits, each used once.
     pub restore: Restore,
+    /// History asks made, and the number of the last answer applied.
+    history_asked: u64,
+    history_applied: u64,
     queue: Vec<PReq>,
 }
 
@@ -439,8 +454,98 @@ impl BoxProjects {
         self.queue.push(PReq::get(PCall::List, "/api/projects".into()));
     }
 
+    /// A note replaces the last one, and with it an offer to replace.
     pub(crate) fn note(&mut self, text: impl Into<String>, error: bool) {
         self.notice = Some((text.into(), error));
+        self.drop_offer();
+    }
+
+    /// Takes the note, and the offer to replace that went with it, away.
+    pub fn clear_notice(&mut self) {
+        self.notice = None;
+        self.drop_offer();
+    }
+
+    fn drop_offer(&mut self) {
+        if self.pending.as_ref().is_some_and(|p| p.offered) {
+            self.pending = None;
+        }
+    }
+
+    /// Whether the note on show offers to replace what the box refused.
+    #[must_use]
+    pub fn replace_offered(&self) -> bool {
+        self.pending.as_ref().is_some_and(|p| p.offered)
+    }
+
+    /// The note that offers `pending`'s Replace, which lasts as long as
+    /// that note: `what` is the refusal, the offer is added to it. With
+    /// the upload forgotten meanwhile (another project opened), only the
+    /// refusal is said.
+    fn offer_replace(&mut self, what: &str) {
+        let offer = self.pending.take().map(|p| Pending { offered: true, ..p });
+        let text = if offer.is_some() {
+            format!("{what} Replace it?")
+        } else {
+            what.to_string()
+        };
+        self.note(text, true);
+        self.pending = offer;
+    }
+
+    /// Where an answer found nothing to apply to: its project was left or
+    /// its file removed. A Deploy waiting for that save would wait for ever.
+    fn save_lost(&mut self, project: &str, file: &str) {
+        if self.deploy == Deploy::Saving {
+            self.deploy = Deploy::Failed(format!(
+                "not deployed: the project changed while {file} of {project} was being saved"
+            ));
+        }
+    }
+
+    /// Drops a restored edit of `project`'s `file` (`None`: of all its files).
+    fn drop_draft(&mut self, project: &str, file: Option<&str>) {
+        let Some(f) = file else {
+            self.restore.drafts.remove(project);
+            return;
+        };
+        if let Some(m) = self.restore.drafts.get_mut(project) {
+            m.remove(f);
+            if m.is_empty() {
+                self.restore.drafts.remove(project);
+            }
+        }
+    }
+
+    /// Opens `name` after the open project's files were replaced under the
+    /// page (a restore, a new project, an upload): its unsaved edits wait
+    /// as restored ones and come back over the files read, or with the
+    /// project when it is opened again.
+    fn open_keeping_edits(&mut self, name: &str) {
+        if let Some(o) = &self.open {
+            let edits: Vec<_> = o
+                .bufs
+                .iter()
+                .filter(|(_, b)| b.dirty())
+                .map(|(f, b)| {
+                    (
+                        f.clone(),
+                        crate::desk::Draft {
+                            text: b.text.clone(),
+                            version: b.version.clone(),
+                        },
+                    )
+                })
+                .collect();
+            if !edits.is_empty() {
+                self.restore
+                    .drafts
+                    .entry(o.name.clone())
+                    .or_default()
+                    .extend(edits);
+            }
+        }
+        self.open_project(name);
     }
 
     /// The open project has edits not saved.
@@ -471,6 +576,7 @@ impl BoxProjects {
         });
         self.diags.clear();
         self.conflict = None;
+        self.pending = None;
         self.history.clear();
         self.revision = None;
         self.pages.clear();
@@ -532,8 +638,12 @@ impl BoxProjects {
 
     /// Asks for project `name`'s revisions (the Files tab's History row).
     pub fn read_history(&mut self, name: &str) {
+        self.history_asked += 1;
         self.queue.push(PReq::get(
-            PCall::History(name.into()),
+            PCall::History {
+                project: name.into(),
+                seq: self.history_asked,
+            },
             format!("{}/history", project_url(name)),
         ));
     }
@@ -606,6 +716,21 @@ impl BoxProjects {
     }
 
     pub fn rename(&mut self, from: &str, to: &str) {
+        // A save or a deploy on its way is answered under the name it was
+        // sent with; renamed meanwhile, its answer would find no project.
+        let saving = self
+            .open
+            .as_ref()
+            .is_some_and(|o| o.name == from && o.bufs.values().any(|b| b.saving.is_some()));
+        if saving || (self.deploy.busy() && self.open.as_ref().is_some_and(|o| o.name == from)) {
+            self.note(
+                format!(
+                    "{from} was not renamed: a save or deploy is on its way. Rename it when that is done."
+                ),
+                true,
+            );
+            return;
+        }
         self.queue.push(PReq::json(
             PCall::Rename {
                 from: from.into(),
@@ -636,6 +761,7 @@ impl BoxProjects {
             PCall::NewFile {
                 project: project.clone(),
                 file: file.into(),
+                text: text.into(),
             },
             "PUT",
             file_url(&project, file),
@@ -648,6 +774,13 @@ impl BoxProjects {
     pub fn rename_file(&mut self, from: &str, to: &str) {
         let Some(o) = &self.open else { return };
         let Some(b) = o.bufs.get(from) else { return };
+        if !b.loaded {
+            self.note(
+                format!("{from} was not renamed: it has not been read from the box yet."),
+                true,
+            );
+            return;
+        }
         let project = o.name.clone();
         let text = b.text.clone();
         self.queue.push(PReq::json(
@@ -655,6 +788,7 @@ impl BoxProjects {
                 project: project.clone(),
                 from: from.into(),
                 to: to.into(),
+                text: text.clone(),
             },
             "PUT",
             file_url(&project, to),
@@ -669,6 +803,7 @@ impl BoxProjects {
             PCall::DeleteFile {
                 project: project.clone(),
                 file: file.into(),
+                moved_to: None,
             },
             file_url(&project, file),
         ));
@@ -754,7 +889,7 @@ impl BoxProjects {
             ));
         }
         self.conflict = None;
-        self.notice = None;
+        self.clear_notice();
         self.queue.extend(reqs);
     }
 
@@ -835,6 +970,7 @@ impl BoxProjects {
                 file: file.into(),
                 bytes: bytes.clone(),
                 project: project.clone(),
+                offered: false,
             });
             self.queue.push(PReq {
                 call: PCall::Upload(project.clone()),
@@ -854,6 +990,7 @@ impl BoxProjects {
             file: file.into(),
             bytes: bytes.clone(),
             project: project.clone(),
+            offered: false,
         });
         let sep = if replace { "&replace=true" } else { "" };
         self.queue.push(PReq {
@@ -870,9 +1007,14 @@ impl BoxProjects {
 
     /// Sends the upload the box refused as taken again, replacing.
     pub fn replace(&mut self) {
-        if let Some(p) = self.pending.take() {
-            self.upload(&p.file, p.bytes, true);
+        let Some(p) = self.pending.take() else { return };
+        // A file goes into the project that refused it, not into whichever
+        // is open now.
+        if !has_ext(&p.file, "zip") && self.open.as_ref().is_none_or(|o| o.name != p.project) {
+            self.note(format!("Open {} to replace {} in it.", p.project, p.file), true);
+            return;
         }
+        self.upload(&p.file, p.bytes, true);
     }
 
     /// The open project as a `.zip`, through the browser.
@@ -968,10 +1110,19 @@ impl BoxProjects {
                     b.saving = None;
                 }
             }
-            self.note(
-                "The box no longer knows this page's session (signed out, expired, or the box restarted). Sign in again; nothing was changed.",
-                true,
-            );
+            let ended = "The box no longer knows this page's session (signed out, expired, or the box restarted). Sign in again;";
+            match call {
+                // The second half of a rename: the new name is written.
+                PCall::DeleteFile {
+                    file,
+                    moved_to: Some(to),
+                    ..
+                } => self.note(
+                    format!("{ended} {to} was written, but the old {file} is still on the box: delete it once signed in."),
+                    true,
+                ),
+                _ => self.note(format!("{ended} nothing was changed."), true),
+            }
             return;
         }
         match call {
@@ -1005,6 +1156,10 @@ impl BoxProjects {
                             .collect()
                     })
                     .unwrap_or_default();
+                // A restored edit of a project the box no longer has is gone.
+                self.restore
+                    .drafts
+                    .retain(|p, _| self.projects.iter().any(|r| r.name == *p));
                 match self.running.clone() {
                     Some(r) => self.read_layout(&r),
                     None => self.layout = None,
@@ -1052,6 +1207,11 @@ impl BoxProjects {
                     })
                     .unwrap_or_default();
                 o.runs = Runs::parse(&j["tests"]);
+                // A restored edit of a file the box no longer has is gone.
+                if let Some(m) = self.restore.drafts.get_mut(&name) {
+                    m.retain(|f, _| files.iter().any(|(n, _)| n == f));
+                }
+                self.restore.drafts.retain(|_, m| !m.is_empty());
                 // Files gone from the box go, unless edited here.
                 o.bufs
                     .retain(|n, b| b.dirty() || files.iter().any(|(f, _)| f == n));
@@ -1115,6 +1275,7 @@ impl BoxProjects {
                     .drafts
                     .get_mut(&project)
                     .and_then(|m| m.remove(&file));
+                self.restore.drafts.retain(|_, m| !m.is_empty());
                 let b = o.bufs.entry(file.clone()).or_default();
                 b.text.clone_from(&text);
                 b.base = text;
@@ -1133,10 +1294,10 @@ impl BoxProjects {
                     }
                     let msg = if stale {
                         format!(
-                            "Your unsaved edits to {file} are back from before the page reloaded; the box's copy changed since, so saving will ask which to keep."
+                            "Your unsaved edits to {file} are back; the box's copy changed since, so saving will ask which to keep."
                         )
                     } else {
-                        format!("Your unsaved edits to {file} are back from before the page reloaded.")
+                        format!("Your unsaved edits to {file} are back.")
                     };
                     self.note(msg, false);
                 }
@@ -1144,7 +1305,7 @@ impl BoxProjects {
             PCall::Create(name) => {
                 if ok {
                     self.note(format!("Made project {name}."), false);
-                    self.open_project(&name);
+                    self.open_keeping_edits(&name);
                     self.relist();
                 } else {
                     self.note(format!("{name} was not made: {}", error_of(a)), true);
@@ -1152,10 +1313,16 @@ impl BoxProjects {
             }
             PCall::Rename { from, to } => {
                 if ok {
+                    if let Some(m) = self.restore.drafts.remove(&from) {
+                        self.restore.drafts.insert(to.clone(), m);
+                    }
                     if self.open.as_ref().is_some_and(|o| o.name == from)
                         && let Some(o) = &mut self.open
                     {
                         o.name.clone_from(&to);
+                        // Reads that were on their way answered the old name.
+                        self.queue
+                            .push(PReq::get(PCall::Project(to.clone()), project_url(&to)));
                     }
                     self.note(format!("Renamed {from} to {to}."), false);
                     self.relist();
@@ -1168,6 +1335,7 @@ impl BoxProjects {
                     if self.open.as_ref().is_some_and(|o| o.name == name) {
                         self.open = None;
                     }
+                    self.drop_draft(&name, None);
                     self.note(format!("Deleted {name}."), false);
                     self.relist();
                 } else {
@@ -1180,8 +1348,10 @@ impl BoxProjects {
                     self.read_history(&project);
                 }
             }
-            PCall::History(project) => {
-                if ok && self.open.as_ref().is_some_and(|o| o.name == project) {
+            PCall::History { project, seq } => {
+                if ok && seq >= self.history_applied && self.open.as_ref().is_some_and(|o| o.name == project)
+                {
+                    self.history_applied = seq;
                     self.history = j["revisions"]
                         .as_array()
                         .map(|a| a.iter().filter_map(revision_row).collect())
@@ -1253,21 +1423,23 @@ impl BoxProjects {
                     );
                     if self.open.as_ref().is_some_and(|o| o.name == project) {
                         // The files changed under the page: read them again.
-                        self.open_project(&project);
+                        self.open_keeping_edits(&project);
                     }
                 } else {
                     self.note(format!("revision {n} was not restored: {}", error_of(a)), true);
                 }
             }
-            PCall::NewFile { project, file } => {
+            PCall::NewFile { project, file, text } => {
                 if ok {
                     if let Some(o) = self.open.as_mut().filter(|o| o.name == project) {
                         o.bufs.insert(
                             file.clone(),
                             Buf {
+                                base: text.clone(),
+                                text,
                                 version: j["version"].as_str().map(str::to_string),
+                                saving: None,
                                 loaded: true,
-                                ..Buf::default()
                             },
                         );
                         o.current = Some(file.clone());
@@ -1277,15 +1449,20 @@ impl BoxProjects {
                     self.note(format!("{file} was not made: {}", error_of(a)), true);
                 }
             }
-            PCall::MoveFile { project, from, to } => {
+            PCall::MoveFile {
+                project,
+                from,
+                to,
+                text,
+            } => {
                 if !ok {
                     self.note(format!("{from} was not renamed: {}", error_of(a)), true);
                     return;
                 }
                 if let Some(o) = self.open.as_mut().filter(|o| o.name == project) {
                     let mut b = o.bufs.remove(&from).unwrap_or_default();
-                    let sent = b.text.clone();
-                    b.base = sent;
+                    // Clean as far as what was sent: typing since stays an edit.
+                    b.base = text;
                     b.version = j["version"].as_str().map(str::to_string);
                     b.loaded = true;
                     o.bufs.insert(to.clone(), b);
@@ -1297,19 +1474,30 @@ impl BoxProjects {
                     PCall::DeleteFile {
                         project: project.clone(),
                         file: from.clone(),
+                        moved_to: Some(to.clone()),
                     },
                     file_url(&project, &from),
                 ));
                 self.note(format!("Renamed {from} to {to}."), false);
             }
-            PCall::DeleteFile { project, file } => {
+            PCall::DeleteFile {
+                project,
+                file,
+                moved_to,
+            } => {
                 if ok || a.status == 404 {
+                    self.drop_draft(&project, Some(&file));
                     if let Some(o) = self.open.as_mut().filter(|o| o.name == project) {
                         o.bufs.remove(&file);
                         if o.current.as_deref() == Some(file.as_str()) {
                             o.current = o.bufs.keys().next().cloned();
                         }
                     }
+                } else if let Some(to) = moved_to {
+                    self.note(
+                        format!("{file} was not deleted: {}. It is now also {to}; delete {file} to finish the rename.", error_of(a)),
+                        true,
+                    );
                 } else {
                     self.note(format!("{file} was not deleted: {}", error_of(a)), true);
                 }
@@ -1377,23 +1565,17 @@ impl BoxProjects {
             }
             PCall::Upload(project) => {
                 if ok {
-                    self.pending = None;
                     self.note(format!("Uploaded {project}."), false);
-                    self.open_project(&project);
+                    self.open_keeping_edits(&project);
                     self.relist();
                 } else if a.status == 409 {
-                    self.note(
-                        format!("A project named {project} is already on the box. Replace it?"),
-                        true,
-                    );
+                    self.offer_replace(&format!("A project named {project} is already on the box."));
                 } else {
-                    self.pending = None;
                     self.note(format!("Upload refused: {}", error_of(a)), true);
                 }
             }
             PCall::Import { project, file } => {
                 if ok {
-                    self.pending = None;
                     let name = j["name"].as_str().unwrap_or(&file).to_string();
                     self.note(format!("Imported {file} into {project} as {name}."), false);
                     if self.open.as_ref().is_some_and(|o| o.name == project) {
@@ -1408,9 +1590,8 @@ impl BoxProjects {
                             .push(PReq::get(PCall::Project(project.clone()), project_url(&project)));
                     }
                 } else if a.status == 409 {
-                    self.note(format!("{project} already has that file. Replace it?"), true);
+                    self.offer_replace(&format!("{project} already has that file."));
                 } else {
-                    self.pending = None;
                     self.note(format!("{file} was refused: {}", error_of(a)), true);
                 }
             }
@@ -1500,9 +1681,13 @@ impl BoxProjects {
     fn saved(&mut self, project: &str, file: &str, a: &Answer, j: &Json) {
         let ok = (200..300).contains(&a.status);
         let Some(o) = self.open.as_mut().filter(|o| o.name == project) else {
+            self.save_lost(project, file);
             return;
         };
-        let Some(b) = o.bufs.get_mut(file) else { return };
+        let Some(b) = o.bufs.get_mut(file) else {
+            self.save_lost(project, file);
+            return;
+        };
         let sent = b.saving.take();
         if ok {
             if let Some(s) = sent {
@@ -1528,6 +1713,12 @@ impl BoxProjects {
             return;
         }
         if still {
+            return;
+        }
+        // Typing since a save was sent is not on the box: a Deploy saves it
+        // too before it checks.
+        if self.deploy == Deploy::Saving && self.dirty() {
+            self.save();
             return;
         }
         // Saved: the requirement tests run against what is on the box now.

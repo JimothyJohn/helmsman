@@ -112,6 +112,78 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Next to build
 
+- [ ] **Canvas: match box answers to requests, one buffer state machine** — from the 2026-11-08 interface review. Every wasm request to the box is a parallel fetch with no request id or generation; `BoxProjects::answer` matches by call name and reads live buffer state at answer time, and the native tests run requests one at a time so ordering is never exercised. The data-loss fixes of PR fix/box-projects-correlation patch the cases found (NewFile empty buffer, dropped save answers, deploy during save, Replace target); this card is the shape that stops the class: an in-flight table keyed by request id holding the sent text and the project generation, answers resolved against it, and one `Buf` state enum (Clean, Dirty, Saving{sent}, Conflict) shared by save, rename, create and deploy, with a test harness that answers requests out of order.
+  needs: fix/box-projects-correlation merged
+  result: a reordered or late answer can never make a buffer clean, empty or stuck; box_projects_tests has an out-of-order answer suite
+  est: 2d
+  difficulty: high
+  id: canvas-request-correlation
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **Canvas: pump the live source every frame, independent of the screen** — review 2026-11-08. `BoxView::tick` runs only from the Editor and Monitor branches, so each new screen (Proposals, "Simulate in this browser", a future one) has to remember to drain the transport or the inboxes grow and the link goes stale. fix/remote-link adds the tick and coalesces events; this card moves the design: App owns one per-frame pump for the live source, screens only render, and the transport inbox keeps latest-per-(stream, module) by construction.
+  needs: fix/remote-link merged
+  result: no screen can leak or stall the box link; a test opens every screen and asserts the link stays current
+  est: 1d
+  difficulty: med
+  id: canvas-pump-every-frame
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **Box streams carry a boot id and a sequence; the canvas reconnects by reason** — review 2026-11-08. The canvas compares times across the box scheduler clock, the trace scan counter, egui time and history fetches, and `Msg::Failed` carries no reason, so a deliberate 600 s stream end, a 503 slot refusal, a 401 and a dead network all look like "lost the box". fix/remote-link patches the worst cases (immediate reconnect after a healthy stream, a values watchdog, trend reset on clock reset). The shape: the values stream and `/api/modules` carry a boot id and a monotonic seq; `BoxState` keeps one epoch and per-stream last-seen marks from it; reconnection learns the status with a fetch probe, backs off with jitter, and resumes from seq.
+  needs: fix/remote-link merged; the box API change is small (api/mod.rs values event, http.rs)
+  result: a box restart, a slot refusal and a half-open socket each show as what they are, and the trend, Monitor and diagram never mix epochs
+  est: 2d
+  difficulty: med
+  id: box-stream-epoch
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **Agent acceptance needs a signal the model does not write** — review 2026-11-08. The model writes the code and the scenarios that accept it, and the checker parses prose and Markdown (fences, `Why:`, `replaces`, an elision phrase list). fix/verify-gate closes the holes found (asserts must be exercised, red-before/green-after, a replacement needs the old test red, truncated answers fail). The shape beyond that: structured output from the model (a tool or JSON schema with why, file_text, scenarios[{name, requirement, source, replaces?}]) so the prose parse and the elision heuristics go away; mutation checks (the scenario must fail when the changed output is inverted); and edits anchored to a base hash instead of whole-file rewrites as the trust unit, with the diff shown before the write.
+  needs: fix/verify-gate merged; a decision on structured output for the relay profiles (agent-relay repo)
+  result: a vacuous or truncated answer cannot be written; the engineer sees a diff, not a sentence
+  est: 3d
+  difficulty: high
+  id: agent-acceptance-signal
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **One agent core for the page and the box; apply and undo as a transaction** — review 2026-11-08. `playground_view` and `box_view` each implement Run, Check, Apply and Undo with different settings and sizes, message caps, pre-save of dirty edits, undo revision source and accepted stop reasons, and they have drifted. `Run` has no base snapshot, file set or per-file hashes, so Undo restores the whole project (other files' later saves included) and the box path overwrites unsaved local edits. Shape: one `AgentRun` owning Run/Check/Apply/Undo; hosts implement `snapshot()`, `settings()`, an atomic multi-file `write_files(base, files)` and `restore(files)`; Apply refuses if a touched file moved since Send; Undo is the exact inverse over those files only.
+  needs: fix/verify-gate merged
+  result: one code path, tested once against both hosts; Undo never touches a file the Agent did not write
+  est: 2d
+  difficulty: high
+  id: agent-run-core
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **The page simulation and the sim project store share the box's rules** — review 2026-11-08. The page is a second runtime that drifted from `helmsman-plc` runtime.rs (cold deploy vs state-carrying hot swap, stop and fault leaving outputs vs zeroing, a 500-scan catch-up burst vs skipped periods, a fixed 10 ms vs the declared period, a 64 KB source cut vs the project limits), and `SimProjects` is a second project store that drifted from the box API (case rules, import overwrite, history keyed by name). fix/sim-semantics and fix/desk-and-sim-store patch the cases found. Shape: a shared library function for deploy, swap, stop and fault semantics both runtimes call, one project-rules trait both stores implement, and one conformance suite run against both.
+  needs: fix/sim-semantics and fix/desk-and-sim-store merged
+  result: "works in the page, differs on the box" stops being a bug class; the conformance suite is the contract
+  est: 3d
+  difficulty: high
+  id: sim-shares-box-rules
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **A Transport trait with a native in-memory implementation; web.rs tested** — review 2026-11-08. web.rs (about 800 lines of wasm glue) has no test coverage: three copies of the stream-read loop, the same char-boundary `String::truncate` panic twice, `get()` without no-store or a timeout, inconsistent error handling. Shape: one `Transport` trait implemented by web.rs and by a native in-memory transport that can inject stalls, 500s, non-UTF-8 and oversized bodies and reordered answers; one shared stream-reader helper; remote.rs's retry and silence logic then runs under `cargo test`.
+  needs: fix/remote-link merged
+  result: every wasm-only path has a native test; a transport bug is a failing test, not a field report
+  est: 2d
+  difficulty: med
+  id: canvas-transport-trait
+  asked: 2026-11-08
+  by: claude-session
+
+- [ ] **Canvas: hit keys as an enum, Chrome split, one Command dispatch** — review 2026-11-08. `Chrome` is the persisted layout format (a hand-rolled k=v string), the UI toggles, the test registry (`hits: Vec<(String, Rect)>`) and a cross-frame channel at once; the `std::mem::take(&mut self.chrome)` pattern hands a default Chrome to anything that reads it meanwhile. Hit keys are free strings the tests and the tour depend on, so a rename silently breaks them. Hotkeys, header glyphs and menu items are three dispatch paths into `App::act` with scattered screen and source guards (fix/shell-hotkeys-layout adds the missing gates). Shape: a versioned `Layout` (persisted), a `FrameOut` (hits, diagram rect), a `HitKey` enum, and one `Command` enum with `enabled(&App) -> Result<(), why>` that menus, glyphs and hotkeys all consult; a tour test that visits every step and asserts its anchor was drawn.
+  needs: fix/shell-hotkeys-layout merged
+  result: a removed or renamed control is a compile error; one place says whether an action is allowed and why
+  est: 2d
+  difficulty: med
+  id: canvas-chrome-split
+  asked: 2026-11-08
+  by: claude-session
+
 - [ ] **The Agent on a box** — left out of agent-scoped-edits (#207): a box's canvas has no Agent tab (BoxView::tabs() is I/O and Requirements; a ui_test pins it), its page's CSP is connect-src 'self', and the box's agent runs through the relay as proposals (POST /api/chat). Give the box an Agent tab that talks to /api/chat, with the pages (#187), iterations (#201), the requirement gate (red_tests) and the edit scope (`scope::apply` takes plain files, so it is reusable) on the box side.
   needs: the relay deployed (relay-deploy) to try it against a real model; the rest builds against the relay fixtures
   result: the same agent workflow on a box as in the playground, every change still a proposal through the approval policy
