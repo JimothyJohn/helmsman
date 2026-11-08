@@ -37,7 +37,7 @@ pub const PHY_POWER_STABLE_DELAY_MS: u32 = 100;
 /// connections, the beacon, the UDP log, two spare. smoltcp panics on a
 /// socket past this ("adding a socket to a full SocketSet": the first
 /// commissioned boot, 2026-11-08, with a site set and four slots).
-pub const SOCKETS: usize = 8;
+pub const SOCKETS: usize = 6;
 
 /// EMAC instance shape used throughout this module.
 pub type EthEmac = Emac<EMAC_RX_FRAMES, EMAC_TX_FRAMES, EMAC_FRAME_BUF_SIZE>;
@@ -139,6 +139,7 @@ pub fn init(
 /// Drives the embassy-net stack (packet rx/tx).
 #[embassy_executor::task]
 pub async fn eth_net_task(mut runner: Runner<'static, EthDriver>) -> ! {
+    println!("ethernet: net task running");
     runner.run().await
 }
 
@@ -146,11 +147,14 @@ pub async fn eth_net_task(mut runner: Runner<'static, EthDriver>) -> ! {
 /// MAC's speed/duplex in step with auto-negotiation.
 #[embassy_executor::task]
 pub async fn eth_link_task(emac_ptr: *mut EthEmac) -> ! {
+    println!("ethernet: link task running");
     let mut mdio = MdioController::new(Delay::new());
     let mut phy = Lan8720a::new(board::PHY_ADDR);
     let mut was_up = false;
+    let mut polls: u32 = 0;
 
     loop {
+        polls += 1;
         match EMAC_STATE.update_link_from_phy(&mut phy, &mut mdio) {
             Ok(Some(status)) => {
                 if !was_up {
@@ -169,6 +173,16 @@ pub async fn eth_link_task(emac_ptr: *mut EthEmac) -> ! {
                 if was_up {
                     println!("ethernet: link down");
                     was_up = false;
+                } else if polls.is_multiple_of(10) {
+                    // A stall here with the cable in and the LED on is worth
+                    // the PHY's own word (2026-11-08: a build stalled at
+                    // "waiting for the link" after the socket set grew).
+                    use ph_esp32_mac::PhyDriver;
+                    let id = phy.phy_id(&mut mdio);
+                    println!(
+                        "ethernet: no link yet after {} polls; PHY id reads {:?}",
+                        polls, id
+                    );
                 }
             }
             Err(e) => println!("ethernet: PHY poll error {:?}", e),

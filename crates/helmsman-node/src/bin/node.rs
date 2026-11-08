@@ -55,7 +55,13 @@ esp_bootloader_esp_idf::esp_app_desc!(
     esp_bootloader_esp_idf::SECURE_VERSION
 );
 
-const HEAP_SIZE: usize = 112 * 1024;
+/// The main stack is what the linker leaves above .bss, and the task pools
+/// sit at the very top of .bss: at 112 KiB of heap the node's stack was
+/// 42 KiB and compiling the program at boot overran it by a few hundred
+/// bytes, which flipped the network tasks' state to "spawned" so the first
+/// spawn failed Busy (2026-11-08, three flashes). 96 KiB leaves about
+/// 58 KiB of stack; the heap peaked at 162 KiB of the 192 KiB that remain.
+const HEAP_SIZE: usize = 96 * 1024;
 const DRAM2_HEAP_SIZE: usize = 96 * 1024;
 
 /// The remote block (a settings-record field later).
@@ -207,14 +213,29 @@ async fn main(spawner: Spawner) -> ! {
         Err(e) => halt(&alloc::format!("ethernet init failed: {e:?}")).await,
     };
     let mac = helmsman_node::board::ethernet_mac(esp_hal::efuse::Efuse::mac_address());
-    spawner.spawn(ethernet::eth_net_task(runner)).ok();
-    spawner.spawn(ethernet::eth_link_task(emac_ptr)).ok();
+    // A spawn that fails must say so: an ignored one looks like a hang.
+    spawner
+        .spawn(ethernet::eth_net_task(runner))
+        .expect("spawn net task");
+    spawner
+        .spawn(ethernet::eth_link_task(emac_ptr))
+        .expect("spawn link task");
     spawner
         .spawn(ethernet::eth_dhcp_task(stack, emac_ptr, addressing))
-        .ok();
+        .expect("spawn address task");
 
     println!("waiting for the link...");
-    stack.wait_config_up().await;
+    let waited = Instant::now();
+    loop {
+        match embassy_time::with_timeout(Duration::from_secs(5), stack.wait_config_up()).await {
+            Ok(()) => break,
+            Err(_) => println!(
+                "still waiting for the link after {} s (link {})",
+                waited.elapsed().as_secs(),
+                if stack.is_link_up() { "up" } else { "down" }
+            ),
+        }
+    }
     if let Some(cfg) = stack.config_v4() {
         println!("address {}; API on port {}", cfg.address, settings.api_port);
     }
