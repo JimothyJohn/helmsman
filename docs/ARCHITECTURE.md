@@ -2399,7 +2399,10 @@ path that drives an output).
 
 For someone in trouble who did not write the program (Nick, 2026-11-07,
 interview). The box's Agent tab has two modes, "Change the program" (the
-instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`):
+instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`),
+switched by a two-glyph toggle (< > and ?) at the tab's top right; the
+heading names the mode, with a dot for the agent's state beside it (green
+online, red offline, grey until heard; Nick, 2026-11-08):
 the person says what went wrong, and the answer is a plain-language
 diagnosis and a Markdown issue with a Copy button, to paste into a GitHub
 issue or to another agent. Nothing is filed.

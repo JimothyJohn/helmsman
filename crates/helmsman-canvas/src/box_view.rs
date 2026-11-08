@@ -912,8 +912,9 @@ impl BoxView {
         }
     }
 
-    /// The Agent tab: the agent's state on one line, the mode, then the
-    /// shared tab (changing the program) or Help.
+    /// The Agent tab: its heading (the agent's state as a dot, the mode's
+    /// name, the mode toggle), then the shared tab (changing the program)
+    /// or Help.
     fn agent_tab(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         use crate::box_agent::Status;
         use crate::help::Mode;
@@ -925,7 +926,6 @@ impl BoxView {
             self.chat.status(ui.ctx());
         }
         let ctx = ui.ctx().clone();
-        let t = theme(ui);
         let view = crate::instruct::View {
             target: self
                 .agent_files()
@@ -943,12 +943,13 @@ impl BoxView {
                 // Room for the scroll bar (a resizable panel grows to any
                 // row that overflows it).
                 ui.set_max_width(ui.available_width() - 12.0);
-                let l = ui
-                    .label(RichText::new(self.agent.status.short()).color(t.muted))
-                    .tip(self.agent.status.line());
-                chrome.hit("agent status", l.rect);
-                ui.add_space(4.0);
-                crate::help::mode_ui(ui, chrome, &mut self.help.mode);
+                crate::help::heading(
+                    ui,
+                    chrome,
+                    &mut self.help.mode,
+                    self.agent.status.dot(),
+                    &self.agent.status.line(),
+                );
                 ui.add_space(4.0);
                 match self.help.mode {
                     Mode::Code => (crate::instruct::ui(ui, chrome, &mut self.instruct, &view), None),

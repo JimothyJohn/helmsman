@@ -32,6 +32,9 @@ pub enum Icon {
     HardHat,
     /// A wrench crossed with a screwdriver: an engineer is signed in.
     Tools,
+    /// < > : the Agent changes the program (its mode toggle, Nick,
+    /// 2026-11-08); [`Icon::Help`] is the other side.
+    Code,
     /// → : deploy the open project, its latest edits (Nick, 2026-11-08).
     /// Beside the running project in Files and the Structured Text header.
     Deploy,
@@ -227,6 +230,29 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
                 })
                 .collect();
             p.add(egui::Shape::line(ring, Stroke::new(w * 1.2, color)));
+        }
+        Icon::Code => {
+            // Two angle brackets, each a chevron a third of the width.
+            let dx = b.width() * 0.3;
+            let dy = b.height() * 0.38;
+            let la = l + w;
+            let ra = r - w;
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(la + dx, c.y - dy),
+                    Pos2::new(la, c.y),
+                    Pos2::new(la + dx, c.y + dy),
+                ],
+                stroke,
+            ));
+            p.add(egui::Shape::line(
+                vec![
+                    Pos2::new(ra - dx, c.y - dy),
+                    Pos2::new(ra, c.y),
+                    Pos2::new(ra - dx, c.y + dy),
+                ],
+                stroke,
+            ));
         }
         Icon::Help => {
             p.circle_stroke(c, b.width() * 0.5, stroke);
