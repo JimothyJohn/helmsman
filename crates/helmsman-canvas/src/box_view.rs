@@ -1609,7 +1609,7 @@ impl Workspace for BoxView {
         else {
             return false;
         };
-        let id = egui::Id::unique(("box-st", &name, &file));
+        let id = editor::source_id("box-st", &name, &file);
         let Some(buf) = self.projects.current_mut() else {
             return false;
         };
@@ -1967,7 +1967,8 @@ impl Body for BoxView {
             });
             let mut go = false;
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Structured Text").strong())
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.add(crate::theme::whole(RichText::new("Structured Text").strong()))
                     .tip("The open file of the project. Save keeps it on the box; Deploy runs it.");
                 // The → deploys this version (Nick, 2026-11-08).
                 go = projects::deploy_arrow(
@@ -1981,7 +1982,7 @@ impl Body for BoxView {
                     Ok(()) => {}
                     Err(why) => {
                         let r = ui
-                            .label(RichText::new("read-only").color(t.muted))
+                            .add(crate::theme::whole(RichText::new("read-only").color(t.muted)))
                             .tip(why.clone());
                         chrome.hit("read-only", r.rect);
                     }
@@ -2007,7 +2008,7 @@ impl Body for BoxView {
                 110.0
             };
             let size = Vec2::new(ui.available_width(), (ui.available_height() - list_h).max(120.0));
-            let id = egui::Id::unique(("box-st", &o.name, &file));
+            let id = editor::source_id("box-st", &o.name, &file);
             let Some(buf) = self.projects.current_mut() else {
                 return;
             };

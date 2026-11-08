@@ -254,7 +254,16 @@ pub fn label(ctx: &egui::Context, action: Action) -> String {
 /// its modifiers are held, extra ones too, so Ctrl+D would otherwise
 /// swallow Ctrl+Shift+D and Ctrl+Z Ctrl+Shift+Z.
 pub fn pressed(ctx: &egui::Context) -> Vec<Action> {
-    let mut order: Vec<&Hotkey> = TABLE.iter().collect();
+    // A text edit with the keyboard undoes and redoes through its own
+    // stack, whether or not it consumed the chord: taking it here too
+    // would step the same history a second time.
+    let typing = ctx
+        .memory(egui::Memory::focused)
+        .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
+    let mut order: Vec<&Hotkey> = TABLE
+        .iter()
+        .filter(|h| !(typing && matches!(h.action, Action::Undo | Action::Redo)))
+        .collect();
     order.sort_by_key(|h| std::cmp::Reverse(modifier_count(h.keys.modifiers)));
     ctx.input_mut(|i| {
         order

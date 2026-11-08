@@ -1175,6 +1175,22 @@ impl Viewer {
     }
 }
 
+/// `text` on one row at most `width` wide, ending in an ellipsis where it
+/// does not fit.
+fn fitted(
+    painter: &egui::Painter,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple(text.to_string(), font, color, width.max(1.0));
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    painter.layout_job(job)
+}
+
 pub fn show(v: Option<Value>) -> String {
     v.map_or_else(|| "–".into(), |v| v.to_string())
 }
@@ -1567,13 +1583,11 @@ fn draw(
             && !matches!(v, Value::Bool(_))
             && let Some(label) = value_text(d, w.from, v, vars)
         {
-            painter.text(
-                pa + Vec2::new(4.0, -7.0) * z,
-                Align2::LEFT_CENTER,
-                label,
-                font(10.0 * z),
-                t.fg.gamma_multiply(f),
-            );
+            // At most the wire's own length (and a block's width) wide.
+            let room = (end.x - pa.x - 8.0 * z).clamp(48.0 * z, 120.0 * z);
+            let g = fitted(painter, &label, font(10.0 * z), t.fg.gamma_multiply(f), room);
+            let at = pa + Vec2::new(4.0, -7.0) * z;
+            painter.galley(at - Vec2::new(0.0, g.size().y / 2.0), g, t.fg);
         }
     }
     // Nodes.
@@ -1721,13 +1735,16 @@ fn draw(
                     Value::Bool(false) => brand::RED,
                     _ => t.fg,
                 };
-                painter.text(
-                    Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0),
-                    Align2::CENTER_CENTER,
-                    label,
+                // Elided to the block, never spilling out of it.
+                let g = fitted(
+                    painter,
+                    &label,
                     font(11.0 * z),
                     color.gamma_multiply(on_path),
+                    r.width() - 6.0 * z,
                 );
+                let mid = Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0);
+                painter.galley(mid - g.size() / 2.0, g, color);
             }
         }
     }
@@ -1821,6 +1838,8 @@ mod value_tests {
     use helmsman_diagram::NodeKind;
     use helmsman_iec::Value;
 
+    use eframe::egui;
+
     use super::{Viewer, value_text};
     use crate::playground::Session;
 
@@ -1890,6 +1909,41 @@ END_PROGRAM
             Some("7"),
             "no declarations known: as the value prints"
         );
+    }
+
+    /// A REAL is an f32 widened; the diagram, the I/O tab and the banners
+    /// show it as the f32 (23.7, not 23.700000762939453).
+    #[test]
+    fn a_real_reads_short_and_a_long_value_is_elided_to_its_block() {
+        let v = viewer();
+        let d = v.diagram();
+        let vars = v.module.program().map(|p| &p.vars);
+        let plus = node(&v, &NodeKind::Op { op: "+".into() });
+        let real = Value::Real(f64::from(23.7f32));
+        assert_eq!(value_text(d, plus, real, vars).as_deref(), Some("23.7"));
+        assert_eq!(super::show(Some(real)), "23.7");
+
+        let ctx = egui::Context::default();
+        let mut width = 0.0;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 300.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            let g = super::fitted(
+                ui.painter(),
+                "0.30000000000000004000",
+                egui::FontId::monospace(11.0),
+                egui::Color32::WHITE,
+                40.0,
+            );
+            width = g.size().x;
+        });
+        out.textures_delta.clear();
+        assert!(width <= 40.5, "{width} pt wide in a 40 pt block");
     }
 }
 

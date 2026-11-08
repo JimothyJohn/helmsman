@@ -22,8 +22,6 @@ use crate::theme::{Theme, theme};
 use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
-/// The ST editor's widget id (its selection is the Agent's scope).
-const SOURCE_ID: &str = "pg-source";
 /// Quiet time after the last keystroke before the editor checks, s.
 const DEBOUNCE: f64 = 0.35;
 /// Trend line colours, in signal order (the last, white, is the page's ink
@@ -953,10 +951,16 @@ impl PlaygroundView {
         })
     }
 
+    /// The ST editor's widget id for the open file (its selection is the
+    /// Agent's scope).
+    pub fn source_id(&self) -> egui::Id {
+        editor::source_id("pg-source", &self.proj.open, &self.proj.current)
+    }
+
     /// Back to the whole file: the selection and the pick go.
     pub fn whole_file(&mut self, ctx: &egui::Context) {
         self.selection = None;
-        editor::deselect(ctx, egui::Id::unique(SOURCE_ID));
+        editor::deselect(ctx, self.source_id());
         if let Some(v) = &mut self.viewer {
             v.pick = None;
         }
@@ -1571,7 +1575,8 @@ impl Body for PlaygroundView {
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
         let mut go = false;
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Structured Text").strong())
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.add(crate::theme::whole(RichText::new("Structured Text").strong()))
                 .tip("The open file. It is checked as you type; Deploy runs it.");
             // The → deploys this version (Nick, 2026-11-08).
             go = crate::projects::deploy_arrow(
@@ -1582,13 +1587,15 @@ impl Body for PlaygroundView {
                 "Deploys this version: compiles the open project and runs it in the page (Ctrl D, File › Deploy).",
             );
             if self.pending.is_some() {
-                ui.label(RichText::new("…").color(t.muted))
+                ui.add(crate::theme::whole(RichText::new("…").color(t.muted)))
                     .tip("Checking the edit.");
             } else if errors > 0 {
-                ui.label(RichText::new(format!("✖ {errors} error(s)")).color(RED))
-                    .tip("The list under the code has each one. Click an error to go to its line.");
+                ui.add(crate::theme::whole(
+                    RichText::new(format!("✖ {errors} error(s)")).color(RED),
+                ))
+                .tip("The list under the code has each one. Click an error to go to its line.");
             } else {
-                ui.label(RichText::new("✔ compiles").color(t.muted))
+                ui.add(crate::theme::whole(RichText::new("✔ compiles").color(t.muted)))
                     .tip("The program has no errors.");
             }
             if undeployed {
@@ -1597,7 +1604,8 @@ impl Body for PlaygroundView {
                 } else {
                     "The program running is unchanged. Deploy runs this version."
                 };
-                ui.label(RichText::new("· not deployed").color(t.muted)).tip(note);
+                ui.add(crate::theme::whole(RichText::new("· not deployed").color(t.muted)))
+                    .tip(note);
             }
         });
         if go {
@@ -1613,6 +1621,7 @@ impl Body for PlaygroundView {
         let avail = ui.available_height();
         let list_h = if self.session.diags.is_empty() { 0.0 } else { 110.0 };
         let size = Vec2::new(ui.available_width(), (avail - list_h).max(120.0));
+        let id = self.source_id();
         let Some(text) = self.proj.current_text_mut() else {
             ui.label(RichText::new("No file open.").color(t.muted))
                 .tip("Open or make one in Files.");
@@ -1620,7 +1629,7 @@ impl Body for PlaygroundView {
         };
         let r = ui
             .allocate_ui(size, |ui| {
-                editor::st_editor(ui, egui::Id::unique(SOURCE_ID), text, &diags, MAX_SOURCE, chrome)
+                editor::st_editor(ui, id, text, &diags, MAX_SOURCE, chrome)
             })
             .inner;
         chrome.hit("st editor", r.rect);
@@ -1630,7 +1639,6 @@ impl Body for PlaygroundView {
         // The selected lines, the Agent's scope while there are some. Read
         // while the editor has focus: an editor without it drops its
         // selection, and moving to the Agent tab takes the focus.
-        let id = egui::Id::unique(SOURCE_ID);
         if ui.ctx().memory(|m| m.has_focus(id)) {
             self.selection = editor::selection(ui.ctx(), id).and_then(|(a, b)| {
                 let text = self.proj.files.get(&current)?;
@@ -2160,7 +2168,7 @@ impl PlaygroundView {
                     "{}\n{}",
                     name.to_ascii_lowercase(),
                     last.filter(|v| v.is_finite())
-                        .map_or("–".into(), |v| format!("{v}"))
+                        .map_or("–".into(), |v| Value::Real(v).to_string())
                 ),
                 FontId::monospace(crate::theme::MIN_TEXT),
                 color,
@@ -2832,10 +2840,11 @@ impl Workspace for PlaygroundView {
     }
 
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
+        let id = self.source_id();
         let Some(text) = self.proj.current_text_mut() else {
             return false;
         };
-        let done = editor::undo(ctx, egui::Id::unique("pg-source"), text, redo);
+        let done = editor::undo(ctx, id, text, redo);
         if done {
             let t = ctx.input(|i| i.time);
             self.edited(t);

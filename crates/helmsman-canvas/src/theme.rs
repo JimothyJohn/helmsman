@@ -104,6 +104,13 @@ impl Theme {
     }
 }
 
+/// A label that is never broken across lines: a row of status words
+/// (`horizontal_wrapped`) moves a whole label to the next line when it
+/// does not fit, instead of cutting "compiles" off its tick.
+pub fn whole(text: egui::RichText) -> egui::Label {
+    egui::Label::new(text).wrap_mode(egui::TextWrapMode::Extend)
+}
+
 /// The theme of the page `ui` draws on.
 #[must_use]
 pub fn theme(ui: &egui::Ui) -> Theme {

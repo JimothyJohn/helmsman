@@ -431,7 +431,9 @@ pub fn ui(
         whole.max,
     );
     let id = egui::Id::unique("tour-card");
-    let size = Vec2::new(CARD_W, ctx.data(|d| d.get_temp::<f32>(id)).unwrap_or(260.0));
+    // No wider than the window leaves it, so a phone sees the buttons.
+    let card_w = CARD_W.min(screen.shrink(8.0).width());
+    let size = Vec2::new(card_w, ctx.data(|d| d.get_temp::<f32>(id)).unwrap_or(260.0));
     let card = place(anchor, size, screen);
     let now = ctx.input(|i| i.time);
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -465,7 +467,7 @@ pub fn ui(
                 .corner_radius(CornerRadius::same(8))
                 .inner_margin(14.0)
                 .show(ui, |ui| {
-                    ui.set_width(CARD_W - 32.0);
+                    ui.set_width(card_w - 32.0);
                     if let Some(n) = tour.step.number() {
                         ui.label(
                             RichText::new(format!("Step {n} of {}", Step::ACTIONS))
