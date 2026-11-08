@@ -615,6 +615,60 @@ END_PROGRAM",
         assert!(h.app.sim.is_none());
     }
 
+    /// Nick, 2026-11-08: an arrow right of the Structured Text header,
+    /// and one beside the running program in Files, deploys the latest
+    /// edit; neither widens the pane.
+    #[test]
+    fn the_arrows_by_the_code_header_and_the_running_program_deploy_the_edit() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let left = h.rect("left");
+        h.press("pane code");
+        h.wait(0.3);
+        assert!(h.has("code deploy"), "the arrow by the header");
+        let edit = |h: &mut Harness, mark: &str| {
+            let sim = h.app.sim.as_mut().unwrap();
+            let current = sim.proj.current.clone();
+            sim.proj.files.get_mut(&current).unwrap().push_str(mark);
+            h.frame(vec![]);
+        };
+        let deployed = |h: &Harness| {
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .session
+                .build
+                .as_ref()
+                .unwrap()
+                .src
+                .clone()
+        };
+        edit(&mut h, "\n(* one *)");
+        assert!(!deployed(&h).contains("(* one *)"), "an edit is only checked");
+        h.press("code deploy");
+        h.wait(0.3);
+        assert!(deployed(&h).contains("(* one *)"), "the arrow deployed it");
+        let sim = h.app.sim.as_ref().unwrap();
+        assert_eq!(sim.proj.running.as_deref(), Some(sim.proj.open.as_str()));
+        // In Files the running program, open, carries the arrow too.
+        h.press("pane files");
+        h.wait(0.3);
+        let arrow = h.rect("deploy arrow");
+        let row = h.rect(&format!("project {}", h.app.sim.as_ref().unwrap().proj.open));
+        assert!(
+            arrow.left() >= row.right() - 1.0,
+            "beside the row: {arrow:?} vs {row:?}"
+        );
+        assert!(arrow.right() <= h.rect("left").right(), "inside the pane");
+        edit(&mut h, "\n(* two *)");
+        h.press("deploy arrow");
+        h.wait(0.3);
+        assert!(deployed(&h).contains("(* two *)"), "the Files arrow deployed it");
+        let grew = h.rect("left").right() - left.right();
+        assert!((0.0..=8.0).contains(&grew), "the left pane grew {grew} pt");
+    }
+
     /// Nick, 2026-11-01: one tall row, menus left, the project right; the
     /// bar that held ST, Reset layout and Save as default is gone.
     #[test]

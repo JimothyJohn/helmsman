@@ -58,7 +58,9 @@ this; change it here first when a decision changes.
   deletes the row last clicked, a double click on a file opens the Code
   tab, every delete is confirmed in a modal at the screen's centre, and
   the earlier iterations of the program, `vN.st`, fold under one
-  "earlier (n)" row with `main.st` marked as the one running),
+  "earlier (n)" row with `main.st` marked as the one running; the running
+  program, open, carries a → that deploys it again with the latest edits,
+  as does the Code tab's Structured Text header, Nick 2026-11-08),
   Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
   system's, each with its points under it, live values and the link's
   state; on a box the open project's `io.map`, else the map the box runs;
@@ -187,7 +189,8 @@ this; change it here first when a decision changes.
   **Deploy** saves first, compiles the open project, records a snapshot in
   the store (history and rollback keep working) and hot-swaps it in
   between scans; compile errors list file and line, and a click goes
-  there.
+  there. A revision's diff and a proposal's source diff draw as GitHub
+  does: `+` on a green tint, `−` on a red tint, the row the pane's width.
 - **Who:** only an engineer login edits, saves, deploys or forces. Anyone
   else watches: the ST is read-only and the write controls are disabled,
   saying why. Sign in and out from the header.

@@ -49,8 +49,9 @@ shows them.
 every file with unsaved edits. A mark in the header shows there are some.
 Saving changes nothing about what runs.
 
-**Deploy** (<kbd>Ctrl</kbd> <kbd>D</kbd>, File › Deploy) saves first,
-then compiles the project and runs it: in the page in the simulation, on
+**Deploy** (<kbd>Ctrl</kbd> <kbd>D</kbd>, File › Deploy, or the → arrow
+right of the Structured Text header and beside the running program in
+Files) saves first, then compiles the project and runs it: in the page in the simulation, on
 the box through its approval policy on a box. A project that does not
 compile is refused with its errors by file and line.
 

@@ -1988,9 +1988,25 @@ impl Body for BoxView {
                 ui.label(RichText::new("Open a project in Files.").color(t.muted));
                 return;
             };
+            let deploy = write.clone().and_then(|()| {
+                if self.busy() {
+                    Err("A save or deploy is under way.".into())
+                } else {
+                    Ok(())
+                }
+            });
+            let mut go = false;
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Structured Text").strong())
                     .tip("The open file of the project. Save keeps it on the box; Deploy runs it.");
+                // The → deploys this version (Nick, 2026-11-08).
+                go = projects::deploy_arrow(
+                    ui,
+                    chrome,
+                    "code deploy",
+                    &deploy,
+                    "Deploys this version: saves, checks and runs the project on the box (Ctrl D, File › Deploy).",
+                );
                 match &write {
                     Ok(()) => {}
                     Err(why) => {
@@ -2001,6 +2017,9 @@ impl Body for BoxView {
                     }
                 }
             });
+            if go {
+                self.deploy();
+            }
             let Some(file) = o.current.clone() else {
                 ui.label(RichText::new("No files in this project yet.").color(t.muted));
                 return;

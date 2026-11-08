@@ -11,6 +11,7 @@
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, Vec2};
 
 use crate::editor::Chrome;
+use crate::glyphs;
 use crate::st_view::TAP;
 use crate::theme::theme;
 use crate::tips::Tip;
@@ -212,6 +213,25 @@ fn menu_item(
     false
 }
 
+/// The running program's arrow, on hover.
+const REDEPLOY_TIP: &str =
+    "Deploys this program again with your latest edits: saves, checks and runs it (Ctrl D, File › Deploy).";
+
+/// The → that deploys the open project (`deploy`: whether it may be, or
+/// why not), drawn as `key` for the tests. True when pressed.
+pub fn deploy_arrow(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    deploy: &Result<(), String>,
+    tip: &str,
+) -> bool {
+    let tip = deploy.as_ref().err().map_or(tip, String::as_str);
+    let r = glyphs::button_sized(ui, glyphs::Icon::Deploy, glyphs::ROW, deploy.is_ok(), false, tip);
+    chrome.hit(key, r.rect);
+    r.clicked()
+}
+
 /// A button that is disabled, with why on hover, unless writes are allowed.
 fn write_button(ui: &mut egui::Ui, write: &Result<(), String>, text: &str, hint: &str) -> egui::Response {
     let b = egui::Button::new(text).min_size(Vec2::new(0.0, TAP * 0.7));
@@ -238,24 +258,46 @@ impl FilesUi {
                 text.push_str("  ● running");
             }
             let color = if p.running { t.accent } else { t.fg };
-            let r = ui.selectable_label(open, RichText::new(text).monospace().color(color));
+            let text = RichText::new(text).monospace().color(color);
+            let tip = if p.example() {
+                let title = example_title(&p.name).unwrap_or(&p.name);
+                format!("{title}: click to make your own copy of this example, under a name you choose.")
+            } else if open {
+                "Your program, open. Right-click to copy, rename or delete it.".into()
+            } else {
+                "Your program: click to open it. Right-click to copy, rename or delete it.".into()
+            };
+            let r = if p.running && open {
+                // The running program, open: an arrow beside it deploys
+                // it again with the latest edits (Nick, 2026-11-08). The
+                // name is capped to the room left of the arrow, so a
+                // long one cannot widen the pane.
+                ui.horizontal(|ui| {
+                    let room = ui.available_width() - glyphs::ROW - ui.spacing().item_spacing.x;
+                    let r = ui
+                        .scope(|ui| {
+                            ui.set_max_width(room.max(40.0));
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                            ui.selectable_label(open, text).tip(tip.as_str())
+                        })
+                        .inner;
+                    if deploy_arrow(ui, chrome, "deploy arrow", &l.deploy, REDEPLOY_TIP) {
+                        act = Some(Act::Deploy);
+                    }
+                    r
+                })
+                .inner
+            } else {
+                ui.selectable_label(open, text).tip(tip.as_str())
+            };
             chrome.hit(format!("project {}", p.name), r.rect);
             if p.example() {
-                let title = example_title(&p.name).unwrap_or(&p.name);
-                let r = r.tip(format!(
-                    "{title}: click to make your own copy of this example, under a name you choose."
-                ));
                 if r.clicked() {
                     let name = free_name(l, &p.name);
                     self.ask(Naming::FromStarter(p.name.clone()), &name);
                 }
                 continue;
             }
-            let r = r.tip(if open {
-                "Your program, open. Right-click to copy, rename or delete it."
-            } else {
-                "Your program: click to open it. Right-click to copy, rename or delete it."
-            });
             if r.clicked() {
                 self.picked = Some(Picked::Project(p.name.clone()));
             }

@@ -10,15 +10,14 @@
 
 use std::collections::BTreeMap;
 
-use eframe::egui::{self, Color32, RichText, Vec2};
+use eframe::egui::{self, RichText, Vec2};
 
+use crate::diff_ui::Kind;
 use crate::editor::Chrome;
 use crate::st_view::TAP;
 use crate::theme::theme;
 use crate::tips::Tip;
 
-const RED: Color32 = Color32::from_rgb(255, 110, 100);
-const GREEN: Color32 = Color32::from_rgb(90, 200, 120);
 /// Longest file a diff is drawn for, lines each side; past it the file is
 /// shown as replaced.
 pub const MAX_DIFF_LINES: usize = 3000;
@@ -249,17 +248,15 @@ pub fn modal(
                     if new + gone == 0 {
                         continue;
                     }
-                    // One block per file, coloured line by line.
+                    // One block per file, line by line as GitHub draws
+                    // a diff (Nick, 2026-11-08).
                     for l in &lines {
-                        let (mark, s, color) = match l {
-                            Line::Same(s) => ("  ", *s, t.muted),
-                            Line::Gone(s) => ("- ", *s, RED),
-                            Line::New(s) => ("+ ", *s, GREEN),
+                        let (kind, s) = match l {
+                            Line::Same(s) => (Kind::Same, *s),
+                            Line::Gone(s) => (Kind::Removed, *s),
+                            Line::New(s) => (Kind::Added, *s),
                         };
-                        ui.add(
-                            egui::Label::new(RichText::new(format!("{mark}{s}")).monospace().color(color))
-                                .truncate(),
-                        );
+                        crate::diff_ui::row(ui, kind, "", s);
                     }
                     ui.add_space(6.0);
                 }

@@ -32,15 +32,33 @@ pub enum Icon {
     HardHat,
     /// A wrench crossed with a screwdriver: an engineer is signed in.
     Tools,
+    /// → : deploy the open project, its latest edits (Nick, 2026-11-08).
+    /// Beside the running project in Files and the Structured Text header.
+    Deploy,
 }
 
 /// The side of a glyph button, points.
 pub const SIZE: f32 = TAP * 0.8;
+/// The side of a glyph in a text row (a file's, a header's), points.
+pub const ROW: f32 = TAP * 0.6;
 
 /// One glyph button; `on` tints it as active.
 pub fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, on: bool, tip: &str) -> Response {
+    button_sized(ui, icon, SIZE, enabled, on, tip)
+}
+
+/// [`button`] at `size` points a side: a glyph in a text row takes the
+/// row's height, not the toolbar's.
+pub fn button_sized(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    size: f32,
+    enabled: bool,
+    on: bool,
+    tip: &str,
+) -> Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
-    let (rect, r) = ui.allocate_exact_size(Vec2::splat(SIZE), sense);
+    let (rect, r) = ui.allocate_exact_size(Vec2::splat(size), sense);
     let r = r.on_hover_text(tip);
     let t = theme(ui);
     let painter = ui.painter();
@@ -55,12 +73,12 @@ pub fn button(ui: &mut egui::Ui, icon: Icon, enabled: bool, on: bool, tip: &str)
     }
     let color = match (enabled, icon) {
         (false, _) => t.muted.gamma_multiply(0.5),
-        (true, Icon::Run) => GREEN,
+        (true, Icon::Run | Icon::Deploy) => GREEN,
         (true, Icon::Stop) => RED,
         (true, _) if hot => t.accent,
         (true, _) => t.fg,
     };
-    draw(painter, rect.shrink(SIZE * 0.26), icon, color);
+    draw(painter, rect.shrink(size * 0.26), icon, color);
     r
 }
 
@@ -151,6 +169,14 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             let dir = if up { -1.0 } else { 1.0 };
             p.line_segment([z, z + Vec2::new(-head, -dir * head)], stroke);
             p.line_segment([z, z + Vec2::new(head, -dir * head)], stroke);
+        }
+        Icon::Deploy => {
+            // A shaft from the left edge, an arrowhead at the right.
+            let shaft = Stroke::new(w * 1.3, color);
+            p.line_segment([Pos2::new(l, c.y), Pos2::new(r - w, c.y)], shaft);
+            let head = b.width() * 0.36;
+            p.line_segment([Pos2::new(r, c.y), Pos2::new(r - head, c.y - head)], shaft);
+            p.line_segment([Pos2::new(r, c.y), Pos2::new(r - head, c.y + head)], shaft);
         }
         Icon::HardHat => {
             // The dome over the brim, a ridge up its middle.

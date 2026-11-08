@@ -46,6 +46,7 @@ mod desk;
 mod device_form;
 mod device_form_ui;
 mod devices;
+mod diff_ui;
 mod editor;
 mod find;
 mod glyphs;
