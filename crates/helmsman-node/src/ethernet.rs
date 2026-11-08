@@ -33,8 +33,11 @@ pub const EMAC_FRAME_BUF_SIZE: usize = 1600;
 pub const ETH_LINK_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// The LAN8720A latches its straps on power-on and needs this before MDIO.
 pub const PHY_POWER_STABLE_DELAY_MS: u32 = 100;
-/// Sockets the stack holds: DHCP, the Modbus TCP link, the UDP log, one spare.
-pub const SOCKETS: usize = 4;
+/// Sockets the stack holds: DHCP, the Modbus TCP link, two HTTP
+/// connections, the beacon, the UDP log, two spare. smoltcp panics on a
+/// socket past this ("adding a socket to a full SocketSet": the first
+/// commissioned boot, 2026-11-08, with a site set and four slots).
+pub const SOCKETS: usize = 8;
 
 /// EMAC instance shape used throughout this module.
 pub type EthEmac = Emac<EMAC_RX_FRAMES, EMAC_TX_FRAMES, EMAC_FRAME_BUF_SIZE>;
