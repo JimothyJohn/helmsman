@@ -286,6 +286,25 @@ impl Arrangement {
         )
     }
 
+    /// `self` brought up to date by `newer`, the moves now read off `v`:
+    /// those of blocks `v` has are `newer`'s alone (a move undone is
+    /// gone), while those of blocks `v` lacks stay, for an edit that
+    /// brings the block back. When too many stay for a layout file, the
+    /// oldest go first.
+    #[must_use]
+    pub fn updated(&self, newer: &Self, v: &Viewer) -> Self {
+        let mut out: Vec<_> = self
+            .0
+            .iter()
+            .filter(|(p, l, t, k, _)| v.block(p, l, t, *k).is_none())
+            .cloned()
+            .collect();
+        let room = helmsman_project::layout::MAX_MOVES.saturating_sub(newer.len());
+        out.drain(..out.len().saturating_sub(room));
+        out.extend(newer.0.iter().cloned());
+        Self(out)
+    }
+
     /// Only the moves of blocks `v` has.
     #[must_use]
     pub fn within(&self, v: &Viewer) -> Self {
