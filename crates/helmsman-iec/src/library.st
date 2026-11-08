@@ -228,10 +228,12 @@ END_FUNCTION_BLOCK
 (* ASSERT: a requirement test's check (see `spec`). Not IEC 61131-3: a
    Helmsman extension. FAILED latches on the first scan COND is FALSE and
    FAILED_AT keeps when that was; a test program names one ASSERT per requirement
-   it checks, and the runner reads FAILED. *)
+   it checks, and the runner reads FAILED. CHECKED latches on the first
+   call: a declared ASSERT that never ran checked nothing. *)
 FUNCTION_BLOCK ASSERT
   VAR_INPUT COND : BOOL; END_VAR
-  VAR_OUTPUT FAILED : BOOL; FAILED_AT : TIME; END_VAR
+  VAR_OUTPUT FAILED : BOOL; FAILED_AT : TIME; CHECKED : BOOL; END_VAR
+  CHECKED := TRUE;
   IF NOT COND AND NOT FAILED THEN
     FAILED := TRUE;
     FAILED_AT := __NOW();

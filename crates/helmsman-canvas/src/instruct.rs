@@ -528,12 +528,13 @@ pub fn status(file: &str, check: &Check) -> String {
             let _ = write!(s, "; the {n} requirement tests still pass");
         }
     }
-    for (f, requirement) in &check.replaced {
+    for r in &check.replaced {
         let _ = write!(
             s,
-            "; changed requirement {}: {}",
-            f.trim_end_matches(".st"),
-            clean(requirement, 120).trim_end_matches('.')
+            "; changed requirement {}: {} (was: {})",
+            r.file.trim_end_matches(".st"),
+            clean(&r.now, 120).trim_end_matches('.'),
+            clean(&r.was, 120).trim_end_matches('.')
         );
     }
     s.push('.');

@@ -701,10 +701,14 @@ mod in_the_page {
         instruct(
             &mut v,
             "debounce",
-            &[&st(&LAMP.replace("lamp := start;", "lamp := start AND start;"))],
+            &[&format!(
+                "Why: it says so.\n\n```st\n{}```\n\n{}",
+                LAMP.replace("lamp := start;", "lamp := start OR lamp;"),
+                crate::instruct_tests::latches()
+            )],
         );
         assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
-        assert!(v.proj.files["main.st"].contains("lamp := start AND start;\nEND_PROGRAM"));
+        assert!(v.proj.files["main.st"].contains("lamp := start OR lamp;\nEND_PROGRAM"));
         // An edit not deployed: the diagram's lines no longer hold.
         v.proj.current_text_mut().unwrap().insert_str(0, "(* moved *)\n");
         assert_eq!(v.scope(), Scope::File("main.st".into()));
