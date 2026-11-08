@@ -261,29 +261,60 @@ pub enum Act {
     Stop,
 }
 
-/// The switch between the two modes, at the top of the tab.
-pub fn mode_ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, mode: &mut Mode) {
-    ui.horizontal_wrapped(|ui| {
-        for (m, key, words, tip) in [
-            (
-                Mode::Code,
-                "agent mode code",
-                "Change the program",
-                "Tell the Agent what the program should do. It changes the open file and checks the change before it is written.",
-            ),
-            (
-                Mode::Help,
-                "agent mode help",
-                "Get help",
-                "Say what went wrong. The Agent looks at this box's messages and devices, tells you what is likely wrong, and writes an issue you can copy to report it.",
-            ),
-        ] {
-            let r = ui.add(egui::Button::selectable(*mode == m, words)).tip(tip);
-            chrome.hit(key, r.rect);
-            if r.clicked() {
-                *mode = m;
-            }
+impl Mode {
+    /// The heading of the Agent tab in this mode.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Code => "Change the program",
+            Self::Help => "Get help",
         }
+    }
+}
+
+/// The Agent tab's heading (Nick, 2026-11-08): a dot for the agent's
+/// state (`dot`, its words on hover), the mode's name, and at the right
+/// a toggle of two glyphs, < > for changing the program and ? for help,
+/// the one in use tinted.
+pub fn heading(
+    ui: &mut egui::Ui,
+    chrome: &mut crate::editor::Chrome,
+    mode: &mut Mode,
+    dot: egui::Color32,
+    dot_tip: &str,
+) {
+    use crate::glyphs::{self, Icon};
+    let t = crate::theme::theme(ui);
+    ui.horizontal(|ui| {
+        let (rect, r) = ui.allocate_exact_size(Vec2::splat(glyphs::ROW * 0.6), egui::Sense::hover());
+        ui.painter().circle_filled(rect.center(), rect.width() * 0.3, dot);
+        let r = r.tip(dot_tip.to_string());
+        chrome.hit("agent status", r.rect);
+        ui.label(RichText::new(mode.title()).strong().color(t.fg))
+            .tip("What the Agent does here. The toggle at the right switches it.");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (m, icon, key, tip) in [
+                (
+                    Mode::Help,
+                    Icon::Help,
+                    "agent mode help",
+                    "Get help: say what went wrong. The Agent looks at this box's messages and devices, tells you what is likely wrong, and writes an issue you can copy to report it.",
+                ),
+                (
+                    Mode::Code,
+                    Icon::Code,
+                    "agent mode code",
+                    "Change the program: tell the Agent what it should do. It changes the open file and checks the change before it is written.",
+                ),
+            ] {
+                let r = glyphs::button_sized(ui, icon, glyphs::ROW, true, *mode == m, tip);
+                chrome.hit(key, r.rect);
+                if r.clicked() {
+                    *mode = m;
+                }
+            }
+        });
     });
 }
 

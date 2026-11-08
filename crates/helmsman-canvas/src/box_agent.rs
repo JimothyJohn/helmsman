@@ -30,6 +30,7 @@
 // Natively nothing carries the answers back but the tests.
 #![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
+use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
@@ -99,15 +100,16 @@ impl Status {
         }
     }
 
-    /// The status in a few words, for the tab (its tooltip is [`Self::line`]).
+    /// The dot beside the Agent tab's heading (Nick, 2026-11-08): green
+    /// online, red offline or without a relay, grey while unknown. Its
+    /// tooltip is [`Self::line`].
     #[must_use]
-    pub const fn short(&self) -> &'static str {
+    pub const fn dot(&self) -> Color32 {
+        use crate::st_view::brand::{GREEN, RED, STEEL};
         match self {
-            Self::Unread => "Agent on this box",
-            Self::Unknown => "Agent status unknown",
-            Self::Unconfigured(_) => "No agent on this box",
-            Self::Online => "Agent online",
-            Self::Offline(_) => "Agent offline",
+            Self::Unread | Self::Unknown => STEEL,
+            Self::Online => GREEN,
+            Self::Unconfigured(_) | Self::Offline(_) => RED,
         }
     }
 

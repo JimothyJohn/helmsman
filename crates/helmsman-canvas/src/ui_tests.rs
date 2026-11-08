@@ -3400,9 +3400,27 @@ mod boxed {
         h.frame(vec![]);
         assert!(h.has("agent mode code") && h.has("agent mode help"));
         assert!(h.has("agent instruction") && !h.has("help question"));
+        // Nick, 2026-11-08: the heading names the mode, the agent's state
+        // is a dot beside it, and the glyph toggle sits at the top right.
+        assert!(h.drew("Change the program") && !h.drew("Get help"));
+        assert!(!h.drew("Agent on this box") && !h.drew("Agent online"));
+        let (dot, code, help) = (
+            h.rect("agent status"),
+            h.rect("agent mode code"),
+            h.rect("agent mode help"),
+        );
+        assert!(
+            dot.left() < code.left() && code.right() <= help.left(),
+            "{dot:?} {code:?} {help:?}"
+        );
+        assert!(
+            help.right() >= h.rect("right").right() - 40.0,
+            "at the right: {help:?}"
+        );
         h.press("agent mode help");
         h.frame(vec![]);
         assert!(h.has("help question") && h.has("help ask") && !h.has("agent instruction"));
+        assert!(h.drew("Get help") && !h.drew("Change the program"));
 
         h.app
             .boxv

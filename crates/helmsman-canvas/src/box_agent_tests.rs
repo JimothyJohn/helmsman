@@ -559,3 +559,15 @@ proptest! {
         prop_assert!(a.turns[0].items.len() <= crate::box_agent::MAX_ITEMS);
     }
 }
+
+/// Nick, 2026-11-08: the Agent tab shows the state as a dot, green online,
+/// red offline or without a relay, grey until heard.
+#[test]
+fn the_status_dot_is_green_online_red_offline_grey_unknown() {
+    use crate::st_view::brand::{GREEN, RED, STEEL};
+    assert_eq!(Status::Online.dot(), GREEN);
+    assert_eq!(Status::Offline("down".into()).dot(), RED);
+    assert_eq!(Status::Unconfigured(String::new()).dot(), RED);
+    assert_eq!(Status::Unread.dot(), STEEL);
+    assert_eq!(Status::Unknown.dot(), STEEL);
+}
