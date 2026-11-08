@@ -258,3 +258,37 @@ fn a_browser_keeps_at_most_max_views_and_drops_the_oldest() {
     l.show(&mut v, "view0", "", true);
     assert!(!l.tweaked());
 }
+#[test]
+fn a_tweak_survives_a_deploy_that_removes_its_block_for_a_while() {
+    let store = Shared::default();
+    let auto = viewer(SRC);
+    let (lamp, horn) = blocks(&auto);
+    let horn0 = at(&auto, &horn);
+
+    let mut l = Layers::load(Box::new(store.clone()));
+    let mut v = viewer(SRC);
+    l.show(&mut v, "box:line", "", true);
+    v.move_node(id(&v, &horn), Vec2::new(50.0, 0.0));
+    l.show(&mut v, "box:line", "", false);
+    assert!(l.tweaked());
+
+    // A deploy without the horn block; another block is moved there.
+    let without = SRC.replace("  horn := stop;\n", "");
+    let mut v = viewer(&without);
+    l.show(&mut v, "box:line", "", true);
+    v.move_node(id(&v, &lamp), Vec2::new(0.0, 30.0));
+    l.show(&mut v, "box:line", "", false);
+
+    // The horn is back: its move is still there, after a reload too.
+    let mut l = Layers::load(Box::new(store.clone()));
+    let mut v = viewer(SRC);
+    l.show(&mut v, "box:line", "", true);
+    assert_eq!(at(&v, &horn), moved(horn0, (50.0, 0.0)), "the horn's tweak, kept");
+
+    // Moving it back is still a change that sticks.
+    v.move_node(id(&v, &horn), Vec2::new(-50.0, 0.0));
+    l.show(&mut v, "box:line", "", false);
+    let mut v = viewer(SRC);
+    l.show(&mut v, "box:line", "", true);
+    assert_eq!(at(&v, &horn), horn0, "undone moves are not resurrected");
+}

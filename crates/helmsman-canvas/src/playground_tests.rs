@@ -16,9 +16,10 @@ use crate::claude::{
 };
 use crate::editor::{Chrome, Tab, highlight};
 use crate::playground::{
-    Dir, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget, nice_range, tick_label,
+    Carried, Dir, MAX_CATCH_UP, MAX_PERIOD, MAX_SOURCE, Place, Session, TREND_SIGNALS, Widget, nice_range,
+    tick_label,
 };
-use crate::playground_view::{PlaygroundView, window_label};
+use crate::playground_view::{PlaygroundView, lane_points, window_label};
 use crate::projects::Workspace;
 use crate::sim_projects::Storage;
 
@@ -351,21 +352,6 @@ fn a_check_marks_errors_and_never_touches_the_program_running() {
 }
 
 #[test]
-fn the_editor_is_bounded_and_cut_on_a_char_boundary() {
-    let mut s = Session::new("");
-    assert!(!s.diags.is_empty(), "empty source does not compile");
-    assert!(s.build.is_none());
-    let long = "é".repeat(MAX_SOURCE);
-    s.set_source(&long);
-    assert!(s.src.len() <= MAX_SOURCE);
-    assert!(s.src.chars().all(|c| c == 'é'));
-    s.src.clear();
-    s.check(&long);
-    assert!(s.src.len() <= MAX_SOURCE, "a check cuts the same");
-    assert!(s.src.chars().all(|c| c == 'é'));
-}
-
-#[test]
 fn inputs_refuse_wrong_kinds_ranges_and_outputs() {
     let mut s = Session::new(example("counter"));
     assert!(!s.set_input("target", Value::Int(40_000)), "past INT");
@@ -490,7 +476,11 @@ fn the_trend_axis_is_a_nice_range_that_holds_between_steps() {
 fn moving_a_trend_signal_carries_its_history() {
     let mut s = Session::new(example("traffic"));
     scans(&mut s, 300);
-    let col = |s: &Session, k: usize| -> Vec<f64> { s.trend.samples.iter().map(|x| x.values[k]).collect() };
+    let col = |s: &Session, k: usize| -> Vec<f64> {
+        (0..s.trend.samples.len())
+            .map(|i| s.trend.samples.value(i, k).unwrap())
+            .collect()
+    };
     let before: Vec<Vec<f64>> = (0..4).map(|k| col(&s, k)).collect();
     s.trend.move_signal(0, 2);
     assert_eq!(s.trend.signals, ["YELLOW", "GREEN", "RED", "RUN"]);
@@ -508,7 +498,7 @@ fn moving_a_trend_signal_carries_its_history() {
     let n = s.trend.samples.len();
     scans(&mut s, 10);
     assert_eq!(s.trend.samples.len(), n + 10, "the history stays and grows");
-    let red = s.trend.samples.back().unwrap().values[2];
+    let red = s.trend.samples.last_value(2).unwrap();
     let point = s.outputs().find(|p| p.name == "RED").unwrap().number();
     // RED is a BOOL: 0 or 1, exact.
     assert_eq!(red.to_bits(), point.to_bits(), "lane 2 records RED");
@@ -520,7 +510,7 @@ fn the_trend_records_chosen_signals_in_a_bounded_window() {
     assert_eq!(s.trend.signals, ["RED", "YELLOW", "GREEN", "RUN"]);
     scans(&mut s, 50);
     assert_eq!(s.trend.samples.len(), 50);
-    assert_eq!(s.trend.samples[0].values.len(), 4);
+    assert!(s.trend.samples.value(0, 3).is_some() && s.trend.samples.value(0, 4).is_none());
     s.trend.toggle("RUN");
     assert_eq!(s.trend.signals.len(), 3);
     assert_eq!(s.trend.samples.len(), 0, "history restarts on a change");
@@ -532,8 +522,8 @@ fn the_trend_records_chosen_signals_in_a_bounded_window() {
     let mut s = Session::new(example("traffic"));
     scans(&mut s, 15_000);
     let (first, last) = (
-        s.trend.samples.front().unwrap().t_ms,
-        s.trend.samples.back().unwrap().t_ms,
+        s.trend.samples.first_t().unwrap(),
+        s.trend.samples.last_t().unwrap(),
     );
     assert!(last - first <= crate::playground::TREND_KEEP_MS);
     assert!(last - first > 90_000, "{first}..{last}");
@@ -1947,7 +1937,7 @@ fn deploying_a_broken_edit_is_refused_and_the_old_program_keeps_running() {
     s.wait(0.2);
     assert!(s.view.session.scans > scans, "and it keeps scanning");
     // The stray character taken back: checked clean, the same source as
-    // deployed, so nothing is stale; Deploy restarts it cold.
+    // deployed, so nothing is stale; Deploy swaps it in hot.
     s.frame(vec![Event::Key {
         key: egui::Key::Backspace,
         physical_key: None,
@@ -1965,7 +1955,7 @@ fn deploying_a_broken_edit_is_refused_and_the_old_program_keeps_running() {
     assert!(!s.view.session.stale());
     s.view.deploy();
     assert!(s.view.session.running);
-    assert_eq!(s.view.session.scans, 0, "a cold start");
+    assert!(s.view.session.scans > 0, "a hot swap: the scan count runs on");
     assert!(
         s.view
             .notice
@@ -2252,4 +2242,250 @@ fn an_empty_key_is_preloaded_from_the_environment_and_said_so() {
     *keep.key_mut() = "sk-ant-api03-keptkeptkeptkeptkeptkeptkept".into();
     keep.take_env(Some("sk-ant-api03-otherotherotherotherotherother".into()));
     assert!(keep.key_mut().starts_with("sk-ant-api03-kept") && !keep.from_env);
+}
+// ---- simulation semantics ----------------------------------------------
+
+/// `blink` with a comment changed: the same variables.
+fn blink_edited() -> String {
+    example("blink").replace("A timer that restarts itself", "A timer that restarts, edited")
+}
+
+#[test]
+fn a_deploy_carries_a_timer_mid_count_and_keeps_the_clock() {
+    let mut s = Session::new(example("blink"));
+    scans(&mut s, 30);
+    assert_eq!(s.value("lamp"), Some(b(false)));
+    let carried = s.deploy(&blink_edited()).expect("compiles");
+    assert_eq!(carried, Carried::default(), "everything carried");
+    assert_eq!(s.scans, 30, "the scan count runs on");
+    assert_eq!(s.now_ms, 300, "so does the clock");
+    // 300 ms were already counted: the timer fires near 500 ms of its run,
+    // not 500 ms after the deploy.
+    scans(&mut s, 25);
+    assert_eq!(s.value("lamp"), Some(b(true)), "at {} ms", s.now_ms);
+    // A load is a cold start, as before.
+    let mut s = Session::new(example("blink"));
+    scans(&mut s, 30);
+    assert!(s.set_source(&blink_edited()));
+    assert_eq!(s.scans, 0);
+    scans(&mut s, 25);
+    assert_eq!(s.value("lamp"), Some(b(false)));
+}
+
+#[test]
+fn a_renamed_or_retyped_timer_starts_fresh_and_the_deploy_says_so() {
+    let mut s = Session::new(example("blink"));
+    scans(&mut s, 30);
+    let renamed = example("blink").replace("pulse", "tick");
+    let carried = s.deploy(&renamed).expect("compiles");
+    assert_eq!(carried.gone, vec!["PULSE".to_string()]);
+    assert!(carried.fresh.is_empty(), "a new name is not a loss");
+    assert!(carried.describe().contains("pulse"), "{}", carried.describe());
+    scans(&mut s, 25);
+    assert_eq!(s.value("lamp"), Some(b(false)), "the new timer began at zero");
+    // The same name with another type starts fresh too.
+    let mut s = Session::new(example("blink"));
+    scans(&mut s, 30);
+    let retyped = example("blink").replace("pulse : TON;", "pulse : TOF;");
+    let carried = s.deploy(&retyped).expect("compiles");
+    assert_eq!(carried.fresh, vec!["PULSE".to_string()]);
+    assert!(carried.describe().contains("type changed"));
+}
+
+#[test]
+fn a_deploy_that_does_not_compile_leaves_the_program_and_its_clock() {
+    let mut s = Session::new(example("blink"));
+    scans(&mut s, 5);
+    assert!(s.deploy("PROGRAM p\nx := 1;\nEND_PROGRAM\n").is_none());
+    assert_eq!((s.scans, s.now_ms), (5, 50));
+    assert_ne!(s.diags.len(), 0);
+}
+
+#[test]
+fn the_lamp_goes_off_when_the_simulation_stops() {
+    let mut s = Session::new(example("latch"));
+    s.set_input("start", b(true));
+    s.set_running(true);
+    s.advance(0.0);
+    s.advance(0.1);
+    assert_eq!(s.value("motor"), Some(b(true)));
+    assert_eq!(s.build.as_ref().unwrap().image.q[0] & 1, 1);
+    s.set_running(false);
+    assert_eq!(
+        s.value("motor"),
+        Some(b(false)),
+        "a stopped module's outputs are off"
+    );
+    assert_eq!(s.build.as_ref().unwrap().image.q[0], 0);
+    // Run again: the next scan writes it back.
+    s.set_running(true);
+    s.advance(1.0);
+    s.advance(1.1);
+    assert_eq!(s.value("motor"), Some(b(true)), "sealed in still");
+}
+
+const FAULTY: &str = "PROGRAM f
+VAR_INPUT d : INT := 1; END_VAR
+VAR_OUTPUT q : INT; END_VAR
+VAR lamp AT %QX0.0 : BOOL; END_VAR
+lamp := TRUE;
+q := 10 / d;
+END_PROGRAM
+";
+
+#[test]
+fn a_fault_turns_the_outputs_off() {
+    let mut s = Session::new(FAULTY);
+    s.step();
+    assert_eq!(s.value("lamp"), Some(b(true)));
+    assert_eq!(s.value("q"), Some(Value::Int(10)));
+    s.set_input("d", Value::Int(0));
+    s.set_running(true);
+    s.advance(0.0);
+    s.advance(0.1);
+    assert!(s.fault.is_some(), "division by zero faults");
+    assert!(!s.running);
+    assert_eq!(s.value("lamp"), Some(b(false)));
+    assert_eq!(s.value("q"), Some(Value::Int(0)));
+    assert_eq!(s.build.as_ref().unwrap().image.q[0], 0);
+}
+
+#[test]
+fn a_program_over_the_old_64_kib_cut_deploys_whole() {
+    let pad = "(* padding padding padding padding padding padding *)\n".repeat(2500);
+    let big = format!("PROGRAM big\nVAR_OUTPUT lamp : BOOL; END_VAR\n{pad}lamp := TRUE;\nEND_PROGRAM\n");
+    assert!(big.len() > 64 * 1024 && big.len() < MAX_SOURCE);
+    let mut s = Session::new("");
+    assert!(s.deploy(&big).is_some(), "{:?}", s.diag_lines());
+    assert_eq!(s.src, big);
+    assert_eq!(s.build.as_ref().unwrap().src.len(), big.len(), "not a byte cut");
+    s.step();
+    assert_eq!(s.value("lamp"), Some(b(true)));
+}
+
+#[test]
+fn a_program_over_the_limit_is_refused_by_name_not_cut() {
+    let mut s = Session::new(example("latch"));
+    let long = "é".repeat(MAX_SOURCE);
+    assert!(!s.set_source(&long));
+    assert!(!s.check(&long));
+    assert!(s.deploy(&long).is_none());
+    assert_eq!(s.src, long, "kept whole, so lines stay the editor's");
+    assert!(s.diag_lines()[0].contains("at most"), "{:?}", s.diag_lines());
+    assert_eq!(
+        s.build.as_ref().unwrap().src,
+        example("latch"),
+        "the program running is untouched"
+    );
+}
+
+const REAL_IN: &str = "PROGRAM r
+VAR_INPUT x : REAL; END_VAR
+VAR_OUTPUT y : REAL; END_VAR
+y := x;
+END_PROGRAM
+";
+
+#[test]
+fn a_real_input_holds_what_the_program_holds_or_is_refused() {
+    let mut s = Session::new(REAL_IN);
+    assert!(!s.set_input("x", Value::Real(1e300)), "overflows a REAL");
+    assert_eq!(
+        s.value("x"),
+        Some(Value::Real(0.0)),
+        "the panel keeps the old value"
+    );
+    let why = s.try_input("x", Value::Real(1e300)).unwrap_err();
+    assert!(why.contains('X') && why.contains("REAL"), "{why}");
+    assert!(s.set_input("x", Value::Real(0.1)));
+    assert_eq!(s.value("x"), Some(Value::Real(f64::from(0.1f32))), "as an f32");
+    s.step();
+    assert_eq!(s.value("y"), s.value("x"));
+}
+
+#[test]
+fn a_block_comment_hides_an_address_from_the_io() {
+    let src = "PROGRAM p
+VAR x : BOOL; END_VAR
+/* %QX5.5 in a block comment (* and an opener */
+x := %IX1.2;
+END_PROGRAM";
+    let s = Session::new(src);
+    assert_eq!(s.diag_lines(), Vec::<String>::new());
+    let names: Vec<_> = s.inputs().chain(s.outputs()).map(|p| p.name.clone()).collect();
+    assert_eq!(names, vec!["%IX1.2".to_string()]);
+}
+
+#[test]
+fn typed_values_past_the_slider_stay() {
+    // Inputs the diagram does not read, so the I/O tab draws their sliders.
+    let src = "PROGRAM q
+VAR_INPUT n : INT; x : REAL; t : TIME; END_VAR
+VAR_OUTPUT o : BOOL; END_VAR
+o := TRUE;
+END_PROGRAM
+";
+    let mut s = Screen::new();
+    s.view.load(src, "sliders");
+    s.wait(0.3);
+    let held = [
+        ("n", Value::Int(5000)),
+        ("x", Value::Real(500.0)),
+        ("t", Value::Int(60_000_000_000)),
+    ];
+    for (name, v) in held {
+        assert!(s.view.session.set_input(name, v), "{name}");
+    }
+    s.wait(0.5);
+    for (name, v) in held {
+        assert_eq!(s.view.session.value(name), Some(v), "{name} snapped back");
+    }
+}
+
+#[test]
+fn the_running_notice_goes_when_the_program_stops_or_faults() {
+    let mut s = Screen::new();
+    s.view.deploy();
+    s.wait(0.2);
+    let note = s.view.notice.clone().expect("a notice");
+    assert!(note.contains("is running in this page"), "{note}");
+    s.view.session.set_running(false);
+    s.wait(0.2);
+    assert_eq!(s.view.notice, None);
+    // A deploy that could not carry a timer says so.
+    s.view.session.set_running(true);
+    s.wait(0.2);
+    let src = s.view.proj.build_src().replace("pulse", "tick");
+    let file = s.view.proj.current.clone();
+    s.view.proj.files.insert(file, src);
+    s.view.deploy();
+    s.wait(0.2);
+    let note = s.view.notice.clone().expect("a notice");
+    assert!(note.contains("Not carried") && note.contains("pulse"), "{note}");
+    // A fault ends it too.
+    s.view.load(FAULTY, "faulty");
+    s.view.deploy();
+    s.wait(0.2);
+    assert!(s.view.notice.as_deref().is_some_and(|n| n.contains("is running")));
+    s.view.session.set_input("d", Value::Int(0));
+    s.wait(0.5);
+    assert!(s.view.session.fault.is_some());
+    assert_eq!(s.view.notice, None);
+}
+#[test]
+fn a_long_trend_draws_a_polyline_bounded_by_the_lane_width() {
+    // 10 minutes of 10 ms scans across a 600 pt lane, with one spike.
+    let n = 60_000u16;
+    let samples = (0..u32::from(n)).map(|i| {
+        let y = if i == 31_234 { 0.0 } else { 5.0 + (i % 3) as f32 };
+        (i as f32 * 0.01, y)
+    });
+    let pts = lane_points(samples);
+    assert!(pts.len() <= 8 * 601, "{} points", pts.len());
+    assert!(pts.iter().any(|p| p.y == 0.0), "the spike survives the thinning");
+    assert!(pts.windows(2).all(|w| w[0].x <= w[1].x), "time order");
+    // Few samples draw as they are: a step to each.
+    let few = lane_points([(10.0, 1.0), (20.0, 2.0), (30.0, 1.0)].into_iter());
+    assert_eq!(few.len(), 5);
+    assert_eq!(lane_points(std::iter::empty()).len(), 0);
 }
