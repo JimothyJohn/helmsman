@@ -883,6 +883,20 @@ the person between screens.
   a desk older than the one it holds (409), and the page then reads the
   newer one. A role change on the same account keeps the desk; signed
   out, or with the box not answering, the browser's is the desk.
+- **Taking a newer desk never drops an unsaved edit.** The edits are
+  merged per file: one edited here stays as it is here (for a file edited
+  on both screens this page's text stays, and saving it is refused as
+  stale if the box's copy moved), and the other screen's other edits come
+  in. With an unsaved edit in the open project the page stays on that
+  project and file; typed inputs, a conversation and a half-filled form
+  stay too. A different person signing in on the same page (the desk
+  names its owner in this browser) starts the page empty and asks for
+  their desk; an answer for the person before is dropped by its `owner`.
+- **A desk this page cannot read in full.** Each field is read on its own,
+  so a newer page's conversation does not take the edits down. A browser
+  slot that did not read in full is left as it is until the person
+  changes something, and a box desk that is not a desk at all is not
+  fought over: the browser keeps it and the page says so.
 - **The Agent's conversation and the device form** (`desk-agent-and-forms`).
   The desk also keeps the Agent tab's turns with the box's agent and the
   last instruction's outcome (`desk::Conversation`), and a half-filled New
@@ -894,7 +908,8 @@ the person between screens.
   characters a field, and any setting whose key names a credential
   (`desk::is_secret_key`: a password, PIN, token, key or secret) is left
   out. Both count as work, so a change dates the desk. Past the box's
-  512 KiB the edits go first, then the conversation, then the form. After a
+  512 KiB the conversation goes first, then the form, then the biggest
+  edits. After a
   reload an instruction that was under way is over with nothing written,
   and the proposals its turn stored are still linked; a proposal decided
   since (no longer a draft in the Proposals list) shows as decided and is

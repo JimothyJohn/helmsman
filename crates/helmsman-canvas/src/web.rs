@@ -778,6 +778,8 @@ pub fn download_bytes(name: &str, bytes: &[u8], mime: &str) {
 pub struct LocalProjects;
 
 const PROJECTS_SLOT: &str = "helmsman-canvas/projects";
+/// What the projects slot held when this page could not read it.
+const PROJECTS_BACKUP_SLOT: &str = "helmsman-canvas/projects.backup";
 
 fn storage() -> Result<web_sys::Storage, String> {
     web_sys::window()
@@ -828,5 +830,11 @@ impl crate::sim_projects::Storage for LocalProjects {
 
     fn save(&mut self, value: &str) -> Result<(), String> {
         storage()?.set_item(PROJECTS_SLOT, value).map_err(|e| text(&e))
+    }
+
+    fn backup(&mut self, value: &str) -> Result<(), String> {
+        storage()?
+            .set_item(PROJECTS_BACKUP_SLOT, value)
+            .map_err(|e| text(&e))
     }
 }
