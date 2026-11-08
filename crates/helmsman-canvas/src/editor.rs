@@ -847,9 +847,15 @@ pub fn st_editor(
                 // Slack for the editor's own margin and the scroll bar: wider
                 // than the pane and a resizable pane grows to fit, every frame.
                 let wrap = (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0);
+                // The width the text edit really wraps at (its margins
+                // come off the width it is given) is told by its layouter;
+                // the gutter uses the last frame's, or the estimate on the
+                // first.
+                let wrap_key = id.with("wrap");
+                let edit_wrap = ui.data(|d| d.get_temp::<f32>(wrap_key)).unwrap_or(wrap - 8.0);
                 // The rows the text takes at that width: each source line
                 // numbered on its first row, its wrapped rows blank.
-                let mut job = highlight(text.as_str(), diags, at, &added, &font, wrap, &t);
+                let mut job = highlight(text.as_str(), diags, at, &added, &font, edit_wrap, &t);
                 crate::find::mark(&mut job, &marks);
                 let galley = ui.fonts_mut(|f| f.layout_job(job));
                 let mut gutter = LayoutJob::default();
@@ -873,6 +879,7 @@ pub fn st_editor(
                 gutter.wrap.max_width = f32::INFINITY;
                 ui.label(gutter);
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+                    ui.data_mut(|d| d.insert_temp(wrap_key, wrap));
                     let mut job = highlight(buf.as_str(), diags, at, &added, &font, wrap, &t);
                     crate::find::mark(&mut job, &marks);
                     ui.fonts_mut(|f| f.layout_job(job))
@@ -888,6 +895,10 @@ pub fn st_editor(
                     .lock_focus(true)
                     .layouter(&mut layouter)
                     .show(ui);
+                // The gutter was laid out a frame behind a change of width.
+                if ui.data(|d| d.get_temp::<f32>(wrap_key)).is_some_and(|w| (w - edit_wrap).abs() > 0.01) {
+                    ui.ctx().request_repaint();
+                }
                 removed_rules(ui, &out, &agent.removed, chrome);
                 out.response.response
             })

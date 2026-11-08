@@ -663,21 +663,30 @@ impl App {
         let waiting = self.waiting();
         let title = self.title();
         let engineer = is_engineer(self.session().as_ref()).is_ok();
+        // A phone's width: the wordmark, the open view's status and the
+        // "simulation" tag give way, so the mark's group and the screens'
+        // never overlap; the title takes what is left and elides.
+        let narrow = ui.ctx().content_rect().width() < NARROW;
         let panel = egui::Panel::top("header").show(ui, |ui| {
             let size = Vec2::new(ui.available_width(), HEADER_H);
             let t = theme(ui);
             ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // The wordmark is the way to the site.
-                let mark = ui
-                    .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent)).frame(false))
-                    .tip(format!("Opens {SITE_URL} in a new tab."));
-                hits.push(("mark".to_string(), mark.rect));
-                if mark.clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
+                // The wordmark is the way to the site (the About window links
+                // it, on a phone).
+                if !narrow {
+                    let mark = ui
+                        .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent)).frame(false))
+                        .tip(format!("Opens {SITE_URL} in a new tab."));
+                    hits.push(("mark".to_string(), mark.rect));
+                    if mark.clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab(SITE_URL));
+                    }
                 }
                 self.menus(ui, engineer, waiting, &mut hits);
-                ui.separator();
-                self.actions(ui, &mut hits);
+                if !narrow {
+                    ui.separator();
+                    self.actions(ui, &mut hits);
+                }
                 // The right-hand group, laid out from the window's edge
                 // leftwards (the order below is right to left).
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -704,12 +713,12 @@ impl App {
                     }
                     ui.separator();
                     self.dirty_mark(ui, &mut hits);
-                    if self.source == Source::Sim {
+                    if self.source == Source::Sim && !narrow {
                         ui.label(RichText::new("simulation").color(t.muted))
                             .tip("The program runs in this page. Nothing reaches a controller.");
                     }
                     let r = ui
-                        .label(RichText::new(&title).strong().monospace().color(t.fg))
+                        .add(egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg)).truncate())
                         .tip("The open project.");
                     hits.push(("title".to_string(), r.rect));
                     m.rect
@@ -1056,6 +1065,28 @@ impl App {
 
     /// File, Edit and View: what exists today, nothing greyed for later.
     fn menus(
+        &mut self,
+        ui: &mut egui::Ui,
+        engineer: bool,
+        waiting: Option<usize>,
+        hits: &mut Vec<(String, Rect)>,
+    ) {
+        if ui.ctx().content_rect().width() >= NARROW {
+            self.menu_buttons(ui, engineer, waiting, hits);
+            return;
+        }
+        // A phone's width has no room for four menus beside the mark and
+        // the screens: one button holds them as submenus.
+        ui.scope(|ui| {
+            egui::containers::menu::menu_style(ui.style_mut());
+            let m = ui.menu_button("Menu", |ui| self.menu_buttons(ui, engineer, waiting, hits));
+            hits.push(("bar menu".to_string(), m.response.rect));
+        });
+    }
+
+    /// File, Edit, View and Help, as buttons of the row (or, on a phone,
+    /// the submenus of its one Menu button).
+    fn menu_buttons(
         &mut self,
         ui: &mut egui::Ui,
         engineer: bool,
