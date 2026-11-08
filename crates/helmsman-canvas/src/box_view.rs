@@ -881,8 +881,13 @@ impl BoxView {
         };
         let was = h.busy();
         h.apply(inc);
-        if was && let crate::help::Phase::Answered { issue, .. } = &h.phase {
-            let line = format!("Help: an issue was written ({}).", issue.title);
+        if was && let crate::help::Phase::Answered { answer, issue, .. } = &h.phase {
+            let line = match (answer, issue) {
+                (Some(_), None) => "Help: answered from the help pages.".to_string(),
+                (Some(_), Some(i)) => format!("Help: answered, and an issue was written ({}).", i.title),
+                (None, Some(i)) => format!("Help: an issue was written ({}).", i.title),
+                (None, None) => return,
+            };
             self.log.info(self.agent_at, line);
         }
     }

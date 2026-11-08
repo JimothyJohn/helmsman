@@ -2405,7 +2405,10 @@ heading names the mode, with a dot for the agent's state beside it (green
 online, red offline, grey until heard; Nick, 2026-11-08):
 the person says what went wrong, and the answer is a plain-language
 diagnosis and a Markdown issue with a Copy button, to paste into a GitHub
-issue or to another agent. Nothing is filed.
+issue or to another agent. Nothing is filed. A question about how things
+work ("How do I load a program?"; Nick, 2026-11-08, after one came back
+as an issue template) is answered from the help pages instead, with
+links to them, and no issue is written.
 
 - **`POST /api/help {question, messages?}`** (`api::help`; any
   credential, the box token or any login session, since it changes
@@ -2424,20 +2427,33 @@ issue or to another agent. Nothing is filed.
   property test and `tests/help.rs` assert that none reaches the relay
   or the answer.
 - **The agent** is the relay's help profile (`--relay-help-agent V`,
-  default `helmsman/help-v1`, not served yet) with one tool,
-  `submit_issue {diagnosis, title, what_happened, expected?, steps?,
-  suspected_files?}`, run in process (`Agent::chat_local`). The box
-  checks it (lengths; a suspected file is a relative repository path,
-  optionally `:LINE`) and links each file to
-  `github.com/JimothyJohn/helmsman/blob/dev/...`. One user message: the
-  fixed `help::ASK`, then the question and context in the `<box-data>`
-  envelope. Budget: 4 turns, 32k output tokens, 3 min.
+  default `helmsman/help-v1`, not served yet) with two tools, run in
+  process (`Agent::chat_local`): `submit_issue {diagnosis, title,
+  what_happened, expected?, steps?, suspected_files?}` for trouble, and
+  `answer_question {answer, pages?}` for a question, `pages` being names
+  of help pages. The box checks both (lengths; a suspected file is a
+  relative repository path, optionally `:LINE`, linked to
+  `github.com/JimothyJohn/helmsman/blob/dev/...`; a page must be one of
+  `help::pages::ALL`). One user message: the fixed `help::ASK`, then the
+  question, the context and the help pages in the `<box-data>` envelope.
+  Budget: 4 turns, 32k output tokens, 3 min.
+- **The help pages ride along** (`help::pages`): `docs/help/*.md`, the
+  Markdown the site builds (`scripts/build-help.sh`), compiled into the
+  box with `include_str!` (about 40 KiB per request; the generated
+  keyboard and starters pages are left out). A new page goes into
+  `pages::ALL` and the script's list. Offline, the same pages give the
+  box its own lead for a question (`pages::suggest`): a section whose
+  heading shares a word with the question, ranked by heading then body
+  matches, at most five, deterministic; a report of trouble (no `?`, no
+  question word first) gets no guess.
 - **Without the agent** (no relay, offline, the relay answering
-  `unknown_agent_version`, or no `submit_issue`) the box writes the
+  `unknown_agent_version`, or neither tool called) the box writes the
   issue from the question and its context, and `done` says why there is
   no diagnosis (`stop: "unavailable"` for a profile the relay does not
   serve). Events: `help` (the context), `text`, `tool_call`,
-  `tool_result`, `retrying`, `issue` (always, once), `done` or `error`.
+  `tool_result`, `retrying`, then `answer {text, pages}` and/or `issue`
+  (at most once each; `issue` always when there is no `answer`), `pages`
+  (the box's suggestion, only without an `answer`), `done` or `error`.
 
 ## Proposal review (`proposal-ui`, built)
 
