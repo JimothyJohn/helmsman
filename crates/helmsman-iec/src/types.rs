@@ -246,7 +246,7 @@ impl fmt::Display for Value {
 #[allow(clippy::cast_possible_truncation)]
 fn write_real(f: &mut fmt::Formatter<'_>, r: f64) -> fmt::Result {
     let narrow = r as f32;
-    if r.is_finite() && f64::from(narrow) == r {
+    if r.is_finite() && f64::from(narrow).to_bits() == r.to_bits() {
         write!(f, "{narrow:?}")
     } else {
         write!(f, "{r:?}")

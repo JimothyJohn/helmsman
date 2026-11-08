@@ -670,6 +670,8 @@ async fn fetch_public(url: &str) -> Result<String, String> {
 thread_local! {
     /// Files the user picked, read, and not taken yet.
     static PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why a picked file was not read, told in Messages.
+    static PICK_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Opens the browser's file picker (`accept`: `.zip,.st,.xml,.l5x`); the
@@ -694,12 +696,24 @@ pub fn pick_file(accept: &str, ctx: &egui::Context) {
             return;
         };
         let name = file.name();
+        // Before the whole file is read into the page.
+        if let Some(why) = crate::app::pick_refusal(&name, file.size()) {
+            PICK_ERRORS.with(|p| p.borrow_mut().push(why));
+            ctx.request_repaint();
+            return;
+        }
         wasm_bindgen_futures::spawn_local(async move {
-            if let Ok(buf) = JsFuture::from(file.array_buffer()).await {
-                let bytes = web_sys::js_sys::Uint8Array::new(&buf).to_vec();
-                PICKED.with(|p| p.borrow_mut().push((name, bytes)));
-                ctx.request_repaint();
+            match JsFuture::from(file.array_buffer()).await {
+                Ok(buf) => {
+                    let bytes = web_sys::js_sys::Uint8Array::new(&buf).to_vec();
+                    PICKED.with(|p| p.borrow_mut().push((name, bytes)));
+                }
+                Err(e) => PICK_ERRORS.with(|p| {
+                    p.borrow_mut()
+                        .push(format!("{name} could not be read: {}", text(&e)));
+                }),
             }
+            ctx.request_repaint();
         });
     });
     input.set_onchange(Some(on_change.unchecked_ref()));
@@ -710,6 +724,12 @@ pub fn pick_file(accept: &str, ctx: &egui::Context) {
 #[must_use]
 pub fn take_picked() -> Vec<(String, Vec<u8>)> {
     PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Why the files picked since the last call were not read.
+#[must_use]
+pub fn take_pick_errors() -> Vec<String> {
+    PICK_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
 /// Clicks a hidden link to `href` that downloads as `name`.
@@ -747,7 +767,14 @@ pub fn download_bytes(name: &str, bytes: &[u8], mime: &str) {
         return;
     };
     click_download(&url, name);
-    let _ = web_sys::Url::revoke_object_url(&url);
+    // Not at once: Safari starts the download after the click returns and
+    // fails on a URL already revoked.
+    let revoke = Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    });
+    if let Some(window) = web_sys::window() {
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000);
+    }
 }
 
 /// The simulation's projects in `localStorage`. Every access is wrapped:

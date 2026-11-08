@@ -168,9 +168,7 @@ fn galleys(h: &Harness, f: impl Fn(&str) -> bool) -> Vec<std::sync::Arc<eframe::
 fn the_gutter_has_a_row_for_every_row_the_editor_wraps_to() {
     let mut h = Harness::new(App::sim());
     let mut text = String::from("PROGRAM p\n");
-    for n in 0..60 {
-        text.push_str(&format!("(* {} *)\n", "w".repeat(14 + n)));
-    }
+    text.extend((0..60).map(|n| format!("(* {} *)\n", "w".repeat(14 + n))));
     text.push_str("END_PROGRAM\n");
     {
         let p = &mut h.app.sim.as_mut().unwrap().proj;
@@ -213,11 +211,117 @@ fn the_code_headers_status_labels_are_not_broken_across_lines() {
     let before = h.rect("pane code").width();
     for needle in ["Structured Text", "compiles", "not deployed"] {
         let found = galleys(&h, |t| t.contains(needle));
-        assert!(needle == "not deployed" || !found.is_empty(), "the header draws {needle:?}");
+        assert!(
+            needle == "not deployed" || !found.is_empty(),
+            "the header draws {needle:?}"
+        );
         for g in found {
             assert_eq!(g.rows.len(), 1, "{:?} is broken across lines", g.job.text);
         }
     }
     h.wait(0.5);
-    assert!((h.rect("pane code").width() - before).abs() < 1.0, "the pane keeps its width");
+    assert!(
+        (h.rect("pane code").width() - before).abs() < 1.0,
+        "the pane keeps its width"
+    );
+}
+
+/// Where the last frame drew text containing `needle`: the clip it was
+/// drawn in, its top-left and its layout.
+fn text_at(
+    h: &Harness,
+    needle: &str,
+) -> Vec<(
+    eframe::egui::Rect,
+    eframe::egui::Pos2,
+    std::sync::Arc<eframe::egui::Galley>,
+)> {
+    fn walk(
+        shape: &eframe::egui::Shape,
+        clip: eframe::egui::Rect,
+        needle: &str,
+        out: &mut Vec<(
+            eframe::egui::Rect,
+            eframe::egui::Pos2,
+            std::sync::Arc<eframe::egui::Galley>,
+        )>,
+    ) {
+        match shape {
+            eframe::egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, needle, out)),
+            eframe::egui::Shape::Text(t) if t.galley.job.text.contains(needle) => {
+                out.push((clip, t.pos, t.galley.clone()));
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for c in &h.shapes {
+        walk(&c.shape, c.clip_rect, needle, &mut out);
+    }
+    out
+}
+
+/// A long message was one unbroken line in a list that only scrolls
+/// down, cut off at the panel's edge.
+#[test]
+fn a_long_message_wraps_inside_the_messages_panel() {
+    let mut h = Harness::new(App::sim());
+    h.wait(0.3);
+    let long = "Deploy of blink refused. ".to_string() + &"the divisor read zero ".repeat(20);
+    h.app.sim.as_mut().unwrap().log.error(1.0, long.clone());
+    h.press("bottom messages");
+    h.wait(0.5);
+    let found = text_at(&h, "the divisor read zero");
+    assert_eq!(found.len(), 1, "the message is drawn once");
+    let (clip, pos, galley) = &found[0];
+    assert!(galley.rows.len() > 1, "wrapped to the panel");
+    assert!(
+        pos.x + galley.size().x <= clip.max.x + 0.5,
+        "{} pt wide from {}, the panel ends at {}",
+        galley.size().x,
+        pos.x,
+        clip.max.x
+    );
+}
+
+/// The tour's card was 380 pt wide whatever the window: under about 396
+/// pt its buttons were off the screen.
+#[test]
+fn the_tour_card_fits_a_narrow_window() {
+    for width in [320.0, 360.0, 390.0] {
+        let mut h = Harness::new(App::sim());
+        h.size = Vec2::new(width, 780.0);
+        h.app.tour = Some(crate::tour::Tour::new());
+        h.wait(0.5);
+        let card = h.rect("tour card");
+        assert!(card.min.x >= 0.0 && card.max.x <= width, "{card:?} in {width} pt");
+        for key in ["tour start", "tour skip"] {
+            let b = h.rect(key);
+            assert!(b.max.x <= width && b.min.x >= 0.0, "{key} {b:?} in {width} pt");
+        }
+    }
+}
+
+/// The picker read a whole file before any size check, and a failure
+/// vanished: now an oversize file is refused by its size, and a failure
+/// is an error in Messages.
+#[test]
+fn a_file_the_picker_cannot_take_is_told_in_messages() {
+    use crate::app::{MAX_PICK, pick_refusal};
+    assert_eq!(pick_refusal("a.zip", 1000.0), None);
+    assert_eq!(pick_refusal("a.zip", MAX_PICK), None, "the limit itself is taken");
+    let why = pick_refusal("big.zip", MAX_PICK + 1.0).expect("refused");
+    assert!(why.contains("big.zip") && why.contains("MB"), "{why}");
+
+    let mut h = Harness::new(App::sim());
+    h.wait(0.3);
+    let before = crate::editor::Body::messages(h.app.sim.as_mut().unwrap()).errors();
+    h.app.pick_failed(vec![why.clone()], 1.0);
+    assert_eq!(
+        crate::editor::Body::messages(h.app.sim.as_mut().unwrap()).errors(),
+        before + 1
+    );
+    h.press("bottom messages");
+    h.wait(0.3);
+    assert!(h.drew("big.zip was not read"), "Messages lists it");
 }

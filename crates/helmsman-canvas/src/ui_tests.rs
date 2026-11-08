@@ -461,11 +461,7 @@ mod polish {
         assert_eq!(h.app.chrome.right, !right, "Alt+3: the side panel");
         // Save: edit, then Ctrl+S.
         h.wait(0.2);
-        let editor = h
-            .ctx
-            .read_response(h.editor_id())
-            .expect("the editor")
-            .rect;
+        let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         h.click(editor.left_top() + egui::vec2(60.0, 6.0));
         h.frame(vec![Event::Text("!".into())]);
         h.wait(0.6);
@@ -782,11 +778,7 @@ END_PROGRAM",
     fn the_file_menu_saves_and_the_edit_menu_undoes_a_typed_character() {
         let mut h = Harness::new(App::sim());
         assert!(h.app.chrome.code_open(), "the ST open");
-        let editor = h
-            .ctx
-            .read_response(h.editor_id())
-            .expect("the editor")
-            .rect;
+        let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         h.click(editor.left_top() + egui::vec2(60.0, 6.0));
         h.frame(vec![Event::Text("!".into())]);
         h.wait(0.6);
@@ -1138,11 +1130,7 @@ mod chrome {
             files.right() <= devices.left() && devices.right() <= code.left(),
             "Files | Devices | Code, left to right"
         );
-        let editor = h
-            .ctx
-            .read_response(h.editor_id())
-            .expect("the editor")
-            .rect;
+        let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         h.press("pane files");
         h.wait(0.3);
         assert!(h.app.chrome.files_open());
@@ -1156,11 +1144,7 @@ mod chrome {
         assert!((code_w - files_w).abs() < 1.0, "one width for both tabs");
         h.press("pane code");
         h.wait(0.3);
-        let again = h
-            .ctx
-            .read_response(h.editor_id())
-            .expect("the editor")
-            .rect;
+        let again = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         assert!((again.width() - editor.width()).abs() < 1.0);
         // Remembered: the tab reads back.
         let back = Chrome::restored(&h.app.chrome.saved());

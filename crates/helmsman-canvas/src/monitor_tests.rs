@@ -918,7 +918,11 @@ fn assert_apart(l: &crate::monitor::Laid, w: f32) {
     let boxes = l.text_boxes();
     for (i, a) in boxes.iter().enumerate() {
         assert!(a.min.x >= 0.0 && a.max.x <= w + 0.5, "{a:?} leaves a {w} pt tile");
-        assert!(a.max.y <= l.height + 0.5, "{a:?} leaves the tile, {} high", l.height);
+        assert!(
+            a.max.y <= l.height + 0.5,
+            "{a:?} leaves the tile, {} high",
+            l.height
+        );
         for b in &boxes[i + 1..] {
             assert!(!a.shrink(0.5).intersects(b.shrink(0.5)), "{a:?} overlaps {b:?}");
         }
@@ -951,7 +955,10 @@ fn a_lamps_long_name_is_elided_so_it_never_covers_its_value() {
 /// instead of being cut mid-sentence at the tile's edge.
 #[test]
 fn a_fault_message_wraps_and_the_tile_grows_with_it() {
-    let short = laid(&plain(TileKind::Status(Run::Faulted("division by zero".into()))), 300.0);
+    let short = laid(
+        &plain(TileKind::Status(Run::Faulted("division by zero".into()))),
+        300.0,
+    );
     let mut t = plain(TileKind::Status(Run::Faulted(
         "Fault: division by zero in station S1 at line 42, in the assignment to the flow rate, \
          after the divisor read zero from the level transmitter"
@@ -959,6 +966,11 @@ fn a_fault_message_wraps_and_the_tile_grows_with_it() {
     )));
     t.stale = Some("no data for 12 s, the box stopped answering and this is the last it said".into());
     let long = laid(&t, 300.0);
-    assert!(long.height > short.height + 40.0, "{} against {}", long.height, short.height);
+    assert!(
+        long.height > short.height + 40.0,
+        "{} against {}",
+        long.height,
+        short.height
+    );
     assert_apart(&long, 300.0);
 }

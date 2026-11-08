@@ -34,6 +34,24 @@ const PROPOSALS_EVERY: f64 = 30.0;
 /// What Upload's file picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub const UPLOAD_ACCEPT: &str = ".zip,.st,.xml,.l5x,.eds";
+/// The largest file a picker takes, bytes: read whole into the page, so
+/// checked against the file's size before it is.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub const MAX_PICK: f64 = helmsman_project::devlib::MAX_BYTES as f64;
+
+/// Why a picked file of `size` bytes is not read, if it is not.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[must_use]
+pub fn pick_refusal(name: &str, size: f64) -> Option<String> {
+    (size > MAX_PICK).then(|| {
+        format!(
+            "{name} was not read: it is {:.1} MB and upload takes files up to {:.0} MB.",
+            size / 1_048_576.0,
+            MAX_PICK / 1_048_576.0
+        )
+    })
+}
+
 /// What the Devices tab's "Import device…" picker offers.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub const DEVICE_ACCEPT: &str = ".eds";
@@ -309,6 +327,26 @@ impl App {
         }
     }
 
+    /// Files the picker could not read, told in Messages (the page used to
+    /// drop them without a word).
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub fn pick_failed(&mut self, errors: Vec<String>, now: f64) {
+        for e in errors {
+            match self.source {
+                Source::Box => {
+                    if let Some(b) = &mut self.boxv {
+                        Body::messages(b).error(now, e);
+                    }
+                }
+                Source::Sim => {
+                    if let Some(s) = &mut self.sim {
+                        Body::messages(s).error(now, e);
+                    }
+                }
+            }
+        }
+    }
+
     /// What the header names: the program or module open.
     #[must_use]
     pub fn title(&self) -> String {
@@ -358,7 +396,10 @@ impl App {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(PROPOSALS_EVERY));
         }
         #[cfg(target_arch = "wasm32")]
-        self.uploaded(crate::web::take_picked());
+        {
+            self.uploaded(crate::web::take_picked());
+            self.pick_failed(crate::web::take_pick_errors(), ctx.input(|i| i.time));
+        }
         let session = self.session();
         let engineer = is_engineer(session.as_ref()).is_ok();
         if let Some(b) = &mut self.boxv {
@@ -675,7 +716,10 @@ impl App {
                 // it, on a phone).
                 if !narrow {
                     let mark = ui
-                        .add(egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent)).frame(false))
+                        .add(
+                            egui::Button::new(RichText::new("HELMSMAN").strong().color(t.accent))
+                                .frame(false),
+                        )
                         .tip(format!("Opens {SITE_URL} in a new tab."));
                     hits.push(("mark".to_string(), mark.rect));
                     if mark.clicked() {
@@ -718,7 +762,10 @@ impl App {
                             .tip("The program runs in this page. Nothing reaches a controller.");
                     }
                     let r = ui
-                        .add(egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg)).truncate())
+                        .add(
+                            egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
+                                .truncate(),
+                        )
                         .tip("The open project.");
                     hits.push(("title".to_string(), r.rect));
                     m.rect

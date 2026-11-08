@@ -29,7 +29,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use eframe::egui::text::LayoutJob;
-use eframe::egui::{self, Color32, CornerRadius, FontId, Galley, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use eframe::egui::{
+    self, Color32, CornerRadius, FontId, Galley, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+};
 use helmsman_diagram::Scan;
 use helmsman_iec::Value;
 use helmsman_iec::ast::{self, PouKind, Section, TypeRef};
@@ -1113,8 +1115,11 @@ pub fn layout_tile(ui: &egui::Ui, t: &Tile, k: f32, w: f32) -> Laid {
                 };
                 match dot {
                     Some(on) if !stale => {
-                        l.pieces
-                            .push(Piece::Dot(Pos2::new(pad + rad, mid), rad, Some(if on { GREEN } else { RED })));
+                        l.pieces.push(Piece::Dot(
+                            Pos2::new(pad + rad, mid),
+                            rad,
+                            Some(if on { GREEN } else { RED }),
+                        ));
                     }
                     Some(_) => l.pieces.push(Piece::Dot(Pos2::new(pad + rad, mid), rad, None)),
                     None => {}

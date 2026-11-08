@@ -896,7 +896,10 @@ pub fn st_editor(
                     .layouter(&mut layouter)
                     .show(ui);
                 // The gutter was laid out a frame behind a change of width.
-                if ui.data(|d| d.get_temp::<f32>(wrap_key)).is_some_and(|w| (w - edit_wrap).abs() > 0.01) {
+                if ui
+                    .data(|d| d.get_temp::<f32>(wrap_key))
+                    .is_some_and(|w| (w - edit_wrap).abs() > 0.01)
+                {
                     ui.ctx().request_repaint();
                 }
                 removed_rules(ui, &out, &agent.removed, chrome);

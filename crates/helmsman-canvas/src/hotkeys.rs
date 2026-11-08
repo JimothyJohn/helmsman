@@ -258,7 +258,7 @@ pub fn pressed(ctx: &egui::Context) -> Vec<Action> {
     // stack, whether or not it consumed the chord: taking it here too
     // would step the same history a second time.
     let typing = ctx
-        .memory(|m| m.focused())
+        .memory(egui::Memory::focused)
         .is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
     let mut order: Vec<&Hotkey> = TABLE
         .iter()
