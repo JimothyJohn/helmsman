@@ -19,128 +19,17 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use crate::class1::{self, Consumer, Producer};
 use crate::cpf;
 use crate::encap;
 use crate::endpoint::{IoEndpoint, Owner};
 use crate::explicit;
-use crate::identity::SocketAddress;
 use crate::io::{
-    Class1Body, ConnectionPath, ElectronicKey, ForwardClose, ForwardCloseReply, ForwardOpen,
-    ForwardOpenReply, IoPacket, NetworkParams, Priority, Refused, Transport, class1_size, close_result,
-    open_result,
+    ForwardClose, ForwardCloseReply, ForwardOpen, ForwardOpenReply, Refused, close_result, open_result,
 };
 use crate::session::{self, Session};
 
-/// What the originator asks for.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IoConfig {
-    /// Configuration assembly instance.
-    pub configuration: u16,
-    /// O->T connection point (the target's output/consumed assembly, or its
-    /// heartbeat instance for `Input Only` / `Listen Only`).
-    pub consumed: u16,
-    /// T->O connection point (the target's input/produced assembly).
-    pub produced: u16,
-    /// Application bytes per O->T packet; 0 makes it a heartbeat.
-    pub output_len: u16,
-    /// Application bytes per T->O packet.
-    pub input_len: u16,
-    pub rpi: Duration,
-    /// Inactivity timeout = RPI × 2^(multiplier + 2).
-    pub timeout_multiplier: u8,
-    /// Prepend the 32-bit run/idle header to O->T data. `OpENer` builds
-    /// with this on (`OPENER_CONSUMED_DATA_HAS_RUN_IDLE_HEADER` default
-    /// TRUE); Logix controllers send it too.
-    pub o_to_t_run_idle: bool,
-    /// Expect a run/idle header on T->O data. `OpENer` default is off.
-    pub t_to_o_run_idle: bool,
-    pub priority: Priority,
-    pub originator_vendor_id: u16,
-    pub originator_serial: u32,
-    pub key: Option<ElectronicKey>,
-    pub config_data: Vec<u8>,
-}
-
-impl IoConfig {
-    /// `Exclusive Owner`: bidirectional, this originator owns the output.
-    #[must_use]
-    pub fn exclusive_owner(
-        configuration: u16,
-        consumed: u16,
-        produced: u16,
-        output_len: u16,
-        input_len: u16,
-        rpi: Duration,
-    ) -> Self {
-        Self {
-            configuration,
-            consumed,
-            produced,
-            output_len,
-            input_len,
-            rpi,
-            timeout_multiplier: 1,
-            o_to_t_run_idle: true,
-            t_to_o_run_idle: false,
-            priority: Priority::Scheduled,
-            originator_vendor_id: 0xFFFF,
-            originator_serial: 0,
-            key: None,
-            config_data: Vec::new(),
-        }
-    }
-
-    /// `Input Only`: heartbeat O->T to `heartbeat` (PUB00213R0 glossary p.24),
-    /// data T->O from `produced`.
-    #[must_use]
-    pub fn input_only(
-        configuration: u16,
-        heartbeat: u16,
-        produced: u16,
-        input_len: u16,
-        rpi: Duration,
-    ) -> Self {
-        Self::exclusive_owner(configuration, heartbeat, produced, 0, input_len, rpi)
-    }
-
-    fn rpi_us(&self) -> u32 {
-        u32::try_from(self.rpi.as_micros()).unwrap_or(u32::MAX)
-    }
-
-    fn forward_open(&self, serial: u16, t_to_o_id: u32) -> ForwardOpen {
-        let mut path = ConnectionPath::assembly(self.configuration, Some(self.consumed), Some(self.produced));
-        path.key = self.key;
-        path.config_data.clone_from(&self.config_data);
-        ForwardOpen {
-            priority_time_tick: 0x0A,
-            timeout_ticks: 0xF0,
-            o_to_t_connection_id: 0,
-            t_to_o_connection_id: t_to_o_id,
-            connection_serial: serial,
-            originator_vendor_id: self.originator_vendor_id,
-            originator_serial: self.originator_serial,
-            timeout_multiplier: self.timeout_multiplier,
-            o_to_t_rpi_us: self.rpi_us(),
-            o_to_t: NetworkParams::point_to_point(
-                class1_size(self.output_len, self.o_to_t_run_idle),
-                self.priority,
-            ),
-            t_to_o_rpi_us: self.rpi_us(),
-            t_to_o: NetworkParams::point_to_point(
-                class1_size(self.input_len, self.t_to_o_run_idle),
-                self.priority,
-            ),
-            transport: Transport::CLASS1_CYCLIC,
-            path,
-        }
-    }
-
-    /// Inactivity timeout this configuration implies.
-    #[must_use]
-    pub fn timeout(&self) -> Duration {
-        self.rpi * (1u32 << (u32::from(self.timeout_multiplier) + 2))
-    }
-}
+pub use crate::class1::{IoConfig, OutputLen, Received};
 
 /// Why an I/O connection could not be opened or closed.
 #[derive(Debug)]
@@ -184,8 +73,7 @@ pub struct Input {
 }
 
 struct Shared {
-    output: Mutex<Vec<u8>>,
-    run: AtomicBool,
+    producer: Mutex<Producer>,
     input: Mutex<Option<Input>>,
     packets_in: AtomicU64,
     packets_out: AtomicU64,
@@ -261,7 +149,7 @@ impl IoConnection {
         config: IoConfig,
         output: &[u8],
     ) -> Result<Self, Error> {
-        check_output(&config, output)?;
+        config.check_output(output).map_err(invalid_input)?;
         let rx = socket.try_clone()?;
         rx.set_read_timeout(Some(config.rpi.max(Duration::from_millis(10))))?;
         let tx = socket.try_clone()?;
@@ -272,7 +160,7 @@ impl IoConnection {
         let reply = open_result(&resp)
             .map_err(session::Error::Decode)?
             .map_err(Error::Refused)?;
-        let target = o_to_t_target(&items, target);
+        let target = class1::o_to_t_target(&items, target);
         let mut buf = vec![0u8; 65535];
         let recv: Recv = Box::new(move |_wait| {
             let (n, from) = rx.recv_from(&mut buf).ok()?;
@@ -301,14 +189,14 @@ impl IoConnection {
         config: IoConfig,
         output: &[u8],
     ) -> Result<Self, Error> {
-        check_output(&config, output)?;
+        config.check_output(output).map_err(invalid_input)?;
         let owner = Arc::new(endpoint.owner());
         let serial = next_serial();
         let t_to_o_id = owner.allocate();
         owner.register(t_to_o_id, *target.ip())?;
         let open = config.forward_open(serial, t_to_o_id);
         let port = endpoint.local_addr().port();
-        let sockaddr = t_to_o_sockaddr(port);
+        let sockaddr = class1::t_to_o_sockaddr(port);
         let item = [cpf::Item {
             type_id: cpf::item::SOCKADDR_T_TO_O,
             data: &sockaddr,
@@ -318,12 +206,12 @@ impl IoConnection {
         let reply = open_result(&resp)
             .map_err(session::Error::Decode)?
             .map_err(Error::Refused)?;
-        let target = o_to_t_target(&items, target);
+        let target = class1::o_to_t_target(&items, target);
         if reply.t_to_o_connection_id != t_to_o_id {
             // The device chose the T->O ID itself; route that one instead.
             let _ = owner.unregister(t_to_o_id);
             if let Err(e) = owner.register(reply.t_to_o_connection_id, *target.ip()) {
-                let _ = closer_of(&open).send(session);
+                let _ = Closer(class1::close_for(&open)).send(session);
                 return Err(Error::Io(e));
             }
         }
@@ -348,9 +236,9 @@ impl IoConnection {
         recv: Recv,
         owner: Option<Arc<Owner>>,
     ) -> Result<Self, Error> {
+        let producer = Producer::new(&config, reply.o_to_t_connection_id, output).map_err(invalid_input)?;
         let shared = Arc::new(Shared {
-            output: Mutex::new(output.to_vec()),
-            run: AtomicBool::new(true),
+            producer: Mutex::new(producer),
             input: Mutex::new(None),
             packets_in: AtomicU64::new(0),
             packets_out: AtomicU64::new(0),
@@ -361,17 +249,14 @@ impl IoConnection {
         let producer = spawn_producer(
             send_to,
             target,
-            reply.o_to_t_connection_id,
             config.rpi,
-            config.o_to_t_run_idle && config.output_len > 0,
             Arc::clone(&shared),
             Arc::clone(&stop),
         )?;
         let consumer = spawn_consumer(
             recv,
-            reply.t_to_o_connection_id,
+            Consumer::new(&config, reply.t_to_o_connection_id),
             config.rpi,
-            config.t_to_o_run_idle,
             Arc::clone(&shared),
             Arc::clone(&stop),
         )?;
@@ -411,26 +296,20 @@ impl IoConnection {
     /// # Errors
     /// `InvalidInput` if `data.len()` differs from the configured output size.
     pub fn set_output(&self, data: &[u8]) -> io::Result<()> {
-        if data.len() != usize::from(self.config.output_len) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!(
-                    "output is {} bytes, connection carries {}",
-                    data.len(),
-                    self.config.output_len
-                ),
-            ));
-        }
-        if let Ok(mut g) = self.shared.output.lock() {
-            g.clear();
-            g.extend_from_slice(data);
-        }
-        Ok(())
+        let mut g = self
+            .shared
+            .producer
+            .lock()
+            .map_err(|_| io::Error::other("producer poisoned"))?;
+        g.set_output(data)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
     }
 
     /// Set the run/idle header bit for O->T data (ignored for heartbeats).
     pub fn set_run(&self, run: bool) {
-        self.shared.run.store(run, Ordering::Relaxed);
+        if let Ok(mut g) = self.shared.producer.lock() {
+            g.set_run(run);
+        }
     }
 
     #[must_use]
@@ -517,7 +396,7 @@ impl IoConnection {
     /// connection meanwhile answers "not found", which is fine.
     #[must_use]
     pub fn closer(&self) -> Closer {
-        closer_of(&self.open)
+        Closer(class1::close_for(&self.open))
     }
 }
 
@@ -538,43 +417,8 @@ impl Closer {
     }
 }
 
-fn check_output(config: &IoConfig, output: &[u8]) -> Result<(), Error> {
-    if output.len() == usize::from(config.output_len) {
-        return Ok(());
-    }
-    Err(Error::Io(io::Error::new(
-        io::ErrorKind::InvalidInput,
-        format!(
-            "initial output is {} bytes, connection carries {}",
-            output.len(),
-            config.output_len
-        ),
-    )))
-}
-
-/// A T->O socket-address item body: `AF_INET`, `port`, address 0 (the
-/// target sends to the IP the session came from; `OpENer` reads only the
-/// port, `cipioconnection.c` `OpenProducingPointToPointConnection`).
-fn t_to_o_sockaddr(port: u16) -> Vec<u8> {
-    let mut w = crate::codec::Writer::with_capacity(SocketAddress::LEN);
-    SocketAddress {
-        family: SocketAddress::AF_INET,
-        port,
-        addr: Ipv4Addr::UNSPECIFIED,
-    }
-    .encode(&mut w);
-    w.into_inner()
-}
-
-fn closer_of(open: &ForwardOpen) -> Closer {
-    Closer(ForwardClose {
-        priority_time_tick: open.priority_time_tick,
-        timeout_ticks: open.timeout_ticks,
-        connection_serial: open.connection_serial,
-        originator_vendor_id: open.originator_vendor_id,
-        originator_serial: open.originator_serial,
-        path: open.path.clone(),
-    })
+fn invalid_input(e: OutputLen) -> Error {
+    Error::Io(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
 }
 
 /// Sends one datagram to an address.
@@ -594,29 +438,6 @@ fn send(
     session.exchange_with_items(&mr.into_inner(), extra)
 }
 
-/// Where the target consumes O->T: `target` unless its `Forward_Open`
-/// reply carried an O->T socket-address item (CPF 0x8000) naming a port,
-/// and an address if that is not 0.0.0.0. CIP Volume 2 lets a target
-/// answer with one; the ioLogik E1213 (firmware 3.1) names UDP 5222 and
-/// ignores O->T data sent to 2222. `OpENer` answers with none.
-fn o_to_t_target(items: &[explicit::OwnedItem], target: SocketAddrV4) -> SocketAddrV4 {
-    let Some((_, data)) = items.iter().find(|(t, _)| *t == cpf::item::SOCKADDR_O_TO_T) else {
-        return target;
-    };
-    let Ok(addr) = SocketAddress::decode(&mut crate::codec::Reader::new(data)) else {
-        return target;
-    };
-    if addr.family != SocketAddress::AF_INET || addr.port == 0 {
-        return target;
-    }
-    let ip = if addr.addr.is_unspecified() {
-        *target.ip()
-    } else {
-        addr.addr
-    };
-    SocketAddrV4::new(ip, addr.port)
-}
-
 impl Drop for IoConnection {
     fn drop(&mut self) {
         self.stop_threads();
@@ -626,40 +447,17 @@ impl Drop for IoConnection {
 fn spawn_producer(
     mut send_to: Send,
     target: SocketAddrV4,
-    id: u32,
     rpi: Duration,
-    header: bool,
     shared: Arc<Shared>,
     stop: Arc<AtomicBool>,
 ) -> io::Result<JoinHandle<()>> {
     thread::Builder::new()
         .name("helmsman-producer".into())
         .spawn(move || {
-            let mut encap_seq: u32 = 0;
-            let mut seq: u16 = 0;
             while !stop.load(Ordering::Relaxed) {
-                encap_seq = encap_seq.wrapping_add(1);
-                seq = seq.wrapping_add(1);
-                let data = shared.output.lock().map(|g| g.clone()).unwrap_or_default();
-                let run_idle = header.then(|| {
-                    if shared.run.load(Ordering::Relaxed) {
-                        Class1Body::RUN
-                    } else {
-                        Class1Body::IDLE
-                    }
-                });
-                let body = Class1Body {
-                    sequence_count: seq,
-                    run_idle,
-                    data: &data,
-                }
-                .encode();
-                let pkt = IoPacket {
-                    connection_id: id,
-                    encapsulation_sequence: Some(encap_seq),
-                    body: &body,
-                }
-                .encode();
+                let Some(pkt) = shared.producer.lock().ok().map(|mut g| g.next_packet()) else {
+                    break;
+                };
                 if send_to(&pkt, target).is_ok() {
                     shared.packets_out.fetch_add(1, Ordering::Relaxed);
                 }
@@ -670,9 +468,8 @@ fn spawn_producer(
 
 fn spawn_consumer(
     mut recv: Recv,
-    id: u32,
+    mut consumer: Consumer,
     rpi: Duration,
-    header: bool,
     shared: Arc<Shared>,
     stop: Arc<AtomicBool>,
 ) -> io::Result<JoinHandle<()>> {
@@ -684,23 +481,16 @@ fn spawn_consumer(
                 let Some((bytes, _from)) = recv(wait) else {
                     continue;
                 };
-                let parsed = IoPacket::decode(&bytes)
-                    .ok()
-                    .filter(|p| p.connection_id == id)
-                    .and_then(|p| {
-                        Class1Body::decode(p.body, header)
-                            .ok()
-                            .map(|b| (b.sequence_count, b.run_idle, b.data.to_vec()))
-                    });
-                match parsed {
-                    Some((sequence_count, run_idle, data)) => {
+                match consumer.accept(&bytes) {
+                    Some(r) => {
+                        let input = Input {
+                            data: r.data.clone(),
+                            sequence_count: r.sequence_count,
+                            run_idle: r.run_idle,
+                            received: Instant::now(),
+                        };
                         if let Ok(mut g) = shared.input.lock() {
-                            *g = Some(Input {
-                                data,
-                                sequence_count,
-                                run_idle,
-                                received: Instant::now(),
-                            });
+                            *g = Some(input);
                         }
                         shared.packets_in.fetch_add(1, Ordering::Relaxed);
                     }

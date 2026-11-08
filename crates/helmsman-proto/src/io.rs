@@ -22,7 +22,8 @@
 //! information, electronic key and connection IDs"; Class 1 data is
 //! "pre-pended with a 16-bit sequence count"; UDP port 2222.
 
-use std::fmt;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::cip::{self, GeneralStatus, Path};
 use crate::codec::{DecodeError, Reader, Writer};

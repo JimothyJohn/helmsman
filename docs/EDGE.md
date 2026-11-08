@@ -488,6 +488,64 @@ timeout; the node cannot do that part without power or network, so the
 test proves the block does it.
 
 
+**Phase 3, the ESP32-P4 and EtherNet/IP (planned 2026-11-08).** Nick
+bought a Waveshare ESP32-P4-ETH with its PoE module (ESP32-P4NRW32: dual
+RISC-V at 400 MHz with a double-precision FPU, 768 KB SRAM, 32 MB PSRAM,
+32 MB flash, IP101GRI PHY, one Ethernet MAC). What was checked before it
+arrived, so the first day on the board is spent on the two real unknowns:
+
+- **Ethernet in Rust.** esp-hal merged basic EMAC support for the classic
+  ESP32 (#5546) and the P4 (#5556) in May 2026, still marked work in
+  progress: an embassy-net adapter, a `MdioBus` trait for external PHYs,
+  and raw `transmit` / `receive` of whole frames. Community fallback:
+  `esp-p4-eth`, tested on exactly this board and PHY, pre-1.0, DHCP not
+  validated end to end. Unknown until the board runs: which of the two
+  brings the IP101GRI up.
+- **TLS.** supervictor's edge firmware runs mbedTLS (`mbedtls-rs`, the
+  esp-rs fork) on the classic ESP32 in 112 KB of heap, so TLS on a node is
+  proven on this chip family; the WROVER spike left it out for memory, not
+  capability. The fork ships prebuilt libraries for riscv32imc and
+  riscv32imac, not the P4's riscv32imafc, so it compiles mbedTLS with
+  clang and cmake on the fly: feasible, untested on a P4. `embedded-tls`
+  (pure Rust TLS 1.3 client, no_std, no allocator) is the fallback and
+  still calls itself work in progress, with certificate verification on
+  std only. TLS belongs on the uplink to the relay (a per-node client
+  certificate) and the deploy channel (plus a signed image); the field bus
+  stays plain Modbus and CIP, as on every PLC.
+- **Protocols on one port.** Modbus TCP, EtherNet/IP (TCP 44818 explicit,
+  UDP 2222 Class 1) and PROFINET RT class 1 are built to share a switched
+  plant network and can share the node's one PoE port. PROFINET's
+  EtherType 0x8892 frames never reach smoltcp (its raw socket is
+  IP-level), so a frame splitter in front of embassy-net is needed, which
+  esp-hal's raw `receive` allows. There is no usable open PROFINET IO
+  controller (p-net is device-side; the PI community stack needs
+  membership; `profinet-rs` is GPL-3.0-only and libpcap), so it would be
+  our own implementation. **EtherCAT does not fit**: a master needs a
+  dedicated port with the slave chain hanging directly off it (the
+  segment reflects every frame back; a switch adds a store-and-forward
+  hop per cycle), the P4 has one MAC, and on a PoE node that port is the
+  uplink. EtherCAT stays a box feature on a second NIC (`ethercat-master`).
+- **Code side, done on this branch.** `helmsman-proto` builds `no_std +
+  alloc` without its default `std` feature: encapsulation, CPF, CIP, the
+  identity item, Forward_Open / Forward_Close and the Class 1 packet, the
+  Logix read layouts and the EDS parser, plus `class1` (the
+  transport-free producer and consumer of a Class 1 connection, which the
+  box's `scanner` threads now run too). `session`, `discover`,
+  `endpoint`, `scanner` and `logix::reader` are the socket half behind
+  `std`. `scripts/lint.sh` builds the no_std half for thumbv7em. The node
+  side (a P4 board module, esp-hal Ethernet, an embassy-net TCP session
+  for Forward_Open and a UDP task around `class1`) waits for the board.
+
+Sources for this phase: esp-hal issue #4163 and PRs #5546 / #5556
+(`github.com/esp-rs/esp-hal`), `github.com/babasha/esp-p4-eth`,
+`github.com/esp-rs/mbedtls-rs` (mbedtls-rs-sys README, "Precompilation"),
+`docs.rs/embedded-tls` 0.19, `docs.rs/smoltcp` (socket::raw), the Zephyr
+ESP32-P4 features page (one 10/100 Ethernet MAC, RMII), the Waveshare
+ESP32-P4-ETH wiki, `github.com/pasrom/profinet-rs`,
+`github.com/rtlabs-com/p-net`, the ETG EtherCAT FAQ, and
+supervictor `supervictor/edge/{Cargo.toml,src/config.rs}`; all read
+2026-11-08.
+
 ## Out of scope for the spike
 
 Deploy endpoint, signed images, A/B program slots and the power-cut-during-

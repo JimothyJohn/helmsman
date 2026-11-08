@@ -11,7 +11,8 @@
 //! list in Rockwell ENET-WP001 §IV.B and PUB00213R0 p.18 ("Select a device
 //! identity").
 
-use std::net::Ipv4Addr;
+use alloc::{string::String, vec::Vec};
+use core::net::Ipv4Addr;
 
 use crate::codec::{DecodeError, Reader, Writer};
 

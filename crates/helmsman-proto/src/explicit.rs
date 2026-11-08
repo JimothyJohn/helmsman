@@ -14,6 +14,7 @@ use crate::cip;
 use crate::codec::{DecodeError, Reader, Writer};
 use crate::cpf::{self, Item};
 use crate::encap::{Command, Frame, PROTOCOL_VERSION, Status};
+use alloc::{vec, vec::Vec};
 
 /// `RegisterSession` request bytes. Session handle is zero until the reply.
 #[must_use]

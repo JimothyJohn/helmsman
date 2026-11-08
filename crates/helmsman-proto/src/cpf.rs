@@ -6,6 +6,7 @@
 //! raw bytes instead of assuming the address/data/sockaddr shape.
 
 use crate::codec::{DecodeError, Reader, Writer};
+use alloc::vec::Vec;
 
 /// CPF item type IDs.
 pub mod item {
