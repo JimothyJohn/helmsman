@@ -234,8 +234,22 @@ impl fmt::Display for Value {
         match self {
             Self::Bool(b) => f.write_str(if *b { "TRUE" } else { "FALSE" }),
             Self::Int(i) => write!(f, "{i}"),
-            Self::Real(r) => write!(f, "{r:?}"),
+            Self::Real(r) => write_real(f, *r),
         }
+    }
+}
+
+/// A REAL is an f32 held widened in an f64, so `{:?}` of it prints noise
+/// (23.700000762939453 for 23.7). A value that is exactly an f32 prints
+/// as that f32, its shortest text that reads back the same; any other
+/// (an LREAL) keeps every digit it has.
+#[allow(clippy::cast_possible_truncation)]
+fn write_real(f: &mut fmt::Formatter<'_>, r: f64) -> fmt::Result {
+    let narrow = r as f32;
+    if r.is_finite() && f64::from(narrow) == r {
+        write!(f, "{narrow:?}")
+    } else {
+        write!(f, "{r:?}")
     }
 }
 
@@ -292,6 +306,32 @@ mod tests {
         assert_eq!(Ty::common(Ty::DInt, Ty::Real), Some(Ty::LReal));
         assert_eq!(Ty::common(Ty::ULInt, Ty::LInt), None);
         assert_eq!(Ty::common(Ty::Word, Ty::Int), None);
+    }
+
+    /// A REAL is an f32 held widened in an f64; it reads as the f32 it is
+    /// (23.7, not 23.700000762939453).
+    #[test]
+    fn a_real_reads_as_its_shortest_f32() {
+        let real = |x: f32| Value::Real(f64::from(x)).to_string();
+        assert_eq!(real(0.1), "0.1");
+        assert_eq!(real(23.7), "23.7");
+        assert_eq!(real(-23.7), "-23.7");
+        assert_eq!(real(1e30), "1e30");
+        assert_eq!(real(3.0), "3.0");
+        assert_eq!(real(0.0), "0.0");
+        assert_eq!(real(f32::NAN), "NaN");
+        assert_eq!(real(f32::INFINITY), "inf");
+        assert_eq!(real(f32::NEG_INFINITY), "-inf");
+        // What is not an f32 keeps every digit it has.
+        assert_eq!(Value::Real(0.1 + 0.2).to_string(), "0.30000000000000004");
+        assert_eq!(Value::Real(1e300).to_string(), "1e300");
+        // And the rest print as before.
+        assert_eq!(Value::Int(-7).to_string(), "-7");
+        assert_eq!(Value::Bool(true).to_string(), "TRUE");
+        // The text reads back as the same REAL.
+        for x in [0.1f32, 23.7, 1e-7, 16_777_217.0, f32::MAX, f32::MIN_POSITIVE] {
+            assert_eq!(real(x).parse::<f32>().unwrap(), x, "{x}");
+        }
     }
 
     #[test]

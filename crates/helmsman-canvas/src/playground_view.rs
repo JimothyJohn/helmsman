@@ -2059,7 +2059,7 @@ impl PlaygroundView {
                     "{}\n{}",
                     name.to_ascii_lowercase(),
                     last.filter(|v| v.is_finite())
-                        .map_or("–".into(), |v| format!("{v}"))
+                        .map_or("–".into(), |v| Value::Real(v).to_string())
                 ),
                 FontId::monospace(crate::theme::MIN_TEXT),
                 color,

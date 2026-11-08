@@ -397,7 +397,7 @@ impl BoxTrend {
                 format!(
                     "{}\n{}",
                     name.to_ascii_lowercase(),
-                    last.map_or("–".into(), |v| format!("{v}"))
+                    last.map_or("–".into(), |v| Value::Real(v).to_string())
                 ),
                 FontId::monospace(crate::theme::MIN_TEXT),
                 color,
