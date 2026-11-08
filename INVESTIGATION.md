@@ -200,6 +200,12 @@ property tests, and the edge-node build (`no_std`, which matters most for
 STRING). Each also changes the playground `SYSTEM` prompt and a relay
 profile. That means a new profile id, since a served profile never changes.
 
+- **Decided** (Nick, 2026-11-08): the table as it stands, with VAR_GLOBAL
+  allowed inside one module and refused across modules. OOP stays out
+  until the corpus ranking says imports fail mostly on it. Cards
+  `st-var-in-out`, `st-var-global`, `st-string`, `st-tod-date` in TODO.md,
+  in the corpus's order.
+
 ### 5. Unit-test frameworks: TcUnit, co-unit, UniTest, zkbuild-action
 
 - **What**: TcUnit (C#/ST, 425 stars, active; GitHub shows its license as
@@ -246,6 +252,9 @@ profile. That means a new profile id, since a served profile never changes.
     them, give each block requirement tests, and mark in the docs which
     blocks are not IEC (as `BLINK_PATTERN` already is). The agent's profile
     gets the list.
+  - **Decided** (Nick, 2026-11-08): OSCAT's or the standard's names, no
+    aliases; the plain words go in each block's tooltip and help page.
+    Card `st-library`.
 - **structured-text-utilities**: MIT. Arrays and strings. It is corpus
   material, and once STRING exists, a source for string helpers.
 - **TcOpen**: MIT, **archived 2025-02**, TwinCAT 3 plus .NET. Its
@@ -280,6 +289,10 @@ profile. That means a new profile id, since a served profile never changes.
     files.
   - Stand: worth it, but after the lints. The lossless layer is the real
     cost.
+- **Decided** (Nick, 2026-11-08): neither the language server nor the
+  formatter yet; revisit once `version-control` has put a project in git
+  and an engineer has cloned one. Card `st-lsp-formatter`, parked behind
+  it.
 
 ### 8. Platforms and import paths
 
@@ -295,7 +308,9 @@ profile. That means a new profile id, since a served profile never changes.
   instructions. A source-level SCL→ST converter is real work but follows
   the L5X pattern (convert, refuse what doesn't map, list every problem).
   Siemens is the largest installed base outside North America. This is a
-  market question for Nick, not a technical one.
+  market question for Nick, not a technical one. **Decided** (Nick,
+  2026-11-08): not for the early release; card `scl-import` waits for a
+  customer with TIA code.
 - **Rockwell Studio 5000**: covered by the L5X import, and ST routines come
   through it too.
 - **OpenPLC**: the closest open-source competitor, and it also runs on a
@@ -308,7 +323,12 @@ profile. That means a new profile id, since a served profile never changes.
   "protocol claims get a SOURCES.md entry" should cover the language too.
   Either buy the standard, or cite free secondary references per behaviour
   (the Fernhill ST reference on the list is detailed) and say they are
-  secondary. **I haven't checked which edition is current, or the price.**
+  secondary. The current edition is IEC 61131-3:2025 (edition 4.0, May
+  2025; the 2013 edition 3.0 before it), sold at webstore.iec.ch
+  (publication 68533; price not checked). **Decided** (Nick, 2026-11-08):
+  secondary references only, marked as such: the docs/SOURCES.md entry
+  "IEC 61131-3, by secondary references" says what each one covers and
+  that no clause of the standard is cited from it.
 - **PLCopen**: three things matter here: the coding guidelines (§1),
   TC6 XML (already used), and the OPC UA information model for IEC
   61131-3 that PLCopen and the OPC Foundation publish together. The box
@@ -353,6 +373,9 @@ profile. That means a new profile id, since a served profile never changes.
 
 ## Suggested order, if we agree
 
+Agreed (Nick, 2026-11-08): carded in this order in TODO.md, "The ST plan".
+The first and fourth rows shipped on 2026-11-07 (#282, #289).
+
 | step | est | depends |
 | --- | --- | --- |
 | ruSTy 1.0.8 bump (existing `rusty-bump` card; check that the fix is really in it) | 2h | – |
@@ -365,17 +388,16 @@ profile. That means a new profile id, since a served profile never changes.
 | matiec oracle (§2) | 1d | – |
 | TOD/DATE (§4), TcPOU import (§8), LSP and formatter (§7) | later | discussion |
 
-## Questions for the discussion
+## Questions for the discussion (all decided)
 
 1. Lints: decided 2026-11-07, see §1 (all shown, two block, a pragma
    with a reason overrides).
-2. The dialect: is the table in §4 the line? In particular VAR_GLOBAL
-   inside one module, and whether OOP is ever on the table.
-3. Process-control library: OSCAT-compatible pin names, or names in our
-   own plain words? The model knows the OSCAT ones. Engineers may know
-   neither.
-4. Do engineers edit outside the canvas? That decides whether the LSP and
-   formatter are worth doing.
-5. Siemens SCL import: a market we want for the early release, or not?
-6. The IEC 61131-3 standard: buy it (which edition), or cite secondary
-   references?
+2. The dialect: the §4 table, VAR_GLOBAL inside one module only, OOP not
+   on the table until the corpus says otherwise (2026-11-08, §4).
+3. Process-control library: OSCAT's or the standard's names, plain words
+   in the tooltips (2026-11-08, §6).
+4. Editing outside the canvas: not yet; revisit after `version-control`
+   (2026-11-08, §7).
+5. Siemens SCL import: not for the early release (2026-11-08, §8).
+6. IEC 61131-3: secondary references only, marked as such (2026-11-08,
+   §9).
