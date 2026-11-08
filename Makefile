@@ -79,7 +79,7 @@ playground-serve:  ## The playground on 127.0.0.1:8791 with Claude through a loc
 canvas-serve:  ## Serve the canvas on :8790 (all interfaces) with live rebuild.
 	./scripts/canvas-serve.sh
 
-node-build:  ## Build the edge node's firmware for the ESP32-POE2 (needs the esp toolchain; docs/EDGE.md).
+node-build:  ## Build the edge node's firmware: ESP32-POE2 (esp toolchain) or NODE_BOARD=p4-eth (docs/EDGE.md).
 	./scripts/node-build.sh
 
 node-clippy:  ## Clippy the edge node's firmware with warnings denied.

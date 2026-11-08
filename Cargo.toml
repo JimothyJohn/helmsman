@@ -4,7 +4,7 @@ members = ["crates/helmsman-proto", "crates/helmsman-agent", "crates/helmsman-ad
 # The edge node's firmware (docs/EDGE.md): the Xtensa target needs the esp
 # toolchain and build-std, so it is its own package with its own lock,
 # built by `make node-build`; the host gate never sees it.
-exclude = ["crates/helmsman-node"]
+exclude = ["crates/helmsman-node", "crates/helmsman-node-p4"]
 
 [workspace.package]
 edition = "2024"

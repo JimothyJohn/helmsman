@@ -36,8 +36,9 @@ messaging, the Class 1 scanner), `helmsman-adapter` (CIP target),
 `no_std`), `helmsman-project` (a project's files and archive),
 `helmsman-plc` (the runtime), `helmsman-diagram` (ST as a live diagram),
 `helmsman-agent` (the box's agent loop behind the Agent tab),
-`helmsman-canvas` (the browser app). `crates/helmsman-node`, outside the
-workspace, is the ESP32 edge firmware (`docs/EDGE.md`). `make help` lists
+`helmsman-canvas` (the browser app). Outside the workspace,
+`crates/helmsman-node` is the ESP32-POE2 edge firmware and
+`crates/helmsman-node-p4` the ESP32-P4 one (`docs/EDGE.md`). `make help` lists
 the dev targets. `docs/SOURCES.md`
 reviews the reference stacks and ODVA documents this project draws on.
 Licensed under the Apache License 2.0 (`LICENSE`, `NOTICE`); `LICENSING.md`
