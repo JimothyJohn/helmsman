@@ -1321,7 +1321,7 @@ impl PlaygroundView {
                 Ok(index) => self.devices_ui.attach_library(&index),
                 Err(why) => {
                     self.devices_ui.library_note =
-                        Some(format!("the device library could not be read: {why}"))
+                        Some(format!("the device library could not be read: {why}"));
                 }
             }
         }

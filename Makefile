@@ -2,7 +2,7 @@
 # Each target is a thin wrapper over a script in ./scripts/ so CI and humans run
 # the same thing.
 
-.PHONY: help install-dev lint fmt test-unit test-integration test-all help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-serve playground playground-serve node-build node-clippy
+.PHONY: help install-dev lint fmt test-unit test-integration test-all help-site help-site-check help-shots test-interop opener-up opener-down opener-logs rusty-image test-oracle test-plcopen-corpus canvas canvas-web canvas-smoke canvas-serve playground playground-serve node-build node-clippy
 
 help:  ## Show this help.
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/ { printf "  \033[1m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -69,6 +69,9 @@ canvas:  ## Run the canvas (the simulation) as a native window.
 
 canvas-web:  ## Build the canvas for the browser into target/canvas-dist (the box serves it: helmsman-plc --ui).
 	./scripts/canvas-web.sh
+
+canvas-smoke:  ## Drive target/canvas-dist in headless Chromium: console errors, panics, a screenshot per step (make canvas-web first; BOX=1 also starts a loopback box).
+	python3 -I scripts/canvas-smoke.py $(if $(BOX),--box,)
 
 playground:  ## Build the public ST playground into docs/playground (commit it; Pages serves master's docs/).
 	./scripts/build-playground.sh
