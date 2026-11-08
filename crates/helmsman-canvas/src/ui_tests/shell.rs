@@ -196,3 +196,28 @@ fn the_gutter_has_a_row_for_every_row_the_editor_wraps_to() {
         );
     }
 }
+
+/// The Code tab's header: "Structured Text → ✔ compiles" broke inside the
+/// status label once the deploy arrow took its room, "compiles" alone on
+/// a line. A label wraps as a whole or not at all.
+#[test]
+fn the_code_headers_status_labels_are_not_broken_across_lines() {
+    let mut h = Harness::new(App::sim());
+    h.wait(0.5);
+    {
+        let p = &mut h.app.sim.as_mut().unwrap().proj;
+        let cur = p.current.clone();
+        p.files.get_mut(&cur).unwrap().insert_str(0, "(* edited *)\n");
+    }
+    h.wait(1.0);
+    let before = h.rect("pane code").width();
+    for needle in ["Structured Text", "compiles", "not deployed"] {
+        let found = galleys(&h, |t| t.contains(needle));
+        assert!(needle == "not deployed" || !found.is_empty(), "the header draws {needle:?}");
+        for g in found {
+            assert_eq!(g.rows.len(), 1, "{:?} is broken across lines", g.job.text);
+        }
+    }
+    h.wait(0.5);
+    assert!((h.rect("pane code").width() - before).abs() < 1.0, "the pane keeps its width");
+}

@@ -1469,7 +1469,8 @@ impl Body for PlaygroundView {
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
         let mut go = false;
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Structured Text").strong())
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.add(crate::theme::whole(RichText::new("Structured Text").strong()))
                 .tip("The open file. It is checked as you type; Deploy runs it.");
             // The → deploys this version (Nick, 2026-11-08).
             go = crate::projects::deploy_arrow(
@@ -1480,13 +1481,15 @@ impl Body for PlaygroundView {
                 "Deploys this version: compiles the open project and runs it in the page (Ctrl D, File › Deploy).",
             );
             if self.pending.is_some() {
-                ui.label(RichText::new("…").color(t.muted))
+                ui.add(crate::theme::whole(RichText::new("…").color(t.muted)))
                     .tip("Checking the edit.");
             } else if errors > 0 {
-                ui.label(RichText::new(format!("✖ {errors} error(s)")).color(RED))
-                    .tip("The list under the code has each one. Click an error to go to its line.");
+                ui.add(crate::theme::whole(
+                    RichText::new(format!("✖ {errors} error(s)")).color(RED),
+                ))
+                .tip("The list under the code has each one. Click an error to go to its line.");
             } else {
-                ui.label(RichText::new("✔ compiles").color(t.muted))
+                ui.add(crate::theme::whole(RichText::new("✔ compiles").color(t.muted)))
                     .tip("The program has no errors.");
             }
             if undeployed {
@@ -1495,7 +1498,8 @@ impl Body for PlaygroundView {
                 } else {
                     "The program running is unchanged. Deploy runs this version."
                 };
-                ui.label(RichText::new("· not deployed").color(t.muted)).tip(note);
+                ui.add(crate::theme::whole(RichText::new("· not deployed").color(t.muted)))
+                    .tip(note);
             }
         });
         if go {
