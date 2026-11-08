@@ -37,7 +37,7 @@ use serde_json::{Value as Json, json};
 use crate::claude::{Event, Sse};
 
 /// The box's longest message, in characters (`api::chat::MAX_MESSAGE`).
-pub const MAX_MESSAGE: usize = 8000;
+pub const MAX_MESSAGE: usize = 200_000;
 /// Most text kept per turn; a runaway stream is cut here.
 pub const MAX_TEXT: usize = 256 * 1024;
 /// Most tool, proposal and notice rows per turn.

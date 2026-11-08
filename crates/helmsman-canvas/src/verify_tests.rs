@@ -470,3 +470,24 @@ fn a_scenario_that_passes_on_the_old_file_does_not_distinguish_the_change() {
     let a = answer_with(&commented(), &[off("lamp_off", true)]);
     assert!(check(&file(), &project(), &a, settings()).green());
 }
+
+/// A block that never closes was cut off: the answer is red and goes
+/// back, not checked as if the block were not there.
+#[test]
+fn an_answer_cut_off_inside_a_block_is_red_not_checked_without_it() {
+    let whole = answer_with(&commented(), &[off("lamp_off", true)]);
+    let cut = whole.trim_end().trim_end_matches("```").trim_end().to_string();
+    assert!(!cut.ends_with("```"), "{cut}");
+    let c = check(&file(), &project(), &cut, settings());
+    assert!(c.red(), "{:?}", c.problems());
+    assert!(c.problems()[0].contains("cut off"), "{:?}", c.problems());
+    assert!(matches!(next(&c, 0, false), Next::Retry(m) if m.contains("cut off")));
+    // The same answer closed is checked as before.
+    assert!(check(&file(), &project(), &whole, settings()).green());
+    // The code block closed and only a scenario cut off.
+    let half = format!(
+        "Why: x.\n\n```st\n{}```\n\n```st scenario\n(* a *)\nPROGRAM test_a\n",
+        commented()
+    );
+    assert!(check(&file(), &project(), &half, settings()).red());
+}

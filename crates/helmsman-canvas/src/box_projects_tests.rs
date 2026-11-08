@@ -1972,6 +1972,80 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     );
 }
 
+/// A program file of realistic size (60 KiB) goes to the box's agent once,
+/// with the answer format and its tests, inside what the box takes; before,
+/// the format and two copies of the file went over 8000 characters at
+/// about 2.5 KB (review 2026-11-08).
+#[test]
+fn a_realistic_file_reaches_the_box_agent_once() {
+    use crate::box_agent::MAX_MESSAGE;
+    use crate::instruct::BOX_RULES;
+    use crate::instruct_tests::{FOLLOWS, LAMP};
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let big = format!("{}{LAMP}", "(* plant notes for the next shift *)\n".repeat(1_600));
+    assert!(big.len() > 58_000, "{}", big.len());
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "big",
+        &[("main.st", big.as_str()), ("test_lamp.st", FOLLOWS)],
+    );
+    v.projects.open_file("main.st");
+    v.tick(&ctx);
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let m: Json = serde_json::from_str(&v.chat_sent[0].body).unwrap();
+    let message = m["message"].as_str().unwrap();
+    assert!(message.chars().count() < MAX_MESSAGE / 2, "{}", message.len());
+    assert!(message.starts_with(BOX_RULES));
+    assert_eq!(message.matches("lamp := start;").count(), 1, "the file goes once");
+    assert!(message.contains("<requirement_tests>"));
+}
+
+/// A turn the box ended early (`budget`) with a whole-looking answer in
+/// it is cut off, not complete: nothing is written (review 2026-11-08).
+#[test]
+fn an_answer_the_box_cut_off_is_never_written() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::{LAMP, st};
+    use serde_json::json;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    v.tick(&ctx);
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    let seq = v.chat_sent.last().expect("a message").seq;
+    let new = LAMP.replace("lamp := start;", "lamp := start; (* follows start *)");
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev("text", json!({ "delta": st(&new) })),
+        ev("done", json!({"stop": "budget", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Failed, "{o:?}");
+    assert!(o.status.contains("cut off"), "{}", o.status);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "never written"
+    );
+}
+
 // ---- the Monitor's Stop, Run and Restart on a box (card monitor-box-run-stop) ----
 
 /// The page on the Monitor, its requests carried out against the box until

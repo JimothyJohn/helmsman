@@ -594,7 +594,10 @@ fn the_agents_change_is_marked_on_the_diagram_and_the_code_until_the_next_edit()
     instruct(
         &mut v,
         "sound the horn with the lamp",
-        &[&format!("Why: it says so.\n\n```st\n{horn}```\n\n{}", horn_follows())],
+        &[&format!(
+            "Why: it says so.\n\n```st\n{horn}```\n\n{}",
+            horn_follows()
+        )],
     );
     assert_eq!(v.instruct.outcome.as_ref().map(|o| o.kind), Some(Kind::Applied));
     v.agent_marks(&mut chrome);

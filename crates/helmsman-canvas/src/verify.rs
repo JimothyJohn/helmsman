@@ -452,6 +452,21 @@ fn the_code(scope: &Scope, answer: &str) -> Option<String> {
 /// requirement tests run with `settings`. Deterministic.
 #[must_use]
 pub fn check(scope: &Scope, files: &Files, answer: &str, settings: Settings) -> Check {
+    // A block that never closes means the answer was cut off in it; half
+    // a file or half a scenario is not checked as if it were whole.
+    if segments(answer)
+        .iter()
+        .any(|s| matches!(s, Segment::Code { closed: false, .. }))
+    {
+        return Check {
+            code: true,
+            failures: vec![
+                "The answer ends inside a code block that was never closed: it was cut off. Send it again in full, every block closed."
+                    .into(),
+            ],
+            ..Check::default()
+        };
+    }
     if !has_code(answer) {
         return Check::default();
     }
@@ -574,7 +589,10 @@ fn contradicted(
     let mut kept = Vec::new();
     let mut replaced = Vec::new();
     for s in scen {
-        let old = s.replaces.then(|| now.tests.iter().find(|t| t.file == s.file)).flatten();
+        let old = s
+            .replaces
+            .then(|| now.tests.iter().find(|t| t.file == s.file))
+            .flatten();
         let Some(old) = old else {
             kept.push(s);
             continue;
@@ -602,7 +620,13 @@ fn contradicted(
 /// not: the answer changes what the file does, and every scenario passes
 /// on the project as it was. `all` is the project with the answer, whose
 /// scenarios `scen` are.
-fn indistinct(scope: &Scope, files: &Files, all: &Files, scen: &[Scenario], settings: Settings) -> Option<String> {
+fn indistinct(
+    scope: &Scope,
+    files: &Files,
+    all: &Files,
+    scen: &[Scenario],
+    settings: Settings,
+) -> Option<String> {
     let file = scope.file()?;
     if scen.is_empty() || bare(files.get(file)?) == bare(all.get(file)?) {
         return None;
@@ -624,7 +648,10 @@ fn indistinct(scope: &Scope, files: &Files, all: &Files, scen: &[Scenario], sett
     if ran.iter().any(spec::Verdict::red) {
         return None;
     }
-    let names: Vec<String> = ran.iter().map(|v| v.file.trim_end_matches(".st").to_string()).collect();
+    let names: Vec<String> = ran
+        .iter()
+        .map(|v| v.file.trim_end_matches(".st").to_string())
+        .collect();
     Some(format!(
         "The scenario does not distinguish the change: {} pass on {file} as it was before, so they would pass without the change. Send a scenario that fails on the old file and passes on the new one.",
         names.join(", ")

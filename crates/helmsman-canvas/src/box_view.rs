@@ -602,12 +602,15 @@ impl BoxView {
         self.answered_seq = self.agent.seq();
         let proposals = turn.proposals();
         match turn.end {
-            Some(End::Done { stop, why }) if stop == "end_turn" || !turn.text.trim().is_empty() => {
-                let _ = why;
-            }
+            Some(End::Done { stop, .. }) if stop == "end_turn" => {}
             Some(End::Done { why, stop }) => {
-                self.instruct
-                    .failed(&why.unwrap_or_else(|| format!("the agent stopped ({stop})")));
+                // Any other stop ended the turn early: whatever text there
+                // is may be half an answer, and half a file is never written.
+                let said = match stop.as_str() {
+                    "budget" | "max_tokens" => format!("the answer was cut off ({stop})"),
+                    _ => format!("the agent stopped ({stop})"),
+                };
+                self.instruct.failed(&why.unwrap_or(said));
                 self.instruct.proposed(&proposals);
                 return;
             }

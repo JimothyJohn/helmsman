@@ -1768,7 +1768,7 @@ fn the_chat_route_needs_the_token_and_a_well_formed_message() {
     assert_eq!(b.call("GET", "/api/chat", None, None).0, 404);
     for (bad, code) in [
         (json!({ "message": "" }), 422),
-        (json!({ "message": "x".repeat(8001) }), 422),
+        (json!({ "message": "x".repeat(200_001) }), 422),
         (json!({ "message": "hi\u{1b}[2J" }), 422),
         (json!({ "message": "hi", "model": "claude-opus-5-5" }), 400),
         (json!({ "message": "hi", "session": "s999" }), 404),
@@ -1777,6 +1777,10 @@ fn the_chat_route_needs_the_token_and_a_well_formed_message() {
         assert_eq!(s, code, "{bad}");
     }
     assert!(relay.seen().is_empty());
+    // The cap is the server's: a 64 KiB program file with its tests and the
+    // answer format (what the canvas sends) is taken, up to the last character.
+    let (s, _) = b.chat(&json!({ "message": "x".repeat(200_000) }));
+    assert_eq!(s, 200);
 }
 
 #[test]
