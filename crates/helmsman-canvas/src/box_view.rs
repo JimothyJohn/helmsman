@@ -1525,7 +1525,7 @@ impl Workspace for BoxView {
         else {
             return false;
         };
-        let id = egui::Id::unique(("box-st", &name, &file));
+        let id = editor::source_id("box-st", &name, &file);
         let Some(buf) = self.projects.current_mut() else {
             return false;
         };
@@ -1915,7 +1915,7 @@ impl Body for BoxView {
                 110.0
             };
             let size = Vec2::new(ui.available_width(), (ui.available_height() - list_h).max(120.0));
-            let id = egui::Id::unique(("box-st", &o.name, &file));
+            let id = editor::source_id("box-st", &o.name, &file);
             let Some(buf) = self.projects.current_mut() else {
                 return;
             };

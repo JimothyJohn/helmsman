@@ -47,6 +47,32 @@ pub enum Source {
     Sim,
 }
 
+/// Whether the shortcut `a` applies on `screen` of `source`. What acts on
+/// the open project (Save, Deploy, Upload, Force, Undo, the step chords)
+/// does so only where that project is on screen: Ctrl+D on the Monitor or
+/// the Proposals must not deploy a project the engineer cannot see. The
+/// simulation's run controls work on the Editor and the Monitor.
+#[must_use]
+pub fn can_act(a: Action, screen: Screen, source: Source) -> bool {
+    match a {
+        Action::Save
+        | Action::Deploy
+        | Action::Upload
+        | Action::Download
+        | Action::Force
+        | Action::ReleaseAll
+        | Action::Undo
+        | Action::Redo
+        | Action::GoToDefinition
+        | Action::CrossReferences
+        | Action::StepInto
+        | Action::StepOut
+        | Action::Breakpoint => screen == Screen::Editor,
+        Action::RunStop | Action::Stop | Action::Step => source == Source::Sim && screen != Screen::Proposals,
+        _ => true,
+    }
+}
+
 /// Which screen fills the window under the header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Screen {
@@ -448,6 +474,9 @@ impl App {
     /// Does what a shortcut (or its menu item) asks; nothing where it
     /// does not apply (Run in a box's page, Sign in in the simulation).
     pub fn act(&mut self, a: Action, ctx: &egui::Context) {
+        if !can_act(a, self.screen, self.source) {
+            return;
+        }
         match a {
             Action::Save => {
                 if let Some(w) = self.workspace()
@@ -468,9 +497,6 @@ impl App {
             }
             Action::RunStop | Action::Stop | Action::Step => {
                 // On the Editor and the Monitor alike (Nick, 2026-11-01).
-                if self.source != Source::Sim || self.screen == Screen::Proposals {
-                    return;
-                }
                 let Some(s) = self.sim.as_mut() else { return };
                 if s.session.build.is_none() {
                     return;

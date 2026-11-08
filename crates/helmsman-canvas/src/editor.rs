@@ -479,6 +479,14 @@ pub fn select(ctx: &egui::Context, id: egui::Id, a: usize, b: usize) {
     state.store(ctx, id);
 }
 
+/// The id of the ST editor showing `file` of `project` in `view`. One id
+/// per file: egui keeps the undo history, caret and scroll under it, and
+/// a shared id would put one file's text into another on Undo.
+#[must_use]
+pub fn source_id(view: &str, project: &str, file: &str) -> egui::Id {
+    egui::Id::unique((view, project, file))
+}
+
 /// Undoes (or, `redo`, redoes) the last edit of the ST editor `id` on
 /// `text`, through the editor's own undo stack; whether anything changed.
 pub fn undo(ctx: &egui::Context, id: egui::Id, text: &mut String, redo: bool) -> bool {

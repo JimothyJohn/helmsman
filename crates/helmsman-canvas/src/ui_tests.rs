@@ -168,6 +168,11 @@ impl Harness {
         self.shapes.iter().any(|c| walk(&c.shape, needle))
     }
 
+    /// The simulation's ST editor's widget id for the open file.
+    fn editor_id(&self) -> egui::Id {
+        self.app.sim.as_ref().unwrap().source_id()
+    }
+
     fn has(&self, key: &str) -> bool {
         self.app.chrome.rect(key).is_some()
     }
@@ -458,7 +463,7 @@ mod polish {
         h.wait(0.2);
         let editor = h
             .ctx
-            .read_response(egui::Id::unique("pg-source"))
+            .read_response(h.editor_id())
             .expect("the editor")
             .rect;
         h.click(editor.left_top() + egui::vec2(60.0, 6.0));
@@ -779,7 +784,7 @@ END_PROGRAM",
         assert!(h.app.chrome.code_open(), "the ST open");
         let editor = h
             .ctx
-            .read_response(egui::Id::unique("pg-source"))
+            .read_response(h.editor_id())
             .expect("the editor")
             .rect;
         h.click(editor.left_top() + egui::vec2(60.0, 6.0));
@@ -1135,7 +1140,7 @@ mod chrome {
         );
         let editor = h
             .ctx
-            .read_response(egui::Id::unique("pg-source"))
+            .read_response(h.editor_id())
             .expect("the editor")
             .rect;
         h.press("pane files");
@@ -1143,7 +1148,7 @@ mod chrome {
         assert!(h.app.chrome.files_open());
         assert!(h.has("file blink.st"), "the files show");
         assert!(
-            h.ctx.read_response(egui::Id::unique("pg-source")).is_none(),
+            h.ctx.read_response(h.editor_id()).is_none(),
             "the editor is on the other tab"
         );
         let code_w = code.right() - files.left();
@@ -1153,7 +1158,7 @@ mod chrome {
         h.wait(0.3);
         let again = h
             .ctx
-            .read_response(egui::Id::unique("pg-source"))
+            .read_response(h.editor_id())
             .expect("the editor")
             .rect;
         assert!((again.width() - editor.width()).abs() < 1.0);
@@ -2436,17 +2441,17 @@ mod chrome {
     #[test]
     fn the_st_toggle_opens_and_closes_the_editor_and_a_block_click_sends_it_to_the_line() {
         let mut h = Harness::new(App::sim());
-        let editor = || egui::Id::unique("pg-source");
+        let editor = h.editor_id();
         assert!(h.app.chrome.code_open(), "the simulation starts with the ST open");
-        assert!(h.ctx.read_response(editor()).is_some());
+        assert!(h.ctx.read_response(editor).is_some());
         h.view_menu("view st");
         assert!(!h.app.chrome.code_open());
         h.wait(0.5);
-        assert!(h.ctx.read_response(editor()).is_none(), "shut");
+        assert!(h.ctx.read_response(editor).is_none(), "shut");
         h.view_menu("view st");
         assert!(h.app.chrome.code_open());
         h.wait(0.5);
-        let r = h.ctx.read_response(editor()).expect("open again");
+        let r = h.ctx.read_response(editor).expect("open again");
         // The pane opens at its default width; the editor is what is
         // left of it beside the gutter.
         assert!(
@@ -2472,7 +2477,7 @@ mod chrome {
             .take(line as usize - 1)
             .map(|l| l.chars().count())
             .sum();
-        let state = egui::text_edit::TextEditState::load(&h.ctx, editor()).expect("the editor's state");
+        let state = egui::text_edit::TextEditState::load(&h.ctx, editor).expect("the editor's state");
         assert_eq!(
             state.cursor.char_range(),
             Some(egui::text::CCursorRange::one(egui::text::CCursor::new(chars))),
@@ -2741,7 +2746,7 @@ mod simulated {
         assert!(text.lines().count() >= 3, "{text}");
         let start = text.lines().next().unwrap().chars().count() + 1;
         let end = start + text.lines().nth(1).unwrap().chars().count() + 2;
-        let id = eframe::egui::Id::unique("pg-source");
+        let id = h.editor_id();
         h.ctx.memory_mut(|m| m.request_focus(id));
         crate::editor::select(&h.ctx, id, start, end);
         h.wait(0.1);
@@ -2834,7 +2839,7 @@ mod simulated {
         h.key(Modifiers::COMMAND, Key::F);
         assert!(h.app.chrome.code_open());
         assert!(h.app.chrome.find.is_some(), "the find box opens");
-        let editor = eframe::egui::Id::unique("pg-source");
+        let editor = h.editor_id();
         h.frame(vec![]);
         assert!(
             h.ctx.memory(|m| m.has_focus(editor.with("find"))),
@@ -4019,7 +4024,7 @@ mod tour {
         assert_eq!(anchor(&h).as_deref(), Some("st editor"));
         card_is_fair(&h, "editor");
         // Select 500 in T#500ms and type 200 over it.
-        let id = egui::Id::unique("pg-source");
+        let id = h.editor_id();
         let editor = h.ctx.read_response(id).expect("the editor").rect;
         h.click(editor.left_top() + egui::vec2(60.0, 6.0));
         let sim = h.app.sim.as_ref().unwrap();
@@ -4123,3 +4128,5 @@ mod tour {
         }
     }
 }
+
+mod shell;
