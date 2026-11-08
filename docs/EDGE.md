@@ -525,16 +525,54 @@ arrived, so the first day on the board is spent on the two real unknowns:
   segment reflects every frame back; a switch adds a store-and-forward
   hop per cycle), the P4 has one MAC, and on a PoE node that port is the
   uplink. EtherCAT stays a box feature on a second NIC (`ethercat-master`).
-- **Code side, done on this branch.** `helmsman-proto` builds `no_std +
-  alloc` without its default `std` feature: encapsulation, CPF, CIP, the
-  identity item, Forward_Open / Forward_Close and the Class 1 packet, the
-  Logix read layouts and the EDS parser, plus `class1` (the
-  transport-free producer and consumer of a Class 1 connection, which the
-  box's `scanner` threads now run too). `session`, `discover`,
-  `endpoint`, `scanner` and `logix::reader` are the socket half behind
-  `std`. `scripts/lint.sh` builds the no_std half for thumbv7em. The node
-  side (a P4 board module, esp-hal Ethernet, an embassy-net TCP session
-  for Forward_Open and a UDP task around `class1`) waits for the board.
+- **Verified on the host, 2026-11-08, before the board arrived.** The whole
+  P4 firmware stack compiles on upstream *stable* Rust for
+  `riscv32imafc-unknown-none-elf` with no build-std: esp-hal 1.2.2 (the
+  first release with the P4's EMAC: `esp32p4`, `unstable`, `rt`), esp-rtos
+  0.4, esp-bootloader-esp-idf 0.6, esp-alloc 0.11, esp-println 0.18,
+  esp-backtrace 0.20, embassy-executor 0.10, embassy-net 0.9, together
+  with helmsman-iec, helmsman-modbus and helmsman-proto without std. The
+  esp-rs mbedTLS fork does **not** build for the P4 at the rev supervictor
+  pins (`4329f17`: a bindgen field mismatch), and does at its current main
+  (`07aeabb`), with Homebrew LLVM's clang first on `PATH`: Apple's clang
+  has no RISC-V backend, and the esp toolchain's "clang" directory holds
+  libraries only. So TLS on the P4 node is a known-good recipe, not a
+  question.
+- **Code side, done.** `helmsman-proto` builds `no_std + alloc` without its
+  default `std` feature (#296): encapsulation, CPF, CIP, the identity
+  item, Forward_Open / Forward_Close and the Class 1 packet, the Logix
+  read layouts and the EDS parser, plus `class1` (the transport-free
+  producer and consumer of a Class 1 connection, which the box's
+  `scanner` threads now run too). `scripts/lint.sh` builds that half for
+  thumbv7em. **`crates/helmsman-node-p4`** is the P4 firmware, its own
+  package outside the workspace like helmsman-node, on stable: `board`
+  (the Waveshare pin map, the efuse MAC), `ethernet` (esp-hal's EMAC
+  driver under embassy-net with DHCP, the PHY polled every 500 ms),
+  `modbus` (the POE2's client, unchanged), `enip` (an explicit session
+  over embassy-net TCP for `RegisterSession` and `SendRRData`, and
+  `IoConnection`: `Forward_Open` through it, `class1::{Producer,
+  Consumer}` around the UDP socket, the E1213's O->T port quirk honoured)
+  and two binaries. `modbus` is the POE2's Phase 2 firmware on the P4.
+  `enip` opens an Exclusive Owner connection to the E1213 (configuration
+  100, O->T 102 one byte under a run/idle header, T->O 101 51 bytes
+  modeless, RPI 100 ms), runs the chase program at a 10 ms scan with the
+  DI bits and DO status as its inputs, produces at the RPI, counts late
+  scans, packets each way, ignored datagrams, losses and reopens, and
+  reports every 10 s over serial and UDP; `ENIP_INPUT_ONLY=1` at build
+  time asks for Input Only instead, which runs beside the try box's
+  exclusive owner. Both link (`cargo build --release`), espflash builds a
+  526 KB app image from the `enip` ELF, and the main stack is about
+  130 KB with a 256 KB heap. `NODE_BOARD=p4-eth scripts/node-build.sh`
+  and `NODE_BOARD=p4-eth scripts/node-flash.sh [enip|modbus]` are the
+  entry points. Nothing has run on hardware yet.
+- **First day on the board, in order.** (1) `espflash board-info` over USB,
+  Ethernet unplugged, and the MAC noted. (2) Flash `modbus`, unplug USB,
+  plug PoE: a lease and the chase on the E1213's outputs says the EMAC,
+  the PHY and the stack work. (3) Flash `enip` with `ENIP_INPUT_ONLY=1`
+  beside the try box: T->O packets arriving says the Class 1 path works.
+  (4) Stop the try box's enip-io (or point it at Modbus) and flash the
+  Exclusive Owner build: the chase over CIP. (5) Measure the PoE module's
+  isolation before USB and PoE are ever connected together.
 
 Sources for this phase: esp-hal issue #4163 and PRs #5546 / #5556
 (`github.com/esp-rs/esp-hal`), `github.com/babasha/esp-p4-eth`,

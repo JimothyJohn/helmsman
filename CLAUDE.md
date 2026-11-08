@@ -112,7 +112,13 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
     `launchctl kickstart -k gui/501/io.advin.helmsman-try` (works from
     SSH). A plain `kill` respawns it; stop for good with `launchctl
     bootout gui/501/io.advin.helmsman-try`. Never start a box that needs
-    the bench devices with `nohup` from a shell.
+    the bench devices with `nohup` from a shell. The rebuild signs the
+    binary (`~/github/helmsman/scratch/18-sign-try-box.sh`, identity
+    "Helmsman Try" from `17-codesign-identity.sh`, identifier
+    `io.advin.helmsman-plc`) because macOS keys the Local Network grant
+    on the code requirement: an ad-hoc, linker-signed cargo binary gets a
+    new identifier per build and the E1213 came back `No route to host`
+    after every rebuild until the Allow was clicked again (2026-11-08).
   - A new service (board, mock-up server) gets its own entry here first.
   - Anything else running is a leftover: `scripts/dev-processes.sh` lists
     every Helmsman process with its port and checkout, `--stop` stops all
