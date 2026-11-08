@@ -9,6 +9,7 @@
 //! frame is traced for the diagram and "on because".
 
 use std::collections::VecDeque;
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use helmsman_diagram::Module;
@@ -418,16 +419,10 @@ impl Carried {
         };
         let mut out = String::new();
         if !self.fresh.is_empty() {
-            out.push_str(&format!(
-                " Started fresh, their type changed: {}.",
-                list(&self.fresh)
-            ));
+            let _ = write!(out, " Started fresh, their type changed: {}.", list(&self.fresh));
         }
         if !self.gone.is_empty() {
-            out.push_str(&format!(
-                " Not carried, no longer declared: {}.",
-                list(&self.gone)
-            ));
+            let _ = write!(out, " Not carried, no longer declared: {}.", list(&self.gone));
         }
         out
     }

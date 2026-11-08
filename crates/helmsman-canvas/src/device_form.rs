@@ -180,12 +180,11 @@ impl PointRow {
                 l.push(' ');
                 l.push_str(t);
             }
-            Some(_) => {}
             None if self.dir == Dir::Out => {
                 l.push(' ');
                 l.push_str(self.ty.safe());
             }
-            None => {}
+            _ => {}
         }
         l
     }
@@ -469,8 +468,7 @@ pub fn point_ok(driver: &str, point: &str) -> Result<(), String> {
             let mut it = point.split(':');
             let (table, addr, fmt) = (it.next().unwrap_or(""), it.next(), it.next());
             let words = match (table, fmt) {
-                ("coil" | "di", None) => 1,
-                ("hr" | "ir", None | Some("u16" | "i16")) => 1,
+                ("coil" | "di", None) | ("hr" | "ir", None | Some("u16" | "i16")) => 1,
                 ("hr" | "ir", Some("u32" | "u32sw" | "i32" | "i32sw" | "f32" | "f32sw")) => 2,
                 _ => {
                     return Err(format!(

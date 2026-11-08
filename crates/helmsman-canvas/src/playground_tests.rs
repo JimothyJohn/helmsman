@@ -2297,7 +2297,7 @@ fn a_deploy_that_does_not_compile_leaves_the_program_and_its_clock() {
     scans(&mut s, 5);
     assert!(s.deploy("PROGRAM p\nx := 1;\nEND_PROGRAM\n").is_none());
     assert_eq!((s.scans, s.now_ms), (5, 50));
-    assert!(!s.diags.is_empty());
+    assert_ne!(s.diags.len(), 0);
 }
 
 #[test]
@@ -2486,5 +2486,5 @@ fn a_long_trend_draws_a_polyline_bounded_by_the_lane_width() {
     // Few samples draw as they are: a step to each.
     let few = lane_points([(10.0, 1.0), (20.0, 2.0), (30.0, 1.0)].into_iter());
     assert_eq!(few.len(), 5);
-    assert!(lane_points(std::iter::empty()).is_empty());
+    assert_eq!(lane_points(std::iter::empty()).len(), 0);
 }

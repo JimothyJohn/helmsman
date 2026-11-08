@@ -1507,8 +1507,10 @@ and Save keeps a copy under a free name. The build is the box's (one
 `.st` as it is; several in name order under `(* file NAME *)` lines), so
 errors and block clicks map to a file and line. Typing only checks
 (`Session::check`: errors marked, the program running and its diagram
-untouched); Deploy compiles and runs it in the page (`Session::set_source`),
-and a project that does not compile is refused with the old program still
+untouched); Deploy compiles and runs it in the page (`Session::deploy`),
+a hot swap as on a box (retained state carried by name and type, the image
+and the clock kept, the notice naming what could not be carried), and a
+project that does not compile is refused with the old program still
 running, as on a box. Upload and Download use `helmsman-project`'s `.zip`;
 `.st`, `PLCopen` `.xml` and `.L5X` import into the open project. An
 L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
@@ -2606,6 +2608,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   program is a `helmsman_iec::Program` scanned directly on the page's
   clock (at most 500 scans a frame); the last scan of each frame is
   traced for the diagram. A fault stops it; Run or Step restarts it cold.
+  A fault or a Stop turns the outputs off, as the box does for a module.
   Loading an example or Claude's code compiles it and leaves it stopped.
 - **Virtual I/O** from the program itself: each `VAR_INPUT` a control
   (BOOL: a push button when named like start/stop/reset/pulse, else a

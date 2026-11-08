@@ -895,8 +895,14 @@ END_PROGRAM
         session.step();
         let trace = session.trace.as_ref().expect("a traced scan");
         let unit = helmsman_iec::ast::parse(src).unwrap();
-        assert_eq!(value_in_trace(trace, &unit, "tank", "level_m"), Some(Value::Real(2.5)));
-        assert_eq!(value_in_trace(trace, &unit, "p", "level_m"), Some(Value::Real(9.0)));
+        assert_eq!(
+            value_in_trace(trace, &unit, "tank", "level_m"),
+            Some(Value::Real(2.5))
+        );
+        assert_eq!(
+            value_in_trace(trace, &unit, "p", "level_m"),
+            Some(Value::Real(9.0))
+        );
         assert_eq!(value_in_trace(trace, &unit, "tank", "nothing"), None);
     }
 }

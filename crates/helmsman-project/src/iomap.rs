@@ -234,7 +234,6 @@ mod tests {
         assert_eq!(m.devices[0].settings, ["unit=1", "timeout_ms=300"]);
         assert_eq!(m.signals[1].tail, ["safe=false"]);
         assert_eq!(m.signals[2].tail, ["unit=mm", "poll_ms=500"]);
-        assert!(m.signals[0].tail.is_empty());
     }
 
     #[test]

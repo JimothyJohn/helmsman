@@ -2256,7 +2256,7 @@ pub fn lane_points(samples: impl Iterator<Item = (f32, f32)>) -> Vec<Pos2> {
     let mut column: Option<Column> = None;
     for (x, y) in samples {
         match &mut column {
-            Some(c) if c.x == x.floor() => c.add(x, y),
+            Some(c) if c.x.to_bits() == x.floor().to_bits() => c.add(x, y),
             _ => {
                 if let Some(c) = column.take() {
                     c.flush(&mut pts);
