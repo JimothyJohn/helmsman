@@ -123,8 +123,6 @@ pub struct Seen {
 pub enum Effect {
     /// Shut the name popup (Back from naming).
     CloseNaming,
-    /// Show the Requirements tab.
-    Requirements,
     /// Open the help pages.
     Help,
 }
@@ -138,8 +136,6 @@ pub enum Button {
     Skip,
     /// Skip the Agent step.
     SkipStep,
-    /// Show the Requirements tab (the last card).
-    Requirements,
     /// Open the help pages (the last card).
     Help,
     Finish,
@@ -241,7 +237,6 @@ impl Tour {
                 }
                 None
             }
-            Button::Requirements => Some(Effect::Requirements),
             Button::Help => Some(Effect::Help),
         }
     }
@@ -346,8 +341,8 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
         Step::Done => (
             "That is the whole loop",
             "You made an example your own, changed it, deployed it and watched it run. The help \
-             pages go further: requirements that become tests and gate Deploy, remote I/O in \
-             Devices, and the keyboard shortcuts."
+             pages go further: the tests the Agent writes with each change and how they gate \
+             Deploy, remote I/O in Devices, and the keyboard shortcuts."
                 .into(),
         ),
     }
@@ -517,13 +512,6 @@ pub fn ui(
                                 );
                             }
                             Step::Done => {
-                                button(
-                                    ui,
-                                    Button::Requirements,
-                                    "Requirements",
-                                    "Opens the Requirements tab: each requirement is a test Deploy must pass.",
-                                    false,
-                                );
                                 button(ui, Button::Help, "Help pages", "Opens the help pages in a new tab.", false);
                                 button(ui, Button::Finish, "Finish", "Ends the tour.", true);
                             }
@@ -567,7 +555,6 @@ pub const fn key(b: Button) -> &'static str {
         Button::Back => "tour back",
         Button::Skip => "tour skip",
         Button::SkipStep => "tour skip step",
-        Button::Requirements => "tour requirements",
         Button::Help => "tour help",
         Button::Finish => "tour finish",
     }

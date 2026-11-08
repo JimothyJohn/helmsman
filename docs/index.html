@@ -160,7 +160,7 @@ header.top .gh:hover{color:var(--yellow)}
     <p>Tell Helmsman what the machine should do, in plain language. Drop in a P&amp;ID, an electrical drawing or a photo of the panel and it reads them. The agent drafts the program and you check how it behaves.</p>
     <ol class="rules steps">
       <li><b>Describe</b>State the sequence, the interlocks and the alarms the way you would to a colleague. Attach the drawings.</li>
-      <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see exactly what drives it. Write each requirement in plain words: the agent writes a test for it, and a failing test stops the deploy.</li>
+      <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see exactly what drives it. The agent writes a test for each change it makes, and a failing test stops the deploy.</li>
       <li><b>Approve</b>An engineer signs off with a PIN. The change goes live between scans; every version is kept and can be rolled back.</li>
     </ol>
     <div class="two" style="margin-top:40px">

@@ -75,8 +75,6 @@ pub struct Desk {
     pub drafts: BTreeMap<String, BTreeMap<String, Draft>>,
     /// The Agent tab's input.
     pub agent: String,
-    /// The Requirements tab's input.
-    pub requirement: String,
     /// `editor` or `monitor`.
     pub screen: Option<String>,
     /// The sign-in form's name (never a password or PIN).
@@ -312,14 +310,8 @@ impl Desk {
     /// inputs, the Agent's conversation and the device form (the project,
     /// file, screen and name follow the work).
     fn work(&self) -> String {
-        serde_json::to_string(&(
-            &self.drafts,
-            &self.agent,
-            &self.requirement,
-            &self.conversation,
-            &self.device,
-        ))
-        .unwrap_or_default()
+        serde_json::to_string(&(&self.drafts, &self.agent, &self.conversation, &self.device))
+            .unwrap_or_default()
     }
 
     /// As text, at most `max` bytes: past it, whole drafts are dropped

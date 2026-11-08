@@ -454,18 +454,6 @@ impl BoxProjects {
         self.read_history(name);
     }
 
-    /// Reads the open project's list again without dropping anything: an
-    /// unsaved buffer keeps its text, a new file comes in, a changed one
-    /// is read if it has no edits (the `PCall::Project` answer merges).
-    /// [`open_project`](Self::open_project) starts over instead.
-    pub fn reread(&mut self) {
-        if let Some(name) = self.open.as_ref().map(|o| o.name.clone()) {
-            self.queue
-                .push(PReq::get(PCall::Project(name.clone()), project_url(&name)));
-            self.read_history(&name);
-        }
-    }
-
     /// Puts the open project, the shown file and every unsaved edit on
     /// `desk`: the open project's edits as they stand, and any restored
     /// edit not yet put back (another project's, or a file not read yet).

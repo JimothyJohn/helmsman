@@ -294,29 +294,6 @@ fn neutralize(text: &str, tag: &str) -> String {
     }
 }
 
-/// `data` ready to go inside a `<box-data>` envelope: a closing tag in it
-/// cannot end the envelope early.
-#[must_use]
-pub fn neutralize_data(data: &str) -> String {
-    neutralize(data, "box-data")
-}
-
-/// A one-message request with its own system prompt (the Requirements
-/// tab's test writer), on the same route and with the same headers as the
-/// Agent's.
-#[must_use]
-pub fn one_shot(route: &Route, model: Model, system: &str, user: &str) -> Request {
-    let body = json!({
-        "model": model.id(),
-        "max_tokens": MAX_TOKENS,
-        "stream": true,
-        "output_config": {"effort": "medium"},
-        "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
-        "messages": [{"role": "user", "content": user}],
-    });
-    finish(route, model, body)
-}
-
 /// The headers and the URL for `route`, around `body`.
 fn finish(route: &Route, model: Model, mut body: Json) -> Request {
     let mut headers = vec![
@@ -891,7 +868,7 @@ pub enum Incoming {
     },
 }
 
-/// The way to the model for the Agent tab and the Requirements tab: the
+/// The way to the model for the Agent tab: the
 /// key, the model, the route, and the one answer under way.
 pub struct Chat {
     /// The key field's text (page memory). Read only to build a request.

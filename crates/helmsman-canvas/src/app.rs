@@ -1424,10 +1424,6 @@ impl App {
                     s.files_ui.naming = None;
                 }
             }
-            Some(crate::tour::Effect::Requirements) => {
-                self.chrome.right = true;
-                self.chrome.tab = crate::editor::Tab::Requirements;
-            }
             Some(crate::tour::Effect::Help) => ctx.open_url(egui::OpenUrl::new_tab(HELP_URL)),
             None => {}
         }
