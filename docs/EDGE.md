@@ -488,6 +488,33 @@ timeout; the node cannot do that part without power or network, so the
 test proves the block does it.
 
 
+*Resumed 2026-11-08, the POE-ISO (poe-iso-rack-03, WROOM).* Split test
+first: supervictor's known-good Ethernet firmware on the same board, cable
+and port took a lease and uplinked in 11 s, so the fault was ours. Found
+by diffing the two firmwares: this crate enabled esp-hal's `psram`
+feature for every board, and `esp_hal::init` then brought up a PSRAM the
+WROOM does not have over GPIO16/17, GPIO17 being the POE-ISO's RMII clock
+pin. With `psram` off for that board (`--no-default-features --features
+poe-iso`) the node took a lease at once. Then, on 10.0.0.x, its reports
+reached the Studio for 50 s and stopped: the Studio is on that subnet
+twice (a wired alias and Wi-Fi) and answered the node through the access
+point, and the modbus image dialled a dead E1213 address every scan, each
+dial spending the stack's one ARP request per second (smoltcp's neighbour
+cache is silent for 1 s after any request, for every address), so the
+node could never re-resolve the sink once that entry expired at 60 s.
+Fixed: the Modbus client backs off 2 s after a failed connect. The bench
+then moved to the Studio link with a **static address**
+(`NODE_STATIC_IP=192.168.3.55/24`; most plants commission controllers on
+static networks with no DHCP, Nick 2026-11-08): one Modbus TCP connection
+to the E1213 (192.168.3.60) held, about 31 reads and 31 writes a second,
+the chase on DO-00..02, reports every 10 s to the Studio's wired port,
+the first end-to-end node run. The node answered ARP and TCP (a SYN to a
+closed port got its RST in 1 s) but not ping: smoltcp answers ICMP echo
+only with its `auto-icmp-echo-reply` feature, now on in both node crates.
+Numbers to carry: the 10 ms scan ran at a 30 ms mean because the two
+Modbus round trips are synchronous inside the scan loop; the node's I/O
+moves to its own task with the API work (Phase 4).
+
 **Phase 3, the ESP32-P4 and EtherNet/IP (planned 2026-11-08).** Nick
 bought a Waveshare ESP32-P4-ETH with its PoE module (ESP32-P4NRW32: dual
 RISC-V at 400 MHz with a double-precision FPU, 768 KB SRAM, 32 MB PSRAM,

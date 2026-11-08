@@ -48,7 +48,9 @@ esp-println = { version = "0.18.0", features = ["esp32p4"] }
 esp-backtrace = { version = "0.20.0", features = ["esp32p4", "panic-handler", "println"] }
 embassy-executor = "0.10"
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
-embassy-net = { version = "0.9", features = ["dhcpv4", "medium-ethernet", "proto-ipv4", "tcp", "udp"] }
+# `auto-icmp-echo-reply`: a controller that does not answer ping is a
+# support call at commissioning; smoltcp answers echo only with this on.
+embassy-net = { version = "0.9", features = ["dhcpv4", "medium-ethernet", "proto-ipv4", "tcp", "udp", "auto-icmp-echo-reply"] }
 embedded-io-async = "0.7"
 static_cell = "2.1"
 
