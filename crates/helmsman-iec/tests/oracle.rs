@@ -381,12 +381,13 @@ fn rusty_compares_unsigned_as_unsigned() {
 
 /// ruSTy 1.0.8 negates a SINT or INT variable or literal in DINT (rusty#2016),
 /// so `-v` on the type's minimum is +128 / +32768 there, and the value
-/// shows in a division before the assignment truncates it. Ours negates
-/// in the operand's width (DINT only for an arithmetic result) and wraps.
-/// Pinned so a seed that negates a minimum points here; the TODO.md card
-/// `rusty-negation-width` decides which side moves.
+/// shows in a division before the assignment truncates it. Ours did the
+/// same only for an arithmetic result and wrapped a plain variable's
+/// negation in its own width; since the TODO.md card
+/// `rusty-negation-width` (Nick, 2026-11-08) both sides agree. Pinned so
+/// either side moving points here.
 #[test]
-fn rusty_negates_small_ints_in_dint() {
+fn small_int_negation_is_dint_wide_on_both_sides() {
     let Some(cmd) = rusty() else { return };
     let c = case(
         "",
@@ -398,11 +399,12 @@ fn rusty_negates_small_ints_in_dint() {
         ],
         "qs := (-s) / SINT#2; qi := (-i) / INT#2;",
     );
-    assert_eq!(ours(&c).unwrap()[2..], ["-64".to_string(), "-16384".to_string()]);
+    let want = ["64".to_string(), "16384".to_string()];
+    assert_eq!(ours(&c).unwrap()[2..], want, "ours negates SINT/INT in DINT");
     let theirs = run_rusty(&cmd, std::slice::from_ref(&c));
     assert_eq!(
         theirs[0][2..],
-        ["64".to_string(), "16384".to_string()],
+        want,
         "ruSTy negates SINT/INT in their own width again"
     );
 }

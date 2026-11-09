@@ -4,16 +4,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
-- [ ] **Negate SINT/INT in DINT, as ruSTy 1.0.8 now does?** — the ruSTy 1.0.8 bump (unsigned compares fixed, workaround dropped) passes the CI sweep, but a widened sweep (3000 cases, seeds default and 7) finds a new disagreement every time: unary minus on a type's minimum. ruSTy 1.0.8 (rusty#2016) negates a SINT or INT variable or literal in DINT, so `(-v) / 2` on an INT of -32768 gives 16384 there and -16384 here, because ours negates in the operand's width and wraps. Ours already negates an arithmetic result in DINT "as ruSTy" (check.rs, `widened`); only a plain variable or literal differs, and only when the negation feeds another operation before the assignment truncates it. `rusty_negates_small_ints_in_dint` (tests/oracle.rs) pins both sides. **Recommendation: follow ruSTy**, i.e. widen every SINT/INT negation with `arith()` in check.rs, flip the pin to agreement and widen the sweep again. That makes negation consistent with how we already carry +, -, * and / results, and the change only shows in a program that negates a type's minimum. It does change what such a program computes, which is why it's your call.
-  needs: your call
-  result: the oracle agrees on 3000-case sweeps with any seed (about 1h with the regression test), or the generator stops negating a possible minimum and the difference is written down
-  options: follow ruSTy, widen in check.rs (recommended) | keep ours, dodge it in the generator | keep both as is, the pin is enough
-  est: 10m
-  difficulty: low
-  id: rusty-negation-width
-  asked: 2026-11-07
-  by: claude-session
-
 - [ ] **RETAIN on a clean shutdown: catch SIGTERM?** — retain-persist (#288) writes RETAIN values at most once a second from a writer thread, so a clean stop (launchctl, systemd, Ctrl-C) can lose up to the last second of changes. The box has no signal handler: catching SIGTERM/SIGINT needs either a new dependency (e.g. `signal-hook`, small, widely used) or `unsafe` (the crate forbids it). **Recommendation: add `signal-hook` behind `box`, flush the retain writer and the snapshot on SIGTERM/SIGINT, then exit.** A second of loss on a power cut is the honest IEC trade; on a planned stop it is avoidable, and a service manager always sends SIGTERM first.
   needs: your call on the dependency
   result: a planned stop keeps every RETAIN value; a test sends SIGTERM mid-count and checks the last value
