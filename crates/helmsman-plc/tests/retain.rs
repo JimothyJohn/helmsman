@@ -286,6 +286,27 @@ impl Running {
     }
 }
 
+impl Running {
+    /// SIGTERM, then waits (with a deadline) for the box to exit on its
+    /// own: its exit status and what it printed.
+    fn terminate(mut self) -> (std::process::ExitStatus, String) {
+        let pid = self.child.id().to_string();
+        let sent = Command::new("kill").args(["-TERM", &pid]).status().unwrap();
+        assert!(sent.success(), "kill -TERM {pid}");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let status = loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                break status;
+            }
+            assert!(Instant::now() < deadline, "the box did not exit on SIGTERM");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let mut rest = String::new();
+        let _ = self.stderr.read_to_string(&mut rest);
+        (status, rest)
+    }
+}
+
 impl Drop for Running {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -381,4 +402,41 @@ fn a_killed_box_resumes_its_retain_counter_and_says_what_changed() {
         ),
         "{log}"
     );
+}
+
+/// A planned stop (SIGTERM, which launchctl and systemd send first) writes
+/// the RETAIN values the writer had not yet reached, says so and exits 0:
+/// the saved count is past the periodic write the test saw, and a restart
+/// resumes from exactly it. (The SIGKILL test above is the negative path:
+/// that one keeps only what the periodic write got to.)
+#[test]
+fn a_terminated_box_writes_its_retain_values_before_exiting() {
+    let dir = tmp("term");
+    let program = dir.join("counter.st");
+    std::fs::write(&program, BOX_COUNTER).unwrap();
+    let state = dir.join("state");
+    let retain_dir = state.join(retain::DIR);
+
+    let first = start(&program, &state);
+    let before = wait_saved(&retain_dir, "the first periodic write", |s| int(s, "COUNT") >= 1);
+    let (status, log) = first.terminate();
+    assert!(status.success(), "a planned stop exits 0, got {status:?}: {log}");
+    assert!(
+        log.contains("helmsman-plc: SIGTERM: RETAIN values written, exiting"),
+        "{log}"
+    );
+    let saved = retain::read(&retain_dir, "counter").unwrap().unwrap();
+    let kept = int(&saved, "COUNT");
+    assert!(
+        kept > int(&before, "COUNT"),
+        "the last scans were written at the stop, not left to the next periodic write: {kept} vs {}",
+        int(&before, "COUNT")
+    );
+
+    let second = start(&program, &state);
+    let after = wait_saved(&retain_dir, "the second run to save", |s| {
+        int(s, "FRESH_STARTS") == 2
+    });
+    assert_eq!(int(&after, "AT_BOOT"), kept, "resumed from what the stop wrote");
+    drop(second);
 }

@@ -99,8 +99,9 @@ A deploy keeps every variable's value where its name and type are the
 same. A box that restarts (a reboot, a power cut) keeps only the
 variables declared in a `VAR RETAIN` block, such as a part counter or a
 recipe step. The box saves them at most once a second when they change,
-so a power cut loses at most the last second, and at start it says in
-its log which values it restored and which start fresh because their
+so a power cut loses at most the last second. A planned stop (the
+service manager, Ctrl-C) writes them all first and loses nothing. At
+start the box says in its log which values it restored and which start fresh because their
 type changed. `NON_RETAIN` and plain `VAR` variables start from their
 initial values, and Restart resets RETAIN variables too. RETAIN inside
 a function block is not kept yet: the check warns and the program still

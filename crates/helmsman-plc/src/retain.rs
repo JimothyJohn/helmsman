@@ -25,7 +25,9 @@
 //! a busy writer means the next offer, not a wait). The writer writes the
 //! modules whose values changed since its last write, so a box whose
 //! RETAIN values sit still does not write at all. A power cut loses at
-//! most the last [`EVERY`] of changes. A module a deploy removes, or one
+//! most the last [`EVERY`] of changes; a planned stop (SIGTERM, SIGINT)
+//! makes a last offer ([`Writer::offer_now`]) and waits for it
+//! ([`Writer::flush`]) first. A module a deploy removes, or one
 //! that no longer declares RETAIN, has its file removed.
 //!
 //! # At start
@@ -50,7 +52,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, PoisonError, TryLockError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread;
 use std::time::Duration;
 
@@ -318,25 +320,21 @@ impl Writer {
         if self.last.is_some_and(|l| now.saturating_sub(l) < EVERY) {
             return;
         }
-        let mut inner = match self.shared.inner.try_lock() {
+        let inner = match self.shared.inner.try_lock() {
             Ok(g) => g,
             Err(TryLockError::Poisoned(p)) => p.into_inner(),
             Err(TryLockError::WouldBlock) => return,
         };
-        let offer: Offer = rt
-            .names()
-            .map(|n| {
-                let state = rt
-                    .program(n)
-                    .filter(|p| p.has_retain())
-                    .map(helmsman_iec::Program::retain_state);
-                (n.to_string(), state)
-            })
-            .collect();
-        inner.pending = Some(offer);
-        inner.offered += 1;
-        drop(inner);
-        self.shared.work.notify_one();
+        hand_over(&self.shared, inner, rt);
+        self.last = Some(now);
+    }
+
+    /// [`Writer::offer`] without the [`EVERY`] bound, waiting for the slot
+    /// if the writer holds it: the last offer before a planned stop, which
+    /// [`Writer::flush`] then waits out.
+    pub fn offer_now(&mut self, now: Duration, rt: &Runtime) {
+        let inner = self.shared.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        hand_over(&self.shared, inner, rt);
         self.last = Some(now);
     }
 
@@ -352,6 +350,24 @@ impl Writer {
             .unwrap_or_else(PoisonError::into_inner);
         inner.written >= want
     }
+}
+
+/// Puts the runtime's RETAIN values in the writer's slot and wakes it.
+fn hand_over(shared: &Shared, mut inner: MutexGuard<'_, Inner>, rt: &Runtime) {
+    let offer: Offer = rt
+        .names()
+        .map(|n| {
+            let state = rt
+                .program(n)
+                .filter(|p| p.has_retain())
+                .map(helmsman_iec::Program::retain_state);
+            (n.to_string(), state)
+        })
+        .collect();
+    inner.pending = Some(offer);
+    inner.offered += 1;
+    drop(inner);
+    shared.work.notify_one();
 }
 
 /// The writer thread: forever, takes the newest offer and writes what

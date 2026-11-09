@@ -14,16 +14,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **RETAIN on a clean shutdown: catch SIGTERM?** — retain-persist (#288) writes RETAIN values at most once a second from a writer thread, so a clean stop (launchctl, systemd, Ctrl-C) can lose up to the last second of changes. The box has no signal handler: catching SIGTERM/SIGINT needs either a new dependency (e.g. `signal-hook`, small, widely used) or `unsafe` (the crate forbids it). **Recommendation: add `signal-hook` behind `box`, flush the retain writer and the snapshot on SIGTERM/SIGINT, then exit.** A second of loss on a power cut is the honest IEC trade; on a planned stop it is avoidable, and a service manager always sends SIGTERM first.
-  needs: your call on the dependency
-  result: a planned stop keeps every RETAIN value; a test sends SIGTERM mid-count and checks the last value
-  options: signal-hook behind box (recommended) | keep the 1 s bound, document it | lower the rate instead
-  est: 10m
-  difficulty: low
-  id: retain-shutdown
-  asked: 2026-11-08
-  by: claude-session
-
 ## Needs your hands
 
 - [ ] **Promote the guided tour** — #248 (the playground tour) is in dev but landed one minute after your dev → master merge, so the live playground does not have it, and docs/playground on dev is still the build without it. An agent rebuilds docs/playground on a PR into dev; then the next dev → master merge (yours) puts /playground/?tour live with the help links that point to it.
