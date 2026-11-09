@@ -713,6 +713,66 @@ pub struct View {
     pub decided: std::collections::BTreeMap<u64, String>,
 }
 
+/// A chat box where Enter sends and Shift+Enter or Ctrl+Enter starts a new
+/// line (Nick, 2026-11-08). Returns the box's response and whether Enter
+/// asked to send. The key is consumed either way, so the Ctrl+Enter
+/// Run/Stop hotkey, read at the end of the frame, never sees it.
+pub(crate) fn chat_box(
+    ui: &mut egui::Ui,
+    draft: &mut String,
+    id_salt: &str,
+    hint: String,
+    tip: String,
+) -> (egui::Response, bool) {
+    use egui::TextBuffer as _;
+    use egui::text::{CCursor, CCursorRange, CharIndex};
+
+    let mut out = egui::TextEdit::multiline(draft)
+        .id_salt(id_salt)
+        .hint_text(hint)
+        .desired_rows(3)
+        .desired_width(f32::INFINITY)
+        .return_key(None)
+        .show(ui)
+        .tip(tip);
+    let mut send = false;
+    if out.response.has_focus() {
+        // The modifiers of the key event itself, as TextEdit reads them.
+        let pressed = ui.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => Some(*modifiers),
+                _ => None,
+            })
+        });
+        if let Some(mods) = pressed {
+            if mods.shift || mods.ctrl || mods.command {
+                let [from, to] = out.cursor_range.map_or_else(
+                    || {
+                        let end = CCursor::new(draft.chars().count());
+                        [end, end]
+                    },
+                    |r| r.sorted_cursors(),
+                );
+                draft.delete_char_range(from.index..to.index);
+                draft.insert_text("\n", from.index);
+                out.state
+                    .cursor
+                    .set_char_range(Some(CCursorRange::one(CCursor::new(CharIndex(from.index.0 + 1)))));
+                out.state.store(ui.ctx(), out.response.id);
+            } else {
+                send = true;
+            }
+            ui.input_mut(|i| i.consume_key(mods, egui::Key::Enter));
+        }
+    }
+    (out.response.response, send)
+}
+
 /// The instruction box, Send or Stop, Undo, and the status line with
 /// the reason.
 pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruct, v: &View) -> Option<Act> {
@@ -724,23 +784,20 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
     let t = crate::theme::theme(ui);
     let mut act = None;
     let target = &v.target;
-    let field = ui
-        .add(
-            egui::TextEdit::multiline(&mut s.draft)
-                .id_salt("agent-instruction")
-                // Fits three rows at the panel's width: a longer hint made the
-                // empty field taller, and it shrank on the first keystroke.
-                .hint_text(format!("What should {target} do? e.g. Latch the lamp until stop"))
-                .desired_rows(3)
-                .desired_width(f32::INFINITY),
-        )
-        .tip(format!(
+    // Fits three rows at the panel's width: a longer hint made the empty
+    // field taller, and it shrank on the first keystroke.
+    let (field, enter) = chat_box(
+        ui,
+        &mut s.draft,
+        "agent-instruction",
+        format!("What should {target} do? e.g. Latch the lamp until stop"),
+        format!(
             "Tell the Agent what {target} should do. It changes the file, checks the change with \
              scenarios and the requirement tests, and writes it only if every check passes. \
-             Ctrl+Enter sends."
-        ));
+             Enter sends; Shift+Enter or Ctrl+Enter starts a new line."
+        ),
+    );
     chrome.hit("agent instruction", field.rect);
-    let enter = field.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
     let why_not = v.blocked.clone().or_else(|| s.refusal());
     ui.horizontal_wrapped(|ui| {
         if s.busy() {

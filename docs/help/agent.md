@@ -117,7 +117,8 @@ program is called, and later new programs land in the same project as
 
 On a box the Agent goes through the box's relay, which holds the key, so
 no box and no browser holds it. The tab works the same way: sign in as an
-engineer, open a program file, type the instruction and press **Send**.
+engineer, open a program file, type the instruction and press **Send** or <kbd>Enter</kbd>
+(<kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a new line).
 The checked change is saved on the box as a revision with its History
 entry, by you, and **Undo** asks the box to restore the revision before
 it. The dot beside the tab's heading says whether the agent is online
@@ -138,8 +139,9 @@ program**, **?** is **Get help**.
 <img src="img/get-help.png" alt="Get help in the Agent tab: the question, Ask for help, and the issue with its Copy button." width="326">
 
 Sign in (any role), say what you saw or what you want to do in your own
-words, and press **Ask for help** (<kbd>Ctrl</kbd> <kbd>Enter</kbd> works
-too). The page sends your words with its recent Messages, and the box
+words, and press **Ask for help** (<kbd>Enter</kbd> works too;
+<kbd>Shift</kbd> <kbd>Enter</kbd> or <kbd>Ctrl</kbd> <kbd>Enter</kbd> starts a
+new line). The page sends your words with its recent Messages, and the box
 adds what it knows: its version, the program it runs, its devices and
 their errors. Passwords, PINs and tokens are left out. Nothing on the box
 changes and nothing is filed anywhere.

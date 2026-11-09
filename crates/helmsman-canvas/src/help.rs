@@ -399,21 +399,18 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
 
     let t = crate::theme::theme(ui);
     let mut act = None;
-    let field = ui
-        .add(
-            egui::TextEdit::multiline(&mut s.draft)
-                .id_salt("agent-help")
-                .hint_text("What went wrong, or what do you want to do? e.g. The conveyor stopped, the lamp is red / How do I load a program?")
-                .desired_rows(3)
-                .desired_width(f32::INFINITY),
-        )
-        .tip(
-            "Say what you saw, or ask how to do something, in your own words. The box adds its recent \
-             messages, its devices and their errors, the program it runs and its version. Passwords, PINs \
-             and tokens are left out. Ctrl+Enter asks.",
-        );
+    let (field, enter) = crate::instruct::chat_box(
+        ui,
+        &mut s.draft,
+        "agent-help",
+        "What went wrong, or what do you want to do? e.g. The conveyor stopped, the lamp is red / How do I load a program?"
+            .to_string(),
+        "Say what you saw, or ask how to do something, in your own words. The box adds its recent \
+         messages, its devices and their errors, the program it runs and its version. Passwords, PINs \
+         and tokens are left out. Enter asks; Shift+Enter or Ctrl+Enter starts a new line."
+            .to_string(),
+    );
     chrome.hit("help question", field.rect);
-    let enter = field.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
     let busy = s.helping.as_ref().is_some_and(Helping::busy);
     let why_not = v.blocked.clone().or_else(|| refusal(&s.draft));
     ui.horizontal_wrapped(|ui| {
