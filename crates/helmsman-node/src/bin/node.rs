@@ -309,25 +309,51 @@ async fn main(spawner: Spawner) -> ! {
         // What a request asked for.
         let pending = state::with(shared, |live| live.pending.take());
         match pending {
-            Some(Pending::Deploy {
-                name,
-                source,
-                program,
-            }) => {
-                running = Some(program);
-                stopped = false;
-                state::with(shared, |live| {
-                    live.module.name = name;
-                    live.module.source = source;
-                    live.module.state = Some(State::Running);
-                    live.module.scans = 0;
-                    live.module.late = 0;
-                    live.module.over = 0;
-                    live.module.last_overrun = None;
-                    live.module.exec = state::Ring::default();
-                    live.module.lateness = state::Ring::default();
-                });
-                println!("deployed: {}", state::with(shared, |l| l.module.name.clone()));
+            Some(Pending::Deploy { name, source }) => {
+                // Free the running program first: one compiled program and
+                // one compile peak at a time is all this heap holds.
+                let old_source = state::with(shared, |live| live.module.source.clone());
+                running = None;
+                let result = match compile(&source, SIZES) {
+                    Ok(p) => {
+                        running = Some(p);
+                        stopped = false;
+                        state::with(shared, |live| {
+                            live.module.name = name.clone();
+                            live.module.source = source;
+                            live.module.state = Some(State::Running);
+                            live.module.scans = 0;
+                            live.module.late = 0;
+                            live.module.over = 0;
+                            live.module.last_overrun = None;
+                            live.module.exec = state::Ring::default();
+                            live.module.lateness = state::Ring::default();
+                        });
+                        println!("deployed: {name}");
+                        Ok(())
+                    }
+                    Err(diags) => {
+                        let errors: alloc::vec::Vec<String> = diags
+                            .iter()
+                            .map(|d| alloc::format!("{}: {}", d.pos, d.msg))
+                            .collect();
+                        // Back to what ran, if it still compiles.
+                        if !old_source.is_empty() {
+                            match compile(&old_source, SIZES) {
+                                Ok(p) => running = Some(p),
+                                Err(_) => state::with(shared, |live| {
+                                    live.module.state = Some(State::Faulted(String::from(
+                                        "deploy refused and the previous program could not be restored",
+                                    )));
+                                    live.outputs = [0; IO_BYTES];
+                                }),
+                            }
+                        }
+                        println!("deploy refused: {} error(s)", errors.len());
+                        Err(errors)
+                    }
+                };
+                state::with(shared, |live| live.deployed = Some(result));
             }
             Some(Pending::Control(action)) => {
                 let state = match (action, running.as_mut()) {

@@ -103,13 +103,21 @@ pub struct DeviceLive {
 
 /// What a request asked the scan loop to do; cleared once done.
 pub enum Pending {
+    /// Compile and run `source` as `name`. The scan loop compiles, not the
+    /// server: the running program is dropped first, so only one compiled
+    /// program and one compile peak are ever in the WROOM's heap at once
+    /// (compiling a second program beside the first ran it out of memory
+    /// on 2026-11-08).
     Deploy {
         name: String,
         source: String,
-        program: Program,
     },
     Control(Control),
 }
+
+/// What became of a deploy: `Ok` runs, `Err` lists the checker's lines
+/// and the previous program runs again (or nothing, if that failed too).
+pub type DeployResult = Result<(), Vec<String>>;
 
 #[derive(Default)]
 pub struct Live {
@@ -124,6 +132,8 @@ pub struct Live {
     pub pending: Option<Pending>,
     /// The last control's resulting state, for the request's reply.
     pub controlled: Option<&'static str>,
+    /// The last deploy's outcome, for the request's reply.
+    pub deployed: Option<DeployResult>,
     pub link_up: bool,
     pub ip: Option<[u8; 4]>,
 }

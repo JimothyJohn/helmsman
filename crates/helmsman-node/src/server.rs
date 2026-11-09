@@ -17,7 +17,7 @@ use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer, with_timeout};
 use embedded_io_async::Write;
 use esp_println::println;
-use helmsman_iec::{ImageSizes, compile};
+use helmsman_iec::ImageSizes;
 use helmsman_nodecore::api;
 use helmsman_nodecore::http::{self, Read as HttpRead, Response};
 use helmsman_nodecore::router::{self, Control, Effect, Outcome};
@@ -171,16 +171,23 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
 }
 
 async fn deploy(name: String, source: String, ctx: &Ctx) -> Response {
-    let program = match compile(&source, ctx.sizes) {
-        Ok(p) => p,
-        Err(diags) => {
-            let errors: Vec<String> = diags
-                .iter()
-                .map(|d| alloc::format!("{}: {}", d.pos, d.msg))
-                .collect();
-            return router::deploy_refused(&errors);
-        }
-    };
+    let bytes = source.len();
+    state::with(ctx.shared, |live| {
+        live.deployed = None;
+        live.pending = Some(Pending::Deploy {
+            name: name.clone(),
+            source: source.clone(),
+        });
+    });
+    if !wait_applied(ctx).await {
+        return Response::error(503, "the scan loop did not take the program in time");
+    }
+    match state::with(ctx.shared, |live| live.deployed.take()) {
+        Some(Ok(())) => {}
+        Some(Err(errors)) => return router::deploy_refused(&errors),
+        None => return Response::error(500, "the scan loop reported nothing"),
+    }
+    // It runs; keep it. A program that did not compile never reaches flash.
     let kept = {
         let store = ctx.store.lock().await;
         let mut store = store.borrow_mut();
@@ -189,17 +196,6 @@ async fn deploy(name: String, source: String, ctx: &Ctx) -> Response {
             None => Err(String::from("no flash store")),
         }
     };
-    let bytes = source.len();
-    state::with(ctx.shared, |live| {
-        live.pending = Some(Pending::Deploy {
-            name: name.clone(),
-            source,
-            program,
-        });
-    });
-    if !wait_applied(ctx).await {
-        return Response::error(503, "the scan loop did not take the program in time");
-    }
     match kept {
         Ok(()) => router::deployed(&name, bytes),
         Err(why) => router::deployed_not_kept(&name, &why),
