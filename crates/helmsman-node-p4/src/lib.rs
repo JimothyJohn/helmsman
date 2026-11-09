@@ -12,8 +12,13 @@
 
 extern crate alloc;
 
+pub mod beacon;
 pub mod board;
 pub mod enip;
 pub mod ethernet;
+pub mod flash;
+pub mod io;
 pub mod modbus;
 pub mod report;
+pub mod server;
+pub mod state;

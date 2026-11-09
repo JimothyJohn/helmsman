@@ -167,7 +167,14 @@ async fn main(spawner: Spawner) -> ! {
         mdio: peripherals.GPIO52,
         phy_reset: peripherals.GPIO51,
     };
-    let (stack, runner) = match ethernet::init(pins, seed).await {
+    let addressing = match helmsman_node_p4::report::build_addressing(
+        option_env!("NODE_STATIC_IP"),
+        option_env!("NODE_GATEWAY"),
+    ) {
+        Ok(a) => a,
+        Err(e) => halt(e).await,
+    };
+    let (stack, runner) = match ethernet::init(pins, addressing, seed).await {
         Ok(parts) => parts,
         Err(e) => halt(&alloc::format!("ethernet init failed: {e:?}")).await,
     };

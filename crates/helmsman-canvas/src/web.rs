@@ -24,6 +24,37 @@ use crate::review::{Answer, Call, Request as ReviewRequest};
 /// Longest a read of the box may take before it is given up as failed, s.
 const GET_TIMEOUT_S: i32 = 15;
 
+thread_local! {
+    /// The origin the box calls go to instead of the page's own
+    /// ([`set_base`]); `None` is the served-by-a-box case.
+    static BASE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Sends every box read and stream to `origin` (`?box=ORIGIN`, see
+/// [`crate::app::box_origin`]). The node and the box answer those with
+/// `Access-Control-Allow-Origin: *`, and a read carries no credentials,
+/// so the browser allows them from any page.
+pub fn set_base(origin: &str) {
+    BASE.with(|b| *b.borrow_mut() = Some(origin.trim_end_matches('/').to_string()));
+}
+
+/// `url` on the base origin, when one is set; `url` itself otherwise.
+fn absolute(url: &str) -> String {
+    BASE.with(|b| match &*b.borrow() {
+        Some(base) if url.starts_with('/') => format!("{base}{url}"),
+        _ => url.to_string(),
+    })
+}
+
+/// The `?box=ORIGIN` of this page, if it names one.
+#[must_use]
+pub fn box_origin() -> Option<String> {
+    let query = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .unwrap_or_default();
+    crate::app::box_origin(&query)
+}
+
 /// An open `EventSource` and the callbacks it holds; closed when dropped.
 struct Source {
     es: web_sys::EventSource,
@@ -68,6 +99,7 @@ impl Driver {
             Cmd::Get(what, url) => {
                 let (inbox, gets, ctx) = (Rc::clone(&self.inbox), Rc::clone(&self.gets), ctx.clone());
                 let n = gets.borrow_mut().issue(&what);
+                let url = absolute(&url);
                 wasm_bindgen_futures::spawn_local(async move {
                     let (build, r) = get(&url).await;
                     // A slow, old answer must not overwrite a newer one.
@@ -83,7 +115,7 @@ impl Driver {
                 });
             }
             Cmd::Listen(stream, url) => {
-                let source = self.listen(stream, &url, ctx);
+                let source = self.listen(stream, &absolute(&url), ctx);
                 if source.is_none() {
                     self.inbox.borrow_mut().push(Msg::Failed(stream));
                 }

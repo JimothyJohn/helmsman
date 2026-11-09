@@ -488,6 +488,33 @@ timeout; the node cannot do that part without power or network, so the
 test proves the block does it.
 
 
+*Resumed 2026-11-08, the POE-ISO (poe-iso-rack-03, WROOM).* Split test
+first: supervictor's known-good Ethernet firmware on the same board, cable
+and port took a lease and uplinked in 11 s, so the fault was ours. Found
+by diffing the two firmwares: this crate enabled esp-hal's `psram`
+feature for every board, and `esp_hal::init` then brought up a PSRAM the
+WROOM does not have over GPIO16/17, GPIO17 being the POE-ISO's RMII clock
+pin. With `psram` off for that board (`--no-default-features --features
+poe-iso`) the node took a lease at once. Then, on 10.0.0.x, its reports
+reached the Studio for 50 s and stopped: the Studio is on that subnet
+twice (a wired alias and Wi-Fi) and answered the node through the access
+point, and the modbus image dialled a dead E1213 address every scan, each
+dial spending the stack's one ARP request per second (smoltcp's neighbour
+cache is silent for 1 s after any request, for every address), so the
+node could never re-resolve the sink once that entry expired at 60 s.
+Fixed: the Modbus client backs off 2 s after a failed connect. The bench
+then moved to the Studio link with a **static address**
+(`NODE_STATIC_IP=192.168.3.55/24`; most plants commission controllers on
+static networks with no DHCP, Nick 2026-11-08): one Modbus TCP connection
+to the E1213 (192.168.3.60) held, about 31 reads and 31 writes a second,
+the chase on DO-00..02, reports every 10 s to the Studio's wired port,
+the first end-to-end node run. The node answered ARP and TCP (a SYN to a
+closed port got its RST in 1 s) but not ping: smoltcp answers ICMP echo
+only with its `auto-icmp-echo-reply` feature, now on in both node crates.
+Numbers to carry: the 10 ms scan ran at a 30 ms mean because the two
+Modbus round trips are synchronous inside the scan loop; the node's I/O
+moves to its own task with the API work (Phase 4).
+
 **Phase 3, the ESP32-P4 and EtherNet/IP (planned 2026-11-08).** Nick
 bought a Waveshare ESP32-P4-ETH with its PoE module (ESP32-P4NRW32: dual
 RISC-V at 400 MHz with a double-precision FPU, 768 KB SRAM, 32 MB PSRAM,
@@ -583,6 +610,78 @@ ESP32-P4-ETH wiki, `github.com/pasrom/profinet-rs`,
 `github.com/rtlabs-com/p-net`, the ETG EtherCAT FAQ, and
 supervictor `supervictor/edge/{Cargo.toml,src/config.rs}`; all read
 2026-11-08.
+
+**Phase 4, a node you can commission, deploy to and watch (2026-11-08, on
+the POE-ISO).** Nick's brief: set up a node's network like supervictor
+now does, connect to it, update the runtime, and watch it from the host
+canvas, so a user has one robust experience. The decisions (interview):
+a fixed factory address like Moxa's (192.168.127.250/24), DHCP as an
+option; program deploy before firmware OTA; the node serves the box API
+subset so the existing canvas box view works unchanged; a bearer token
+from the settings record guards writes; programs compile on the node;
+status is scan health, memory and fieldbus links. What exists:
+
+- **`crates/helmsman-nodecore`** (workspace member, `no_std + alloc`,
+  host-tested): the settings record and the program slots in the `nvs`
+  partition (two slots each, sequence-numbered, checksummed, 24 KiB in
+  all, the partition espflash writes by default), a bounded HTTP/1.1
+  reader and writer with SSE framing, the box API's JSON shapes
+  (`render.rs`'s field names) plus `/api/node` and `/api/settings`, the
+  node's own page with the settings form, and the router whose effects
+  (deploy, control, save settings) the firmware carries out. The
+  canvas's `node_api_tests.rs` parses the node's JSON with the same code
+  that parses a box, so the two cannot drift apart unnoticed.
+- **`helmsman-node`'s `node` binary** (`api` feature; `scripts/node-build.sh
+  api`, `scripts/node-flash.sh node`): settings and program from flash
+  (factory record written on an empty partition), the I/O task on its
+  own (the scan never waits on Modbus), two HTTP connections on the
+  settings' port, the site beacon, a report line every 10 s. Verified on
+  poe-iso-rack-03 from the Studio over the wire: first boot at the
+  factory address with the page and every read route answering; a save
+  on the page (the first save needs no token and sets one) wrote the
+  record and restarted the node on static 192.168.3.55; record and
+  program came back from flash; ping; the values stream; `PUT
+  /api/modules/blink` with the token compiled, ran and was kept (201),
+  stop and run (200), a broken program refused with the checker's line
+  (422) and the old program kept running, a tokenless write refused
+  (401); a settings re-save restarted the node and the deployed program
+  came back from flash. Scan: 10 ms, zero late scans in steady state,
+  about 1 ms of work, the E1213 up at 192.168.3.60.
+- **Two WROOM lessons.** (1) The main stack is what the linker leaves above
+  `.bss`, and the task pools sit at the very top of `.bss`: at 112 KiB of
+  heap the stack was 42 KiB, compiling the program at boot overran it by
+  a few hundred bytes, the pools read as "spawned" and the first spawn
+  failed Busy, which looked like a dead link; esp-hal's stack guard is a
+  word 60 B below the stack base and a frame larger than that steps over
+  it. 96 KiB of heap leaves 59 KiB of stack. (2) Memory: 153 KiB of
+  196 KiB used with one small program resident, most of it the runtime's
+  parsed standard library; compiling a second program beside the first
+  ran the heap out and reset the node, so a deploy now drops the running
+  program, compiles, and restores the old one from its source if the new
+  one fails, and only a program that runs is written to flash. A real
+  cell program is a P4 job.
+- **The host canvas opens a node by address.** `?box=http://192.168.3.55:8080`
+  on any canvas page (the dev server's, or a box page served with
+  `--site`) sends every box read and the values stream to that origin;
+  only an origin is accepted, never a path. Verified 2026-11-09 in a
+  headless Chromium against the node: the canvas fetched `/api/modules`,
+  `/api/devices`, `/api/io_map`, opened `/api/events`, selected the chase
+  module and fetched its source, and showed "chase running" with its scan
+  count and the twelve signals live on the I/O tab; the trace stream it
+  also asks for answers 404 on a node, so the diagram pane says it is
+  waiting for a traced scan. (From an agent session the browser itself
+  cannot reach the LAN, macOS Local Network privacy; a TCP forwarder run
+  by Apple's python on localhost stands in.)
+- **`helmsman-node-p4` has the same binary** (`node`, from the same
+  modules; esp-storage 0.10 and esp-bootloader-esp-idf 0.6 for the P4),
+  built and lint clean, waiting for the board.
+- **Bench topology.** The Studio is on 10.0.0.0/24 twice (a wired alias and
+  Wi-Fi) and answers wired nodes through the access point; nodes live on
+  the 192.168.3.x link with the E1213 and the Studio's en0, static.
+- **Left in this phase:** firmware OTA (supervictor's installer and
+  rollback policy); an I/O map setting for the block's address and point
+  names; writes from the canvas (deploy, controls) need a token field in
+  the canvas, today they are `curl` with the bearer.
 
 ## Out of scope for the spike
 
