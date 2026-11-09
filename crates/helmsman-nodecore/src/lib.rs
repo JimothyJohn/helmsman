@@ -26,6 +26,7 @@ extern crate alloc;
 
 pub mod api;
 pub mod http;
+pub mod iomap;
 pub mod program;
 pub mod router;
 pub mod settings;

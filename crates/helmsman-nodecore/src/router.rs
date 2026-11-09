@@ -10,6 +10,7 @@
 //! GET  /                          the node's page (status and the settings form)
 //! GET  /settings                  the same
 //! POST /settings                  the form: SaveSettings (token in the form or as a bearer)
+//! POST /io_map                    the form: SaveIoMap (the box's io.map format, one Modbus TCP block)
 //! GET  /api/modules               the one module
 //! GET  /api/modules/{name}        with its source
 //! PUT  /api/modules/{name}        token: Deploy the body (ST text, or {"source": ...})
@@ -17,6 +18,7 @@
 //! GET  /api/events                the values stream
 //! GET  /api/signals  /api/devices  /api/io_map  /api/site  /api/node  /api/settings
 //! PUT  /api/settings              token: SaveSettings from JSON
+//! PUT  /api/io_map                token: SaveIoMap from {"text"} or text/plain; 422 names the bad line
 //! OPTIONS *                       204 with the CORS headers
 //! ```
 
@@ -42,6 +44,10 @@ pub enum Effect {
     /// request came from the page when `page` is set, so the reply is a
     /// redirect to it.
     SaveSettings { settings: Settings, page: bool },
+    /// Write the I/O map beside the program and restart, so the I/O task
+    /// drives the block it names ([`io_map_saved`]). The text parsed
+    /// ([`crate::iomap::parse`]) before it got here.
+    SaveIoMap { text: String, page: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +122,8 @@ pub fn handle(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
             Outcome::Reply(Response::html(200, api::settings_page(view, settings, None)))
         }
         ("POST", ["settings"]) => settings_form(req, view, settings),
+        ("POST", ["io_map"]) => io_map_form(req, view, settings),
+        ("PUT", ["api", "io_map"]) => io_map_put(req, settings),
         ("GET", ["api", "modules"]) => Outcome::Reply(Response::json(200, &api::modules(view))),
         ("GET", ["api", "modules", name]) => match module_named(view, name) {
             Some(m) => Outcome::Reply(Response::json(200, &api::module_detail(m))),
@@ -167,18 +175,9 @@ pub fn handle(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
 fn settings_form(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
     let pairs = form_pairs(&req.body);
     // The form carries the current token as `auth` (the page asks for it
-    // on save); a bearer header works too.
-    let given = req.bearer().or_else(|| {
-        pairs
-            .iter()
-            .find(|(k, _)| k == "auth")
-            .map(|(_, v)| v.as_str())
-            .filter(|v| !v.is_empty())
-    });
-    // On a fresh node no token is set yet: the first save sets it.
-    if let Err(e) = authorize(given, settings)
-        && !settings.token.is_empty()
-    {
+    // on save); a bearer header works too. On a fresh node no token is
+    // set yet: the first save sets it.
+    if let Err(e) = form_authorized(req, &pairs, settings) {
         return Outcome::Reply(Response::html(
             e.status,
             api::settings_page(
@@ -197,6 +196,101 @@ fn settings_form(req: &Request, view: &NodeView, settings: &Settings) -> Outcome
             422,
             api::settings_page(view, settings, Some(&format!("not saved: {}", e.0))),
         )),
+    }
+}
+
+/// The token a form sent (`auth`), or the bearer header; on a fresh node
+/// with no token yet, nothing is asked.
+fn form_authorized(req: &Request, pairs: &[(String, String)], settings: &Settings) -> Result<(), Response> {
+    let given = req.bearer().or_else(|| {
+        pairs
+            .iter()
+            .find(|(k, _)| k == "auth")
+            .map(|(_, v)| v.as_str())
+            .filter(|v| !v.is_empty())
+    });
+    match authorize(given, settings) {
+        Err(e) if !settings.token.is_empty() => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// `POST /io_map`: the settings page's map form (`map`, and `auth`).
+fn io_map_form(req: &Request, view: &NodeView, settings: &Settings) -> Outcome {
+    let pairs = form_pairs(&req.body);
+    if let Err(e) = form_authorized(req, &pairs, settings) {
+        return Outcome::Reply(Response::html(
+            e.status,
+            api::settings_page(
+                view,
+                settings,
+                Some("map not saved: the current API token is needed"),
+            ),
+        ));
+    }
+    let text = pairs
+        .iter()
+        .find(|(k, _)| k == "map")
+        .map(|(_, v)| v.replace("\r\n", "\n"))
+        .unwrap_or_default();
+    match crate::iomap::parse(&text) {
+        Ok(_) => Outcome::Effect(Effect::SaveIoMap { text, page: true }),
+        Err(bad) => Outcome::Reply(Response::html(
+            422,
+            api::settings_page(view, settings, Some(&format!("map not saved: {bad}"))),
+        )),
+    }
+}
+
+/// `PUT /api/io_map`: `{"text": "..."}` or the map as `text/plain`.
+fn io_map_put(req: &Request, settings: &Settings) -> Outcome {
+    if let Err(e) = authorize(req.bearer(), settings) {
+        return Outcome::Reply(e);
+    }
+    let is_json = req
+        .header("content-type")
+        .is_some_and(|t| t.starts_with("application/json"));
+    let text = if is_json {
+        match serde_json::from_slice::<serde_json::Value>(&req.body) {
+            Ok(j) => match j["text"].as_str() {
+                Some(t) => String::from(t),
+                None => return Outcome::Reply(Response::error(400, "want {\"text\": \"...\"}")),
+            },
+            Err(_) => return Outcome::Reply(Response::error(400, "body is not JSON")),
+        }
+    } else {
+        match core::str::from_utf8(&req.body) {
+            Ok(t) => String::from(t),
+            Err(_) => return Outcome::Reply(Response::error(400, "the map is not UTF-8")),
+        }
+    };
+    match crate::iomap::parse(&text) {
+        Ok(_) => Outcome::Effect(Effect::SaveIoMap { text, page: false }),
+        Err(bad) => Outcome::Reply(Response::error(422, &alloc::format!("{bad}"))),
+    }
+}
+
+/// The reply once a [`Effect::SaveIoMap`] is on flash: a redirect back to
+/// the page, or JSON; the node restarts after sending it.
+#[must_use]
+pub fn io_map_saved(page: bool, restarting: bool) -> Response {
+    if page {
+        Response::see_other("/settings?map_saved")
+    } else {
+        Response::json(200, &json!({ "saved": true, "restarting": restarting }))
+    }
+}
+
+/// The reply when the map could not be written.
+#[must_use]
+pub fn io_map_not_saved(page: bool, view: &NodeView, settings: &Settings, why: &str) -> Response {
+    if page {
+        Response::html(
+            500,
+            api::settings_page(view, settings, Some(&format!("map not saved: {why}"))),
+        )
+    } else {
+        Response::error(500, why)
     }
 }
 
@@ -394,6 +488,74 @@ mod tests {
             &s,
         ));
         assert_eq!(r.status, 204);
+    }
+
+    #[test]
+    fn the_map_is_saved_with_the_token_and_a_bad_one_names_its_line() {
+        let v = sample_view();
+        let s = settings();
+        let map = "device rio modbus-tcp 192.168.3.60\nin estop bool rio di:0\nout motor bool rio coil:0\n";
+        let put = |auth: &str, ctype: &str, body: &str| {
+            req(&format!(
+                "PUT /api/io_map HTTP/1.1\r\n{auth}Content-Type: {ctype}\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ))
+        };
+        assert_eq!(reply(handle(&put("", "text/plain", map), &v, &s)).status, 401);
+        let auth = "Authorization: Bearer tok\r\n";
+        assert_eq!(
+            handle(&put(auth, "text/plain", map), &v, &s),
+            Outcome::Effect(Effect::SaveIoMap {
+                text: map.into(),
+                page: false
+            })
+        );
+        let json = serde_json::json!({ "text": map }).to_string();
+        assert_eq!(
+            handle(&put(auth, "application/json", &json), &v, &s),
+            Outcome::Effect(Effect::SaveIoMap {
+                text: map.into(),
+                page: false
+            })
+        );
+        let bad = reply(handle(
+            &put(auth, "text/plain", "device rio enip 192.168.3.60\n"),
+            &v,
+            &s,
+        ));
+        assert_eq!(bad.status, 422);
+        let text = String::from_utf8_lossy(&bad.body).into_owned();
+        assert!(text.contains("line 1"), "{text}");
+        assert_eq!(
+            reply(handle(&put(auth, "application/json", "{}"), &v, &s)).status,
+            400
+        );
+        // The page's form: the token as `auth`, CRLF from the browser normalised.
+        let form = format!(
+            "auth=tok&map={}",
+            "device%20rio%20modbus-tcp%2010.0.0.9%0D%0Ain%20x%20bool%20rio%20di%3A1%0D%0A"
+        );
+        let r = req(&format!(
+            "POST /io_map HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{form}",
+            form.len()
+        ));
+        assert_eq!(
+            handle(&r, &v, &s),
+            Outcome::Effect(Effect::SaveIoMap {
+                text: "device rio modbus-tcp 10.0.0.9\nin x bool rio di:1\n".into(),
+                page: true
+            })
+        );
+        let no_auth = format!("map={}", "device%20rio%20modbus-tcp%2010.0.0.9%0A");
+        let r = req(&format!(
+            "POST /io_map HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: {}\r\n\r\n{no_auth}",
+            no_auth.len()
+        ));
+        let page = reply(handle(&r, &v, &s));
+        assert_eq!(page.status, 401);
+        assert!(String::from_utf8_lossy(&page.body).contains("map not saved"));
+        assert_eq!(io_map_saved(false, true).status, 200);
+        assert_eq!(io_map_saved(true, true).status, 303);
     }
 
     #[test]

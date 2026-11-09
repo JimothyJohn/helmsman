@@ -125,6 +125,9 @@ pub struct Live {
     pub outputs: [u8; IO_BYTES],
     pub module: ModuleLive,
     pub device: DeviceLive,
+    /// The I/O map text the node runs (card node-io-map): what
+    /// `/api/io_map` and the settings page show.
+    pub io_map: String,
     /// Publication count and time, bumped by the scan loop when the
     /// signals were refreshed.
     pub seq: u64,
@@ -190,7 +193,9 @@ pub fn view(
                 address: Some(live.device.address.clone()),
             }]
         };
-        let io_map = if live.device.name.is_empty() {
+        let io_map = if !live.io_map.is_empty() {
+            live.io_map.clone()
+        } else if live.device.name.is_empty() {
             String::new()
         } else {
             alloc::format!("device {} modbus-tcp {}\n", live.device.name, live.device.address)
@@ -215,28 +220,65 @@ pub fn view(
     })
 }
 
-/// The node's signals: the block's points as the I/O task moves them
-/// (`di0`..`di7` from the inputs' first byte, `do0`..`do3` from the
-/// outputs'), then the program's ports with their values. The runtime does
-/// not list located variables (`AT %IX0.0`), so the points are named here
-/// from the image; an I/O map setting will name them later.
+/// The block's point names in image order, from the I/O map
+/// (`helmsman_nodecore::iomap`): index `k` is bit `k % 8` of byte `k / 8`;
+/// `None` where the map names no point.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PointNames {
+    pub inputs: Vec<Option<String>>,
+    pub outputs: Vec<Option<String>>,
+}
+
+impl PointNames {
+    /// The names a map gives its points.
+    #[must_use]
+    pub fn of(map: &helmsman_nodecore::iomap::IoMap) -> Self {
+        let own = |points: &[helmsman_nodecore::iomap::Point]| {
+            helmsman_nodecore::iomap::IoMap::names(points)
+                .into_iter()
+                .map(|n| n.map(String::from))
+                .collect()
+        };
+        Self {
+            inputs: own(&map.inputs),
+            outputs: own(&map.outputs),
+        }
+    }
+}
+
+/// The node's signals: the block's points as the I/O task moves them,
+/// named by the map (`names`), then the program's ports with their
+/// values. The runtime does not list located variables (`AT %IX0.0`), so
+/// the points are read here from the image.
 #[must_use]
-pub fn signals_of(program: &Program, inputs: &[u8; IO_BYTES], outputs: &[u8; IO_BYTES]) -> Vec<SignalView> {
-    let mut out: Vec<SignalView> = (0..8)
-        .map(|bit| SignalView {
-            name: alloc::format!("di{bit}"),
-            dir: "in",
-            value: Some(SignalValue::Bool(inputs[0] & (1 << bit) != 0)),
+pub fn signals_of(
+    program: &Program,
+    inputs: &[u8; IO_BYTES],
+    outputs: &[u8; IO_BYTES],
+    names: &PointNames,
+) -> Vec<SignalView> {
+    let bit = |image: &[u8; IO_BYTES], k: usize| image.get(k / 8).is_some_and(|b| b & (1 << (k % 8)) != 0);
+    let point = |dir: &'static str, image: &[u8; IO_BYTES], k: usize, name: &Option<String>| {
+        name.as_ref().map(|n| SignalView {
+            name: n.clone(),
+            dir,
+            value: Some(SignalValue::Bool(bit(image, k))),
             quality: "good",
             point_error: None,
         })
-        .chain((0..4).map(|bit| SignalView {
-            name: alloc::format!("do{bit}"),
-            dir: "out",
-            value: Some(SignalValue::Bool(outputs[0] & (1 << bit) != 0)),
-            quality: "good",
-            point_error: None,
-        }))
+    };
+    let mut out: Vec<SignalView> = names
+        .inputs
+        .iter()
+        .enumerate()
+        .filter_map(|(k, n)| point("in", inputs, k, n))
+        .chain(
+            names
+                .outputs
+                .iter()
+                .enumerate()
+                .filter_map(|(k, n)| point("out", outputs, k, n)),
+        )
         .collect();
     out.extend(program.ports().iter().map(|p| {
         let value = match program.get(&p.name) {

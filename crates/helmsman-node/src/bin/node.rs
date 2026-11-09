@@ -36,9 +36,10 @@ use esp_hal::timer::timg::TimerGroup;
 use esp_println::println;
 use esp_storage::FlashStorage;
 use helmsman_iec::{Image, ImageSizes, Program, compile};
-use helmsman_node::state::{self, IO_BYTES, Pending, Shared};
+use helmsman_node::state::{self, IO_BYTES, Pending, PointNames, Shared};
 use helmsman_node::{beacon, ethernet, flash, io, server};
 use helmsman_nodecore::api::State;
+use helmsman_nodecore::iomap::{self, IoMap};
 use helmsman_nodecore::router::Control;
 use helmsman_nodecore::settings::{Net, Settings};
 use static_cell::StaticCell;
@@ -64,13 +65,13 @@ esp_bootloader_esp_idf::esp_app_desc!(
 const HEAP_SIZE: usize = 96 * 1024;
 const DRAM2_HEAP_SIZE: usize = 96 * 1024;
 
-/// The remote block (a settings-record field later).
+/// The remote block the factory map names (the stored map wins once one
+/// is saved, card node-io-map).
 const E1213_ADDR: &str = match option_env!("E1213_ADDR") {
     Some(a) => a,
     None => "192.168.3.60",
 };
 const E1213_PORT: u16 = 502;
-const UNIT: u8 = 1;
 const SEED_CHASE: bool = option_env!("NODE_SEED_CHASE").is_some();
 
 const SCAN: Duration = Duration::from_millis(10);
@@ -104,6 +105,7 @@ END_PROGRAM
 ";
 
 static SHARED: StaticCell<Shared> = StaticCell::new();
+static NAMES: StaticCell<PointNames> = StaticCell::new();
 static SETTINGS: StaticCell<Settings> = StaticCell::new();
 static STORE: StaticCell<server::StoreCell> = StaticCell::new();
 static CTX: StaticCell<server::Ctx> = StaticCell::new();
@@ -178,17 +180,64 @@ async fn main(spawner: Spawner) -> ! {
     } else {
         println!("program: none; deploy one with PUT /api/modules/{{name}}");
     }
+    // The I/O map (card node-io-map): the text kept beside the program,
+    // else the factory map at the build-time block address.
+    let factory_host = parse_endpoint(E1213_ADDR, E1213_PORT).map_or([192, 168, 3, 60], |e| match e.addr {
+        IpAddress::Ipv4(a) => a.octets(),
+    });
+    let stored_map = store
+        .as_ref()
+        .and_then(|s| s.program().map(|p| p.map.clone()))
+        .unwrap_or_default();
+    let map = if stored_map.trim().is_empty() {
+        println!("io map: none on flash; the factory map ({E1213_ADDR}, di0..7, do0..3)");
+        IoMap::factory(factory_host, "rio")
+    } else {
+        match iomap::parse(&stored_map) {
+            Ok(m) => {
+                println!(
+                    "io map: {} at {}.{}.{}.{}:{} unit {}, {} inputs, {} coils",
+                    m.device,
+                    m.host[0],
+                    m.host[1],
+                    m.host[2],
+                    m.host[3],
+                    m.port,
+                    m.unit,
+                    m.input_count(),
+                    m.coil_count()
+                );
+                m
+            }
+            Err(e) => {
+                println!("io map: the stored map no longer parses ({e}); the factory map");
+                IoMap::factory(factory_host, "rio")
+            }
+        }
+    };
+    let names: &'static PointNames = NAMES.init(PointNames::of(&map));
+    let block = IpEndpoint::new(
+        IpAddress::Ipv4(Ipv4Address::new(
+            map.host[0],
+            map.host[1],
+            map.host[2],
+            map.host[3],
+        )),
+        map.port,
+    );
+    let (unit, input_count, coil_count) = (map.unit, map.input_count(), map.coil_count());
     let store: &'static server::StoreCell = STORE.init(embassy_sync::mutex::Mutex::new(RefCell::new(store)));
 
     let shared: &'static Shared = SHARED.init(Mutex::new(RefCell::new(state::Live::default())));
     state::with(shared, |live| {
-        live.device.name = String::from("rio");
-        live.device.address = alloc::format!("{E1213_ADDR}:{E1213_PORT}");
+        live.device.name.clone_from(&map.device);
+        live.device.address = alloc::format!("{block}");
+        live.io_map.clone_from(&map.text);
         if let Some((name, source, p)) = &program {
             live.module.name.clone_from(name);
             live.module.source.clone_from(source);
             live.module.state = Some(State::Running);
-            live.module.signals = state::signals_of(p, &[0; IO_BYTES], &[0; IO_BYTES]);
+            live.module.signals = state::signals_of(p, &[0; IO_BYTES], &[0; IO_BYTES], names);
         }
     });
 
@@ -242,14 +291,11 @@ async fn main(spawner: Spawner) -> ! {
         println!("address {}; API on port {}", cfg.address, settings.api_port);
     }
 
-    // The tasks: the block, the server (two connections), the beacon.
-    let Some(block) = parse_endpoint(E1213_ADDR, E1213_PORT) else {
-        halt(&alloc::format!(
-            "E1213_ADDR {E1213_ADDR:?} is not an IPv4 address"
-        ))
-        .await
-    };
-    spawner.spawn(io::io_task(stack, block, UNIT, shared)).ok();
+    // The tasks: the block (as the map says), the server (two
+    // connections), the beacon.
+    spawner
+        .spawn(io::io_task(stack, block, unit, input_count, coil_count, shared))
+        .ok();
     let ctx: &'static server::Ctx = CTX.init(server::Ctx {
         shared,
         settings,
@@ -400,7 +446,7 @@ async fn main(spawner: Spawner) -> ! {
             scan_count += 1;
             let outputs: [u8; IO_BYTES] = image.q[..IO_BYTES].try_into().unwrap_or([0; IO_BYTES]);
             let refresh = scan_count.is_multiple_of(10);
-            let signals = refresh.then(|| state::signals_of(p, &inputs, &outputs));
+            let signals = refresh.then(|| state::signals_of(p, &inputs, &outputs, names));
             let faulted = result.as_ref().err().map(|f| alloc::format!("{f}"));
             state::with(shared, |live| {
                 live.module.scans += 1;

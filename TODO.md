@@ -261,15 +261,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-09
   by: claude-session
 
-- [ ] **Node I/O map as a setting: the block's address, unit and point names** — today the node's Modbus block is fixed at build time (E1213_ADDR, unit 1, points di0..di7 and do0..do3 named in the firmware), so one image fits one bench. Make it a record beside the settings on flash (nodecore settings: address, port, unit id, the DI and DO point names and counts, scan period), edited on the settings page and over PUT /api/settings like the network, applied on restart; the box's I/O map format where it fits (a node holds one or two blocks, not a site). The canvas box view then shows the engineer's names. Test: nodecore round-trips the record, refuses a count the block cannot have, and the I/O task reads the record instead of constants.
-  needs: nothing; builds on #312's settings record
-  result: one node image commissions against any Modbus TCP block by filling a form, no rebuild
-  est: 1d
-  difficulty: med
-  id: node-io-map
-  asked: 2026-11-09
-  by: claude-session
-
 - [ ] **Canvas: a token field for a node, so deploy and run/stop work from the UI** — `?box=ORIGIN` (#312) makes the canvas watch a node or another box by address, read-only in practice: every write needs the node's bearer token, which only curl sends today. Add a token field where the canvas asks for the origin (kept in the browser's storage for that origin, never in the URL), sent as Authorization: Bearer on every write, with a 401 opening the field again. Then the Editor's deploy and the Stop/Run glyphs work against a node. Test: the canvas contract test (node_api_tests.rs) with a write that fails without the header and passes with it.
   needs: nothing
   result: an engineer commissions, deploys and stops a node from the canvas alone

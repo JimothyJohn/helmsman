@@ -128,9 +128,30 @@ impl Store {
     /// A program too big for a slot, the flash failing or the read-back
     /// differing.
     pub fn write_program(&mut self, name: &str, source: &str) -> Result<(), StoreError> {
+        // The map rides along unchanged (card node-io-map).
+        let map = self.program.as_ref().map(|p| p.map.clone()).unwrap_or_default();
+        self.write_slot(name, source, &map)
+    }
+
+    /// Writes the I/O map text beside the program (kept as it is) as the
+    /// next record into the other slot, read back.
+    ///
+    /// # Errors
+    /// A map too big for the slot beside the program, the flash failing or
+    /// the read-back differing.
+    pub fn write_map(&mut self, map: &str) -> Result<(), StoreError> {
+        let (name, source) = self
+            .program
+            .as_ref()
+            .map(|p| (p.name.clone(), p.source.clone()))
+            .unwrap_or_default();
+        self.write_slot(&name, &source, map)
+    }
+
+    fn write_slot(&mut self, name: &str, source: &str, map: &str) -> Result<(), StoreError> {
         let (slot, seq) = program::next(self.program.as_ref());
         let mut frame = vec![0xFFu8; program::SLOT_LEN];
-        let used = program::encode(name, source, seq, &mut frame).map_err(|_| StoreError::TooBig)?;
+        let used = program::encode(name, source, map, seq, &mut frame).map_err(|_| StoreError::TooBig)?;
         {
             let mut region = region(&mut self.flash, &mut self.table)?;
             region
@@ -149,6 +170,7 @@ impl Store {
             seq,
             name: String::from(name),
             source: String::from(source),
+            map: String::from(map),
         });
         Ok(())
     }
