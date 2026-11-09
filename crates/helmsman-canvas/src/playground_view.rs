@@ -1574,11 +1574,18 @@ impl Body for PlaygroundView {
         // An edit is only checked: what runs is the last deploy, as on a box.
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
         let mut go = false;
+        // The header is the open file's name (Nick, 2026-11-08), then word
+        // wrap, then the → that deploys this version.
+        let name = self.proj.current.clone();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            ui.add(crate::theme::whole(RichText::new("Structured Text").strong()))
-                .tip("The open file. It is checked as you type; Deploy runs it.");
-            // The → deploys this version (Nick, 2026-11-08).
+            editor::file_header(
+                ui,
+                chrome,
+                &name,
+                "The open file. It is checked as you type; Deploy runs it.",
+            );
+            editor::wrap_toggle(ui, chrome);
             go = crate::projects::deploy_arrow(
                 ui,
                 chrome,

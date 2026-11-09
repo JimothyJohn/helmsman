@@ -30,8 +30,8 @@ outputs.
    name you give it, or **Upload** (File › Upload) a `.zip` of a whole
    project or a single `.st` file. See [Projects](projects.html).
 4. **Deploy**: <kbd>Ctrl</kbd> <kbd>D</kbd>, File › Deploy, or the → arrow
-   right of the Structured Text header and beside the running program in
-   Files. Deploy saves first, compiles the whole project, and loads it.
+   right of the file name at the top of Code and beside the running
+   program in Files. Deploy saves first, compiles the whole project, and loads it.
    A project that does not compile is refused, with each error by file
    and line, and the box keeps running what it had.
 5. **Approve it, if it asks.** A box has an approval policy: a small
