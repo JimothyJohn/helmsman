@@ -671,7 +671,14 @@ status is scan health, memory and fieldbus links. What exists:
   also asks for answers 404 on a node, so the diagram pane says it is
   waiting for a traced scan. (From an agent session the browser itself
   cannot reach the LAN, macOS Local Network privacy; a TCP forwarder run
-  by Apple's python on localhost stands in.)
+  by Apple's python on localhost stands in.) Writes too, since card
+  `canvas-node-token` (2026-11-09): on such a page the sign-in panel asks
+  for the node's token instead of a user, keeps it in that browser for
+  that origin only (`localStorage`, never the URL), and the transport
+  sends it as `Authorization: Bearer` on every call there (the node
+  answers the preflight), so Deploy, Save, Stop and Run work from the UI.
+  Forget drops it. A box watched by address still refuses the preflight,
+  so that path is a node's today.
 - **The block and its points are a setting: the I/O map** (card
   `node-io-map`, 2026-11-09). The node keeps an io.map text in the box's
   format beside the program in its flash slot (frame version 2; a version

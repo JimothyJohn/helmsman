@@ -247,7 +247,17 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         let mut app = if let Some(origin) = crate::web::box_origin() {
             crate::web::set_base(&origin);
-            Self::boxed()
+            let mut app = Self::boxed();
+            // The sign-in panel asks for that origin's token (card
+            // canvas-node-token); the one this browser kept for it, if any,
+            // makes the page an engineer there from the first frame.
+            let review = app.review.get_or_insert_with(ReviewView::new);
+            if let Some(token) = crate::web::remembered_token(&origin) {
+                crate::web::set_token(Some(&token));
+                review.state.session = Some(crate::node_token::session());
+            }
+            review.remote = Some(origin);
+            app
         } else if crate::web::wants_sim() {
             Self::sim()
         } else {

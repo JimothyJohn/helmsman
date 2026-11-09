@@ -28,6 +28,41 @@ thread_local! {
     /// The origin the box calls go to instead of the page's own
     /// ([`set_base`]); `None` is the served-by-a-box case.
     static BASE: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The bearer token every call to [`BASE`] carries ([`set_token`];
+    /// card canvas-node-token); `None` sends none.
+    static TOKEN: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Sends `token` as `Authorization: Bearer` on every call to the base
+/// origin from now on (`None`: none). The node answers a preflight for
+/// it; a box does not, so this is for a node today.
+pub fn set_token(token: Option<&str>) {
+    TOKEN.with(|t| *t.borrow_mut() = token.map(str::to_string));
+}
+
+/// The token this browser kept for `origin`, if the person asked it to.
+#[must_use]
+pub fn remembered_token(origin: &str) -> Option<String> {
+    local_storage()?
+        .get_item(&crate::node_token::slot(origin))
+        .ok()
+        .flatten()
+        .filter(|t| !t.is_empty())
+}
+
+/// Keeps `token` for `origin` in this browser (`localStorage`: it never
+/// reaches the URL or another origin's page).
+pub fn remember_token(origin: &str, token: &str) {
+    if let Some(s) = local_storage() {
+        let _ = s.set_item(&crate::node_token::slot(origin), token);
+    }
+}
+
+/// Drops the token kept for `origin`.
+pub fn forget_token(origin: &str) {
+    if let Some(s) = local_storage() {
+        let _ = s.remove_item(&crate::node_token::slot(origin));
+    }
 }
 
 /// Sends every box read and stream to `origin` (`?box=ORIGIN`, see
@@ -446,14 +481,29 @@ impl Http {
 /// null` even to the same origin; `same-origin` here makes it send the
 /// real one, which the box checks beside the cookie. A mutating call
 /// carries `X-Helmsman-Request: 1`, a header no cross-site form can send.
+///
+/// With a base origin ([`set_base`]) the call is cross-origin instead:
+/// CORS, no cookie (the page has none there), and the token the person
+/// gave for it ([`set_token`]) as `Authorization: Bearer`, which the node
+/// answers a preflight for.
 fn init(method: &str) -> Result<(web_sys::RequestInit, web_sys::Headers), String> {
     let init = web_sys::RequestInit::new();
     init.set_method(method);
-    init.set_mode(web_sys::RequestMode::SameOrigin);
     init.set_cache(web_sys::RequestCache::NoStore);
-    init.set_credentials(web_sys::RequestCredentials::SameOrigin);
-    init.set_referrer_policy(web_sys::ReferrerPolicy::SameOrigin);
     let headers = web_sys::Headers::new().map_err(|e| text(&e))?;
+    let remote = BASE.with(|b| b.borrow().is_some());
+    if remote {
+        init.set_mode(web_sys::RequestMode::Cors);
+        init.set_credentials(web_sys::RequestCredentials::Omit);
+        if let Some(token) = TOKEN.with(|t| t.borrow().clone()) {
+            let (name, value) = crate::node_token::header(&token);
+            headers.set(name, &value).map_err(|e| text(&e))?;
+        }
+    } else {
+        init.set_mode(web_sys::RequestMode::SameOrigin);
+        init.set_credentials(web_sys::RequestCredentials::SameOrigin);
+        init.set_referrer_policy(web_sys::ReferrerPolicy::SameOrigin);
+    }
     if method != "GET" {
         headers.set("X-Helmsman-Request", "1").map_err(|e| text(&e))?;
     }

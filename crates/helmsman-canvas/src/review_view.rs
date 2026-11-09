@@ -71,6 +71,12 @@ pub struct ReviewView {
     /// The role picked to sign in with its PIN (boxes without accounts).
     pub role_input: String,
     pub pin_input: String,
+    /// The token typed for a node or box watched by address (card
+    /// canvas-node-token); emptied once it is taken.
+    pub token_input: String,
+    /// The origin this page watches by address (`?box=ORIGIN`), when it
+    /// does: the sign-in panel then asks for that origin's token.
+    pub remote: Option<String>,
     /// Which POU of the diagram diff is shown.
     pub pou: usize,
     pub cam: Cam,
@@ -121,6 +127,8 @@ impl ReviewView {
             password_input: String::new(),
             role_input: ROLES[0].to_string(),
             pin_input: String::new(),
+            token_input: String::new(),
+            remote: None,
             pou: 0,
             cam: Cam::default(),
             rects: Vec::new(),
@@ -210,6 +218,10 @@ impl ReviewView {
     /// Who is approving: signed in, or the way in this box takes (a user
     /// and password with accounts, else a role and its PIN).
     pub fn login_ui(&mut self, ui: &mut egui::Ui) {
+        if let Some(origin) = self.remote.clone() {
+            self.token_ui(ui, &origin);
+            return;
+        }
         let t = theme(ui);
         ui.label(RichText::new("Signed in").strong()).tip(SESSION);
         if let Some(who) = self.state.signed_in() {
@@ -259,6 +271,73 @@ impl ReviewView {
         }
         if self.state.logging_in {
             ui.spinner();
+        }
+        if let Some(p) = &self.state.login_problem {
+            ui.colored_label(RED, p);
+        }
+    }
+
+    /// The panel for a node or box watched by address: no accounts there,
+    /// only its token, kept by this browser for that origin and sent on
+    /// every call (card canvas-node-token).
+    fn token_ui(&mut self, ui: &mut egui::Ui, origin: &str) {
+        let t = theme(ui);
+        ui.label(RichText::new("Token").strong()).tip(TOKEN_TIP);
+        ui.label(RichText::new(origin).color(t.muted))
+            .tip("The node or box this page watches, from its address.");
+        if self.state.session.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("● token kept for this address").color(t.accent))
+                    .tip("Deploy, Save, Stop and Run send it; the node checks it on every write.");
+                let out = ui
+                    .button("Forget")
+                    .tip("Drops the token from this browser. Watching goes on; writes stop.");
+                self.rects.push(("forget".into(), out.rect));
+                if out.clicked() {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        crate::web::set_token(None);
+                        crate::web::forget_token(origin);
+                    }
+                    self.state.session = None;
+                    self.state.login_problem = None;
+                }
+            });
+            return;
+        }
+        let field = ui
+            .add(
+                egui::TextEdit::singleline(&mut self.token_input)
+                    .password(true)
+                    .hint_text("token")
+                    .desired_width(f32::INFINITY),
+            )
+            .tip("The token from the node's settings page (or the box's api-token file). Enter keeps it.");
+        self.rects.push(("token".into(), field.rect));
+        let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let go = ui
+            .button("Use this token")
+            .tip("Keeps the token in this browser for this address and sends it on every call.");
+        self.rects.push(("use".into(), go.rect));
+        if go.clicked() || enter {
+            match crate::node_token::clean(&self.token_input) {
+                Some(token) => {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        crate::web::set_token(Some(&token));
+                        crate::web::remember_token(origin, &token);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let _ = &token;
+                    self.token_input.clear();
+                    self.state.session = Some(crate::node_token::session());
+                    self.state.login_problem = None;
+                }
+                None => {
+                    self.state.login_problem =
+                        Some("A token is one line of plain characters, no spaces.".into());
+                }
+            }
         }
         if let Some(p) = &self.state.login_problem {
             ui.colored_label(RED, p);
@@ -473,6 +552,11 @@ struct Out {
 const SESSION: &str = "The box keeps the session (1 h, or 15 min unused) in a cookie this page \
                        cannot read; signing out ends it on the box. Approvals are made as who \
                        is signed in.";
+
+/// The token panel's heading tooltip (a node or box watched by address).
+const TOKEN_TIP: &str = "A node has no accounts: its settings page holds one token, and every \
+                         write needs it. This browser keeps the token for this address only, \
+                         never in the page's URL.";
 
 /// The Sign in button's tooltip.
 const fn sign_in_tip(busy: bool) -> &'static str {
