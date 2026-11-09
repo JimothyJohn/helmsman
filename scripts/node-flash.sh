@@ -131,8 +131,18 @@ mkdir -p scratch
 log="scratch/node-$bin-$(date -u +%Y%m%dT%H%M%SZ).log"
 echo "monitor output also goes to $log; Ctrl-C to leave the monitor"
 cd "$crate"
-espflash flash --monitor --port "$SERIAL_PORT" \
-  "$target_dir/$bin" 2>&1 | tee "../../$log"
+# The interactive monitor needs a terminal; from an agent session (no tty)
+# flash alone, and read the console afterwards with
+#   espflash monitor --port PORT --non-interactive --before no-reset-no-sync --after no-reset
+if [ -t 0 ]; then
+  espflash flash --monitor --port "$SERIAL_PORT" \
+    "$target_dir/$bin" 2>&1 | tee "../../$log"
+else
+  espflash flash --port "$SERIAL_PORT" \
+    "$target_dir/$bin" 2>&1 | tee "../../$log"
+  echo "no terminal: flashed without the monitor; read the console with"
+  echo "  espflash monitor --port $SERIAL_PORT --non-interactive --before no-reset-no-sync --after no-reset"
+fi
 echo "log: $log"
 if grep -q "Flashing has completed" "$root/$log"; then
   printf '%s %s\n' "$SERIAL_PORT" "$mac" > "$memo"
