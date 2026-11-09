@@ -1983,7 +1983,7 @@ impl Body for BoxView {
                     chrome,
                     "code deploy",
                     &deploy,
-                    "Deploys this version: saves, checks and runs the project on the box (Ctrl D, File › Deploy).",
+                    "Deploys this version: saves, checks and runs the project on the box (Ctrl Shift Enter, File › Deploy).",
                 );
                 match &write {
                     Ok(()) => {}

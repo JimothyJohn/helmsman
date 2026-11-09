@@ -624,7 +624,7 @@ mod tests {
     #[test]
     fn a_question_gets_an_answer_from_the_help_pages_and_no_issue() {
         let answer = json!({
-            "text": "Sign in as an engineer, open the project in Files and press Deploy (Ctrl D).",
+            "text": "Sign in as an engineer, open the project in Files and press Deploy (Ctrl Shift Enter).",
             "pages": [
                 { "page": "box", "title": "On a box", "url": "https://helmsman.advin.io/help/box.html" },
                 { "page": "box", "title": "On a box", "url": "https://helmsman.advin.io/help/box.html" },

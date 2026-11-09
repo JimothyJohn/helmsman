@@ -655,7 +655,7 @@ pub struct Session {
     /// scan the variable takes the point's value, so the model runs from
     /// the sensor instead of its own state.
     pub sensors: Vec<(String, String)>,
-    /// Breakpoints (Ctrl B): statements of the running build a scan stops
+    /// Breakpoints (Shift F9): statements of the running build a scan stops
     /// before, sorted. A statement in a function block's body stops in
     /// every instance.
     pub breaks: Vec<StmtId>,
@@ -915,8 +915,8 @@ impl Session {
         self.running = on;
     }
 
-    /// Sets or clears a breakpoint on `id` (Ctrl B). Clearing the one a
-    /// scan is paused at leaves it paused there (F10 finishes the scan).
+    /// Sets or clears a breakpoint on `id` (Shift F9). Clearing the one a
+    /// scan is paused at leaves it paused there (F8 finishes the scan).
     pub fn toggle_break(&mut self, id: StmtId) {
         match self.breaks.binary_search(&id) {
             Ok(k) => {

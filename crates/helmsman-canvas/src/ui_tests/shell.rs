@@ -86,16 +86,16 @@ fn save_and_deploy_do_nothing_on_the_monitor() {
     h.wait(0.2);
     h.app.sim.as_mut().unwrap().notice = None;
     h.chord(Modifiers::COMMAND, Key::S);
-    h.chord(Modifiers::COMMAND, Key::D);
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Enter);
     h.wait(0.2);
     assert!(h.app.sim.as_ref().unwrap().proj.dirty(), "Ctrl+S did not save");
     assert!(
         h.app.sim.as_ref().unwrap().notice.is_none(),
-        "Ctrl+D did not deploy the hidden project"
+        "Deploy's key did not deploy the hidden project"
     );
     h.app.screen = Screen::Editor;
     h.wait(0.2);
-    h.chord(Modifiers::COMMAND, Key::D);
+    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Enter);
     h.wait(0.2);
     assert!(
         h.app.sim.as_ref().unwrap().notice.is_some(),

@@ -1534,7 +1534,7 @@ impl Body for PlaygroundView {
                 ui.colored_label(WARN, format!("Paused at a breakpoint{at}."))
                     .tip("The diagram and the values show the scan as it stood just before that statement.");
                 ui.label(
-                    RichText::new("F10 runs the rest of the scan. Ctrl Enter goes on to the next stop.")
+                    RichText::new("F8 runs the rest of the scan. Ctrl Enter goes on to the next stop.")
                         .color(t.muted),
                 );
             });
@@ -1591,7 +1591,7 @@ impl Body for PlaygroundView {
                 chrome,
                 "code deploy",
                 &Ok(()),
-                "Deploys this version: compiles the open project and runs it in the page (Ctrl D, File › Deploy).",
+                "Deploys this version: compiles the open project and runs it in the page (Ctrl Shift Enter, File › Deploy).",
             );
             if self.pending.is_some() {
                 ui.add(crate::theme::whole(RichText::new("…").color(t.muted)))

@@ -222,8 +222,7 @@ fn menu_item(
 }
 
 /// The running program's arrow, on hover.
-const REDEPLOY_TIP: &str =
-    "Deploys this program again with your latest edits: saves, checks and runs it (Ctrl D, File › Deploy).";
+const REDEPLOY_TIP: &str = "Deploys this program again with your latest edits: saves, checks and runs it (Ctrl Shift Enter, File › Deploy).";
 
 /// The → that deploys the open project (`deploy`: whether it may be, or
 /// why not), drawn as `key` for the tests. True when pressed.
@@ -899,28 +898,28 @@ pub trait Workspace {
     /// Lights every read and write of the picked block's variable on the
     /// diagram (Cross references); whether there was one.
     fn cross_references(&mut self) -> bool;
-    /// Sets or clears a breakpoint on the picked block (Ctrl B); whether
+    /// Sets or clears a breakpoint on the picked block (Shift F9); whether
     /// there was a block to put one on. Only the simulation stops.
     fn toggle_breakpoint(&mut self) -> bool {
         false
     }
-    /// Forces the input the picked block reads (Ctrl Shift F): a BOOL
+    /// Forces the input the picked block reads (Alt Shift F): a BOOL
     /// flips, a number's field takes the keyboard. On a box an engineer's
     /// force; in the simulation the input's switch. Whether it did.
     fn force_picked(&mut self, _ctx: &egui::Context) -> bool {
         false
     }
-    /// Opens the picked block instance's diagram (Ctrl ]); a stopped
+    /// Opens the picked block instance's diagram (Alt ]); a stopped
     /// simulation then steps one scan. Whether it opened one.
     fn step_into(&mut self) -> bool {
         false
     }
-    /// Up one level of the diagram (Ctrl [); a stopped simulation then
+    /// Up one level of the diagram (Alt [); a stopped simulation then
     /// steps one scan. Whether there was a level up.
     fn step_out(&mut self) -> bool {
         false
     }
-    /// Releases every force (Ctrl Shift U); whether there were any.
+    /// Releases every force (Alt Shift U); whether there were any.
     fn release_all(&mut self) -> bool {
         false
     }

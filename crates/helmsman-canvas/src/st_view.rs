@@ -429,7 +429,7 @@ impl Viewer {
     }
 
     /// The statement the picked block or region was lowered from: what a
-    /// breakpoint (Ctrl B) goes on.
+    /// breakpoint (Shift F9) goes on.
     #[must_use]
     pub fn picked_stmt(&self) -> Option<StmtId> {
         let d = self.diagram();
@@ -966,7 +966,7 @@ impl Viewer {
             .position(|s| s.prefix.eq_ignore_ascii_case(&want))
     }
 
-    /// Opens the picked block instance's diagram (Ctrl ]); whether the
+    /// Opens the picked block instance's diagram (Alt ]); whether the
     /// pick was an instance with a diagram of its own.
     pub fn step_into(&mut self) -> bool {
         let Some(Pick::Node(n)) = self.pick else {
@@ -983,8 +983,8 @@ impl Viewer {
         true
     }
 
-    /// Up to the caller's diagram (Ctrl [), the instance just left picked
-    /// there so Ctrl ] goes back in; whether there was a level up.
+    /// Up to the caller's diagram (Alt [), the instance just left picked
+    /// there so Alt ] goes back in; whether there was a level up.
     pub fn step_out(&mut self) -> bool {
         let Some(up) = self.parent() else {
             return false;
