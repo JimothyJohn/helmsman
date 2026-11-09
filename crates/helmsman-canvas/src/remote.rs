@@ -260,6 +260,10 @@ pub enum Link {
     /// Nothing has worked or failed yet.
     Connecting,
     Connected,
+    /// The box answered a read with 401: every read needs a session (card
+    /// read-lock), and this page has none. Nothing is read or retried
+    /// until [`BoxState::unlock`].
+    SignIn,
     /// It worked, or is trying; the last attempt failed. Retrying at `at`.
     Reconnecting {
         failures: u32,
@@ -754,6 +758,10 @@ pub struct BoxState {
     heard: Option<f64>,
     /// Nobody is looking at the box: its streams are closed.
     paused: bool,
+    /// The box refused a read for want of a session ([`Link::SignIn`]).
+    locked: bool,
+    /// The lock is new and the page has not yet been asked to sign in.
+    prompt: bool,
     values: Retry,
     trace: Retry,
     list: Retry,
@@ -802,6 +810,8 @@ impl BoxState {
             streaming: false,
             heard: None,
             paused: false,
+            locked: false,
+            prompt: false,
             values: Retry::default(),
             trace: Retry::default(),
             list: Retry::default(),
@@ -817,8 +827,9 @@ impl BoxState {
 
     /// What to do now: queued commands and retries that are due.
     pub fn poll(&mut self, now: f64) -> Vec<Cmd> {
-        if self.paused {
-            // Closing is all that is left to do for a box nobody watches.
+        if self.paused || self.locked {
+            // Closing is all that is left to do for a box nobody watches,
+            // or one that will not answer without a session.
             self.queue.retain(|c| matches!(c, Cmd::Close(_)));
             return std::mem::take(&mut self.queue);
         }
@@ -916,6 +927,62 @@ impl BoxState {
         }
     }
 
+    /// A read came back 401: the box wants a session for every read (card
+    /// read-lock). Streams close, nothing is retried, and the link says
+    /// so; the failure counts stay as they were, since the box is there.
+    fn lock(&mut self) {
+        if self.locked {
+            return;
+        }
+        self.locked = true;
+        self.prompt = true;
+        self.connected = false;
+        self.streaming = false;
+        self.heard = None;
+        self.queue.extend([
+            Cmd::Close(Stream::Values),
+            Cmd::Close(Stream::Trace),
+            Cmd::Close(Stream::Traces),
+        ]);
+        self.values.at = None;
+        self.trace.at = None;
+        self.traces.at = None;
+        self.list.at = None;
+        self.detail.at = None;
+    }
+
+    /// Whether the box wants a session before it answers a read.
+    #[must_use]
+    pub const fn locked(&self) -> bool {
+        self.locked
+    }
+
+    /// Once: the page should open its sign-in panel for this lock.
+    pub const fn take_prompt(&mut self) -> bool {
+        std::mem::replace(&mut self.prompt, false)
+    }
+
+    /// The page signed in: read and stream again, from the start.
+    pub fn unlock(&mut self) {
+        if !self.locked {
+            return;
+        }
+        self.locked = false;
+        self.prompt = false;
+        self.values = Retry::default();
+        self.list = Retry::default();
+        self.detail = Retry::default();
+        self.traces = Retry::default();
+        self.devs = DevicesPoll::Answered(None);
+        self.queue.push(Cmd::Get(Fetch::Modules, "/api/modules".into()));
+        self.queue.push(Cmd::Listen(Stream::Values, "/api/events".into()));
+        if self.monitor {
+            self.queue.push(Cmd::Listen(Stream::Traces, TRACES_URL.into()));
+        } else if let Some(name) = self.selected.clone() {
+            self.queue.push(Cmd::Listen(Stream::Trace, trace_url(&name)));
+        }
+    }
+
     /// The soonest retry, for scheduling a repaint.
     #[must_use]
     pub fn next_retry(&self) -> Option<f64> {
@@ -935,6 +1002,9 @@ impl BoxState {
 
     #[must_use]
     pub fn link(&self) -> Link {
+        if self.locked {
+            return Link::SignIn;
+        }
         let r = if self.ever_connected {
             self.values
         } else {
@@ -1059,6 +1129,19 @@ impl BoxState {
 
     /// Takes in what the transport saw at page time `now` (seconds).
     pub fn apply(&mut self, msg: Msg, now: f64) {
+        if let Msg::Got(_, Err(e)) = &msg
+            && e == "HTTP 401"
+        {
+            // The box is there and wants a session for every read: no
+            // failure to count, nothing to retry until the page signs in.
+            self.lock();
+            return;
+        }
+        if self.locked && matches!(msg, Msg::Failed(_)) {
+            // A stream the lock closed, or one the box refused: not a
+            // failure of the link.
+            return;
+        }
         match msg {
             Msg::Got(Fetch::Modules, Ok(body)) => {
                 match parse(&body).as_ref().and_then(|j| rows(j, ModuleRow::parse)) {
@@ -1310,6 +1393,51 @@ pub fn trace_url(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Card read-lock: a 401 on any read means the box wants a session.
+    /// Nothing is retried or counted as a failure until the page signs
+    /// in; then the reads and streams start again from the top.
+    #[test]
+    fn a_401_locks_the_box_until_the_page_signs_in() {
+        let mut s = BoxState::new();
+        let _ = s.poll(0.0);
+        s.apply(Msg::Got(Fetch::Modules, Err("HTTP 401".into())), 1.0);
+        assert_eq!(s.link(), Link::SignIn);
+        assert!(s.locked());
+        assert!(s.take_prompt(), "the sign-in panel opens once");
+        assert!(!s.take_prompt());
+        let closing = s.poll(1.0);
+        assert!(
+            closing.iter().all(|c| matches!(c, Cmd::Close(_))) && !closing.is_empty(),
+            "{closing:?}"
+        );
+        assert_eq!(s.poll(100.0), [], "nothing is read or retried while locked");
+        // The streams the lock closed report failing: not a failure of the link.
+        s.apply(Msg::Failed(Stream::Values), 2.0);
+        assert_eq!(s.link(), Link::SignIn);
+        assert_eq!(s.next_retry(), None);
+        // A second 401 changes nothing.
+        s.apply(Msg::Got(Fetch::Devices, Err("HTTP 401".into())), 3.0);
+        assert!(!s.take_prompt(), "asked once per lock");
+
+        s.unlock();
+        assert!(!s.locked());
+        assert_eq!(s.link(), Link::Connecting);
+        let again = s.poll(4.0);
+        assert!(
+            again.contains(&Cmd::Get(Fetch::Modules, "/api/modules".into())),
+            "{again:?}"
+        );
+        assert!(
+            again.contains(&Cmd::Listen(Stream::Values, "/api/events".into())),
+            "{again:?}"
+        );
+        s.apply(Msg::Opened(Stream::Values), 4.1);
+        assert_eq!(s.link(), Link::Connected);
+        // Any other failed read is still a failure, as before.
+        s.apply(Msg::Got(Fetch::Modules, Err("HTTP 500".into())), 5.0);
+        assert!(!s.locked());
+    }
 
     #[test]
     fn the_retry_wait_is_the_same_every_time() {

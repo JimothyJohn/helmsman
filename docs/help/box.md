@@ -6,9 +6,10 @@ running, with the real inputs and outputs.
 
 ## Signing in
 
-Anyone on the network can watch. Editing, saving, deploying and forcing
-need an engineer's sign in: **Sign in** in the header, or <kbd>Alt</kbd>
-<kbd>F8</kbd>; <kbd>Ctrl</kbd> <kbd>F8</kbd> signs out. A fresh box with
+A box shows nothing until you sign in: the page asks for it the moment it
+opens, and any account or role can watch. Editing, saving, deploying and
+forcing need an engineer's sign in: **Sign in** in the header, or
+<kbd>Alt</kbd> <kbd>F8</kbd>; <kbd>Ctrl</kbd> <kbd>F8</kbd> signs out. A fresh box with
 no accounts yet takes a role and its PIN; once an account exists, only
 accounts sign in. A session ends when you sign out, when it has been idle
 a while, or when it is a day old. Once you are signed in the panel

@@ -472,7 +472,13 @@ impl Bench {
     }
 
     fn history(&self) -> Vec<Json> {
-        let r = send(self.addr, "GET", "/api/projects/line/history", &[], "");
+        let r = send(
+            self.addr,
+            "GET",
+            "/api/projects/line/history",
+            &[bearer(TOKEN)],
+            "",
+        );
         r.json()["revisions"].as_array().unwrap().clone()
     }
 
@@ -489,7 +495,7 @@ impl Bench {
     }
 
     fn audit(&self) -> Vec<Json> {
-        send(self.addr, "GET", "/api/audit?limit=1000", &[], "")
+        send(self.addr, "GET", "/api/audit?limit=1000", &[bearer(TOKEN)], "")
             .json()
             .as_array()
             .unwrap()
@@ -925,7 +931,7 @@ fn only_an_engineer_writes_a_requirement() {
                 .contains("requirement: refused, not an engineer")
     }));
     // GET is not a way in.
-    assert_eq!(send(b.addr, "GET", path, &[], "").status, 404);
+    assert_eq!(send(b.addr, "GET", path, &[bearer(TOKEN)], "").status, 404);
 }
 
 #[test]
@@ -1041,7 +1047,7 @@ fn the_model_can_run_nothing_but_submit_test() {
         let text = x["content"].as_str().unwrap();
         assert!(text.contains("<box-data tool=\"unknown\">"), "{text}");
     }
-    let props = send(b.addr, "GET", "/api/proposals", &[], "").json();
+    let props = send(b.addr, "GET", "/api/proposals", &[bearer(TOKEN)], "").json();
     assert_eq!(props, json!([]));
     assert_eq!(agent_writes(&b), 0);
     assert_eq!(last(&evs, "test")["state"], "untested");

@@ -957,7 +957,7 @@ fn audit(b: &Bench) -> Vec<Json> {
         b.addr,
         "GET",
         "/api/audit?limit=1000",
-        false,
+        true,
         "application/json",
         b"",
     )
@@ -985,7 +985,7 @@ fn the_api_exports_a_snapshot_as_an_unsigned_bundle_under_the_same_id() {
         b.addr,
         "GET",
         &format!("/api/snapshots/{id}/bundle"),
-        false,
+        true,
         "application/json",
         b"",
     );
@@ -1007,7 +1007,7 @@ fn the_api_exports_a_snapshot_as_an_unsigned_bundle_under_the_same_id() {
         b.addr,
         "GET",
         &format!("/api/snapshots/{}/bundle", "0".repeat(64)),
-        false,
+        true,
         "application/json",
         b"",
     );
@@ -1109,7 +1109,7 @@ fn import_refuses_tampered_untrusted_and_unsigned_bundles_and_audits_each() {
         &bytes(),
     );
     assert_eq!(r.status, 401);
-    let r = request(b.addr, "GET", "/api/bundles", false, "application/json", b"");
+    let r = request(b.addr, "GET", "/api/bundles", true, "application/json", b"");
     assert_eq!(r.status, 404);
     let r = request(
         b.addr,
@@ -1128,7 +1128,7 @@ fn import_refuses_tampered_untrusted_and_unsigned_bundles_and_audits_each() {
         .map(|e| e["status"].as_u64().unwrap())
         .collect();
     assert_eq!(statuses, [422, 403, 403, 422, 415, 405], "{log:?}");
-    let list = request(b.addr, "GET", "/api/proposals", false, "application/json", b"").json();
+    let list = request(b.addr, "GET", "/api/proposals", true, "application/json", b"").json();
     assert_eq!(list, json!([]));
 }
 
@@ -1199,7 +1199,7 @@ out lamp     bool box do:0
     );
     assert!(why("lamp").contains("already driven by conveyor"), "{j}");
     assert_eq!(j["bundle"]["name"], "horn-kit");
-    let list = request(b.addr, "GET", "/api/proposals", false, "application/json", b"").json();
+    let list = request(b.addr, "GET", "/api/proposals", true, "application/json", b"").json();
     assert_eq!(list, json!([]));
 }
 
@@ -1555,7 +1555,7 @@ fn the_api_exports_a_wasm_snapshot_and_imports_it_signed_as_a_proposal() {
         b.addr,
         "GET",
         &format!("/api/snapshots/{id}/bundle"),
-        false,
+        true,
         "application/json",
         b"",
     );
@@ -1568,7 +1568,7 @@ fn the_api_exports_a_wasm_snapshot_and_imports_it_signed_as_a_proposal() {
         b.addr,
         "GET",
         &format!("/api/snapshots/{id}"),
-        false,
+        true,
         "application/json",
         b"",
     )
@@ -1945,7 +1945,7 @@ fn a_box_lists_a_signed_index_and_installs_from_it_as_a_proposal() {
 fn an_index_that_is_tampered_untrusted_or_lying_is_refused_before_anything_imports() {
     let good = site_files(&[("horn-kit-1.0.0.hbundle", bytes())], &publisher());
     let b = bench(Some(trust()));
-    let proposals_before = request(b.addr, "GET", "/api/proposals", false, "application/json", b"")
+    let proposals_before = request(b.addr, "GET", "/api/proposals", true, "application/json", b"")
         .json()
         .as_array()
         .map_or(0, Vec::len);
@@ -2010,7 +2010,7 @@ fn an_index_that_is_tampered_untrusted_or_lying_is_refused_before_anything_impor
     );
     assert_eq!(r.status, 422, "{r:?}");
 
-    let proposals_after = request(b.addr, "GET", "/api/proposals", false, "application/json", b"")
+    let proposals_after = request(b.addr, "GET", "/api/proposals", true, "application/json", b"")
         .json()
         .as_array()
         .map_or(0, Vec::len);

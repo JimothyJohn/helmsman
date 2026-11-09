@@ -182,9 +182,11 @@ fn unchunk(mut s: &str) -> String {
 
 fn get(addr: SocketAddr, path: &str) -> (u16, String) {
     let mut s = TcpStream::connect(addr).unwrap();
+    // The box token stands for the signed-in page's cookie (card read-lock).
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nAuthorization: Bearer {}\r\n\r\n",
+        crate::box_tests::TOKEN
     )
     .unwrap();
     let mut raw = String::new();

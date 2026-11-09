@@ -249,7 +249,8 @@ impl Bench {
     }
 
     fn get(&self, path: &str) -> Json {
-        let w = self.raw("GET", path, &[], b"");
+        let auth = format!("Bearer {TOKEN}");
+        let w = self.raw("GET", path, &[("Authorization", &auth)], b"");
         assert_eq!(w.status, 200, "GET {path}: {}", w.text());
         w.json()
     }

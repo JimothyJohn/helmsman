@@ -702,7 +702,15 @@ fn a_projects_own_driver_comes_before_the_boxs_and_travels_in_its_zip() {
     let r = b.upload(&alice, "line", &files(Some(&forty)));
     assert_eq!(r.status, 201, "{r:?}");
     assert_eq!(r.json()["drivers"], json!(["modbus"]), "{r:?}");
-    let listed = send(b.addr, "GET", "/api/projects/line", "", "application/json", b"").json();
+    let listed = send(
+        b.addr,
+        "GET",
+        "/api/projects/line",
+        TOKEN,
+        "application/json",
+        b"",
+    )
+    .json();
     assert_eq!(
         listed["drivers"],
         json!([{ "name": "modbus", "bytes": forty.len(), "sha256": sha(&forty) }]),
@@ -724,7 +732,7 @@ fn a_projects_own_driver_comes_before_the_boxs_and_travels_in_its_zip() {
         b.addr,
         "GET",
         "/api/projects/line/zip",
-        "",
+        TOKEN,
         "application/json",
         b"",
     );
@@ -738,7 +746,7 @@ fn a_projects_own_driver_comes_before_the_boxs_and_travels_in_its_zip() {
         b.addr,
         "GET",
         "/api/projects/copy/zip",
-        "",
+        TOKEN,
         "application/json",
         b"",
     );
@@ -755,7 +763,7 @@ fn a_projects_own_driver_comes_before_the_boxs_and_travels_in_its_zip() {
         b.addr,
         "GET",
         "/api/projects/twin/zip",
-        "",
+        TOKEN,
         "application/json",
         b"",
     );
@@ -793,7 +801,14 @@ fn a_projects_own_driver_comes_before_the_boxs_and_travels_in_its_zip() {
     let r = b.upload(&alice, "junk", &files(Some(b"\0asm junk")));
     assert_eq!(r.status, 422, "{r:?}");
     assert!(r.error().contains("drivers/modbus.wasm"), "{r:?}");
-    let r = send(b.addr, "GET", "/api/projects/junk", "", "application/json", b"");
+    let r = send(
+        b.addr,
+        "GET",
+        "/api/projects/junk",
+        TOKEN,
+        "application/json",
+        b"",
+    );
     assert_eq!(r.status, 404, "{r:?}");
 }
 
@@ -811,10 +826,13 @@ fn only_an_engineer_lists_uploads_or_deletes_a_driver() {
         ("an operator", bob.as_str()),
     ] {
         let r = b.list(bearer);
-        assert_eq!(r.status, 403, "{who}: {r:?}");
         if bearer.is_empty() {
-            continue; // a write without a credential is 401 before any route
+            // Without a credential any call is 401 before any route
+            // (reads too: card read-lock).
+            assert_eq!(r.status, 401, "{who}: {r:?}");
+            continue;
         }
+        assert_eq!(r.status, 403, "{who}: {r:?}");
         let r = b.put_driver(bearer, "modbus", MODBUS);
         assert_eq!(r.status, 403, "{who}: {r:?}");
         assert!(r.error().contains("engineer"), "{who}: {r:?}");
@@ -831,7 +849,15 @@ fn only_an_engineer_lists_uploads_or_deletes_a_driver() {
     assert_eq!(r.status, 403, "{r:?}");
     assert!(b.box_file("modbus").is_some(), "an operator deletes nothing");
     // Every write and refusal is audited with who it was.
-    let audit = send(b.addr, "GET", "/api/audit?limit=100", "", "application/json", b"").json();
+    let audit = send(
+        b.addr,
+        "GET",
+        "/api/audit?limit=100",
+        TOKEN,
+        "application/json",
+        b"",
+    )
+    .json();
     let lines: Vec<String> = audit["entries"]
         .as_array()
         .or_else(|| audit.as_array())

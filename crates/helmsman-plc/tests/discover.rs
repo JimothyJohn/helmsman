@@ -232,7 +232,7 @@ fn a_scan_lists_the_simulated_e1213_mapped_and_known_to_the_library() {
     let fresh = request(api.addr(), "POST", "/api/devices/discover?fresh=1", true).json();
     assert_eq!(fresh["devices"].as_array().unwrap().len(), 1);
     // Every scan is audited as a read-only act.
-    let audit = request(api.addr(), "GET", "/api/audit?limit=100", false).json();
+    let audit = request(api.addr(), "GET", "/api/audit?limit=100", true).json();
     assert!(
         audit.as_array().unwrap().iter().any(|e| e["detail"]
             .as_str()
@@ -244,7 +244,7 @@ fn a_scan_lists_the_simulated_e1213_mapped_and_known_to_the_library() {
         api.addr(),
         "GET",
         "/api/devices/library?vendor=991&product=515&address=10.0.0.57",
-        false,
+        true,
     );
     assert_eq!(lib.status, 200);
     let lib = lib.json();
@@ -256,16 +256,16 @@ fn a_scan_lists_the_simulated_e1213_mapped_and_known_to_the_library() {
     );
     assert!(lines.contains("in di0 bool e1213 di:0"), "{lines}");
     // By text, and a bad ask.
-    let by_text = request(api.addr(), "GET", "/api/devices/library?q=moxa%20e1213", false).json();
+    let by_text = request(api.addr(), "GET", "/api/devices/library?q=moxa%20e1213", true).json();
     assert_eq!(by_text["matches"].as_array().unwrap().len(), 1);
-    let none = request(api.addr(), "GET", "/api/devices/library?q=nothing%20here", false).json();
+    let none = request(api.addr(), "GET", "/api/devices/library?q=nothing%20here", true).json();
     assert_eq!(none["matches"].as_array().unwrap().len(), 0);
     assert_eq!(
-        request(api.addr(), "GET", "/api/devices/library?vendor=x", false).status,
+        request(api.addr(), "GET", "/api/devices/library?vendor=x", true).status,
         400
     );
     assert_eq!(
-        request(api.addr(), "GET", "/api/devices/library", false).status,
+        request(api.addr(), "GET", "/api/devices/library", true).status,
         400
     );
 }
@@ -290,7 +290,7 @@ fn an_unmapped_device_says_so_and_a_hostile_library_is_refused_whole() {
         api.addr(),
         "GET",
         "/api/devices/library?vendor=991&product=515",
-        false,
+        true,
     )
     .json();
     assert_eq!(m["matches"].as_array().unwrap().len(), 0);
@@ -331,7 +331,7 @@ fn a_box_without_scanning_or_library_says_so() {
     drop(sim);
     let r = request(api.addr(), "POST", "/api/devices/discover", true);
     assert_eq!(r.status, 501, "{}", r.body);
-    let m = request(api.addr(), "GET", "/api/devices/library?q=moxa", false).json();
+    let m = request(api.addr(), "GET", "/api/devices/library?q=moxa", true).json();
     assert_eq!(m["matches"].as_array().unwrap().len(), 0);
     assert!(
         m["unavailable"].as_str().unwrap().contains("devices-index off"),
@@ -403,7 +403,7 @@ fn a_modbus_probe_finds_the_device_its_map_line_and_its_library_entry() {
     let again = request(api.addr(), "POST", "/api/devices/discover?modbus=1", true).json();
     assert_eq!(again["modbus"], j["modbus"]);
     assert_eq!(rio.state().requests, before);
-    let audit = request(api.addr(), "GET", "/api/audit?limit=100", false).json();
+    let audit = request(api.addr(), "GET", "/api/audit?limit=100", true).json();
     assert!(
         audit.as_array().unwrap().iter().any(|e| e["detail"]
             .as_str()

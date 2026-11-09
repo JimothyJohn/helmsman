@@ -1035,11 +1035,16 @@ fn spawn_api(state: &Path) -> (Running, std::net::SocketAddr, String) {
     (Running { child, stderr }, api.unwrap(), token.unwrap())
 }
 
-fn http_get(addr: std::net::SocketAddr, path: &str) -> String {
+/// A read with the box's token (every read needs a session: card read-lock).
+fn http_get(addr: std::net::SocketAddr, path: &str, token: &str) -> String {
     use std::io::Write as _;
     let mut s = std::net::TcpStream::connect(addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    write!(s, "GET {path} HTTP/1.1\r\nHost: box\r\n\r\n").unwrap();
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {token}\r\n\r\n"
+    )
+    .unwrap();
     let mut out = String::new();
     s.read_to_string(&mut out).unwrap();
     out
@@ -1063,10 +1068,10 @@ fn the_api_serves_the_running_box_and_its_token_is_printed_once() {
         assert_eq!(mode, 0o600);
     }
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut modules = http_get(api, "/api/modules");
+    let mut modules = http_get(api, "/api/modules", &token);
     while !modules.contains("\"state\":\"running\"") && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(20));
-        modules = http_get(api, "/api/modules");
+        modules = http_get(api, "/api/modules", &token);
     }
     assert!(modules.starts_with("HTTP/1.1 200 OK"), "{modules}");
     assert!(
@@ -1092,8 +1097,12 @@ fn the_api_serves_the_running_box_and_its_token_is_printed_once() {
 fn the_api_reports_each_modules_scan_time_and_lateness() {
     let state = state_dir();
     let (plc, api, _) = spawn_api(&state);
+    let token = std::fs::read_to_string(state.join("api-token"))
+        .unwrap()
+        .trim()
+        .to_string();
     let module = || -> serde_json::Value {
-        let raw = http_get(api, "/api/modules");
+        let raw = http_get(api, "/api/modules", &token);
         let body = raw.split_once("\r\n\r\n").map_or("", |(_, b)| b);
         serde_json::from_str::<serde_json::Value>(body).unwrap_or_default()[0].clone()
     };

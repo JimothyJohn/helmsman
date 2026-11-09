@@ -120,8 +120,16 @@ fn connect(addr: SocketAddr, pin: &str) -> Result<TlsStream, String> {
 }
 
 /// `GET path` over `s`: the whole response, read to the server's close.
+/// The token every box these tests start is seeded with (`plc`), and the
+/// in-process API's: every read needs a session (card read-lock).
+const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
 fn get_over(mut s: impl Read + Write, path: &str) -> String {
-    write!(s, "GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+    write!(
+        s,
+        "GET {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+    )
+    .unwrap();
     s.flush().unwrap();
     let mut out = Vec::new();
     let _ = s.read_to_end(&mut out);
@@ -172,6 +180,9 @@ impl Drop for Plc {
 }
 
 fn plc(state: &Path, extra: &[&str]) -> Command {
+    // The box takes the token it finds in its state directory.
+    std::fs::create_dir_all(state).unwrap();
+    std::fs::write(state.join("api-token"), TOKEN).unwrap();
     let echo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("programs/echo.st");
     let mut c = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"));
     c.args(["--opcua", "off"])
@@ -258,7 +269,7 @@ fn the_box_serves_https_with_a_certificate_it_keeps_and_a_fingerprint_that_holds
     let mut s = connect(b.api, &fp).unwrap();
     write!(
         s,
-        "GET /api/events HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\n\r\n"
+        "GET /api/events HTTP/1.1\r\nHost: localhost\r\nAccept: text/event-stream\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
     )
     .unwrap();
     s.flush().unwrap();
@@ -377,7 +388,7 @@ fn served(deadline: Duration) -> Served {
     let id = tls::load_or_create(&state_dir("lib"), Some("box-1")).unwrap();
     let cfg = Config {
         bind: "127.0.0.1:0".parse().unwrap(),
-        token: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+        token: TOKEN.into(),
         limits: Limits {
             deadline,
             ..Limits::default()

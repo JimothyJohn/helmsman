@@ -249,12 +249,15 @@ fn the_box_serves_the_canvas_beside_the_api() {
     assert_eq!((r.status, r.header("Content-Type")), (200, Some("image/svg+xml")));
     assert_eq!(r.header("Cache-Control"), Some("no-cache"));
 
-    // The API is untouched by it.
+    // The API is untouched by it: a read without a session is refused as
+    // on any box (card read-lock), the health route answers.
     let r = get(p.addr, "/api/modules");
-    assert_eq!(r.status, 200, "{}", r.text());
+    assert_eq!(r.status, 401, "{}", r.text());
     assert_eq!(r.header("Cache-Control"), Some("no-store"));
-    assert!(r.text().contains("\"name\":\"echo\""), "{}", r.text());
-    assert_eq!(get(p.addr, "/api/nope").status, 404);
+    let r = get(p.addr, "/api/health");
+    assert_eq!(r.status, 200, "{}", r.text());
+    assert!(r.text().contains("\"up\":true"), "{}", r.text());
+    assert_eq!(get(p.addr, "/api/nope").status, 401, "auth comes before routing");
 }
 
 #[test]
@@ -476,7 +479,7 @@ fn a_slow_reader_of_a_big_file_does_not_hold_up_the_api() {
         stalled.push(s);
     }
     let t = Instant::now();
-    let r = get(p.addr, "/api/modules");
+    let r = get(p.addr, "/api/health");
     assert_eq!(r.status, 200);
     assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
     drop(stalled);

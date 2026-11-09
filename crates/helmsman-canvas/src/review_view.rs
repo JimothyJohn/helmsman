@@ -238,6 +238,13 @@ impl ReviewView {
                 );
                 return;
             }
+            Some("none") => {
+                ui.label(
+                    RichText::new("This box takes no sign-ins: it runs without an approval path.")
+                        .color(t.muted),
+                );
+                return;
+            }
             Some("accounts") => self.account_fields(ui),
             Some(_) => self.pin_fields(ui),
         };

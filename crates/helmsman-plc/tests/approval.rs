@@ -422,8 +422,9 @@ fn request(addr: SocketAddr, method: &str, path: &str, auth: bool, body: &str) -
     }
 }
 
+/// A read with the box token (every read needs a session: card read-lock).
 fn get(addr: SocketAddr, path: &str) -> Resp {
-    request(addr, "GET", path, false, "")
+    request(addr, "GET", path, true, "")
 }
 
 fn post(addr: SocketAddr, path: &str, body: &Json) -> Resp {

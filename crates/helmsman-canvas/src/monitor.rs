@@ -178,6 +178,7 @@ impl Feed for BoxState {
                 Some(_) => None,
             },
             Link::Connecting => Some("connecting to the box".into()),
+            Link::SignIn => Some("sign in to watch this box".into()),
             Link::Reconnecting { .. } => Some("lost the box; reconnecting".into()),
             Link::Unreachable { .. } => Some("box unreachable".into()),
         }
