@@ -75,6 +75,52 @@ pub fn wants_sim(query: &str, mode: Option<&str>) -> bool {
     mode == Some("playground") || has(query, "playground") || has(query, "demo")
 }
 
+/// The box or node this page should watch instead of its own origin:
+/// `?box=http://192.168.3.55:8080` (a node on the floor, or another box).
+/// Only an origin is taken, `http://` or `https://`, a host of letters,
+/// digits, `.` and `-`, an optional port, nothing after it; anything else
+/// is ignored, so a link cannot point the canvas's requests at a path.
+/// `%3A` and `%2F` are undone, which is how a browser pastes the value.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+#[must_use]
+pub fn box_origin(query: &str) -> Option<String> {
+    let raw = query
+        .trim_start_matches('?')
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("box="))?;
+    let decoded = raw
+        .replace("%3A", ":")
+        .replace("%3a", ":")
+        .replace("%2F", "/")
+        .replace("%2f", "/");
+    let decoded = decoded.trim_end_matches('/');
+    let rest = decoded
+        .strip_prefix("http://")
+        .map(|r| ("http://", r))
+        .or_else(|| decoded.strip_prefix("https://").map(|r| ("https://", r)))?;
+    let (scheme, hostport) = rest;
+    let (host, port) = match hostport.split_once(':') {
+        Some((h, p)) => (h, Some(p)),
+        None => (hostport, None),
+    };
+    if host.is_empty()
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')
+    {
+        return None;
+    }
+    if let Some(p) = port
+        && (p.is_empty()
+            || p.len() > 5
+            || !p.bytes().all(|b| b.is_ascii_digit())
+            || p.parse::<u16>().is_err())
+    {
+        return None;
+    }
+    Some(format!("{scheme}{hostport}"))
+}
+
 /// Whether a page with this query string opens on the Monitor: `?monitor`
 /// (a wall TV's link), and the old floor screen's `?andon`. (`?site` is
 /// gone.)
@@ -134,8 +180,13 @@ impl App {
         // A page the box serves watches that box; docs/playground/ (and
         // the old `?playground` and `?demo` links) run the simulation, as
         // does the native window.
+        // `?box=ORIGIN` watches a node or another box from wherever this
+        // page is served (the dev server, or a box page with `--site`).
         #[cfg(target_arch = "wasm32")]
-        let mut app = if crate::web::wants_sim() {
+        let mut app = if let Some(origin) = crate::web::box_origin() {
+            crate::web::set_base(&origin);
+            Self::boxed()
+        } else if crate::web::wants_sim() {
             Self::sim()
         } else {
             Self::boxed()
@@ -1571,5 +1622,43 @@ impl eframe::App for App {
         theme::Theme::for_mode(visuals.dark_mode)
             .bg
             .to_normalized_gamma_f32()
+    }
+}
+
+#[cfg(test)]
+mod box_origin_tests {
+    use super::box_origin;
+
+    #[test]
+    fn takes_an_origin_and_nothing_more() {
+        assert_eq!(
+            box_origin("?box=http://192.168.3.55:8080"),
+            Some("http://192.168.3.55:8080".into())
+        );
+        assert_eq!(
+            box_origin("?monitor&box=https://press-4.local"),
+            Some("https://press-4.local".into())
+        );
+        assert_eq!(
+            box_origin("?box=http%3A%2F%2F192.168.3.55%3A8080%2F"),
+            Some("http://192.168.3.55:8080".into())
+        );
+        assert_eq!(
+            box_origin("?box=http://192.168.3.55:8080/"),
+            Some("http://192.168.3.55:8080".into())
+        );
+    }
+
+    #[test]
+    fn refuses_paths_schemes_and_junk() {
+        assert_eq!(box_origin("?box=http://192.168.3.55:8080/api"), None);
+        assert_eq!(box_origin("?box=ftp://x"), None);
+        assert_eq!(box_origin("?box=192.168.3.55:8080"), None);
+        assert_eq!(box_origin("?box=http://"), None);
+        assert_eq!(box_origin("?box=http://a:99999"), None);
+        assert_eq!(box_origin("?box=http://a b"), None);
+        assert_eq!(box_origin("?box=javascript://alert(1)"), None);
+        assert_eq!(box_origin("?playground"), None);
+        assert_eq!(box_origin(""), None);
     }
 }
