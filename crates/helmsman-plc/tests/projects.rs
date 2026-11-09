@@ -451,8 +451,9 @@ fn send(addr: SocketAddr, method: &str, path: &str, bearer: Option<&str>, ctype:
     }
 }
 
+/// A read with the box token (every read needs a session: card read-lock).
 fn get(addr: SocketAddr, path: &str) -> Resp {
-    send(addr, "GET", path, None, "application/json", b"")
+    send(addr, "GET", path, Some(TOKEN), "application/json", b"")
 }
 
 fn post_json(addr: SocketAddr, path: &str, bearer: Option<&str>, body: &Json) -> Resp {
@@ -1795,6 +1796,10 @@ impl Drop for Plc {
 }
 
 fn plc_projects(state: &Path) -> Plc {
+    // The box takes the token it finds in its state directory, so the
+    // tests' reads (every read needs a session: card read-lock) use TOKEN.
+    std::fs::create_dir_all(state).unwrap();
+    std::fs::write(state.join("api-token"), TOKEN).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_helmsman-plc"))
         .args(["--opcua", "off", "--projects"])
         .args(["--bind", "127.0.0.1", "--encap-port", "0", "--io-port", "0"])

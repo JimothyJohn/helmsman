@@ -630,14 +630,14 @@ impl Caller for InProcess<'_> {
             return Err(format!("the MCP tools do not reach {method} {}", clean(path)));
         }
         let (path, segments, query) = http::target(path).map_err(str::to_string)?;
-        let write = method != "GET";
+        // The box token on every call, reads included (card read-lock).
         let mut req = Request {
             method: method.into(),
             path,
             segments,
             query,
-            bearer: write.then(|| self.ctx.cfg.token.clone()),
-            authorization: write,
+            bearer: Some(self.ctx.cfg.token.clone()),
+            authorization: true,
             content_type: body.map(|_| "application/json".into()),
             body: body
                 .map(|b| serde_json::to_vec(b).unwrap_or_default())

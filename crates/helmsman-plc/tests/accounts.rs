@@ -1023,6 +1023,61 @@ fn a_pin_login_sets_an_httponly_cookie_the_page_never_sees() {
     assert_secrets_kept(&b, &[&s, &bearer_tok]);
 }
 
+/// Card read-lock: a read takes the page's cookie alone, with no
+/// same-origin proof (a read changes nothing, the cookie is
+/// `SameSite=Strict`, and the canvas's `EventSource` cannot send a
+/// header); a cookie the box did not issue is 401 and cleared; and a
+/// write on the cookie still needs the proof.
+#[test]
+fn a_cookie_alone_reads_but_still_cannot_write() {
+    let b = Bench::with_accounts(None);
+    let s = pin_login(b.addr, "operator", OPERATOR_PIN).session();
+    let cookie = format!("helmsman_session={s}");
+    for path in ["/api/modules", "/api/signals", "/api/session", "/api/projects"] {
+        let r = raw(b.addr, "GET", path, &[("Cookie", &cookie)], "");
+        assert!(
+            r.status == 200 || r.status == 404,
+            "GET {path} on the cookie alone: {r:?}"
+        );
+        assert!(
+            r.set_cookies().is_empty(),
+            "a read neither sets nor clears the cookie: {r:?}"
+        );
+    }
+    // The values stream, as an EventSource opens it: the cookie, nothing
+    // else. Only the head is read: the stream stays open for minutes.
+    let mut stream = TcpStream::connect(b.addr).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    write!(
+        stream,
+        "GET /api/events HTTP/1.1\r\nHost: box\r\nAccept: text/event-stream\r\nCookie: {cookie}\r\n\r\n"
+    )
+    .unwrap();
+    let mut head = [0u8; 15];
+    stream.read_exact(&mut head).unwrap();
+    assert_eq!(&head, b"HTTP/1.1 200 OK", "the stream opens on the cookie alone");
+    drop(stream);
+    // Not the box's cookie: 401, and the browser is told to drop it.
+    let fake = format!("helmsman_session={}", "a".repeat(64));
+    let r = raw(b.addr, "GET", "/api/modules", &[("Cookie", &fake)], "");
+    assert_eq!(r.status, 401, "{r:?}");
+    assert!(r.cleared(), "{r:?}");
+    // Without any credential: 401, and nothing to clear.
+    let r = raw(b.addr, "GET", "/api/modules", &[], "");
+    assert_eq!(r.status, 401, "{r:?}");
+    assert!(r.set_cookies().is_empty(), "{r:?}");
+    // A write on the cookie alone is still 403: the proof is for writes.
+    let id = b.param(0.5);
+    let r = raw(
+        b.addr,
+        "POST",
+        &format!("/api/proposals/{id}/apply"),
+        &[("Cookie", &cookie)],
+        "{}",
+    );
+    assert_eq!(r.status, 403, "{r:?}");
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn a_cookie_without_a_same_origin_proof_is_refused() {
@@ -1991,8 +2046,9 @@ fn request(addr: SocketAddr, method: &str, path: &str, bearer: Option<&str>, bod
     }
 }
 
+/// A read with the box token (every read needs a session: card read-lock).
 fn get(addr: SocketAddr, path: &str) -> Resp {
-    request(addr, "GET", path, None, "")
+    request(addr, "GET", path, Some(TOKEN), "")
 }
 
 fn login(addr: SocketAddr, user: &str, password: &str) -> Resp {

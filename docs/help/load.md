@@ -23,8 +23,8 @@ outputs.
    address and the network first.
 2. **Sign in** as an engineer: Sign in in the header, or <kbd>Alt</kbd>
    <kbd>F8</kbd>. A fresh box with no accounts takes the engineer role
-   and its PIN; once accounts exist, only accounts sign in. Anyone can
-   watch without signing in, but nothing can be loaded.
+   and its PIN; once accounts exist, only accounts sign in. Any sign in
+   can watch; loading needs an engineer's.
 3. **Open the project** in Files, on the left. Pick one the box already
    holds, or click an example to get a running copy of your own under a
    name you give it, or **Upload** (File › Upload) a `.zip` of a whole

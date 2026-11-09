@@ -621,7 +621,7 @@ impl Bench {
     }
 
     fn get(&self, path: &str) -> Json {
-        let (s, j) = self.call("GET", path, None, None);
+        let (s, j) = self.call("GET", path, Some(TOKEN), None);
         assert_eq!(s, 200, "GET {path}: {j}");
         j
     }
@@ -996,21 +996,28 @@ fn a_document_is_stored_chunked_and_read_back() {
     }
     assert_eq!(back, long, "the chunks are the document");
     assert_eq!(
-        b.call("GET", &format!("/api/dropins/{id}?chunk={chunks}"), None, None)
-            .0,
+        b.call(
+            "GET",
+            &format!("/api/dropins/{id}?chunk={chunks}"),
+            Some(TOKEN),
+            None
+        )
+        .0,
         404
     );
     assert_eq!(
-        b.call("GET", &format!("/api/dropins/{id}?chunk=x"), None, None).0,
+        b.call("GET", &format!("/api/dropins/{id}?chunk=x"), Some(TOKEN), None)
+            .0,
         400
     );
     assert_eq!(
-        b.call("GET", &format!("/api/dropins/{id}/plc"), None, None).0,
+        b.call("GET", &format!("/api/dropins/{id}/plc"), Some(TOKEN), None)
+            .0,
         404,
         "prose has no inventory"
     );
-    assert_eq!(b.call("GET", "/api/dropins/999", None, None).0, 404);
-    assert_eq!(b.call("GET", "/api/dropins/x", None, None).0, 404);
+    assert_eq!(b.call("GET", "/api/dropins/999", Some(TOKEN), None).0, 404);
+    assert_eq!(b.call("GET", "/api/dropins/x", Some(TOKEN), None).0, 404);
     let st = upload_ok(
         &b,
         "",
@@ -1025,7 +1032,10 @@ fn a_document_is_stored_chunked_and_read_back() {
     }
     let list = b.get("/api/dropins");
     assert_eq!(list.as_array().unwrap().len(), 32);
-    assert_eq!(b.call("GET", &format!("/api/dropins/{id}"), None, None).0, 404);
+    assert_eq!(
+        b.call("GET", &format!("/api/dropins/{id}"), Some(TOKEN), None).0,
+        404
+    );
     assert!(
         list.as_array().unwrap().iter().all(|d| d.get("text").is_none()),
         "the list carries no text"
@@ -1084,7 +1094,7 @@ fn an_l5x_reads_as_an_inventory_with_its_hostile_text_as_data() {
         "view=routine&name=A/B",
         "offset=-1",
     ] {
-        let (s, _) = b.call("GET", &format!("/api/dropins/{id}/plc?{bad}"), None, None);
+        let (s, _) = b.call("GET", &format!("/api/dropins/{id}/plc?{bad}"), Some(TOKEN), None);
         assert!(s == 400 || s == 404, "{bad}: {s}");
     }
 }
@@ -1526,10 +1536,10 @@ fn photos_are_known_by_their_bytes_and_held_to_their_limits() {
     );
 
     // A photo has no text: the text tools' routes say so.
-    let (s, j) = b.call("GET", "/api/dropins/1?chunk=0", None, None);
+    let (s, j) = b.call("GET", "/api/dropins/1?chunk=0", Some(TOKEN), None);
     assert_eq!(s, 404, "{j}");
     assert!(j["error"].as_str().unwrap().contains("photo"), "{j}");
-    let (s, j) = b.call("GET", "/api/dropins/1/plc", None, None);
+    let (s, j) = b.call("GET", "/api/dropins/1/plc", Some(TOKEN), None);
     assert_eq!(s, 404, "{j}");
     assert!(j["error"].as_str().unwrap().contains("photo"), "{j}");
 
@@ -1904,7 +1914,7 @@ fn a_pdf_reaches_the_model_untouched_as_a_document_block_and_becomes_a_draft_and
         format!("/api/dropins/{id}?chunk=0"),
         format!("/api/dropins/{id}/plc"),
     ] {
-        let (s, j) = b.call("GET", &path, None, None);
+        let (s, j) = b.call("GET", &path, Some(TOKEN), None);
         assert_eq!(s, 404, "{path}: {j}");
         assert!(j["error"].as_str().unwrap().contains("PDF"), "{j}");
     }

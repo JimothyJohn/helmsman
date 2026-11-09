@@ -114,6 +114,9 @@ pub enum Call {
     Logout,
     /// `GET /api/session`: who the page's cookie is.
     Session,
+    /// `GET /api/login`: how this box signs in (the one read open before
+    /// a session, card read-lock).
+    LoginHow,
 }
 
 /// Who this page is signed in as (the box holds the session; the page
@@ -744,6 +747,10 @@ pub struct Review {
     pub list_error: Option<String>,
     pub open: Option<Open>,
     pub policy: Option<Json>,
+    /// How the box signs in (`pins`, `accounts`, `unavailable`, `none`),
+    /// from `GET /api/login`: readable before a session, unlike the
+    /// policy.
+    pub how: Option<String>,
     /// Box output signals, upper-cased.
     pub outputs: Vec<String>,
     /// The history entry for what runs, after an apply.
@@ -797,6 +804,7 @@ impl Review {
         self.queue.push(Request::get(Call::Policy, "/api/policy".into()));
         self.queue
             .push(Request::get(Call::Session, "/api/session".into()));
+        self.queue.push(Request::get(Call::LoginHow, "/api/login".into()));
     }
 
     /// What to send now.
@@ -815,7 +823,10 @@ impl Review {
     /// `unavailable`; `None` until the policy came.
     #[must_use]
     pub fn credentials(&self) -> Option<&str> {
-        self.policy.as_ref()?["credentials"].as_str()
+        self.policy
+            .as_ref()
+            .and_then(|p| p["credentials"].as_str())
+            .or(self.how.as_deref())
     }
 
     /// `alice (engineer)` or `operator (PIN)`, while signed in.
@@ -961,6 +972,11 @@ impl Review {
                 }
             }
             Call::Policy => self.policy = j.filter(|_| ok),
+            Call::LoginHow => {
+                self.how = j
+                    .filter(|_| ok)
+                    .and_then(|j| j["credentials"].as_str().map(str::to_string));
+            }
             Call::Snapshots => {
                 self.head = j
                     .filter(|_| ok)
@@ -1050,6 +1066,9 @@ impl Review {
                 if let Some(s) = session {
                     self.session = Some(s);
                     self.login_problem = None;
+                    // Every read needs the session (card read-lock): what
+                    // was refused before it is read now.
+                    self.refresh();
                     return;
                 }
                 let error = j
@@ -1321,6 +1340,9 @@ mod tests {
             0.0,
         );
         assert_eq!(r.signed_in(), Some(format!("{role} (PIN)")));
+        // The refresh a sign-in starts (every read needs the session, card
+        // read-lock): not what these tests look at.
+        let _ = r.poll();
     }
 
     fn opened() -> Review {
@@ -1508,7 +1530,16 @@ mod tests {
     fn a_reload_finds_the_cookie_session_and_sign_out_ends_it_on_the_box() {
         let mut r = Review::new();
         let calls: Vec<Call> = r.poll().into_iter().map(|q| q.call).collect();
-        assert_eq!(calls, [Call::List, Call::Signals, Call::Policy, Call::Session]);
+        assert_eq!(
+            calls,
+            [
+                Call::List,
+                Call::Signals,
+                Call::Policy,
+                Call::Session,
+                Call::LoginHow
+            ]
+        );
         r.answer(
             Call::Session,
             &ans(401, &json!({ "error": "not logged in" })),

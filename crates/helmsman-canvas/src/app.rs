@@ -452,6 +452,18 @@ impl App {
             if let Some(b) = &mut self.boxv {
                 b.state.resume();
                 b.state.set_monitor(self.screen == Screen::Monitor);
+                // Card read-lock: a box answers no read without a session.
+                // The first 401 opens the sign-in panel once; a sign-in
+                // starts the reads again.
+                let signed_in = self
+                    .review
+                    .as_ref()
+                    .is_some_and(|r| r.state.signed_in().is_some());
+                if b.state.locked() && signed_in {
+                    b.state.unlock();
+                } else if b.state.take_prompt() {
+                    self.login = true;
+                }
             }
         } else if let Some(b) = self.boxv.as_mut().filter(|b| !b.state.paused()) {
             b.park(&ctx);

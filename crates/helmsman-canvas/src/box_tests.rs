@@ -99,6 +99,11 @@ pub const fn scripted(ms: u64) -> [bool; 3] {
 
 /// [`DEMO`] on a real runtime, the way the box runs it, with the
 /// real API over it. The scripted shift drives `%IX0.0..2`.
+/// The bench box's API token; what the tests' reads carry, standing for
+/// the signed-in page's cookie (every read needs a session, card
+/// read-lock).
+pub const TOKEN: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
 pub struct Bench {
     api: Option<Api>,
     pub addr: SocketAddr,
@@ -157,7 +162,7 @@ impl Bench {
         let live = Arc::new(Live::default());
         let cfg = Config {
             bind: "127.0.0.1:0".parse().unwrap(),
-            token: "0".repeat(64),
+            token: TOKEN.into(),
             limits: Limits::default(),
             stream_every: Duration::from_millis(10),
             memory: 0,
@@ -221,7 +226,13 @@ impl Bench {
     pub fn get_build(&self, path: &str) -> (u16, Option<String>, String) {
         let mut s = TcpStream::connect(self.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-        write!(s, "GET {path} HTTP/1.1\r\nHost: box\r\n\r\n").unwrap();
+        // The box token stands for the signed-in page's cookie: every
+        // read needs a session (card read-lock).
+        write!(
+            s,
+            "GET {path} HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+        )
+        .unwrap();
         let mut out = String::new();
         s.read_to_string(&mut out).unwrap();
         let (head, body) = out.split_once("\r\n\r\n").unwrap();
@@ -238,7 +249,11 @@ impl Bench {
     pub fn events(&self, path: &str, n: usize) -> Vec<(String, String)> {
         let mut s = TcpStream::connect(self.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-        write!(s, "GET {path} HTTP/1.1\r\nHost: box\r\n\r\n").unwrap();
+        write!(
+            s,
+            "GET {path} HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+        )
+        .unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut buf = String::new();
         let mut chunk = [0u8; 8192];

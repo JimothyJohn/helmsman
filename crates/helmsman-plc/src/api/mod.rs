@@ -75,16 +75,23 @@
 //! checks), and plain HTTP only to this host; from elsewhere plain HTTP
 //! is redirected, never served ([`to_https`]).
 //!
-//! **Auth.** Reads (`GET`) are open to whoever can reach the socket (the
-//! default bind is loopback; the LAN only when asked). Every other method
-//! needs `Authorization: Bearer <token>` ([`token`]), or a login session
-//! from `POST /api/login` ([`login`], which takes a session wherever it
-//! takes the token, except `/mcp`): as a bearer, or as the browser's
-//! `HttpOnly` cookie with a same-origin proof ([`login::same_origin`];
-//! an `Authorization` header, when sent, is the credential and the cookie
-//! is not read). Each call is written to the audit log whatever its
-//! outcome, naming the session's person; without a credential it is
-//! refused with 401 before any routing, and a cookie without the proof
+//! **Auth.** Every call under `/api` needs `Authorization: Bearer
+//! <token>` ([`token`]), or a login session from `POST /api/login`
+//! ([`login`], which takes a session wherever it takes the token, except
+//! `/mcp`): as a bearer, or as the browser's `HttpOnly` cookie. Reads
+//! (`GET`) too, since card read-lock (2026-11-08): a box bound to the LAN
+//! showed its programs, map, values, audit log and snapshots to whoever
+//! reached the socket. The reads that stay open are the canvas's own files,
+//! `GET /api` (the route list), `GET /api/health` (up and the build),
+//! `GET /api/login` (how to sign in) and `GET /api/site`
+//! ([`read_is_open`]). A mutating call on the cookie needs
+//! a same-origin proof too ([`login::same_origin`]); a read on the cookie
+//! does not (it changes nothing, the cookie is `SameSite=Strict`, and an
+//! `EventSource` cannot send a header). An `Authorization` header, when
+//! sent, is the credential and the cookie is not read. Each mutating call
+//! is written to the audit log whatever its outcome, naming the session's
+//! person; without a credential any call is refused with 401 before any
+//! routing (so nothing can be probed), and a cookie without the proof
 //! with 403. A token in the query string is refused
 //! outright (400), on any request, so it never lands in a log or a
 //! browser history.
@@ -983,6 +990,31 @@ fn policy_json(a: &Approval, ctx: &Ctx) -> Json {
     j
 }
 
+/// The two open reads with a body of their own: `GET /api/health` (up,
+/// and the build, for a monitor to poll) and `GET /api/login`
+/// ([`login_how`]).
+fn open_read(route: &str, ctx: &Ctx) -> Response {
+    if route == "health" {
+        return Response::json(200, &json!({ "up": true, "build": crate::BUILD }));
+    }
+    login_how(ctx)
+}
+
+/// `GET /api/login`: how to sign in here (`credentials`: `pins`,
+/// `accounts`, `unavailable`, or `none` on a box without an approval
+/// path), and nothing else. Open: the sign-in form has to know before
+/// there is a session, and it is what `POST /api/login` tells a wrong
+/// attempt anyway.
+fn login_how(ctx: &Ctx) -> Response {
+    let credentials = match ctx.approval.as_ref().map(|a| a.gate.logins().map(Logins::mode)) {
+        None => "none",
+        Some(None | Some(Mode::Pins)) => "pins",
+        Some(Some(Mode::Accounts(_))) => "accounts",
+        Some(Some(Mode::Broken(_))) => "unavailable",
+    };
+    Response::json(200, &json!({ "credentials": credentials }))
+}
+
 /// The login sessions, when the box has an approval path with accounts
 /// wired in.
 fn logins(ctx: &Ctx) -> Option<&crate::policy::account::Logins> {
@@ -1012,6 +1044,20 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         );
     }
     if req.method == "GET" {
+        if !read_is_open(&req.segments) {
+            // A read needs a session too (card read-lock): the box token
+            // or a bearer session as any write; the cookie alone, with no
+            // same-origin proof, since a read changes nothing and the
+            // event streams cannot send a header.
+            let authed = if req.authorization || req.cookies.is_empty() {
+                by_bearer(req, ctx, false)
+            } else {
+                login::by_cookie_read(req, ctx)
+            };
+            if let Err(r) = authed {
+                return Reply::Once(r);
+            }
+        }
         return get(req, ctx);
     }
     if req.method == "POST" && req.segments == ["api", "login"] {
@@ -1063,6 +1109,23 @@ fn handle(req: &mut Request, ctx: &Ctx) -> Reply {
         return Reply::Once(mcp::post(req, ctx));
     }
     Reply::Once(mutate(req, ctx))
+}
+
+/// The reads that answer without a session: the canvas's own files (the
+/// page has to load to sign in), the route list, `GET /api/health` (up
+/// and the build, for a monitor to poll), `GET /api/login` (how to sign
+/// in: the form has to know before there is a session) and `GET
+/// /api/site` (what the beacons already tell the whole LAN, read across
+/// origins by the site view). `GET /api/session` answers 401 itself,
+/// clearing a dead cookie.
+fn read_is_open(segments: &[String]) -> bool {
+    match segments {
+        // The page and its files, and the route list.
+        [] | [_] => true,
+        [api, ..] if api != "api" => true,
+        [_, route] => matches!(route.as_str(), "health" | "site" | "session" | "login"),
+        _ => false,
+    }
 }
 
 /// Authenticates `req` by its `Authorization: Bearer`: the box token, or
@@ -1372,14 +1435,11 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         _ => {}
     }
     match path {
-        ["api", "proposals" | "dropins"] => Some("GET, POST"),
+        ["api", "proposals" | "dropins" | "login"] => Some("GET, POST"),
         ["api", "proposals", _, "apply" | "replay"]
         | ["api", "snapshots", _, "rollback" | "replay"]
         | ["api", "proposals", "check" | "replay"]
-        | [
-            "api",
-            "chat" | "explain" | "help" | "bundles" | "login" | "logout",
-        ]
+        | ["api", "chat" | "explain" | "help" | "bundles" | "logout"]
         | ["api", "devices", "discover"]
         | ["api", "market", "list" | "install"]
         | ["api", "devices", _, "browse"] => Some("POST"),
@@ -1388,7 +1448,7 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | [
             "api",
             "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
-            | "session" | "site" | "io_map",
+            | "session" | "site" | "io_map" | "health",
         ]
         | [
             "api",
@@ -1687,6 +1747,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
     let module = |name: &str| c.module(name);
     let r = match segs.as_slice() {
         ["api"] => Response::json(200, &index(ctx.chat.is_some())),
+        ["api", route @ ("health" | "login")] => open_read(route, ctx),
         ["api", "signals"] => Response::json(200, &forces::mark(ctx, render::signals(c, &view))),
         ["api", "signals", name] => match c.signal(name) {
             Some(i) => Response::json(
@@ -1842,64 +1903,66 @@ fn index(agent: bool) -> Json {
     json!({
         "service": "helmsman box API",
         "endpoints": [
-            e("GET", "/api/signals", false, "every signal with its live value and quality"),
-            e("GET", "/api/signals/{name}", false, "one signal"),
-            e("GET", "/api/modules", false, "every module: schedule, status, stats"),
-            e("GET", "/api/modules/{name}", false, "one module with ports, source and manifest"),
-            e("GET", "/api/modules/{name}/trace", false, "request a traced scan; 200 with the newest, 202 until one lands"),
-            e("GET", "/api/modules/{name}/trace/events", false, "event stream of traced scans"),
+            e("GET", "/api/health", false, "up, and the build; the one read a monitor polls without a session"),
+            e("GET", "/api/login", false, "how to sign in here: {credentials: accounts | pins | unavailable}, nothing else"),
+            e("GET", "/api/signals", true, "every signal with its live value and quality"),
+            e("GET", "/api/signals/{name}", true, "one signal"),
+            e("GET", "/api/modules", true, "every module: schedule, status, stats"),
+            e("GET", "/api/modules/{name}", true, "one module with ports, source and manifest"),
+            e("GET", "/api/modules/{name}/trace", true, "request a traced scan; 200 with the newest, 202 until one lands"),
+            e("GET", "/api/modules/{name}/trace/events", true, "event stream of traced scans"),
             e("POST", "/api/modules/{name}/stop", true, "engineer session (the policy's output-affecting role): stop the module; outputs zero, signals safe, until run or restart"),
             e("POST", "/api/modules/{name}/run", true, "engineer session: run a stopped or faulted module again, its state as it was"),
             e("POST", "/api/modules/{name}/restart", true, "engineer session: cold restart, initial values, then run"),
             e(
                 "GET",
                 "/api/traces/events",
-                false,
+                true,
                 "event stream of every module's traced scans",
             ),
-            e("GET", "/api/outputs", false, "output commands, safe values, the %Q image"),
-            e("GET", "/api/devices", false, "device links up or down"),
-            e("GET", "/api/io_map", false, "the running I/O map file and its snapshot id"),
-            e("GET", "/api/proposals", false, "drafts awaiting approval"),
-            e("GET", "/api/proposals/{id}", false, "one proposal"),
+            e("GET", "/api/outputs", true, "output commands, safe values, the %Q image"),
+            e("GET", "/api/devices", true, "device links up or down"),
+            e("GET", "/api/io_map", true, "the running I/O map file and its snapshot id"),
+            e("GET", "/api/proposals", true, "drafts awaiting approval"),
+            e("GET", "/api/proposals/{id}", true, "one proposal"),
             e("POST", "/api/proposals", true, "store a checked draft: {kind: module, manifest, source or wasm (base64)}, {kind: param, module, param, value}, or {kind: io_map|calendar, text}; any of them may cite dropins: [ids] and, of those, refused_dropins: the ones the relay refused"),
             e("POST", "/api/proposals/check", true, "check a draft as POST /api/proposals would, storing nothing"),
             e("POST", "/api/proposals/replay", true, "sim replay of a module draft {draft: {kind: module, manifest, source}, minutes}; nothing stored, not evidence"),
             e("POST", "/api/proposals/{id}/replay", true, "sim replay of the draft against what runs (evidence)"),
             e("POST", "/api/login", false, "log in {user, password} (with an accounts file) or {role, pin} (without): a session token for Authorization: Bearer, or with X-Helmsman-Request: 1 from the box's own page an HttpOnly cookie"),
             e("POST", "/api/logout", true, "end the session it is sent with (and clear its cookie)"),
-            e("GET", "/api/session", false, "who the session sent (cookie or bearer) is, or 401"),
+            e("GET", "/api/session", true, "who the session sent (cookie or bearer) is, or 401"),
             e("POST", "/api/proposals/{id}/apply", true, "apply: with a session {replay?}, else {role, pin, replay?} (PINs only while the box has no accounts), checked against the policy"),
-            e("GET", "/api/audit?after=N&limit=M", false, "every mutating call"),
-            e("GET", "/api/snapshots", false, "snapshot history (needs --store), head, and the running change set's id"),
-            e("GET", "/api/snapshots/head", false, "the head entry"),
-            e("GET", "/api/snapshots/{id}", false, "a snapshot's files"),
-            e("GET", "/api/snapshots/{a}/diff/{b}", false, "what changed from a to b"),
-            e("GET", "/api/snapshots/{id}/bundle", false, "that snapshot as an unsigned bundle file (sign it off the box)"),
+            e("GET", "/api/audit?after=N&limit=M", true, "every mutating call"),
+            e("GET", "/api/snapshots", true, "snapshot history (needs --store), head, and the running change set's id"),
+            e("GET", "/api/snapshots/head", true, "the head entry"),
+            e("GET", "/api/snapshots/{id}", true, "a snapshot's files"),
+            e("GET", "/api/snapshots/{a}/diff/{b}", true, "what changed from a to b"),
+            e("GET", "/api/snapshots/{id}/bundle", true, "that snapshot as an unsigned bundle file (sign it off the box)"),
             e("POST", "/api/bundles", true, "import a bundle file (application/octet-stream): verified against the box's trusted publishers, bound to its signals by name, stored as a draft"),
             e("POST", "/api/market/list", true, "{index}: the signed marketplace index at that URL, verified against the trusted publishers, and its bundles"),
             e("POST", "/api/market/install", true, "{index, name, version?}: that bundle fetched from the index's site, checked against the index, then imported as POST /api/bundles"),
             e("POST", "/api/snapshots/{id}/replay", true, "sim replay of a rollback to it (evidence)"),
             e("POST", "/api/snapshots/{id}/rollback", true, "roll back: as apply, checked against the policy"),
-            e("GET", "/api/replays/{n}", false, "a replay kept as evidence"),
-            e("GET", "/api/policy", false, "the approval policy this box enforces, and its transport: https and the certificate's SHA-256 fingerprint"),
-            e("GET", "/api/events", false, "event stream of live values and module status"),
+            e("GET", "/api/replays/{n}", true, "a replay kept as evidence"),
+            e("GET", "/api/policy", true, "the approval policy this box enforces, and its transport: https and the certificate's SHA-256 fingerprint"),
+            e("GET", "/api/events", true, "event stream of live values and module status"),
             e("POST", "/api/chat", true, "one message to the agent {message, session?, dropins?}; an event stream of its progress"),
             e("POST", "/api/explain", true, "why a variable is in its state {module, path}: the box's explanation, then the agent's, streamed; read-only"),
             e("POST", "/api/help", true, "{question, messages?}: what went wrong, in words (1 to 2000 characters) with the page's recent messages; the box attaches its build, the running project, its devices and their errors, all redacted of secrets. An event stream: help, text, tool_call, tool_result, retrying, issue (a diagnosis and a Markdown issue to copy; nothing is filed), done or error"),
             e("POST", "/api/dropins?name=N&kind=K", true, "a document for the agent (text, Markdown, L5X, PLCopen XML, ST; at most 1 MiB), a photo (PNG, JPEG, WebP; at most 512 KiB, 8000 px a side) or a PDF (at most 2 MiB, passed to the model unread): stored in memory, 201 with its id"),
-            e("GET", "/api/dropins", false, "the drop-ins held: id, name, kind, size, chunks"),
-            e("GET", "/api/dropins/{id}?chunk=K", false, "one chunk of a drop-in's text"),
-            e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", false, "a PLC drop-in's inventory: overview, tags, routine, names"),
+            e("GET", "/api/dropins", true, "the drop-ins held: id, name, kind, size, chunks"),
+            e("GET", "/api/dropins/{id}?chunk=K", true, "one chunk of a drop-in's text"),
+            e("GET", "/api/dropins/{id}/plc?view=V&name=N&offset=O", true, "a PLC drop-in's inventory: overview, tags, routine, names"),
             e("POST", "/api/devices/{name}/browse", true, "an observed Logix controller's tag list, read-only"),
-            e("GET", "/api/chat/status", false, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
+            e("GET", "/api/chat/status", true, "the agent: online, offline since T and why, or unknown; offline, chat reads param edits by rule"),
             e("GET", "/api/site", false, "this box's status and the boxes it heard on the LAN (with --site); readable from other origins"),
-            e("GET", "/api/projects", false, "the editor's projects (with --projects) and which one runs"),
+            e("GET", "/api/projects", true, "the editor's projects (with --projects) and which one runs"),
             e("POST", "/api/projects", true, "engineer session: {name} a new empty project, or {name, from} a copy"),
-            e("GET", "/api/projects/{p}", false, "a project's files: name, bytes, version (SHA-256)"),
+            e("GET", "/api/projects/{p}", true, "a project's files: name, bytes, version (SHA-256)"),
             e("DELETE", "/api/projects/{p}", true, "engineer session: delete a project (never the running one)"),
             e("POST", "/api/projects/{p}/rename", true, "engineer session: {to}"),
-            e("GET", "/api/projects/{p}/files/{f}", false, "one file: {name, text, version}"),
+            e("GET", "/api/projects/{p}/files/{f}", true, "one file: {name, text, version}"),
             e("PUT", "/api/projects/{p}/files/{f}", true, "engineer session: save {text, version?} (a draft; version: what was read, null: a new file)"),
             e("DELETE", "/api/projects/{p}/files/{f}", true, "engineer session: delete a file"),
             e("POST", "/api/projects/{p}/check", true, "build the project as a deploy would: its modules and tier, or every problem with file and line; nothing changes"),
@@ -1907,25 +1970,26 @@ fn index(agent: bool) -> Json {
             e("POST", "/api/projects/{p}/requirements", true, "engineer session: one requirement {text, name?} (one line, 1 to 500 characters): the agent writes its test, compiled and run here, saved as a revision; offline it is written down untested. An event stream: requirement, text, tool_call, tool_result, retrying, test, done or error"),
             e("POST", "/api/projects/{p}/replay", true, "engineer session: sim replay of deploying the project (evidence for deploy)"),
             e("POST", "/api/projects/{p}/deploy", true, "engineer session: {replay?}: build, apply through the approval policy, commit a snapshot, hot-swap between scans"),
-            e("GET", "/api/projects/{p}/zip", false, "the project as a .zip (its .st files, io.map, project.settings)"),
+            e("GET", "/api/projects/{p}/zip", true, "the project as a .zip (its .st files, io.map, project.settings)"),
             e("POST", "/api/projects/{p}/zip?replace=true", true, "engineer session: a .zip (application/zip) as project p, new or (replace=true) in its place"),
             e("POST", "/api/projects/{p}/import?file=F&replace=true", true, "engineer session: one file into the project: F.st as it is, F.xml (PLCopen TC6) lowered to F.st"),
-            e("GET", "/api/trends?signals=a,b", false, "each signal's history (10 min, on change) on the scheduler's clock; keeps them tracked a day: {now_ms, window_ms, signals: [{name, points: [[t_ms, value]]}], unknown, refused}"),
-            e("GET", "/api/trends/pins", false, "the signed-in person's pinned signals"),
+            e("GET", "/api/trends?signals=a,b", true, "each signal's history (10 min, on change) on the scheduler's clock; keeps them tracked a day: {now_ms, window_ms, signals: [{name, points: [[t_ms, value]]}], unknown, refused}"),
+            e("GET", "/api/trends/pins", true, "the signed-in person's pinned signals"),
             e("PUT", "/api/trends/pins", true, "a login session: {signals: [...]} (at most 16), that person's pins"),
-            e("GET", "/api/desk", false, "the signed-in person's desk (open project and file, unsaved edits, inputs), or null"),
+            e("GET", "/api/desk", true, "the signed-in person's desk (open project and file, unsaved edits, inputs), or null"),
             e("PUT", "/api/desk", true, "a login session: that person's desk (at most 512 KiB; an older saved_at than the box's is refused, 409)"),
-            e("GET", "/api/forces", false, "active forced inputs: {id, signal | address, value, by, at}"),
+            e("GET", "/api/forces", true, "active forced inputs: {id, signal | address, value, by, at}"),
             e("POST", "/api/forces", true, "engineer session: force an input {signal, value} or {address: %IX0.0 | %IBn | %IWn | %IDn, value}; ends at that session's logout or expiry and on deploy"),
             e("DELETE", "/api/forces/{id}", true, "engineer session: release one force"),
             e("DELETE", "/api/forces", true, "engineer session: release every force"),
             e("GET", "/api/drivers", true, "engineer session: the box's WASM driver files (drivers/NAME.wasm): name, bytes, sha256, problems"),
             e("PUT", "/api/drivers/{name}", true, "engineer session: the driver's .wasm bytes, checked as a load checks them, written atomically; runs from the next deploy or map reload"),
             e("DELETE", "/api/drivers/{name}", true, "engineer session: delete a driver file (not one the running map loads from the box)"),
-            e("GET", "/api/running", false,"the project deployed last, its snapshot, and whether it is what runs"),
+            e("GET", "/api/running", true,"the project deployed last, its snapshot, and whether it is what runs"),
             e("POST", "/mcp", true,"MCP (Streamable HTTP, 2026-07-28 or 2025-11-25): the agent's read, draft, check, simulate and propose tools for an engineer's own client; no apply"),
         ],
         "agent": agent,
+        "reads": "every read but /api, /api/health and /api/site needs a session (the box token, a bearer session, or the page's cookie)",
         "writes": "no endpoint writes a signal, an output or a module; a proposal runs only through apply, which needs a role PIN the policy allows (and a sim replay for logic and output-affecting changes)",
     })
 }

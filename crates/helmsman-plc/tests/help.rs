@@ -391,7 +391,7 @@ impl Bench {
     }
 
     fn audit(&self) -> Vec<Json> {
-        send(self.addr, "GET", "/api/audit?limit=1000", &[], "")
+        send(self.addr, "GET", "/api/audit?limit=1000", &[bearer(TOKEN)], "")
             .json()
             .as_array()
             .unwrap()
@@ -929,6 +929,8 @@ fn help_needs_a_credential_and_a_question_in_words() {
         .count();
     assert_eq!(refused, 7);
     let r = send(b.addr, "GET", "/api/help", &[], "");
+    assert_eq!(r.status, 401, "a read without a session: {r:?}");
+    let r = send(b.addr, "GET", "/api/help", &[bearer(TOKEN)], "");
     assert!(matches!(r.status, 404 | 405), "{r:?}");
 }
 

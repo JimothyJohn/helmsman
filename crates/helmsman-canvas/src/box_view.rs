@@ -951,12 +951,16 @@ impl BoxView {
             Link::Connected => 1,
             Link::Reconnecting { .. } => 2,
             Link::Unreachable { .. } => 3,
+            Link::SignIn => 4,
         };
         if Some(link) != self.seen.link {
             match link {
                 1 => self.log.info(now, "Connected to the box."),
                 2 => self.log.warning(now, "Lost the box: reconnecting."),
                 3 => self.log.error(now, "The box is unreachable."),
+                4 => self
+                    .log
+                    .info(now, "This box needs a sign in before it shows anything."),
                 _ => {}
             }
             self.seen.link = Some(link);
@@ -1199,6 +1203,9 @@ impl BoxView {
             return p.clone();
         }
         match (&s.selected, &s.scan) {
+            _ if s.link() == Link::SignIn => {
+                "Sign in to watch this box: Sign in in the header, or Alt F8.".into()
+            }
             _ if !matches!(s.link(), Link::Connected) && s.modules.is_empty() => {
                 "Looking for the box…".into()
             }
@@ -1219,6 +1226,7 @@ impl BoxView {
         match self.state.link() {
             Link::Connecting => ("● connecting…".into(), t.muted),
             Link::Connected => ("● connected".into(), t.accent),
+            Link::SignIn => ("● sign in to watch".into(), t.fg),
             Link::Reconnecting { at, .. } => (format!("● reconnecting (retry in {}s)", retry(at)), t.fg),
             Link::Unreachable { at, .. } => (format!("● box unreachable (retry in {}s)", retry(at)), RED),
         }

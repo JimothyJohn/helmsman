@@ -846,8 +846,8 @@ signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
   same bounds; a bad file starts with no pins) so they survive a restart,
   while history stays in memory and starts over (card
   `trend-pins-persist`). Signed out, the browser keeps them
-  (`localStorage`, wrapped). `GET /api/trends?signals=a,b` (open, like
-  every read) answers `{now_ms, window_ms, signals: [{name, points: [[t_ms,
+  (`localStorage`, wrapped). `GET /api/trends?signals=a,b` (a session,
+  like every read) answers `{now_ms, window_ms, signals: [{name, points: [[t_ms,
   value]]}], unknown, refused}` and keeps those signals tracked for a day
   after the last ask; the page asks on open, on every pin change and every
   10 min. A person's pins stay tracked while pinned.
@@ -1070,13 +1070,31 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   `EventSource` streams follow the page's scheme, so the canvas needs
   nothing.
 
-- **Reads** (`GET`) are open: signals with live values, quality and point errors, modules
-  (source, manifest, ports, status, stats), a module's latest trace (a
-  `GET` requests the next traced scan; 202 until one lands), output commands
-  and safe values, device links, proposals, the audit log, and snapshots
-  (`--store`: history, a snapshot's files, a diff). Two event streams (SSE:
-  one-way is all the canvas needs, and it is plain HTTP, so the same bounded
-  parser serves it): live values and status, and a module's traces.
+- **Reads** (`GET`) need a session like everything else, since card
+  `read-lock` (Nick, 2026-11-08, `secure-defaults`): before it a box bound
+  to the LAN showed its programs, the I/O map, live values, the audit log
+  and the snapshots to whoever reached the socket. The reads: signals with
+  live values, quality and point errors, modules (source, manifest, ports,
+  status, stats), a module's latest trace (a `GET` requests the next
+  traced scan; 202 until one lands), output commands and safe values,
+  device links, proposals, the audit log, and snapshots (`--store`:
+  history, a snapshot's files, a diff). Two event streams (SSE: one-way
+  is all the canvas needs, and it is plain HTTP, so the same bounded
+  parser serves it): live values and status, and a module's traces. What
+  answers without a session: the canvas's own files (the page has to load
+  to sign in), `GET /api` (the route list), `GET /api/health` (`{up,
+  build}`, nothing else, for a monitor to poll), `GET /api/login`
+  (`{credentials}`: `pins`, `accounts`, `unavailable` or `none`, so the
+  sign-in form knows what to ask before there is a session) and `GET
+  /api/site` (what the beacons already tell the whole LAN; the site view
+  reads it across origins). `GET /api/session` answers 401 itself. A read without a
+  credential is 401 before any routing, so nothing can be probed, and it
+  is logged but never audited. The canvas asks the person to sign in on
+  the first 401 and reads nothing until they do; the EtherNet/IP adapter
+  stays on at boot (being an adapter to another PLC is the job, and it
+  never writes to other controllers), and OPC UA stays loopback-only,
+  anonymous, read-only. The box's own agent, MCP and the test runner send
+  the box token on their reads, as they did on their writes.
 - **Everything else** needs `Authorization: Bearer <token>` (64 hex
   digits, made on first start in `api-token`, mode 0600, under
   `--state-dir` or systemd's `StateDirectory=`, else `helmsman-state` in
@@ -1113,8 +1131,10 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   `GET /api/session` says who the cookie (or a bearer session) is, so a
   reloaded page knows; `POST /api/logout` ends it on the box and sends
   `Max-Age=0`; any 401 on a cookie also clears it.
-- **CSRF.** A request authenticated by the cookie (any method but `GET`,
-  which is a read) must carry exactly one `X-Helmsman-Request: 1` (a
+- **CSRF.** A request authenticated by the cookie (any method but `GET`:
+  a read changes nothing, the cookie is `SameSite=Strict`, and the
+  canvas's `EventSource` streams cannot send a header, so a `GET` takes
+  the cookie alone) must carry exactly one `X-Helmsman-Request: 1` (a
   cross-site form cannot send a custom header; a cross-site `fetch` with
   one needs a preflight the box never answers) and an `Origin` equal to
   the scheme the request came over (`https://` over TLS, `http://`
@@ -1464,19 +1484,19 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   engineer or above (an account's, or the engineer's role-PIN session on
   a box without accounts). The box token alone is 403 there: the agent
   drafts proposals, never edits the editor's files. `check` takes the
-  token or any session; reads are open like every `GET`. Every call is
-  audited with the person.
+  token or any session; reads take any session, like every `GET`
+  (card read-lock). Every mutating call is audited with the person.
 
 Endpoints (also in `api/projects.rs` and `GET /api`):
 
 | route | who | body / answer |
 | --- | --- | --- |
-| `GET /api/projects` | open | `{projects: [{name, running}], running}` |
+| `GET /api/projects` | session | `{projects: [{name, running}], running}` |
 | `POST /api/projects` | engineer | `{name}` or `{name, from}` (copy); 201 |
-| `GET /api/projects/{p}` | open | `{name, running, files: [{name, bytes, version}], drivers: [{name, bytes, sha256}]}` |
+| `GET /api/projects/{p}` | session | `{name, running, files: [{name, bytes, version}], drivers: [{name, bytes, sha256}]}` |
 | `DELETE /api/projects/{p}` | engineer | 409 for the running project |
 | `POST /api/projects/{p}/rename` | engineer | `{to}` |
-| `GET /api/projects/{p}/files/{f}` | open | `{name, text, version}` |
+| `GET /api/projects/{p}/files/{f}` | session | `{name, text, version}` |
 | `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
 | `DELETE /api/projects/{p}/files/{f}` | engineer | |
 | `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval}`, or 422 `{diagnostics: [{file, line, col, message}]}` |
@@ -1484,10 +1504,10 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | `POST /api/projects/{p}/requirements` | engineer | `{text, name?}`; an event stream: the agent writes the requirement's test (see Requirement tests) |
 | `POST /api/projects/{p}/replay` | engineer | sim replay evidence, as `POST /api/proposals/{id}/replay` |
 | `POST /api/projects/{p}/deploy` | engineer | `{replay?}`; as apply, plus `project: {name, recorded}` |
-| `GET /api/projects/{p}/zip` | open | `application/zip` |
+| `GET /api/projects/{p}/zip` | session | `application/zip` |
 | `POST /api/projects/{p}/zip[?replace=true]` | engineer | `application/zip` body; 201 new, 200 replaced |
 | `POST /api/projects/{p}/import?file=F[&replace=true]` | engineer | the file's bytes; 201 `{name, version, bytes}` |
-| `GET /api/running` | open | `{project, snapshot, running, current}` |
+| `GET /api/running` | session | `{project, snapshot, running, current}` |
 
 **In the Editor** (`helmsman-canvas`: `box_projects.rs` decides,
 `box_view.rs` draws, `projects.rs` is the Files sidebar the simulation

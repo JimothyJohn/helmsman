@@ -252,14 +252,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **Every read needs a session** — decided 2026-11-08 (`secure-defaults`: lock GETs, keep CIP on). Today every `GET /api/...` answers whoever reaches the socket (api/mod.rs "Auth"), so on a LAN bind anyone reads the programs, the I/O map, live values, the audit log and the snapshots. Require a session (cookie or bearer; the box token counts, as it does for POST) on every GET except the canvas itself (`/`, `/{file}`), `GET /api` (the route list) and one health route (`GET /api/health`: up, build, nothing else) for a monitor to poll. The canvas signs in before the Monitor shows anything (the sign-in panel already exists), and a 401 on the first read opens it. The EtherNet/IP adapter stays on at boot (being an adapter to another PLC is the job, and it never writes to other controllers), and the Monitor shows its bind address beside the devices. OPC UA stays loopback-only, anonymous, read-only. It is a breaking change for anything that polls today: the try box check (`curl -sk .../api/devices` in the handoff needs a token), `scripts/`, the node, the MCP tests, docs/ARCHITECTURE.md's Auth paragraph and api/mod.rs's. Tests: a sweep over every route in the `/api` list asserting 401 without a session, 200 with one, and that the three exceptions answer without; the CSRF rules unchanged for the cookie.
-  result: a buyer's IT finds nothing readable without signing in, and the CIP adapter is visible rather than silent
-  est: 1d
-  difficulty: med
-  id: read-lock
-  asked: 2026-11-08
-  by: claude-session
-
 - [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. Same code on the POE-ISO and the P4 (helmsman-node-p4). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
   needs: node-p4-bringup is not required; the POE-ISO on the bench (poe-iso-rack-03, /dev/cu.usbserial-1130, 192.168.3.55) is enough
   result: a node on the plant network takes a new firmware from a laptop without a USB cable, and a bad image cannot brick it
@@ -293,6 +285,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 1d
   difficulty: med
   id: node-p4-bringup
+  asked: 2026-11-09
+  by: claude-session
+
+- [ ] **Monitor: show the EtherNet/IP adapter's address beside the devices** — the half of `read-lock` (decided 2026-11-08) that did not ship with it: the adapter stays on at boot, so the Monitor's Devices tab should say where it listens instead of staying silent about it. The API does not know the adapter's bind today (`api::Config.bind` is the API's own; main.rs starts the adapter from `o.server.bind` and `encap_port`). Shape: `api::Extras` carries the adapter's socket address (`None` when off), a new `GET /api/adapter` answers `{protocol: "EtherNet/IP", bind, on}` behind a session like every read, the canvas polls it with the devices (remote.rs `Fetch`) and the Devices tab shows one wrapped line under the tree ("EtherNet/IP adapter on 0.0.0.0:44818: other controllers read this box here"). Tests: the route in api.rs, a remote.rs parse test, and the Devices tab at the panel's default width (CLAUDE.md panel rule).
+  needs: nothing
+  result: a buyer's IT sees the one listener that stays open, named, where they look for devices
+  est: 3h
+  difficulty: low
+  id: cip-adapter-visible
   asked: 2026-11-09
   by: claude-session
 

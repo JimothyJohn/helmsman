@@ -310,7 +310,13 @@ fn request(addr: SocketAddr, method: &str, path: &str, auth: Option<&str>, ctype
     send(addr, raw.as_bytes())
 }
 
+/// A read with the box token (every read needs a session: card read-lock).
 fn get(addr: SocketAddr, path: &str) -> Resp {
+    request(addr, "GET", path, Some(&bearer()), "", "")
+}
+
+/// A read with no credential at all.
+fn get_bare(addr: SocketAddr, path: &str) -> Resp {
     request(addr, "GET", path, None, "", "")
 }
 
@@ -378,7 +384,8 @@ fn every_reply_names_the_build() {
 
     let mut s = TcpStream::connect(b.addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    s.write_all(b"GET /api/events HTTP/1.1\r\n\r\n").unwrap();
+    s.write_all(format!("GET /api/events HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n").as_bytes())
+        .unwrap();
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
     while !head.ends_with(b"\r\n\r\n") {
@@ -391,7 +398,7 @@ fn every_reply_names_the_build() {
 }
 
 #[test]
-fn reads_are_open_and_describe_the_box() {
+fn reads_with_a_session_describe_the_box() {
     let b = Bench::new();
     let index = get(b.addr, "/api");
     assert_eq!(index.status, 200, "{index:?}");
@@ -466,8 +473,11 @@ fn a_trace_is_requested_then_served_and_streamed() {
 
     let mut s = TcpStream::connect(b.addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    s.write_all(b"GET /api/modules/conveyor/trace/events HTTP/1.1\r\n\r\n")
-        .unwrap();
+    s.write_all(
+        format!("GET /api/modules/conveyor/trace/events HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n")
+            .as_bytes(),
+    )
+    .unwrap();
     let mut head = [0u8; 50];
     s.read_exact(&mut head).unwrap();
     assert_eq!(&head, b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n");
@@ -481,7 +491,10 @@ fn every_modules_traces_come_on_one_stream() {
     let b = Bench::new();
     let mut s = TcpStream::connect(b.addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    s.write_all(b"GET /api/traces/events HTTP/1.1\r\n\r\n").unwrap();
+    s.write_all(
+        format!("GET /api/traces/events HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n").as_bytes(),
+    )
+    .unwrap();
     let mut head = [0u8; 50];
     s.read_exact(&mut head).unwrap();
     assert_eq!(&head, b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n");
@@ -532,7 +545,8 @@ fn the_event_stream_carries_live_values() {
     let b = Bench::new();
     let mut s = TcpStream::connect(b.addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-    s.write_all(b"GET /api/events HTTP/1.1\r\n\r\n").unwrap();
+    s.write_all(format!("GET /api/events HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n").as_bytes())
+        .unwrap();
     let v = read_event(&mut s, "values");
     assert!(v["seq"].as_u64().unwrap() > 0, "{v}");
     assert_eq!(v["modules"][0]["name"], "conveyor");
@@ -558,6 +572,119 @@ const WRITE_PATHS: &[&str] = &[
 ];
 
 const METHODS: &[&str] = &["POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"];
+
+/// Card read-lock (2026-11-08): every read under `/api` needs a session
+/// (the box token counts, as it does for a write), except the route list,
+/// the health route and the site view, which hold nothing a buyer's IT
+/// would mind; the canvas's own files stay open so the page can load and
+/// sign in. The paths come from the route list itself, so a new route
+/// cannot slip out unlocked.
+#[test]
+fn every_read_but_the_index_health_and_site_needs_a_session() {
+    let b = Bench::new();
+    let index = get_bare(b.addr, "/api");
+    assert_eq!(index.status, 200, "{index:?}");
+    let mut locked = 0;
+    for e in index.json()["endpoints"].as_array().unwrap() {
+        if e["method"] != "GET" {
+            continue;
+        }
+        let path = e["path"].as_str().unwrap();
+        // A path parameter stands for any value: auth comes before routing.
+        let concrete: String = path
+            .split('/')
+            .map(|seg| if seg.starts_with('{') { "x" } else { seg })
+            .collect::<Vec<_>>()
+            .join("/");
+        let bare = concrete.split('?').next().unwrap().to_string();
+        let open = ["/api", "/api/health", "/api/login", "/api/site"].contains(&bare.as_str());
+        assert_eq!(
+            e["token"],
+            json!(!open),
+            "{path}: the route list says what needs a session"
+        );
+        let r = get_bare(b.addr, &bare);
+        if bare == "/api/session" {
+            // Its own answer: who the session is, or 401 (the box token is
+            // no login session, so it says 401 to that too).
+            assert_eq!(r.status, 401, "{r:?}");
+            continue;
+        }
+        if open {
+            assert_ne!(r.status, 401, "{bare} answers without a session: {r:?}");
+            continue;
+        }
+        assert_eq!(r.status, 401, "GET {bare} without a session: {r:?}");
+        assert_eq!(r.header("WWW-Authenticate").as_deref(), Some("Bearer"), "{bare}");
+        locked += 1;
+        if bare.ends_with("/events") {
+            // A stream: only its head, since it stays open for minutes.
+            let mut s = TcpStream::connect(b.addr).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            write!(
+                s,
+                "GET {bare} HTTP/1.1\r\nHost: box\r\nAuthorization: {}\r\n\r\n",
+                bearer()
+            )
+            .unwrap();
+            let mut head = [0u8; 12];
+            s.read_exact(&mut head).unwrap();
+            assert!(&head[9..] != b"401", "GET {bare} with the box token opens");
+            continue;
+        }
+        if ["/api/trends/pins", "/api/desk"].contains(&bare.as_str()) {
+            // A person's own: a login session, never the box token.
+            let r = request(b.addr, "GET", &bare, Some(&bearer()), "", "");
+            assert_eq!(r.status, 401, "{bare}: the box token is nobody: {r:?}");
+            continue;
+        }
+        let r = request(b.addr, "GET", &bare, Some(&bearer()), "", "");
+        assert!(
+            r.status != 401 && r.status != 403,
+            "GET {bare} with the box token is routed, not refused: {r:?}"
+        );
+    }
+    assert!(locked > 20, "{locked} locked reads: the route list is the sweep");
+    // A wrong token on a read is a refusal too, and so is a made-up path
+    // (auth first, so nothing can be probed without a session).
+    let wrong = format!("Bearer {}", "f".repeat(64));
+    for path in [
+        "/api/signals",
+        "/api/modules/conveyor",
+        "/api/nope",
+        "/api/events",
+    ] {
+        assert_eq!(
+            request(b.addr, "GET", path, Some(&wrong), "", "").status,
+            401,
+            "{path}"
+        );
+        assert_eq!(get_bare(b.addr, path).status, 401, "{path}");
+    }
+    // The page itself, and what it loads, stay open.
+    assert_ne!(get_bare(b.addr, "/").status, 401);
+    // Refused reads are logged without the path's query, and never audited.
+    assert_eq!(audit(b.addr), Vec::<Json>::new());
+    assert!(
+        b.logs().iter().any(|l| l.contains("refused GET /api/signals")),
+        "{:?}",
+        b.logs()
+    );
+}
+
+/// `GET /api/health` is the one read a monitor polls without a session:
+/// up, the build, nothing else.
+#[test]
+fn health_says_up_and_the_build_and_nothing_else() {
+    let b = Bench::new();
+    let r = get_bare(b.addr, "/api/health");
+    assert_eq!(r.status, 200, "{r:?}");
+    let j = r.json();
+    assert_eq!(j["up"], json!(true));
+    assert_eq!(j["build"].as_str(), Some(helmsman_plc::BUILD));
+    assert_eq!(j.as_object().unwrap().len(), 2, "{j}");
+    assert_eq!(r.header("Cache-Control").as_deref(), Some("no-store"));
+}
 
 #[test]
 fn every_mutating_call_without_the_right_token_is_refused_and_does_nothing() {
@@ -1097,7 +1224,10 @@ fn a_client_that_never_reads_its_event_stream_is_dropped() {
     let stalled: Vec<TcpStream> = (0..2)
         .map(|_| {
             let mut s = TcpStream::connect(b.addr).unwrap();
-            s.write_all(b"GET /api/events HTTP/1.1\r\n\r\n").unwrap();
+            s.write_all(
+                format!("GET /api/events HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n").as_bytes(),
+            )
+            .unwrap();
             s
         })
         .collect();
@@ -1112,7 +1242,8 @@ fn a_client_that_never_reads_its_event_stream_is_dropped() {
     Bench::wait("a stream slot freed", || {
         let mut s = TcpStream::connect(b.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        s.write_all(b"GET /api/events HTTP/1.1\r\n\r\n").unwrap();
+        s.write_all(format!("GET /api/events HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n").as_bytes())
+            .unwrap();
         let mut buf = [0u8; 12];
         s.read_exact(&mut buf).is_ok() && &buf == b"HTTP/1.1 200"
     });
@@ -1167,7 +1298,10 @@ fn hammering_the_api_does_not_hold_up_the_scan() {
     let stalled: Vec<TcpStream> = (0..4)
         .map(|_| {
             let mut s = TcpStream::connect(b.addr).unwrap();
-            s.write_all(b"GET /api/events HTTP/1.1\r\n\r\n").unwrap();
+            s.write_all(
+                format!("GET /api/events HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n\r\n").as_bytes(),
+            )
+            .unwrap();
             s
         })
         .collect();

@@ -3789,6 +3789,11 @@ mod reviewing {
         let mut h = Harness::new(App::boxed());
         assert_eq!(h.app.screen, Screen::Editor);
         pump(&mut h, &b);
+        // Nothing is read before a sign-in (card read-lock); an operator's will do.
+        rv(&mut h)
+            .state
+            .login_pin("operator", crate::review_tests::OPERATOR.into());
+        pump(&mut h, &b);
         assert_eq!(h.app.waiting(), Some(0));
         b.horn();
         // The list is read again every 30 s, without opening the screen.
@@ -3812,12 +3817,10 @@ mod reviewing {
         h.size = Vec2::new(1400.0, 4000.0);
         h.frame(vec![]);
         pump(&mut h, &b);
-        click(&mut h, &format!("row {id}"));
-        pump(&mut h, &b);
-        assert_eq!(rv(&mut h).state.open.as_ref().map(|o| o.id), Some(id));
-
-        // Not signed in: no token field anywhere, approving is off, and the
-        // panel asks for a role and its PIN (the box has no accounts).
+        // Not signed in: no row to click (every read needs a session, card
+        // read-lock), no token field anywhere, and the panel asks for a
+        // role and its PIN (the box has no accounts).
+        assert!(rv(&mut h).state.list.is_empty(), "nothing read before a sign-in");
         let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
         for gone in ["token", "use", "user", "password"] {
             assert!(!keys.contains(&gone.to_string()), "{gone} on screen: {keys:?}");
@@ -3831,21 +3834,6 @@ mod reviewing {
         ] {
             assert!(keys.contains(&k.to_string()), "no {k}: {keys:?}");
         }
-        // Above the button: what the deploy keeps and resets, in words.
-        assert!(
-            h.drew("Before you approve: this deploy keeps 5 values, starts HORN at the initial value (new)."),
-            "the approval screen shows the preview"
-        );
-        assert!(h.drew("new HORN"), "the reset value is marked apart");
-        let state = rect(&mut h, "state");
-        assert!(state.top() < rect(&mut h, &format!("go {:?}", Target::Proposal(id))).top());
-        let t = Target::Proposal(id);
-        click(&mut h, &format!("go {t:?}"));
-        pump(&mut h, &b);
-        assert!(
-            matches!(rv(&mut h).state.open.as_ref().unwrap().step.phase, Phase::Idle),
-            "a disabled button sends nothing"
-        );
 
         click(&mut h, "role engineer");
         assert_eq!(rv(&mut h).role_input, "engineer");
@@ -3864,6 +3852,20 @@ mod reviewing {
         let keys: Vec<String> = rv(&mut h).rects.iter().map(|(k, _)| k.clone()).collect();
         assert!(keys.contains(&"logout".to_string()), "{keys:?}");
         assert!(!keys.contains(&"pin".to_string()), "{keys:?}");
+
+        // Signed in, the list came, and the row opens.
+        click(&mut h, &format!("row {id}"));
+        pump(&mut h, &b);
+        assert_eq!(rv(&mut h).state.open.as_ref().map(|o| o.id), Some(id));
+        // Above the button: what the deploy keeps and resets, in words.
+        assert!(
+            h.drew("Before you approve: this deploy keeps 5 values, starts HORN at the initial value (new)."),
+            "the approval screen shows the preview"
+        );
+        assert!(h.drew("new HORN"), "the reset value is marked apart");
+        let t = Target::Proposal(id);
+        let state = rect(&mut h, "state");
+        assert!(state.top() < rect(&mut h, &format!("go {t:?}")).top());
 
         click(&mut h, &format!("replay {t:?}"));
         pump(&mut h, &b);
@@ -3966,8 +3968,8 @@ mod reviewing {
         let calls: Vec<_> = rv(&mut h).sent.iter().map(|q| q.call.clone()).collect();
         assert_eq!(
             calls.len(),
-            4,
-            "the list, the outputs, the policy and who is signed in: {calls:?}"
+            5,
+            "the list, the outputs, the policy, who is signed in and how to sign in: {calls:?}"
         );
         let ctx = h.ctx.clone();
         let answers = std::mem::take(&mut rv(&mut h).sent)

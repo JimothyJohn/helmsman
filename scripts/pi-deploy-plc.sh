@@ -243,7 +243,7 @@ local_api="127.0.0.1:$api_port"
 answering=
 for _ in $(seq 1 10); do
     # shellcheck disable=SC2029 # $local_api is meant to expand here.
-    if ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/modules >/dev/null"; then
+    if ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/health >/dev/null"; then
         answering=1
         break
     fi
@@ -260,14 +260,17 @@ ssh "$target" "curl -fsS --max-time 2 http://$local_api/ | grep -q '<canvas' \
 # because it comes from the Pi itself. -k: the certificate is self-signed;
 # its fingerprint, printed below, is what a person checks instead.
 # shellcheck disable=SC2029 # $local_api is meant to expand here.
-ssh "$target" "curl -fsSk --max-time 2 -o /dev/null https://$local_api/api/modules" \
+ssh "$target" "curl -fsSk --max-time 2 -o /dev/null https://$local_api/api/health" \
     || { echo "FAIL: the box API does not answer over HTTPS on the Pi's $local_api" >&2; exit 1; }
-# shellcheck disable=SC2029 # $local_api is meant to expand here.
-fingerprint=$(ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/policy" \
+# Every read needs a session (card read-lock): the unit's token, read on
+# the Pi and never printed here.
+auth='-H "Authorization: Bearer $(sudo cat /var/lib/helmsman-plc/api-token)"'
+# shellcheck disable=SC2029 # $local_api and $auth are meant to expand here.
+fingerprint=$(ssh "$target" "curl -fsS --max-time 2 $auth http://$local_api/api/policy" \
     | grep -o '"fingerprint":"[0-9A-F:]*"' | cut -d'"' -f4 || true)
 if [ "$mode" = projects ]; then
     # shellcheck disable=SC2029 # $local_api is meant to expand here.
-    running="$(ssh "$target" "curl -fsS --max-time 2 http://$local_api/api/running")" \
+    running="$(ssh "$target" "curl -fsS --max-time 2 $auth http://$local_api/api/running")" \
         || { echo "FAIL: the box answers without projects (is it running --projects?)" >&2; exit 1; }
     case "$running" in
         *'"current":true'*) echo "running: $running" ;;

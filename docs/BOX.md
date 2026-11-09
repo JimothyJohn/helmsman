@@ -23,8 +23,9 @@ installs over SSH on a Pi you already have:
 | `/boot/firmware/helmsman/` | where the pairing files go; a README there says the same |
 
 The API and the canvas listen on the LAN (`0.0.0.0:8080`, HTTPS with the
-box's own certificate, fingerprint in Help › About); reads are open, every
-change needs an engineer. A fresh box has no accounts: its role PINs work
+box's own certificate, fingerprint in Help › About); every read needs a
+sign in (only `/api/health` answers a bare poll), every change needs an
+engineer. A fresh box has no accounts: its role PINs work
 until one exists (`helmsman-plc account add`, or `scripts/pi-account.sh`).
 SSH is on with the default user `helmsman` (set the password with
 Raspberry Pi Imager when flashing, or in `pi-gen`'s `FIRST_USER_PASS`).

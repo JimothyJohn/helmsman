@@ -314,7 +314,11 @@ fn exchange(
     let mut s = TcpStream::connect(addr).map_err(|e| e.to_string())?;
     s.set_read_timeout(Some(Duration::from_secs(60)))
         .map_err(|e| e.to_string())?;
-    let mut req = format!("{method} {url} HTTP/1.1\r\nHost: box\r\nConnection: close\r\n");
+    // The box token stands for the signed-in page's cookie (card read-lock).
+    let mut req = format!(
+        "{method} {url} HTTP/1.1\r\nHost: box\r\nConnection: close\r\nAuthorization: Bearer {}\r\n",
+        crate::box_tests::TOKEN
+    );
     if let Some((b, ctype)) = body {
         let _ = write!(req, "Content-Type: {ctype}\r\nContent-Length: {}\r\n", b.len());
     }
@@ -446,7 +450,13 @@ fn listen(addr: SocketAddr, stream: Stream, url: &str, stop: &AtomicBool, inbox:
         return;
     };
     let _ = s.set_read_timeout(Some(Duration::from_millis(50)));
-    if write!(s, "GET {url} HTTP/1.1\r\nHost: box\r\n\r\n").is_err() {
+    if write!(
+        s,
+        "GET {url} HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {}\r\n\r\n",
+        crate::box_tests::TOKEN
+    )
+    .is_err()
+    {
         push(Msg::Failed(stream));
         return;
     }

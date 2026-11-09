@@ -250,7 +250,7 @@ impl Bench {
         let live = Arc::new(Live::default());
         let cfg = Config {
             bind: "127.0.0.1:0".parse().unwrap(),
-            token: "0".repeat(64),
+            token: crate::box_tests::TOKEN.into(),
             limits: Limits::default(),
             stream_every: Duration::from_millis(20),
             memory: 16,
@@ -399,9 +399,37 @@ impl Bench {
         }
     }
 
-    /// `GET path` with no cookie: status and body bytes.
+    /// `GET path` as the page in `jar` reads: its session cookie and
+    /// nothing else (every read needs a session, card read-lock: signed
+    /// out, this is a 401).
+    pub fn get_in(&self, jar: &Jar, path: &str) -> (u16, Vec<u8>) {
+        let cookie = jar
+            .get()
+            .map(|s| format!("Cookie: helmsman_session={s}\r\n"))
+            .unwrap_or_default();
+        let (s, _, b) = self.raw(&format!("GET {path} HTTP/1.1\r\nHost: box\r\n{cookie}\r\n"), b"");
+        (s, b)
+    }
+
+    /// The first `n` events of the stream at `path`, as the page in `jar`
+    /// opens it (its cookie alone, as an `EventSource` sends it).
+    pub fn events_in(&self, jar: &Jar, path: &str, n: usize) -> Vec<(String, String)> {
+        let cookie = jar
+            .get()
+            .map(|s| format!("Cookie: helmsman_session={s}\r\n"))
+            .unwrap_or_default();
+        self.events_with(path, n, &cookie)
+    }
+
+    /// `GET path` as the test itself looks at the box: the box token.
     pub fn get(&self, path: &str) -> (u16, Vec<u8>) {
-        let (s, _, b) = self.raw(&format!("GET {path} HTTP/1.1\r\nHost: box\r\n\r\n"), b"");
+        let (s, _, b) = self.raw(
+            &format!(
+                "GET {path} HTTP/1.1\r\nHost: box\r\nAuthorization: Bearer {}\r\n\r\n",
+                crate::box_tests::TOKEN
+            ),
+            b"",
+        );
         (s, b)
     }
 
@@ -409,22 +437,35 @@ impl Bench {
         serde_json::from_slice(&self.get(path).1).unwrap()
     }
 
-    /// The first `n` events of the stream at `path`.
+    /// The first `n` events of the stream at `path`, with the box token.
     pub fn events(&self, path: &str, n: usize) -> Vec<(String, String)> {
+        let auth = format!("Authorization: Bearer {}\r\n", crate::box_tests::TOKEN);
+        self.events_with(path, n, &auth)
+    }
+
+    fn events_with(&self, path: &str, n: usize, headers: &str) -> Vec<(String, String)> {
         let mut s = TcpStream::connect(self.addr).unwrap();
         s.set_read_timeout(Some(Duration::from_millis(200))).unwrap();
-        write!(s, "GET {path} HTTP/1.1\r\nHost: box\r\n\r\n").unwrap();
+        write!(s, "GET {path} HTTP/1.1\r\nHost: box\r\n{headers}\r\n").unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut buf = String::new();
         let mut chunk = [0u8; 8192];
         loop {
+            // A refused stream (401 signed out) is no events at all.
+            if let Some(head) = buf.split_once("\r\n\r\n").map(|(h, _)| h)
+                && !head.starts_with("HTTP/1.1 200")
+            {
+                return Vec::new();
+            }
             let events = sse(&buf);
             if events.len() >= n {
                 return events.into_iter().take(n).collect();
             }
             assert!(Instant::now() < deadline, "{n} events from {path}");
             if let Ok(k) = s.read(&mut chunk) {
-                assert!(k > 0, "{path} closed");
+                if k == 0 {
+                    return Vec::new();
+                }
                 buf.push_str(&String::from_utf8_lossy(&chunk[..k]));
             }
         }
@@ -463,7 +504,7 @@ fn pump(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context, now: f64) {
     for c in cmds {
         match c {
             Cmd::Get(what, url) => {
-                let (s, body) = b.get(&url);
+                let (s, body) = b.get_in(jar, &url);
                 let body = String::from_utf8_lossy(&body).into_owned();
                 msgs.push(Msg::Got(
                     what,
@@ -475,8 +516,15 @@ fn pump(b: &Bench, jar: &Jar, v: &mut BoxView, ctx: &egui::Context, now: f64) {
                 ));
             }
             Cmd::Listen(stream, url) => {
+                // Signed out the box refuses the stream (401): the browser
+                // would report it failed.
+                let events = b.events_in(jar, &url, 1);
+                if events.is_empty() {
+                    msgs.push(Msg::Failed(stream));
+                    continue;
+                }
                 msgs.push(Msg::Opened(stream));
-                for (name, data) in b.events(&url, 1) {
+                for (name, data) in events {
                     msgs.push(Msg::Event(stream, name, data));
                 }
             }
@@ -718,9 +766,12 @@ fn an_engineer_lists_opens_edits_saves_and_deploys_a_project_on_the_box() {
     let on_box = b.json("/api/projects/line/files/main.st");
     assert_eq!(on_box["text"], MAIN);
 
-    // Another page lists it and opens it with every file.
+    // Another page (signed in: every read needs a session, card read-lock)
+    // lists it and opens it with every file.
     let mut other = BoxProjects::new();
-    settle(&b, &Jar::default(), &mut other);
+    let jar2 = Jar::default();
+    b.login(&jar2, "bob", BOB);
+    settle(&b, &jar2, &mut other);
     assert_eq!(other.open.as_ref().unwrap().name, "line");
     assert_eq!(files(&other), ["blocks.st", "io.map", "main.st"]);
     assert_eq!(other.current().unwrap().text, MAIN, "main.st first");
@@ -1066,7 +1117,13 @@ fn signed_out_or_below_engineer_everything_is_read_only() {
         let v = page(&b, &jar, who);
         let why = v.writable().unwrap_err();
         match who {
-            None => assert!(why.contains("Sign in as an engineer"), "{why}"),
+            None => {
+                assert!(why.contains("Sign in as an engineer"), "{why}");
+                // Signed out, the box answers no read (card read-lock):
+                // nothing is listed or opened until a sign-in.
+                assert!(v.projects.open.is_none(), "nothing listed or opened");
+                continue;
+            }
             Some(_) => assert!(
                 why.contains("bob (operator)") && why.contains("only an engineer"),
                 "{why}"
@@ -1556,10 +1613,17 @@ fn the_shared_layout_round_trips_through_the_running_project_for_an_engineer_onl
     // The layout is no program change: what runs is still the project.
     assert_eq!(b.json("/api/running")["current"], true);
 
-    // Another page, any role, starts from it.
+    // Another page, any signed-in role, starts from it; signed out, the
+    // box answers no read (card read-lock), so there is nothing to start
+    // from.
     for who in [None, Some(("bob", BOB))] {
         let jar = Jar::default();
         let mut v = page(&b, &jar, who);
+        if who.is_none() {
+            // Nothing read, so nothing to start from and nothing to save.
+            assert_eq!(v.projects.shared_layout(), "", "nothing read signed out");
+            continue;
+        }
         assert_eq!(v.projects.shared_layout(), text);
         // An operator's page offers no Save as default and sends nothing.
         v.save_layout();
@@ -1791,9 +1855,12 @@ fn a_reload_puts_back_the_project_the_file_the_edits_and_the_inputs() {
         "their save stands"
     );
 
-    // Signed out, the edit still comes back; saving it waits for a sign-in.
+    // Signed in as an operator (a read needs a session, card read-lock),
+    // the edit still comes back; saving it waits for an engineer's sign-in.
     let mut r = BoxView::new().with_desk(Box::new(MemStorage(Some(stale.text_within(MAX_BYTES).0))));
-    settle(&b, &Jar::default(), &mut r.projects);
+    let jar3 = Jar::default();
+    b.login(&jar3, "bob", BOB);
+    settle(&b, &jar3, &mut r.projects);
     assert!(r.projects.dirty());
 }
 
