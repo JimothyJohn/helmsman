@@ -270,15 +270,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-09
   by: claude-session
 
-- [ ] **Canvas: a token field for a node, so deploy and run/stop work from the UI** — `?box=ORIGIN` (#312) makes the canvas watch a node or another box by address, read-only in practice: every write needs the node's bearer token, which only curl sends today. Add a token field where the canvas asks for the origin (kept in the browser's storage for that origin, never in the URL), sent as Authorization: Bearer on every write, with a 401 opening the field again. Then the Editor's deploy and the Stop/Run glyphs work against a node. Test: the canvas contract test (node_api_tests.rs) with a write that fails without the header and passes with it.
-  needs: nothing
-  result: an engineer commissions, deploys and stops a node from the canvas alone
-  est: 4h
-  difficulty: low
-  id: canvas-node-token
-  asked: 2026-11-09
-  by: claude-session
-
 - [ ] **Bring up the ESP32-P4 board: Ethernet on the IP101GRI, then the same commissioning run** — the Waveshare ESP32-P4-ETH + PoE module arrives Wednesday 2026-11-12. helmsman-node-p4 builds and links the `modbus`, `enip` and `node` binaries (#299, #312) but has never run on hardware. Order (docs/EDGE.md Phase 3 "First day on the board"): flash the `modbus` build over USB with PoE unplugged until the module's isolation is known, watch the console for the link (esp-hal 1.2 Ethernet on the IP101GRI over RMII and MDIO; esp-p4-eth is the fallback if the PHY does not come up), then the `node` build and the POE-ISO's commissioning run (factory 192.168.127.250, PUT /api/settings to static, deploy the chase, ping, values stream). Then the memory headroom the WROOM lacks (768 KiB: a real cell program), then mbedtls-rs at the fork's main with Homebrew clang for TLS. E1213 note: it has one exclusive EtherNet/IP owner (the try box), so the first enip run is ENIP_INPUT_ONLY=1 or over Modbus.
   needs: the board on the bench (Wednesday); which switch and subnet it plugs into (the E1213 is on the Studio link 192.168.3.x)
   result: the node image runs on the P4 end to end as on the POE-ISO, with the numbers for scan period and free memory written into EDGE.md
