@@ -63,6 +63,12 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   Homebrew's python said `No route to host`: macOS Local Network
   privacy, not the firewall or the driver. Any box that talks to bench
   devices runs as a LaunchAgent (the try box's entry below).
+- **A panel is only ever laid out at the width something forces.** The
+  right panel sat 48 pt wider than its 236 pt default for as long as it
+  had three tabs, so the model combo and the field hints that overflowed
+  236 pt were never seen until the third tab went (2026-11-08). New panel
+  content gets a test at the panel's default width, not only
+  `every_tab_leaves_the_panels_their_width`.
 - **A resizable egui panel grows to any row that overflows it, every
   frame.** A label in a plain `horizontal`, a combo box or field at full
   width beside a scroll bar, a grid cell with a full-width button: each

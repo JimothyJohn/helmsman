@@ -172,6 +172,10 @@ pub struct Chrome {
     /// set by the workspace each frame; drawn only while the editor's text
     /// is what the Agent wrote ([`crate::agent_marks`]).
     pub st_marks: Option<crate::agent_marks::StMarks>,
+    /// Word wrap in the Code tab: long lines wrap at the pane's width
+    /// (on, the default) or run on behind a sideways scroll bar (Nick,
+    /// 2026-11-08). The toggle sits in the Code header.
+    pub wrap: bool,
 }
 
 impl Default for Chrome {
@@ -191,6 +195,7 @@ impl Default for Chrome {
             diagram: Rect::NOTHING,
             find: None,
             st_marks: None,
+            wrap: true,
         }
     }
 }
@@ -200,7 +205,7 @@ impl Chrome {
     #[must_use]
     pub fn saved(&self) -> String {
         format!(
-            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={}",
+            "left={} right={} pane={} tab={} scan={} trend={} bottom={} light={} wrap={}",
             u8::from(self.left),
             u8::from(self.right),
             self.pane.key(),
@@ -208,7 +213,8 @@ impl Chrome {
             u8::from(self.scan),
             u8::from(self.trend),
             self.bottom.key(),
-            u8::from(self.light)
+            u8::from(self.light),
+            u8::from(self.wrap)
         )
     }
 
@@ -228,6 +234,7 @@ impl Chrome {
                 Some(("scan", v)) => c.scan = v == "1",
                 Some(("trend", v)) => c.trend = v == "1",
                 Some(("light", v)) => c.light = v == "1",
+                Some(("wrap", v)) => c.wrap = v == "1",
                 Some(("bottom", "messages")) => c.bottom = Bottom::Messages,
                 Some(("bottom", "trend")) => c.bottom = Bottom::Trend,
                 Some(("tab", v)) => {
@@ -774,8 +781,9 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
 /// The ST, with line numbers, diagnostics marked (`(line, column)`), and
 /// the line [`Chrome::goto`] sent it to scrolled into view and marked. A
 /// `&mut &str` is read-only (on a box); a `String` is edited in place, up
-/// to `limit` characters. Lines wrap at the pane's width; a wrapped line
-/// is numbered once, on its first row.
+/// to `limit` characters. Lines wrap at the pane's width while
+/// [`Chrome::wrap`] is on, a wrapped line numbered once, on its first
+/// row; off, each line is one row and the code scrolls sideways.
 pub fn st_editor(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -787,7 +795,13 @@ pub fn st_editor(
     let font = FontId::monospace(crate::theme::MONO);
     let row = ui.fonts_mut(|f| f.row_height(&font));
     let found = crate::find::row(ui, &mut chrome.find, id, text.as_str());
-    let mut scroll = egui::ScrollArea::vertical().id_salt(id.with("scroll"));
+    let wrap_on = chrome.wrap;
+    let mut scroll = if wrap_on {
+        egui::ScrollArea::vertical()
+    } else {
+        egui::ScrollArea::both()
+    }
+    .id_salt(id.with("scroll"));
     if let Some(line) = chrome.jump.take() {
         #[allow(clippy::cast_precision_loss)]
         let y = (line.saturating_sub(4)) as f32 * row;
@@ -846,13 +860,21 @@ pub fn st_editor(
                 let gutter_w = digit * 3.0;
                 // Slack for the editor's own margin and the scroll bar: wider
                 // than the pane and a resizable pane grows to fit, every frame.
-                let wrap = (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0);
+                let wrap = if wrap_on {
+                    (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0)
+                } else {
+                    f32::INFINITY
+                };
                 // The width the text edit really wraps at (its margins
                 // come off the width it is given) is told by its layouter;
                 // the gutter uses the last frame's, or the estimate on the
                 // first.
                 let wrap_key = id.with("wrap");
-                let edit_wrap = ui.data(|d| d.get_temp::<f32>(wrap_key)).unwrap_or(wrap - 8.0);
+                let edit_wrap = if wrap_on {
+                    ui.data(|d| d.get_temp::<f32>(wrap_key)).unwrap_or(wrap - 8.0)
+                } else {
+                    f32::INFINITY
+                };
                 // The rows the text takes at that width: each source line
                 // numbered on its first row, its wrapped rows blank.
                 let mut job = highlight(text.as_str(), diags, at, &added, &font, edit_wrap, &t);
@@ -878,7 +900,12 @@ pub fn st_editor(
                 }
                 gutter.wrap.max_width = f32::INFINITY;
                 ui.label(gutter);
+                // Wrap off: the editor is as wide as its longest line (plus
+                // its margins) and the scroll area scrolls to it; the pane
+                // keeps its width because the scroll area clips.
+                let desired = if wrap_on { wrap } else { galley.size().x + 16.0 };
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+                    let wrap = if wrap_on { wrap } else { f32::INFINITY };
                     ui.data_mut(|d| d.insert_temp(wrap_key, wrap));
                     let mut job = highlight(buf.as_str(), diags, at, &added, &font, wrap, &t);
                     crate::find::mark(&mut job, &marks);
@@ -889,16 +916,17 @@ pub fn st_editor(
                 let out = egui::TextEdit::multiline(text) // tip: exempt
                     .id(id)
                     .code_editor()
-                    .desired_width(wrap)
+                    .desired_width(desired)
                     .char_limit(limit)
                     .desired_rows(24)
                     .lock_focus(true)
                     .layouter(&mut layouter)
                     .show(ui);
                 // The gutter was laid out a frame behind a change of width.
-                if ui
-                    .data(|d| d.get_temp::<f32>(wrap_key))
-                    .is_some_and(|w| (w - edit_wrap).abs() > 0.01)
+                if wrap_on
+                    && ui
+                        .data(|d| d.get_temp::<f32>(wrap_key))
+                        .is_some_and(|w| (w - edit_wrap).abs() > 0.01)
                 {
                     ui.ctx().request_repaint();
                 }
@@ -908,6 +936,44 @@ pub fn st_editor(
             .inner
         })
         .inner
+}
+
+/// The Code header's word-wrap toggle, drawn as "code wrap" for the
+/// tests: on, long lines wrap at the pane's width; off, each line is one
+/// row and the code scrolls sideways ([`Chrome::wrap`]).
+pub fn wrap_toggle(ui: &mut egui::Ui, chrome: &mut Chrome) {
+    let tip = if chrome.wrap {
+        "Word wrap is on: a long line wraps at the pane's width. Click for one row per line, scrolled sideways."
+    } else {
+        "Word wrap is off: each line is one row, scrolled sideways. Click to wrap long lines at the pane's width."
+    };
+    let r = crate::glyphs::button_sized(
+        ui,
+        crate::glyphs::Icon::Wrap,
+        crate::glyphs::ROW,
+        true,
+        chrome.wrap,
+        tip,
+    );
+    chrome.hit("code wrap", r.rect);
+    if r.clicked() {
+        chrome.wrap = !chrome.wrap;
+    }
+}
+
+/// The Code header's name: the open file, truncated to leave the row's
+/// glyphs and notes their room, drawn as "code file" for the tests.
+pub fn file_header(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str) {
+    // Two glyphs, their spacing and a short note stay on the row.
+    let room = (ui.available_width() - 2.0 * (crate::glyphs::ROW + 6.0) - 120.0).max(60.0);
+    let r = ui
+        .scope(|ui| {
+            ui.set_max_width(room);
+            ui.add(egui::Label::new(RichText::new(name).strong()).truncate())
+        })
+        .inner
+        .tip(tip);
+    chrome.hit("code file", r.rect);
 }
 
 /// Where the Agent's change removed lines: a red rule between the rows

@@ -1974,11 +1974,18 @@ impl Body for BoxView {
                 }
             });
             let mut go = false;
+            // The header is the open file's name (Nick, 2026-11-08), then
+            // word wrap, then the → that deploys this version.
+            let name = o.current.clone().unwrap_or_else(|| "Structured Text".to_string());
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                ui.add(crate::theme::whole(RichText::new("Structured Text").strong()))
-                    .tip("The open file of the project. Save keeps it on the box; Deploy runs it.");
-                // The → deploys this version (Nick, 2026-11-08).
+                editor::file_header(
+                    ui,
+                    chrome,
+                    &name,
+                    "The open file of the project. Save keeps it on the box; Deploy runs it.",
+                );
+                editor::wrap_toggle(ui, chrome);
                 go = projects::deploy_arrow(
                     ui,
                     chrome,
@@ -2046,10 +2053,16 @@ impl Body for BoxView {
             }
             return;
         }
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Structured Text").strong())
-                .tip("The source of the module that runs.");
-            ui.label(RichText::new("read-only").color(t.muted))
+        let name = self
+            .state
+            .selected
+            .clone()
+            .unwrap_or_else(|| "Structured Text".to_string());
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            editor::file_header(ui, chrome, &name, "The source of the module that runs.");
+            editor::wrap_toggle(ui, chrome);
+            ui.add(crate::theme::whole(RichText::new("read-only").color(t.muted)))
                 .tip("Changes reach the box as proposals.");
         });
         match &self.view {

@@ -146,8 +146,11 @@ label is drawn, the icon stands alone at a readable size.
   signal into the map. When that signal is one of the program's inputs,
   in the same unit, the simulation runs the model from it: set it in
   the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
-  Structured Text editor. Errors are marked on the line as you type; the
-  program running does not change until you deploy. The key for a tab
+  Structured Text editor, headed by the open file's name. Errors are
+  marked on the line as you type; the program running does not change
+  until you deploy. The word-wrap button beside the file name wraps long
+  lines at the pane's width, or, off, keeps each line on one row with a
+  scroll bar under the code; the choice is kept with the layout. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
   A double click on any tab, on this pane or the side panel, hides that
   pane.

@@ -670,6 +670,66 @@ END_PROGRAM",
         assert!((0.0..=8.0).contains(&grew), "the left pane grew {grew} pt");
     }
 
+    /// Nick, 2026-11-08: the Code header is the open file's name, with a
+    /// word-wrap toggle between it and the deploy arrow. Wrap off, a long
+    /// line is one row behind a sideways scroll bar and the pane keeps its
+    /// width; the choice is remembered with the layout.
+    #[test]
+    fn the_code_header_names_the_file_and_toggles_word_wrap() {
+        use crate::editor::Chrome;
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let left = h.rect("left");
+        h.press("pane code");
+        h.wait(0.3);
+        let file = h.app.sim.as_ref().unwrap().proj.current.clone();
+        assert!(h.drew(&file), "the header is the file name {file}");
+        assert!(!h.drew("Structured Text"), "no generic header");
+        let (name, wrap, arrow) = (h.rect("code file"), h.rect("code wrap"), h.rect("code deploy"));
+        assert!(
+            name.right() <= wrap.left() && wrap.right() <= arrow.left(),
+            "name, wrap, arrow in a row: {name:?} {wrap:?} {arrow:?}"
+        );
+        assert!(h.app.chrome.wrap, "wrap is on by default");
+        // "left" is the pane's toggle, on the pane's right edge.
+        let pane = left.right();
+        let wrapped = h.rect("st editor");
+        assert!(
+            wrapped.right() <= pane,
+            "wrapped, the editor fits the pane: {wrapped:?}"
+        );
+        // A line far wider than the pane.
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            let current = sim.proj.current.clone();
+            let long = format!("\n(* {} *)", "wide ".repeat(200));
+            sim.proj.files.get_mut(&current).unwrap().push_str(&long);
+        }
+        h.frame(vec![]);
+        assert!(h.rect("st editor").right() <= pane, "still wrapped");
+        h.press("code wrap");
+        h.wait(0.3);
+        assert!(!h.app.chrome.wrap, "the toggle turned wrap off");
+        assert!(
+            h.rect("st editor").width() > 2.0 * pane,
+            "unwrapped, the long line runs on: {} pt wide",
+            h.rect("st editor").width()
+        );
+        let grew = h.rect("left").right() - left.right();
+        assert!(
+            (0.0..=8.0).contains(&grew),
+            "wrap off: the left pane grew {grew} pt"
+        );
+        let saved = h.app.chrome.saved();
+        assert!(saved.contains("wrap=0"), "{saved}");
+        assert!(!Chrome::restored(&saved).wrap, "read back");
+        assert!(Chrome::restored("left=1").wrap, "absent: on");
+        h.press("code wrap");
+        h.wait(0.3);
+        assert!(h.app.chrome.wrap, "and back on");
+        assert!(h.rect("st editor").right() <= pane, "wrapped again");
+    }
+
     /// Nick, 2026-11-01: one tall row, menus left, the project right; the
     /// bar that held ST, Reset layout and Save as default is gone.
     #[test]
