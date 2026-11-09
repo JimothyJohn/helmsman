@@ -9,6 +9,8 @@
 # folder with its own Cargo.lock; nothing else in the workspace is touched.
 #
 # Usage: scripts/node-build.sh                (Phase 1: the `bench` binary)
+#        scripts/node-build.sh api            (Phase 4: `bench`, `modbus` and `node`;
+#                                              E1213_ADDR, NODE_SEED_CHASE=1 apply)
 #        scripts/node-build.sh net            (Phase 2: `bench` and `modbus`;
 #                                              E1213_ADDR=a.b.c.d LOG_SINK=a.b.c.d:port
 #                                              in the environment change the defaults)
@@ -68,18 +70,28 @@ mode="${1:-build}"
 features=()
 case "${2:-${1:-}}" in
   net) features=(--features net) ;;
+  api) features=(--features api) ;;
 esac
 # NODE_BOARD=poe-iso builds for the ESP32-POE-ISO (RMII clock on GPIO17);
 # the default is the ESP32-POE2.
+# The POE-ISO is a WROOM: no PSRAM, so the default `psram` feature is off
+# (with it on, esp_hal::init brings up PSRAM over GPIO16/17, and GPIO17 is
+# that board's RMII clock pin; docs/EDGE.md, 2026-11-08).
 case "${NODE_BOARD:-poe2}" in
   poe2) ;;
-  poe-iso) [ ${#features[@]} -gt 0 ] && features=(--features net,poe-iso) ;;
-  *) echo "NODE_BOARD: poe2 or poe-iso, not ${NODE_BOARD}" >&2; exit 2 ;;
+  poe-iso)
+    case "${2:-${1:-}}" in
+      api) features=(--no-default-features --features poe-iso,api) ;;
+      net) features=(--no-default-features --features poe-iso) ;;
+      *) features=(--no-default-features) ;;
+    esac
+    ;;
+  *) echo "NODE_BOARD: poe2, poe-iso or p4-eth, not ${NODE_BOARD}" >&2; exit 2 ;;
 esac
 case "$mode" in
-  build|net) cargo build --release ${features[@]+"${features[@]}"} ;;
+  build|net|api) cargo build --release ${features[@]+"${features[@]}"} ;;
   clippy) cargo clippy --release ${features[@]+"${features[@]}"} -- -D warnings ;;
-  *) echo "usage: $0 [build|net|clippy [net]]" >&2; exit 2 ;;
+  *) echo "usage: $0 [build|net|api|clippy [net|api]]" >&2; exit 2 ;;
 esac
 # The main stack is what the statics leave of the DRAM segment
 # (_stack_start - _stack_end); a heap that grows eats it silently, and the
@@ -88,7 +100,10 @@ esac
 MIN_STACK=$((32 * 1024))
 if [ "$mode" != clippy ]; then
   bins=(bench)
-  [ ${#features[@]} -gt 0 ] && bins+=(modbus)
+  case "${2:-${1:-}}" in
+    net) bins+=(modbus) ;;
+    api) bins+=(modbus node) ;;
+  esac
   for b in "${bins[@]}"; do
     elf="target/xtensa-esp32-none-elf/release/$b"
     start=$(xtensa-esp32-elf-nm "$elf" | awk '$3 == "_stack_start_cpu0" { print $1 }')

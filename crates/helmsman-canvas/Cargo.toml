@@ -74,6 +74,9 @@ web-sys = { version = "0.3", features = [
 # must stay free of SQLite and TLS (tests/wasm_deps.rs).
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 helmsman-plc = { path = "../helmsman-plc", features = ["box"] }
+# What a node renders (crates/helmsman-nodecore): the contract test parses
+# it with the same code that parses a box (src/node_api_tests.rs).
+helmsman-nodecore = { path = "../helmsman-nodecore" }
 helmsman-agent = { path = "../helmsman-agent" }
 proptest = "1.12"
 helmsman-io = { path = "../helmsman-io" }

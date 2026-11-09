@@ -14,6 +14,11 @@ publish = false
 [workspace]
 
 [features]
+default = ["psram"]
+# `psram`: the WROVER-E's 8 MB on the POE2 as a second heap region (the
+# bench's round 2). Never on the POE-ISO: `--no-default-features --features
+# poe-iso` (scripts/node-build.sh does that).
+psram = ["esp-hal/psram"]
 # `poe-iso`: the image for an Olimex ESP32-POE-ISO (WROOM) instead of the
 # POE2: the RMII clock on GPIO17 (src/board.rs). Implies `net`.
 poe-iso = ["net"]
@@ -31,6 +36,9 @@ net = [
   "dep:ph-esp32-mac",
   "dep:static_cell",
 ]
+# `api`: the `node` binary: settings on flash, the HTTP server with the box
+# API subset, the beacon, program deploy (docs/EDGE.md Phase 4).
+api = ["net", "dep:esp-storage", "dep:embedded-storage", "dep:embassy-sync"]
 
 [[bin]]
 name = "bench"
@@ -41,6 +49,11 @@ name = "modbus"
 path = "src/bin/modbus.rs"
 required-features = ["net"]
 
+[[bin]]
+name = "node"
+path = "src/bin/node.rs"
+required-features = ["api"]
+
 [dependencies]
 # The runtime, without std: the clock comes in through `scan_at`, the
 # float functions from libm (helmsman-iec's `libm` feature).
@@ -48,6 +61,9 @@ helmsman-iec = { path = "../helmsman-iec", default-features = false, features = 
 # The Modbus codec (PDUs, reply checks, MBAP), no_std, no deps: the same
 # bytes the box puts on the wire.
 helmsman-modbus = { path = "../helmsman-modbus" }
+# What a node serves and stores (settings record, program slots, HTTP, the
+# box API subset, the router), no_std, host-tested.
+helmsman-nodecore = { path = "../helmsman-nodecore" }
 
 # The esp-rs stack, at the versions supervictor's edge crate pins (its
 # Cargo.lock, 2026-11-02): esp-hal 1.0.0 exactly (1.1 removed unstable
@@ -56,7 +72,11 @@ helmsman-modbus = { path = "../helmsman-modbus" }
 # heap statistics (max usage: the G3 number; the per-alloc bookkeeping
 # costs a little scan time, named in the output), esp-println on UART0
 # (USB serial), esp-backtrace as the panic handler.
-esp-hal = { version = "=1.0.0", features = ["esp32", "unstable", "psram", "rt"] }
+# No `psram` here: it is the `psram` feature below, on by default for the
+# POE2 (WROVER-E) and OFF for the POE-ISO (WROOM): with it on, esp_hal::init
+# brings up a PSRAM the WROOM does not have over GPIO16/17, and GPIO17 is
+# that board's RMII clock pin (the no-lease run of 2026-11-03).
+esp-hal = { version = "=1.0.0", default-features = false, features = ["esp32", "unstable", "rt"] }
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32"] }
 esp-alloc = { version = "0.9.0", features = ["internal-heap-stats"] }
 esp-println = { version = "0.16.1", features = ["esp32"] }
@@ -71,13 +91,23 @@ esp-backtrace = { version = "0.18.1", features = ["esp32", "panic-handler", "pri
 # static_cell for the stack's statics.
 embassy-executor = { version = "0.9.1", optional = true }
 embassy-time = { version = "0.5", features = ["generic-queue-8"], optional = true }
-embassy-net = { version = "0.9.1", features = ["dhcpv4", "medium-ethernet", "proto-ipv4", "tcp", "udp"], optional = true }
+# `auto-icmp-echo-reply`: a controller that does not answer ping is a
+# support call at commissioning; smoltcp answers echo only with this on.
+embassy-net = { version = "0.9.1", features = ["dhcpv4", "medium-ethernet", "proto-ipv4", "tcp", "udp", "auto-icmp-echo-reply"], optional = true }
 embassy-net-driver = { version = "0.2", optional = true }
 embedded-io-async = { version = "0.7.0", optional = true }
 esp-rtos = { version = "0.2", features = ["embassy", "esp32"], optional = true }
 esp32 = { version = "0.42", optional = true }
 ph-esp32-mac = { git = "https://github.com/photon-circus/ph-esp32-mac", rev = "b05d53ade4224361175283ac1b65c7504a029301", features = ["esp-hal", "embassy-net", "log"], optional = true }
 static_cell = { version = "2.1.0", features = ["nightly"], optional = true }
+
+# `api` only: the flash behind the settings and program slots in the nvs
+# partition (esp-storage's driver through the embedded-storage traits, the
+# partition table read by esp-bootloader-esp-idf), and embassy-sync's
+# blocking mutex for the state the scan loop and the server share.
+esp-storage = { version = "0.8.1", features = ["esp32"], optional = true }
+embedded-storage = { version = "0.3.2", optional = true }
+embassy-sync = { version = "0.7", optional = true }
 
 [profile.release]
 # Speed is what is measured; frame pointers stay for esp-backtrace.

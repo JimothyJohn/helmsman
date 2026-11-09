@@ -696,7 +696,9 @@ into the code.
   compiler of the same language; its own reading of the standard is not
   ours to cite) and the PLCopen TC6 corpus above. Where they and a
   reference disagree, the disagreement is written down in the test
-  (`rusty_negates_small_ints_in_dint` is the pattern).
+  (`small_int_negation_is_dint_wide_on_both_sides` in oracle.rs was the
+  pattern while the two disagreed; Nick's call on 2026-11-08 moved ours
+  to ruSTy's side, and the test now pins the agreement).
 - **Secondary references, marked as such:**
   - Fernhill Software, "Structured Text (ST)", in the Fernhill SCADA help,
     https://www.fernhillsoftware.com/help/iec-61131/structured-text/

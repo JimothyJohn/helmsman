@@ -1165,18 +1165,6 @@ impl<'a> Ck<'a> {
         }
     }
 
-    /// Whether an integer expression's value is carried wider than its
-    /// type (a binary arithmetic result, or a negation of one).
-    fn widened(ex: &Ex) -> bool {
-        match ex {
-            Ex::Bin(BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod, _, _, t) => {
-                t.arith() != *t
-            }
-            Ex::Un(UnOp::Neg, inner, _) => Self::widened(inner),
-            _ => false,
-        }
-    }
-
     fn is_const(ex: &Ex) -> bool {
         match ex {
             Ex::Const(_) => true,
@@ -1784,10 +1772,12 @@ impl<'a> Ck<'a> {
             (UnOp::Neg, T::IntLit(v)) => Some((Ex::Const(Value::Int(-v)), T::IntLit(-v))),
             (UnOp::Neg, T::RealLit(v)) => Some((Ex::Const(Value::Real(-v)), T::RealLit(-v))),
             (UnOp::Neg, T::Known(Type::Elem(ty))) if ty.is_signed_int() || ty.is_real() || ty == Ty::Time => {
-                // Negation works at its operand's width: a variable's own,
-                // or the widened width of an arithmetic result (as ruSTy).
-                let width = if Self::widened(&x) { ty.arith() } else { ty };
-                Some((Ex::Un(op, Box::new(x), width), t))
+                // Negation is carried at the arithmetic width, like `+ - * /`
+                // (SINT and INT in DINT, as ruSTy 1.0.8, rusty#2016), so the
+                // type's minimum negates to its positive value until an
+                // assignment truncates it (tests/st.rs
+                // `negation_of_small_ints_is_dint_wide`).
+                Some((Ex::Un(op, Box::new(x), ty.arith()), t))
             }
             (UnOp::Not, T::Known(Type::Elem(ty))) if ty.is_bit() => Some((Ex::Un(op, Box::new(x), ty), t)),
             (UnOp::Not, T::IntLit(_)) if want.and_then(Self::rt).is_some_and(Ty::is_bitstring) => {

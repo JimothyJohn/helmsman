@@ -171,6 +171,32 @@ fn implicit_widening_and_literals() {
     assert_eq!(get(&p, "w"), Value::Int(0xF000));
 }
 
+/// Unary minus on a SINT or INT is computed DINT-wide, like `+ - * /` on
+/// them (as ruSTy 1.0.8, rusty#2016): negating a type's minimum gives the
+/// positive value, which a later operation sees before the assignment
+/// truncates it. Assigned straight back to its own type it wraps, as any
+/// widened result does.
+#[test]
+fn negation_of_small_ints_is_dint_wide() {
+    let (p, _) = run(
+        "s : SINT := -128; i : INT := -32768; qs : SINT; qi : INT; ds : DINT; di : DINT; back : INT;",
+        "qs := (-s) / SINT#2; qi := (-i) / INT#2; ds := -s; di := -i; back := -i;",
+    );
+    assert_eq!(
+        get(&p, "qs"),
+        Value::Int(64),
+        "-(-128) is 128 before the division, not -128"
+    );
+    assert_eq!(get(&p, "qi"), Value::Int(16384));
+    assert_eq!(
+        get(&p, "ds"),
+        Value::Int(128),
+        "the widened value survives into a DINT"
+    );
+    assert_eq!(get(&p, "di"), Value::Int(32768));
+    assert_eq!(get(&p, "back"), Value::Int(-32768), "assigned to INT it wraps");
+}
+
 #[test]
 fn conversions() {
     let (p, _) = run(

@@ -14,7 +14,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::Context;
 
-use embassy_net::{Runner, Stack, StackResources};
+use embassy_net::{Runner, Stack, StackResources, StaticConfigV4};
 use embassy_time::{Duration, Timer};
 use esp_hal::Async;
 use esp_hal::ethernet::clock::ExternalRefClock;
@@ -31,9 +31,10 @@ use crate::board::{self, EthPins};
 /// takes them (esp-hal's example uses 10 and 10).
 pub const RX_FRAMES: usize = 10;
 pub const TX_FRAMES: usize = 10;
-/// Sockets the stack holds: DHCP, the TCP link (Modbus or the explicit
-/// session), the UDP I/O socket, the UDP log, one spare.
-pub const SOCKETS: usize = 5;
+/// Sockets the stack holds: DHCP, the TCP links (Modbus, the explicit
+/// session), the UDP I/O socket, two HTTP connections, the beacon, the
+/// UDP log, spare. smoltcp panics on a socket past this.
+pub const SOCKETS: usize = 10;
 /// How often the PHY is asked about the link.
 pub const LINK_POLL: Duration = Duration::from_millis(500);
 
@@ -89,14 +90,27 @@ impl Phy for LinkPhy {
     }
 }
 
-/// Brings the PHY and the EMAC up and builds the embassy-net stack, DHCP
-/// configured. `seed` feeds the stack's TCP sequence randomness. Returns
+/// How the node gets its address: a lease, or a fixed one (most plants
+/// commission controllers on static networks with no DHCP server; Nick,
+/// 2026-11-08).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Addressing {
+    Dhcp,
+    Static(StaticConfigV4),
+}
+
+/// Brings the PHY and the EMAC up and builds the embassy-net stack with
+/// `addressing`. `seed` feeds the stack's TCP sequence randomness. Returns
 /// the stack and its runner (spawn [`net_task`] with it).
 ///
 /// # Errors
 /// The driver's init refusing: no PHY answering at the strapped address
 /// means the reset line, the reference clock or the MDIO pins.
-pub async fn init(pins: EthPins, seed: u64) -> Result<(Stack<'static>, Runner<'static, EthDriver>), Error> {
+pub async fn init(
+    pins: EthPins,
+    addressing: Addressing,
+    seed: u64,
+) -> Result<(Stack<'static>, Runner<'static, EthDriver>), Error> {
     let mut reset = Output::new(pins.phy_reset, Level::Low, OutputConfig::default());
     Timer::after(Duration::from_millis(100)).await;
     reset.set_high();
@@ -122,7 +136,10 @@ pub async fn init(pins: EthPins, seed: u64) -> Result<(Stack<'static>, Runner<'s
     )?
     .into_async();
 
-    let config = embassy_net::Config::dhcpv4(embassy_net::DhcpConfig::default());
+    let config = match addressing {
+        Addressing::Dhcp => embassy_net::Config::dhcpv4(embassy_net::DhcpConfig::default()),
+        Addressing::Static(fixed) => embassy_net::Config::ipv4_static(fixed),
+    };
     Ok(embassy_net::new(
         eth,
         config,

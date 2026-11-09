@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{IpEndpoint, Stack};
-use embassy_time::{Duration, with_timeout};
+use embassy_time::{Duration, Instant, with_timeout};
 use embedded_io_async::{Read, Write};
 use helmsman_modbus::{MBAP_LEN, READ_DISCRETE_INPUTS, mbap, pdu, reply};
 
@@ -50,7 +50,17 @@ pub struct Client<'a> {
     tid: u16,
     /// Connections opened since start: a reconnect count for the record.
     pub connects: u32,
+    /// After a failed connect, no new attempt before this: a dead or
+    /// absent unit would otherwise be dialled every scan, and each dial
+    /// spends the stack's one ARP request per second (smoltcp's neighbour
+    /// cache is silent for 1 s after any request, for every address), so
+    /// nothing else on the node could resolve a neighbour; the 2026-11-08
+    /// run lost its report sink that way.
+    retry_at: Option<Instant>,
 }
+
+/// How long a failed connect keeps the link quiet.
+pub const CONNECT_BACKOFF: Duration = Duration::from_secs(2);
 
 impl<'a> Client<'a> {
     /// `rx` and `tx` are the socket's buffers for the client's whole life
@@ -73,6 +83,7 @@ impl<'a> Client<'a> {
             connected: false,
             tid: 0,
             connects: 0,
+            retry_at: None,
         }
     }
 
@@ -80,18 +91,24 @@ impl<'a> Client<'a> {
         if self.connected {
             return Ok(());
         }
+        if self.retry_at.is_some_and(|t| Instant::now() < t) {
+            return Err(Error::Link("backing off after a failed connect"));
+        }
         match with_timeout(self.timeout, self.socket.connect(self.endpoint)).await {
             Ok(Ok(())) => {
                 self.connected = true;
                 self.connects += 1;
+                self.retry_at = None;
                 Ok(())
             }
             Ok(Err(_)) => {
                 self.socket.abort();
+                self.retry_at = Some(Instant::now() + CONNECT_BACKOFF);
                 Err(Error::Link("connect refused"))
             }
             Err(_) => {
                 self.socket.abort();
+                self.retry_at = Some(Instant::now() + CONNECT_BACKOFF);
                 Err(Error::Link("connect timed out"))
             }
         }
