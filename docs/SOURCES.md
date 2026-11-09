@@ -715,6 +715,34 @@ into the code.
   a `§` of the standard. A behaviour pinned by the oracle cites the oracle
   test by name.
 
+### Browser keyboard shortcuts (Chrome, Edge, Safari, Firefox), read 2026-11-08
+
+- **Where:** Chrome, "Chrome keyboard shortcuts"
+  (https://support.google.com/chrome/answer/157179; Windows & Linux and
+  Mac tables); Microsoft Edge, "Keyboard shortcuts in Microsoft Edge"
+  (https://support.microsoft.com/en-us/microsoft-edge/keyboard-shortcuts-in-microsoft-edge-50d3edab-30d9-c7e4-21ce-37fe2713cfad;
+  Windows and macOS); Safari User Guide, "Keyboard and other shortcuts"
+  (https://support.apple.com/guide/safari/keyboard-and-other-shortcuts-cpsh003/mac);
+  Firefox from its source, since the support page would not serve a
+  script: `browser/base/content/browser-sets.inc.xhtml` (the keyset,
+  `modifiers` and `key` or `keycode` per command; `accel` is Ctrl on
+  Windows and Linux, ⌘ on a Mac) joined with
+  `browser/locales/en-US/browser/browserSets.ftl` (the English key
+  letters), both at github.com/mozilla-firefox/firefox `main`; the
+  tab-switching digits are `__NUM_SELECT_TAB_MODIFIER__` there (Alt on
+  Windows and Linux, ⌘ on a Mac).
+- **Leaned on by** `crates/helmsman-canvas/src/hotkeys.rs`: the module
+  doc's table and `BROWSER` / `BROWSER_MAC`, the chords a browser owns in
+  our key space, which `no_shortcut_is_a_browsers` keeps the table off
+  (Nick, 2026-11-08: Ctrl D deployed and the browser bookmarked). What
+  moved: Deploy to Ctrl Shift Enter, Step to F8, the panes to Alt Shift
+  0 to 4, Go to definition and Cross references to Alt Shift D and X,
+  Breakpoint to Shift F9, Force and Release all to Alt Shift F and U, the
+  step chords to Alt ] and Alt [; Ctrl Y redoes off a Mac only.
+- **How to cite:** `Chrome shortcuts (Mac) "⌘ + d"`, `Edge shortcuts
+  (Windows) "Ctrl+Shift+U"`, `Firefox browser-sets.inc.xhtml
+  key_togglePictureInPicture`.
+
 ### PKWARE, APPNOTE.TXT, .ZIP File Format Specification, version 6.3.10 (2022-11-01)
 
 - **Where:** https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT,

@@ -937,7 +937,7 @@ impl Monitor {
                 "step",
                 glyphs::Icon::Step,
                 t.built && !t.running,
-                "Step one scan (F10)",
+                "Step one scan (F8)",
                 Action::Step,
             ),
             (

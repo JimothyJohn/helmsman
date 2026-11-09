@@ -108,9 +108,11 @@ impl Pane {
     #[must_use]
     pub const fn tip(self) -> &'static str {
         match self {
-            Self::Files => "The projects and the open one's files (Alt+0 opens or shuts it).",
-            Self::Devices => "The I/O map: the remote modules and their points (Alt+4 opens or shuts it).",
-            Self::Code => "The Structured Text of the open file (Alt+1 opens or shuts it).",
+            Self::Files => "The projects and the open one's files (Alt+Shift+0 opens or shuts it).",
+            Self::Devices => {
+                "The I/O map: the remote modules and their points (Alt+Shift+4 opens or shuts it)."
+            }
+            Self::Code => "The Structured Text of the open file (Alt+Shift+1 opens or shuts it).",
         }
     }
 
@@ -296,7 +298,7 @@ impl Chrome {
         self.pane = Pane::Devices;
     }
 
-    /// Alt 4, View › Devices: the Devices tab, or the pane shut when that
+    /// Alt Shift 4, View › Devices: the Devices tab, or the pane shut when that
     /// is what shows.
     pub fn toggle_devices(&mut self) {
         if self.devices_open() {
@@ -306,7 +308,7 @@ impl Chrome {
         }
     }
 
-    /// Alt 1, View › Structured Text: the Code tab, or the pane shut when
+    /// Alt Shift 1, View › Structured Text: the Code tab, or the pane shut when
     /// that is what shows.
     pub fn toggle_code(&mut self) {
         if self.code_open() {
@@ -316,7 +318,7 @@ impl Chrome {
         }
     }
 
-    /// Alt 0, View › Files: the Files tab, or the pane shut when that is
+    /// Alt Shift 0, View › Files: the Files tab, or the pane shut when that is
     /// what shows.
     pub fn toggle_files(&mut self) {
         if self.files_open() {
@@ -699,7 +701,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             let toggle = if open {
                 let mut t = None;
                 ui.horizontal(|ui| {
-                    t = Some(header_toggle(ui, false, "Hides the panel (Alt+3)."));
+                    t = Some(header_toggle(ui, false, "Hides the panel (Alt+Shift+3)."));
                     for &k in tabs {
                         let r = crate::theme::tab(ui, tab == k, k.label(), Vec2::new(0.0, TAP * 0.75))
                             .tip(format!("{} Double-click hides the panel.", k.tip()));
@@ -716,7 +718,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                 body.tab(ui, tab, chrome);
                 t
             } else {
-                Some(strip_toggle(ui, true, "Shows the panel (Alt+3)."))
+                Some(strip_toggle(ui, true, "Shows the panel (Alt+Shift+3)."))
             };
             if let Some(t) = toggle {
                 hits.push(("right".to_string(), t.rect));
@@ -747,7 +749,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                         Bottom::Trend,
                         "Trend".to_string(),
                         "bottom trend",
-                        "Pinned signals over time (Alt+2).",
+                        "Pinned signals over time (Alt+Shift+2).",
                     ),
                     (
                         Bottom::Messages,

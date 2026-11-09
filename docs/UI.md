@@ -222,37 +222,42 @@ this; change it here first when a decision changes.
 
 CODESYS's default keys where the browser leaves them alone (its
 "Shortcuts" help page, checked 2026-11-01); nothing on a key the browser
-owns (F5 and Ctrl+R reload, F11 goes full screen, Ctrl+F5 reloads hard).
-The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
+owns, checked on 2026-11-08 against Chrome, Edge, Firefox and Safari
+(Ctrl D bookmarks, Ctrl B is Firefox's bookmarks sidebar, F10 the
+toolbar on Windows, Alt 1 to 9 Firefox's tabs, Ctrl ] Forward); the
+editor's own conventions stay (Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F,
+Ctrl G), as in every editor on the web. `hotkeys::BROWSER` holds the
+browsers' chords and a test keeps the table off them. The page keeps the
+browser's default off our keys. Ctrl is ⌘ on a Mac.
 Save, Deploy, Upload, Download, Force, Release all, Undo, Redo, Go to
 definition, Cross references, the step chords and Breakpoint act only on
-the Editor screen; on the Monitor or Proposals they do nothing (a Ctrl D
-there used to deploy the hidden project). Ctrl Z and Ctrl Y go to the
+the Editor screen; on the Monitor or Proposals they do nothing (Deploy's
+key there used to deploy the hidden project). Ctrl Z and Ctrl Y go to the
 focused text field alone, never to the editor's history as well
 (2026-11-08).
 
 | key | does | CODESYS command on that key |
 |---|---|---|
 | Ctrl S | Save | Save Project |
-| Ctrl D | Deploy | (Download has no key) |
+| Ctrl Shift Enter | Deploy | (Download has no key; Ctrl D is the browser's bookmark) |
 | Ctrl Enter | Run / Stop the simulation | (Start is F5, the browser's) |
 | Shift F8 | Stop the simulation | Stop |
-| F10 | Step one scan (stopped); from a breakpoint, the rest of the scan | Step Over |
+| F8 | Step one scan (stopped); from a breakpoint, the rest of the scan | Step Into (Step Over is F10, the browser's toolbar on Windows) |
 | Alt F8 | Sign in (box) | Login |
 | Ctrl F8 | Sign out (box) | Logout |
-| Ctrl Z, Ctrl Y | Undo, Redo in the ST editor | Undo, Restore |
-| Alt 0 | The left pane's Files tab | Devices view |
-| Alt 1 | The left pane's Code tab (the Structured Text) | POUs view |
-| Alt 2 | Trend along the bottom | Modules view |
-| Alt 3 | Side panel | Messages view |
-| Alt 4 | The left pane's Devices tab | |
-| Ctrl Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition |
-| Ctrl Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References |
-| Ctrl B | Breakpoint on the picked block (simulation): the scan stops before it, framed in orange; Ctrl Enter goes on to the next stop | (Toggle Breakpoint is F9) |
-| Ctrl Shift F | Force the picked input: a switch flips, a number's field opens (on a box an engineer's audited force) | |
-| Ctrl Shift U | Release every force (box, engineer) | |
-| Ctrl ] | Into the picked block instance's diagram; a stopped simulation steps one scan | |
-| Ctrl [ | Out to the caller's diagram, the instance left picked; a stopped simulation steps one scan | |
+| Ctrl Z, Ctrl Shift Z; Ctrl Y off a Mac | Undo, Redo in the ST editor | Undo, Restore |
+| Alt Shift 0 | The left pane's Files tab | Devices view (Alt 1 to 9 are Firefox's tabs on Windows and Linux) |
+| Alt Shift 1 | The left pane's Code tab (the Structured Text) | POUs view |
+| Alt Shift 2 | Trend along the bottom | Modules view |
+| Alt Shift 3 | Side panel | Messages view |
+| Alt Shift 4 | The left pane's Devices tab | |
+| Alt Shift D | Go to definition: the picked block's variable, at its VAR line | Go to Definition (Ctrl Shift D bookmarks every tab) |
+| Alt Shift X | Cross references: every read and write of it lit, until the next click | Display Cross References (Ctrl Shift X is Firefox's text direction) |
+| Shift F9 | Breakpoint on the picked block (simulation): the scan stops before it, framed in orange; Ctrl Enter goes on to the next stop | (Toggle Breakpoint is F9, Edge's reader; Ctrl B is Firefox's bookmarks) |
+| Alt Shift F | Force the picked input: a switch flips, a number's field opens (on a box an engineer's audited force) | (Ctrl Shift F is Firefox's full screen on a Mac) |
+| Alt Shift U | Release every force (box, engineer) | (Ctrl Shift U is Edge's Read aloud) |
+| Alt ] | Into the picked block instance's diagram; a stopped simulation steps one scan | (Ctrl ] is Forward) |
+| Alt [ | Out to the caller's diagram, the instance left picked; a stopped simulation steps one scan | (Ctrl [ is Back) |
 | Ctrl F | Find in the ST: every match marked, the current one brighter and scrolled to; Enter / Shift Enter next / previous, Esc closes with the match selected | |
 | Ctrl G, Ctrl Shift G | Next / previous match | |
 | Alt ↑ | Up one level in the diagram | |

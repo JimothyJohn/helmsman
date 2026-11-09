@@ -100,7 +100,7 @@ alt="The same screen in light mode, View › Light mode." /></p>
 <h2 id="the-glyphs">The glyphs</h2>
 <p>A strip of buttons sits over the diagram's top-right corner. In the
 simulation: run or stop (<kbd>Ctrl</kbd> <kbd>Enter</kbd>), step one
-scan (<kbd>F10</kbd>, when stopped), and restart from initial values. On
+scan (<kbd>F8</kbd>, when stopped), and restart from initial values. On
 both: save, upload a file into the project, download the project as a
 <code>.zip</code>, and <strong>?</strong> for these pages. Hover one for
 its name and key.</p>
@@ -120,9 +120,9 @@ this scan stays lit for a moment, so a one-shot reads as a blink.</li>
 everything that drives its value stays lit and the rest dims. Click
 empty space to clear.</li>
 <li><strong>Go to the code.</strong> Click any block and the Structured
-Text pane scrolls to its line. Edit › Go to definition (<kbd>Ctrl</kbd>
+Text pane scrolls to its line. Edit › Go to definition (<kbd>Alt</kbd>
 <kbd>Shift</kbd> <kbd>D</kbd>) jumps to where the picked block's
-variable is declared; Cross references (<kbd>Ctrl</kbd> <kbd>Shift</kbd>
+variable is declared; Cross references (<kbd>Alt</kbd> <kbd>Shift</kbd>
 <kbd>X</kbd>) lights every read and write of it.</li>
 <li><strong>Switch an input.</strong> An input's block is a control: a
 switch flips on a click, a push button is on while you hold it, a number
@@ -133,10 +133,10 @@ a box</a>).</li>
 <li><strong>Go into a block.</strong> Double-click a function block
 instance to see its own diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the
 breadcrumbs come back up. From the keyboard, pick the instance and press
-<kbd>Ctrl</kbd> <kbd>]</kbd> to go in and <kbd>Ctrl</kbd> <kbd>[</kbd>
-to come out (the instance stays picked, so <kbd>Ctrl</kbd> <kbd>]</kbd>
-goes back in). With the simulation stopped, each also steps one scan, so
-you watch the instance work as you move through the levels.</li>
+<kbd>Alt</kbd> <kbd>]</kbd> to go in and <kbd>Alt</kbd> <kbd>[</kbd> to
+come out (the instance stays picked, so <kbd>Alt</kbd> <kbd>]</kbd> goes
+back in). With the simulation stopped, each also steps one scan, so you
+watch the instance work as you move through the levels.</li>
 <li><strong>Arrange.</strong> Drag a block, or an IF by its label, to
 move it. View › Reset layout goes back; View › Save layout as default
 keeps your arrangement with the project so everyone opens it that way.
@@ -165,30 +165,31 @@ the label is drawn, the icon stands alone at a readable size.</p>
 <h2 id="the-panes">The panes</h2>
 <ul>
 <li><strong>The left pane</strong> has three tabs.
-<strong>Files</strong> (<kbd>Alt</kbd> <kbd>0</kbd>): the project's
-files, the examples, and the program tree under them; a right-click on a
-file offers Copy, Paste, Duplicate, Rename and Delete, and what you copy
-pastes into any project you open next. <strong>Devices</strong>
-(<kbd>Alt</kbd> <kbd>4</kbd>): at the top, <strong>I/O wiring</strong>
-links to the project's <code>io.map</code>, the file that says which
-program variable is wired to which device point; then the devices it
-names, each with its points under it, their live values, and whether the
-link is up; a right-click on the blank space adds a device (name,
-protocol, address, settings) as a line of the map; Import device… takes
-the vendor's EDS file, keeps it in the project and fills the form in
-from it. Under the map's devices, <strong>On the network</strong>: Scan
-lists every EtherNet/IP device that answers on the LAN, says whether the
-map already has it, and shows what the public device library knows of it
-(in the simulation, one simulated E1213). <strong>Use this
-device</strong> under one opens the form filled in, the device named by
-its identity so a changed address never loses it; on a read-only example
-it copies the project first. The form has a field for each of the
-protocol's settings, filled in with the usual values and checked against
-the driver's ranges, with the device's io.map line under them. Below
-that are its inputs and outputs: a known device (the ioLogik E1213)
-lists every channel, and the program's inputs and outputs that were on
-the box's own channels are already ticked on the first free ones. Tick
-any other channel and name it, or add rows with
+<strong>Files</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
+the project's files, the examples, and the program tree under them; a
+right-click on a file offers Copy, Paste, Duplicate, Rename and Delete,
+and what you copy pastes into any project you open next.
+<strong>Devices</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>):
+at the top, <strong>I/O wiring</strong> links to the project's
+<code>io.map</code>, the file that says which program variable is wired
+to which device point; then the devices it names, each with its points
+under it, their live values, and whether the link is up; a right-click
+on the blank space adds a device (name, protocol, address, settings) as
+a line of the map; Import device… takes the vendor's EDS file, keeps it
+in the project and fills the form in from it. Under the map's devices,
+<strong>On the network</strong>: Scan lists every EtherNet/IP device
+that answers on the LAN, says whether the map already has it, and shows
+what the public device library knows of it (in the simulation, one
+simulated E1213). <strong>Use this device</strong> under one opens the
+form filled in, the device named by its identity so a changed address
+never loses it; on a read-only example it copies the project first. The
+form has a field for each of the protocol's settings, filled in with the
+usual values and checked against the driver's ranges, with the device's
+io.map line under them. Below that are its inputs and outputs: a known
+device (the ioLogik E1213) lists every channel, and the program's inputs
+and outputs that were on the box's own channels are already ticked on
+the first free ones. Tick any other channel and name it, or add rows
+with
 <ul>
 <li>Input and + Output for any other device. For each row, Program picks
 what the program does with it: one of its own variables, a new variable
@@ -209,26 +210,26 @@ of sensor that would; right-click one and Add a sensor… writes that
 signal into the map. When that signal is one of the program's inputs, in
 the same unit, the simulation runs the model from it: set it in the I/O
 tab and the plant follows the sensor. <strong>Code</strong>
-(<kbd>Alt</kbd> <kbd>1</kbd>): the Structured Text editor, headed by the
-open file's name. Errors are marked on the line as you type; the program
-running does not change until you deploy. The word-wrap button beside
-the file name wraps long lines at the pane's width, or, off, keeps each
-line on one row with a scroll bar under the code; the choice is kept
-with the layout. The key for a tab opens the pane on it, or shuts the
-pane when that tab already shows. A double click on any tab, on this
-pane or the side panel, hides that pane.</li>
+(<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>): the Structured Text
+editor, headed by the open file's name. Errors are marked on the line as
+you type; the program running does not change until you deploy. The
+word-wrap button beside the file name wraps long lines at the pane's
+width, or, off, keeps each line on one row with a scroll bar under the
+code; the choice is kept with the layout. The key for a tab opens the
+pane on it, or shuts the pane when that tab already shows. A double
+click on any tab, on this pane or the side panel, hides that pane.</li>
 </ul></li>
-<li><strong>The bottom panel</strong> (<kbd>Alt</kbd> <kbd>2</kbd>): the
-<strong>Trend</strong> of the signals you pin, with a long time axis,
-and <strong>Messages</strong>, the last two hundred things the page had
-to say, with the error count on the tab.</li>
+<li><strong>The bottom panel</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd>
+<kbd>2</kbd>): the <strong>Trend</strong> of the signals you pin, with a
+long time axis, and <strong>Messages</strong>, the last two hundred
+things the page had to say, with the error count on the tab.</li>
 <li><strong>The side panel</strong>, on the right (<kbd>Alt</kbd>
-<kbd>3</kbd>): <strong>I/O</strong>, every input and output with its
-value and a control for each input the diagram does not show;
-<strong>Requirements</strong>, the project's requirement tests, one row
-each, green or red with why, with <strong>Edit</strong> (new words; the
-agent rewrites the test for them, or only the words change) and
-<strong>Delete</strong> (asks first) on every row (see <a
+<kbd>Shift</kbd> <kbd>3</kbd>): <strong>I/O</strong>, every input and
+output with its value and a control for each input the diagram does not
+show; <strong>Requirements</strong>, the project's requirement tests,
+one row each, green or red with why, with <strong>Edit</strong> (new
+words; the agent rewrites the test for them, or only the words change)
+and <strong>Delete</strong> (asks first) on every row (see <a
 href="projects.html#requirement-tests">Requirement tests</a>); and
 <strong>Agent</strong>, where you type what the open file should do and
 it is updated (see <a href="agent.html">The Agent</a>).</li>

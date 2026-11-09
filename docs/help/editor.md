@@ -36,7 +36,7 @@ keeps those lines after they have gone.
 
 A strip of buttons sits over the diagram's top-right corner. In the
 simulation: run or stop (<kbd>Ctrl</kbd> <kbd>Enter</kbd>), step one scan
-(<kbd>F10</kbd>, when stopped), and restart from initial values. On both:
+(<kbd>F8</kbd>, when stopped), and restart from initial values. On both:
 save, upload a file into the project, download the project as a `.zip`,
 and **?** for these pages. Hover one for its name and key.
 
@@ -56,9 +56,9 @@ you cannot draw into it. What you can do:
 - **Ask why.** Click an output or any assignment: everything that drives
   its value stays lit and the rest dims. Click empty space to clear.
 - **Go to the code.** Click any block and the Structured Text pane scrolls
-  to its line. Edit › Go to definition (<kbd>Ctrl</kbd> <kbd>Shift</kbd>
+  to its line. Edit › Go to definition (<kbd>Alt</kbd> <kbd>Shift</kbd>
   <kbd>D</kbd>) jumps to where the picked block's variable is declared;
-  Cross references (<kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>X</kbd>) lights
+  Cross references (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>X</kbd>) lights
   every read and write of it.
 - **Switch an input.** An input's block is a control: a switch flips on
   a click, a push button is on while you hold it, a number takes what you
@@ -67,9 +67,9 @@ you cannot draw into it. What you can do:
   on a box they are forces (see [On a box](box.html)).
 - **Go into a block.** Double-click a function block instance to see its
   own diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the breadcrumbs come back
-  up. From the keyboard, pick the instance and press <kbd>Ctrl</kbd>
-  <kbd>]</kbd> to go in and <kbd>Ctrl</kbd> <kbd>[</kbd> to come out (the
-  instance stays picked, so <kbd>Ctrl</kbd> <kbd>]</kbd> goes back in).
+  up. From the keyboard, pick the instance and press <kbd>Alt</kbd>
+  <kbd>]</kbd> to go in and <kbd>Alt</kbd> <kbd>[</kbd> to come out (the
+  instance stays picked, so <kbd>Alt</kbd> <kbd>]</kbd> goes back in).
   With the simulation stopped, each also steps one scan, so you watch
   the instance work as you move through the levels.
 - **Arrange.** Drag a block, or an IF by its label, to move it. View ›
@@ -104,11 +104,11 @@ label is drawn, the icon stands alone at a readable size.
 
 ## The panes
 
-- **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>0</kbd>):
+- **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>0</kbd>):
   the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
-  next. **Devices** (<kbd>Alt</kbd> <kbd>4</kbd>): at the top, **I/O
+  next. **Devices** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>4</kbd>): at the top, **I/O
   wiring** links to the project's `io.map`, the file that says which
   program variable is wired to which device point; then the devices it
   names, each with its points under it, their live
@@ -145,7 +145,7 @@ label is drawn, the icon stands alone at a readable size.
   sensor that would; right-click one and Add a sensor… writes that
   signal into the map. When that signal is one of the program's inputs,
   in the same unit, the simulation runs the model from it: set it in
-  the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>1</kbd>): the
+  the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>): the
   Structured Text editor, headed by the open file's name. Errors are
   marked on the line as you type; the program running does not change
   until you deploy. The word-wrap button beside the file name wraps long
@@ -154,10 +154,10 @@ label is drawn, the icon stands alone at a readable size.
   opens the pane on it, or shuts the pane when that tab already shows.
   A double click on any tab, on this pane or the side panel, hides that
   pane.
-- **The bottom panel** (<kbd>Alt</kbd> <kbd>2</kbd>): the **Trend** of the
+- **The bottom panel** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>): the **Trend** of the
   signals you pin, with a long time axis, and **Messages**, the last two
   hundred things the page had to say, with the error count on the tab.
-- **The side panel**, on the right (<kbd>Alt</kbd> <kbd>3</kbd>): **I/O**,
+- **The side panel**, on the right (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
   diagram does not show; **Requirements**, the project's requirement tests,
   one row each, green or red with why, with **Edit** (new words; the

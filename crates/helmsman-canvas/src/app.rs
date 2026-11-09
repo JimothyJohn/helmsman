@@ -80,7 +80,7 @@ pub enum Source {
 
 /// Whether the shortcut `a` applies on `screen` of `source`. What acts on
 /// the open project (Save, Deploy, Upload, Force, Undo, the step chords)
-/// does so only where that project is on screen: Ctrl+D on the Monitor or
+/// does so only where that project is on screen: Deploy's key on the Monitor or
 /// the Proposals must not deploy a project the engineer cannot see. The
 /// simulation's run controls work on the Editor and the Monitor.
 #[must_use]
@@ -436,6 +436,7 @@ impl App {
     /// can drive it without a window.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        hotkeys::swallow_text(&ctx);
         let now = ctx.input(|i| i.time);
         theme::apply(&ctx, self.chrome.light);
         if self.source == Source::Sim && self.screen == Screen::Proposals {
@@ -1073,9 +1074,9 @@ impl App {
                                     built && !running,
                                     false,
                                     if running {
-                                        "Step one scan (F10): stop the program first."
+                                        "Step one scan (F8): stop the program first."
                                     } else {
-                                        "Step one scan (F10)"
+                                        "Step one scan (F8)"
                                     },
                                     Action::Step,
                                 );

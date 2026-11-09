@@ -13,7 +13,7 @@ The [playground](../playground/) runs a controller inside the page, with no
 install and nothing to sign up for. It opens with a small example running:
 a lamp that blinks. The diagram in the middle is the program as it runs,
 live; the Structured Text that makes it is one key away (View › Structured
-Text, or <kbd>Alt</kbd> <kbd>1</kbd>).
+Text, or <kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>).
 
 ![The playground as it opens: the blink example running, its diagram in the middle, the Structured Text on the left, the I/O panel on the right and the trend along the bottom.](img/editor.png)
 
@@ -31,7 +31,7 @@ Or try these yourself, in order:
    follows.
 3. Open the Structured Text and change something. The program keeps
    running what it had; the editor marks any error as you type. Press
-   **Deploy** (File › Deploy, <kbd>Ctrl</kbd> <kbd>D</kbd>) to run your
+   **Deploy** (File › Deploy, <kbd>Ctrl</kbd> <kbd>Shift</kbd> <kbd>Enter</kbd>) to run your
    change.
 4. Click an output block, say the lamp. Everything that drives it stays
    lit and the rest dims: that is the diagram's answer to "why".

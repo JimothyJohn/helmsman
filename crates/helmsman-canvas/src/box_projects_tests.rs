@@ -1291,7 +1291,7 @@ fn ctrl_shift_f_forces_the_picked_input_and_ctrl_shift_u_releases_all() {
     let session = v.session.clone();
     let mut h = Harness::new(v, session);
     h.frame(vec![]);
-    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::F);
+    h.chord(Modifiers::ALT.plus(Modifiers::SHIFT), egui::Key::F);
     let reqs = h.sent();
     let post = reqs
         .iter()
@@ -1306,7 +1306,7 @@ fn ctrl_shift_f_forces_the_picked_input_and_ctrl_shift_u_releases_all() {
     settle(&b, &jar, &mut h.bv().projects);
     h.frame(vec![]);
     assert_eq!(h.bv().state.forces.len(), 1);
-    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::U);
+    h.chord(Modifiers::ALT.plus(Modifiers::SHIFT), egui::Key::U);
     let reqs = h.sent();
     assert!(
         reqs.iter()
@@ -1339,8 +1339,8 @@ fn ctrl_shift_f_sends_nothing_without_an_engineer_signed_in() {
     let mut h = Harness::new(v, None);
     h.frame(vec![]);
     h.sent();
-    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::F);
-    h.chord(Modifiers::COMMAND.plus(Modifiers::SHIFT), egui::Key::U);
+    h.chord(Modifiers::ALT.plus(Modifiers::SHIFT), egui::Key::F);
+    h.chord(Modifiers::ALT.plus(Modifiers::SHIFT), egui::Key::U);
     let reqs = h.sent();
     assert!(!reqs.iter().any(|q| q.url.starts_with("/api/forces")), "{reqs:?}");
 }

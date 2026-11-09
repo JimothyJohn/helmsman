@@ -432,11 +432,11 @@ mod polish {
         h.key(Modifiers::SHIFT, Key::F8);
         assert!(!h.app.sim.as_ref().unwrap().session.running, "Shift+F8 stops");
         let scans = h.app.sim.as_ref().unwrap().session.scans;
-        h.key(Modifiers::NONE, Key::F10);
+        h.key(Modifiers::NONE, Key::F8);
         assert_eq!(
             h.app.sim.as_ref().unwrap().session.scans,
             scans + 1,
-            "F10 steps one scan"
+            "F8 steps one scan"
         );
         h.key(Modifiers::COMMAND, Key::Enter);
         assert!(h.app.sim.as_ref().unwrap().session.running, "Ctrl+Enter runs");
@@ -445,20 +445,27 @@ mod polish {
         // The panes: the simulation starts on the left pane's Code tab.
         assert!(h.app.chrome.code_open());
         let right = h.app.chrome.right;
-        h.key(Modifiers::ALT, Key::Num1);
-        assert!(!h.app.chrome.left, "Alt+1 on the Code tab shuts the pane");
-        h.key(Modifiers::ALT, Key::Num0);
-        assert!(h.app.chrome.files_open(), "Alt+0: the Files tab");
-        h.key(Modifiers::ALT, Key::Num1);
-        assert!(h.app.chrome.code_open(), "Alt+1: the Code tab");
-        h.key(Modifiers::ALT, Key::Num4);
-        assert!(h.app.chrome.devices_open(), "Alt+4: the Devices tab");
-        h.key(Modifiers::ALT, Key::Num4);
-        assert!(!h.app.chrome.left, "Alt+4 on the Devices tab shuts the pane");
-        h.key(Modifiers::ALT, Key::Num1);
+        let pane = Modifiers::ALT.plus(Modifiers::SHIFT);
+        h.key(pane, Key::Num1);
+        assert!(!h.app.chrome.left, "Alt+Shift+1 on the Code tab shuts the pane");
+        h.key(pane, Key::Num0);
+        assert!(h.app.chrome.files_open(), "Alt+Shift+0: the Files tab");
+        h.key(pane, Key::Num1);
+        assert!(h.app.chrome.code_open(), "Alt+Shift+1: the Code tab");
+        h.key(pane, Key::Num4);
+        assert!(h.app.chrome.devices_open(), "Alt+Shift+4: the Devices tab");
+        h.key(pane, Key::Num4);
+        assert!(
+            !h.app.chrome.left,
+            "Alt+Shift+4 on the Devices tab shuts the pane"
+        );
+        h.key(pane, Key::Num1);
         assert!(h.app.chrome.code_open());
-        h.key(Modifiers::ALT, Key::Num3);
-        assert_eq!(h.app.chrome.right, !right, "Alt+3: the side panel");
+        h.key(pane, Key::Num3);
+        assert_eq!(h.app.chrome.right, !right, "Alt+Shift+3: the side panel");
+        // Alt alone on a digit is Firefox's tab switch: not ours any more.
+        h.key(Modifiers::ALT, Key::Num1);
+        assert!(h.app.chrome.code_open(), "Alt+1 does nothing");
         // Save: edit, then Ctrl+S.
         h.wait(0.2);
         let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
@@ -475,9 +482,9 @@ mod polish {
     }
 
     #[test]
-    fn ctrl_shift_d_opens_the_declaration_and_ctrl_shift_x_lights_the_references() {
+    fn alt_shift_d_opens_the_declaration_and_alt_shift_x_lights_the_references() {
         let mut h = Harness::new(App::sim());
-        h.key(Modifiers::ALT, Key::Num1);
+        h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::Num1);
         assert!(!h.app.chrome.code_open(), "ST shut for the test");
         // The pane's close moves the diagram: let it settle, then pick.
         h.wait(0.6);
@@ -490,7 +497,7 @@ mod polish {
             "the block is picked"
         );
         h.app.chrome.line = None;
-        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::D);
+        h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::D);
         assert!(h.app.chrome.code_open(), "the ST opens");
         let line = h.app.chrome.line.expect("sent to the declaration");
         let src = h.app.sim.as_ref().unwrap().session.src.clone();
@@ -499,7 +506,7 @@ mod polish {
             decl.to_ascii_lowercase().contains("lamp"),
             "line {line}: {decl:?}"
         );
-        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::X);
+        h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::X);
         h.frame(vec![]);
         let v = super::sim_view(&h);
         assert!(v.highlighted().is_some_and(|d| !d.is_empty()), "references lit");
@@ -510,7 +517,7 @@ mod polish {
     }
 
     #[test]
-    fn ctrl_b_on_a_picked_block_pauses_the_scan_there_and_f10_runs_the_rest() {
+    fn shift_f9_on_a_picked_block_pauses_the_scan_there_and_f8_runs_the_rest() {
         fn session(h: &Harness) -> &crate::playground::Session {
             &h.app.sim.as_ref().unwrap().session
         }
@@ -521,37 +528,37 @@ mod polish {
         h.click(at);
         h.frame(vec![]);
         let id = super::sim_view(&h).picked_stmt().expect("a statement picked");
-        h.key(Modifiers::COMMAND, Key::B);
-        assert_eq!(session(&h).breaks, vec![id], "Ctrl B sets the breakpoint");
+        h.key(Modifiers::SHIFT, Key::F9);
+        assert_eq!(session(&h).breaks, vec![id], "Shift F9 sets the breakpoint");
         assert_eq!(super::sim_view(&h).breaks, vec![id], "and the diagram marks it");
-        // Stopped, F10 steps a scan: it stops before the statement.
+        // Stopped, F8 steps a scan: it stops before the statement.
         h.key(Modifiers::SHIFT, Key::F8);
         assert!(!session(&h).running);
         if session(&h).paused.is_some() {
             // It was running and stopped there on its own: finish that scan.
-            h.key(Modifiers::NONE, Key::F10);
+            h.key(Modifiers::NONE, Key::F8);
         }
-        // The lamp's write is under `IF pulse.Q`: F10 steps scans until
+        // The lamp's write is under `IF pulse.Q`: F8 steps scans until
         // the timer fires and the scan stops before it.
         let mut steps = 0;
         while session(&h).paused.is_none() && steps < 200 {
-            h.key(Modifiers::NONE, Key::F10);
+            h.key(Modifiers::NONE, Key::F8);
             steps += 1;
         }
         assert_eq!(session(&h).paused_at(), Some(id), "after {steps} steps");
         let scans = session(&h).scans;
         assert_eq!(super::sim_view(&h).paused, Some(id), "the diagram shows where");
-        h.key(Modifiers::NONE, Key::F10);
-        assert_eq!(session(&h).paused, None, "F10 again runs the rest");
+        h.key(Modifiers::NONE, Key::F8);
+        assert_eq!(session(&h).paused, None, "F8 again runs the rest");
         assert_eq!(session(&h).scans, scans + 1);
-        h.key(Modifiers::COMMAND, Key::B);
-        assert!(session(&h).breaks.is_empty(), "Ctrl B again clears it");
+        h.key(Modifiers::SHIFT, Key::F9);
+        assert!(session(&h).breaks.is_empty(), "Shift F9 again clears it");
         h.press("bar edit");
         assert!(h.has("edit breakpoint"), "the Edit menu lists it with its key");
     }
 
     #[test]
-    fn ctrl_shift_f_flips_the_picked_switch_and_opens_a_number_field() {
+    fn alt_shift_f_flips_the_picked_switch_and_opens_a_number_field() {
         use helmsman_iec::Value;
         let mut h = Harness::new(App::sim());
         h.app.sim.as_mut().unwrap().load(
@@ -579,16 +586,16 @@ END_PROGRAM",
         let value = |h: &Harness, name: &str| h.app.sim.as_ref().unwrap().session.value(name);
         pick(&mut h, "enable");
         assert_eq!(value(&h, "enable"), Some(Value::Bool(true)));
-        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
+        h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::F);
         assert_eq!(
             value(&h, "enable"),
             Some(Value::Bool(false)),
             "the switch flipped"
         );
-        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
+        h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::F);
         assert_eq!(value(&h, "enable"), Some(Value::Bool(true)), "and back");
         let k = pick(&mut h, "speed");
-        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
+        h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::F);
         h.frame(vec![]);
         let field = egui::Id::unique(("pg-map-number", k));
         assert!(
@@ -596,7 +603,7 @@ END_PROGRAM",
             "the speed's field has the keyboard"
         );
         // Nothing to release in the simulation; the key does nothing.
-        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::U);
+        h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::U);
         h.press("bar edit");
         assert!(h.has("edit force"));
         assert!(!h.has("edit release"), "release all is a box's");
@@ -793,12 +800,12 @@ END_PROGRAM",
         assert_eq!(scans(&h), 0, "a cold restart");
         h.press("run");
         assert!(running(&h), "and running again");
-        // The keys, on the Monitor: Ctrl Enter stops, F10 steps.
+        // The keys, on the Monitor: Ctrl Enter stops, F8 steps.
         h.key(Modifiers::COMMAND, Key::Enter);
         assert!(!running(&h), "Ctrl Enter stops on the Monitor");
         let n = scans(&h);
-        h.key(Modifiers::NONE, Key::F10);
-        assert_eq!(scans(&h), n + 1, "F10 steps on the Monitor");
+        h.key(Modifiers::NONE, Key::F8);
+        assert_eq!(scans(&h), n + 1, "F8 steps on the Monitor");
         // Still no Save, Upload or Download there: nothing to edit.
         assert!(!h.has("save") && !h.has("download"));
     }
@@ -2223,7 +2230,7 @@ mod chrome {
             "the test is not in the build"
         );
         // Deploy: refused, with the test named.
-        h.key(Modifiers::COMMAND, Key::D);
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Enter);
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
         let notice = sim.notice.clone().unwrap_or_default();
@@ -2254,7 +2261,7 @@ mod chrome {
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
         assert!(sim.tests.rows[0].passed(), "{:?}", sim.tests);
-        h.key(Modifiers::COMMAND, Key::D);
+        h.key(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Enter);
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
         let notice = sim.notice.clone().unwrap_or_default();
@@ -2641,7 +2648,7 @@ mod simulated {
             .expect("a station instance");
         v.pick = Some(Pick::Node(n));
         let before = scans(&h);
-        h.key(Modifiers::COMMAND, Key::CloseBracket);
+        h.key(Modifiers::ALT, Key::CloseBracket);
         let v = sim_view(&h);
         assert_eq!(v.diagram().pou, "STATION");
         assert!(
@@ -2652,19 +2659,19 @@ mod simulated {
             v.scopes[v.scope]
         );
         assert_eq!(scans(&h), before + 1, "stopped, it steps one scan");
-        // Nothing picked inside: Ctrl ] does nothing.
-        h.key(Modifiers::COMMAND, Key::CloseBracket);
+        // Nothing picked inside: Alt ] does nothing.
+        h.key(Modifiers::ALT, Key::CloseBracket);
         assert_eq!(scans(&h), before + 1);
-        h.key(Modifiers::COMMAND, Key::OpenBracket);
+        h.key(Modifiers::ALT, Key::OpenBracket);
         let v = sim_view(&h);
         assert_eq!(v.scope, 0, "back on the program");
         assert_eq!(v.pick, Some(Pick::Node(n)), "the instance left is picked");
         assert_eq!(scans(&h), before + 2);
-        // At the top, Ctrl [ does nothing; running, the keys only move.
-        h.key(Modifiers::COMMAND, Key::OpenBracket);
+        // At the top, Alt [ does nothing; running, the keys only move.
+        h.key(Modifiers::ALT, Key::OpenBracket);
         assert_eq!(scans(&h), before + 2);
         h.app.sim.as_mut().unwrap().session.set_running(true);
-        h.key(Modifiers::COMMAND, Key::CloseBracket);
+        h.key(Modifiers::ALT, Key::CloseBracket);
         assert_eq!(sim_view(&h).diagram().pou, "STATION");
     }
 
@@ -2692,8 +2699,8 @@ mod simulated {
         h.wait(0.2);
         let s = &h.app.sim.as_ref().unwrap().session;
         assert!(!s.trend.samples.is_empty(), "it records while shown");
-        h.key(Modifiers::ALT, Key::Num2);
-        assert!(!h.app.chrome.trend, "Alt+2 folds it");
+        h.key(Modifiers::ALT.plus(Modifiers::SHIFT), Key::Num2);
+        assert!(!h.app.chrome.trend, "Alt+Shift+2 folds it");
     }
 
     /// Nick, 2026-11-07: drag a lane's label up or down to reorder the
