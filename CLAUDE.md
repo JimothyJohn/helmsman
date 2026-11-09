@@ -154,7 +154,9 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
 ## Next door
 
 - `../agent-relay`: the relay (Rust, SAM, private repo JimothyJohn/agent-relay,
-  deployed: serves helmsman/v7). Client-agnostic; the box↔relay contract is its
+  deployed: serves helmsman/v7). The model it answers with is its deployment
+  setting (`RELAY_MODEL`; OpenRouter upstream, DeepSeek V4.1 Flash by
+  default), not a profile field. Client-agnostic; the box↔relay contract is its
   `docs/relay-protocol.md`. Helmsman's agent profiles are
   `agents/helmsman/<name>/` (ids `helmsman/v6`, ...); the bare `v6` and
   `explain-v2` the box asks for are aliases. A served profile never
