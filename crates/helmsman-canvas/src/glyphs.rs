@@ -36,8 +36,11 @@ pub enum Icon {
     /// 2026-11-08); [`Icon::Help`] is the other side.
     Code,
     /// → : deploy the open project, its latest edits (Nick, 2026-11-08).
-    /// Beside the running project in Files and the Structured Text header.
+    /// Beside the running project in Files and the Code header.
     Deploy,
+    /// A line turning back under itself: word wrap in the Code tab
+    /// (Nick, 2026-11-08), lit while on.
+    Wrap,
 }
 
 /// The side of a glyph button, points.
@@ -180,6 +183,20 @@ fn draw(p: &egui::Painter, b: Rect, icon: Icon, color: Color32) {
             let head = b.width() * 0.36;
             p.line_segment([Pos2::new(r, c.y), Pos2::new(r - head, c.y - head)], shaft);
             p.line_segment([Pos2::new(r, c.y), Pos2::new(r - head, c.y + head)], shaft);
+        }
+        Icon::Wrap => {
+            // A full line, a second that turns down and back with an
+            // arrowhead, and the short start of a third.
+            let (y1, y2, y3) = (t + b.height() * 0.12, c.y, bt - b.height() * 0.12);
+            let turn = r - w;
+            p.line_segment([Pos2::new(l, y1), Pos2::new(r, y1)], stroke);
+            p.line_segment([Pos2::new(l, y2), Pos2::new(turn, y2)], stroke);
+            p.line_segment([Pos2::new(turn, y2), Pos2::new(turn, y3)], stroke);
+            p.line_segment([Pos2::new(turn, y3), Pos2::new(c.x, y3)], stroke);
+            let head = b.width() * 0.22;
+            p.line_segment([Pos2::new(c.x, y3), Pos2::new(c.x + head, y3 - head)], stroke);
+            p.line_segment([Pos2::new(c.x, y3), Pos2::new(c.x + head, y3 + head)], stroke);
+            p.line_segment([Pos2::new(l, y3), Pos2::new(l + b.width() * 0.3, y3)], stroke);
         }
         Icon::HardHat => {
             // The dome over the brim, a ridge up its middle.

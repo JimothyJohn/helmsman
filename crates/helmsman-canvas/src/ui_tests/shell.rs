@@ -195,7 +195,7 @@ fn the_gutter_has_a_row_for_every_row_the_editor_wraps_to() {
     }
 }
 
-/// The Code tab's header: "Structured Text → ✔ compiles" broke inside the
+/// The Code tab's header: "main.st ↵ → ✔ compiles" broke inside the
 /// status label once the deploy arrow took its room, "compiles" alone on
 /// a line. A label wraps as a whole or not at all.
 #[test]
@@ -209,7 +209,8 @@ fn the_code_headers_status_labels_are_not_broken_across_lines() {
     }
     h.wait(1.0);
     let before = h.rect("pane code").width();
-    for needle in ["Structured Text", "compiles", "not deployed"] {
+    let file = h.app.sim.as_ref().unwrap().proj.current.clone();
+    for needle in [file.as_str(), "compiles", "not deployed"] {
         let found = galleys(&h, |t| t.contains(needle));
         assert!(
             needle == "not deployed" || !found.is_empty(),
