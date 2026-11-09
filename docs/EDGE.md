@@ -611,6 +611,75 @@ ESP32-P4-ETH wiki, `github.com/pasrom/profinet-rs`,
 supervictor `supervictor/edge/{Cargo.toml,src/config.rs}`; all read
 2026-11-08.
 
+**Phase 4, a node you can commission, deploy to and watch (2026-11-08, on
+the POE-ISO).** Nick's brief: set up a node's network like supervictor
+now does, connect to it, update the runtime, and watch it from the host
+canvas, so a user has one robust experience. The decisions (interview):
+a fixed factory address like Moxa's (192.168.127.250/24), DHCP as an
+option; program deploy before firmware OTA; the node serves the box API
+subset so the existing canvas box view works unchanged; a bearer token
+from the settings record guards writes; programs compile on the node;
+status is scan health, memory and fieldbus links. What exists:
+
+- **`crates/helmsman-nodecore`** (workspace member, `no_std + alloc`,
+  host-tested): the settings record and the program slots in the `nvs`
+  partition (two slots each, sequence-numbered, checksummed, 24 KiB in
+  all, the partition espflash writes by default), a bounded HTTP/1.1
+  reader and writer with SSE framing, the box API's JSON shapes
+  (`render.rs`'s field names) plus `/api/node` and `/api/settings`, the
+  node's own page with the settings form, and the router whose effects
+  (deploy, control, save settings) the firmware carries out. The
+  canvas's `node_api_tests.rs` parses the node's JSON with the same code
+  that parses a box, so the two cannot drift apart unnoticed.
+- **`helmsman-node`'s `node` binary** (`api` feature; `scripts/node-build.sh
+  api`, `scripts/node-flash.sh node`): settings and program from flash
+  (factory record written on an empty partition), the I/O task on its
+  own (the scan never waits on Modbus), two HTTP connections on the
+  settings' port, the site beacon, a report line every 10 s. Verified on
+  poe-iso-rack-03 from the Studio over the wire: first boot at the
+  factory address with the page and every read route answering; a save
+  on the page (the first save needs no token and sets one) wrote the
+  record and restarted the node on static 192.168.3.55; record and
+  program came back from flash; ping; the values stream; `PUT
+  /api/modules/blink` with the token compiled, ran and was kept (201),
+  stop and run (200), a broken program refused with the checker's line
+  (422) and the old program kept running, a tokenless write refused
+  (401); a settings re-save restarted the node and the deployed program
+  came back from flash. Scan: 10 ms, zero late scans in steady state,
+  about 1 ms of work, the E1213 up at 192.168.3.60.
+- **Two WROOM lessons.** (1) The main stack is what the linker leaves above
+  `.bss`, and the task pools sit at the very top of `.bss`: at 112 KiB of
+  heap the stack was 42 KiB, compiling the program at boot overran it by
+  a few hundred bytes, the pools read as "spawned" and the first spawn
+  failed Busy, which looked like a dead link; esp-hal's stack guard is a
+  word 60 B below the stack base and a frame larger than that steps over
+  it. 96 KiB of heap leaves 59 KiB of stack. (2) Memory: 153 KiB of
+  196 KiB used with one small program resident, most of it the runtime's
+  parsed standard library; compiling a second program beside the first
+  ran the heap out and reset the node, so a deploy now drops the running
+  program, compiles, and restores the old one from its source if the new
+  one fails, and only a program that runs is written to flash. A real
+  cell program is a P4 job.
+- **The host canvas opens a node by address.** `?box=http://192.168.3.55:8080`
+  on any canvas page (the dev server's, or a box page served with
+  `--site`) sends every box read and the values stream to that origin;
+  only an origin is accepted, never a path. Verified 2026-11-09 in a
+  headless Chromium against the node: the canvas fetched `/api/modules`,
+  `/api/devices`, `/api/io_map`, opened `/api/events`, selected the chase
+  module and fetched its source, and showed "chase running" with its scan
+  count and the twelve signals live on the I/O tab; the trace stream it
+  also asks for answers 404 on a node, so the diagram pane says it is
+  waiting for a traced scan. (From an agent session the browser itself
+  cannot reach the LAN, macOS Local Network privacy; a TCP forwarder run
+  by Apple's python on localhost stands in.)
+- **`helmsman-node-p4` has the same binary** (`node`, from the same
+  modules; esp-storage 0.10 and esp-bootloader-esp-idf 0.6 for the P4),
+  built and lint clean, waiting for the board.
+- **Left in this phase:** firmware OTA (supervictor's installer and
+  rollback policy); an I/O map setting for the block's address and point
+  names; writes from the canvas (deploy, controls) need a token field in
+  the canvas, today they are `curl` with the bearer.
+
 ## Out of scope for the spike
 
 Deploy endpoint, signed images, A/B program slots and the power-cut-during-

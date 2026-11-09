@@ -79,8 +79,7 @@ async fn serve(socket: &mut TcpSocket<'_>, ctx: &Ctx) {
     let mut chunk = [0u8; 512];
     let request = loop {
         match with_timeout(READ_TIMEOUT, socket.read(&mut chunk)).await {
-            Ok(Ok(0)) | Err(_) => return,
-            Ok(Err(_)) => return,
+            Ok(Ok(0) | Err(_)) | Err(_) => return,
             Ok(Ok(n)) => buf.extend_from_slice(&chunk[..n]),
         }
         match http::parse(&buf) {

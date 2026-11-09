@@ -164,17 +164,16 @@ async fn main(spawner: Spawner) -> ! {
             }
         }
     } else if SEED_CHASE {
-        match compile(CHASE, SIZES) {
-            Ok(p) => {
-                if let Some(s) = store.as_mut() {
-                    match s.write_program("chase", CHASE) {
-                        Ok(()) => println!("program: chase seeded to flash"),
-                        Err(e) => println!("program: chase not kept ({e})"),
-                    }
+        if let Ok(p) = compile(CHASE, SIZES) {
+            if let Some(s) = store.as_mut() {
+                match s.write_program("chase", CHASE) {
+                    Ok(()) => println!("program: chase seeded to flash"),
+                    Err(e) => println!("program: chase not kept ({e})"),
                 }
-                program = Some((String::from("chase"), String::from(CHASE), p));
             }
-            Err(_) => println!("program: the built-in chase does not compile?!"),
+            program = Some((String::from("chase"), String::from(CHASE), p));
+        } else {
+            println!("program: the built-in chase does not compile?!");
         }
     } else {
         println!("program: none; deploy one with PUT /api/modules/{{name}}");
@@ -186,8 +185,8 @@ async fn main(spawner: Spawner) -> ! {
         live.device.name = String::from("rio");
         live.device.address = alloc::format!("{E1213_ADDR}:{E1213_PORT}");
         if let Some((name, source, p)) = &program {
-            live.module.name = name.clone();
-            live.module.source = source.clone();
+            live.module.name.clone_from(name);
+            live.module.source.clone_from(source);
             live.module.state = Some(State::Running);
             live.module.signals = state::signals_of(p, &[0; IO_BYTES], &[0; IO_BYTES]);
         }
@@ -227,14 +226,17 @@ async fn main(spawner: Spawner) -> ! {
     println!("waiting for the link...");
     let waited = Instant::now();
     loop {
-        match embassy_time::with_timeout(Duration::from_secs(5), stack.wait_config_up()).await {
-            Ok(()) => break,
-            Err(_) => println!(
-                "still waiting for the link after {} s (link {})",
-                waited.elapsed().as_secs(),
-                if stack.is_link_up() { "up" } else { "down" }
-            ),
+        if embassy_time::with_timeout(Duration::from_secs(5), stack.wait_config_up())
+            .await
+            .is_ok()
+        {
+            break;
         }
+        println!(
+            "still waiting for the link after {} s (link {})",
+            waited.elapsed().as_secs(),
+            if stack.is_link_up() { "up" } else { "down" }
+        );
     }
     if let Some(cfg) = stack.config_v4() {
         println!("address {}; API on port {}", cfg.address, settings.api_port);
@@ -319,7 +321,7 @@ async fn main(spawner: Spawner) -> ! {
                         running = Some(p);
                         stopped = false;
                         state::with(shared, |live| {
-                            live.module.name = name.clone();
+                            live.module.name.clone_from(&name);
                             live.module.source = source;
                             live.module.state = Some(State::Running);
                             live.module.scans = 0;
