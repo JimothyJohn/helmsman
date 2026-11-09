@@ -320,7 +320,7 @@ fn refusal_carries_the_extended_status_and_wanted_size() {
     }
     assert_eq!(
         err.to_string(),
-        "forward open refused: 0x01 connection failure extended 0x0127 [0026]"
+        "forward open refused: 0x01 connection failure extended 0x0127 (invalid O->T size) [0026]"
     );
     assert!(t.refuse.is_some());
     s.close();

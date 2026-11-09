@@ -18,6 +18,8 @@ struct Harness {
     shapes: Vec<egui::epaint::ClippedShape>,
     /// The pointer the last frame asked for.
     cursor: egui::CursorIcon,
+    /// Text the app put on the clipboard, newest last.
+    copied: Vec<String>,
 }
 
 impl Harness {
@@ -29,6 +31,7 @@ impl Harness {
             size: Vec2::new(1400.0, 860.0),
             shapes: Vec::new(),
             cursor: egui::CursorIcon::Default,
+            copied: Vec::new(),
         };
         // Two frames: panels settle their sizes, the view fits the graph.
         h.frame(vec![]);
@@ -50,6 +53,11 @@ impl Harness {
         out.textures_delta.clear();
         self.shapes = out.shapes;
         self.cursor = out.platform_output.cursor_icon;
+        for c in out.platform_output.commands {
+            if let egui::OutputCommand::CopyText(t) = c {
+                self.copied.push(t);
+            }
+        }
     }
 
     /// Every piece of text the last frame drew outside the diagram (which
@@ -114,6 +122,18 @@ impl Harness {
         self.frame(vec![Self::button(at, false)]);
     }
 
+    /// A press at `from`, moved in steps to `to`, released there.
+    fn drag(&mut self, from: Pos2, to: Pos2) {
+        self.frame(vec![Event::PointerMoved(from)]);
+        self.frame(vec![Self::button(from, true)]);
+        for k in 1..=8 {
+            #[allow(clippy::cast_precision_loss)]
+            self.frame(vec![Event::PointerMoved(from.lerp(to, k as f32 / 8.0))]);
+        }
+        self.frame(vec![Self::button(to, false)]);
+        self.frame(vec![]);
+    }
+
     /// A right click at `at` (opens a context menu).
     fn right_click(&mut self, at: Pos2) {
         let press = |pressed| Event::PointerButton {
@@ -134,6 +154,23 @@ impl Harness {
             let keys: Vec<&String> = self.app.chrome.hits.iter().map(|(k, _)| k).collect();
             panic!("no {key} on screen: {keys:?}")
         })
+    }
+
+    /// Whether the last frame drew a piece of text containing `needle`.
+    fn drew(&self, needle: &str) -> bool {
+        fn walk(shape: &egui::Shape, needle: &str) -> bool {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().any(|s| walk(s, needle)),
+                egui::Shape::Text(t) => t.galley.job.text.contains(needle),
+                _ => false,
+            }
+        }
+        self.shapes.iter().any(|c| walk(&c.shape, needle))
+    }
+
+    /// The simulation's ST editor's widget id for the open file.
+    fn editor_id(&self) -> egui::Id {
+        self.app.sim.as_ref().unwrap().source_id()
     }
 
     fn has(&self, key: &str) -> bool {
@@ -246,6 +283,42 @@ mod glyphs_and_help {
         assert_eq!(log.show, [false, true, true], "info filtered out");
         assert_eq!(h.app.chrome.bottom, Bottom::Messages);
         assert!(!h.has("st"), "no Files header row either");
+    }
+
+    /// Nick, 2026-11-07: "I really need to be able to copy and paste
+    /// errors". An error line under the header has a Copy button, the
+    /// Messages tab a Copy all, and both put the whole text on the
+    /// clipboard.
+    #[test]
+    fn errors_copy_to_the_clipboard() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.2);
+        h.app.sim.as_mut().unwrap().session.fault = Some("division by zero at line 7".into());
+        h.wait(0.2);
+        h.press("fault copy");
+        assert_eq!(
+            h.copied.last().map(String::as_str),
+            Some("Fault: division by zero at line 7. Run or Step restarts the program.")
+        );
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .log
+            .error(1.0, "deploy refused: no engineer session");
+        h.press("bottom messages");
+        h.frame(vec![]);
+        h.press("messages copy");
+        let all = h.copied.last().expect("Copy all copied").clone();
+        assert!(
+            all.contains("error   deploy refused: no engineer session"),
+            "{all}"
+        );
+        assert_eq!(
+            all,
+            h.app.sim.as_ref().unwrap().log.text(),
+            "what is shown, as text"
+        );
     }
 
     #[test]
@@ -388,11 +461,7 @@ mod polish {
         assert_eq!(h.app.chrome.right, !right, "Alt+3: the side panel");
         // Save: edit, then Ctrl+S.
         h.wait(0.2);
-        let editor = h
-            .ctx
-            .read_response(egui::Id::unique("pg-source"))
-            .expect("the editor")
-            .rect;
+        let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         h.click(editor.left_top() + egui::vec2(60.0, 6.0));
         h.frame(vec![Event::Text("!".into())]);
         h.wait(0.6);
@@ -547,6 +616,60 @@ END_PROGRAM",
         assert!(h.app.sim.is_none());
     }
 
+    /// Nick, 2026-11-08: an arrow right of the Structured Text header,
+    /// and one beside the running program in Files, deploys the latest
+    /// edit; neither widens the pane.
+    #[test]
+    fn the_arrows_by_the_code_header_and_the_running_program_deploy_the_edit() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let left = h.rect("left");
+        h.press("pane code");
+        h.wait(0.3);
+        assert!(h.has("code deploy"), "the arrow by the header");
+        let edit = |h: &mut Harness, mark: &str| {
+            let sim = h.app.sim.as_mut().unwrap();
+            let current = sim.proj.current.clone();
+            sim.proj.files.get_mut(&current).unwrap().push_str(mark);
+            h.frame(vec![]);
+        };
+        let deployed = |h: &Harness| {
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .session
+                .build
+                .as_ref()
+                .unwrap()
+                .src
+                .clone()
+        };
+        edit(&mut h, "\n(* one *)");
+        assert!(!deployed(&h).contains("(* one *)"), "an edit is only checked");
+        h.press("code deploy");
+        h.wait(0.3);
+        assert!(deployed(&h).contains("(* one *)"), "the arrow deployed it");
+        let sim = h.app.sim.as_ref().unwrap();
+        assert_eq!(sim.proj.running.as_deref(), Some(sim.proj.open.as_str()));
+        // In Files the running program, open, carries the arrow too.
+        h.press("pane files");
+        h.wait(0.3);
+        let arrow = h.rect("deploy arrow");
+        let row = h.rect(&format!("project {}", h.app.sim.as_ref().unwrap().proj.open));
+        assert!(
+            arrow.left() >= row.right() - 1.0,
+            "beside the row: {arrow:?} vs {row:?}"
+        );
+        assert!(arrow.right() <= h.rect("left").right(), "inside the pane");
+        edit(&mut h, "\n(* two *)");
+        h.press("deploy arrow");
+        h.wait(0.3);
+        assert!(deployed(&h).contains("(* two *)"), "the Files arrow deployed it");
+        let grew = h.rect("left").right() - left.right();
+        assert!((0.0..=8.0).contains(&grew), "the left pane grew {grew} pt");
+    }
+
     /// Nick, 2026-11-01: one tall row, menus left, the project right; the
     /// bar that held ST, Reset layout and Save as default is gone.
     #[test]
@@ -655,11 +778,7 @@ END_PROGRAM",
     fn the_file_menu_saves_and_the_edit_menu_undoes_a_typed_character() {
         let mut h = Harness::new(App::sim());
         assert!(h.app.chrome.code_open(), "the ST open");
-        let editor = h
-            .ctx
-            .read_response(egui::Id::unique("pg-source"))
-            .expect("the editor")
-            .rect;
+        let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         h.click(editor.left_top() + egui::vec2(60.0, 6.0));
         h.frame(vec![Event::Text("!".into())]);
         h.wait(0.6);
@@ -793,9 +912,10 @@ END_PROGRAM",
             assert!((right.left() - h.rect("right").left()).abs() <= 8.0, "{key}");
         }
         // Fixing an answer: what failed is the tooltip, not a page of text.
+        let open = h.app.sim.as_ref().unwrap().proj.open.clone();
         h.app.sim.as_mut().unwrap().instruct.run = Some(Run {
             instruction: word.clone(),
-            project: "p".into(),
+            project: open,
             scope: crate::scope::Scope::File(format!("{word}.st")),
             earlier: Vec::new(),
             asked: String::new(),
@@ -1011,17 +1131,13 @@ mod chrome {
             files.right() <= devices.left() && devices.right() <= code.left(),
             "Files | Devices | Code, left to right"
         );
-        let editor = h
-            .ctx
-            .read_response(egui::Id::unique("pg-source"))
-            .expect("the editor")
-            .rect;
+        let editor = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         h.press("pane files");
         h.wait(0.3);
         assert!(h.app.chrome.files_open());
         assert!(h.has("file blink.st"), "the files show");
         assert!(
-            h.ctx.read_response(egui::Id::unique("pg-source")).is_none(),
+            h.ctx.read_response(h.editor_id()).is_none(),
             "the editor is on the other tab"
         );
         let code_w = code.right() - files.left();
@@ -1029,11 +1145,7 @@ mod chrome {
         assert!((code_w - files_w).abs() < 1.0, "one width for both tabs");
         h.press("pane code");
         h.wait(0.3);
-        let again = h
-            .ctx
-            .read_response(egui::Id::unique("pg-source"))
-            .expect("the editor")
-            .rect;
+        let again = h.ctx.read_response(h.editor_id()).expect("the editor").rect;
         assert!((again.width() - editor.width()).abs() < 1.0);
         // Remembered: the tab reads back.
         let back = Chrome::restored(&h.app.chrome.saved());
@@ -1798,105 +1910,6 @@ mod chrome {
         assert!(!h.has("device e1213"));
     }
 
-    /// Nick, 2026-11-05: "I need to be able to edit and delete
-    /// requirements as well". Each row has Edit and Delete; Edit with the
-    /// rewrite off changes only the words in the test's first comment,
-    /// with it on the old test goes and the requirement is added afresh;
-    /// Delete asks first.
-    #[test]
-    fn a_requirement_is_reworded_rewritten_and_deleted_from_its_row() {
-        let mut h = Harness::new(App::sim());
-        let ctx = h.ctx.clone();
-        {
-            let sim = h.app.sim.as_mut().unwrap();
-            sim.proj.create("mine", Some("latch"));
-            sim.open_project("mine");
-            sim.add_requirement("The motor runs once start is pressed", &ctx);
-        }
-        let file = "test_the_motor_runs_once_start_is_pressed.st";
-        assert!(
-            h.app.sim.as_ref().unwrap().proj.files.contains_key(file),
-            "no agent here: a placeholder"
-        );
-        h.press("tab tests");
-        h.wait(0.3);
-        let name = "test_the_motor_runs_once_start_is_pressed";
-        assert!(
-            h.has(&format!("req edit {name}")) && h.has(&format!("req delete {name}")),
-            "on the row, not behind it"
-        );
-        // Reword, the test kept.
-        h.press(&format!("req edit {name}"));
-        h.wait(0.2);
-        assert!(h.has("req edit form"));
-        h.press("req edit rewrite");
-        h.press("req edit text");
-        h.frame(vec![Event::Key {
-            key: egui::Key::A,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        }]);
-        h.frame(vec![Event::Text("The motor runs within 1 s of start".into())]);
-        h.wait(0.2);
-        h.press("req edit ok");
-        h.wait(0.3);
-        assert!(!h.has("req edit form"));
-        {
-            let sim = h.app.sim.as_ref().unwrap();
-            let text = &sim.proj.files[file];
-            assert!(
-                text.starts_with("(* The motor runs within 1 s of start *)\n"),
-                "{text}"
-            );
-            let row = sim.tests.rows.iter().find(|r| r.file == file).expect("its row");
-            assert_eq!(row.requirement, "The motor runs within 1 s of start");
-        }
-        // Rewrite: the old file goes, the requirement is added afresh.
-        h.press(&format!("req edit {name}"));
-        h.wait(0.2);
-        h.press("req edit text");
-        h.frame(vec![Event::Key {
-            key: egui::Key::A,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::COMMAND,
-        }]);
-        h.frame(vec![Event::Text("The lamp is on while the motor runs".into())]);
-        h.wait(0.2);
-        h.press("req edit ok");
-        h.wait(0.3);
-        let new_file = "test_the_lamp_is_on_while_the_motor_runs.st";
-        {
-            let sim = h.app.sim.as_ref().unwrap();
-            assert!(!sim.proj.files.contains_key(file), "the old test is gone");
-            assert!(
-                sim.proj.files.contains_key(new_file),
-                "{:?}",
-                sim.proj.files.keys().collect::<Vec<_>>()
-            );
-        }
-        // Delete: asks, Cancel keeps it, Delete removes it.
-        let new_name = "test_the_lamp_is_on_while_the_motor_runs";
-        h.press(&format!("req delete {new_name}"));
-        h.wait(0.2);
-        assert!(h.has("req delete form"));
-        h.press("req delete cancel");
-        h.wait(0.2);
-        assert!(
-            h.app.sim.as_ref().unwrap().proj.files.contains_key(new_file),
-            "Cancel keeps it"
-        );
-        h.press(&format!("req delete {new_name}"));
-        h.wait(0.2);
-        h.press("req delete ok");
-        h.wait(0.3);
-        assert!(!h.app.sim.as_ref().unwrap().proj.files.contains_key(new_file));
-        assert!(!h.has(&format!("req edit {new_name}")));
-    }
-
     /// The library's match fills the form's name and profile in.
     #[test]
     fn a_library_match_names_the_device_and_its_profile() {
@@ -2114,18 +2127,19 @@ mod chrome {
     }
 
     /// Requirement tests in the simulation (TODO.md spec-tests): the
-    /// Requirements tab lists the project's `test_*.st` files green or
-    /// red with why; a red one refuses Deploy and a block answer's "Use
-    /// this code", naming it; a test file never builds into the program;
-    /// fixed, the deploy goes through.
+    /// project's `test_*.st` files run green or red with why; a red one
+    /// refuses Deploy and a block answer's "Use this code", naming it; a
+    /// test file never builds into the program; fixed, the deploy goes
+    /// through. (The Requirements tab that listed them is archived,
+    /// 2026-11-08; the gate stays.)
     #[test]
     fn requirement_tests_gate_deploy_and_use_this_code_in_the_simulation() {
         let mut h = Harness::new(App::sim());
-        h.press("tab tests");
         h.wait(0.3);
-        assert_eq!(h.app.chrome.tab, Tab::Requirements);
-        assert!(h.has("tests run"));
-        assert!(!h.has("test test_lamp"), "the blink example has no tests");
+        assert!(
+            h.app.sim.as_ref().unwrap().tests.rows.is_empty(),
+            "the blink example has no tests"
+        );
         let main = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
         let red = "(* The lamp stays off while start is held. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_stays_off : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_stays_off(COND := NOT lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
         {
@@ -2144,7 +2158,6 @@ mod chrome {
             sim.tests.rows[0].requirement,
             "The lamp stays off while start is held."
         );
-        assert!(h.has("test test_lamp"), "the row shows");
         assert!(
             !sim.session.src.contains("PROGRAM test_lamp"),
             "the test is not in the build"
@@ -2168,7 +2181,7 @@ mod chrome {
         let sim = h.app.sim.as_ref().unwrap();
         assert_eq!(sim.proj.files.len(), before, "{:?}", sim.proj.files.keys());
         assert!(sim.notice.clone().unwrap_or_default().starts_with("Refused:"));
-        // Fixed: green, Run reruns, Deploy goes through.
+        // Fixed: green, Deploy goes through.
         {
             let sim = h.app.sim.as_mut().unwrap();
             sim.proj.files.insert(
@@ -2176,8 +2189,8 @@ mod chrome {
                 red.replace("stays off", "comes on")
                     .replace("COND := NOT lamp", "COND := lamp"),
             );
+            sim.run_tests();
         }
-        h.press("tests run");
         h.wait(0.2);
         let sim = h.app.sim.as_ref().unwrap();
         assert!(sim.tests.rows[0].passed(), "{:?}", sim.tests);
@@ -2186,8 +2199,6 @@ mod chrome {
         let sim = h.app.sim.as_ref().unwrap();
         let notice = sim.notice.clone().unwrap_or_default();
         assert!(notice.starts_with("mine is running in this page"), "{notice}");
-        // The tab is remembered.
-        assert_eq!(Chrome::restored(&h.app.chrome.saved()).tab, Tab::Requirements);
     }
 
     #[test]
@@ -2201,6 +2212,57 @@ mod chrome {
         h.click(at);
         h.frame(vec![]);
         assert!(h.app.chrome.code_open(), "two open the Code tab");
+    }
+
+    /// Nick 2026-11-07: a double click on any pane tab (Files, Devices,
+    /// Code; I/O, Agent and the rest on the right) hides that pane; one
+    /// click only picks the tab.
+    #[test]
+    fn double_clicking_a_tab_hides_its_pane_and_one_click_does_not() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.2);
+        for key in ["pane files", "pane devices", "pane code"] {
+            h.app.chrome.left = true;
+            h.wait(0.2);
+            let at = h.rect(key).center();
+            h.click(at);
+            h.wait(0.5);
+            assert!(h.app.chrome.left, "one click on {key} keeps the pane");
+            h.click(at);
+            h.click(at);
+            h.frame(vec![]);
+            assert!(!h.app.chrome.left, "a double click on {key} hides the pane");
+            h.wait(0.5);
+            h.press("left");
+            h.wait(0.2);
+            assert!(h.app.chrome.left, "the strip brings it back after {key}");
+        }
+        h.app.chrome.right = true;
+        h.wait(0.2);
+        let tabs: Vec<String> = h
+            .app
+            .chrome
+            .hits
+            .iter()
+            .map(|(k, _)| k.clone())
+            .filter(|k| k.starts_with("tab "))
+            .collect();
+        assert!(
+            tabs.iter().any(|k| k == "tab io") && tabs.iter().any(|k| k == "tab claude"),
+            "{tabs:?}"
+        );
+        for key in tabs {
+            h.app.chrome.right = true;
+            h.wait(0.2);
+            let at = h.rect(&key).center();
+            h.click(at);
+            h.wait(0.5);
+            assert!(h.app.chrome.right, "one click on {key} keeps the panel");
+            h.click(at);
+            h.click(at);
+            h.frame(vec![]);
+            assert!(!h.app.chrome.right, "a double click on {key} hides the panel");
+        }
     }
 
     /// The question is asked wherever the page is, the Files tab shut or
@@ -2364,17 +2426,17 @@ mod chrome {
     #[test]
     fn the_st_toggle_opens_and_closes_the_editor_and_a_block_click_sends_it_to_the_line() {
         let mut h = Harness::new(App::sim());
-        let editor = || egui::Id::unique("pg-source");
+        let editor = h.editor_id();
         assert!(h.app.chrome.code_open(), "the simulation starts with the ST open");
-        assert!(h.ctx.read_response(editor()).is_some());
+        assert!(h.ctx.read_response(editor).is_some());
         h.view_menu("view st");
         assert!(!h.app.chrome.code_open());
         h.wait(0.5);
-        assert!(h.ctx.read_response(editor()).is_none(), "shut");
+        assert!(h.ctx.read_response(editor).is_none(), "shut");
         h.view_menu("view st");
         assert!(h.app.chrome.code_open());
         h.wait(0.5);
-        let r = h.ctx.read_response(editor()).expect("open again");
+        let r = h.ctx.read_response(editor).expect("open again");
         // The pane opens at its default width; the editor is what is
         // left of it beside the gutter.
         assert!(
@@ -2400,7 +2462,7 @@ mod chrome {
             .take(line as usize - 1)
             .map(|l| l.chars().count())
             .sum();
-        let state = egui::text_edit::TextEditState::load(&h.ctx, editor()).expect("the editor's state");
+        let state = egui::text_edit::TextEditState::load(&h.ctx, editor).expect("the editor's state");
         assert_eq!(
             state.cursor.char_range(),
             Some(egui::text::CCursorRange::one(egui::text::CCursor::new(chars))),
@@ -2424,44 +2486,6 @@ mod simulated {
     use crate::app::App;
     use crate::editor::Tab;
     use crate::st_view::{Pick, TAP, node_near};
-
-    /// Nick, 2026-11-05: the Requirements tab lists requirements in plain
-    /// words with the test behind each row; a row opens to its test, and
-    /// the test file stays out of the Files list.
-    #[test]
-    fn a_requirement_is_a_row_with_its_test_behind_it_not_a_file() {
-        let mut h = Harness::new(App::sim());
-        {
-            let v = h.app.sim.as_mut().unwrap();
-            v.proj.create("mine", Some("latch"));
-            v.open_project("mine");
-        }
-        h.wait(0.2);
-        let ctx = h.ctx.clone();
-        h.app
-            .sim
-            .as_mut()
-            .unwrap()
-            .add_requirement("The motor runs once start is pressed", &ctx);
-        h.press("tab tests");
-        h.wait(0.2);
-        assert!(h.has("req draft") && h.has("req add"), "the field to add one");
-        let row = "test test_the_motor_runs_once_start_is_pressed";
-        assert!(h.has(row), "its row");
-        h.press(row);
-        h.wait(0.2);
-        assert!(
-            h.has("test edit test_the_motor_runs_once_start_is_pressed"),
-            "opened: Edit"
-        );
-        h.press("pane files");
-        h.wait(0.2);
-        assert!(h.has("file latch.st"));
-        assert!(
-            !h.has("file test_the_motor_runs_once_start_is_pressed.st"),
-            "the test lives behind its row"
-        );
-    }
 
     fn stations() -> Harness {
         let mut h = Harness::new(App::sim());
@@ -2612,6 +2636,35 @@ mod simulated {
         assert!(!h.app.chrome.trend, "Alt+2 folds it");
     }
 
+    /// Nick, 2026-11-07: drag a lane's label up or down to reorder the
+    /// trend. A drag that ends on its own lane moves nothing.
+    #[test]
+    fn dragging_a_trend_label_moves_its_lane() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        // Lanes are drawn by name; a name the program lacks records as no
+        // value, which is all this needs.
+        let s = &mut h.app.sim.as_mut().unwrap().session;
+        s.trend.signals = vec!["FIRST".into(), "SECOND".into(), "THIRD".into()];
+        s.trend.samples.clear();
+        h.wait(0.3);
+        let order = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.signals.clone();
+        let [a, b, c] = <[String; 3]>::try_from(order(&h)).unwrap();
+        let handle = |h: &Harness, n: &str| h.rect(&format!("trend lane {}", n.to_ascii_lowercase()));
+        // The first lane's label onto the third lane.
+        let (from, to) = (handle(&h, &a).center(), handle(&h, &c).center());
+        h.drag(from, to);
+        assert_eq!(order(&h), [b.clone(), c.clone(), a.clone()]);
+        // Back up to the top.
+        let (from, to) = (handle(&h, &a).center(), handle(&h, &b).center());
+        h.drag(from, to);
+        assert_eq!(order(&h), [a.clone(), b.clone(), c.clone()]);
+        // A small drag inside its own lane.
+        let r = handle(&h, &b);
+        h.drag(r.center(), r.center() + Vec2::new(4.0, r.height() * 0.3));
+        assert_eq!(order(&h), [a, b, c]);
+    }
+
     /// Nick, 2026-11-01: the trend's window is 1, 10 or 100 s, so the
     /// line can cross the pane fast or slow; the history is kept for the
     /// widest, so widening shows what already ran. Nick, 2026-11-02: one
@@ -2625,7 +2678,7 @@ mod simulated {
         assert!(h.has("trend window"), "the slider");
         assert!(!h.has("trend window 10"), "the buttons are gone");
         let window = |h: &Harness| h.app.sim.as_ref().unwrap().session.trend.window_ms;
-        assert_eq!(window(&h), 10_000, "opens on 10 s");
+        assert_eq!(window(&h), 30_000, "opens on 30 s");
         let slider = h.rect("trend window");
         h.click(Pos2::new(slider.left() + 1.0, slider.center().y));
         assert_eq!(window(&h), WINDOW_MIN_MS, "the left end is 100 ms");
@@ -2678,7 +2731,7 @@ mod simulated {
         assert!(text.lines().count() >= 3, "{text}");
         let start = text.lines().next().unwrap().chars().count() + 1;
         let end = start + text.lines().nth(1).unwrap().chars().count() + 2;
-        let id = eframe::egui::Id::unique("pg-source");
+        let id = h.editor_id();
         h.ctx.memory_mut(|m| m.request_focus(id));
         crate::editor::select(&h.ctx, id, start, end);
         h.wait(0.1);
@@ -2721,7 +2774,6 @@ mod simulated {
             "pane devices",
             "pane code",
             "tab io",
-            "tab tests",
             "tab claude",
             "bottom messages",
             "bottom trend",
@@ -2772,7 +2824,7 @@ mod simulated {
         h.key(Modifiers::COMMAND, Key::F);
         assert!(h.app.chrome.code_open());
         assert!(h.app.chrome.find.is_some(), "the find box opens");
-        let editor = eframe::egui::Id::unique("pg-source");
+        let editor = h.editor_id();
         h.frame(vec![]);
         assert!(
             h.ctx.memory(|m| m.has_focus(editor.with("find"))),
@@ -2824,6 +2876,50 @@ mod simulated {
         assert_eq!((a.min(b), a.max(b)), (chars(last.start), chars(last.end)));
     }
 
+    /// Nick 2026-11-07: the pane kept widening to show a device's whole
+    /// cip= identity. A project with identity-named devices and long
+    /// names must leave both panels their width on every tab.
+    #[test]
+    fn long_device_identities_and_names_leave_the_panels_their_width() {
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        {
+            let sim = h.app.sim.as_mut().unwrap();
+            sim.proj.create("wide", None);
+            sim.proj.add_file(
+                "io.map",
+                "device e1213 enip-io cip=991:515:0x2A629EAE profile=moxa-e1213 rpi_ms=100 poll_ms=20\n\
+                 device e1213_by_mac_address_on_the_far_side_of_the_plant modbus-tcp mac=00-90-e8-7e-af-be unit=1 timeout_ms=300 poll_ms=20\n\
+                 in  di00_the_part_present_sensor_at_the_infeed_of_station_one bool e1213 di:0\n\
+                 out do0_the_clamp_solenoid_that_holds_the_part_while_it_is_drilled bool e1213 coil:0 safe=false\n\
+                 in  counter_of_parts_seen_by_the_far_sensor int e1213_by_mac_address_on_the_far_side_of_the_plant ir:24:u32\n"
+                    .into(),
+            );
+        }
+        h.wait(0.3);
+        for key in [
+            "pane devices",
+            "pane files",
+            "pane code",
+            "tab io",
+            "tab claude",
+            "pane devices",
+            "tab io",
+        ] {
+            h.press(key);
+            h.wait(0.3);
+            let l = h.rect("left").right() - left.right();
+            let r = right.left() - h.rect("right").left();
+            assert!((0.0..=8.0).contains(&l), "after {key} the left pane grew {l} pt");
+            assert!(
+                (0.0..=8.0).contains(&r),
+                "after {key} the right panel grew {r} pt"
+            );
+        }
+    }
+
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());
@@ -2865,10 +2961,219 @@ mod boxed {
     use crate::box_view::BoxView;
     use crate::editor::Tab;
     use crate::remote::{Link, Msg, Stream};
+    use crate::stamp;
     use crate::theme::Theme;
 
     fn boxed(h: &Harness) -> &BoxView {
         h.app.boxv.as_ref().unwrap()
+    }
+
+    /// Nick 2026-11-07: once someone is signed in the sign-in panel
+    /// collapses (the box's answer lands frames after its button), and the
+    /// header shows the role: a hard hat for an operator, a wrench and a
+    /// screwdriver for an engineer.
+    #[test]
+    fn signing_in_collapses_the_panel_and_the_header_shows_the_role() {
+        use crate::review::Session;
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        assert!(
+            !h.has("role operator") && !h.has("role engineer"),
+            "signed out: no role"
+        );
+        h.press("sign in");
+        h.wait(0.2);
+        assert!(h.app.login, "the panel opens");
+        // The answer arrives a few frames later, as from the box.
+        h.wait(0.2);
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: None,
+            role: "operator".into(),
+        });
+        h.wait(0.2);
+        assert!(!h.app.login, "signed in: the panel collapses");
+        assert!(h.has("role operator") && !h.has("role engineer"), "a hard hat");
+        // Opened again while signed in, it stays open (to sign out).
+        h.press("sign in");
+        h.wait(0.2);
+        assert!(h.app.login, "open again on a click");
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("alice".into()),
+            role: "engineer".into(),
+        });
+        h.wait(0.2);
+        assert!(!h.app.login, "a different person signed in: collapses");
+        assert!(h.has("role engineer") && !h.has("role operator"), "the tools");
+        // The glyph opens the panel too.
+        h.press("role engineer");
+        h.wait(0.2);
+        assert!(h.app.login);
+        h.app.review.as_mut().unwrap().state.session = None;
+        h.wait(0.2);
+        assert!(!h.app.login, "signed out: collapses");
+        assert!(!h.has("role engineer"));
+    }
+
+    /// The box is read whichever screen shows: on Proposals nothing else
+    /// draws it, and its streams carry on, so an unread backlog of values
+    /// events (a JSON string each) would pile up and be parsed in one frame.
+    #[test]
+    fn the_box_is_kept_up_on_the_proposals_screen() {
+        use crate::app::Screen;
+        use crate::remote::{Cmd, Fetch};
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        let b = h.app.boxv.as_mut().unwrap();
+        b.sent.clear();
+        // Something the box view has to carry out when it is ticked.
+        b.state.relist();
+        h.app.screen = Screen::Proposals;
+        h.wait(0.2);
+        let sent = &h.app.boxv.as_ref().unwrap().sent;
+        assert!(
+            sent.contains(&Cmd::Get(Fetch::Modules, "/api/modules".into())),
+            "{sent:?}"
+        );
+    }
+
+    /// Simulating in the browser leaves the box with nobody to read its
+    /// streams: they are closed, and open again when the page goes back.
+    #[test]
+    fn simulating_in_the_browser_closes_the_boxs_streams_and_going_back_opens_them() {
+        use crate::remote::{Cmd, Stream};
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        h.app.boxv.as_mut().unwrap().sent.clear();
+        h.app.source = Source::Sim;
+        h.wait(12.0);
+        let sent = std::mem::take(&mut h.app.boxv.as_mut().unwrap().sent);
+        for s in [Stream::Values, Stream::Trace, Stream::Traces] {
+            assert!(sent.contains(&Cmd::Close(s)), "{s:?} closed: {sent:?}");
+        }
+        assert!(
+            sent.iter().all(|c| matches!(c, Cmd::Close(_))),
+            "nothing is asked of a box nobody watches: {sent:?}"
+        );
+        h.app.source = Source::Box;
+        h.wait(0.2);
+        let sent = std::mem::take(&mut h.app.boxv.as_mut().unwrap().sent);
+        assert!(
+            sent.contains(&Cmd::Listen(Stream::Values, "/api/events".into())),
+            "{sent:?}"
+        );
+    }
+
+    /// The Editor's Run and Stop act on what the Monitor's do (the program
+    /// shown), not on every module: a module left stopped on purpose is not
+    /// started by a click meant for another, and a second click before the
+    /// box's list shows the first one's effect does not send again.
+    #[test]
+    fn the_editors_run_glyph_acts_on_the_program_shown_and_only_once() {
+        use crate::remote::ModuleRow;
+        use crate::review::Session;
+        let row = |name: &str, state: &str| ModuleRow {
+            name: name.into(),
+            state: state.into(),
+            fault: None,
+            stopped_by: None,
+            scans: 0,
+            scan_ms: Some(10.0),
+            overruns: 0,
+            overrun_ago: None,
+            timing: None,
+        };
+        let mut h = Harness::new(App::boxed());
+        h.app
+            .review
+            .get_or_insert_with(crate::review_view::ReviewView::new)
+            .state
+            .session = Some(Session {
+            user: Some("alice".into()),
+            role: "engineer".into(),
+        });
+        h.app.boxv.as_mut().unwrap().state.modules = vec![row("a", "running"), row("b", "stopped")];
+        // The program shown is b, which an engineer left stopped.
+        h.app.monitor.at = Some(("b".into(), String::new()));
+        h.wait(0.2);
+        h.app.boxv.as_mut().unwrap().psent.clear();
+        h.press("run");
+        let urls = |h: &mut Harness| -> Vec<String> {
+            h.wait(0.1);
+            std::mem::take(&mut h.app.boxv.as_mut().unwrap().psent)
+                .into_iter()
+                .filter(|q| q.method == "POST")
+                .map(|q| q.url)
+                .collect()
+        };
+        assert_eq!(
+            urls(&mut h),
+            ["/api/modules/b/run"],
+            "b alone, and run, not a's stop"
+        );
+        // The box's list lags: b still reads stopped.
+        h.press("run");
+        assert_eq!(
+            urls(&mut h),
+            Vec::<String>::new(),
+            "the first click is still on its way"
+        );
+        // Once the list shows it, the next click decides afresh.
+        h.app.boxv.as_mut().unwrap().state.modules = vec![row("a", "running"), row("b", "running")];
+        h.wait(0.2);
+        h.press("run");
+        assert_eq!(urls(&mut h), ["/api/modules/b/stop"]);
+    }
+
+    /// Card build-match: a box that answers as another build gets the
+    /// banner, on the Editor and the Monitor alike, and the panels keep
+    /// their width under it.
+    #[test]
+    fn a_box_of_another_build_shows_the_banner() {
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.3);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        assert!(!h.has("build banner"), "no stamp heard yet");
+        h.app.boxv.as_mut().unwrap().state.build = Some(format!("{}-other", stamp::CANVAS));
+        h.wait(0.3);
+        assert!(h.has("build banner") && h.has("reload"));
+        assert!(
+            h.rect("build banner").top() >= h.rect("header").bottom() - 1.0,
+            "under the header"
+        );
+        assert!((h.rect("left").width() - left.width()).abs() <= 1.0);
+        assert!((h.rect("right").width() - right.width()).abs() <= 1.0);
+        h.app.screen = crate::app::Screen::Monitor;
+        h.wait(0.3);
+        assert!(h.has("build banner"), "on the Monitor too");
+    }
+
+    /// Nothing to compare is no mismatch: the same build, a box built
+    /// without git ("unknown"), and the simulation show no banner.
+    #[test]
+    fn the_same_build_or_an_unknown_one_shows_no_banner() {
+        let mut h = Harness::new(App::boxed());
+        for build in [stamp::CANVAS, stamp::UNKNOWN, ""] {
+            h.app.boxv.as_mut().unwrap().state.build = Some(build.to_string());
+            h.wait(0.3);
+            assert!(!h.has("build banner"), "{build:?}");
+        }
+        h.app.boxv.as_mut().unwrap().state.build = Some("other".into());
+        h.app.source = Source::Sim;
+        h.wait(0.3);
+        assert!(!h.has("build banner"), "the simulation has no box to differ from");
+    }
+
+    /// The real box API names its build on the replies the canvas
+    /// fetches, and a box and canvas from one checkout match.
+    #[test]
+    fn a_box_of_this_build_is_heard_and_matches() {
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        assert_eq!(state.build.as_deref(), Some(stamp::CANVAS));
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.wait(0.3);
+        assert!(!h.has("build banner"));
     }
 
     /// The minimum holds on a box too: its tabs, signed in, and the
@@ -2887,14 +3192,7 @@ mod boxed {
         });
         h.wait(0.2);
         let mut seen = Vec::new();
-        for key in [
-            "pane files",
-            "pane devices",
-            "pane code",
-            "tab io",
-            "tab tests",
-            "tab claude",
-        ] {
+        for key in ["pane files", "pane devices", "pane code", "tab io", "tab claude"] {
             h.press(key);
             h.wait(0.3);
             for (size, text) in h.small_text() {
@@ -2952,6 +3250,7 @@ mod boxed {
                 )]
                 .into(),
                 current: Some("main.st".into()),
+                runs: None,
             });
         }
         h.frame(vec![]);
@@ -3025,6 +3324,128 @@ mod boxed {
             .map(|r| r.url.clone())
             .collect();
         assert!(asked.iter().any(|u| u == "/api/proposals/3"), "{asked:?}");
+    }
+
+    /// Help mode on a box's Agent tab (card `help-mode-box`): signed out,
+    /// Ask stays off; signed in as anyone, the question goes to
+    /// `POST /api/help` with the page's Messages; the answer shows the
+    /// diagnosis and the issue, whose Copy puts the whole Markdown on the
+    /// clipboard; and the panels keep their width throughout.
+    #[test]
+    fn help_mode_on_a_box_asks_and_shows_a_copyable_issue() {
+        use crate::box_agent::Incoming;
+        use crate::review::Session;
+        use serde_json::{Value as Json, json};
+
+        let bench = Bench::new();
+        let (state, _) = watch(&bench);
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.wait(0.3);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        let kept = |h: &Harness, when: &str| {
+            let l = h.rect("left").right() - left.right();
+            let r = right.left() - h.rect("right").left();
+            assert!((0.0..=8.0).contains(&l), "{when}: the left pane grew {l} pt");
+            assert!((0.0..=8.0).contains(&r), "{when}: the right panel grew {r} pt");
+        };
+        h.press("tab claude");
+        h.frame(vec![]);
+        assert!(h.has("agent mode code") && h.has("agent mode help"));
+        assert!(h.has("agent instruction") && !h.has("help question"));
+        // Nick, 2026-11-08: the heading names the mode, the agent's state
+        // is a dot beside it, and the glyph toggle sits at the top right.
+        assert!(h.drew("Change the program") && !h.drew("Get help"));
+        assert!(!h.drew("Agent on this box") && !h.drew("Agent online"));
+        let (dot, code, help) = (
+            h.rect("agent status"),
+            h.rect("agent mode code"),
+            h.rect("agent mode help"),
+        );
+        assert!(
+            dot.left() < code.left() && code.right() <= help.left(),
+            "{dot:?} {code:?} {help:?}"
+        );
+        assert!(
+            help.right() >= h.rect("right").right() - 40.0,
+            "at the right: {help:?}"
+        );
+        h.press("agent mode help");
+        h.frame(vec![]);
+        assert!(h.has("help question") && h.has("help ask") && !h.has("agent instruction"));
+        assert!(h.drew("Get help") && !h.drew("Change the program"));
+
+        h.app
+            .boxv
+            .as_mut()
+            .unwrap()
+            .log
+            .error(2.0, "The box is unreachable.");
+        h.app.boxv.as_mut().unwrap().help.draft = "The conveyor stopped.".into();
+        h.frame(vec![]);
+        h.press("help ask");
+        h.frame(vec![]);
+        assert!(boxed(&h).help_sent.is_empty(), "signed out, nothing is sent");
+
+        h.app.review.as_mut().unwrap().state.session = Some(Session {
+            user: Some("bob".into()),
+            role: "operator".into(),
+        });
+        h.frame(vec![]);
+        h.press("help ask");
+        h.frame(vec![]);
+        let sent = boxed(&h).help_sent.clone();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].url, "/api/help");
+        let body: Json = serde_json::from_str(&sent[0].body).unwrap();
+        assert_eq!(body["question"], "The conveyor stopped.");
+        assert!(
+            body["messages"]
+                .as_str()
+                .unwrap()
+                .contains("error   The box is unreachable."),
+            "{body}"
+        );
+        assert!(h.has("help stop") && h.has("help working"));
+        kept(&h, "asking");
+
+        let markdown = format!(
+            "# Conveyor stops when rio drops\n\n### What happened\n\n{}\n\n### Context from the box\n\n- Devices:\n  - `rio`: down: connection refused\n",
+            "The conveyor stopped and the panel lamp went red. ".repeat(12)
+        );
+        let issue = json!({
+            "by": "agent", "title": "Conveyor stops when rio drops",
+            "diagnosis": "The remote I/O module rio is not answering. Check its power and network cable.",
+            "markdown": markdown,
+        });
+        let stream = format!(
+            "event: help\ndata: {{\"context\":{{}}}}\n\nevent: issue\ndata: {issue}\n\nevent: done\ndata: {{\"stop\":\"end_turn\",\"why\":null,\"steps\":2,\"output_tokens\":9}}\n\n"
+        );
+        let seq = sent[0].seq;
+        let b = h.app.boxv.as_mut().unwrap();
+        b.help_answer(Incoming::Chunk { seq, text: stream });
+        b.help_answer(Incoming::End { seq });
+        h.frame(vec![]);
+        h.frame(vec![]);
+        assert!(h.has("help diagnosis") && h.has("help issue") && h.has("help issue copy"));
+        assert!(!h.has("help stop"));
+        kept(&h, "answered");
+        let small = h.small_text();
+        assert!(small.is_empty(), "text below the minimum: {small:?}");
+        h.press("help issue copy");
+        assert_eq!(h.copied.last(), Some(&markdown));
+        assert!(
+            boxed(&h)
+                .log
+                .text()
+                .contains("Help: an issue was written (Conveyor stops when rio drops)."),
+            "in Messages"
+        );
+        h.press("agent mode code");
+        h.frame(vec![]);
+        assert!(h.has("agent instruction"));
+        kept(&h, "back to the code");
     }
 
     /// The Devices tab on a box: the map the box runs, each device with
@@ -3221,6 +3642,8 @@ mod boxed {
         // The box goes away: reconnecting, then unreachable, still drawn.
         let t = h.time;
         let b = h.app.boxv.as_mut().unwrap();
+        // The first end of a stream that was delivering is reopened quietly.
+        b.state.apply(Msg::Failed(Stream::Values), t);
         b.state.apply(Msg::Failed(Stream::Values), t);
         assert!(
             b.status(t, &Theme::dark())
@@ -3408,6 +3831,14 @@ mod reviewing {
         ] {
             assert!(keys.contains(&k.to_string()), "no {k}: {keys:?}");
         }
+        // Above the button: what the deploy keeps and resets, in words.
+        assert!(
+            h.drew("Before you approve: this deploy keeps 5 values, starts HORN at the initial value (new)."),
+            "the approval screen shows the preview"
+        );
+        assert!(h.drew("new HORN"), "the reset value is marked apart");
+        let state = rect(&mut h, "state");
+        assert!(state.top() < rect(&mut h, &format!("go {:?}", Target::Proposal(id))).top());
         let t = Target::Proposal(id);
         click(&mut h, &format!("go {t:?}"));
         pump(&mut h, &b);
@@ -3452,6 +3883,10 @@ mod reviewing {
         assert!(
             rv(&mut h).state.open.as_ref().unwrap().undo.is_some(),
             "the undo is offered"
+        );
+        assert!(
+            h.drew("Applied: this deploy keeps 5 values, starts HORN at the initial value (new)."),
+            "what the deploy did, as the box reported it"
         );
         assert_eq!(h.app.waiting(), Some(0), "nothing waits once applied");
 
@@ -3566,7 +4001,7 @@ mod reviewing {
 #[test]
 fn the_simulation_survives_a_click_storm_on_every_tab() {
     let mut h = Harness::new(App::sim());
-    for tab in ["tab io", "tab tests", "tab claude"] {
+    for tab in ["tab io", "tab claude"] {
         // A storm may have hit the panel's hide chevron: open it again.
         if !h.has(tab) {
             h.press("right");
@@ -3594,7 +4029,6 @@ mod tour {
 
     use super::{App, Harness, Screen, Source};
     use crate::app::wants_tour;
-    use crate::editor::Tab;
     use crate::tour::{Step, Tour};
 
     fn step(h: &Harness) -> Step {
@@ -3688,7 +4122,7 @@ mod tour {
         assert_eq!(anchor(&h).as_deref(), Some("st editor"));
         card_is_fair(&h, "editor");
         // Select 500 in T#500ms and type 200 over it.
-        let id = egui::Id::unique("pg-source");
+        let id = h.editor_id();
         let editor = h.ctx.read_response(id).expect("the editor").rect;
         h.click(editor.left_top() + egui::vec2(60.0, 6.0));
         let sim = h.app.sim.as_ref().unwrap();
@@ -3747,9 +4181,6 @@ mod tour {
             "one instruction sent"
         );
         card_is_fair(&h, "done");
-        h.press("tour requirements");
-        h.wait(0.2);
-        assert_eq!(h.app.chrome.tab, Tab::Requirements);
         h.press("tour finish");
         h.wait(0.2);
         assert!(h.app.tour.is_none());
@@ -3795,3 +4226,5 @@ mod tour {
         }
     }
 }
+
+mod shell;

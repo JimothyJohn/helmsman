@@ -1,0 +1,2 @@
+helmsman-layout 2
+move	conveyor	0	0	120	LAMP :=	LAMP := START	snap=grid

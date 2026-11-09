@@ -63,7 +63,7 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="the-editor">The Editor</h1>
 <p>The Editor is the screen you program in. It is the same on a box and
@@ -166,29 +166,29 @@ the label is drawn, the icon stands alone at a readable size.</p>
 <ul>
 <li><strong>The left pane</strong> has three tabs.
 <strong>Files</strong> (<kbd>Alt</kbd> <kbd>0</kbd>): the project's
-files, the examples and starters, and the program tree under them; a
-right-click on a file offers Copy, Paste, Duplicate, Rename and Delete,
-and what you copy pastes into any project you open next.
-<strong>Devices</strong> (<kbd>Alt</kbd> <kbd>4</kbd>): at the top,
-<strong>I/O wiring</strong> links to the project's <code>io.map</code>,
-the file that says which program variable is wired to which device
-point; then the devices it names, each with its points under it, their
-live values, and whether the link is up; a right-click on the blank
-space adds a device (name, protocol, address, settings) as a line of the
-map; Import device… takes the vendor's EDS file, keeps it in the project
-and fills the form in from it. Under the map's devices, <strong>On the
-network</strong>: Scan lists every EtherNet/IP device that answers on
-the LAN, says whether the map already has it, and shows what the public
-device library knows of it (in the simulation, one simulated E1213).
-<strong>Use this device</strong> under one opens the form filled in, the
-device named by its identity so a changed address never loses it; on a
-read-only example it copies the project first. The form has a field for
-each of the protocol's settings, filled in with the usual values and
-checked against the driver's ranges, with the device's io.map line under
-them. Below that are its inputs and outputs: a known device (the ioLogik
-E1213) lists every channel, and the program's inputs and outputs that
-were on the box's own channels are already ticked on the first free
-ones. Tick any other channel and name it, or add rows with
+files, the examples, and the program tree under them; a right-click on a
+file offers Copy, Paste, Duplicate, Rename and Delete, and what you copy
+pastes into any project you open next. <strong>Devices</strong>
+(<kbd>Alt</kbd> <kbd>4</kbd>): at the top, <strong>I/O wiring</strong>
+links to the project's <code>io.map</code>, the file that says which
+program variable is wired to which device point; then the devices it
+names, each with its points under it, their live values, and whether the
+link is up; a right-click on the blank space adds a device (name,
+protocol, address, settings) as a line of the map; Import device… takes
+the vendor's EDS file, keeps it in the project and fills the form in
+from it. Under the map's devices, <strong>On the network</strong>: Scan
+lists every EtherNet/IP device that answers on the LAN, says whether the
+map already has it, and shows what the public device library knows of it
+(in the simulation, one simulated E1213). <strong>Use this
+device</strong> under one opens the form filled in, the device named by
+its identity so a changed address never loses it; on a read-only example
+it copies the project first. The form has a field for each of the
+protocol's settings, filled in with the usual values and checked against
+the driver's ranges, with the device's io.map line under them. Below
+that are its inputs and outputs: a known device (the ioLogik E1213)
+lists every channel, and the program's inputs and outputs that were on
+the box's own channels are already ticked on the first free ones. Tick
+any other channel and name it, or add rows with
 <ul>
 <li>Input and + Output for any other device. For each row, Program picks
 what the program does with it: one of its own variables, a new variable
@@ -212,7 +212,8 @@ tab and the plant follows the sensor. <strong>Code</strong>
 (<kbd>Alt</kbd> <kbd>1</kbd>): the Structured Text editor. Errors are
 marked on the line as you type; the program running does not change
 until you deploy. The key for a tab opens the pane on it, or shuts the
-pane when that tab already shows.</li>
+pane when that tab already shows. A double click on any tab, on this
+pane or the side panel, hides that pane.</li>
 </ul></li>
 <li><strong>The bottom panel</strong> (<kbd>Alt</kbd> <kbd>2</kbd>): the
 <strong>Trend</strong> of the signals you pin, with a long time axis,
@@ -229,7 +230,7 @@ href="projects.html#requirement-tests">Requirement tests</a>); and
 <strong>Agent</strong>, where you type what the open file should do and
 it is updated (see <a href="agent.html">The Agent</a>).</li>
 </ul>
-<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
+<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 
 <img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">
 

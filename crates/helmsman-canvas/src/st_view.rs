@@ -182,6 +182,14 @@ pub struct Viewer {
     pub breaks: Vec<StmtId>,
     /// The statement a paused scan stopped before.
     pub paused: Option<StmtId>,
+    /// The program as the diagram showed it when the Agent's last change
+    /// landed ([`crate::agent_marks`]): what that change added is outlined
+    /// green and what it removed drawn as red ghosts, against it. The host
+    /// sets it each frame and clears it at the engineer's next edit.
+    pub baseline: Option<std::rc::Rc<Module>>,
+    /// The diff of `baseline` to `module`, kept while neither changes:
+    /// (the baseline's address, the source it was made against, the diff).
+    change: Option<(usize, String, helmsman_diagram::diff::ModuleDiff)>,
 }
 
 /// One row of the program tree.
@@ -278,6 +286,25 @@ impl Arrangement {
         )
     }
 
+    /// `self` brought up to date by `newer`, the moves now read off `v`:
+    /// those of blocks `v` has are `newer`'s alone (a move undone is
+    /// gone), while those of blocks `v` lacks stay, for an edit that
+    /// brings the block back. When too many stay for a layout file, the
+    /// oldest go first.
+    #[must_use]
+    pub fn updated(&self, newer: &Self, v: &Viewer) -> Self {
+        let mut out: Vec<_> = self
+            .0
+            .iter()
+            .filter(|(p, l, t, k, _)| v.block(p, l, t, *k).is_none())
+            .cloned()
+            .collect();
+        let room = helmsman_project::layout::MAX_MOVES.saturating_sub(newer.len());
+        out.drain(..out.len().saturating_sub(room));
+        out.extend(newer.0.iter().cloned());
+        Self(out)
+    }
+
     /// Only the moves of blocks `v` has.
     #[must_use]
     pub fn within(&self, v: &Viewer) -> Self {
@@ -350,7 +377,36 @@ impl Viewer {
             icons: crate::icons::Icons::default(),
             breaks: Vec::new(),
             paused: None,
+            baseline: None,
+            change: None,
         }
+    }
+
+    /// What the Agent's last change added on the diagram shown (block
+    /// ids of the new diagram) and what it removed (block ids of the old
+    /// one, with the old diagram): empty with no baseline.
+    pub(crate) fn agent_change(&mut self) -> (Vec<NodeId>, Vec<NodeId>) {
+        let Some(base) = self.baseline.clone() else {
+            self.change = None;
+            return (Vec::new(), Vec::new());
+        };
+        let key = std::rc::Rc::as_ptr(&base) as usize;
+        if self
+            .change
+            .as_ref()
+            .is_none_or(|(k, src, _)| *k != key || *src != self.src)
+        {
+            let d = helmsman_diagram::diff::modules(&base, &self.module);
+            self.change = Some((key, self.src.clone(), d));
+        }
+        let Some((_, _, d)) = &self.change else {
+            return (Vec::new(), Vec::new());
+        };
+        let pou = &self.module.pous[self.scopes[self.scope].pou].name;
+        (
+            d.new_nodes(pou, helmsman_diagram::diff::Change::Added),
+            d.removed_nodes(pou),
+        )
     }
 
     /// The picked block if it reads a variable: its path and its index
@@ -1071,6 +1127,13 @@ impl Viewer {
             .map(|h| self.references(h))
             .filter(|r| !r.is_empty())
             .or_else(|| self.path(scan));
+        let (added, removed) = self.agent_change();
+        let pou = &self.module.pous[self.scopes[self.scope].pou].name;
+        let old = self
+            .baseline
+            .as_ref()
+            .and_then(|b| b.pou(pou))
+            .map(|p| &p.diagram);
         draw(
             &painter,
             &t,
@@ -1086,6 +1149,8 @@ impl Viewer {
                 icons: &self.icons,
                 breaks: &self.breaks,
                 paused: self.paused,
+                added: &added,
+                ghosts: old.map(|o| (o, removed.as_slice())),
             },
         );
     }
@@ -1108,6 +1173,22 @@ impl Viewer {
     pub const fn highlighted(&self) -> Option<&Drivers> {
         self.lit.as_ref()
     }
+}
+
+/// `text` on one row at most `width` wide, ending in an ellipsis where it
+/// does not fit.
+fn fitted(
+    painter: &egui::Painter,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple(text.to_string(), font, color, width.max(1.0));
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    painter.layout_job(job)
 }
 
 pub fn show(v: Option<Value>) -> String {
@@ -1166,6 +1247,55 @@ pub fn node_near(d: &Diagram, x: f32, y: f32, slop: f32) -> Option<NodeId> {
     })
 }
 
+/// The Agent's added blocks and wires (the brand green), and its
+/// removed ones (the brand red, ghosted).
+const ADDED: Color32 = brand::GREEN;
+
+/// Blocks the Agent's change removed, drawn where they were in the old
+/// diagram: a faint red fill, a red outline and their label, and the old
+/// wires between two removed blocks, so what went is seen in place.
+fn draw_ghosts(painter: &egui::Painter, cam: Cam, old: &Diagram, removed: &[NodeId]) {
+    let z = cam.zoom;
+    let red = brand::RED;
+    for w in &old.wires {
+        if removed.contains(&w.from) && removed.contains(&w.to) {
+            let (a, b) = (old.node(w.from), old.node(w.to));
+            let (ax, ay) = out_port(a, w.out);
+            let (bx, by) = in_port(b, w.inp);
+            bezier(
+                painter,
+                cam.to_screen(ax, ay),
+                cam.to_screen(bx, by),
+                z,
+                red.gamma_multiply(0.45),
+                1.2,
+            );
+        }
+    }
+    for id in removed {
+        let Some(n) = old.nodes.get(id.0 as usize) else {
+            continue;
+        };
+        let r = cam.rect(&n.rect);
+        painter.rect_filled(r, CornerRadius::same(4), red.gamma_multiply(0.12));
+        painter.rect_stroke(
+            r,
+            CornerRadius::same(4),
+            Stroke::new(1.5 * z.max(0.6), red.gamma_multiply(0.7)),
+            StrokeKind::Outside,
+        );
+        if z > 0.35 {
+            painter.text(
+                r.center(),
+                Align2::CENTER_CENTER,
+                &n.label,
+                font(11.5 * z),
+                red.gamma_multiply(0.75),
+            );
+        }
+    }
+}
+
 /// What [`draw`] marks on the diagram beside the scan.
 #[derive(Clone, Copy)]
 struct Marks<'a> {
@@ -1184,6 +1314,11 @@ struct Marks<'a> {
     breaks: &'a [StmtId],
     /// The statement a paused scan stopped before: outlined.
     paused: Option<StmtId>,
+    /// Blocks the Agent's last change added: outlined green.
+    added: &'a [NodeId],
+    /// Blocks it removed, in the old diagram: drawn as red ghosts where
+    /// they were.
+    ghosts: Option<(&'a Diagram, &'a [NodeId])>,
 }
 
 /// Where a statement is marked on the diagram: the blocks it ends in, or
@@ -1311,6 +1446,8 @@ fn draw(
         icons,
         breaks,
         paused,
+        added,
+        ghosts,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
     let mut dot_regions = std::collections::HashSet::new();
@@ -1438,18 +1575,19 @@ fn draw(
         if w.negated {
             bubble(painter, t, pb, z, live.and_then(|l| l.input(d, k)), f);
         }
+        if added.contains(&w.from) || added.contains(&w.to) {
+            bezier(painter, pa, end, z, ADDED.gamma_multiply(0.85), 1.5);
+        }
         if text
             && let Some(v) = v
             && !matches!(v, Value::Bool(_))
             && let Some(label) = value_text(d, w.from, v, vars)
         {
-            painter.text(
-                pa + Vec2::new(4.0, -7.0) * z,
-                Align2::LEFT_CENTER,
-                label,
-                font(10.0 * z),
-                t.fg.gamma_multiply(f),
-            );
+            // At most the wire's own length (and a block's width) wide.
+            let room = (end.x - pa.x - 8.0 * z).clamp(48.0 * z, 120.0 * z);
+            let g = fitted(painter, &label, font(10.0 * z), t.fg.gamma_multiply(f), room);
+            let at = pa + Vec2::new(4.0, -7.0) * z;
+            painter.galley(at - Vec2::new(0.0, g.size().y / 2.0), g, t.fg);
         }
     }
     // Nodes.
@@ -1507,6 +1645,14 @@ fn draw(
             Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
+        if added.contains(&n.id) {
+            painter.rect_stroke(
+                r.expand(3.0 * z),
+                CornerRadius::same(6),
+                Stroke::new(2.5 * z.max(0.6), ADDED),
+                StrokeKind::Outside,
+            );
+        }
         if here_nodes.contains(&n.id) {
             paused_outline(painter, r, z);
         }
@@ -1589,15 +1735,22 @@ fn draw(
                     Value::Bool(false) => brand::RED,
                     _ => t.fg,
                 };
-                painter.text(
-                    Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0),
-                    Align2::CENTER_CENTER,
-                    label,
+                // Elided to the block, never spilling out of it.
+                let g = fitted(
+                    painter,
+                    &label,
                     font(11.0 * z),
                     color.gamma_multiply(on_path),
+                    r.width() - 6.0 * z,
                 );
+                let mid = Pos2::new(r.center().x, h.max.y + (r.max.y - h.max.y) / 2.0);
+                painter.galley(mid - g.size() / 2.0, g, color);
             }
         }
+    }
+    // Last, so what the Agent removed shows over whatever took its place.
+    if let Some((old, removed)) = ghosts {
+        draw_ghosts(painter, cam, old, removed);
     }
 }
 
@@ -1685,6 +1838,8 @@ mod value_tests {
     use helmsman_diagram::NodeKind;
     use helmsman_iec::Value;
 
+    use eframe::egui;
+
     use super::{Viewer, value_text};
     use crate::playground::Session;
 
@@ -1754,6 +1909,41 @@ END_PROGRAM
             Some("7"),
             "no declarations known: as the value prints"
         );
+    }
+
+    /// A REAL is an f32 widened; the diagram, the I/O tab and the banners
+    /// show it as the f32 (23.7, not 23.700000762939453).
+    #[test]
+    fn a_real_reads_short_and_a_long_value_is_elided_to_its_block() {
+        let v = viewer();
+        let d = v.diagram();
+        let vars = v.module.program().map(|p| &p.vars);
+        let plus = node(&v, &NodeKind::Op { op: "+".into() });
+        let real = Value::Real(f64::from(23.7f32));
+        assert_eq!(value_text(d, plus, real, vars).as_deref(), Some("23.7"));
+        assert_eq!(super::show(Some(real)), "23.7");
+
+        let ctx = egui::Context::default();
+        let mut width = 0.0;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 300.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            let g = super::fitted(
+                ui.painter(),
+                "0.30000000000000004000",
+                egui::FontId::monospace(11.0),
+                egui::Color32::WHITE,
+                40.0,
+            );
+            width = g.size().x;
+        });
+        out.textures_delta.clear();
+        assert!(width <= 40.5, "{width} pt wide in a 40 pt block");
     }
 }
 

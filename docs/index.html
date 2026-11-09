@@ -118,6 +118,7 @@ header.top .gh:hover{color:var(--yellow)}
       <a href="#connect">Connects to</a>
       <a href="#status">Status</a>
       <a href="#why">Why?</a>
+      <a href="#field">From the field</a>
       <a href="help/">Help</a>
       <a href="helmsman-datasheet.pdf" download="helmsman-datasheet.pdf">Datasheet</a>
       <a href="playground/">Try it</a>
@@ -159,7 +160,7 @@ header.top .gh:hover{color:var(--yellow)}
     <p>Tell Helmsman what the machine should do, in plain language. Drop in a P&amp;ID, an electrical drawing or a photo of the panel and it reads them. The agent drafts the program and you check how it behaves.</p>
     <ol class="rules steps">
       <li><b>Describe</b>State the sequence, the interlocks and the alarms the way you would to a colleague. Attach the drawings.</li>
-      <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see exactly what drives it.</li>
+      <li><b>Validate</b>See the draft as a live diagram and run it against a simulation of your I/O. Tap any output to see exactly what drives it. The agent writes a test for each change it makes, and a failing test stops the deploy.</li>
       <li><b>Approve</b>An engineer signs off with a PIN. The change goes live between scans; every version is kept and can be rolled back.</li>
     </ol>
     <div class="two" style="margin-top:40px">
@@ -185,10 +186,10 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
   <div class="wrap">
     <h2>Standards and interoperability</h2>
     <h3>A pure soft PLC on your network.</h3>
-    <p>Helmsman is only the controller. Field I/O stays in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols.</p>
+    <p>Helmsman is only the controller. Field I/O stays in junction boxes and remote I/O modules such as the Moxa ioLogik, on industrial Ethernet. The controller talks to them, to drives and to the PLCs you already run, over open protocols. It scans the network for devices and looks each one up in a public device library, or reads the vendor's EDS file.</p>
     <ul class="rules">
       <li><b>IEC 61131-3</b>Structured Text, the proven standard, plus PLCopen XML import from other tools.</li>
-      <li><b>EtherNet/IP (CIP)</b>Appears to your existing PLCs as a standard adapter, and reads their tags without ever writing to them.</li>
+      <li><b>EtherNet/IP (CIP)</b>Drives remote I/O over cyclic Class 1 connections. Your existing PLCs see it as a standard adapter, and it reads their tags without ever writing to them.</li>
       <li><b>Modbus TCP</b>Drives remote I/O blocks and devices directly, through a named I/O map.</li>
     </ul>
     <p class="muted" style="margin-top:24px">Ethernet protocols today; others as customers need them.</p>
@@ -206,7 +207,7 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
       <tbody>
         <tr><td>OpENer reference adapter</td><td>EtherNet/IP device under continuous test</td><td><span class="chip ok">verified</span></td></tr>
         <tr><td>Helmsman's own adapter</td><td>Same interoperability suite</td><td><span class="chip ok">verified</span></td></tr>
-        <tr><td>Moxa ioLogik E1213</td><td>Remote I/O over Modbus TCP</td><td><span class="chip pending">bench pending</span></td></tr>
+        <tr><td>Moxa ioLogik E1213</td><td>Remote I/O over EtherNet/IP and Modbus TCP</td><td><span class="chip ok">verified</span></td></tr>
         <tr><td>Rockwell CompactLogix</td><td>Existing PLC, read without writing</td><td><span class="chip pending">bench pending</span></td></tr>
       </tbody>
     </table>
@@ -229,6 +230,24 @@ alarm := s1.alarm <span class="k">OR</span> s2.alarm;
         <p>The idea in one line: focus on what matters and leave the boilerplate to the agent. You are the robot overlord, not the meat puppet.</p>
       </div>
     </div>
+  </div>
+</section>
+
+<section id="field">
+  <div class="wrap">
+    <h2>From the field</h2>
+    <h3>What engineers are tired of</h3>
+    <p>We read years of forum threads, reviews and issue trackers about the major PLC suites and the open-source runtimes. The same complaints come up on every platform. These are the ones Helmsman answers today, each checked against what is built.</p>
+    <ul class="rules">
+      <li><b>A virtual machine per version</b>The controller serves its own editor to a browser. There is no workstation software to install or to keep in step with the firmware.</li>
+      <li><b>Project files you can't compare</b>A project is a folder of plain text: the Structured Text, the I/O map and the settings. Every deploy is kept as a version you can roll back to, with its approver and the time.</li>
+      <li><b>Stopping the machine for a change</b>An approved change is taken between two scans while the other programs keep running, and timers and counters keep their values. You can also stop, run or restart one program on its own.</li>
+      <li><b>Testing that needs the machine</b>Requirement tests run against the program with no hardware connected and give the same result every run. A failing test stops the deploy.</li>
+      <li><b>Licence keys, dongles and trial timers</b>The controller has none of them. Its software is open source under Apache 2.0.</li>
+      <li><b>Default passwords</b>There is no default account or password. Only an engineer's sign-in or PIN can approve a change, and every change goes into an append-only audit log.</li>
+      <li><b>One typo, twenty errors</b>A syntax error is reported once, at its line and column, and the editor marks it where you typed it.</li>
+      <li><b>A cloud in the control path</b>Programs keep scanning when the controller loses its internet connection. Only the agent waits until the connection is back.</li>
+    </ul>
   </div>
 </section>
 

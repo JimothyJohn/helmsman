@@ -27,7 +27,7 @@ cargo run -q -p helmsman-canvas -- --help-tables keyboard > "$out/keyboard.md"
 cargo run -q -p helmsman-canvas -- --help-tables starters > "$out/starters.md"
 
 # Every page, in nav order; the title is the first heading.
-pages="index editor simulation projects box agent keyboard starters"
+pages="index load editor simulation projects box agent keyboard starters"
 nav=""
 for p in $pages; do
     title="$(grep -m1 '^# ' "$out/$p.md" | sed 's/^# //')"

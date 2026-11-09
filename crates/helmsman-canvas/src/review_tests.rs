@@ -32,7 +32,9 @@ use helmsman_plc::store::{ChangeSet, Meta, ModuleFiles, Store};
 use helmsman_plc::{Runtime, SignalTable, Window};
 use serde_json::{Value as Json, json};
 
-use crate::review::{Answer, Call, Delta, Method, Phase, Replay, Request, Review, Target, Why};
+use crate::review::{
+    Answer, Call, Delta, Method, Phase, Replay, Request, Review, SHOWN, Target, Values, Why,
+};
 
 #[test]
 fn explain_rides_the_same_cookie_and_is_refused_without_it() {
@@ -482,6 +484,66 @@ fn refused(p: &Phase) -> (Why, String) {
         Phase::Refused(r) => (r.why, r.error.clone()),
         other => panic!("expected a refusal, got {other:?}"),
     }
+}
+
+#[test]
+fn the_review_shows_the_box_s_preview_of_what_the_deploy_keeps() {
+    let b = Bench::new();
+    let id = b.horn();
+    let mut r = Review::new();
+    settle(&b, &mut r, 0.0);
+    r.open(id);
+    settle(&b, &mut r, 0.0);
+    let v = r
+        .open
+        .as_ref()
+        .unwrap()
+        .values()
+        .expect("the box sent its preview");
+    assert!(v.preview && v.running, "{v:?}");
+    assert_eq!(v.kept, 5, "START, SPEED, LAMP, N and the BLINK timer: {v:?}");
+    assert_eq!(v.reset, [("HORN".to_string(), "new".to_string())]);
+    assert!(v.dropped.is_empty(), "{v:?}");
+    assert_eq!(
+        v.sentence(),
+        "Before you approve: this deploy keeps 5 values, starts HORN at the initial value (new)."
+    );
+}
+
+#[test]
+fn values_name_modules_when_several_and_say_when_nothing_runs() {
+    let many: Vec<String> = (0..40).map(|n| format!("V{n}")).collect();
+    let j = json!({
+        "preview": false,
+        "running": true,
+        "kept": 2,
+        "modules": [
+            { "module": "a", "new": false, "kept": ["X", "Y"], "reset": [{ "name": "COUNT", "why": "type changed" }], "dropped": many },
+            { "module": "b", "new": true, "kept": [], "reset": [], "dropped": [] },
+        ],
+        "summary": "keeps 2 values, resets a.COUNT (type changed), drops a.V0 and 39 more",
+    });
+    let v = Values::parse(&j).unwrap();
+    assert!(!v.preview);
+    assert_eq!(v.reset, [("a.COUNT".to_string(), "type changed".to_string())]);
+    assert_eq!(v.dropped.len(), 40, "all kept; the screen lists {SHOWN}");
+    assert_eq!(v.dropped[0], "a.V0");
+    assert!(
+        v.sentence().starts_with("Applied: this deploy keeps 2 values"),
+        "{}",
+        v.sentence()
+    );
+
+    let none = Values::parse(
+        &json!({ "preview": true, "running": false, "kept": 0, "modules": [],
+        "summary": "nothing running to keep: every value starts at its initial value" }),
+    )
+    .unwrap();
+    assert_eq!(
+        none.sentence(),
+        "Before you approve: nothing is running to keep, so every value starts at its initial value."
+    );
+    assert_eq!(Values::parse(&Json::Null), None, "an older box sends none");
 }
 
 #[test]

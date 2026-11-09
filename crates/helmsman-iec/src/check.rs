@@ -190,6 +190,9 @@ pub struct VarInfo {
     pub off: usize,
     pub section: Section,
     pub constant: bool,
+    /// Declared `RETAIN` (a program's own variables only): kept across a
+    /// restart of the box.
+    pub retain: bool,
     pub loc: Option<Loc>,
 }
 
@@ -394,6 +397,9 @@ pub struct Checked {
     /// Located variables' initial values, written to the image at a cold
     /// start.
     pub loc_init: Vec<(Loc, Ty, Value)>,
+    /// What the checker has to say that does not stop the program, in
+    /// source order.
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// Type of a synthesized expression: known, or a literal still free to take
@@ -484,6 +490,8 @@ struct Ck<'a> {
     /// Initial values of located variables: (where, type, value).
     loc_init: Vec<(Loc, Ty, Value)>,
     diags: Vec<Diagnostic>,
+    /// Shown, not blocking: the program still compiles.
+    warnings: Vec<Diagnostic>,
 }
 
 /// Per-body context.
@@ -496,6 +504,10 @@ struct Scope {
 impl<'a> Ck<'a> {
     fn err(&mut self, pos: Pos, msg: impl Into<String>) {
         self.diags.push(Diagnostic { pos, msg: msg.into() });
+    }
+
+    fn warn(&mut self, pos: Pos, msg: impl Into<String>) {
+        self.warnings.push(Diagnostic { pos, msg: msg.into() });
     }
 
     /// Whether `name` in POU `pou` failed to declare (and was reported).
@@ -598,7 +610,11 @@ impl<'a> Ck<'a> {
                             "STRING" | "WSTRING" => " (STRING is not supported yet)".to_string(),
                             "DATE" | "DT" | "TOD" | "DATE_AND_TIME" | "TIME_OF_DAY" | "LDATE" | "LDT"
                             | "LTOD" | "LTIME" => format!(" ({n} is not supported yet)"),
-                            _ => String::new(),
+                            _ => {
+                                let mut known: Vec<&str> = Ty::names().collect();
+                                known.extend(self.named.keys().map(String::as_str));
+                                crate::suggest::hint(n, known)
+                            }
                         };
                         self.err(*pos, format!("unknown type {n}{hint}"));
                         None
@@ -783,6 +799,7 @@ impl<'a> Ck<'a> {
         let mut init: Vec<Value> = Vec::new();
         let mut temps = Vec::new();
         let mut ok = true;
+        let (mut retained, mut too_big) = (0usize, false);
         // A function's result is slot 0, named after the function.
         if let PouKind::Function(rt) = &src.kind {
             match self.resolve(rt) {
@@ -794,6 +811,7 @@ impl<'a> Ck<'a> {
                         off: 0,
                         section: Section::Output,
                         constant: false,
+                        retain: false,
                         loc: None,
                     });
                     init.push(Value::zero(ty));
@@ -806,6 +824,7 @@ impl<'a> Ck<'a> {
                         off: 0,
                         section: Section::Output,
                         constant: false,
+                        retain: false,
                         loc: None,
                     });
                     init.push(Value::Int(self.enums[e].values[0].1));
@@ -846,6 +865,36 @@ impl<'a> Ck<'a> {
                 self.err(d.pos, format!("{what} is not supported in {pk} yet"));
                 ok = false;
                 continue;
+            }
+            // RETAIN where it is not kept is a warning, not an error: it
+            // was ignored before RETAIN was kept, and a project that
+            // compiled then must compile now.
+            let mut retain = d.retain;
+            if d.retain {
+                if d.constant {
+                    self.err(d.pos, format!("{}: a CONSTANT cannot be RETAIN", d.name));
+                    ok = false;
+                    continue;
+                }
+                let not_kept = match (kind, d.section) {
+                    (PouType::Function, _) => {
+                        Some("a FUNCTION keeps nothing between calls, so RETAIN in it is not kept")
+                    }
+                    (PouType::FunctionBlock, _) => Some(
+                        "RETAIN inside a function block is not kept across a restart yet: declare the instance RETAIN in the program",
+                    ),
+                    (_, Section::Temp) => {
+                        Some("VAR_TEMP starts fresh on every scan, so RETAIN on it is not kept")
+                    }
+                    _ if d.at.is_some() => {
+                        Some("a located variable lives in the process image, so RETAIN on it is not kept")
+                    }
+                    _ => None,
+                };
+                if let Some(m) = not_kept {
+                    self.warn(d.pos, format!("{}: {m}", d.name));
+                    retain = false;
+                }
             }
             if vars.iter().any(|v| v.name == d.name) {
                 self.err(d.pos, format!("{} is declared twice", d.name));
@@ -953,6 +1002,7 @@ impl<'a> Ck<'a> {
                             off: 0,
                             section: d.section,
                             constant: false,
+                            retain: false,
                             loc: Some(loc),
                         });
                     }
@@ -992,6 +1042,21 @@ impl<'a> Ck<'a> {
                 }
             }
             let len = v.len();
+            if retain {
+                retained += len;
+                if retained > crate::MAX_RETAIN && !too_big {
+                    too_big = true;
+                    self.err(
+                        d.pos,
+                        format!(
+                            "{}: the RETAIN variables take {retained} values or more; a module keeps at most {} across a restart",
+                            d.name,
+                            crate::MAX_RETAIN
+                        ),
+                    );
+                    ok = false;
+                }
+            }
             init.extend(v);
             if d.section == Section::Temp {
                 temps.push((off, len));
@@ -1002,6 +1067,7 @@ impl<'a> Ck<'a> {
                 off,
                 section: d.section,
                 constant: d.constant,
+                retain,
                 loc: None,
             });
         }
@@ -1099,18 +1165,6 @@ impl<'a> Ck<'a> {
         }
     }
 
-    /// Whether an integer expression's value is carried wider than its
-    /// type (a binary arithmetic result, or a negation of one).
-    fn widened(ex: &Ex) -> bool {
-        match ex {
-            Ex::Bin(BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod, _, _, t) => {
-                t.arith() != *t
-            }
-            Ex::Un(UnOp::Neg, inner, _) => Self::widened(inner),
-            _ => false,
-        }
-    }
-
     fn is_const(ex: &Ex) -> bool {
         match ex {
             Ex::Const(_) => true,
@@ -1133,9 +1187,14 @@ impl<'a> Ck<'a> {
                         return None;
                     }
                     let hint = if self.pou_index.contains_key(name) {
-                        " (a function is called with parentheses)"
+                        " (a function is called with parentheses)".to_string()
                     } else {
-                        ""
+                        let near = crate::suggest::hint(name, sc.vars.keys().map(String::as_str));
+                        if near.is_empty() {
+                            " (declare it in a VAR block)".to_string()
+                        } else {
+                            near
+                        }
                     };
                     self.err(e.pos, format!("undeclared variable {name}{hint}"));
                     return None;
@@ -1713,10 +1772,12 @@ impl<'a> Ck<'a> {
             (UnOp::Neg, T::IntLit(v)) => Some((Ex::Const(Value::Int(-v)), T::IntLit(-v))),
             (UnOp::Neg, T::RealLit(v)) => Some((Ex::Const(Value::Real(-v)), T::RealLit(-v))),
             (UnOp::Neg, T::Known(Type::Elem(ty))) if ty.is_signed_int() || ty.is_real() || ty == Ty::Time => {
-                // Negation works at its operand's width: a variable's own,
-                // or the widened width of an arithmetic result (as ruSTy).
-                let width = if Self::widened(&x) { ty.arith() } else { ty };
-                Some((Ex::Un(op, Box::new(x), width), t))
+                // Negation is carried at the arithmetic width, like `+ - * /`
+                // (SINT and INT in DINT, as ruSTy 1.0.8, rusty#2016), so the
+                // type's minimum negates to its positive value until an
+                // assignment truncates it (tests/st.rs
+                // `negation_of_small_ints_is_dint_wide`).
+                Some((Ex::Un(op, Box::new(x), ty.arith()), t))
             }
             (UnOp::Not, T::Known(Type::Elem(ty))) if ty.is_bit() => Some((Ex::Un(op, Box::new(x), ty), t)),
             (UnOp::Not, T::IntLit(_)) if want.and_then(Self::rt).is_some_and(Ty::is_bitstring) => {
@@ -1782,7 +1843,7 @@ impl<'a> Ck<'a> {
             let rt = self.pous[p].vars[0].ty;
             return Some((Ex::Call(Box::new(call)), T::Known(rt)));
         }
-        self.builtin(name, args, want, pos, sc)
+        self.builtin(name, args, want, pos, sc, callee.pos)
     }
 
     fn positional(&mut self, name: &str, args: &[Arg], pos: Pos) -> bool {
@@ -1797,9 +1858,18 @@ impl<'a> Ck<'a> {
         true
     }
 
-    /// Standard functions and conversions.
+    /// Standard functions and conversions. `at` is where the function's
+    /// name is, for an unknown one.
     #[allow(clippy::too_many_lines)]
-    fn builtin(&mut self, name: &str, args: &[Arg], want: Option<Type>, pos: Pos, sc: &Scope) -> O<(Ex, T)> {
+    fn builtin(
+        &mut self,
+        name: &str,
+        args: &[Arg],
+        want: Option<Type>,
+        pos: Pos,
+        sc: &Scope,
+        at: Pos,
+    ) -> O<(Ex, T)> {
         if let Some(conv) = self.conversion(name, args, pos, sc) {
             return conv;
         }
@@ -1822,7 +1892,14 @@ impl<'a> Ck<'a> {
         }
         let Some(&(_, b)) = BUILTINS.iter().find(|(n, _)| *n == name) else {
             if !self.was_dropped(sc.pou, name) {
-                self.err(pos, format!("unknown function {name}"));
+                let functions = self
+                    .pou_index
+                    .iter()
+                    .filter(|&(_, &p)| self.pous[p].kind == PouType::Function)
+                    .map(|(n, _)| n.as_str());
+                let known = BUILTINS.iter().map(|(n, _)| *n).chain(["EXPT", "MOVE"]);
+                let hint = crate::suggest::hint(name, known.chain(functions));
+                self.err(at, format!("unknown function {name}{hint}"));
             }
             return None;
         };
@@ -2520,6 +2597,7 @@ pub fn check(
         dropped: BTreeMap::new(),
         loc_init: Vec::new(),
         diags: Vec::new(),
+        warnings: Vec::new(),
     };
     ck.register_types(&library.types);
     ck.register_types(&user.types);
@@ -2618,6 +2696,11 @@ pub fn check(
             library: ck.srcs.iter().take_while(|s| s.system).count(),
             mem_init,
             loc_init: ck.loc_init,
+            warnings: {
+                ck.warnings.sort_by_key(|d| d.pos);
+                ck.warnings.dedup();
+                ck.warnings
+            },
         }),
         _ => {
             ck.diags.sort_by_key(|d| d.pos);

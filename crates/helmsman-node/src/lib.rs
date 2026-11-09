@@ -7,9 +7,19 @@
 
 extern crate alloc;
 
+#[cfg(feature = "api")]
+pub mod beacon;
 #[cfg(feature = "net")]
 pub mod board;
 #[cfg(feature = "net")]
 pub mod ethernet;
+#[cfg(feature = "api")]
+pub mod flash;
+#[cfg(feature = "api")]
+pub mod io;
 #[cfg(feature = "net")]
 pub mod modbus;
+#[cfg(feature = "api")]
+pub mod server;
+#[cfg(feature = "api")]
+pub mod state;

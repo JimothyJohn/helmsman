@@ -4,7 +4,7 @@
 //!
 //! Runs when `HELMSMAN_RUSTY` holds the command that reads ST on stdin,
 //! compiles and runs it with ruSTy, e.g.
-//! `HELMSMAN_RUSTY="docker run --rm -i helmsman/rusty:1.0.7"`
+//! `HELMSMAN_RUSTY="docker run --rm -i helmsman/rusty:1.0.8"`
 //! (`make rusty-image` builds that image from docker/rusty/).
 //!
 //! ruSTy is only executed, never linked: it is a dev-time oracle.
@@ -353,11 +353,12 @@ fn corpus() -> Vec<Case> {
     ]
 }
 
-/// ruSTy 1.0.7 compares UDINT and ULINT as signed: `ULINT_max > 1` is
-/// FALSE there. Ours is right; this pins both facts so a ruSTy fix (and the
-/// generator workaround in `cond`) can be noticed and dropped.
+/// ruSTy 1.0.7 compared UDINT and ULINT as signed (`ULINT_max > 1` was
+/// FALSE); 1.0.8 carries the fix (PLC-lang/rusty#2015, backported in #2016).
+/// Pinned so a regression on either side shows up here first, before the
+/// random sweep trips over it.
 #[test]
-fn rusty_unsigned_compare_bug() {
+fn rusty_compares_unsigned_as_unsigned() {
     let Some(cmd) = rusty() else { return };
     let c = case(
         "",
@@ -373,8 +374,38 @@ fn rusty_unsigned_compare_bug() {
     let theirs = run_rusty(&cmd, std::slice::from_ref(&c));
     assert_eq!(
         theirs[0][2..],
-        ["0".to_string(), "0".to_string()],
-        "ruSTy fixed its unsigned compare: drop the workaround"
+        ["1".to_string(), "1".to_string()],
+        "ruSTy compares UDINT/ULINT as signed again"
+    );
+}
+
+/// ruSTy 1.0.8 negates a SINT or INT variable or literal in DINT (rusty#2016),
+/// so `-v` on the type's minimum is +128 / +32768 there, and the value
+/// shows in a division before the assignment truncates it. Ours did the
+/// same only for an arithmetic result and wrapped a plain variable's
+/// negation in its own width; since the TODO.md card
+/// `rusty-negation-width` (Nick, 2026-11-08) both sides agree. Pinned so
+/// either side moving points here.
+#[test]
+fn small_int_negation_is_dint_wide_on_both_sides() {
+    let Some(cmd) = rusty() else { return };
+    let c = case(
+        "",
+        vec![
+            var_init("s", "SINT", "-128"),
+            var_init("i", "INT", "-32768"),
+            var("qs", "SINT"),
+            var("qi", "INT"),
+        ],
+        "qs := (-s) / SINT#2; qi := (-i) / INT#2;",
+    );
+    let want = ["64".to_string(), "16384".to_string()];
+    assert_eq!(ours(&c).unwrap()[2..], want, "ours negates SINT/INT in DINT");
+    let theirs = run_rusty(&cmd, std::slice::from_ref(&c));
+    assert_eq!(
+        theirs[0][2..],
+        want,
+        "ruSTy negates SINT/INT in their own width again"
     );
 }
 
@@ -435,15 +466,9 @@ fn lit(rng: &mut Rng, ty: &str, lo: i128, hi: i128) -> String {
     format!("{ty}#{}", literal(rng, lo, hi))
 }
 
-/// A condition involving a `ty` value. ruSTy 1.0.7 compares UDINT and ULINT
-/// as signed (see `rusty_unsigned_compare_bug`), so conditions on those
-/// types test a signed variable instead.
+/// A condition comparing the `ty` variable with a literal of its own type.
 fn cond(rng: &mut Rng, ty: &str, lo: i128, hi: i128) -> String {
-    if ty == "UDINT" || ty == "ULINT" {
-        format!("v_dint < {}", lit(rng, "DINT", -2_147_483_648, 2_147_483_647))
-    } else {
-        format!("v_{} < {}", ty.to_lowercase(), lit(rng, ty, lo, hi))
-    }
+    format!("v_{} < {}", ty.to_lowercase(), lit(rng, ty, lo, hi))
 }
 
 /// A random integer expression of type `ty` over `vars` (all of the INTS).

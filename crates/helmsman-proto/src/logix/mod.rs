@@ -13,11 +13,13 @@
 //! Not a product of, or endorsed by, the controller's vendor or ODVA.
 
 pub mod path;
+#[cfg(feature = "std")]
 pub mod reader;
 pub mod types;
 pub mod wire;
 
 pub use path::{Element, PathError, TagPath};
+#[cfg(feature = "std")]
 pub use reader::{Error, TagReader};
 pub use types::{AtomicType, DataType, TagData, Value};
 pub use wire::{ReadRequest, SYMBOL_CLASS, Symbol};

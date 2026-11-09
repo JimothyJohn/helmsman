@@ -32,7 +32,8 @@
 //! one win and the other refused as stale, never half of each. Every
 //! outcome is in the audit log with the role, the tier and both snapshot
 //! ids; an apply that acts writes an entry before (so a full log stops it)
-//! and one after.
+//! and one after, which (like the answer's `state`) says what the swap did
+//! to the running values: kept, reset, dropped ([`super::carry`]).
 
 use std::fmt::Write as _;
 use std::sync::{Mutex, PoisonError};
@@ -41,6 +42,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Value as Json, json};
 
+use super::carry;
 use super::store::Stored;
 use super::swap::{Plant, Reloaded, SwapHandle, compile_set};
 use super::{Ctx, Note, Request, Response, audit_full, record, wall};
@@ -753,6 +755,9 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         }
     };
     let loaded_drivers = layout.as_ref().map(|l| l.drivers.clone());
+    // What the swap does to state is told against these (`carry`).
+    let before = carry::names(&old);
+    let after: Vec<String> = new.iter().map(|m| m.name.clone()).collect();
     if let Some(l) = &layout {
         let fits = crate::Runtime::with_signals(appr.plant.i_len, appr.plant.q_len, new.clone(), &l.table);
         if let Err(errs) = fits {
@@ -781,13 +786,20 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         return audit_full();
     }
     let landed = match layout {
-        None => appr.swap.run(new, target.clone()).map(|c| (c, None)),
+        None => appr
+            .swap
+            .run(new, target.clone())
+            .map(|s| (s.catalog, s.carry, None)),
         Some(l) => appr.swap.reload(new, target.clone(), l).map(|r| {
             let Reloaded { swapped, links } = r;
-            (swapped.catalog, Some((swapped.table, swapped.record, links)))
+            (
+                swapped.catalog,
+                swapped.carry,
+                Some((swapped.table, swapped.record, links)),
+            )
         }),
     };
-    let (catalog, reloaded) = match landed {
+    let (catalog, carried, reloaded) = match landed {
         Ok(x) => x,
         Err(e) => {
             let why = e.to_string();
@@ -860,8 +872,10 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             "drivers": drivers_json(&found),
         })
     });
+    let state = carry::describe(false, &before, &after, &carried);
     if let Some(mut p) = proposal {
         p.json["status"] = json!("applied");
+        p.json["applied_state"] = state.clone();
         p.json["applied_by"] = json!(role.as_str());
         if let Some(user) = by.person() {
             p.json["approved_by"] = json!(user);
@@ -869,7 +883,10 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
         ctx.box_.proposals.update(p);
     }
     let undo = format!("/api/snapshots/{base}/rollback");
-    let mut detail = format!("{label}: applied ({tier}) by {who}, {base} -> {content}");
+    let mut detail = format!(
+        "{label}: applied ({tier}) by {who}, {base} -> {content}; state: {}",
+        state["summary"].as_str().unwrap_or_default()
+    );
     if let Some(r) = &reload {
         let _ = write!(detail, "; I/O map or calendar reloaded");
         for n in r["notes"]
@@ -895,6 +912,7 @@ pub(super) fn apply(req: &Request, ctx: &Ctx, target_ref: Target<'_>) -> Respons
             "undo": undo,
             "reload": reload,
             "project": project,
+            "state": state,
         }),
     )
 }

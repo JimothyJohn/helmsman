@@ -34,7 +34,11 @@ this; change it here first when a decision changes.
   either side flips it), Sign in on a box, and ? in the very corner (help
   on the site). Proposals and "Simulate in this browser / Back to this
   box" are View items. A fault, a deploy under way or a stale file shows
-  on a line under the header only while it lasts.
+  on a line under the header only while it lasts. Below the narrow width
+  (a phone) the wordmark, the state and the "simulation" tag are hidden,
+  the four menus fold into one Menu button with File, Edit, View and Help
+  as submenus, and the project's name is truncated, so the two groups
+  never overlap (2026-11-08).
 - **Glyphs over the diagram's top-right corner:** run/stop, step and
   restart (the simulation), then save, upload, download. Strokes in the
   brand colours; each tells its key on hover.
@@ -46,6 +50,9 @@ this; change it here first when a decision changes.
   with the counts on the filters: info, warnings,
   errors, with the error count on the tab), so a fault or a refused
   deploy is still there to read after the line under the header has gone.
+- **Panes collapse** from their chevron, their Alt key, or a double click
+  on any of their tabs (Nick, 2026-11-07), on the left pane and the side
+  panel alike.
 - **Left pane, collapsible, tabs (200 pt):** Files (the projects, the
   open one's files, the program tree; a right-click on a project offers
   Copy, Rename and Delete, on a file Copy, Paste, Duplicate, Rename and
@@ -55,7 +62,9 @@ this; change it here first when a decision changes.
   deletes the row last clicked, a double click on a file opens the Code
   tab, every delete is confirmed in a modal at the screen's centre, and
   the earlier iterations of the program, `vN.st`, fold under one
-  "earlier (n)" row with `main.st` marked as the one running),
+  "earlier (n)" row with `main.st` marked as the one running; the running
+  program, open, carries a → that deploys it again with the latest edits,
+  as does the Code tab's Structured Text header, Nick 2026-11-08),
   Devices (Nick, 2026-11-02: the I/O map's devices as a tree like the file
   system's, each with its points under it, live values and the link's
   state; on a box the open project's `io.map`, else the map the box runs;
@@ -95,55 +104,47 @@ this; change it here first when a decision changes.
   editor). One width
   for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
   pane on its tab, or shut it when that tab shows.
-- **Right panel, collapsible, tabs (236 pt since the third tab):** I/O
-  (values; inputs the diagram does not show), Requirements (Nick, 2026-11-05: a list of requirements in plain words.
-  Type one and Add: the agent writes the test behind it, a
-  `test_NAME.st` PROGRAM whose first comment is the requirement, and runs
-  it; in the simulation through the page's Agent route, on a box through
-  `POST /api/projects/{p}/requirements`, where the box's agent writes and
-  checks it. Each row is green (passing), red (failing, and why) or grey
-  (no test yet: no agent was reachable, or it wrote none); a row opens to
-  its test with Edit test and Delete. Test files stay out of the Files
-  list. The page runs the tests after every build change and before
-  Deploy and "Use this code", a box when a project opens, after each save
-  and before a deploy; a red one refuses both, naming the test, a grey one
-  does not), Agent (Nick,
-  2026-11-01: the conversation is pages, ‹ › walk them, Delete drops
-  one, every kept page goes to the model as context each time, and the
-  pages live with the project as `agent.md`, so a reload or a download
-  keeps them; an earlier page's code has its own Use this code. On a box
-  (card `agent-on-box`, first cut) the Agent tab talks to the agent the
-  box runs through its relay, `POST /api/chat` with the session cookie:
-  the reply streams in with each tool it ran, ✓ or ✗ and a summary, and
-  each change it stored as a proposal with a Review #n button that opens
-  it under Proposals, where it is replayed, approved or left like any
-  other; nothing on the tab applies a change. A line on top says whether
-  the agent is online, offline (a message is then read by rule: a param
-  edit becomes a proposal, nothing else) or not configured; signed out,
-  Send stays off. Stop ends the answer on the page; New conversation
-  starts one of its own on the box. Pages, iterations and the edit scope
-  are the page's alone for now. The agent edits only what is in focus (Nick 2026-11-01,
+- **Right panel, collapsible, tabs (236 pt):** I/O
+  (values; inputs the diagram does not show) and Agent. (The Requirements
+  tab of 2026-11-05, a list of requirements in plain words with the agent
+  writing the test behind each, is archived since 2026-11-08 under
+  `crates/helmsman-canvas/archive/requirements/`: the scenarios the Agent
+  writes with each change are the tests. `test_NAME.st` files still run,
+  after every build change and before Deploy and "Use this code" in the
+  page, when a project opens, after each save and before a deploy on a
+  box; a red one refuses both, naming the test. Test files stay out of
+  the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
+  same on the page and on a box: no conversation. The tab is an
+  instruction box, Send or Stop, Undo, and after an answer a status line
+  and the Agent's one-sentence reason. Send updates the open file: one
+  request carries the whole file in its scope, the program and its
+  errors, and the last 5 instructions carried out on that file, read back
+  from its History revisions. `verify::check` runs the answer on a copy
+  with its scenarios and the requirement tests; a red one goes back with
+  what failed, up to `verify::RETRIES` times, and if it is still red
+  nothing is written and the tab says why. Green is written into the file
+  as one revision whose History entry records the instruction, the
+  reason, the scenarios and the failed attempts; the scenarios are kept
+  as test files, and Undo restores the revision before. On a box (card
+  `agent-on-box`) the same message goes to `POST /api/chat` with the
+  session cookie, a new conversation per instruction; the change is a
+  PUT, Undo the box's restore, and a proposal the box stores instead is
+  offered for review under Proposals with nothing written. A line on top
+  says whether the box's agent is online, offline or not configured;
+  signed out, Send stays off. The agent edits only what is in focus (Nick 2026-11-01,
   interview 2026-11-02, card `agent-scoped-edits`): the open file by
   default, the lines selected in the Code tab or the block picked in the
   diagram (its statement, while the diagram is of the editor's text) when
-  there is one; a line above the question says which ("Editing: main.st",
+  there is one; a line above the instruction says which ("Editing: main.st",
   "Editing: lines 12–30 of main.st", "Editing: block Motor1") and by which
   rule, with Whole file to drop the selection or pick. The scope goes to
-  the model in an `<edit_scope>` envelope and back with the page; Use
-  this code takes the answer into that scope only (`scope.rs`,
-  `apply`): another file, lines outside the selection, a block's
-  neighbour, several code blocks, the page's envelope markers or no
-  change at all are refused, saying what it tried to touch, and nothing
-  outside the scope changes, byte for byte. A taken change must keep the
-  requirement tests green; unsaved edits are saved first, then the
-  change is one revision with its page. A whole `main.st` with its
-  PROGRAM lands as an iteration; lines and blocks are edited in place.
-  With a built-in example open (read-only) the scope is a new project:
-  Use this code on a PROGRAM asks for the program's name once per
-  conversation; the answers after it land in that project with the
-  newest as `main.st` and the file it replaced kept as the next `vN.st`,
-  serially, however many; `vN.st` is never built, and past the project's
-  size the oldest go first). On a Pi the Trend opens with
+  the model in an `<edit_scope>` envelope (`scope.rs`, `apply`): another
+  file, lines outside the selection, a block's neighbour, several code
+  blocks, the envelope markers or no change at all are refused, saying
+  what it tried to touch, and nothing outside the scope changes, byte for
+  byte. With a built-in example open (read-only) the scope is a new
+  project: the first answer asks for the program's name in a popup
+  ("Use this code") and lands in that project as `main.st`). On a Pi the Trend opens with
   the box's history of each pinned signal (the last 10 minutes), then
   streams; pins are the signed-in person's, kept by the box across
   restarts (history is not), or the browser's when signed out.
@@ -189,7 +190,8 @@ this; change it here first when a decision changes.
   **Deploy** saves first, compiles the open project, records a snapshot in
   the store (history and rollback keep working) and hot-swaps it in
   between scans; compile errors list file and line, and a click goes
-  there.
+  there. A revision's diff and a proposal's source diff draw as GitHub
+  does: `+` on a green tint, `−` on a red tint, the row the pane's width.
 - **Who:** only an engineer login edits, saves, deploys or forces. Anyone
   else watches: the ST is read-only and the write controls are disabled,
   saying why. Sign in and out from the header.
@@ -222,6 +224,12 @@ CODESYS's default keys where the browser leaves them alone (its
 "Shortcuts" help page, checked 2026-11-01); nothing on a key the browser
 owns (F5 and Ctrl+R reload, F11 goes full screen, Ctrl+F5 reloads hard).
 The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
+Save, Deploy, Upload, Download, Force, Release all, Undo, Redo, Go to
+definition, Cross references, the step chords and Breakpoint act only on
+the Editor screen; on the Monitor or Proposals they do nothing (a Ctrl D
+there used to deploy the hidden project). Ctrl Z and Ctrl Y go to the
+focused text field alone, never to the editor's history as well
+(2026-11-08).
 
 | key | does | CODESYS command on that key |
 |---|---|---|
@@ -275,8 +283,7 @@ Each menu item prints its key. Reserved, not built (TODO card
 As built (step 3): a group per PROGRAM (a module on a box), each with its
 status tile (RUNNING, FAULTED with the fault, HELD, STOPPED; the scan
 period and count only while an engineer is signed in and this browser's
-"Scan detail" is on, kept with the Editor's layout; nothing is measured
-box-side), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
+"Scan detail" is on, kept with the Editor's layout), a tile of the PROGRAM's own outputs (`VAR_OUTPUT`s
 and located `%Q` variables), then a tile per user function block
 instance in declaration order (standard blocks such as TON are not
 tiles). A BOOL output is a lamp (TRUE green, FALSE red; card
@@ -285,6 +292,16 @@ Editor's diagram at the level shown. Stale data is never a colour: a
 program with no new scan for 3 s, or every program while the box is out
 of reach, goes grey with "stale" and the age, under a red NO DATA banner
 when the box itself is the problem; a stopped simulation is grey too.
+
+Scan load (card `scan-stats`): on a box, "Scan detail" also puts three
+lines on each status tile, each with a tooltip on what it means and
+what is normal: the scan time (average and peak over the module's last
+1000 scans; the tooltip adds the p99 and the shortest), the jitter (how
+late each scan started after its deadline, the same way), and the
+overruns with how long ago the last one was. An overrun in the last
+minute shows on the tile for everyone, in yellow, Scan detail or not.
+The simulation runs in the page on no real clock and shows none of
+these.
 Phones (under 600 points wide), `?monitor` and the old `?andon` open on
 it; the header switches either way. Tiles are at least a finger wide,
 one column on a phone, and grow with the screen up to 4K.

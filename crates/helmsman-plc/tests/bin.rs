@@ -1085,6 +1085,54 @@ fn the_api_serves_the_running_box_and_its_token_is_printed_once() {
     assert!(!rest.contains(&token), "{rest}");
 }
 
+/// The box's scan load on `/api/modules`: execution time and start
+/// lateness in µs over the newest scans, ordered and moving. Magnitudes
+/// are not asserted: the suite runs six copies at once.
+#[test]
+fn the_api_reports_each_modules_scan_time_and_lateness() {
+    let state = state_dir();
+    let (plc, api, _) = spawn_api(&state);
+    let module = || -> serde_json::Value {
+        let raw = http_get(api, "/api/modules");
+        let body = raw.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+        serde_json::from_str::<serde_json::Value>(body).unwrap_or_default()[0].clone()
+    };
+    // A box's reads lag a publish tick: wait for a window, then for it to grow.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut m = module();
+    while m["timing"]["window"].as_u64().unwrap_or(0) < 2 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        m = module();
+    }
+    let first = m["timing"]["window"].as_u64().unwrap_or(0);
+    assert!(first >= 2, "{m}");
+    for key in ["exec_us", "late_us"] {
+        let s = &m["timing"][key];
+        let f = |k: &str| s[k].as_f64().unwrap_or_else(|| panic!("{key}.{k}: {m}"));
+        let (min, mean, max, p99) = (f("min"), f("mean"), f("max"), f("p99"));
+        assert!(min >= 0.0 && min <= mean && mean <= max, "{key}: {m}");
+        assert!(min <= p99 && p99 <= max, "{key}: {m}");
+    }
+    assert!(m["stats"]["overruns"].as_u64().is_some(), "{m}");
+    let ago = &m["stats"]["last_overrun_ms_ago"];
+    assert!(
+        ago.is_null() == (m["stats"]["overruns"] == 0) && (ago.is_null() || ago.as_u64().is_some()),
+        "{m}"
+    );
+    let scans = m["stats"]["scans"].as_u64().unwrap_or(0);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while m["stats"]["scans"].as_u64().unwrap_or(0) <= scans && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        m = module();
+    }
+    let window = m["timing"]["window"].as_u64().unwrap_or(0);
+    assert!(
+        m["stats"]["scans"].as_u64().unwrap_or(0) > scans && window >= first && window <= 1000,
+        "the counts move and the window holds at most 1000 scans: {m}"
+    );
+    drop(plc);
+}
+
 #[test]
 fn a_taken_api_port_stops_the_plc_with_a_message() {
     let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1351,8 +1399,9 @@ fn the_retired_screen_flag_is_refused_with_the_reason() {
 
 /// A box asks the relay for agent v7 (v6's tools with strict schemas the
 /// model API takes; v3 to v6 are refused there), explain-v2 (read-only
-/// tools, floor language) and tests-v1 (the requirement route's one
-/// tool, `submit_test`) unless told otherwise.
+/// tools, floor language), tests-v1 (the requirement route's one
+/// tool, `submit_test`) and helmsman/help-v1 (Help mode's one tool,
+/// `submit_issue`; not served by the relay yet) unless told otherwise.
 #[test]
 fn the_default_agent_versions_are_the_ones_the_relay_serves() {
     let out = plc().arg("--help").output().unwrap();
@@ -1360,6 +1409,7 @@ fn the_default_agent_versions_are_the_ones_the_relay_serves() {
     assert!(usage.contains("(default v7)"), "{usage}");
     assert!(usage.contains("default explain-v2"), "{usage}");
     assert!(usage.contains("default tests-v1"), "{usage}");
+    assert!(usage.contains("default helmsman/help-v1"), "{usage}");
 }
 
 /// A map naming `wasm:NAME` boots on `<state-dir>/drivers/NAME.wasm`, with

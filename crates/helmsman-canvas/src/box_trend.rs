@@ -19,7 +19,7 @@ use serde_json::{Value as Json, json};
 use crate::box_projects::{Answer, PCall, PReq};
 use crate::editor::Chrome;
 use crate::playground::nice_range;
-use crate::playground_view::{scale_labels, window_slider};
+use crate::playground_view::{lane_handles, scale_labels, window_slider};
 use crate::remote::{BoxState, segment};
 use crate::review::Session;
 use crate::sim_projects::Storage;
@@ -90,6 +90,8 @@ pub struct BoxTrend {
     /// Page time of the last history ask.
     asked: Option<f64>,
     seq: Option<u64>,
+    /// The box's restarts seen so far ([`BoxState::epoch`]).
+    epoch: u64,
     queue: Vec<PReq>,
 }
 
@@ -109,13 +111,14 @@ impl BoxTrend {
             pins: Vec::new(),
             series: BTreeMap::new(),
             now_ms: 0,
-            window_ms: WINDOW_MS,
+            window_ms: crate::playground::TREND_MS,
             notice: None,
             problem: None,
             store,
             loaded: None,
             asked: None,
             seq: None,
+            epoch: 0,
             queue: Vec::new(),
         }
     }
@@ -171,6 +174,14 @@ impl BoxTrend {
                 self.ask(now);
             }
         }
+        if state.epoch() != self.epoch {
+            // The box restarted: its clock starts again, so what was drawn
+            // (on the old one) would interleave with the new.
+            self.epoch = state.epoch();
+            self.series.clear();
+            self.now_ms = 0;
+            self.ask(now);
+        }
         if self.asked.is_some_and(|a| now - a >= RENEW_S) {
             self.ask(now);
         }
@@ -207,6 +218,26 @@ impl BoxTrend {
         } else {
             return;
         }
+        self.keep_pins(session);
+        self.ask(now);
+    }
+
+    /// Moves the pin in lane `from` to lane `to`, the others closing up,
+    /// and keeps the new order as [`toggle`](Self::toggle) keeps a pin.
+    /// The history is per signal, so nothing is asked again.
+    pub fn move_pin(&mut self, from: usize, to: usize, session: Option<&Session>) {
+        let n = self.pins.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        let p = self.pins.remove(from);
+        self.pins.insert(to, p);
+        self.keep_pins(session);
+    }
+
+    /// Keeps the pins, in order: on the box for a person signed in, in
+    /// this browser otherwise.
+    fn keep_pins(&mut self, session: Option<&Session>) {
         if session.is_some() {
             self.queue.push(PReq::json(
                 PCall::SavePins,
@@ -217,7 +248,6 @@ impl BoxTrend {
         } else if let Err(e) = self.store.save(&json!(self.pins).to_string()) {
             self.problem = Some(format!("this browser does not keep pins ({e})"));
         }
-        self.ask(now);
     }
 
     /// Takes in an answer to one of this tab's calls.
@@ -319,10 +349,15 @@ impl BoxTrend {
         }
         window_slider(ui, chrome, &mut self.window_ms);
         ui.add_space(6.0);
-        self.chart(ui);
+        let plot = self.chart(ui);
+        if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.pins) {
+            self.move_pin(from, to, session);
+        }
     }
 
-    fn chart(&self, ui: &mut egui::Ui) {
+    /// Draws the chart; returns the rect it filled (the lanes' handles go
+    /// over it).
+    fn chart(&self, ui: &mut egui::Ui) -> egui::Rect {
         let t = theme(ui);
         let rect = ui.available_rect_before_wrap();
         ui.allocate_rect(rect, Sense::hover());
@@ -336,7 +371,7 @@ impl BoxTrend {
                 FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );
-            return;
+            return rect;
         }
         let end = self.now_ms;
         let window = self.window_ms.max(1);
@@ -373,7 +408,7 @@ impl BoxTrend {
                 format!(
                     "{}\n{}",
                     name.to_ascii_lowercase(),
-                    last.map_or("–".into(), |v| format!("{v}"))
+                    last.map_or("–".into(), |v| Value::Real(v).to_string())
                 ),
                 FontId::monospace(crate::theme::MIN_TEXT),
                 color,
@@ -409,6 +444,7 @@ impl BoxTrend {
                 painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
             }
         }
+        rect
     }
 }
 
@@ -480,6 +516,41 @@ mod tests {
         assert_eq!(t.poll().len(), 1);
     }
 
+    /// The values stream's `at_ms` is the box's clock since its process
+    /// started: after a restart it is small again, and a series that kept
+    /// the old (larger) times would drop every new point.
+    #[test]
+    fn a_box_restart_starts_the_trend_over() {
+        use crate::remote::{Msg, Stream};
+        let mut t = BoxTrend::new(Box::new(MemStorage(Some(r#"["lamp"]"#.into()))));
+        let mut s = BoxState::new();
+        let ev = |seq: u64, at: u64| {
+            Msg::Event(
+                Stream::Values,
+                "values".into(),
+                json!({ "seq": seq, "at_ms": at, "modules": [],
+                        "signals": [{ "name": "lamp", "dir": "out", "value": true, "quality": "good" }] })
+                .to_string(),
+            )
+        };
+        t.step(None, &s, 0.0);
+        t.poll();
+        for (k, at) in [(100, 600_000), (101, 600_100)] {
+            s.apply(ev(k, at), 1.0);
+            t.step(None, &s, 1.0);
+        }
+        assert_eq!(t.series["lamp"].last(), Some(&(600_100, 1.0)));
+        // The box restarts; its clock is at 200 ms.
+        s.apply(ev(1, 200), 2.0);
+        t.step(None, &s, 2.0);
+        assert_eq!(t.series["lamp"], [(200, 1.0)], "the old clock's points are void");
+        assert_eq!(t.now_ms, 200);
+        assert_eq!(t.poll().len(), 1, "the box's history is asked for again");
+        s.apply(ev(2, 300), 2.1);
+        t.step(None, &s, 2.1);
+        assert_eq!(t.series["lamp"], [(200, 1.0), (300, 1.0)], "and it extends");
+    }
+
     #[test]
     fn at_most_pins_signals_and_garbage_pins_are_none() {
         let mut t = BoxTrend::new(Box::new(MemStorage(Some("{not json".into()))));
@@ -491,5 +562,70 @@ mod tests {
         assert_eq!(t.pins.len(), PINS);
         t.toggle("s0", None, 0.0);
         assert_eq!(t.pins.len(), PINS - 1);
+    }
+
+    /// Nick, 2026-11-07: the lanes reorder. The new order is kept where the
+    /// pins are kept, the history stays, and a bad lane moves nothing.
+    #[test]
+    fn moving_a_pin_keeps_the_new_order_for_the_person_and_the_browser() {
+        let me = Session {
+            user: Some("nick".into()),
+            role: "engineer".into(),
+        };
+        let mut t = BoxTrend::new(Box::new(MemStorage(Some(r#"["a","b","c"]"#.into()))));
+        t.step(None, &BoxState::new(), 0.0);
+        t.series.insert("a".into(), vec![(1, 1.0)]);
+        t.poll();
+        t.move_pin(0, 2, None);
+        assert_eq!(t.pins, ["b", "c", "a"]);
+        assert!(
+            t.poll().is_empty(),
+            "the history is per signal: nothing asked again"
+        );
+        assert_eq!(t.series["a"], [(1, 1.0)]);
+        for (from, to) in [(3, 0), (0, 3), (1, 1), (usize::MAX, 0)] {
+            t.move_pin(from, to, None);
+            assert_eq!(t.pins, ["b", "c", "a"], "{from} -> {to}");
+        }
+        // Signed in and out again: the browser kept the order.
+        t.step(Some(&me), &BoxState::new(), 1.0);
+        t.answer(
+            &PCall::TrendPins,
+            &Answer {
+                status: 401,
+                retry_after: None,
+                body: "{}".into(),
+            },
+            1.0,
+        );
+        t.step(None, &BoxState::new(), 2.0);
+        assert_eq!(t.pins, ["b", "c", "a"], "the browser's pins, in the new order");
+        // Signed in: the box keeps the order.
+        t.step(Some(&me), &BoxState::new(), 3.0);
+        t.answer(
+            &PCall::TrendPins,
+            &Answer {
+                status: 200,
+                retry_after: None,
+                body: r#"{"pins":["x","y"]}"#.into(),
+            },
+            3.0,
+        );
+        t.poll();
+        t.move_pin(1, 0, Some(&me));
+        let sent = t.poll();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            (sent[0].method, sent[0].url.as_str()),
+            ("PUT", "/api/trends/pins")
+        );
+        let body: Json = serde_json::from_slice(sent[0].body.as_deref().unwrap()).unwrap();
+        assert_eq!(body, json!({ "signals": ["y", "x"] }));
+    }
+
+    #[test]
+    fn the_box_trend_opens_on_30_s() {
+        let t = BoxTrend::new(Box::new(MemStorage(None)));
+        assert_eq!(t.window_ms, 30_000);
     }
 }

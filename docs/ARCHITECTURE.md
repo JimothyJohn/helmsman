@@ -91,6 +91,15 @@ With a single program (the default deploy) each scan, every `--scan-ms`
 4. sleep to the next deadline; a late scan skips the periods it missed
    (counted as overruns) rather than bursting.
 
+Each scan's execution time (steps 1 to 3, on a monotonic `Clock` the
+runtime reads twice per scan, scripted in tests) and its start lateness
+(the tick's `now` minus the deadline it was due at) go into a fixed ring
+of the module's newest 1000 scans (`TIMING_WINDOW`; no allocation on the
+scan). `Runtime::timing` gives min, mean, max and a nearest-rank p99 of
+each and when the module last overran; `/api/modules` serves them as
+`timing` (`window`, `exec_us`, `late_us`, `null` before the first scan)
+and `stats.last_overrun_ms_ago`, and the Monitor's status tile shows them.
+
 A fault (division by zero, index out of range, watchdog) zeroes that
 module's outputs and stops it; the adapter stays on the network so the PLC
 can still be found and diagnosed, even once every module has stopped.
@@ -616,7 +625,10 @@ copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
 `ASSERT` failed (named as words, with its declaration line's comment, and
 when), either side faulted or does not compile, a shared port's types
 differ, `DONE` never came within the limit (two minutes of simulated
-time), or the test holds no `ASSERT` at all. The test's first comment is
+time), the test holds no `ASSERT` at all, a declared `ASSERT` was never
+called (the block latches `CHECKED` on its first call), or the test
+shares no port with the program (reads no output, drives no input), so
+it could pass whatever the program does. The test's first comment is
 the requirement in the engineer's words. Deterministic: no wall clock, no
 I/O.
 
@@ -631,9 +643,28 @@ green, so an older client reads an untested one as not passed) and an
 `untested` count; `ok` and `red` count only the red ones. A file with no
 comment, a body and no `ASSERT` is still red.
 
+**On the command line** (`cli-test-runner`). `helmsman-plc test
+PROJECT_DIR [--junit FILE] [--scan-ms MS]` (`project::check::cli`) reads
+a project folder with the store's rules (`project::read_folder`, which
+`Projects::read` also uses), builds it as a deploy does
+(`project::build::build`, for a box started with the defaults) and runs
+`project::check::run_tests`, the function the tests route and the deploy
+gate call, so CI runs the box's tests. Exit 0 green or untested, 1 a red
+test, 2 does not build (each problem `DIR/FILE:LINE:COL`), 64 usage, 74
+I/O. `--junit` writes the report whole or not at all
+(`project::junit`, by hand, no dependency): a `build` case, then one per
+test file in name order; red is `<failure>`, untested `<skipped/>`. It
+needs `box` (the project rules and the build live there) but opens no
+socket. docs/ci/ holds a GitHub Actions template for a project's own
+repository.
+
 **Writing a requirement** (`POST /api/projects/{p}/requirements`,
-`api::requirements`). The Requirements tab becomes a list of plain-words
-requirements; typing one has the agent write the test behind it. The
+`api::requirements`). *The canvas side of this, the Requirements tab, is
+archived since 2026-11-08 (Nick: "not that useful and creates more issues
+than it solves"; the scenarios the Agent writes with each change are the
+tests) under `crates/helmsman-canvas/archive/requirements/`; the route
+stays on the box without a caller.* The Requirements tab was a list of
+plain-words requirements; typing one had the agent write the test behind it. The
 request is `{text, name?}`: one line (no control characters), 1 to 500
 characters trimmed; `name` is snake case (`spec::name_ok`, 1 to 48 of
 `a-z 0-9 _`, starting with a letter), else the box slugs the words
@@ -685,7 +716,7 @@ answer is tested with the candidate file in place); a box runs them when a
 project opens, after each save (`POST /api/projects/{p}/tests`, token or
 session, nothing changes) and inside the deploy's approval path, where a
 red test refuses with 409 before anything builds (`projects::red_tests`).
-The Requirements tab of the right panel shows one row per test, green or
+The Requirements tab of the right panel (archived 2026-11-08) showed one row per test, green or
 red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
 same gate.
 
@@ -702,7 +733,18 @@ written (`verify::check`): the code taken into a copy through
 `scope::apply`, the scenarios added, compiled, the scenarios run with
 the project's own tests, and the whole-file rule (`verify::full_copy`: no
 elision markers, every POU with its header and END_ line, the landed file
-equal to the code). A failure goes back with what failed, up to two
+equal to the code). Three more rules keep a scenario honest: when the
+answer changes what the file does, a scenario must fail on the file as it
+was (`verify::indistinct`); a scenario marked `replaces test_X` stands only
+when X is red with the new code, and the outcome keeps both wordings
+(`verify::contradicted`, `Check::replaced`); a block that never closes
+means the answer was cut off and is red. A stop for `max_tokens` (page) or
+`budget` (box) is a failed run, never a complete answer. The file goes
+once: when the program is that one file, `<current_program>` points at the
+`text:` in `<edit_scope>`. On a box the check runs at the image sizes and
+scan period the box reports for the project (`tests` in `GET
+/api/projects/{p}`), and an instruction ends if another project is opened
+before its answer is in. A failure goes back with what failed, up to two
 retries (`verify::next`); still red, nothing is written and the tab says
 why. Green is written into the file at once and saved as one revision
 whose Agent page is `instruct::record` (instruction, reason, scenarios,
@@ -812,6 +854,68 @@ signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
 - **The tab** draws up to six pins as steps over the box's window,
   extended by each values event (`at_ms`), the last value held to now.
 
+## The desk (`desk-on-box`, built)
+
+What a person had in front of them on the box's page (the open project
+and file, unsaved edits with the box version each was made against, the
+Agent's input, the screen, the sign-in name, never
+a password or PIN): `crates/helmsman-canvas/src/desk.rs` keeps it in the
+browser (`localStorage`, at most 1 MiB, written at most once a second when
+it changed) and, signed in, on the box per person (`OnBox`), so it follows
+the person between screens.
+
+- **On the box** (`api/desk.rs`): `GET /api/desk` answers the session's
+  own desk (`{owner, desk}`, `desk` null when there is none; 401 signed
+  out) and `PUT /api/desk` sets it (a login session; the box token is no
+  one, 400). The owner is the session's, as for the trend pins (an
+  account, or the role for a role-PIN session); neither route takes one
+  from the request. The body is read into the desk's own fields and
+  written back from them, so anything else in it is dropped. At most
+  512 KiB (413 past it), 64 people (507 for a new one past that, rather
+  than dropping someone's unsaved work); every PUT is audited. Kept in
+  the state directory's `desks/` (0700, one file per owner named by the
+  owner in hex, written atomically, read under the same bound).
+- **Newer wins.** The desk carries `saved_at`, when its work (the edits
+  and the inputs) last changed, never moving back. On sign-in the page
+  asks for the box's desk before sending any, and takes it when it is
+  newer than its own (the project opens again with its file and edits,
+  as after a reload); otherwise its own goes to the box. The box refuses
+  a desk older than the one it holds (409), and the page then reads the
+  newer one. A role change on the same account keeps the desk; signed
+  out, or with the box not answering, the browser's is the desk.
+- **Taking a newer desk never drops an unsaved edit.** The edits are
+  merged per file: one edited here stays as it is here (for a file edited
+  on both screens this page's text stays, and saving it is refused as
+  stale if the box's copy moved), and the other screen's other edits come
+  in. With an unsaved edit in the open project the page stays on that
+  project and file; typed inputs, a conversation and a half-filled form
+  stay too. A different person signing in on the same page (the desk
+  names its owner in this browser) starts the page empty and asks for
+  their desk; an answer for the person before is dropped by its `owner`.
+- **A desk this page cannot read in full.** Each field is read on its own,
+  so a newer page's conversation does not take the edits down. A browser
+  slot that did not read in full is left as it is until the person
+  changes something, and a box desk that is not a desk at all is not
+  fought over: the browser keeps it and the page says so.
+- **The Agent's conversation and the device form** (`desk-agent-and-forms`).
+  The desk also keeps the Agent tab's turns with the box's agent and the
+  last instruction's outcome (`desk::Conversation`), and a half-filled New
+  device form with its points (`devices::NewDevice`; the EDS by its file
+  name in the project, never its bytes). The conversation is capped at
+  128 KiB of the desk: the newest turns first, each with at most 16 KiB of
+  answer, 2 KiB of message and 40 rows (proposals first), and an Undo only
+  while its file is at most 64 KiB. The form keeps 256 rows and 256
+  characters a field, and any setting whose key names a credential
+  (`desk::is_secret_key`: a password, PIN, token, key or secret) is left
+  out. Both count as work, so a change dates the desk. Past the box's
+  512 KiB the conversation goes first, then the form, then the biggest
+  edits. After a
+  reload an instruction that was under way is over with nothing written,
+  and the proposals its turn stored are still linked; a proposal decided
+  since (no longer a draft in the Proposals list) shows as decided and is
+  not offered again. The box reads both into their own shape like the rest
+  of the desk, so any other field is dropped.
+
 ## Snapshots (`snapshots`, built)
 
 `helmsman_plc::store` (`store.rs`; contract in `tests/store.rs`) keeps
@@ -884,6 +988,49 @@ In the binary, an approved change reaches the runtime as
 carried as `swap` carries one, new ones start cold, ones dropped have their
 bytes zeroed and signals made safe), run by the scan thread between ticks;
 see the approval policy below.
+
+## RETAIN across a restart (`retain-persist`, built)
+
+A deploy carries every variable; a restart of the box (reboot, power cut,
+killed process) keeps the ones a program declares in a `VAR RETAIN`
+block, and only those (`NON_RETAIN` and plain `VAR` start at their initial
+values). Contract in `crates/helmsman-iec/tests/retain.rs` and
+`crates/helmsman-plc/tests/retain.rs`; code in `helmsman-iec`'s `state.rs`
+(`Program::retain_state`, `State::encode`/`decode`,
+`Program::restore_retain`) and `helmsman-plc`'s `retain.rs` (`box`).
+
+- **The checker warns where RETAIN is not kept**: inside a
+  `FUNCTION_BLOCK` (declare the instance RETAIN in the program instead) or
+  a `FUNCTION`, on `VAR_TEMP` or a located variable. A warning
+  (`Program::warnings`, the checker's first non-blocking diagnostic; the
+  box logs it at start) never stops the program, since such code compiled
+  when RETAIN was ignored and older projects must still open. Errors only
+  for what was never valid: RETAIN with `NON_RETAIN` or `CONSTANT`, and
+  past `MAX_RETAIN` (65 536) values per program. Nothing is kept in part.
+- **On disk**: `<state-dir>/retain/<module>.ret`, magic `HRT1`, length,
+  CRC-32 and the encoded state (each variable's name, type shape and
+  values). Written through a temporary file, synced, renamed, folder
+  synced.
+- **Rate**: the scan thread never writes. At most once a second it hands
+  the modules' RETAIN values to a writer thread through a latest-wins slot
+  it only `try_lock`s; the writer writes a module only when its values
+  changed. A power cut loses at most the last second. A module a deploy
+  removes, or one with no RETAIN left, has its file removed.
+- **Planned stop**: SIGTERM and SIGINT (`signal-hook`, `flag` only, behind
+  `box`) set a flag the scan loop checks once per scan; it then makes an
+  unthrottled offer (`Writer::offer_now`), waits up to 5 s for the writer
+  (`Writer::flush`), prints `SIGTERM: RETAIN values written, exiting` and
+  exits 0, so a planned stop keeps every RETAIN value. The snapshot store
+  writes on deploy, not periodically, so it needs no last write.
+  `HELMSMAN_EXIT_WITH_STDIN` (tests) still exits at once, unflushed.
+- **At start** each ST module's file is restored by name and type, the
+  rules a deploy carries by; stderr names what was restored, what starts
+  fresh because its type changed or it is new, and what was dropped. A
+  damaged or oversize (over 8 MiB) file is reported, moved aside to
+  `.ret.damaged`, and the module starts cold.
+- A cold restart from the API resets RETAIN too (IEC 61131-3's cold
+  restart). Not yet: RETAIN inside a function block type, and `%M`
+  retention.
 
 ## Box API (`box-api`, built)
 
@@ -991,7 +1138,13 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   directory's two files, or one param's value): parsed, compiled against its
   windows, held to its manifest, its signals checked against the box, and,
   when the box runs a change set, carrying the change set applying it would
-  commit, its snapshot id, its diff and its tier. The only way a draft runs
+  commit, its snapshot id, its diff, its tier and a preview of what it
+  does to the running values (`state`: which keep, which reset because
+  they are new or their type changed, which are dropped; `api/carry.rs`,
+  worked out once at creation by restoring freshly compiled target
+  programs from freshly compiled running ones, never from the scan
+  thread's state). An apply answers, and audits, the carry the swap
+  actually made (`Runtime::last_carry`). The only way a draft runs
   is `apply`, the only way back `rollback`, both through the approval
   policy (below). A project deploy (`projects`, below) is an apply of
   the project's build, through the same path, by an engineer's session.
@@ -1024,6 +1177,16 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   are cached a year (`immutable`), everything else revalidates
   (`no-cache`); HTML carries a CSP of `'self'`, `'wasm-unsafe-eval'` and its
   own inline scripts by SHA-256.
+- **Build match** (`build-match`): the box and the canvas are built
+  separately, so both carry a stamp, `HELMSMAN_BUILD`, baked in by
+  `crates/build_stamp.rs` (the build scripts of helmsman-plc and
+  helmsman-canvas `include!` it): `git describe --always --abbrev=9`,
+  `HELMSMAN_BUILD` from the environment if set, "unknown" without either.
+  Every reply, files and event streams too, carries the box's as
+  `X-Helmsman-Build`; the canvas reads it off its fetches (the device poll
+  every 5 s, so a box restarted on a new build is heard within that) and
+  shows a banner under the header when the two are known and differ
+  (`stamp::differs`; "unknown" on either side is no mismatch).
 
 ## Approval policy (`approval-policy`, built)
 
@@ -1195,7 +1358,12 @@ threads, the Modbus simulator over TCP).
 
 The editor's projects (docs/UI.md "Projects", build step 2):
 `helmsman_plc::project` (folders, rules, `build`, `zip`) and
-`api/projects.rs` (routes); contract in `tests/projects.rs`.
+`api/projects.rs` (routes); contract in `tests/projects.rs`. Every
+release opens every older project: `tests/project_compat.rs` lays down
+one frozen project per release (`tests/fixtures/projects/<release>/`,
+the first `unreleased-20261107`) and opens, builds, scans and tests it
+on the current build; a construct the build no longer accepts is a
+listed problem on its file and line, and the project still opens.
 `helmsman-plc --projects` turns it on: projects live in
 `<state-dir>/projects/<name>/` (`/var/lib/helmsman-plc/projects/` on a
 Pi), the store defaults to `<state-dir>/store/`, and the box boots the
@@ -1227,21 +1395,20 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   or after a racing save. A save may name the version (SHA-256) it read
   (`version`, or `null` for "new only"): a stale one is 409, so two
   editors never silently clobber each other.
-- **Starters** (`helmsman_project::starters`): the worked machines and
-  templates, real files under `crates/helmsman-project/starters/`, compiled
-  in with `include_str!` so the browser's simulation and a box offer the
-  same text. A starter is `main.st` (the controls and its PROGRAM, one per
-  project), `plant_model.st` (a simulation of the machine, its calls marked
-  PLANT, deleted when real I/O is wired), `io.map` (every signal, on the
-  box's own channels or `screen`, so it deploys with nothing wired) and the
-  shared blocks it uses (`starters/blocks/`). They are built on what the
-  library has (`BLINK_PATTERN` in `stack_light`); PID is written in ST
-  (`pid_loop.st`). The box has no route for them: the canvas holds them and
-  sends a new project as its `.zip` to `POST /api/projects/{p}/zip`.
-  A project opens on its `main.st` when it has one. Tests:
-  `helmsman-canvas/src/starter_tests.rs` (each machine runs on the simulated
-  scan clock and trips when an input is forced) and
-  `box_projects_tests.rs` (each deploys against the real API).
+- **Examples** (`helmsman_canvas::playground::EXAMPLES`; Nick,
+  2026-11-05, which retired the starter machines and templates, kept in
+  git history): five short programs, one idea each, as the first chapters
+  of a Structured Text book teach them. Inputs are `VAR_INPUT`s the I/O
+  tab switches, outputs `VAR_OUTPUT`s it shows. An example opens
+  read-only; picking one asks for a name and makes a project of the
+  program and an `io.map` derived from its ports
+  (`sim_projects::example_project`, `example_io_map`). The box has no
+  route for them: the canvas sends the new project as its `.zip`
+  (`box_projects::create_from`). A project opens on its `main.st` when it
+  has one. Tests: `playground_tests.rs` (each compiles, draws and has
+  I/O, and stays short) and `box_projects_tests.rs` (each deploys against
+  the real API). The edge node's bench programs, the old batch mixer
+  among them, live in `crates/helmsman-node/bench/`.
 - **Build** (`project::build`): each PROGRAM becomes a module named as
   the PROGRAM in lower case. Its `module.st` is every file in name
   order under a `(* file NAME *)` line with every other PROGRAM blanked
@@ -1361,8 +1528,10 @@ and Save keeps a copy under a free name. The build is the box's (one
 `.st` as it is; several in name order under `(* file NAME *)` lines), so
 errors and block clicks map to a file and line. Typing only checks
 (`Session::check`: errors marked, the program running and its diagram
-untouched); Deploy compiles and runs it in the page (`Session::set_source`),
-and a project that does not compile is refused with the old program still
+untouched); Deploy compiles and runs it in the page (`Session::deploy`),
+a hot swap as on a box (retained state carried by name and type, the image
+and the clock kept, the notice naming what could not be carried), and a
+project that does not compile is refused with the old program still
 running, as on a box. Upload and Download use `helmsman-project`'s `.zip`;
 `.st`, `PLCopen` `.xml` and `.L5X` import into the open project. An
 L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
@@ -2198,8 +2367,16 @@ agent as ST; nothing here writes ST back).
   proven by rendering every scan of a run with the API's own renderer and
   comparing annotations and explanations. Connection status: connecting,
   connected, reconnecting, unreachable after 3 failures; a failed stream
-  is closed and reopened after 2 s doubling to 30 s (the canvas's backoff,
-  not the browser's). The decisions (`remote::BoxState`) are free of I/O
+  is closed and reopened after a steady 5 s (the canvas's backoff, not the
+  browser's). The box ends each stream at 600 s, so one that was
+  delivering is reopened at once and the link stays connected; a values
+  stream that opens and then says nothing for 5 s is closed and opened
+  again (and counted), since a half-open connection raises no error. A box
+  that answers `GET /api/modules` is a box even when its 8 stream slots are
+  taken. The page takes the box's streams while it shows any screen, and
+  closes them while it simulates in the browser; the transport keeps only
+  the newest values (and each module's newest trace) of an unread backlog.
+  The decisions (`remote::BoxState`) are free of I/O
   and tested natively against the real API. **Simulation** (the ST
   playground below: docs/playground/, `?playground` or `?demo`, native,
   or "Simulate in this browser" from the ⋯ menu or when the box is
@@ -2218,7 +2395,13 @@ agent as ST; nothing here writes ST back).
   path. A program whose newest scan is over 3 s old, or every program
   while the values stream is down or silent for 3 s, is drawn grey with
   the age: never a colour. It sends only GETs and stream opens (tested);
-  leaving it closes the all-modules stream and reopens the Editor's.
+  leaving it closes the all-modules stream and reopens the Editor's. Over
+  a slow link no poll is asked for again while its last ask is on its
+  way: the 5 s device round waits for both its reads (`/api/devices`,
+  `/api/io_map`), the header badge's 30 s proposals round for its list
+  (contract in `slow_link_tests.rs`: the Monitor against the real API
+  through an in-process proxy with a site VPN's 300 ms round trip,
+  1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
 
 ## Explain mode (`explain-mode`, built)
 
@@ -2260,6 +2443,66 @@ path that drives an output).
   route's profile, see Requirement tests). `GET /api` says whether the box has an
   agent. The route takes the browser's session cookie as well as the
   token; no canvas screen calls it now.
+
+## Help mode (`help-mode-box`, built; the relay side is `help-mode-relay`)
+
+For someone in trouble who did not write the program (Nick, 2026-11-07,
+interview). The box's Agent tab has two modes, "Change the program" (the
+instruction tab above) and "Get help" (`helmsman-canvas/src/help.rs`),
+switched by a two-glyph toggle (< > and ?) at the tab's top right; the
+heading names the mode, with a dot for the agent's state beside it (green
+online, red offline, grey until heard; Nick, 2026-11-08):
+the person says what went wrong, and the answer is a plain-language
+diagnosis and a Markdown issue with a Copy button, to paste into a GitHub
+issue or to another agent. Nothing is filed. A question about how things
+work ("How do I load a program?"; Nick, 2026-11-08, after one came back
+as an issue template) is answered from the help pages instead, with
+links to them, and no issue is written.
+
+- **`POST /api/help {question, messages?}`** (`api::help`; any
+  credential, the box token or any login session, since it changes
+  nothing; audited). `messages` is the page's Messages as text
+  (`messages::Log::text`); the box keeps the newest 16 KiB. The box adds
+  its own context: build (version, the build stamp `helmsman_plc::BUILD`
+  that the API sends as `X-Helmsman-Build`, OS, arch), the project it runs and that snapshot
+  (12 hex digits), and each device link with its state, error and
+  address (as `GET /api/devices`).
+- **Redaction** (`help::redact`): every string of the context, the
+  question, and the finished issue (whoever wrote it) lose the box
+  token, the relay token, any run of 32+ hex digits (session tokens,
+  keys), `hmr1_...`, the word after `Bearer`, the value after a secret
+  key and `:` or `=` (`token`, `pin`, `password`, `cookie`,
+  `helmsman_session`, `*_key`, ...) and the digits after `PIN`. A
+  property test and `tests/help.rs` assert that none reaches the relay
+  or the answer.
+- **The agent** is the relay's help profile (`--relay-help-agent V`,
+  default `helmsman/help-v1`, not served yet) with two tools, run in
+  process (`Agent::chat_local`): `submit_issue {diagnosis, title,
+  what_happened, expected?, steps?, suspected_files?}` for trouble, and
+  `answer_question {answer, pages?}` for a question, `pages` being names
+  of help pages. The box checks both (lengths; a suspected file is a
+  relative repository path, optionally `:LINE`, linked to
+  `github.com/JimothyJohn/helmsman/blob/dev/...`; a page must be one of
+  `help::pages::ALL`). One user message: the fixed `help::ASK`, then the
+  question, the context and the help pages in the `<box-data>` envelope.
+  Budget: 4 turns, 32k output tokens, 3 min.
+- **The help pages ride along** (`help::pages`): `docs/help/*.md`, the
+  Markdown the site builds (`scripts/build-help.sh`), compiled into the
+  box with `include_str!` (about 40 KiB per request; the generated
+  keyboard and starters pages are left out). A new page goes into
+  `pages::ALL` and the script's list. Offline, the same pages give the
+  box its own lead for a question (`pages::suggest`): a section whose
+  heading shares a word with the question, ranked by heading then body
+  matches, at most five, deterministic; a report of trouble (no `?`, no
+  question word first) gets no guess.
+- **Without the agent** (no relay, offline, the relay answering
+  `unknown_agent_version`, or neither tool called) the box writes the
+  issue from the question and its context, and `done` says why there is
+  no diagnosis (`stop: "unavailable"` for a profile the relay does not
+  serve). Events: `help` (the context), `text`, `tool_call`,
+  `tool_result`, `retrying`, then `answer {text, pages}` and/or `issue`
+  (at most once each; `issue` always when there is no `answer`), `pages`
+  (the box's suggestion, only without an `answer`), `done` or `error`.
 
 ## Proposal review (`proposal-ui`, built)
 
@@ -2386,6 +2629,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   program is a `helmsman_iec::Program` scanned directly on the page's
   clock (at most 500 scans a frame); the last scan of each frame is
   traced for the diagram. A fault stops it; Run or Step restarts it cold.
+  A fault or a Stop turns the outputs off, as the box does for a module.
   Loading an example or Claude's code compiles it and leaves it stopped.
 - **Virtual I/O** from the program itself: each `VAR_INPUT` a control
   (BOOL: a push button when named like start/stop/reset/pulse, else a
@@ -2471,7 +2715,8 @@ prompt. The agent never touches the Rust core.
 ## Where the planned pieces attach
 
 - `approval-policy` (built, above) → `proposal-ui` (built, above): the
-  canvas shows a draft's `approval` (tier, reasons, what it needs), charts
+  canvas shows a draft's `approval` (tier, reasons, what it needs) and
+  its `state` preview in words above the approve button, charts
   its replay, and posts the PIN (or, with accounts, the login session) to
   `apply`. `box-mcp` (built, above) wraps the same routes;
   `local-accounts` (built, above) replaces role PINs with people, keeping

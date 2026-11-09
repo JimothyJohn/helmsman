@@ -10,7 +10,8 @@
 //! p.9 gives the same addressing model in prose: class, instance, attribute,
 //! service code.
 
-use std::fmt;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::codec::{DecodeError, Reader, Writer};
 

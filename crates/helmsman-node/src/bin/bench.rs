@@ -54,6 +54,7 @@ const BENCH: &str = include_str!("../../../helmsman-iec/examples/trace_bench.st"
 /// A realistic cell: the old batch-mixer starter's controls (kept in bench/) with the blocks it
 /// uses, as the project builds them (the plant model left out: on a real
 /// machine the sensors replace it).
+#[cfg(feature = "psram")]
 const CELL: &str = concat!(
     include_str!("../../bench/batch_mixer.st"),
     "\n",
@@ -82,6 +83,7 @@ const DRAM2_HEAP_SIZE: usize = 96 * 1024;
 fn main() -> ! {
     esp_alloc::heap_allocator!(size: HEAP_SIZE);
     esp_alloc::heap_allocator!(#[unsafe(link_section = ".dram2_uninit")] size: DRAM2_HEAP_SIZE);
+    #[cfg_attr(not(feature = "psram"), allow(unused_variables))]
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     println!();
@@ -101,13 +103,18 @@ fn main() -> ! {
     // handler aborts, so round 2 never ran. It runs with PSRAM only.
     println!("cell: skipped on internal SRAM alone (out of heap on 2026-11-03)");
 
-    esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram);
-    println!(
-        "--- round 2: internal SRAM + PSRAM ({} B heap in all) ---",
-        esp_alloc::HEAP.stats().size
-    );
-    run("bench-4k", BENCH);
-    run("cell", CELL);
+    #[cfg(feature = "psram")]
+    {
+        esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram);
+        println!(
+            "--- round 2: internal SRAM + PSRAM ({} B heap in all) ---",
+            esp_alloc::HEAP.stats().size
+        );
+        run("bench-4k", BENCH);
+        run("cell", CELL);
+    }
+    #[cfg(not(feature = "psram"))]
+    println!("--- round 2 skipped: this image has no PSRAM (POE-ISO build) ---");
     println!("--- done ---");
 
     loop {

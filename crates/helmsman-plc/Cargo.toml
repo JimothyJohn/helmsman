@@ -30,6 +30,10 @@ ring = { version = "0.17.14", optional = true }
 # A project's rules and its .zip (`project`), shared with the canvas's
 # simulation; pure Rust (miniz_oxide for DEFLATE).
 helmsman-project = { path = "../helmsman-project", optional = true }
+# SIGTERM / SIGINT as a flag the scan loop polls, so a planned stop writes the
+# RETAIN values first. std has no signal API and the crate forbids unsafe;
+# without its default features it is signal-hook-registry and libc only.
+signal-hook = { version = "0.4.6", default-features = false, optional = true }
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "deterministic", "auto-dispatch"], optional = true }
 
 [dev-dependencies]
@@ -70,7 +74,7 @@ workspace = true
 # scripts/lint.sh keeps compiling) refuses a map naming `enip-io` as "not
 # in this build".
 default = ["box", "https", "enip-io"]
-box = ["dep:rusqlite", "dep:ring", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
+box = ["dep:rusqlite", "dep:ring", "dep:signal-hook", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
 enip-io = ["box", "helmsman-io/enip"]
 # `wasm`: modules compiled to WebAssembly (`module.wasm`) beside ST ones,
 # run by an interpreter under fuel and memory limits, and the map's WASM
@@ -169,11 +173,23 @@ name = "projects"
 required-features = ["box"]
 
 [[test]]
+name = "project_compat"
+required-features = ["box"]
+
+[[test]]
 name = "requirements"
 required-features = ["box"]
 
 [[test]]
+name = "help"
+required-features = ["box"]
+
+[[test]]
 name = "trend"
+required-features = ["box"]
+
+[[test]]
+name = "desk"
 required-features = ["box"]
 
 [[test]]
@@ -182,4 +198,12 @@ required-features = ["box", "https"]
 
 [[test]]
 name = "firstboot"
+required-features = ["box"]
+
+[[test]]
+name = "retain"
+required-features = ["box"]
+
+[[test]]
+name = "test_cli"
 required-features = ["box"]

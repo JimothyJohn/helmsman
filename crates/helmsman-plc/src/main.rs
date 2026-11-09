@@ -12,6 +12,7 @@ use std::io::{BufRead as _, Write as _};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -38,6 +39,7 @@ use helmsman_plc::policy::account::{self, Accounts, Logins};
 use helmsman_plc::policy::pin::{self, Gate, Pins};
 use helmsman_plc::policy::{Policy, Role};
 use helmsman_plc::record::{RecordConfig, Recorder};
+use helmsman_plc::retain;
 use helmsman_plc::sink::{self, Sinks};
 use helmsman_plc::site::{self, Site};
 use helmsman_plc::spec::{Defaults, Spec};
@@ -54,7 +56,11 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                     (first install only: with no project and nothing deployed,
                     makes NAME from the files for --projects; nothing runs
                     until an engineer deploys it)
-  --module SPEC        PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
+       helmsman-plc test PROJECT_DIR [--junit FILE] [--scan-ms MS]
+                    (checks a project folder and runs its requirement tests with
+                    no box running; exit 0 green, 1 red, 2 does not build:
+                    `helmsman-plc test --help`)
+  --module SPEC       PATH[,name=N][,scan=MS][,i=START+LEN][,q=START+LEN][,m=BYTES]
                        one module; unset keys take the defaults below. A bare
                        PROGRAM argument is a module with every default.
   --module-dir DIR     one module as a directory: module.st and module.manifest
@@ -116,6 +122,10 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        the agent version POST /api/projects/{p}/requirements
                        asks for (a tests profile; default tests-v1). The box
                        runs only its submit_test for it either way.
+  --relay-help-agent V the agent version POST /api/help asks for (a help
+                       profile; default helmsman/help-v1). The box runs only
+                       its submit_issue for it either way; a relay that does
+                       not serve it leaves Help with the box's own issue.
   --devices-index URL  the device library's index the Devices tab and the
                        agent look a found device up in (default the public
                        library's, see docs/devices/; `off` for none)
@@ -195,6 +205,7 @@ struct Opts {
     relay_agent: String,
     relay_explain_agent: Option<String>,
     relay_tests_agent: Option<String>,
+    relay_help_agent: Option<String>,
     ui: Option<PathBuf>,
     site: Option<String>,
     /// `--devices-index`: `None` is the default library, `Some("off")` none.
@@ -217,7 +228,7 @@ fn once(slot: &mut Option<PathBuf>, flag: &str, v: &str) -> Result<(), String> {
 }
 
 /// `--relay`, `--relay-token`, `--relay-agent`, `--relay-explain-agent`,
-/// `--relay-tests-agent`.
+/// `--relay-tests-agent`, `--relay-help-agent`.
 fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
     match flag {
         "--relay" => {
@@ -228,6 +239,7 @@ fn relay_flag(o: &mut Opts, flag: &str, v: &str) -> Result<(), String> {
         _ if !relay::version_ok(v) => return Err(format!("{flag}: not an agent version: {v:?}")),
         "--relay-explain-agent" => o.relay_explain_agent = Some(v.to_string()),
         "--relay-tests-agent" => o.relay_tests_agent = Some(v.to_string()),
+        "--relay-help-agent" => o.relay_help_agent = Some(v.to_string()),
         _ => v.clone_into(&mut o.relay_agent),
     }
     Ok(())
@@ -257,6 +269,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         relay_agent: "v7".into(),
         relay_explain_agent: None,
         relay_tests_agent: None,
+        relay_help_agent: None,
         ui: None,
         site: None,
         devices_index: None,
@@ -343,7 +356,8 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             | "--relay-token"
             | "--relay-agent"
             | "--relay-explain-agent"
-            | "--relay-tests-agent" => {
+            | "--relay-tests-agent"
+            | "--relay-help-agent" => {
                 relay_flag(&mut o, flag, v)?;
             }
             "--policy" => once(&mut o.policy, flag, v)?,
@@ -1148,6 +1162,7 @@ fn start_api(
         drivers: Some(helmsman_plc::driver_dir::DriverDir::in_state_dir(&dir)),
         running_drivers,
         trend_pins: Some(dir.join("trend-pins")),
+        desks: Some(dir.join("desks")),
         discovery: api::discover::Discovery::lan(match o.devices_index.as_deref() {
             Some("off") => None,
             Some(url) => Some(url.to_string()),
@@ -1295,6 +1310,9 @@ fn chat_setup(o: &Opts) -> Result<Option<api::chat::Setup>, String> {
             .unwrap_or_else(|| "explain-v2".into()),
     );
     setup.tests_agent = Some(o.relay_tests_agent.clone().unwrap_or_else(|| "tests-v1".into()));
+    if let Some(v) = &o.relay_help_agent {
+        setup.help_agent.clone_from(v);
+    }
     Ok(Some(setup))
 }
 
@@ -1426,6 +1444,23 @@ fn browsers(map: Option<&helmsman_io::IoMap>, devices: &Devices) {
     }
 }
 
+/// The flags SIGTERM and SIGINT set, by name (no signal API in std, and the
+/// crate forbids `unsafe`, so `signal-hook`).
+fn stop_flags() -> Result<Vec<(&'static str, Arc<AtomicBool>)>, String> {
+    [
+        ("SIGTERM", signal_hook::consts::SIGTERM),
+        ("SIGINT", signal_hook::consts::SIGINT),
+    ]
+    .into_iter()
+    .map(|(name, sig)| {
+        let flag = Arc::new(AtomicBool::new(false));
+        signal_hook::flag::register(sig, Arc::clone(&flag))
+            .map_err(|e| format!("cannot catch {name}: {e}"))?;
+        Ok((name, flag))
+    })
+    .collect()
+}
+
 #[allow(clippy::too_many_lines)]
 fn run(o: &Opts) -> Result<(), String> {
     if o.emit_st {
@@ -1441,7 +1476,7 @@ fn run(o: &Opts) -> Result<(), String> {
     let d = defaults(o, i_len, q_len);
     let mut content = content(o, &d)?;
     let loaded = specs(o, &d, std::mem::take(&mut content.dirs))?;
-    let (modules, sources): (Vec<Module>, Vec<String>) = loaded
+    let (mut modules, sources): (Vec<Module>, Vec<String>) = loaded
         .iter()
         .map(load)
         .collect::<Result<Vec<_>, _>>()?
@@ -1453,6 +1488,8 @@ fn run(o: &Opts) -> Result<(), String> {
         map,
         calendar: cal,
     } = load_signals(&content)?;
+    let retain_dir = state_dir(o).join(retain::DIR);
+    let restored = retain::restore(&retain_dir, &mut modules);
     let table = Arc::new(Mutex::new(table));
     let bound = Runtime::with_signals(
         i_len,
@@ -1496,6 +1533,15 @@ fn run(o: &Opts) -> Result<(), String> {
         o.gpio_chip.as_deref(),
         cal.as_ref(),
     );
+    for name in rt.names() {
+        for w in rt.program(name).map_or(&[][..], helmsman_iec::Program::warnings) {
+            eprintln!("helmsman-plc: module {name}: warning: {w}");
+        }
+    }
+    for line in &restored {
+        eprintln!("helmsman-plc: {line}");
+    }
+    let mut retainer = retain::Writer::start(retain_dir);
     let recorder = recorder(&table);
     let (swap, swapper) = api::swap::channel(Duration::from_secs(5));
     let swap = swap.with_links(Arc::clone(&link_set));
@@ -1565,6 +1611,9 @@ fn run(o: &Opts) -> Result<(), String> {
     let mut inputs = vec![0; i_len];
     let mut names: Vec<String> = rt.names().map(str::to_string).collect();
     let start = Instant::now();
+    // A planned stop (service manager, Ctrl-C) sets one of these; the scan
+    // loop sees it within a scan and writes the RETAIN values before exiting.
+    let stops = stop_flags()?;
     loop {
         {
             let d = lock_ref(&dev);
@@ -1623,6 +1672,20 @@ fn run(o: &Opts) -> Result<(), String> {
             (held, faults)
         };
         report_changes(&specs, &names, &rt, &held, faults);
+        if let Some(name) = stops
+            .iter()
+            .find_map(|(name, f)| f.load(Ordering::Relaxed).then_some(*name))
+        {
+            retainer.offer_now(start.elapsed(), &rt);
+            let said = if retainer.flush(Duration::from_secs(5)) {
+                "RETAIN values written, exiting"
+            } else {
+                "RETAIN values not written within 5 s, exiting"
+            };
+            eprintln!("helmsman-plc: {name}: {said}");
+            return Ok(());
+        }
+        retainer.offer(start.elapsed(), &rt);
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
         sleep_to(start, rt.next_deadline(), cap(scene.calendar.as_ref()), &mut said);
     }
@@ -1702,6 +1765,23 @@ fn project_cli(args: &[String]) -> Result<String, String> {
     }
 }
 
+/// The box `helmsman-plc test` builds and tests for: one started with the
+/// defaults (`--scan-ms 10`, `--memory 1024`, the adapter's assemblies).
+fn test_shape() -> helmsman_plc::project::build::Shape {
+    let cfg = device_config(1);
+    let (i_len, q_len) = (assembly_size(&cfg, INPUTS), assembly_size(&cfg, OUTPUTS));
+    helmsman_plc::project::build::Shape {
+        defaults: Defaults {
+            period: Duration::from_millis(10),
+            i: Window::new(0, i_len),
+            q: Window::new(0, q_len),
+            m: 1024,
+        },
+        i_len,
+        q_len,
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|a| a == "account") {
@@ -1728,6 +1808,12 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         };
+    }
+    if args.first().is_some_and(|a| a == "test") {
+        let ran = helmsman_plc::project::check::cli(&args[1..], &test_shape());
+        print!("{}", ran.out);
+        eprint!("{}", ran.err);
+        return ExitCode::from(ran.code);
     }
     if args.first().is_some_and(|a| a == "bundle") {
         return match helmsman_plc::bundle::cli::run(&args[1..]) {

@@ -30,20 +30,17 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
-    /// The project's requirement tests, green or red (`helmsman_iec::spec`).
-    Requirements,
     Claude,
 }
 
 impl Tab {
     /// Every tab, in the panel's order.
-    pub const ALL: [Self; 3] = [Self::Io, Self::Requirements, Self::Claude];
+    pub const ALL: [Self; 2] = [Self::Io, Self::Claude];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Requirements => "Requirements",
             Self::Claude => "Agent",
         }
     }
@@ -53,7 +50,6 @@ impl Tab {
     pub const fn tip(self) -> &'static str {
         match self {
             Self::Io => "The program's inputs and outputs with their live values.",
-            Self::Requirements => "The project's requirement tests, green or red. A red test stops Deploy.",
             Self::Claude => "Ask the agent about the program, or have it propose a change.",
         }
     }
@@ -61,7 +57,6 @@ impl Tab {
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
-            Self::Requirements => "tests",
             Self::Claude => "claude",
         }
     }
@@ -133,9 +128,10 @@ impl Pane {
 /// the hide chevron must fit the row, or the pane grows every frame); 240
 /// since 2026-11-05 (Nick: "just a bit wider").
 pub const LEFT_W: f32 = 240.0;
-/// The right panel's width when first opened, points: 236 since the
-/// Requirements tab (three tab buttons and the hide chevron must fit the
-/// row, or the panel grows every frame).
+/// The right panel's width when first opened, points: 236 since
+/// 2026-11-05 (the tab buttons and the hide chevron must fit the row, or
+/// the panel grows every frame; the Requirements tab is archived since
+/// 2026-11-08, the width kept).
 pub const RIGHT_W: f32 = 236.0;
 
 /// The Editor's layout and the Monitor's scan detail (kept per browser)
@@ -172,6 +168,10 @@ pub struct Chrome {
     pub diagram: Rect,
     /// The find box over the ST pane, while open (Ctrl F).
     pub find: Option<crate::find::Find>,
+    /// What the Agent's last change added and removed in the open file,
+    /// set by the workspace each frame; drawn only while the editor's text
+    /// is what the Agent wrote ([`crate::agent_marks`]).
+    pub st_marks: Option<crate::agent_marks::StMarks>,
 }
 
 impl Default for Chrome {
@@ -190,6 +190,7 @@ impl Default for Chrome {
             hits: Vec::new(),
             diagram: Rect::NOTHING,
             find: None,
+            st_marks: None,
         }
     }
 }
@@ -415,7 +416,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Side panel",
         right,
         &k(Action::Panel),
-        "Shows or hides the panel on the right: I/O, Requirements, Agent.",
+        "Shows or hides the panel on the right: I/O, Agent.",
     ) {
         chrome.right = !right;
     }
@@ -476,6 +477,14 @@ pub fn select(ctx: &egui::Context, id: egui::Id, a: usize, b: usize) {
         egui::text::CCursor::new(b),
     )));
     state.store(ctx, id);
+}
+
+/// The id of the ST editor showing `file` of `project` in `view`. One id
+/// per file: egui keeps the undo history, caret and scroll under it, and
+/// a shared id would put one file's text into another on Undo.
+#[must_use]
+pub fn source_id(view: &str, project: &str, file: &str) -> egui::Id {
+    egui::Id::unique((view, project, file))
 }
 
 /// Undoes (or, `redo`, redoes) the last edit of the ST editor `id` on
@@ -587,6 +596,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut left = chrome.left;
     let mut pane = chrome.pane;
     let (left0, pane0) = (left, pane);
+    let mut hide = false;
     let flip = egui::Panel::show_switched(
         ui,
         &mut left,
@@ -601,13 +611,17 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             let toggle = if open {
                 let mut t = None;
                 // Tabs: Files | Devices | Code, the hide chevron at the right.
+                // A double click on a tab hides the pane too (Nick, 2026-11-07).
                 ui.horizontal(|ui| {
                     for p in Pane::ALL {
                         let r = crate::theme::tab(ui, pane == p, p.label(), Vec2::new(0.0, TAP * 0.75))
-                            .tip(p.tip());
+                            .tip(format!("{} Double-click hides the pane.", p.tip()));
                         hits.push((format!("pane {}", p.key()), r.rect));
                         if r.clicked() {
                             pane = p;
+                        }
+                        if r.double_clicked() {
+                            hide = true;
                         }
                     }
                     // The chevron at the right edge, or right after the
@@ -639,7 +653,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             };
             if let Some(t) = toggle {
                 hits.push(("left".to_string(), t.rect));
-                t.clicked()
+                t.clicked() || hide
             } else {
                 false
             }
@@ -664,6 +678,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     }
     let mut right = chrome.right;
     let mut tab = chrome.tab;
+    let mut hide_right = false;
     let flip = egui::Panel::show_switched(
         ui,
         &mut right,
@@ -680,10 +695,13 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
                     t = Some(header_toggle(ui, false, "Hides the panel (Alt+3)."));
                     for &k in tabs {
                         let r = crate::theme::tab(ui, tab == k, k.label(), Vec2::new(0.0, TAP * 0.75))
-                            .tip(k.tip());
+                            .tip(format!("{} Double-click hides the panel.", k.tip()));
                         hits.push((format!("tab {}", k.key()), r.rect));
                         if r.clicked() {
                             tab = k;
+                        }
+                        if r.double_clicked() {
+                            hide_right = true;
                         }
                     }
                 });
@@ -695,7 +713,7 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             };
             if let Some(t) = toggle {
                 hits.push(("right".to_string(), t.rect));
-                t.clicked()
+                t.clicked() || hide_right
             } else {
                 false
             }
@@ -815,6 +833,12 @@ pub fn st_editor(
         })
         .unwrap_or_default();
     let at = chrome.line;
+    let agent = chrome
+        .st_marks
+        .clone()
+        .filter(|m| m.applies(text.as_str()))
+        .unwrap_or_default();
+    let added = agent.added.clone();
     scroll
         .show(ui, |ui| {
             ui.horizontal_top(|ui| {
@@ -823,9 +847,15 @@ pub fn st_editor(
                 // Slack for the editor's own margin and the scroll bar: wider
                 // than the pane and a resizable pane grows to fit, every frame.
                 let wrap = (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0);
+                // The width the text edit really wraps at (its margins
+                // come off the width it is given) is told by its layouter;
+                // the gutter uses the last frame's, or the estimate on the
+                // first.
+                let wrap_key = id.with("wrap");
+                let edit_wrap = ui.data(|d| d.get_temp::<f32>(wrap_key)).unwrap_or(wrap - 8.0);
                 // The rows the text takes at that width: each source line
                 // numbered on its first row, its wrapped rows blank.
-                let mut job = highlight(text.as_str(), diags, at, &font, wrap, &t);
+                let mut job = highlight(text.as_str(), diags, at, &added, &font, edit_wrap, &t);
                 crate::find::mark(&mut job, &marks);
                 let galley = ui.fonts_mut(|f| f.layout_job(job));
                 let mut gutter = LayoutJob::default();
@@ -849,26 +879,94 @@ pub fn st_editor(
                 gutter.wrap.max_width = f32::INFINITY;
                 ui.label(gutter);
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
-                    let mut job = highlight(buf.as_str(), diags, at, &font, wrap, &t);
+                    ui.data_mut(|d| d.insert_temp(wrap_key, wrap));
+                    let mut job = highlight(buf.as_str(), diags, at, &added, &font, wrap, &t);
                     crate::find::mark(&mut job, &marks);
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
                 // A tooltip would sit over the code under the pointer while
                 // the engineer types; the pane's tab button has one.
-                ui.add(
-                    egui::TextEdit::multiline(text) // tip: exempt
-                        .id(id)
-                        .code_editor()
-                        .desired_width(wrap)
-                        .char_limit(limit)
-                        .desired_rows(24)
-                        .lock_focus(true)
-                        .layouter(&mut layouter),
-                )
+                let out = egui::TextEdit::multiline(text) // tip: exempt
+                    .id(id)
+                    .code_editor()
+                    .desired_width(wrap)
+                    .char_limit(limit)
+                    .desired_rows(24)
+                    .lock_focus(true)
+                    .layouter(&mut layouter)
+                    .show(ui);
+                // The gutter was laid out a frame behind a change of width.
+                if ui
+                    .data(|d| d.get_temp::<f32>(wrap_key))
+                    .is_some_and(|w| (w - edit_wrap).abs() > 0.01)
+                {
+                    ui.ctx().request_repaint();
+                }
+                removed_rules(ui, &out, &agent.removed, chrome);
+                out.response.response
             })
             .inner
         })
         .inner
+}
+
+/// Where the Agent's change removed lines: a red rule between the rows
+/// they stood between, its tooltip the removed text (a text editor holds
+/// only the file's own lines, so the gone ones are told, not inserted).
+fn removed_rules(
+    ui: &egui::Ui,
+    out: &egui::text_edit::TextEditOutput,
+    removed: &[(u32, Vec<String>)],
+    chrome: &mut Chrome,
+) {
+    if removed.is_empty() {
+        return;
+    }
+    let rows = &out.galley.rows;
+    // The top of each source line's first row, by 1-based line number.
+    let mut tops: Vec<f32> = Vec::new();
+    let mut first = true;
+    for r in rows {
+        if first {
+            tops.push(r.rect().top());
+        }
+        first = r.ends_with_newline;
+    }
+    let bottom = rows.last().map_or(0.0, |r| r.rect().bottom());
+    let left = out.galley_pos.x;
+    let right = out.response.rect.right();
+    for (line, gone) in removed {
+        let y = out.galley_pos.y
+            + tops
+                .get(line.saturating_sub(1) as usize)
+                .copied()
+                .unwrap_or(bottom);
+        let band = Rect::from_min_max(Pos2::new(left, y - 3.0), Pos2::new(right, y + 3.0));
+        ui.painter().line_segment(
+            [Pos2::new(left, y), Pos2::new(right, y)],
+            Stroke::new(2.0, crate::st_view::brand::RED.gamma_multiply(0.85)),
+        );
+        let n = gone.len();
+        ui.painter().text(
+            Pos2::new(right - 4.0, y),
+            egui::Align2::RIGHT_CENTER,
+            format!("−{n}"),
+            FontId::monospace(crate::theme::MIN_TEXT),
+            crate::st_view::brand::RED,
+        );
+        let r = ui.interact(
+            band,
+            out.response.id.with(("removed", *line)),
+            egui::Sense::hover(),
+        );
+        let mut tip = format!("The Agent removed {n} line(s) here:");
+        for g in gone {
+            tip.push('\n');
+            tip.push_str(g);
+        }
+        r.on_hover_text(tip);
+        chrome.hit(format!("removed lines {line}"), band);
+    }
 }
 
 /// The gutter beside laid-out rows (`ends_with_newline` per row): each
@@ -891,12 +989,14 @@ pub fn numbering(rows: impl Iterator<Item = bool>) -> Vec<(usize, bool)> {
 
 /// The ST as a layout wrapped at `wrap` points: a line with a diagnostic
 /// on a red ground, its column to the end of the word underlined; the
-/// line `at` (a block click sent the editor there) on a grey ground.
+/// line `at` (a block click sent the editor there) on a grey ground; a
+/// line the Agent's last change added (`added`) on a green ground.
 #[must_use]
 pub fn highlight(
     text: &str,
     diags: &[(u32, u32)],
     at: Option<u32>,
+    added: &[u32],
     font: &FontId,
     wrap: f32,
     t: &Theme,
@@ -911,6 +1011,11 @@ pub fn highlight(
                 TextFormat {
                     background: t.rule,
                     color: t.fg,
+                    ..plain.clone()
+                }
+            } else if added.contains(&n) {
+                TextFormat {
+                    background: crate::st_view::brand::GREEN.gamma_multiply(0.22),
                     ..plain.clone()
                 }
             } else {

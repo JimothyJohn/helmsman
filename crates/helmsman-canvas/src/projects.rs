@@ -11,6 +11,7 @@
 use eframe::egui::{self, Color32, Key, Modifiers, RichText, Vec2};
 
 use crate::editor::Chrome;
+use crate::glyphs;
 use crate::st_view::TAP;
 use crate::theme::theme;
 use crate::tips::Tip;
@@ -152,7 +153,14 @@ pub enum Naming {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Picked {
     Project(String),
-    File(String),
+    /// A file, with the project it was clicked in.
+    File {
+        project: String,
+        file: String,
+    },
+    /// What was picked is deleted or renamed: the key has no target until
+    /// a row is clicked, and does not fall back to the open project.
+    Gone,
 }
 
 /// The sidebar's own state: a name being typed, a delete being confirmed.
@@ -164,7 +172,8 @@ pub struct FilesUi {
     /// the screen ([`Self::confirm_ui`]).
     pub confirm: Option<Act>,
     /// The project or file last clicked; the Delete key deletes it (or
-    /// the open project when nothing was).
+    /// the open project when nothing was clicked yet). Once it is deleted
+    /// or renamed, or its project is left, the key does nothing.
     pub picked: Option<Picked>,
     /// The earlier iterations (`vN.st`) are unfolded.
     pub earlier_open: bool,
@@ -212,6 +221,25 @@ fn menu_item(
     false
 }
 
+/// The running program's arrow, on hover.
+const REDEPLOY_TIP: &str =
+    "Deploys this program again with your latest edits: saves, checks and runs it (Ctrl D, File › Deploy).";
+
+/// The → that deploys the open project (`deploy`: whether it may be, or
+/// why not), drawn as `key` for the tests. True when pressed.
+pub fn deploy_arrow(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    key: &str,
+    deploy: &Result<(), String>,
+    tip: &str,
+) -> bool {
+    let tip = deploy.as_ref().err().map_or(tip, String::as_str);
+    let r = glyphs::button_sized(ui, glyphs::Icon::Deploy, glyphs::ROW, deploy.is_ok(), false, tip);
+    chrome.hit(key, r.rect);
+    r.clicked()
+}
+
 /// A button that is disabled, with why on hover, unless writes are allowed.
 fn write_button(ui: &mut egui::Ui, write: &Result<(), String>, text: &str, hint: &str) -> egui::Response {
     let b = egui::Button::new(text).min_size(Vec2::new(0.0, TAP * 0.7));
@@ -238,24 +266,46 @@ impl FilesUi {
                 text.push_str("  ● running");
             }
             let color = if p.running { t.accent } else { t.fg };
-            let r = ui.selectable_label(open, RichText::new(text).monospace().color(color));
+            let text = RichText::new(text).monospace().color(color);
+            let tip = if p.example() {
+                let title = example_title(&p.name).unwrap_or(&p.name);
+                format!("{title}: click to make your own copy of this example, under a name you choose.")
+            } else if open {
+                "Your program, open. Right-click to copy, rename or delete it.".into()
+            } else {
+                "Your program: click to open it. Right-click to copy, rename or delete it.".into()
+            };
+            let r = if p.running && open {
+                // The running program, open: an arrow beside it deploys
+                // it again with the latest edits (Nick, 2026-11-08). The
+                // name is capped to the room left of the arrow, so a
+                // long one cannot widen the pane.
+                ui.horizontal(|ui| {
+                    let room = ui.available_width() - glyphs::ROW - ui.spacing().item_spacing.x;
+                    let r = ui
+                        .scope(|ui| {
+                            ui.set_max_width(room.max(40.0));
+                            ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+                            ui.selectable_label(open, text).tip(tip.as_str())
+                        })
+                        .inner;
+                    if deploy_arrow(ui, chrome, "deploy arrow", &l.deploy, REDEPLOY_TIP) {
+                        act = Some(Act::Deploy);
+                    }
+                    r
+                })
+                .inner
+            } else {
+                ui.selectable_label(open, text).tip(tip.as_str())
+            };
             chrome.hit(format!("project {}", p.name), r.rect);
             if p.example() {
-                let title = example_title(&p.name).unwrap_or(&p.name);
-                let r = r.tip(format!(
-                    "{title}: click to make your own copy of this example, under a name you choose."
-                ));
                 if r.clicked() {
                     let name = free_name(l, &p.name);
                     self.ask(Naming::FromStarter(p.name.clone()), &name);
                 }
                 continue;
             }
-            let r = r.tip(if open {
-                "Your program, open. Right-click to copy, rename or delete it."
-            } else {
-                "Your program: click to open it. Right-click to copy, rename or delete it."
-            });
             if r.clicked() {
                 self.picked = Some(Picked::Project(p.name.clone()));
             }
@@ -400,7 +450,10 @@ impl FilesUi {
                     });
                 chrome.hit(format!("file {f}"), r.rect);
                 if r.clicked() {
-                    self.picked = Some(Picked::File(f.clone()));
+                    self.picked = Some(Picked::File {
+                        project: l.open.unwrap_or_default().into(),
+                        file: f.clone(),
+                    });
                     if !here {
                         act = Some(Act::OpenFile(f.clone()));
                     }
@@ -532,11 +585,12 @@ impl FilesUi {
         let mine = |name: &str| l.projects.iter().any(|p| p.name == name && !p.example());
         let open_mine = l.open.filter(|o| mine(o));
         match &self.picked {
-            Some(Picked::File(f)) if open_mine.is_some() && l.files.iter().any(|(n, _)| n == f) => {
-                Some(Act::DeleteFile(f.clone()))
-            }
-            Some(Picked::Project(p)) if mine(p) => Some(Act::DeleteProject(p.clone())),
-            _ => open_mine.map(|o| Act::DeleteProject(o.into())),
+            Some(Picked::File { project, file }) => (open_mine == Some(project.as_str())
+                && l.files.iter().any(|(n, _)| n == file))
+            .then(|| Act::DeleteFile(file.clone())),
+            Some(Picked::Project(p)) => mine(p).then(|| Act::DeleteProject(p.clone())),
+            Some(Picked::Gone) => None,
+            None => open_mine.map(|o| Act::DeleteProject(o.into())),
         }
     }
 
@@ -701,6 +755,9 @@ impl FilesUi {
             if name.is_empty() {
                 return None;
             }
+            if matches!(n, Naming::RenameProject(_) | Naming::RenameFile(_)) {
+                self.picked = Some(Picked::Gone);
+            }
             return Some(match n {
                 Naming::NewProject => Act::NewProject(name),
                 Naming::CopyProject(from) => Act::CopyProject { from, to: name },
@@ -772,6 +829,9 @@ impl FilesUi {
                     .tip("Leaves everything as it is (Escape).");
                 chrome.hit("confirm no", no.rect);
                 if yes.clicked() {
+                    if matches!(a, Act::DeleteProject(_) | Act::DeleteFile(_)) {
+                        self.picked = Some(Picked::Gone);
+                    }
                     out = Some(a.clone());
                     self.confirm = None;
                 } else if no.clicked() {

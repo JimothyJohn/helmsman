@@ -22,8 +22,6 @@ use crate::theme::{Theme, theme};
 use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
-/// The ST editor's widget id (its selection is the Agent's scope).
-const SOURCE_ID: &str = "pg-source";
 /// Quiet time after the last keystroke before the editor checks, s.
 const DEBOUNCE: f64 = 0.35;
 /// Trend line colours, in signal order (the last, white, is the page's ink
@@ -98,6 +96,9 @@ pub struct PlaygroundView {
     seen: Seen,
     /// The diagram of the program running, rebuilt when it changes.
     pub viewer: Option<Viewer>,
+    /// The Agent's last change, marked on the diagram and in the code
+    /// until the file is edited ([`crate::agent_marks`]).
+    pub agent_change: Option<crate::agent_marks::AgentChange>,
     /// Its shared default layout (the project's) and this browser's
     /// tweaks (`arrange.rs`).
     pub layers: Layers,
@@ -116,6 +117,9 @@ pub struct PlaygroundView {
     library: crate::web::TextFetch,
     /// A one-line note under the top bar (loaded an example, …).
     pub notice: Option<String>,
+    /// The text of `notice` while it says the program is running in this
+    /// page: it goes when the program stops, faults or restarts.
+    running_notice: Option<String>,
     /// The projects, kept in the browser's storage.
     pub proj: SimProjects,
     pub files_ui: FilesUi,
@@ -140,13 +144,6 @@ pub struct PlaygroundView {
     /// (`crate::requirements`): after every build change, before Deploy
     /// and "Use this code".
     pub tests: crate::requirements::Results,
-    /// The Requirements tab's field and open row.
-    pub req_ui: crate::requirements::ReqUi,
-    /// The requirement being added, and the last one's outcome.
-    pub adding: Option<crate::requirements::Adding>,
-    /// The next requirement request's seq: far from the Agent's, so the
-    /// shared transport's answers go to the right one.
-    req_seq: u64,
     /// The lines selected in the Code tab (file, first, last), as the
     /// editor last drew them: the Agent's scope when there are some.
     pub selection: Option<(String, u32, u32)>,
@@ -188,6 +185,7 @@ impl PlaygroundView {
         let mut v = Self {
             session: Session::new(&proj.build_src()),
             viewer: None,
+            agent_change: None,
             layers: Layers::load(tweaks),
             fresh: false,
             viewer_of: String::new(),
@@ -201,6 +199,7 @@ impl PlaygroundView {
             log: crate::messages::Log::default(),
             seen: Seen::default(),
             notice: None,
+            running_notice: None,
             proj,
             files_ui: FilesUi::default(),
             devices_ui: crate::devices::DevicesUi::default(),
@@ -212,9 +211,6 @@ impl PlaygroundView {
             to_name: None,
             revision: None,
             tests: crate::requirements::Results::default(),
-            req_ui: crate::requirements::ReqUi::default(),
-            adding: None,
-            req_seq: 1 << 40,
             selection: None,
             #[cfg(not(target_arch = "wasm32"))]
             downloads: Vec::new(),
@@ -234,7 +230,7 @@ impl PlaygroundView {
     }
 
     /// Runs the open project's requirement tests against its build and
-    /// keeps the results for the Requirements tab.
+    /// keeps the results (the deploy gate reads them).
     pub fn run_tests(&mut self) {
         let plan = self.proj.test_plan();
         let v = helmsman_iec::spec::run_all(&plan, self.test_settings());
@@ -272,6 +268,57 @@ impl PlaygroundView {
             }
         };
         results.refusal()
+    }
+
+    /// Checks a PROGRAM answer (`text`) landing as `main.st` of the saved
+    /// project `name`, with the answer's `scenarios` added: the project's
+    /// own files with them, compiled and its requirement tests run, as the
+    /// project will stand. The scenarios come back named free among the
+    /// project's files (they were named free among the files of the open
+    /// example the answer was checked against). Why not, if it must not land.
+    fn program_into(
+        &self,
+        name: &str,
+        text: &str,
+        scenarios: &[(String, String)],
+    ) -> Result<Vec<(String, String)>, String> {
+        let Some(target) = self.proj.saved.get(name) else {
+            return Ok(scenarios.to_vec());
+        };
+        let mut files = target.0.clone();
+        files.insert(helmsman_project::MAIN.to_string(), text.to_string());
+        let mut taken: Vec<String> = files.keys().cloned().collect();
+        let mut named = Vec::new();
+        for (file, t) in scenarios {
+            let want = file
+                .trim_end_matches(".st")
+                .trim_start_matches(helmsman_iec::spec::TEST_PREFIX);
+            let free = format!(
+                "{}{}.st",
+                helmsman_iec::spec::TEST_PREFIX,
+                crate::requirements::name_for(want, &taken)
+            );
+            taken.push(free.clone());
+            files.insert(free.clone(), t.clone());
+            named.push((free, t.clone()));
+        }
+        let plan = helmsman_iec::spec::plan(
+            files
+                .iter()
+                .filter(|(n, _)| helmsman_project::file_name(n) == Some(helmsman_project::FileKind::St))
+                .map(|(n, t)| (n.as_str(), t.as_str())),
+        );
+        if let Err(d) = helmsman_iec::compile(&plan.main, crate::playground::SIZES) {
+            let first = d.first().map_or_else(String::new, ToString::to_string);
+            return Err(format!(
+                "Refused: with {name}'s other files the program does not compile: {first}"
+            ));
+        }
+        let verdicts = helmsman_iec::spec::run_all(&plan, self.test_settings());
+        match crate::requirements::Results::from_verdicts(&verdicts).refusal() {
+            Some(why) => Err(format!("{why} (the program would replace main.st of {name})")),
+            None => Ok(named),
+        }
     }
 
     /// Loads the open project's build into the session, compiled and
@@ -350,6 +397,23 @@ impl PlaygroundView {
                         return;
                     }
                 }
+                // A PROGRAM answer into a project that exists replaces its
+                // main.st: that project's own tests must hold with it, and
+                // the scenarios take names free there.
+                let mut scenarios = self.to_name.as_ref().map(|a| a.tests.clone()).unwrap_or_default();
+                if text.to_ascii_uppercase().contains("PROGRAM ") && self.proj.saved.contains_key(&name) {
+                    match self.program_into(&name, &text, &scenarios) {
+                        Ok(named) => scenarios = named,
+                        Err(why) => {
+                            self.notice = Some(why.clone());
+                            self.log.error(
+                                self.session.now_ms as f64 / 1000.0,
+                                format!("Use this code: {why}"),
+                            );
+                            return;
+                        }
+                    }
+                }
                 // Unsaved edits first (a save is a revision: none when
                 // there is nothing to save).
                 if save && self.proj.dirty() {
@@ -362,8 +426,7 @@ impl PlaygroundView {
                 if text.to_ascii_uppercase().contains("PROGRAM ") {
                     dropped = self.land_program(&name, text);
                     // The scenarios its answer passed, kept as its tests.
-                    let tests = self.to_name.as_ref().map(|a| a.tests.clone()).unwrap_or_default();
-                    for (f, t) in tests {
+                    for (f, t) in scenarios {
                         self.proj.files.insert(f, t);
                     }
                 } else {
@@ -560,11 +623,12 @@ impl PlaygroundView {
             .iter()
             .map(|(n, t)| (n.as_str(), t.as_str()))
             .collect();
-        let value = |name: &str| {
-            self.session
-                .trace
-                .as_ref()
-                .and_then(|t| crate::plant::value_in_trace(t, name))
+        let unit = std::cell::OnceCell::new();
+        let value = |pou: &str, name: &str| {
+            let trace = self.session.trace.as_ref()?;
+            let src = self.session.build.as_ref().map_or("", |b| b.src.as_str());
+            let unit = unit.get_or_init(|| helmsman_iec::ast::parse(src).ok()).as_ref()?;
+            crate::plant::value_in_trace(trace, unit, pou, name)
         };
         let live = |name: &str| self.session.value(name);
         let mut states = crate::plant::states(&files, map, &value, &live);
@@ -660,131 +724,17 @@ impl PlaygroundView {
         }
     }
 
-    /// Adds a requirement: the Agent writes its test when it can be
-    /// reached (the visitor's key or the local proxy); else it is written
-    /// as "no test yet".
-    pub fn add_requirement(&mut self, text: &str, ctx: &egui::Context) {
-        use crate::requirements::{Adding, Phase, name_for, page_request};
-        if self.proj.is_example() || crate::requirements::refusal(text).is_some() {
-            return;
-        }
-        let taken: Vec<String> = self.proj.files.keys().cloned().collect();
-        let name = name_for(text, &taken);
-        self.req_seq += 1;
-        let seq = self.req_seq;
-        let mut a = Adding::in_page(text, &name, seq);
-        match self.chat.route() {
-            Ok(route) => {
-                let programs: Vec<(String, String)> = self
-                    .proj
-                    .files
-                    .iter()
-                    .filter(|(f, _)| {
-                        helmsman_project::file_name(f) == Some(helmsman_project::FileKind::St)
-                            && !helmsman_iec::spec::is_test(f)
-                    })
-                    .map(|(f, t)| (f.clone(), t.clone()))
-                    .collect();
-                let req = page_request(&route, self.chat.model, text, &name, &programs);
-                self.link.send(seq, req, ctx);
-            }
-            Err(why) if matches!(self.chat.proxy, crate::claude::Proxy::Checking) => {
-                a.phase = Phase::Failed(why.into());
-            }
-            Err(_) => {
-                let file = self.write_test(&name, &helmsman_iec::spec::placeholder(&name, text));
-                a.phase = Phase::Untested {
-                    file,
-                    why: "No agent here: paste an API key in the Agent tab, or open the row and write the test yourself."
-                        .into(),
-                };
-            }
-        }
-        self.adding = Some(a);
-    }
-
-    /// Writes `test_<name>.st` into the open project, saved, and runs the
-    /// tests; the file's name.
-    fn write_test(&mut self, name: &str, text: &str) -> String {
-        let file = format!("test_{name}.st");
-        self.proj.files.insert(file.clone(), text.to_string());
-        self.proj.save();
-        self.run_tests();
-        file
-    }
-
-    /// An answer for the requirement being added: taken (`true`) or not
-    /// one of its pieces.
-    fn requirement_answer(&mut self, m: &crate::claude::Incoming) -> bool {
-        use crate::claude::Incoming;
-        use crate::requirements::{Phase, State};
-        let Some(a) = self.adding.as_mut() else {
-            return false;
-        };
-        let seq = match m {
-            Incoming::Status { seq, .. }
-            | Incoming::Chunk { seq, .. }
-            | Incoming::End { seq }
-            | Incoming::Unreachable { seq, .. } => *seq,
-            Incoming::Proxy(_) => return false,
-        };
-        if seq != a.seq {
-            return seq > 1 << 40;
-        }
-        match m {
-            Incoming::Chunk { text, .. } => a.chunk(text),
-            Incoming::Status { status, body, .. } => {
-                a.phase = Phase::Failed(format!(
-                    "the Agent answered {status}: {}",
-                    body.chars().take(200).collect::<String>()
-                ));
-            }
-            Incoming::Unreachable { why, .. } => a.end(Some(why)),
-            Incoming::End { .. } => {
-                a.end(None);
-                if a.busy() {
-                    let (name, requirement) = (a.name.clone(), a.requirement.clone());
-                    let program = a.page_program();
-                    let text = match &program {
-                        Some(p) => format!("{}{}", helmsman_iec::spec::header(&requirement), p.trim_start()),
-                        None => helmsman_iec::spec::placeholder(&name, &requirement),
-                    };
-                    let file = self.write_test(&name, &text);
-                    let row = self.tests.rows.iter().find(|r| r.file == file).cloned();
-                    let a = self.adding.as_mut().expect("still adding");
-                    a.phase = match (program, row) {
-                        (None, _) => Phase::Untested {
-                            file,
-                            why: "the Agent's answer held no test; open the row to write one".into(),
-                        },
-                        (Some(_), Some(r)) if r.state == State::Untested => Phase::Untested {
-                            file,
-                            why: String::new(),
-                        },
-                        (Some(_), Some(r)) => Phase::Written {
-                            file,
-                            state: r.state,
-                            why: r.why,
-                        },
-                        (Some(_), None) => Phase::Written {
-                            file,
-                            state: State::Failed,
-                            why: "it did not run".into(),
-                        },
-                    };
-                }
-            }
-            Incoming::Proxy(_) => {}
-        }
-        true
-    }
-
     /// Stop: the answer under way is dropped and nothing is written.
     pub fn stop_answer(&mut self) {
+        self.stop_answer_with("stopped");
+    }
+
+    /// [`Self::stop_answer`], saying `why` in the instruction's outcome.
+    fn stop_answer_with(&mut self, why: &str) {
         self.chat.stop();
         self.link.abort();
         if self.instruct.busy() {
-            self.instruct.failed("stopped");
+            self.instruct.failed(why);
         }
     }
 
@@ -1001,12 +951,33 @@ impl PlaygroundView {
         })
     }
 
+    /// The ST editor's widget id for the open file (its selection is the
+    /// Agent's scope).
+    pub fn source_id(&self) -> egui::Id {
+        editor::source_id("pg-source", &self.proj.open, &self.proj.current)
+    }
+
     /// Back to the whole file: the selection and the pick go.
     pub fn whole_file(&mut self, ctx: &egui::Context) {
         self.selection = None;
-        editor::deselect(ctx, egui::Id::unique(SOURCE_ID));
+        editor::deselect(ctx, self.source_id());
         if let Some(v) = &mut self.viewer {
             v.pick = None;
+        }
+    }
+
+    /// An instruction belongs to the project it was typed in: when another
+    /// is open before the answer is in, the run ends with nothing written,
+    /// so no retry is built from the other project's source and tests.
+    fn drop_run_of_another_project(&mut self) {
+        let moved = self
+            .instruct
+            .run
+            .as_ref()
+            .is_some_and(|r| r.project != self.proj.open);
+        if moved {
+            self.stop_answer_with("the open project changed while the Agent was answering");
+            self.log_outcome();
         }
     }
 
@@ -1069,6 +1040,31 @@ impl PlaygroundView {
         }
     }
 
+    /// The Agent's last change, marked while its file is what the Agent
+    /// wrote: the editor's line marks for the file open, the diagram's
+    /// baseline. The first edit (any other text) clears them.
+    pub(crate) fn agent_marks(&mut self, chrome: &mut Chrome) {
+        let text = self
+            .agent_change
+            .as_ref()
+            .and_then(|c| self.proj.files.get(&c.file))
+            .map(String::as_str);
+        if self
+            .agent_change
+            .as_ref()
+            .is_some_and(|c| !c.holds(&self.proj.open, text))
+        {
+            self.agent_change = None;
+        }
+        let c = self.agent_change.as_ref();
+        chrome.st_marks = c
+            .filter(|c| c.file == self.proj.current)
+            .map(|c| c.lines().clone());
+        if let Some(v) = &mut self.viewer {
+            v.baseline = c.and_then(|c| c.baseline.clone());
+        }
+    }
+
     /// A checked answer into the open project: unsaved edits are saved
     /// first as their own revision, so the version before the change is
     /// one; then the file (and the scenarios it passed, as requirement
@@ -1101,6 +1097,15 @@ impl PlaygroundView {
             self.proj.save_as("saved before the Agent's change", None);
         }
         let before = self.proj.revisions().last().map(|r| r.n);
+        let was = self.proj.files.get(&apply.file).cloned().unwrap_or_default();
+        let baseline = self.viewer.as_ref().map(|v| std::rc::Rc::new(v.module.clone()));
+        self.agent_change = Some(crate::agent_marks::AgentChange::new(
+            &apply.project,
+            &apply.file,
+            &was,
+            apply.text.clone(),
+            baseline,
+        ));
         self.proj.files.insert(apply.file.clone(), apply.text.clone());
         for (f, t) in &apply.tests {
             self.proj.files.insert(f.clone(), t.clone());
@@ -1249,6 +1254,7 @@ impl PlaygroundView {
     /// One frame of the Editor.
     pub fn show(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         self.tick(&ui.ctx().clone());
+        self.agent_marks(chrome);
         editor::show(ui, chrome, self);
         if self.devices_ui.take_import() {
             #[cfg(target_arch = "wasm32")]
@@ -1315,15 +1321,14 @@ impl PlaygroundView {
                 Ok(index) => self.devices_ui.attach_library(&index),
                 Err(why) => {
                     self.devices_ui.library_note =
-                        Some(format!("the device library could not be read: {why}"))
+                        Some(format!("the device library could not be read: {why}"));
                 }
             }
         }
         for m in self.link.drain() {
-            if !self.requirement_answer(&m) {
-                self.chat.receive(m);
-            }
+            self.chat.receive(m);
         }
+        self.drop_run_of_another_project();
         self.settle(ctx);
         let t = ctx.input(|i| i.time);
         self.check_due(t, false);
@@ -1384,6 +1389,7 @@ struct Seen {
     notice: Option<String>,
     storage: Option<String>,
     running: Option<bool>,
+    scans: u64,
 }
 
 impl PlaygroundView {
@@ -1392,6 +1398,18 @@ impl PlaygroundView {
     /// the program starting or stopping.
     fn watch(&mut self, t: f64) {
         let fault = self.session.fault.as_ref().map(ToString::to_string);
+        let ended = (self.seen.running == Some(true) && !self.session.running)
+            || (fault.is_some() && fault != self.seen.fault)
+            || self.session.scans < self.seen.scans;
+        self.seen.scans = self.session.scans;
+        if ended
+            && self
+                .running_notice
+                .take()
+                .is_some_and(|n| self.notice.as_ref() == Some(&n))
+        {
+            self.notice = None;
+        }
         if fault != self.seen.fault {
             if let Some(f) = &fault {
                 self.log
@@ -1505,7 +1523,8 @@ impl Body for PlaygroundView {
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = &self.session.fault {
-            ui.colored_label(RED, format!("Fault: {f}. Run or Step restarts the program."));
+            let text = format!("Fault: {f}. Run or Step restarts the program.");
+            crate::messages::copyable(ui, chrome, "fault", &text, RED);
         }
         if self.session.paused.is_some() {
             let at = self
@@ -1524,9 +1543,13 @@ impl Body for PlaygroundView {
             ui.label(RichText::new(n).color(t.muted));
         }
         if let Some((n, error)) = self.proj.notice.clone() {
-            let r = ui.label(RichText::new(n).color(if error { RED } else { t.muted }));
-            chrome.hit("notice", r.rect);
-            if error && self.proj.pending.is_some() {
+            if error {
+                crate::messages::copyable(ui, chrome, "notice", &n, RED);
+            } else {
+                let r = ui.label(RichText::new(n).color(t.muted));
+                chrome.hit("notice", r.rect);
+            }
+            if error && (self.proj.pending.is_some() || self.proj.pending_file.is_some()) {
                 let r = ui
                     .button("Replace")
                     .tip("Saves your version over the one kept in this browser.");
@@ -1550,17 +1573,29 @@ impl Body for PlaygroundView {
         let errors = self.session.diags.len();
         // An edit is only checked: what runs is the last deploy, as on a box.
         let undeployed = stale && self.pending.is_none() && self.session.build.is_some();
+        let mut go = false;
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("Structured Text").strong())
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.add(crate::theme::whole(RichText::new("Structured Text").strong()))
                 .tip("The open file. It is checked as you type; Deploy runs it.");
+            // The → deploys this version (Nick, 2026-11-08).
+            go = crate::projects::deploy_arrow(
+                ui,
+                chrome,
+                "code deploy",
+                &Ok(()),
+                "Deploys this version: compiles the open project and runs it in the page (Ctrl D, File › Deploy).",
+            );
             if self.pending.is_some() {
-                ui.label(RichText::new("…").color(t.muted))
+                ui.add(crate::theme::whole(RichText::new("…").color(t.muted)))
                     .tip("Checking the edit.");
             } else if errors > 0 {
-                ui.label(RichText::new(format!("✖ {errors} error(s)")).color(RED))
-                    .tip("The list under the code has each one. Click an error to go to its line.");
+                ui.add(crate::theme::whole(
+                    RichText::new(format!("✖ {errors} error(s)")).color(RED),
+                ))
+                .tip("The list under the code has each one. Click an error to go to its line.");
             } else {
-                ui.label(RichText::new("✔ compiles").color(t.muted))
+                ui.add(crate::theme::whole(RichText::new("✔ compiles").color(t.muted)))
                     .tip("The program has no errors.");
             }
             if undeployed {
@@ -1569,9 +1604,13 @@ impl Body for PlaygroundView {
                 } else {
                     "The program running is unchanged. Deploy runs this version."
                 };
-                ui.label(RichText::new("· not deployed").color(t.muted)).tip(note);
+                ui.add(crate::theme::whole(RichText::new("· not deployed").color(t.muted)))
+                    .tip(note);
             }
         });
+        if go {
+            self.deploy();
+        }
         let all = self.diags();
         let current = self.proj.current.clone();
         let diags: Vec<(u32, u32)> = all
@@ -1582,6 +1621,7 @@ impl Body for PlaygroundView {
         let avail = ui.available_height();
         let list_h = if self.session.diags.is_empty() { 0.0 } else { 110.0 };
         let size = Vec2::new(ui.available_width(), (avail - list_h).max(120.0));
+        let id = self.source_id();
         let Some(text) = self.proj.current_text_mut() else {
             ui.label(RichText::new("No file open.").color(t.muted))
                 .tip("Open or make one in Files.");
@@ -1589,7 +1629,7 @@ impl Body for PlaygroundView {
         };
         let r = ui
             .allocate_ui(size, |ui| {
-                editor::st_editor(ui, egui::Id::unique(SOURCE_ID), text, &diags, MAX_SOURCE, chrome)
+                editor::st_editor(ui, id, text, &diags, MAX_SOURCE, chrome)
             })
             .inner;
         chrome.hit("st editor", r.rect);
@@ -1599,7 +1639,6 @@ impl Body for PlaygroundView {
         // The selected lines, the Agent's scope while there are some. Read
         // while the editor has focus: an editor without it drops its
         // selection, and moving to the Agent tab takes the focus.
-        let id = egui::Id::unique(SOURCE_ID);
         if ui.ctx().memory(|m| m.has_focus(id)) {
             self.selection = editor::selection(ui.ctx(), id).and_then(|(a, b)| {
                 let text = self.proj.files.get(&current)?;
@@ -1752,59 +1791,12 @@ impl Body for PlaygroundView {
     }
 
     fn tabs(&self) -> &'static [Tab] {
-        &[Tab::Io, Tab::Requirements, Tab::Claude]
+        &[Tab::Io, Tab::Claude]
     }
 
     fn tab(&mut self, ui: &mut egui::Ui, tab: Tab, chrome: &mut Chrome) {
         match tab {
             Tab::Io => self.io(ui, chrome),
-            Tab::Requirements => {
-                let ctx = ui.ctx().clone();
-                let act = egui::ScrollArea::vertical()
-                    .id_salt("pg-tests")
-                    .show(ui, |ui| {
-                        let files = &self.proj.files;
-                        let source = |f: &str| files.get(f).cloned();
-                        let cannot_add = self.proj.is_example().then(|| {
-                            "Make this example your own first: click it in Files and name it.".to_string()
-                        });
-                        let view = crate::requirements::View {
-                            results: &self.tests,
-                            adding: self.adding.as_ref(),
-                            busy: false,
-                            cannot_add,
-                            source: &source,
-                            agent: "the Agent (your API key or the local proxy)",
-                        };
-                        crate::requirements::ui(ui, chrome, &view, &mut self.req_ui)
-                    })
-                    .inner;
-                match act {
-                    Some(crate::requirements::Act::Add(text)) => self.add_requirement(&text, &ctx),
-                    Some(crate::requirements::Act::Run) => self.run_tests(),
-                    Some(crate::requirements::Act::Edit(f)) => {
-                        self.proj.open_file(&f);
-                        self.reload();
-                        chrome.show_code();
-                    }
-                    Some(crate::requirements::Act::Delete(f)) => {
-                        self.proj.delete_file(&f);
-                        self.req_ui.open = None;
-                        self.run_tests();
-                    }
-                    Some(crate::requirements::Act::Reword { file, text }) => {
-                        self.proj.files.insert(file, text);
-                        self.proj.save();
-                        self.run_tests();
-                    }
-                    Some(crate::requirements::Act::Rewrite { file, requirement }) => {
-                        self.proj.delete_file(&file);
-                        self.req_ui.open = None;
-                        self.add_requirement(&requirement, &ctx);
-                    }
-                    None => {}
-                }
-            }
             Tab::Claude => self.claude(ui, chrome),
         }
     }
@@ -1902,7 +1894,9 @@ impl PlaygroundView {
                 }
             });
             for (name, v) in set {
-                self.session.set_input(&name, v);
+                if let Err(why) = self.session.try_input(&name, v) {
+                    self.notice = Some(why);
+                }
             }
             ui.add_space(8.0);
             let outputs_tip = if outputs.is_empty() {
@@ -1973,7 +1967,10 @@ impl PlaygroundView {
         });
         window_slider(ui, chrome, &mut self.session.trend.window_ms);
         ui.add_space(6.0);
-        self.trend_plot(ui);
+        let plot = self.trend_plot(ui);
+        if let Some((from, to)) = lane_handles(ui, chrome, plot, &self.session.trend.signals) {
+            self.session.trend.move_signal(from, to);
+        }
     }
 
     fn claude(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
@@ -1998,9 +1995,12 @@ impl PlaygroundView {
                 ui.label(RichText::new("Model").color(t.muted))
                     .tip("The model that answers. A larger one is slower and costs more.");
                 // No wider than the panel: a row that overflows a resizable
-                // panel widens it every frame.
+                // panel widens it every frame. `width` is only a floor, so
+                // the selected text is truncated to the room (2026-11-08:
+                // with two tabs the panel is narrower than this row was).
                 egui::ComboBox::from_id_salt("pg-model")
                     .width((ui.available_width() - 40.0).max(60.0))
+                    .wrap_mode(egui::TextWrapMode::Truncate)
                     .selected_text(self.chat.model.label())
                     .show_ui(ui, |ui| {
                         for m in Model::ALL {
@@ -2017,6 +2017,7 @@ impl PlaygroundView {
                 target: self.scope().label().replacen("Editing: ", "", 1),
                 blocked: self.chat.route().err().map(str::to_string),
                 undo_blocked: self.undo_blocked(),
+                decided: std::collections::BTreeMap::new(),
             };
             match crate::instruct::ui(ui, chrome, &mut self.instruct, &view) {
                 Some(crate::instruct::Act::Send) => self.send_instruction(&ctx),
@@ -2116,7 +2117,9 @@ impl PlaygroundView {
         ui.add_space(6.0);
     }
 
-    fn trend_plot(&self, ui: &mut egui::Ui) {
+    /// Draws the trend; returns the rect it filled (the lanes' handles go
+    /// over it).
+    fn trend_plot(&self, ui: &mut egui::Ui) -> Rect {
         let t = theme(ui);
         let trend = &self.session.trend;
         let rect = ui.available_rect_before_wrap();
@@ -2131,16 +2134,15 @@ impl PlaygroundView {
                 FontId::proportional(crate::theme::MIN_TEXT),
                 t.muted,
             );
-            return;
+            return rect;
         }
         let n = trend.signals.len();
         #[allow(clippy::cast_precision_loss)]
         let lane = rect.height() / n as f32;
-        let end = trend.samples.back().map_or(0, |s| s.t_ms);
+        let end = trend.samples.last_t().unwrap_or(0);
         let window = trend.window_ms.max(1);
         let start = end.saturating_sub(window);
         // Samples older than the window are kept for a wider one: not drawn.
-        let shown = trend.samples.iter().filter(|s| s.t_ms >= start);
         #[allow(clippy::cast_precision_loss)]
         let x_of = |t: u64| rect.left() + 90.0 + (rect.width() - 96.0) * ((t - start) as f32 / window as f32);
         for (k, name) in trend.signals.iter().enumerate() {
@@ -2150,13 +2152,15 @@ impl PlaygroundView {
                 5 if !t.dark => t.fg,
                 i => TREND[i],
             };
-            let (lo, hi) = shown
-                .clone()
-                .filter_map(|s| s.values.get(k).copied().filter(|v| v.is_finite()))
+            let (lo, hi) = trend
+                .samples
+                .lane(k, start)
+                .map(|(_, v)| v)
+                .filter(|v| v.is_finite())
                 .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| {
                     (a.min(v), b.max(v))
                 });
-            let last = trend.samples.back().and_then(|s| s.values.get(k).copied());
+            let last = trend.samples.last_value(k);
             painter.text(
                 Pos2::new(rect.left() + 6.0, top + lane / 2.0),
                 egui::Align2::LEFT_CENTER,
@@ -2164,7 +2168,7 @@ impl PlaygroundView {
                     "{}\n{}",
                     name.to_ascii_lowercase(),
                     last.filter(|v| v.is_finite())
-                        .map_or("–".into(), |v| format!("{v}"))
+                        .map_or("–".into(), |v| Value::Real(v).to_string())
                 ),
                 FontId::monospace(crate::theme::MIN_TEXT),
                 color,
@@ -2180,23 +2184,99 @@ impl PlaygroundView {
                 let f = ((v - lo) / (hi - lo)) as f32;
                 top + lane - 4.0 - (lane - 8.0) * f.clamp(0.0, 1.0)
             };
-            let mut pts: Vec<Pos2> = Vec::new();
-            for s in shown.clone() {
-                let Some(v) = s.values.get(k).copied().filter(|v| v.is_finite()) else {
-                    continue;
-                };
-                let p = Pos2::new(x_of(s.t_ms), y_of(v));
-                // Steps, not slopes: a PLC value holds until the next scan.
-                if let Some(prev) = pts.last().copied() {
-                    pts.push(Pos2::new(p.x, prev.y));
-                }
-                pts.push(p);
-            }
+            let pts = lane_points(
+                trend
+                    .samples
+                    .lane(k, start)
+                    .filter(|(_, v)| v.is_finite())
+                    .map(|(t, v)| (x_of(t), y_of(v))),
+            );
             if pts.len() > 1 {
                 painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
             }
         }
+        rect
     }
+}
+
+/// One pixel column of a lane's samples: its first, lowest, highest and
+/// last, each with its place in the column's order.
+struct Column {
+    x: f32,
+    n: usize,
+    first: (usize, f32, f32),
+    lo: (usize, f32, f32),
+    hi: (usize, f32, f32),
+    last: (usize, f32, f32),
+}
+
+impl Column {
+    fn new(c: f32, x: f32, y: f32) -> Self {
+        let e = (0, x, y);
+        Self {
+            x: c,
+            n: 1,
+            first: e,
+            lo: e,
+            hi: e,
+            last: e,
+        }
+    }
+
+    fn add(&mut self, x: f32, y: f32) {
+        let e = (self.n, x, y);
+        self.n += 1;
+        if y < self.lo.2 {
+            self.lo = e;
+        }
+        if y > self.hi.2 {
+            self.hi = e;
+        }
+        self.last = e;
+    }
+
+    /// Its kept samples onto `pts`, in time order, each as a step.
+    fn flush(&self, pts: &mut Vec<Pos2>) {
+        let mut kept = [self.first, self.lo, self.hi, self.last];
+        kept.sort_by_key(|e| e.0);
+        let mut prev = None;
+        for (k, x, y) in kept {
+            if prev == Some(k) {
+                continue;
+            }
+            prev = Some(k);
+            // Steps, not slopes: a PLC value holds until the next scan.
+            if let Some(before) = pts.last().copied() {
+                pts.push(Pos2::new(x, before.y));
+            }
+            pts.push(Pos2::new(x, y));
+        }
+    }
+}
+
+/// The polyline of a lane drawn from its samples (x, y in points, x
+/// rising): a step per sample, but each pixel column of them reduced to
+/// its first, lowest, highest and last, in time order. A 10 minute
+/// window of 10 ms scans is 60 000 samples and draws a few thousand
+/// points, the same picture.
+pub fn lane_points(samples: impl Iterator<Item = (f32, f32)>) -> Vec<Pos2> {
+    let mut pts = Vec::new();
+    let mut column: Option<Column> = None;
+    for (x, y) in samples {
+        match &mut column {
+            Some(c) if c.x.to_bits() == x.floor().to_bits() => c.add(x, y),
+            _ => {
+                if let Some(c) = column.take() {
+                    c.flush(&mut pts);
+                }
+                column = Some(Column::new(x.floor(), x, y));
+            }
+        }
+    }
+    if let Some(c) = column {
+        c.flush(&mut pts);
+    }
+    pts
 }
 
 /// The narrowest trend window, ms (Nick, 2026-11-02: down to 100 ms).
@@ -2221,6 +2301,66 @@ pub fn window_label(ms: u64) -> String {
     } else {
         format!("{secs} s")
     }
+}
+
+/// Width of a lane's label column, which is also its drag handle.
+const LANE_HANDLE_W: f32 = 88.0;
+
+/// The lane labels of a trend drawn in `rect`, one lane per name, as
+/// drag handles (both trends; Nick, 2026-11-07): drag a label up or down
+/// and its signal moves to the lane it is dropped on, a bar marking
+/// where it will land. The hits are `trend lane <name>`. Returns
+/// `(from, to)` when a drag ends on another lane.
+pub fn lane_handles(
+    ui: &mut egui::Ui,
+    chrome: &mut Chrome,
+    rect: Rect,
+    names: &[String],
+) -> Option<(usize, usize)> {
+    let n = names.len();
+    if n == 0 {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let lane = rect.height() / n as f32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let lane_at = |y: f32| (((y - rect.top()) / lane).floor().max(0.0) as usize).min(n - 1);
+    let accent = theme(ui).accent;
+    let mut moved = None;
+    for (k, name) in names.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let top = rect.top() + lane * k as f32;
+        let handle = Rect::from_min_size(Pos2::new(rect.left(), top), Vec2::new(LANE_HANDLE_W, lane));
+        let r = ui
+            .interact(handle, ui.scope_id().with(("trend lane", k)), Sense::drag())
+            .on_hover_cursor(egui::CursorIcon::Grab)
+            .tip("Drag up or down to move this signal to another lane.");
+        chrome.hit(format!("trend lane {}", name.to_ascii_lowercase()), handle);
+        let at = ui.ctx().input(|i| i.pointer.latest_pos());
+        if r.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            if let Some(p) = at {
+                let to = lane_at(p.y);
+                // The bar sits on the edge the signal will take: above
+                // the target lane moving up, below it moving down.
+                #[allow(clippy::cast_precision_loss)]
+                let y = rect.top() + lane * (if to > k { to + 1 } else { to }) as f32;
+                ui.painter_at(rect).line_segment(
+                    [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+                    Stroke::new(3.0, accent),
+                );
+            }
+        }
+        if r.drag_stopped()
+            && let Some(p) = at
+        {
+            let to = lane_at(p.y);
+            if to != k {
+                moved = Some((k, to));
+            }
+        }
+    }
+    moved
 }
 
 /// The window's width as one slider, logarithmic from [`WINDOW_MIN_MS`]
@@ -2700,10 +2840,11 @@ impl Workspace for PlaygroundView {
     }
 
     fn undo(&mut self, ctx: &egui::Context, redo: bool) -> bool {
+        let id = self.source_id();
         let Some(text) = self.proj.current_text_mut() else {
             return false;
         };
-        let done = editor::undo(ctx, egui::Id::unique("pg-source"), text, redo);
+        let done = editor::undo(ctx, id, text, redo);
         if done {
             let t = ctx.input(|i| i.time);
             self.edited(t);
@@ -2733,18 +2874,26 @@ impl Workspace for PlaygroundView {
             return;
         }
         let src = self.proj.build_src();
-        let ok = self.session.set_source(&src);
+        let carried = self.session.deploy(&src);
         self.pending = None;
         self.sync_viewer();
-        if ok {
+        if let Some(carried) = carried {
             self.session.set_running(true);
+            self.seen.running = Some(true);
+            self.seen.scans = self.session.scans;
             self.proj.running = Some(self.proj.open.clone());
             let program = self
                 .viewer
                 .as_ref()
                 .and_then(|v| v.module.program())
                 .map_or_else(String::new, |p| format!(": {}", p.name.to_ascii_lowercase()));
-            self.notice = Some(format!("{} is running in this page{program}.", self.proj.open));
+            let note = format!(
+                "{} is running in this page{program}.{}",
+                self.proj.open,
+                carried.describe()
+            );
+            self.running_notice = Some(note.clone());
+            self.notice = Some(note);
             self.log.info(
                 self.session.now_ms as f64 / 1000.0,
                 format!("Deployed {}: running in this page{program}.", self.proj.open),
@@ -2866,10 +3015,14 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 _ => 0,
             };
             let before = v;
-            ui.add(egui::Slider::new(&mut v, slo..=shi).show_value(false))
-                .tip(format!(
-                    "Drag to set the input, {slo} to {shi}. Type any value in the box."
-                ));
+            ui.add(
+                egui::Slider::new(&mut v, slo..=shi)
+                    .clamping(egui::SliderClamping::Edits)
+                    .show_value(false),
+            )
+            .tip(format!(
+                "Drag to set the input, {slo} to {shi}. Type any value in the box."
+            ));
             if v != before {
                 out = Some(Value::Int(i128::from(v)));
             }
@@ -2895,8 +3048,12 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 _ => 0.0,
             };
             let before = v;
-            ui.add(egui::Slider::new(&mut v, -100.0..=100.0).show_value(false))
-                .tip("Drag to set the input, -100 to 100. Type any value in the box.");
+            ui.add(
+                egui::Slider::new(&mut v, -100.0..=100.0)
+                    .clamping(egui::SliderClamping::Edits)
+                    .show_value(false),
+            )
+            .tip("Drag to set the input, -100 to 100. Type any value in the box.");
             if v.to_bits() != before.to_bits() && v.is_finite() {
                 out = Some(Value::Real(v));
             }
@@ -2922,8 +3079,12 @@ fn input_ui(ui: &mut egui::Ui, p: &Point) -> Option<Value> {
                 _ => 0,
             };
             let before = ms;
-            ui.add(egui::Slider::new(&mut ms, 0..=10_000).show_value(false))
-                .tip("Drag to set the time, up to 10 s.");
+            ui.add(
+                egui::Slider::new(&mut ms, 0..=10_000)
+                    .clamping(egui::SliderClamping::Edits)
+                    .show_value(false),
+            )
+            .tip("Drag to set the time, up to 10 s.");
             ui.add(egui::DragValue::new(&mut ms).range(0..=86_400_000).suffix(" ms"))
                 .tip("The time in ms. Drag, or double-click to type it, up to a day.");
             if ms != before {

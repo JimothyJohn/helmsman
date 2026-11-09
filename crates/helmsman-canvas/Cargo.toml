@@ -16,6 +16,9 @@ helmsman-project = { path = "../helmsman-project" }
 eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
 # The box API's JSON (already in the workspace through helmsman-plc).
 serde_json = "1.0"
+# The desk kept in the browser (desk.rs); serde and serde_derive are
+# already in the workspace through helmsman-plc and helmsman-agent.
+serde = { version = "1.0", features = ["derive"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
@@ -71,6 +74,9 @@ web-sys = { version = "0.3", features = [
 # must stay free of SQLite and TLS (tests/wasm_deps.rs).
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 helmsman-plc = { path = "../helmsman-plc", features = ["box"] }
+# What a node renders (crates/helmsman-nodecore): the contract test parses
+# it with the same code that parses a box (src/node_api_tests.rs).
+helmsman-nodecore = { path = "../helmsman-nodecore" }
 helmsman-agent = { path = "../helmsman-agent" }
 proptest = "1.12"
 helmsman-io = { path = "../helmsman-io" }

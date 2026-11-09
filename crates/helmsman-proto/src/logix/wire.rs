@@ -48,6 +48,7 @@
 use crate::cip::{self, GeneralStatus, class};
 use crate::codec::{DecodeError, Reader, Writer};
 use crate::io::service::UNCONNECTED_SEND;
+use alloc::{string::String, string::ToString, vec::Vec};
 
 use super::path::{PathError, TagPath};
 use super::types::{DataType, TagData};

@@ -22,7 +22,8 @@
 //! information, electronic key and connection IDs"; Class 1 data is
 //! "pre-pended with a 16-bit sequence count"; UDP port 2222.
 
-use std::fmt;
+use alloc::vec::Vec;
+use core::fmt;
 
 use crate::cip::{self, GeneralStatus, Path};
 use crate::codec::{DecodeError, Reader, Writer};
@@ -592,11 +593,35 @@ impl Refused {
     }
 }
 
+/// What an extended Connection Manager code means, for the ones named in
+/// [`extended`] that an engineer can act on.
+#[must_use]
+pub const fn extended_text(code: u16) -> Option<&'static str> {
+    Some(match code {
+        extended::CONNECTION_IN_USE => "connection in use",
+        extended::OWNERSHIP_CONFLICT => "ownership conflict: another controller owns this device's outputs",
+        extended::CONNECTION_NOT_FOUND => "connection not found",
+        extended::RPI_NOT_SUPPORTED => "RPI not supported",
+        extended::RPI_NOT_ACCEPTABLE => "RPI not acceptable",
+        extended::NO_MORE_CONNECTIONS => "no more connections",
+        extended::VENDOR_OR_PRODUCT_CODE_MISMATCH => "vendor or product code mismatch",
+        extended::DEVICE_TYPE_MISMATCH => "device type mismatch",
+        extended::REVISION_MISMATCH => "revision mismatch",
+        extended::INVALID_O_TO_T_SIZE => "invalid O->T size",
+        extended::INVALID_T_TO_O_SIZE => "invalid T->O size",
+        extended::CONNECTION_TIMED_OUT => "connection timed out",
+        _ => return None,
+    })
+}
+
 impl fmt::Display for Refused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "refused: {}", self.status)?;
         if let Some(code) = self.extended_code() {
             write!(f, " extended 0x{code:04X}")?;
+            if let Some(what) = extended_text(code) {
+                write!(f, " ({what})")?;
+            }
         }
         if self.extended.len() > 1 {
             write!(f, " {:04X?}", &self.extended[1..])?;
@@ -971,7 +996,7 @@ mod tests {
         assert_eq!(r.connection_serial, 0x0101);
         assert_eq!(
             r.to_string(),
-            "refused: 0x01 connection failure extended 0x0127 [0026]"
+            "refused: 0x01 connection failure extended 0x0127 (invalid O->T size) [0026]"
         );
     }
 

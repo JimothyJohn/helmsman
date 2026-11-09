@@ -11,12 +11,14 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Pos2, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Vec2,
 };
 use helmsman_diagram::diff::{self, Change, Line};
+
+use crate::diff_ui::Kind;
 use helmsman_diagram::layout::{HEADER, LABEL_H, in_port, in_port_at, out_port, out_port_at};
 use helmsman_diagram::{Diagram, NodeId};
 
 use crate::review::{
-    Answer, Call, Chart, Delta, Drawn, Open, Phase, ROLES, Refusal, Replay, Request, Review, SignalChart,
-    Step, Target, Track, Why,
+    Answer, Call, Chart, Delta, Drawn, Open, Phase, ROLES, Refusal, Replay, Request, Review, SHOWN,
+    SignalChart, Step, Target, Track, Values, Why,
 };
 use crate::st_view::brand::{BLACK, YELLOW};
 use crate::theme::{Theme, theme};
@@ -410,6 +412,10 @@ impl ReviewView {
         };
         section(ui, "Sim replay");
         replay_ui(ui, &o.step, &mut out);
+        if let Some(v) = o.values() {
+            section(ui, "Running values").tip(VALUES);
+            values_ui(ui, &v, &mut out);
+        }
         section(ui, "Approve");
         approve_ui(ui, o, now, &mut out);
         if let Some(u) = o.undo.as_mut() {
@@ -600,7 +606,7 @@ fn source(ui: &mut egui::Ui, lines: &[Line]) {
         .collect();
     egui::Frame::new()
         .fill(t.bg)
-        .inner_margin(egui::Margin::same(6))
+        .inner_margin(egui::Margin::symmetric(2, 6))
         .show(ui, |ui| {
             let mut skipped = false;
             for (k, l) in lines.iter().enumerate() {
@@ -612,21 +618,14 @@ fn source(ui: &mut egui::Ui, lines: &[Line]) {
                     continue;
                 }
                 skipped = false;
-                let (gutter, fg, bg) = match l {
-                    Line::Same { new, .. } => (format!("{new:>4}  "), t.muted, None),
-                    Line::Added { new, .. } => (format!("{new:>4} +"), BLACK, Some(YELLOW)),
-                    Line::Removed { old, .. } => (format!("{old:>4} −"), t.fg, Some(t.rule)),
+                // As GitHub draws a diff: + on green, − on red, the row
+                // the pane's width (Nick, 2026-11-08).
+                let (kind, n) = match l {
+                    Line::Same { new, .. } => (Kind::Same, *new),
+                    Line::Added { new, .. } => (Kind::Added, *new),
+                    Line::Removed { old, .. } => (Kind::Removed, *old),
                 };
-                let mut t = RichText::new(format!("{gutter} {}", l.text()))
-                    .monospace()
-                    .color(fg);
-                if let Some(bg) = bg {
-                    t = t.background_color(bg);
-                }
-                if matches!(l, Line::Removed { .. }) {
-                    t = t.strikethrough();
-                }
-                ui.label(t);
+                crate::diff_ui::row(ui, kind, &format!("{n:>4}"), l.text());
             }
         });
 }
@@ -938,6 +937,84 @@ fn replay_ui(ui: &mut egui::Ui, step: &Step, out: &mut Out) {
         Replay::Failed(r) => refusal_ui(ui, r, 0.0),
         Replay::None | Replay::Running => {}
     }
+}
+
+/// The Running values heading's tooltip.
+const VALUES: &str = "What the deploy does to the values the box holds now: timers, counters \
+                      and every variable keep their value when the new program declares them \
+                      with the same name and type. A new variable, or one whose type changed, \
+                      starts at its initial value; one the new program no longer declares is \
+                      gone. The audit log records what the deploy did.";
+
+/// What the deploy keeps, resets and drops: the box's sentence, then each
+/// reset and dropped value marked apart from the kept count. Wrapped to
+/// what is visible (the diagram can make the scrolled area wider), with
+/// room for the scroll bar.
+fn values_ui(ui: &mut egui::Ui, v: &Values, out: &mut Out) {
+    let seen = ui.clip_rect().right() - ui.cursor().left() - 12.0;
+    let w = ui.available_width().min(seen).max(120.0);
+    ui.scope(|ui| {
+        ui.set_max_width(w);
+        values_rows(ui, v, out);
+    });
+}
+
+fn values_rows(ui: &mut egui::Ui, v: &Values, out: &mut Out) {
+    let t = theme(ui);
+    let tip = if v.preview {
+        "A preview, worked out when the proposal was made against what runs now. A value that \
+         no longer fits its type at the moment of the deploy also starts again; the audit log \
+         records what actually happened."
+    } else {
+        "What the deploy did, as the box reported it when it swapped the program."
+    };
+    let line = ui
+        .add(egui::Label::new(RichText::new(v.sentence()).color(t.fg)).wrap())
+        .tip(tip);
+    out.rects.push(("state".into(), line.rect));
+    if !v.running || (v.reset.is_empty() && v.dropped.is_empty()) {
+        return;
+    }
+    ui.horizontal_wrapped(|ui| {
+        ui.label(RichText::new(format!("{} kept", v.kept)).color(t.muted))
+            .tip("Values that carry over unchanged.");
+        for (name, why) in v.reset.iter().take(SHOWN) {
+            let (mark, tip) = if why == "type changed" {
+                ("reset", "Starts again at its initial value: its type changed.")
+            } else {
+                ("new", "New: starts at its initial value.")
+            };
+            ui.label(
+                RichText::new(format!("{mark} {name}"))
+                    .monospace()
+                    .background_color(YELLOW)
+                    .color(BLACK),
+            )
+            .tip(tip);
+        }
+        more(ui, v.reset.iter().skip(SHOWN).map(|(n, _)| n.as_str()), "reset");
+        for name in v.dropped.iter().take(SHOWN) {
+            ui.label(
+                RichText::new(format!("drop {name}"))
+                    .monospace()
+                    .strikethrough()
+                    .color(GONE),
+            )
+            .tip("No longer declared: its value is gone after the deploy.");
+        }
+        more(ui, v.dropped.iter().skip(SHOWN).map(String::as_str), "dropped");
+    });
+}
+
+/// "and 40 more reset", the names in its tooltip; nothing when none.
+fn more<'a>(ui: &mut egui::Ui, rest: impl Iterator<Item = &'a str>, what: &str) {
+    let rest: Vec<&str> = rest.collect();
+    if rest.is_empty() {
+        return;
+    }
+    let t = theme(ui);
+    ui.label(RichText::new(format!("and {} more {what}", rest.len())).color(t.muted))
+        .tip(rest.join(", "));
 }
 
 fn approve_ui(ui: &mut egui::Ui, o: &mut Open, now: f64, out: &mut Out) {

@@ -52,6 +52,8 @@ simulation by itself and says so.
 
 ## Where things are
 
+- [Load a program](load.html): what download, go online and the rest are
+  called here, and deploying step by step.
 - [The Editor](editor.html): the screen, its menus and glyphs, the
   diagram, the panels.
 - [The simulation](simulation.html): running, stepping, inputs, the trend.
@@ -61,5 +63,5 @@ simulation by itself and says so.
   forcing, the Monitor.
 - [The Agent](agent.html): writing and changing programs from a
   description.
-- [Keyboard](keyboard.html) and [Examples and starters](starters.html),
+- [Keyboard](keyboard.html) and [Examples](starters.html),
   generated from the program itself.

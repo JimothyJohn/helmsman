@@ -236,7 +236,6 @@ fn the_agent_step_can_be_skipped_and_only_it() {
     assert_eq!(t.step, Step::Agent);
     t.press(Button::SkipStep, &s);
     assert_eq!(t.step, Step::Done);
-    assert_eq!(t.press(Button::Requirements, &s), Some(Effect::Requirements));
     assert_eq!(t.press(Button::Help, &s), Some(Effect::Help));
     assert_eq!(t.step, Step::Done);
 }

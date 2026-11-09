@@ -63,7 +63,7 @@ footer{background:var(--graphite);color:var(--header-fg);font:13px var(--mono);p
   <button class="theme" type="button" aria-pressed="false" title="Switch between dark and light">Light</button>
 </div></header>
 <div class="wrap page">
-<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
+<nav class="help" aria-label="Help pages"><a href="index.html">Getting started</a><a href="load.html">Load a program</a><a href="editor.html">The Editor</a><a href="simulation.html">The simulation</a><a href="projects.html">Projects</a><a href="box.html">On a box</a><a href="agent.html">The Agent</a><a href="keyboard.html">Keyboard</a><a href="starters.html">Examples</a></nav>
 <main>
 <h1 id="the-agent">The Agent</h1>
 <p>The Agent is the way you program by describing the machine. Open the
@@ -83,6 +83,13 @@ example:</p>
 latches until stop is pressed.</p>
 </blockquote>
 <p>Nothing runs until you deploy it, as with any edit of your own.</p>
+<p>What the change did is marked until your next edit. In the code,
+lines it added are on a green ground and a red rule stands where it
+removed lines (point at the rule to read them). On the diagram, blocks
+and wires it added are outlined green and those it removed are drawn as
+faint red ghosts where they were. In the simulation the diagram shows
+the change at once; on a box the diagram is what runs, so its marks
+appear when you deploy.</p>
 <h2 id="checked-before-it-is-written">Checked before it is written</h2>
 <p>With every change the Agent writes one or more scenarios: short
 requirement tests, each stating in plain words what it checks, such as

@@ -414,6 +414,18 @@ into the code.
 - **Leaned on by** `modbus.rs` and `sim.rs`: the 7-byte MBAP header
   (transaction id, protocol id 0, length counting unit id + PDU, unit id;
   §3.1.3 p.5) and port 502 (p.5).
+- **Leaned on by** `modbus.rs`'s shared connection (`Client`, `Line`) and
+  `sim.rs`'s `Gateway`, read again 2026-11-07 (same sha256, `pdftotext
+  -layout`, the page footer's "n/46"): the server copies the transaction
+  id back "for transaction pairing", and the unit id routes a request to
+  a serial slave "through a gateway" (§3.1.3 pp.5-6); a client should
+  open few connections to one server, "one connection per application",
+  and transactions sharing a connection are told apart by transaction id
+  (§4.2.1.1 p.10, implementation rules 3 and 4); past a server's
+  connection limit "the oldest unused connection is closed" (§4.2.1.2
+  p.12); a transaction id "must be unique" on a connection at a time,
+  and the TCP-to-serial gateway reconciles TCP's several requests in
+  flight with the serial line's one (§4.4.1.2 p.23).
 - **How to cite:** `TCP §<x> p.<n>`.
 
 ### Modbus Organization, MODBUS over Serial Line Specification and Implementation Guide V1.02 (2006-12-20, 44 pp)
@@ -669,6 +681,39 @@ into the code.
   no resources or prompts.
 - **How to cite:** `MCP 2026-07-28 <page> § <heading>`, e.g.
   `MCP 2026-07-28 basic/transports/streamable-http § Server Validation`.
+
+### IEC 61131-3, by secondary references (the standard itself is not held)
+
+- **The standard:** IEC 61131-3 "Programmable controllers – Part 3:
+  Programming languages", current edition 4.0, IEC 61131-3:2025 (May 2025;
+  https://webstore.iec.ch/en/publication/68533), after edition 3.0 of 2013.
+  Decided (Nick, 2026-11-08, TODO card `iec-standard-source`): not bought.
+  Nothing in this repo cites a clause, table or page of the standard, and
+  nothing may until a copy is held; "IEC 61131-3 Structured Text" in the
+  docs means the language as the references below and ruSTy describe it.
+- **What pins the semantics instead:** agreement with ruSTy
+  (`crates/helmsman-iec/tests/oracle.rs`, docker/rusty/, an independent
+  compiler of the same language; its own reading of the standard is not
+  ours to cite) and the PLCopen TC6 corpus above. Where they and a
+  reference disagree, the disagreement is written down in the test
+  (`small_int_negation_is_dint_wide_on_both_sides` in oracle.rs was the
+  pattern while the two disagreed; Nick's call on 2026-11-08 moved ours
+  to ruSTy's side, and the test now pins the agreement).
+- **Secondary references, marked as such:**
+  - Fernhill Software, "Structured Text (ST)", in the Fernhill SCADA help,
+    https://www.fernhillsoftware.com/help/iec-61131/structured-text/
+    (version 4.39, read 2026-11-08). One page per statement (assignment,
+    function call, IF, CASE, FOR, WHILE, REPEAT, EXIT, RETURN; FOR EACH is
+    Fernhill's own) and a "Common Elements" section for types, literals
+    and operators. It names no edition of the standard, and some of it is
+    Fernhill's dialect: check a claim against ruSTy before leaning on it.
+  - The PLCopen Coding Guidelines v1.0 (2016), for the lints (card
+    `st-lints`): a free PDF from https://www.plcopen.org/downloads
+    (no login; checked 2026-11-08). The entry with its rule numbers
+    arrives with that card.
+- **How to cite:** `IEC 61131-3 (secondary: Fernhill ST "<page>")`, never
+  a `§` of the standard. A behaviour pinned by the oracle cites the oracle
+  test by name.
 
 ### PKWARE, APPNOTE.TXT, .ZIP File Format Specification, version 6.3.10 (2022-11-01)
 

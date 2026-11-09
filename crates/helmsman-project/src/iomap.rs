@@ -13,6 +13,9 @@ pub struct MapDevice {
     pub endpoint: String,
     /// The driver's params, in order, as `KEY=VALUE` tokens.
     pub params: Vec<(String, String)>,
+    /// Every token after the endpoint, as written (the `KEY=VALUE` ones
+    /// among them are `params`), so an edit can keep what it does not know.
+    pub settings: Vec<String>,
 }
 
 /// One `in|out NAME TYPE DEVICE POINT [KEY=VALUE ...]` line.
@@ -25,6 +28,9 @@ pub struct MapSignal {
     pub device: String,
     pub point: String,
     pub unit: Option<String>,
+    /// Every token after the point, as written (`safe=true`, `unit=mm`,
+    /// `poll_ms=500`, ...), so an edit can keep what it does not know.
+    pub tail: Vec<String>,
 }
 
 /// What a map's text names.
@@ -63,6 +69,7 @@ pub fn skim(text: &str) -> MapText {
                 driver: (*driver).to_string(),
                 endpoint: (*endpoint).to_string(),
                 params: params(rest),
+                settings: rest.iter().map(|t| (*t).to_string()).collect(),
             }),
             [dir @ ("in" | "out"), name, ty, device, point, rest @ ..] => out.signals.push(MapSignal {
                 dir: (*dir).to_string(),
@@ -74,6 +81,7 @@ pub fn skim(text: &str) -> MapText {
                     .into_iter()
                     .find(|(k, _)| k == "unit")
                     .map(|(_, v)| v),
+                tail: rest.iter().map(|t| (*t).to_string()).collect(),
             }),
             _ => out.odd += 1,
         }
@@ -89,6 +97,69 @@ pub fn device_name_ok(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
         && name.len() <= 64
         && !RESERVED.contains(&name)
+}
+
+/// Whether `endpoint` is an address `driver` can dial: for the network
+/// drivers `host[:port]` with a port that is a `u16` above zero, a host
+/// that is a valid IPv4 address when it looks like one (digits and dots)
+/// and a hostname otherwise, or `[IPv6]` with an optional port. An
+/// identity (`mac=...`, `cip=...`, which the driver resolves) and the
+/// other drivers' addresses (a serial port's path) are theirs to check.
+///
+/// # Errors
+/// What is wrong with it, in words.
+pub fn endpoint_ok(driver: &str, endpoint: &str) -> Result<(), String> {
+    if !matches!(driver, "modbus-tcp" | "enip-io")
+        || endpoint.starts_with("mac=")
+        || endpoint.starts_with("cip=")
+    {
+        return Ok(());
+    }
+    let (host, port) = if let Some(inner) = endpoint.strip_prefix('[') {
+        let (h, rest) = inner
+            .split_once(']')
+            .ok_or("an IPv6 address is written [::1]:502")?;
+        if h.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(format!("{h:?} is not an IPv6 address"));
+        }
+        let port = match rest {
+            "" => None,
+            r => Some(r.strip_prefix(':').ok_or("after ] comes :PORT")?),
+        };
+        return port_ok(port);
+    } else {
+        let mut parts = endpoint.splitn(3, ':');
+        let (host, port, more) = (parts.next().unwrap_or(""), parts.next(), parts.next());
+        if more.is_some() {
+            return Err("the address is HOST or HOST:PORT (an IPv6 address goes in [ ])".into());
+        }
+        (host, port)
+    };
+    port_ok(port)?;
+    let numeric = !host.is_empty() && host.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    if numeric {
+        if host.parse::<std::net::Ipv4Addr>().is_err() {
+            return Err(format!("{host:?} is not an IPv4 address"));
+        }
+    } else if host.is_empty()
+        || host.len() > 253
+        || host.starts_with(['.', '-'])
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    {
+        return Err(format!("{host:?} is not a host name or an IP address"));
+    }
+    Ok(())
+}
+
+fn port_ok(port: Option<&str>) -> Result<(), String> {
+    match port {
+        Some(p) if !(p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u16>().is_ok_and(|n| n > 0)) => {
+            Err(format!("the port is a number from 1 to 65535, not {p:?}"))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// A `device` line for the map, or why not: the name an identifier, the
@@ -111,6 +182,12 @@ pub fn device_line(name: &str, driver: &str, endpoint: &str, params: &str) -> Re
     if driver.split_whitespace().count() != 1 {
         return Err("the protocol is one word".into());
     }
+    if [driver, endpoint, params].iter().any(|t| t.contains('#')) {
+        return Err(
+            "a # starts a comment in io.map: the protocol, address and settings cannot hold one".into(),
+        );
+    }
+    endpoint_ok(driver, endpoint)?;
     let mut line = format!("device {name} {driver} {endpoint}");
     for p in params.split_whitespace() {
         match p.split_once('=') {
@@ -153,6 +230,10 @@ mod tests {
         assert_eq!(m.signals[2].unit.as_deref(), Some("mm"));
         assert_eq!(m.signals[1].device, "box");
         assert_eq!(m.odd, 3);
+        // What follows the endpoint or the point is kept as written.
+        assert_eq!(m.devices[0].settings, ["unit=1", "timeout_ms=300"]);
+        assert_eq!(m.signals[1].tail, ["safe=false"]);
+        assert_eq!(m.signals[2].tail, ["unit=mm", "poll_ms=500"]);
     }
 
     #[test]
@@ -201,6 +282,40 @@ mod tests {
         assert!(device_line("rio", "modbus tcp", "a", "").is_err());
         assert!(device_line("rio", "modbus-tcp", "a", "unit").is_err());
         assert!(device_line("rio", "modbus-tcp", "a", "=1").is_err());
+        // The address is dialled: a host and a port that exist.
+        for bad in [
+            "999.1.1.1:99999",
+            "10.0.0.57:0",
+            "10.0.0.57:65536",
+            "host:abc",
+            "host:",
+            ":502",
+            "300.1.1.1",
+            "1.2.3",
+            "a:b:c",
+            "[::1",
+            "[zz]:502",
+            "ho st",
+            "ho$t:502",
+            "host#:502",
+        ] {
+            assert!(device_line("rio", "modbus-tcp", bad, "").is_err(), "{bad:?}");
+        }
+        for good in [
+            "10.0.0.57",
+            "10.0.0.57:502",
+            "plc-1.local:44818",
+            "bench_pc",
+            "[::1]:502",
+            "[fe80::1]",
+        ] {
+            assert!(device_line("rio", "enip-io", good, "").is_ok(), "{good:?}");
+        }
+        // An identity is the driver's to resolve, a #  never fits a line.
+        assert!(device_line("rio", "enip-io", "cip=991:515", "").is_ok());
+        assert!(device_line("rio", "enip-io", "mac=00-90-e8-7e-af-be", "").is_ok());
+        assert!(device_line("rio", "modbus-tcp", "a", "unit=1#x").is_err());
+        assert!(device_line("rio", "modbus#tcp", "a", "").is_err());
         assert!(device_line("rio", "modbus-tcp", "a", "unit=").is_err());
         // A line written reads back as one device.
         let line = device_line("rio", "modbus-tcp", "h:502", "unit=1").unwrap();

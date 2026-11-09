@@ -105,7 +105,7 @@ label is drawn, the icon stands alone at a readable size.
 ## The panes
 
 - **The left pane** has three tabs. **Files** (<kbd>Alt</kbd> <kbd>0</kbd>):
-  the project's files, the examples and starters, and the program tree
+  the project's files, the examples, and the program tree
   under them; a right-click on a file offers Copy, Paste, Duplicate,
   Rename and Delete, and what you copy pastes into any project you open
   next. **Devices** (<kbd>Alt</kbd> <kbd>4</kbd>): at the top, **I/O
@@ -149,6 +149,8 @@ label is drawn, the icon stands alone at a readable size.
   Structured Text editor. Errors are marked on the line as you type; the
   program running does not change until you deploy. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
+  A double click on any tab, on this pane or the side panel, hides that
+  pane.
 - **The bottom panel** (<kbd>Alt</kbd> <kbd>2</kbd>): the **Trend** of the
   signals you pin, with a long time axis, and **Messages**, the last two
   hundred things the page had to say, with the error count on the tab.
@@ -161,7 +163,7 @@ label is drawn, the icon stands alone at a readable size.
   and **Agent**, where you type what the open file should do and it
   is updated (see [The Agent](agent.html)).
 
-<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples and starters, and the program tree." width="360">
+<img src="img/files-pane.png" alt="The Files tab: the project's files, the examples, and the program tree." width="360">
 
 <img src="img/io-tab.png" alt="The I/O tab: every input with its control, every output with its value." width="300">
 

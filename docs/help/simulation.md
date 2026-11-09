@@ -85,10 +85,13 @@ the belt or the compressors, so that it moves with nothing wired.
 The Trend tab along the bottom plots the signals you pin, up to six,
 each in its own lane with its last value. The Window slider sets how
 much of the past the pane shows, from 100 ms to 10 minutes on a
-logarithmic scale, and the plot follows as you drag; history is kept for
-the widest, so widening shows what already ran. The lane's scale is at its right edge: it rounds out to an even step
-and moves only when the values cross one. Pin from the tab's list.
-History restarts when you change the set.
+logarithmic scale (it opens on 30 s), and the plot follows as you drag;
+history is kept for the widest, so widening shows what already ran. The
+lane's scale is at its right edge: it rounds out to an even step and
+moves only when the values cross one. Pin from the tab's list. History
+restarts when you change the set. To put the lanes in another order,
+drag a lane's name up or down and drop it on the lane it should take;
+its history moves with it.
 
 ![The Trend tab: three pinned signals, the Window slider, a lane each with its scale at the right edge.](img/trend.png)
 

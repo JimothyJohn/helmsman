@@ -19,6 +19,14 @@ example:
 
 Nothing runs until you deploy it, as with any edit of your own.
 
+What the change did is marked until your next edit. In the code, lines
+it added are on a green ground and a red rule stands where it removed
+lines (point at the rule to read them). On the diagram, blocks and wires
+it added are outlined green and those it removed are drawn as faint red
+ghosts where they were. In the simulation the diagram shows the change
+at once; on a box the diagram is what runs, so its marks appear when you
+deploy.
+
 ## Checked before it is written
 
 With every change the Agent writes one or more scenarios: short

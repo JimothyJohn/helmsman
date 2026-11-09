@@ -14,7 +14,7 @@
 //! DHCP starts only after link-up, with promiscuous mode held until a lease
 //! is in (MAC filtering during DHCP was unreliable on real hardware).
 
-use embassy_net::{Config, ConfigV4, DhcpConfig, Runner, Stack};
+use embassy_net::{Config, ConfigV4, DhcpConfig, Runner, Stack, StaticConfigV4};
 use embassy_time::{Duration, Timer};
 use esp_hal::delay::Delay;
 use esp_hal::gpio::Output;
@@ -33,8 +33,11 @@ pub const EMAC_FRAME_BUF_SIZE: usize = 1600;
 pub const ETH_LINK_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// The LAN8720A latches its straps on power-on and needs this before MDIO.
 pub const PHY_POWER_STABLE_DELAY_MS: u32 = 100;
-/// Sockets the stack holds: DHCP, the Modbus TCP link, the UDP log, one spare.
-pub const SOCKETS: usize = 4;
+/// Sockets the stack holds: DHCP, the Modbus TCP link, two HTTP
+/// connections, the beacon, the UDP log, two spare. smoltcp panics on a
+/// socket past this ("adding a socket to a full SocketSet": the first
+/// commissioned boot, 2026-11-08, with a site set and four slots).
+pub const SOCKETS: usize = 6;
 
 /// EMAC instance shape used throughout this module.
 pub type EthEmac = Emac<EMAC_RX_FRAMES, EMAC_TX_FRAMES, EMAC_FRAME_BUF_SIZE>;
@@ -136,6 +139,7 @@ pub fn init(
 /// Drives the embassy-net stack (packet rx/tx).
 #[embassy_executor::task]
 pub async fn eth_net_task(mut runner: Runner<'static, EthDriver>) -> ! {
+    println!("ethernet: net task running");
     runner.run().await
 }
 
@@ -143,11 +147,14 @@ pub async fn eth_net_task(mut runner: Runner<'static, EthDriver>) -> ! {
 /// MAC's speed/duplex in step with auto-negotiation.
 #[embassy_executor::task]
 pub async fn eth_link_task(emac_ptr: *mut EthEmac) -> ! {
+    println!("ethernet: link task running");
     let mut mdio = MdioController::new(Delay::new());
     let mut phy = Lan8720a::new(board::PHY_ADDR);
     let mut was_up = false;
+    let mut polls: u32 = 0;
 
     loop {
+        polls += 1;
         match EMAC_STATE.update_link_from_phy(&mut phy, &mut mdio) {
             Ok(Some(status)) => {
                 if !was_up {
@@ -166,6 +173,16 @@ pub async fn eth_link_task(emac_ptr: *mut EthEmac) -> ! {
                 if was_up {
                     println!("ethernet: link down");
                     was_up = false;
+                } else if polls.is_multiple_of(10) {
+                    // A stall here with the cable in and the LED on is worth
+                    // the PHY's own word (2026-11-08: a build stalled at
+                    // "waiting for the link" after the socket set grew).
+                    use ph_esp32_mac::PhyDriver;
+                    let id = phy.phy_id(&mut mdio);
+                    println!(
+                        "ethernet: no link yet after {} polls; PHY id reads {:?}",
+                        polls, id
+                    );
                 }
             }
             Err(e) => println!("ethernet: PHY poll error {:?}", e),
@@ -174,12 +191,29 @@ pub async fn eth_link_task(emac_ptr: *mut EthEmac) -> ! {
     }
 }
 
-/// Starts DHCP once the link is up and re-arms it if the lease is lost.
+/// How the node gets its address: a lease, or a fixed one (most plants
+/// commission controllers on static networks with no DHCP server; Nick,
+/// 2026-11-08).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Addressing {
+    Dhcp,
+    Static(StaticConfigV4),
+}
+
+/// Applies the address once the link is up: a static one at once, or
+/// DHCP, re-armed if the lease is lost.
 #[embassy_executor::task]
-pub async fn eth_dhcp_task(stack: Stack<'static>, emac_ptr: *mut EthEmac) -> ! {
+pub async fn eth_dhcp_task(stack: Stack<'static>, emac_ptr: *mut EthEmac, addressing: Addressing) -> ! {
     let mut promisc = false;
     loop {
         stack.wait_link_up().await;
+        if let Addressing::Static(fixed) = &addressing {
+            println!("ethernet: link up, static {}", fixed.address);
+            stack.set_config_v4(ConfigV4::Static(fixed.clone()));
+            stack.wait_link_down().await;
+            println!("ethernet: link down");
+            continue;
+        }
         println!("ethernet: link up, starting DHCP");
         Timer::after(Duration::from_secs(1)).await;
 
