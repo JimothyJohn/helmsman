@@ -280,6 +280,42 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-08
   by: claude-session
 
+- [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. Same code on the POE-ISO and the P4 (helmsman-node-p4). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
+  needs: node-p4-bringup is not required; the POE-ISO on the bench (poe-iso-rack-03, /dev/cu.usbserial-1130, 192.168.3.55) is enough
+  result: a node on the plant network takes a new firmware from a laptop without a USB cable, and a bad image cannot brick it
+  est: 2d
+  difficulty: high
+  id: node-ota
+  asked: 2026-11-09
+  by: claude-session
+
+- [ ] **Node I/O map as a setting: the block's address, unit and point names** — today the node's Modbus block is fixed at build time (E1213_ADDR, unit 1, points di0..di7 and do0..do3 named in the firmware), so one image fits one bench. Make it a record beside the settings on flash (nodecore settings: address, port, unit id, the DI and DO point names and counts, scan period), edited on the settings page and over PUT /api/settings like the network, applied on restart; the box's I/O map format where it fits (a node holds one or two blocks, not a site). The canvas box view then shows the engineer's names. Test: nodecore round-trips the record, refuses a count the block cannot have, and the I/O task reads the record instead of constants.
+  needs: nothing; builds on #312's settings record
+  result: one node image commissions against any Modbus TCP block by filling a form, no rebuild
+  est: 1d
+  difficulty: med
+  id: node-io-map
+  asked: 2026-11-09
+  by: claude-session
+
+- [ ] **Canvas: a token field for a node, so deploy and run/stop work from the UI** — `?box=ORIGIN` (#312) makes the canvas watch a node or another box by address, read-only in practice: every write needs the node's bearer token, which only curl sends today. Add a token field where the canvas asks for the origin (kept in the browser's storage for that origin, never in the URL), sent as Authorization: Bearer on every write, with a 401 opening the field again. Then the Editor's deploy and the Stop/Run glyphs work against a node. Test: the canvas contract test (node_api_tests.rs) with a write that fails without the header and passes with it.
+  needs: nothing
+  result: an engineer commissions, deploys and stops a node from the canvas alone
+  est: 4h
+  difficulty: low
+  id: canvas-node-token
+  asked: 2026-11-09
+  by: claude-session
+
+- [ ] **Bring up the ESP32-P4 board: Ethernet on the IP101GRI, then the same commissioning run** — the Waveshare ESP32-P4-ETH + PoE module arrives Wednesday 2026-11-12. helmsman-node-p4 builds and links the `modbus`, `enip` and `node` binaries (#299, #312) but has never run on hardware. Order (docs/EDGE.md Phase 3 "First day on the board"): flash the `modbus` build over USB with PoE unplugged until the module's isolation is known, watch the console for the link (esp-hal 1.2 Ethernet on the IP101GRI over RMII and MDIO; esp-p4-eth is the fallback if the PHY does not come up), then the `node` build and the POE-ISO's commissioning run (factory 192.168.127.250, PUT /api/settings to static, deploy the chase, ping, values stream). Then the memory headroom the WROOM lacks (768 KiB: a real cell program), then mbedtls-rs at the fork's main with Homebrew clang for TLS. E1213 note: it has one exclusive EtherNet/IP owner (the try box), so the first enip run is ENIP_INPUT_ONLY=1 or over Modbus.
+  needs: the board on the bench (Wednesday); which switch and subnet it plugs into (the E1213 is on the Studio link 192.168.3.x)
+  result: the node image runs on the P4 end to end as on the POE-ISO, with the numbers for scan period and free memory written into EDGE.md
+  est: 1d
+  difficulty: med
+  id: node-p4-bringup
+  asked: 2026-11-09
+  by: claude-session
+
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
 
 The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with his calls folded in: lints shown, two block, a pragma overrides (§1, 2026-11-07); the §4 dialect table with VAR_GLOBAL inside one module only; OSCAT or standard names for the library with plain words in the tooltips; no LSP or formatter until `version-control` ships; no SCL for the early release; IEC 61131-3 cited from secondary references marked as such (docs/SOURCES.md). Done already: the ruSTy 1.0.8 bump (#282) and `helmsman-plc test` with JUnit XML (#289). Each dialect "yes" adds oracle cases, property tests, the no_std build check and a new relay profile id (a served profile never changes).
@@ -543,10 +579,11 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   notes: Nick 2026-11-02 (board): "I like this because it also allows me to set it up like my ../github/supervictor project. And now I realize that I may not have enough cores to do what I need with the network, uplink, communication, and program / process that may get complicated." Interview 2026-11-02: the fleet lives on the ESP32-POE2 as "every node is its own box": each node runs the runtime, serves its own API and announces itself on the LAN (`--site`), the fleet view is the canvas's Site view across nodes from any laptop, history and uplink go node → relay. Nothing in the middle to host. This card becomes: the Site view across boxes and nodes, the relay as the uplink, OTA of the node firmware (signed, A/B slots) once the node runs; depends on the edge spike (`node-modbus`) for the node half.
   status: ready
 
-- [ ] **Resume the edge node: faster scans, PSRAM, and the network receive path** — parked by Nick 2026-11-03 after the first runs on the boards (docs/EDGE.md Phase 1 and 2). Three open threads, in order: (1) the network: on the POE2 frames from the Studio never register (ARP replies unanswered, no UDP report sent) and the POE-ISO gets no DHCP lease; first flash supervictor's known-good POE-ISO firmware on the same board to tell this firmware from the board or switch, then compare the executor and interrupt setup (esp-rtos) and the main task's share of the CPU; (2) scan speed: 28 ms for the 4k-statement bench against < 5 ms; measure flash at 80 MHz QIO (it boots at 40 MHz DIO), the interpreter's i128 `Value::Int` on a 32-bit core, the no_std BTreeMap lookups, esp-alloc heap-stats, before any rewrite (a compact compiled form or compile-on-laptop is the bigger lever); (3) the PSRAM corruption: compiling the batch-mixer starter with PSRAM asks for 0x3F40D781 bytes (a rodata address read as a length).
-  needs: Nick's call to resume (2026-11-06: stays parked); the POE-ISO (WROOM, /dev/cu.usbserial-1130 on 2026-11-03) for the network thread since USB can stay on with PoE; the POE2 for PSRAM
-  result: a node that scans a realistic program inside its period and talks to the Studio, or a firm no with numbers for each thread
-  notes: the Studio's en0 has 10.0.0.241 (scratch/04-studio-wired-10net.sh; `off` removes it, a reboot too); LOG_SINK=10.0.0.241:9514 puts the reports on the wired side. Builds: scripts/node-build.sh [net], NODE_BOARD=poe-iso; flash: scripts/node-flash.sh [bench|modbus], Nick's step.
+- [ ] **Resume the edge node: faster scans and the POE2's PSRAM** — parked by Nick 2026-11-03 after the first runs on the boards (docs/EDGE.md Phase 1 and 2). Thread 1 (the network) is SOLVED in #312 (2026-11-08): the POE-ISO got no lease because helmsman-node enabled esp-hal's `psram` feature on the WROOM, whose PSRAM pins are the POE-ISO's RMII clock (now `--no-default-features --features poe-iso`); the Studio reached 10.0.0.x only over Wi-Fi (dual-homed, scratch/23 and 26 add the en0 aliases); and a dead unit's connect-every-scan starved smoltcp's neighbour cache (2 s back-off after a failed connect). Two threads stay: (2) scan speed: 28 ms for the 4k-statement bench against < 5 ms, and 30 ms with two synchronous Modbus round trips before the I/O task; measure flash at 80 MHz QIO (it boots at 40 MHz DIO), the interpreter's i128 `Value::Int` on a 32-bit core, the no_std BTreeMap lookups, esp-alloc heap-stats, before any rewrite (a compact compiled form or compile-on-laptop is the bigger lever); (3) the PSRAM corruption on the POE2: compiling the batch-mixer starter with PSRAM asks for 0x3F40D781 bytes (a rodata address read as a length); the POE2 at 10.0.0.50 still runs November's firmware.
+  needs: Nick's call to resume (2026-11-06: stays parked); the P4 (node-p4-bringup) may make both threads moot: 768 KiB of RAM and a faster core
+  result: a node that scans a realistic program inside its period, or a firm no with numbers for each thread
+  notes: the Studio's en0 has 10.0.0.241 and 192.168.127.10 (sudo ifconfig en0 -alias X undoes). Builds: scripts/node-build.sh [bench|modbus|node], NODE_BOARD=poe-iso|p4-eth; flash: scripts/node-flash.sh (the POE-ISO flashes from a session without a prompt).
+  depends: node-p4-bringup
   est: 1w
   difficulty: high
   id: node-resume
