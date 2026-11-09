@@ -671,7 +671,14 @@ status is scan health, memory and fieldbus links. What exists:
   also asks for answers 404 on a node, so the diagram pane says it is
   waiting for a traced scan. (From an agent session the browser itself
   cannot reach the LAN, macOS Local Network privacy; a TCP forwarder run
-  by Apple's python on localhost stands in.)
+  by Apple's python on localhost stands in.) Writes too, since card
+  `canvas-node-token` (2026-11-09): on such a page the sign-in panel asks
+  for the node's token instead of a user, keeps it in that browser for
+  that origin only (`localStorage`, never the URL), and the transport
+  sends it as `Authorization: Bearer` on every call there (the node
+  answers the preflight), so Deploy, Save, Stop and Run work from the UI.
+  Forget drops it. A box watched by address still refuses the preflight,
+  so that path is a node's today.
 - **`helmsman-node-p4` has the same binary** (`node`, from the same
   modules; esp-storage 0.10 and esp-bootloader-esp-idf 0.6 for the P4),
   built and lint clean, waiting for the board.

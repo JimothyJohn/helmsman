@@ -10,6 +10,50 @@ use helmsman_nodecore::settings::Settings;
 
 use crate::remote::{BoxState, Fetch, Msg, Stream};
 
+/// Card canvas-node-token: the header the canvas sends for the token the
+/// person typed is the one a node's router takes for a write, and a
+/// write without it is refused.
+#[test]
+fn the_canvas_token_header_opens_a_nodes_writes() {
+    use helmsman_nodecore::http::parse;
+    use helmsman_nodecore::router::{Effect, Outcome, handle};
+    let v = view();
+    let settings = Settings {
+        token: "bench-token-2026".into(),
+        ..Settings::default()
+    };
+    let body = "PROGRAM p END_PROGRAM";
+    let request = |auth: &str| {
+        let raw = format!(
+            "PUT /api/modules/p HTTP/1.1\r\nHost: node\r\n{auth}Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        match parse(raw.as_bytes()).expect("a whole request") {
+            helmsman_nodecore::http::Read::Done(r, _) => r,
+            helmsman_nodecore::http::Read::Incomplete => panic!("incomplete"),
+        }
+    };
+    let (name, value) = crate::node_token::header(&crate::node_token::clean(" bench-token-2026 ").unwrap());
+    let with = request(&format!("{name}: {value}\r\n"));
+    assert!(
+        matches!(
+            handle(&with, &v, &settings),
+            Outcome::Effect(Effect::Deploy { .. })
+        ),
+        "the node takes the canvas's header as its token"
+    );
+    let without = request("");
+    let Outcome::Reply(r) = handle(&without, &v, &settings) else {
+        panic!("a write without the token is refused")
+    };
+    assert_eq!(r.status, 401);
+    let wrong = request("Authorization: Bearer bench-token-2025\r\n");
+    let Outcome::Reply(r) = handle(&wrong, &v, &settings) else {
+        panic!("a wrong token is refused")
+    };
+    assert_eq!(r.status, 401);
+}
+
 fn view() -> NodeView {
     NodeView {
         module: Some(ModuleView {
