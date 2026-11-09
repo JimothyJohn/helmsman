@@ -1016,15 +1016,21 @@ values). Contract in `crates/helmsman-iec/tests/retain.rs` and
   it only `try_lock`s; the writer writes a module only when its values
   changed. A power cut loses at most the last second. A module a deploy
   removes, or one with no RETAIN left, has its file removed.
+- **Planned stop**: SIGTERM and SIGINT (`signal-hook`, `flag` only, behind
+  `box`) set a flag the scan loop checks once per scan; it then makes an
+  unthrottled offer (`Writer::offer_now`), waits up to 5 s for the writer
+  (`Writer::flush`), prints `SIGTERM: RETAIN values written, exiting` and
+  exits 0, so a planned stop keeps every RETAIN value. The snapshot store
+  writes on deploy, not periodically, so it needs no last write.
+  `HELMSMAN_EXIT_WITH_STDIN` (tests) still exits at once, unflushed.
 - **At start** each ST module's file is restored by name and type, the
   rules a deploy carries by; stderr names what was restored, what starts
   fresh because its type changed or it is new, and what was dropped. A
   damaged or oversize (over 8 MiB) file is reported, moved aside to
   `.ret.damaged`, and the module starts cold.
 - A cold restart from the API resets RETAIN too (IEC 61131-3's cold
-  restart). Not yet: a last write on a clean shutdown (the box has no
-  signal handler; the one-second rate bounds the loss), RETAIN inside a
-  function block type, and `%M` retention.
+  restart). Not yet: RETAIN inside a function block type, and `%M`
+  retention.
 
 ## Box API (`box-api`, built)
 

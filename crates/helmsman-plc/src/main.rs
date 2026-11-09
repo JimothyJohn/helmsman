@@ -12,6 +12,7 @@ use std::io::{BufRead as _, Write as _};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1443,6 +1444,23 @@ fn browsers(map: Option<&helmsman_io::IoMap>, devices: &Devices) {
     }
 }
 
+/// The flags SIGTERM and SIGINT set, by name (no signal API in std, and the
+/// crate forbids `unsafe`, so `signal-hook`).
+fn stop_flags() -> Result<Vec<(&'static str, Arc<AtomicBool>)>, String> {
+    [
+        ("SIGTERM", signal_hook::consts::SIGTERM),
+        ("SIGINT", signal_hook::consts::SIGINT),
+    ]
+    .into_iter()
+    .map(|(name, sig)| {
+        let flag = Arc::new(AtomicBool::new(false));
+        signal_hook::flag::register(sig, Arc::clone(&flag))
+            .map_err(|e| format!("cannot catch {name}: {e}"))?;
+        Ok((name, flag))
+    })
+    .collect()
+}
+
 #[allow(clippy::too_many_lines)]
 fn run(o: &Opts) -> Result<(), String> {
     if o.emit_st {
@@ -1593,6 +1611,9 @@ fn run(o: &Opts) -> Result<(), String> {
     let mut inputs = vec![0; i_len];
     let mut names: Vec<String> = rt.names().map(str::to_string).collect();
     let start = Instant::now();
+    // A planned stop (service manager, Ctrl-C) sets one of these; the scan
+    // loop sees it within a scan and writes the RETAIN values before exiting.
+    let stops = stop_flags()?;
     loop {
         {
             let d = lock_ref(&dev);
@@ -1651,6 +1672,19 @@ fn run(o: &Opts) -> Result<(), String> {
             (held, faults)
         };
         report_changes(&specs, &names, &rt, &held, faults);
+        if let Some(name) = stops
+            .iter()
+            .find_map(|(name, f)| f.load(Ordering::Relaxed).then_some(*name))
+        {
+            retainer.offer_now(start.elapsed(), &rt);
+            let said = if retainer.flush(Duration::from_secs(5)) {
+                "RETAIN values written, exiting"
+            } else {
+                "RETAIN values not written within 5 s, exiting"
+            };
+            eprintln!("helmsman-plc: {name}: {said}");
+            return Ok(());
+        }
         retainer.offer(start.elapsed(), &rt);
         lock_ref(&dev).write_assembly(OUTPUTS, rt.outputs())?;
         sleep_to(start, rt.next_deadline(), cap(scene.calendar.as_ref()), &mut said);
