@@ -171,12 +171,48 @@ so no box and no browser holds it. The tab works the same way: sign in
 as an engineer, open a program file, type the instruction and press
 <strong>Send</strong>. The checked change is saved on the box as a
 revision with its History entry, by you, and <strong>Undo</strong> asks
-the box to restore the revision before it. The line at the top of the
-tab says whether the agent is online.</p>
+the box to restore the revision before it. The dot beside the tab's
+heading says whether the agent is online (green), offline (red) or not
+heard from yet (grey).</p>
 <p>If the agent stores a <strong>proposal</strong> for review instead of
 sending the file back, the file is not touched and the tab offers
 <strong>Review</strong> to open it on the Proposals screen, where an
 approver signs it off under the box's policy.</p>
+<h2 id="get-help">Get help</h2>
+<p>On a box the Agent tab has a second mode, for someone who did not
+write the program and has a machine that does not do what it should. The
+toggle at the top right of the tab switches it: <strong>&lt;
+&gt;</strong> is <strong>Change the program</strong>, <strong>?</strong>
+is <strong>Get help</strong>.</p>
+<img src="img/get-help.png" alt="Get help in the Agent tab: the question, Ask for help, and the issue with its Copy button." width="326">
+
+<p>Sign in (any role), say what you saw or what you want to do in your
+own words, and press <strong>Ask for help</strong> (<kbd>Ctrl</kbd>
+<kbd>Enter</kbd> works too). The page sends your words with its recent
+Messages, and the box adds what it knows: its version, the program it
+runs, its devices and their errors. Passwords, PINs and tokens are left
+out. Nothing on the box changes and nothing is filed anywhere.</p>
+<p>What comes back depends on what you asked:</p>
+<ul>
+<li>A report of trouble ("the conveyor stopped, the lamp is red") gets
+<strong>What is likely wrong</strong>, the Agent's diagnosis from the
+box's messages and devices, and <strong>Issue to report it</strong>, a
+Markdown issue that carries your words and the box's details.
+<strong>Copy</strong> takes the whole issue, to paste into a new GitHub
+issue or to give to another agent.</li>
+<li>A question about how things work ("how do I load a program?") gets
+<strong>How to do it</strong>, an answer written from these help pages,
+with the pages it came from linked under <strong>Read more</strong>. No
+issue is written.</li>
+</ul>
+<p>When the agent cannot be reached (the box has no relay, the relay is
+offline, or the agent service does not offer help yet), the box writes
+the issue by itself from your words and its details, and a line above it
+says why there is no diagnosis. For a question it also lists the help
+sections whose headings match it, under <strong>These help pages may
+answer it</strong>. The picture above shows this case.</p>
+<p><strong>Stop</strong>, shown while the Agent is working, stops
+waiting for the answer.</p>
 <h2 id="what-it-will-not-do">What it will not do</h2>
 <p>The Agent changes the open file; it never deploys. It cannot force an
 input, change the I/O map on a box, or approve anything. Its code is
