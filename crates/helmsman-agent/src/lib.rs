@@ -1,7 +1,7 @@
 //! The agent behind the box's chat panel (card `agent-loop`).
 //!
 //! Claude is reached only through the relay ([`relay`]), with a per-box
-//! token; the box holds no Anthropic key and names no model, prompt or
+//! token; the box holds no model API key and names no model, prompt or
 //! tool schema (the relay serves those per agent version). The loop
 //! ([`agent`]) streams each assistant turn ([`sse`], [`turn`]), runs the
 //! tool calls on the box against its own HTTP API ([`tools`]), and sends

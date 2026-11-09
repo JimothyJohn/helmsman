@@ -5,7 +5,7 @@
 //!
 //! The box never names a model, a system prompt, tools or `max_tokens`:
 //! the relay owns them per agent version. The box never holds an
-//! Anthropic key either; the token here is the relay's per-box token.
+//! model API key either; the token here is the relay's per-box token.
 
 use std::fmt;
 use std::time::Duration;

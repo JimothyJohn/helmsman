@@ -112,7 +112,7 @@ usage: helmsman-plc [PROGRAM.st|PROJECT.xml ...] [--module SPEC ...] [--module-d
                        /api/chat), e.g. https://relay.example.com; without
                        it the agent is offline and /api/chat answers 503
   --relay-token FILE   the relay's per-box token (hmr1_...); needs --relay.
-                       The box never holds an Anthropic key.
+                       The box never holds a model API key.
   --relay-agent V      the agent version to ask the relay for (default v7)
   --relay-explain-agent V
                        the agent version POST /api/explain asks for (an

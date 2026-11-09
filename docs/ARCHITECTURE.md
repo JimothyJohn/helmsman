@@ -15,7 +15,7 @@ roadmap card, by id).
 
 ```
                        ┌──────────────────────────── relay (planned: relay-v0) ─┐
-                       │ per-box token · Anthropic key · metering · prompts     │
+                       │ per-box token · model API key · metering · prompts    │
                        └──────────────▲─────────────────────────────────────────┘
                                       │ HTTPS, box-initiated
  ┌──────────────────────────── the box (Pi 5) ───────┼────────────────────────────┐
@@ -1735,8 +1735,11 @@ module's unit tests.
 `helmsman-plc --relay URL --relay-token FILE [--relay-agent v7]` turns on
 `POST /api/chat` (`helmsman-agent`, `api/chat.rs`; contract in
 `helmsman-plc/tests/agent.rs`). The box holds a per-box relay token, never
-an Anthropic key, and names no model, prompt or tool schema: the relay
-serves those per agent version (relay protocol v1).
+a model API key, and names no model, prompt or tool schema: the relay
+serves those per agent version (relay protocol v1). Which model answers is
+the relay deployment's setting (`RELAY_MODEL` in `../agent-relay`; today
+DeepSeek V4.1 Flash through OpenRouter), reported back as the `model` label
+in `relay_usage`; the box treats it as a label.
 
 - **The loop.** One user message: send the conversation to
   `POST /v1/agents/{version}/messages`, assemble the streamed assistant
