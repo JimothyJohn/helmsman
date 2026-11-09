@@ -716,6 +716,174 @@ fn a_bad_issue_is_answered_with_why_and_the_next_one_is_kept() {
     assert_eq!(last(&evs, "issue")["by"], "agent");
 }
 
+/// A question about how things work (Nick, 2026-11-08: "How do I load a
+/// program?" came back as an issue template): the help pages ride in the
+/// envelope, the agent answers from them with `answer_question`, the
+/// stream carries the answer with links to the pages, and no issue.
+#[test]
+fn a_question_is_answered_from_the_help_pages_and_no_issue_is_written() {
+    let relay = FakeRelay::start(vec![
+        turn(
+            Some("This is a question, not a fault."),
+            &[(
+                "t1",
+                help::ANSWER,
+                json!({
+                    "answer": "Sign in as an engineer (Alt F8), open the project in Files, then Deploy (Ctrl D or File > Deploy). A logic change waits for an approval first.",
+                    "pages": ["box", "projects", "box"],
+                }),
+            )],
+        ),
+        text("Answered."),
+    ]);
+    let b = Bench::new(&Agent::Relay(relay.url()), "connection refused");
+    let session = b.bob();
+    let question = "How do I load a program onto the box?";
+    let (s, raw, evs) = b.help(
+        &[bearer(&session)],
+        &json!({ "question": question, "messages": leaky_messages(&session) }),
+    );
+    assert_eq!(s, 200, "{evs:?}");
+    assert_eq!(
+        names(&evs),
+        [
+            "help",
+            "text",
+            "tool_call",
+            "tool_result",
+            "text",
+            "answer",
+            "done"
+        ],
+        "{evs:?}"
+    );
+    assert_eq!(last(&evs, "tool_result")["ok"], true, "{evs:?}");
+    let a = last(&evs, "answer");
+    assert!(
+        a["text"].as_str().unwrap().starts_with("Sign in as an engineer"),
+        "{a}"
+    );
+    // Each page once, in the order named, as a link into the site.
+    assert_eq!(
+        a["pages"],
+        json!([
+            { "page": "box", "title": "On a box", "url": format!("{}box.html", help::HELP_SITE) },
+            { "page": "projects", "title": "Projects", "url": format!("{}projects.html", help::HELP_SITE) },
+        ]),
+        "{a}"
+    );
+    let d = last(&evs, "done");
+    assert_eq!(d["stop"], "end_turn");
+    assert_eq!(d["why"], Json::Null);
+    // The help pages went to the model, as the site has them.
+    let seen = relay.seen();
+    let blocks = seen[0].body["messages"][0]["content"].as_array().unwrap().clone();
+    assert!(blocks[0]["text"].as_str().unwrap().contains(help::ANSWER));
+    let data = data(blocks[1]["text"].as_str().unwrap());
+    let pages = data["help_pages"].as_array().unwrap();
+    let names: Vec<&str> = pages.iter().map(|p| p["name"].as_str().unwrap()).collect();
+    assert_eq!(names, help::pages::ALL.iter().map(|p| p.name).collect::<Vec<_>>());
+    let site_box = pages.iter().find(|p| p["name"] == "box").unwrap();
+    assert_eq!(site_box["title"], "On a box");
+    assert!(
+        site_box["text"].as_str().unwrap().contains("## Deploying"),
+        "the Markdown itself"
+    );
+    for (k, s) in seen.iter().enumerate() {
+        no_secrets(&s.body.to_string(), &session, &format!("relay request {k}"));
+    }
+    no_secrets(&raw, &session, "the answer");
+}
+
+/// An answer that names a page that is not one, or says nothing, is
+/// refused with why, and the next one is kept.
+#[test]
+fn a_bad_answer_is_refused_with_why_and_the_next_one_is_kept() {
+    let relay = FakeRelay::start(vec![
+        turn(
+            None,
+            &[(
+                "t1",
+                help::ANSWER,
+                json!({ "answer": "See the page.", "pages": ["https://evil.example/x"] }),
+            )],
+        ),
+        turn(
+            None,
+            &[("t2", help::ANSWER, json!({ "answer": "   ", "pages": [] }))],
+        ),
+        turn(
+            None,
+            &[(
+                "t3",
+                help::ANSWER,
+                json!({ "answer": "Press Deploy.", "pages": ["projects"] }),
+            )],
+        ),
+        text("Done."),
+    ]);
+    let b = Bench::new(&Agent::Relay(relay.url()), "connection refused");
+    let (s, _, evs) = b.help(&[bearer(TOKEN)], &json!({ "question": "How do I deploy?" }));
+    assert_eq!(s, 200, "{evs:?}");
+    let results: Vec<&Json> = evs
+        .iter()
+        .filter(|(n, _)| n == "tool_result")
+        .map(|(_, d)| d)
+        .collect();
+    assert_eq!(results.len(), 3, "{evs:?}");
+    assert_eq!(results[0]["ok"], false);
+    assert!(
+        results[0]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("not a help page"),
+        "{}",
+        results[0]
+    );
+    assert_eq!(results[1]["ok"], false);
+    assert!(
+        results[1]["summary"].as_str().unwrap().contains("answer: 1 to"),
+        "{}",
+        results[1]
+    );
+    assert_eq!(results[2]["ok"], true);
+    assert_eq!(last(&evs, "answer")["text"], "Press Deploy.");
+    assert!(!names(&evs).contains(&"issue"), "{evs:?}");
+}
+
+/// With no agent, a question still gets the box's own lead: the help
+/// sections whose headings match, before the issue it writes alone.
+#[test]
+fn a_box_without_a_relay_points_a_question_at_the_help_pages() {
+    let b = Bench::new(&Agent::None, "timed out");
+    let (s, _, evs) = b.help(
+        &[bearer(TOKEN)],
+        &json!({ "question": "How do I deploy a program onto the box?" }),
+    );
+    assert_eq!(s, 200, "{evs:?}");
+    assert_eq!(names(&evs), ["help", "pages", "issue", "done"], "{evs:?}");
+    let pages = last(&evs, "pages")["pages"].as_array().unwrap().clone();
+    assert!(pages.len() >= 3 && pages.len() <= 5, "{pages:?}");
+    // The Load page, then the two sections about deploying, as the unit
+    // test pins.
+    let urls: Vec<&str> = pages[..3].iter().map(|p| p["url"].as_str().unwrap()).collect();
+    assert_eq!(
+        urls,
+        [
+            format!("{}load.html", help::HELP_SITE),
+            format!("{}projects.html#save-and-deploy", help::HELP_SITE),
+            format!("{}box.html#deploying", help::HELP_SITE)
+        ],
+        "{pages:?}"
+    );
+    assert_eq!(pages[2]["title"], "On a box: Deploying");
+    assert_eq!(last(&evs, "issue")["by"], "box");
+    assert_eq!(last(&evs, "done")["stop"], "offline");
+    // A report of trouble gets no guess: the events are as before.
+    let (_, _, evs) = b.help(&[bearer(TOKEN)], &json!({ "question": QUESTION }));
+    assert_eq!(names(&evs), ["help", "issue", "done"], "{evs:?}");
+}
+
 #[test]
 fn an_agent_that_writes_no_issue_leaves_the_box_issue_and_says_why() {
     let relay = FakeRelay::start(vec![text("I am not sure what is wrong.")]);

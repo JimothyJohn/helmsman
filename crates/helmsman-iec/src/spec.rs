@@ -16,7 +16,10 @@
 //! declares one, for a program with a `done` of its own); it fails when any of its
 //! `ASSERT` instances has `FAILED`, when either program faults, when it
 //! never sets `DONE` within the limit, or when it holds no `ASSERT` at all
-//! (a test that checks nothing is not green). Deterministic: no wall
+//! (a test that checks nothing is not green). It also fails when it is done
+//! but a declared `ASSERT` was never called (`CHECKED` stayed FALSE), or when
+//! it shares no port with the program under test (reads no output, drives no
+//! input), since such a test can pass whatever the program does. Deterministic: no wall
 //! clock, no I/O.
 //!
 //! **No test yet** (Nick, 2026-11-05: the Requirements tab is a list of
@@ -226,6 +229,12 @@ pub enum Outcome {
     NeverDone,
     /// The test holds no `ASSERT`: it checks nothing.
     NoAssert,
+    /// `DONE` went TRUE but a declared `ASSERT` was never called (its name
+    /// as words): that check never ran.
+    NeverChecked { check: String },
+    /// The test neither reads an output nor drives an input of the program
+    /// under test, so whatever it asserts says nothing about the program.
+    ChecksNothing,
     /// No test yet: the file states its requirement but declares no
     /// `ASSERT` (or its PROGRAM's body is empty). Neither green nor red.
     Untested,
@@ -293,6 +302,10 @@ impl Verdict {
             Outcome::Failed { check, at } => format!("{check} failed at {}", secs(*at)),
             Outcome::NeverDone => format!("never set DONE within {}", secs(self.elapsed)),
             Outcome::NoAssert => "has no ASSERT: it checks nothing".into(),
+            Outcome::NeverChecked { check } => format!("{check} never checked"),
+            Outcome::ChecksNothing => {
+                "reads no output and drives no input of the program: it checks nothing".into()
+            }
             Outcome::TestDoesNotCompile(d) => format!("the test does not compile: {}", first(d)),
             Outcome::ProgramDoesNotCompile(d) => format!("the program does not compile: {}", first(d)),
             Outcome::PortTypes { port, test, program } => {
@@ -453,6 +466,16 @@ pub fn run(main: &str, test: &TestSrc, settings: Settings) -> Verdict {
             }
         }
         if t.get(end) == Some(Value::Bool(true)) {
+            if drives.is_empty() && reads.is_empty() {
+                return verdict(Outcome::ChecksNothing, scans, now);
+            }
+            if let Some((_, check)) = checks
+                .iter()
+                .find(|(path, _)| t.get(&format!("{path}.CHECKED")) != Some(Value::Bool(true)))
+            {
+                let check = check.clone();
+                return verdict(Outcome::NeverChecked { check }, scans, now);
+            }
             return verdict(Outcome::Passed, scans, now);
         }
     }
@@ -701,6 +724,63 @@ END_PROGRAM
         assert_eq!(v.outcome, Outcome::NeverDone);
         assert_eq!(v.why(), "never set DONE within 5.00 s");
         assert_eq!(v.scans, 501);
+    }
+
+    /// A scenario that passes while checking nothing: an ASSERT declared
+    /// and never called, or a test that touches none of the program's ports.
+    #[test]
+    fn a_test_that_checks_nothing_is_red() {
+        let never_called = "(* The lamp is on. *)
+PROGRAM test_x
+VAR_INPUT lamp : BOOL; END_VAR
+VAR_OUTPUT start_pb : BOOL; done : BOOL; END_VAR
+VAR lamp_ok : ASSERT; END_VAR
+start_pb := TRUE;
+done := TRUE;
+END_PROGRAM
+";
+        let v = one(LAMP, never_called);
+        assert_eq!(
+            v.outcome,
+            Outcome::NeverChecked {
+                check: "lamp ok".into()
+            }
+        );
+        assert_eq!(v.why(), "lamp ok never checked");
+        assert!(v.red());
+        // Called, but only on a branch that never runs: still never checked.
+        let branch = never_called.replace(
+            "done := TRUE;",
+            "IF FALSE THEN lamp_ok(COND := lamp); END_IF;\ndone := TRUE;",
+        );
+        assert!(matches!(one(LAMP, &branch).outcome, Outcome::NeverChecked { .. }));
+        // Called with a constant, touching no port of the program.
+        let no_ports = "(* The lamp is on. *)
+PROGRAM test_x
+VAR_OUTPUT done : BOOL; END_VAR
+VAR lamp_ok : ASSERT; END_VAR
+lamp_ok(COND := TRUE);
+done := TRUE;
+END_PROGRAM
+";
+        let v = one(LAMP, no_ports);
+        assert_eq!(v.outcome, Outcome::ChecksNothing);
+        assert!(v.why().contains("checks nothing"), "{}", v.why());
+        // Called and sharing a port: green.
+        let called = never_called.replace("done := TRUE;", "lamp_ok(COND := TRUE);\ndone := TRUE;");
+        assert_eq!(one(LAMP, &called).outcome, Outcome::Passed);
+        // Two asserts, one never called: the one that did not run is named.
+        let two = TEST_OK.replace(
+            "lamp_on_in_time : ASSERT;",
+            "lamp_on_in_time : ASSERT; spare_check : ASSERT;",
+        );
+        assert_eq!(
+            one(LAMP, &two).outcome,
+            Outcome::NeverChecked {
+                check: "spare check (on within 2 s)".into()
+            }
+        );
+        assert_eq!(one(LAMP, TEST_OK).outcome, Outcome::Passed);
     }
 
     #[test]

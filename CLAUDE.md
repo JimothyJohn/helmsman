@@ -10,6 +10,11 @@ board). Branch flow and everything general is in ~/.claude/CLAUDE.md.
   without default features, and helmsman-canvas for wasm32. CI runs only fmt
   and clippy of these, so the last two are yours to keep green.
 - `cargo test --workspace --locked`
+- After a change the native suite cannot see (anything behind
+  `cfg(target_arch = "wasm32")`, panel layout): `make canvas-web` then
+  `make canvas-smoke` (`BOX=1` for the box-served page too) drives the
+  browser build headless and leaves a screenshot per step in
+  target/canvas-smoke/ to look at (2026-11-08).
 
 ## Rules that cost a day to learn
 

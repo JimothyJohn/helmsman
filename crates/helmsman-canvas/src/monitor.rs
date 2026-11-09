@@ -26,8 +26,12 @@
 //! things a tap changes are which level is shown and the Editor's scope.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use eframe::egui::{self, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
+use eframe::egui::text::LayoutJob;
+use eframe::egui::{
+    self, Color32, CornerRadius, FontId, Galley, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
+};
 use helmsman_diagram::Scan;
 use helmsman_iec::Value;
 use helmsman_iec::ast::{self, PouKind, Section, TypeRef};
@@ -125,6 +129,10 @@ impl Feed for BoxState {
             .map(|m| {
                 let w = self.programs.get(&m.name);
                 let at = w.and_then(|w| w.at);
+                // A module that scans slower than the limit sends a scan
+                // that seldom: three of its periods is as long as it may
+                // be quiet.
+                let limit = STALE_AFTER.max(m.scan_ms.map_or(0.0, |ms| 3.0 * ms / 1000.0));
                 Program {
                     name: m.name.clone(),
                     run: match m.state.as_str() {
@@ -139,7 +147,7 @@ impl Feed for BoxState {
                     src: w.and_then(|w| w.lowered.as_ref()).map(|l| l.src.as_str()),
                     values: w.and_then(|w| w.scan.as_ref()).map(|s| s as &dyn Scan),
                     fresh: match at {
-                        Some(t) if now - t <= STALE_AFTER => Fresh::Live,
+                        Some(t) if now - t <= limit => Fresh::Live,
                         Some(t) => Fresh::Stale {
                             age: Some(now - t),
                             why: "no new scan".into(),
@@ -957,17 +965,15 @@ impl Monitor {
         let cols = (((width + gap) / (min + gap)).floor() as usize).max(1);
         let w = (width - gap * (cols - 1) as f32) / cols as f32;
         for row in tiles.chunks(cols) {
-            let h = row
-                .iter()
-                .map(|t| tile_height(t, k))
-                .fold(TAP * 2.0 * k, f32::max);
+            let laid: Vec<Laid> = row.iter().map(|t| layout_tile(ui, t, k, w)).collect();
+            let h = laid.iter().map(|l| l.height).fold(TAP * 2.0 * k, f32::max);
             let (rect, _) = ui.allocate_exact_size(Vec2::new(width, h), Sense::hover());
             for (i, t) in row.iter().enumerate() {
                 let x = rect.min.x + i as f32 * (w + gap);
                 let r = Rect::from_min_size(Pos2::new(x, rect.min.y), Vec2::new(w, h));
                 let resp = ui.interact(r, ui.scope_id().with(&t.key), Sense::click());
                 chrome.hit(t.key.clone(), r);
-                let lines = draw_tile(ui, r, t, k, resp.hovered() && t.into.is_some());
+                let lines = draw_tile(ui, r, t, k, resp.hovered() && t.into.is_some(), &laid[i]);
                 for (line, lr) in t.lines.iter().zip(lines) {
                     chrome.hit(line.key.clone(), lr);
                     let _ = ui
@@ -985,31 +991,184 @@ impl Monitor {
     }
 }
 
-fn tile_height(t: &Tile, k: f32) -> f32 {
-    let head = 64.0 * k;
-    let body = match &t.kind {
-        TileKind::Status(Run::Faulted(_)) => 70.0 * k,
-        TileKind::Status(_) => 48.0 * k,
-        _ => t.lamps.len().max(1) as f32 * 30.0 * k,
-    };
-    let foot = if t.stale.is_some() { 26.0 * k } else { 0.0 };
-    let extra = match &t.kind {
-        TileKind::Status(Run::Stopped(Some(_))) => 22.0 * k,
-        _ => 0.0,
-    };
-    head + body + extra + t.lines.len() as f32 * LINE_H * k + foot + 12.0 * k
-}
-
 /// A load line's height, before scaling.
 const LINE_H: f32 = 24.0;
 
-/// Draws `t` in `r`; returns where each of its [`Line`]s went.
-fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) -> Vec<Rect> {
-    let p = ui.painter_at(r);
+/// One thing a tile draws, placed from the tile's top-left corner.
+enum Piece {
+    Text(Pos2, Arc<Galley>),
+    /// A lamp's dot: centre, radius; filled, or (stale) a ring.
+    Dot(Pos2, f32, Option<Color32>),
+}
+
+/// A tile laid out for a width: what it draws, where its load lines went,
+/// and how tall it came out. The height follows the text (a fault message
+/// wraps to the tile, a long name is elided), so no text is cut off by the
+/// tile's edge.
+pub struct Laid {
+    pieces: Vec<Piece>,
+    spots: Vec<Rect>,
+    pub height: f32,
+    y: f32,
+    pad: f32,
+    inner: f32,
+}
+
+impl Laid {
+    /// `text` wrapped to the tile's inner width at the cursor, which moves
+    /// down by the text's height, or by `step` where that is more.
+    fn wrapped(&mut self, ui: &egui::Ui, text: &str, style: (FontId, Color32), step: f32) -> Rect {
+        let mut job = LayoutJob::simple(text.to_string(), style.0, style.1, self.inner);
+        job.wrap.break_anywhere = true;
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let at = Pos2::new(self.pad, self.y);
+        let high = galley.size().y.max(step);
+        self.y += high;
+        self.pieces.push(Piece::Text(at, galley));
+        Rect::from_min_size(at, Vec2::new(self.inner, high))
+    }
+
+    /// The boxes of the text pieces (tests: none may overlap or leave the
+    /// tile).
+    #[cfg(test)]
+    pub fn text_boxes(&self) -> Vec<Rect> {
+        self.pieces
+            .iter()
+            .filter_map(|p| match p {
+                Piece::Text(at, g) => Some(Rect::from_min_size(*at, g.size())),
+                Piece::Dot(..) => None,
+            })
+            .collect()
+    }
+}
+
+/// `text` on one row at most `wrap` wide, ending in an ellipsis where it
+/// does not fit.
+fn elided(ui: &egui::Ui, text: &str, font: FontId, color: Color32, wrap: f32) -> Arc<Galley> {
+    let mut job = LayoutJob::simple(text.to_string(), font, color, wrap.max(1.0));
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    job.wrap.overflow_character = Some('…');
+    ui.fonts_mut(|f| f.layout_job(job))
+}
+
+/// Lays `t` out in a tile `w` wide at scale `k`.
+pub fn layout_tile(ui: &egui::Ui, t: &Tile, k: f32, w: f32) -> Laid {
     let th = theme(ui);
     let stale = t.stale.is_some();
+    let ink = if stale { th.muted } else { th.fg };
+    let pad = 14.0 * k;
+    let mut l = Laid {
+        pieces: Vec::new(),
+        spots: Vec::new(),
+        height: 0.0,
+        y: pad,
+        pad,
+        inner: (w - 2.0 * pad).max(1.0),
+    };
+    let title = if t.into.is_some() {
+        format!("{} ›", t.title)
+    } else {
+        t.title.clone()
+    };
+    l.wrapped(ui, &title, (FontId::proportional(24.0 * k), ink), 30.0 * k);
+    let small = (14.0 * k).max(crate::theme::MIN_TEXT);
+    l.wrapped(ui, &t.sub, (FontId::monospace(small), th.muted), 26.0 * k);
+    match &t.kind {
+        TileKind::Status(run) => {
+            let (word, color) = match run {
+                Run::Running => ("RUNNING", GREEN),
+                Run::Faulted(_) => ("FAULTED", RED),
+                Run::Held => ("HELD", th.accent),
+                Run::Stopped(_) => ("STOPPED", th.muted),
+                Run::Starting => ("STARTING", th.muted),
+            };
+            let color = if stale { th.muted } else { color };
+            l.wrapped(ui, word, (FontId::proportional(30.0 * k), color), 40.0 * k);
+            if let Run::Stopped(Some(by)) = run {
+                let text = format!("outputs at safe values · by {by}");
+                l.wrapped(ui, &text, (FontId::proportional(small), ink), 22.0 * k);
+            }
+            if let Run::Faulted(f) = run {
+                l.wrapped(ui, f, (FontId::proportional(small), ink), 22.0 * k);
+            }
+            for line in &t.lines {
+                let color = if stale {
+                    th.muted
+                } else if line.warn {
+                    th.accent
+                } else {
+                    ink
+                };
+                let font = FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT));
+                let spot = l.wrapped(ui, &line.text, (font, color), LINE_H * k);
+                l.spots.push(spot);
+            }
+        }
+        TileKind::Outputs | TileKind::Instance => {
+            if t.lamps.is_empty() {
+                let font = FontId::proportional((16.0 * k).max(crate::theme::MIN_TEXT));
+                l.wrapped(ui, "no outputs", (font, th.muted), 30.0 * k);
+            }
+            for lamp in &t.lamps {
+                let mid = l.y + 12.0 * k;
+                let rad = 9.0 * k;
+                let (dot, value) = match lamp.value {
+                    Some(Value::Bool(on)) => (Some(on), None),
+                    v => (None, Some(crate::st_view::show(v))),
+                };
+                match dot {
+                    Some(on) if !stale => {
+                        l.pieces.push(Piece::Dot(
+                            Pos2::new(pad + rad, mid),
+                            rad,
+                            Some(if on { GREEN } else { RED }),
+                        ));
+                    }
+                    Some(_) => l.pieces.push(Piece::Dot(Pos2::new(pad + rad, mid), rad, None)),
+                    None => {}
+                }
+                let x = if dot.is_some() || value.is_none() {
+                    pad + rad * 2.0 + 10.0 * k
+                } else {
+                    pad
+                };
+                let size = (18.0 * k).max(crate::theme::MIN_TEXT);
+                // The value keeps its room (at most half the row); the
+                // name gets what is left and is elided to it.
+                let value = value.map(|v| {
+                    let color = if stale { th.muted } else { th.accent };
+                    elided(ui, &v, FontId::monospace(size), color, l.inner * 0.5)
+                });
+                let gap = if value.is_some() { 10.0 * k } else { 0.0 };
+                let room = w - pad - x - value.as_ref().map_or(0.0, |g| g.size().x) - gap;
+                let name = elided(ui, &lamp.name, FontId::proportional(size), ink, room);
+                l.pieces
+                    .push(Piece::Text(Pos2::new(x, mid - name.size().y / 2.0), name));
+                if let Some(g) = value {
+                    let at = Pos2::new(w - pad - g.size().x, mid - g.size().y / 2.0);
+                    l.pieces.push(Piece::Text(at, g));
+                }
+                l.y += 30.0 * k;
+            }
+        }
+    }
+    if let Some(s) = &t.stale {
+        l.y += 4.0 * k;
+        let font = FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT));
+        l.wrapped(ui, s, (font, th.muted), 22.0 * k);
+    }
+    l.height = (l.y + pad).max(TAP * 2.0 * k);
+    l
+}
+
+/// Draws `t`, laid out as `laid`, in `r`; returns where each of its
+/// [`Line`]s went.
+fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool, laid: &Laid) -> Vec<Rect> {
+    let p = ui.painter_at(r);
+    let th = theme(ui);
     // A stale tile sinks halfway back into the page.
-    let fill = if stale {
+    let fill = if t.stale.is_some() {
         th.panel.gamma_multiply(0.5)
     } else {
         th.panel
@@ -1022,152 +1181,18 @@ fn draw_tile(ui: &egui::Ui, r: Rect, t: &Tile, k: f32, hot: bool) -> Vec<Rect> {
         Stroke::new(1.5 * k, edge),
         StrokeKind::Inside,
     );
-    let ink = if stale { th.muted } else { th.fg };
-    let pad = 14.0 * k;
-    let mut spots = Vec::new();
-    let mut y = r.min.y + pad;
-    let title = if t.into.is_some() {
-        format!("{} ›", t.title)
-    } else {
-        t.title.clone()
-    };
-    p.text(
-        Pos2::new(r.min.x + pad, y),
-        egui::Align2::LEFT_TOP,
-        title,
-        FontId::proportional(24.0 * k),
-        ink,
-    );
-    y += 30.0 * k;
-    p.text(
-        Pos2::new(r.min.x + pad, y),
-        egui::Align2::LEFT_TOP,
-        &t.sub,
-        FontId::monospace((14.0 * k).max(crate::theme::MIN_TEXT)),
-        th.muted,
-    );
-    y += 26.0 * k;
-    match &t.kind {
-        TileKind::Status(run) => {
-            let (word, color) = match run {
-                Run::Running => ("RUNNING", GREEN),
-                Run::Faulted(_) => ("FAULTED", RED),
-                Run::Held => ("HELD", th.accent),
-                Run::Stopped(_) => ("STOPPED", th.muted),
-                Run::Starting => ("STARTING", th.muted),
-            };
-            let color = if stale { th.muted } else { color };
-            p.text(
-                Pos2::new(r.min.x + pad, y),
-                egui::Align2::LEFT_TOP,
-                word,
-                FontId::proportional(30.0 * k),
-                color,
-            );
-            y += 40.0 * k;
-            if let Run::Stopped(Some(by)) = run {
-                p.text(
-                    Pos2::new(r.min.x + pad, y),
-                    egui::Align2::LEFT_TOP,
-                    format!("outputs at safe values · by {by}"),
-                    FontId::proportional((14.0 * k).max(crate::theme::MIN_TEXT)),
-                    ink,
-                );
-                y += 22.0 * k;
+    for piece in &laid.pieces {
+        match piece {
+            Piece::Text(at, g) => {
+                p.galley(r.min + at.to_vec2(), g.clone(), th.fg);
             }
-            if let Run::Faulted(f) = run {
-                p.text(
-                    Pos2::new(r.min.x + pad, y),
-                    egui::Align2::LEFT_TOP,
-                    f,
-                    FontId::proportional((14.0 * k).max(crate::theme::MIN_TEXT)),
-                    ink,
-                );
-                y += 22.0 * k;
+            Piece::Dot(c, rad, Some(fill)) => {
+                p.circle_filled(r.min + c.to_vec2(), *rad, *fill);
             }
-            for l in &t.lines {
-                let color = if stale {
-                    th.muted
-                } else if l.warn {
-                    th.accent
-                } else {
-                    ink
-                };
-                p.text(
-                    Pos2::new(r.min.x + pad, y),
-                    egui::Align2::LEFT_TOP,
-                    &l.text,
-                    FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT)),
-                    color,
-                );
-                spots.push(Rect::from_min_size(
-                    Pos2::new(r.min.x + pad, y),
-                    Vec2::new((r.width() - 2.0 * pad).max(0.0), LINE_H * k),
-                ));
-                y += LINE_H * k;
-            }
-        }
-        TileKind::Outputs | TileKind::Instance => {
-            if t.lamps.is_empty() {
-                p.text(
-                    Pos2::new(r.min.x + pad, y),
-                    egui::Align2::LEFT_TOP,
-                    "no outputs",
-                    FontId::proportional((16.0 * k).max(crate::theme::MIN_TEXT)),
-                    th.muted,
-                );
-                y += 30.0 * k;
-            }
-            for l in &t.lamps {
-                let mid = y + 12.0 * k;
-                let rad = 9.0 * k;
-                let c = Pos2::new(r.min.x + pad + rad, mid);
-                let (lamp, text) = match l.value {
-                    Some(Value::Bool(on)) => (Some(on), None),
-                    v => (None, Some(crate::st_view::show(v))),
-                };
-                match lamp {
-                    Some(on) if !stale => {
-                        p.circle_filled(c, rad, if on { GREEN } else { RED });
-                    }
-                    Some(_) => {
-                        p.circle_stroke(c, rad, Stroke::new(1.5 * k, th.muted));
-                    }
-                    None => {}
-                }
-                let x = if lamp.is_some() || text.is_none() {
-                    r.min.x + pad + rad * 2.0 + 10.0 * k
-                } else {
-                    r.min.x + pad
-                };
-                p.text(
-                    Pos2::new(x, mid),
-                    egui::Align2::LEFT_CENTER,
-                    &l.name,
-                    FontId::proportional((18.0 * k).max(crate::theme::MIN_TEXT)),
-                    ink,
-                );
-                if let Some(v) = text {
-                    p.text(
-                        Pos2::new(r.max.x - pad, mid),
-                        egui::Align2::RIGHT_CENTER,
-                        v,
-                        FontId::monospace((18.0 * k).max(crate::theme::MIN_TEXT)),
-                        if stale { th.muted } else { th.accent },
-                    );
-                }
-                y += 30.0 * k;
+            Piece::Dot(c, rad, None) => {
+                p.circle_stroke(r.min + c.to_vec2(), *rad, Stroke::new(1.5 * k, th.muted));
             }
         }
     }
-    if let Some(s) = &t.stale {
-        p.text(
-            Pos2::new(r.min.x + pad, y + 4.0 * k),
-            egui::Align2::LEFT_TOP,
-            s,
-            FontId::proportional((15.0 * k).max(crate::theme::MIN_TEXT)),
-            th.muted,
-        );
-    }
-    spots
+    laid.spots.iter().map(|s| s.translate(r.min.to_vec2())).collect()
 }

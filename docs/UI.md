@@ -34,7 +34,11 @@ this; change it here first when a decision changes.
   either side flips it), Sign in on a box, and ? in the very corner (help
   on the site). Proposals and "Simulate in this browser / Back to this
   box" are View items. A fault, a deploy under way or a stale file shows
-  on a line under the header only while it lasts.
+  on a line under the header only while it lasts. Below the narrow width
+  (a phone) the wordmark, the state and the "simulation" tag are hidden,
+  the four menus fold into one Menu button with File, Edit, View and Help
+  as submenus, and the project's name is truncated, so the two groups
+  never overlap (2026-11-08).
 - **Glyphs over the diagram's top-right corner:** run/stop, step and
   restart (the simulation), then save, upload, download. Strokes in the
   brand colours; each tells its key on hover.
@@ -100,19 +104,16 @@ this; change it here first when a decision changes.
   editor). One width
   for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
   pane on its tab, or shut it when that tab shows.
-- **Right panel, collapsible, tabs (236 pt since the third tab):** I/O
-  (values; inputs the diagram does not show), Requirements (Nick, 2026-11-05: a list of requirements in plain words.
-  Type one and Add: the agent writes the test behind it, a
-  `test_NAME.st` PROGRAM whose first comment is the requirement, and runs
-  it; in the simulation through the page's Agent route, on a box through
-  `POST /api/projects/{p}/requirements`, where the box's agent writes and
-  checks it. Each row is green (passing), red (failing, and why) or grey
-  (no test yet: no agent was reachable, or it wrote none); a row opens to
-  its test with Edit test and Delete. Test files stay out of the Files
-  list. The page runs the tests after every build change and before
-  Deploy and "Use this code", a box when a project opens, after each save
-  and before a deploy; a red one refuses both, naming the test, a grey one
-  does not), Agent (Nick, 2026-11-05, `crate::instruct`, the
+- **Right panel, collapsible, tabs (236 pt):** I/O
+  (values; inputs the diagram does not show) and Agent. (The Requirements
+  tab of 2026-11-05, a list of requirements in plain words with the agent
+  writing the test behind each, is archived since 2026-11-08 under
+  `crates/helmsman-canvas/archive/requirements/`: the scenarios the Agent
+  writes with each change are the tests. `test_NAME.st` files still run,
+  after every build change and before Deploy and "Use this code" in the
+  page, when a project opens, after each save and before a deploy on a
+  box; a red one refuses both, naming the test. Test files stay out of
+  the Files list.) Agent (Nick, 2026-11-05, `crate::instruct`, the
   same on the page and on a box: no conversation. The tab is an
   instruction box, Send or Stop, Undo, and after an answer a status line
   and the Agent's one-sentence reason. Send updates the open file: one
@@ -223,6 +224,12 @@ CODESYS's default keys where the browser leaves them alone (its
 "Shortcuts" help page, checked 2026-11-01); nothing on a key the browser
 owns (F5 and Ctrl+R reload, F11 goes full screen, Ctrl+F5 reloads hard).
 The page keeps the browser's default off these. Ctrl is ⌘ on a Mac.
+Save, Deploy, Upload, Download, Force, Release all, Undo, Redo, Go to
+definition, Cross references, the step chords and Breakpoint act only on
+the Editor screen; on the Monitor or Proposals they do nothing (a Ctrl D
+there used to deploy the hidden project). Ctrl Z and Ctrl Y go to the
+focused text field alone, never to the editor's history as well
+(2026-11-08).
 
 | key | does | CODESYS command on that key |
 |---|---|---|

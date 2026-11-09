@@ -153,7 +153,14 @@ pub enum Naming {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Picked {
     Project(String),
-    File(String),
+    /// A file, with the project it was clicked in.
+    File {
+        project: String,
+        file: String,
+    },
+    /// What was picked is deleted or renamed: the key has no target until
+    /// a row is clicked, and does not fall back to the open project.
+    Gone,
 }
 
 /// The sidebar's own state: a name being typed, a delete being confirmed.
@@ -165,7 +172,8 @@ pub struct FilesUi {
     /// the screen ([`Self::confirm_ui`]).
     pub confirm: Option<Act>,
     /// The project or file last clicked; the Delete key deletes it (or
-    /// the open project when nothing was).
+    /// the open project when nothing was clicked yet). Once it is deleted
+    /// or renamed, or its project is left, the key does nothing.
     pub picked: Option<Picked>,
     /// The earlier iterations (`vN.st`) are unfolded.
     pub earlier_open: bool,
@@ -442,7 +450,10 @@ impl FilesUi {
                     });
                 chrome.hit(format!("file {f}"), r.rect);
                 if r.clicked() {
-                    self.picked = Some(Picked::File(f.clone()));
+                    self.picked = Some(Picked::File {
+                        project: l.open.unwrap_or_default().into(),
+                        file: f.clone(),
+                    });
                     if !here {
                         act = Some(Act::OpenFile(f.clone()));
                     }
@@ -574,11 +585,12 @@ impl FilesUi {
         let mine = |name: &str| l.projects.iter().any(|p| p.name == name && !p.example());
         let open_mine = l.open.filter(|o| mine(o));
         match &self.picked {
-            Some(Picked::File(f)) if open_mine.is_some() && l.files.iter().any(|(n, _)| n == f) => {
-                Some(Act::DeleteFile(f.clone()))
-            }
-            Some(Picked::Project(p)) if mine(p) => Some(Act::DeleteProject(p.clone())),
-            _ => open_mine.map(|o| Act::DeleteProject(o.into())),
+            Some(Picked::File { project, file }) => (open_mine == Some(project.as_str())
+                && l.files.iter().any(|(n, _)| n == file))
+            .then(|| Act::DeleteFile(file.clone())),
+            Some(Picked::Project(p)) => mine(p).then(|| Act::DeleteProject(p.clone())),
+            Some(Picked::Gone) => None,
+            None => open_mine.map(|o| Act::DeleteProject(o.into())),
         }
     }
 
@@ -743,6 +755,9 @@ impl FilesUi {
             if name.is_empty() {
                 return None;
             }
+            if matches!(n, Naming::RenameProject(_) | Naming::RenameFile(_)) {
+                self.picked = Some(Picked::Gone);
+            }
             return Some(match n {
                 Naming::NewProject => Act::NewProject(name),
                 Naming::CopyProject(from) => Act::CopyProject { from, to: name },
@@ -814,6 +829,9 @@ impl FilesUi {
                     .tip("Leaves everything as it is (Escape).");
                 chrome.hit("confirm no", no.rect);
                 if yes.clicked() {
+                    if matches!(a, Act::DeleteProject(_) | Act::DeleteFile(_)) {
+                        self.picked = Some(Picked::Gone);
+                    }
                     out = Some(a.clone());
                     self.confirm = None;
                 } else if no.clicked() {

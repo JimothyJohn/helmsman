@@ -10,7 +10,7 @@ use crate::app::{App, Screen, Source, wants_monitor, wants_sim};
 use crate::box_tests::{Bench, DEMO};
 use crate::editor::Chrome;
 use crate::monitor::{
-    Feed, Fresh, Group, Line, Load, Monitor, NARROW, Program, Run, STALE_AFTER, Shape, Tile, TileKind,
+    Feed, Fresh, Group, Lamp, Line, Load, Monitor, NARROW, Program, Run, STALE_AFTER, Shape, Tile, TileKind,
     micros_text,
 };
 use crate::remote::{Cmd, Fetch, Msg, ScanTiming, SpreadUs, Stream};
@@ -885,4 +885,92 @@ fn an_engineer_sees_the_boxs_scan_load() {
     for s in [t.exec, t.late] {
         assert!(s.min <= s.mean && s.mean <= s.max && s.p99 <= s.max, "{t:?}");
     }
+}
+
+/// `t` laid out in a tile `w` wide at scale 1.
+fn laid(t: &Tile, w: f32) -> crate::monitor::Laid {
+    let ctx = egui::Context::default();
+    let mut out = None;
+    let input = RawInput {
+        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(w, 800.0))),
+        ..Default::default()
+    };
+    let mut full = ctx.run_ui(input, |ui| out = Some(crate::monitor::layout_tile(ui, t, 1.0, w)));
+    full.textures_delta.clear();
+    out.unwrap()
+}
+
+fn plain(kind: TileKind) -> Tile {
+    Tile {
+        key: "t".into(),
+        title: "Station".into(),
+        sub: "S1".into(),
+        kind,
+        lamps: Vec::new(),
+        stale: None,
+        into: None,
+        lines: Vec::new(),
+    }
+}
+
+/// Texts overlap, or leave the tile.
+fn assert_apart(l: &crate::monitor::Laid, w: f32) {
+    let boxes = l.text_boxes();
+    for (i, a) in boxes.iter().enumerate() {
+        assert!(a.min.x >= 0.0 && a.max.x <= w + 0.5, "{a:?} leaves a {w} pt tile");
+        assert!(
+            a.max.y <= l.height + 0.5,
+            "{a:?} leaves the tile, {} high",
+            l.height
+        );
+        for b in &boxes[i + 1..] {
+            assert!(!a.shrink(0.5).intersects(b.shrink(0.5)), "{a:?} overlaps {b:?}");
+        }
+    }
+}
+
+/// A phone's tile (card monitor-tile-wrap): a long name and a value on one
+/// row used to be painted over each other and out of the tile.
+#[test]
+fn a_lamps_long_name_is_elided_so_it_never_covers_its_value() {
+    let mut t = plain(TileKind::Outputs);
+    t.lamps = vec![
+        Lamp {
+            name: "an output with a very long name that no tile is wide enough for".into(),
+            path: "x".into(),
+            value: Some(Value::Real(f64::from(23.7f32))),
+        },
+        Lamp {
+            name: "lamp".into(),
+            path: "y".into(),
+            value: Some(Value::Bool(true)),
+        },
+    ];
+    for w in [260.0, 340.0, 520.0] {
+        assert_apart(&laid(&t, w), w);
+    }
+}
+
+/// A fault's message is wrapped to the tile and the tile grows with it,
+/// instead of being cut mid-sentence at the tile's edge.
+#[test]
+fn a_fault_message_wraps_and_the_tile_grows_with_it() {
+    let short = laid(
+        &plain(TileKind::Status(Run::Faulted("division by zero".into()))),
+        300.0,
+    );
+    let mut t = plain(TileKind::Status(Run::Faulted(
+        "Fault: division by zero in station S1 at line 42, in the assignment to the flow rate, \
+         after the divisor read zero from the level transmitter"
+            .into(),
+    )));
+    t.stale = Some("no data for 12 s, the box stopped answering and this is the last it said".into());
+    let long = laid(&t, 300.0);
+    assert!(
+        long.height > short.height + 40.0,
+        "{} against {}",
+        long.height,
+        short.height
+    );
+    assert_apart(&long, 300.0);
 }

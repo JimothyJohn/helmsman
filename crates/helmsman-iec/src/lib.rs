@@ -68,6 +68,9 @@ mod prelude {
 /// the ones [`trace::StmtInfo`] carries, so a view finds a statement's
 /// [`trace::StmtId`] by POU, line and column.
 pub mod ast {
+    #[cfg(not(feature = "std"))]
+    use crate::prelude::*;
+
     pub use crate::lexer::Pos;
     pub use crate::parser::{
         Arg, BinOp, Block, CaseArm, CaseLabel, Expr, ExprKind, Field, Init, LabelValue, Pou, PouKind,
@@ -83,6 +86,21 @@ pub mod ast {
             pos: e.pos,
             msg: e.msg,
         })
+    }
+
+    /// The directly represented addresses (`IX0.1`, without the `%`) the
+    /// code writes, in order of appearance with repeats: tokens, so none
+    /// inside a comment or a string. Empty when `src` does not tokenise.
+    #[must_use]
+    pub fn direct_addresses(src: &str) -> Vec<String> {
+        crate::lexer::lex(src, false)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(t, _)| match t {
+                crate::lexer::Tok::Direct(d) => Some(d),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The standard function blocks ([`crate::LIBRARY`]), parsed.

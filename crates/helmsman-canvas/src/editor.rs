@@ -30,20 +30,17 @@ const RED: Color32 = Color32::from_rgb(255, 110, 100);
 pub enum Tab {
     #[default]
     Io,
-    /// The project's requirement tests, green or red (`helmsman_iec::spec`).
-    Requirements,
     Claude,
 }
 
 impl Tab {
     /// Every tab, in the panel's order.
-    pub const ALL: [Self; 3] = [Self::Io, Self::Requirements, Self::Claude];
+    pub const ALL: [Self; 2] = [Self::Io, Self::Claude];
 
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Io => "I/O",
-            Self::Requirements => "Requirements",
             Self::Claude => "Agent",
         }
     }
@@ -53,7 +50,6 @@ impl Tab {
     pub const fn tip(self) -> &'static str {
         match self {
             Self::Io => "The program's inputs and outputs with their live values.",
-            Self::Requirements => "The project's requirement tests, green or red. A red test stops Deploy.",
             Self::Claude => "Ask the agent about the program, or have it propose a change.",
         }
     }
@@ -61,7 +57,6 @@ impl Tab {
     const fn key(self) -> &'static str {
         match self {
             Self::Io => "io",
-            Self::Requirements => "tests",
             Self::Claude => "claude",
         }
     }
@@ -133,9 +128,10 @@ impl Pane {
 /// the hide chevron must fit the row, or the pane grows every frame); 240
 /// since 2026-11-05 (Nick: "just a bit wider").
 pub const LEFT_W: f32 = 240.0;
-/// The right panel's width when first opened, points: 236 since the
-/// Requirements tab (three tab buttons and the hide chevron must fit the
-/// row, or the panel grows every frame).
+/// The right panel's width when first opened, points: 236 since
+/// 2026-11-05 (the tab buttons and the hide chevron must fit the row, or
+/// the panel grows every frame; the Requirements tab is archived since
+/// 2026-11-08, the width kept).
 pub const RIGHT_W: f32 = 236.0;
 
 /// The Editor's layout and the Monitor's scan detail (kept per browser)
@@ -420,7 +416,7 @@ pub fn view_menu(ui: &mut egui::Ui, chrome: &mut Chrome, tabs: &[Tab]) {
         "Side panel",
         right,
         &k(Action::Panel),
-        "Shows or hides the panel on the right: I/O, Requirements, Agent.",
+        "Shows or hides the panel on the right: I/O, Agent.",
     ) {
         chrome.right = !right;
     }
@@ -481,6 +477,14 @@ pub fn select(ctx: &egui::Context, id: egui::Id, a: usize, b: usize) {
         egui::text::CCursor::new(b),
     )));
     state.store(ctx, id);
+}
+
+/// The id of the ST editor showing `file` of `project` in `view`. One id
+/// per file: egui keeps the undo history, caret and scroll under it, and
+/// a shared id would put one file's text into another on Undo.
+#[must_use]
+pub fn source_id(view: &str, project: &str, file: &str) -> egui::Id {
+    egui::Id::unique((view, project, file))
 }
 
 /// Undoes (or, `redo`, redoes) the last edit of the ST editor `id` on
@@ -843,9 +847,15 @@ pub fn st_editor(
                 // Slack for the editor's own margin and the scroll bar: wider
                 // than the pane and a resizable pane grows to fit, every frame.
                 let wrap = (ui.available_width() - gutter_w - ui.spacing().item_spacing.x - 32.0).max(60.0);
+                // The width the text edit really wraps at (its margins
+                // come off the width it is given) is told by its layouter;
+                // the gutter uses the last frame's, or the estimate on the
+                // first.
+                let wrap_key = id.with("wrap");
+                let edit_wrap = ui.data(|d| d.get_temp::<f32>(wrap_key)).unwrap_or(wrap - 8.0);
                 // The rows the text takes at that width: each source line
                 // numbered on its first row, its wrapped rows blank.
-                let mut job = highlight(text.as_str(), diags, at, &added, &font, wrap, &t);
+                let mut job = highlight(text.as_str(), diags, at, &added, &font, edit_wrap, &t);
                 crate::find::mark(&mut job, &marks);
                 let galley = ui.fonts_mut(|f| f.layout_job(job));
                 let mut gutter = LayoutJob::default();
@@ -869,6 +879,7 @@ pub fn st_editor(
                 gutter.wrap.max_width = f32::INFINITY;
                 ui.label(gutter);
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
+                    ui.data_mut(|d| d.insert_temp(wrap_key, wrap));
                     let mut job = highlight(buf.as_str(), diags, at, &added, &font, wrap, &t);
                     crate::find::mark(&mut job, &marks);
                     ui.fonts_mut(|f| f.layout_job(job))
@@ -884,6 +895,13 @@ pub fn st_editor(
                     .lock_focus(true)
                     .layouter(&mut layouter)
                     .show(ui);
+                // The gutter was laid out a frame behind a change of width.
+                if ui
+                    .data(|d| d.get_temp::<f32>(wrap_key))
+                    .is_some_and(|w| (w - edit_wrap).abs() > 0.01)
+                {
+                    ui.ctx().request_repaint();
+                }
                 removed_rules(ui, &out, &agent.removed, chrome);
                 out.response.response
             })

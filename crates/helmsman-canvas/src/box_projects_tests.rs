@@ -37,10 +37,10 @@ use helmsman_plc::{Runtime, SignalTable, Window};
 use serde_json::Value as Json;
 
 use crate::app::App;
-use crate::box_projects::{Answer, BoxProjects, Deploy, PReq};
+use crate::box_projects::{Answer, BoxProjects, Buf, Deploy, PReq, Pending};
 use crate::box_tests::sse;
 use crate::box_view::BoxView;
-use crate::projects::Workspace;
+use crate::projects::{Act, Workspace};
 use crate::remote::{Cmd, Msg, Stream};
 use crate::review::Session;
 use crate::review_view::ReviewView;
@@ -933,9 +933,10 @@ END_PROGRAM
 ";
 
 /// Requirement tests on a box (TODO.md spec-tests): opening a project runs
-/// its `test_*.st` files on the box and the Requirements tab shows each,
-/// red or green with why; a red one refuses the deploy, saying which; a
-/// save runs them again, and green, the deploy goes through.
+/// its `test_*.st` files on the box, red or green with why; a red one
+/// refuses the deploy, saying which; a save runs them again, and green,
+/// the deploy goes through. (The tab that listed them is archived,
+/// 2026-11-08; the gate stays.)
 #[test]
 fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
     let b = Bench::new();
@@ -980,18 +981,6 @@ fn requirement_tests_show_on_the_box_and_a_red_one_refuses_the_deploy() {
         "{why}"
     );
     assert!(p.running.is_none());
-
-    // The tab draws the row red and the refusal shows under the header.
-    let ctx = egui::Context::default();
-    v.step_all(&ctx, vec![], vec![], 0.0);
-    let mut chrome = crate::editor::Chrome::default();
-    chrome.tab = crate::editor::Tab::Requirements;
-    let mut out = ctx.run_ui(RawInput::default(), |ui| {
-        crate::editor::Body::tab(&mut v, ui, crate::editor::Tab::Requirements, &mut chrome);
-    });
-    out.textures_delta.clear();
-    assert!(chrome.rect("test test_lamp").is_some(), "{:?}", chrome.hits);
-    assert!(chrome.rect("tests run").is_some());
 
     // Fixed and saved: the box runs them again, green, and deploys.
     let p = &mut v.projects;
@@ -1708,153 +1697,6 @@ fn only_an_engineer_can_start_a_project_from_the_list() {
     assert!(writes.is_empty(), "{writes:?}");
 }
 
-/// Undoes HTTP chunked framing (a streamed answer).
-fn unchunk(raw: &[u8]) -> String {
-    let s = String::from_utf8_lossy(raw);
-    let mut rest: &str = &s;
-    let mut out = String::new();
-    while let Some((size, after)) = rest.split_once("\r\n") {
-        let Ok(n) = usize::from_str_radix(size.trim(), 16) else {
-            break;
-        };
-        if n == 0 || after.len() < n {
-            break;
-        }
-        out.push_str(&after[..n]);
-        rest = after[n..].strip_prefix("\r\n").unwrap_or(&after[n..]);
-    }
-    if out.is_empty() { s.into_owned() } else { out }
-}
-
-/// Nick, 2026-11-05: a requirement typed on a box goes to the box's
-/// requirements route; with no relay the box writes it as "no test yet",
-/// and the list shows it grey, never refusing a deploy.
-#[test]
-fn a_requirement_added_on_a_box_without_an_agent_is_listed_with_no_test_yet() {
-    use crate::requirements::{Adding, Phase, State};
-    let b = Bench::build(true);
-    let jar = Jar::default();
-    let mut v = page(&b, &jar, Some(("alice", ALICE)));
-    make(
-        &b,
-        &jar,
-        &mut v.projects,
-        "line",
-        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
-    );
-    settle(&b, &jar, &mut v.projects);
-
-    let (mut a, req) = Adding::to_box("line", "The conveyor runs after start", "conveyor_runs", 1);
-    assert_eq!(req.url, "/api/projects/line/requirements");
-    let head = format!(
-        "POST {} HTTP/1.1\r\nHost: box\r\nX-Helmsman-Request: 1\r\nOrigin: http://box\r\nCookie: helmsman_session={}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-        req.url,
-        jar.get().unwrap(),
-        req.body.len()
-    );
-    let (status, _, body) = b.raw(&head, req.body.as_bytes());
-    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
-    a.chunk(&unchunk(&body));
-    a.end(None);
-    assert_eq!(
-        a.phase,
-        Phase::Untested {
-            file: "test_conveyor_runs.st".into(),
-            why: String::new()
-        }
-    );
-
-    // The page reads the project again, which runs its tests.
-    v.projects.open_project("line");
-    settle(&b, &jar, &mut v.projects);
-    v.projects.run_tests();
-    settle(&b, &jar, &mut v.projects);
-    let row = v
-        .projects
-        .tests
-        .rows
-        .iter()
-        .find(|r| r.file == "test_conveyor_runs.st")
-        .expect("its row");
-    assert_eq!(row.state, State::Untested, "{:?}", v.projects.tests);
-    assert_eq!(row.requirement, "The conveyor runs after start");
-    assert_eq!(v.projects.tests.refusal(), None);
-
-    // Signed out, the box refuses it.
-    let (mut a, req) = Adding::to_box("line", "The belt stops on stop", "belt_stops", 2);
-    let head = format!(
-        "POST {} HTTP/1.1\r\nHost: box\r\nX-Helmsman-Request: 1\r\nOrigin: http://box\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-        req.url,
-        req.body.len()
-    );
-    let (status, _, body) = b.raw(&head, req.body.as_bytes());
-    assert_eq!(status, 401);
-    a.refused(status, &String::from_utf8_lossy(&body));
-    assert!(
-        matches!(&a.phase, Phase::Failed(w) if w.starts_with("Sign in")),
-        "{:?}",
-        a.phase
-    );
-}
-
-/// Nick, 2026-11-07: inputs must not disappear on a state change. A
-/// requirement the box finished adding reads the project again for the
-/// new test file; that read used to replace every buffer, so an unsaved
-/// edit to another file was lost. Now the edit stays and the new file
-/// comes in beside it.
-#[test]
-fn a_finished_requirement_keeps_unsaved_edits() {
-    use crate::box_agent::Incoming;
-    use crate::requirements::Adding;
-    let b = Bench::build(true);
-    let jar = Jar::default();
-    let mut v = page(&b, &jar, Some(("alice", ALICE)));
-    make(
-        &b,
-        &jar,
-        &mut v.projects,
-        "line",
-        &[("main.st", MAIN), ("blocks.st", BLOCKS), ("io.map", MAP)],
-    );
-    settle(&b, &jar, &mut v.projects);
-    let edited = format!("{MAIN}\n(* not saved yet *)\n");
-    v.projects
-        .open
-        .as_mut()
-        .unwrap()
-        .bufs
-        .get_mut("main.st")
-        .unwrap()
-        .text = edited.clone();
-
-    // The box adds the test file, as the requirement's POST would.
-    let (a, req) = Adding::to_box("line", "The conveyor runs after start", "conveyor_runs", 7);
-    let head = format!(
-        "POST {} HTTP/1.1\r\nHost: box\r\nX-Helmsman-Request: 1\r\nOrigin: http://box\r\nCookie: helmsman_session={}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-        req.url,
-        jar.get().unwrap(),
-        req.body.len()
-    );
-    let (status, _, body) = b.raw(&head, req.body.as_bytes());
-    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
-    v.adding = Some(a);
-    v.requirement_answer(Incoming::Chunk {
-        seq: 7,
-        text: unchunk(&body),
-    });
-    v.requirement_answer(Incoming::End { seq: 7 });
-    settle(&b, &jar, &mut v.projects);
-
-    let o = v.projects.open.as_ref().unwrap();
-    assert_eq!(o.bufs["main.st"].text, edited, "the unsaved edit stays");
-    assert!(o.bufs["main.st"].dirty());
-    assert!(
-        o.bufs.contains_key("test_conveyor_runs.st"),
-        "{:?}",
-        o.bufs.keys()
-    );
-}
-
 /// Nick, 2026-11-07: "the interface and inputs need to be more
 /// persistent so they don't just disappear during a refresh". A page
 /// reloaded on the same browser comes back on the project and file it
@@ -1882,7 +1724,6 @@ fn a_reload_puts_back_the_project_the_file_the_edits_and_the_inputs() {
     let edited = format!("{BLOCKS}\n(* half done *)\n");
     a.projects.current_mut().unwrap().text = edited.clone();
     a.instruct.draft = "make the lamp blink at 2 Hz".into();
-    a.req_ui.draft = "The lamp blinks while running".into();
     let (kept, dropped) = a.desk().text_within(MAX_BYTES);
     assert_eq!(dropped, Vec::<String>::new());
     assert!(!kept.contains(ALICE), "no password in the desk");
@@ -1905,7 +1746,6 @@ fn a_reload_puts_back_the_project_the_file_the_edits_and_the_inputs() {
             .contains("blocks.st are back")
     );
     assert_eq!(r.instruct.draft, "make the lamp blink at 2 Hz");
-    assert_eq!(r.req_ui.draft, "The lamp blinks while running");
     // Saved, the draft is gone from the desk.
     r.projects.save();
     settle(&b, &ja, &mut r.projects);
@@ -2125,6 +1965,179 @@ fn the_agent_on_a_box_saves_a_checked_answer_with_its_history_and_undo_restores_
     let o = v.instruct.outcome.clone().unwrap();
     assert_eq!(o.kind, Kind::Refused, "{o:?}");
     assert!(o.problems.iter().any(|p| p.contains("lamp on failed")), "{o:?}");
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        LAMP,
+        "never written"
+    );
+}
+
+/// A program file of realistic size (60 KiB) goes to the box's agent once,
+/// with the answer format and its tests, inside what the box takes; before,
+/// the format and two copies of the file went over 8000 characters at
+/// about 2.5 KB (review 2026-11-08).
+#[test]
+fn a_realistic_file_reaches_the_box_agent_once() {
+    use crate::box_agent::MAX_MESSAGE;
+    use crate::instruct::BOX_RULES;
+    use crate::instruct_tests::{FOLLOWS, LAMP};
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let big = format!("{}{LAMP}", "(* plant notes for the next shift *)\n".repeat(1_600));
+    assert!(big.len() > 58_000, "{}", big.len());
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "big",
+        &[("main.st", big.as_str()), ("test_lamp.st", FOLLOWS)],
+    );
+    v.projects.open_file("main.st");
+    v.tick(&ctx);
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let m: Json = serde_json::from_str(&v.chat_sent[0].body).unwrap();
+    let message = m["message"].as_str().unwrap();
+    assert!(message.chars().count() < MAX_MESSAGE / 2, "{}", message.len());
+    assert!(message.starts_with(BOX_RULES));
+    assert_eq!(message.matches("lamp := start;").count(), 1, "the file goes once");
+    assert!(message.contains("<requirement_tests>"));
+}
+
+/// The Agent checks an answer against the box's own image sizes and scan
+/// period, not the page's simulation (8 bytes of I and Q, 64 of M, 10 ms):
+/// a valid program that reads an input at byte 20 (the page has 8) failed
+/// to compile there and the model was told to fix it (review 2026-11-08).
+#[test]
+fn the_agent_on_a_box_checks_against_the_boxs_sizes_and_period() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::LAMP;
+    use serde_json::json;
+    let big = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; kept : BOOL; END_VAR\nVAR sensor AT %IX20.0 : BOOL; END_VAR\nlamp := start;\nkept := start OR sensor;\nEND_PROGRAM\n";
+    let scenario = "```st scenario\n(* The kept flag follows start. *)\nPROGRAM test_kept\nVAR_INPUT kept : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; kept_on : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN kept_on(COND := kept); done := TRUE; END_IF;\nEND_PROGRAM\n```\n";
+    // The page's simulation cannot hold it; the box can.
+    assert!(helmsman_iec::compile(big, crate::playground::SIZES).is_err());
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    v.tick(&ctx);
+    let runs = v
+        .projects
+        .open
+        .as_ref()
+        .and_then(|o| o.runs)
+        .expect("the box reported its sizes");
+    assert_eq!((runs.sizes.i, runs.sizes.q), (32, 32), "{runs:?}");
+    assert_eq!(
+        runs.period,
+        Duration::from_millis(2),
+        "the bench box scans at 2 ms"
+    );
+    v.instruct.draft = "keep a counter word".into();
+    v.send_instruction(&ctx);
+    let seq = v.chat_sent.last().expect("a message").seq;
+    let answer = format!("Why: it keeps a word.\n\n```st\n{big}```\n\n{scenario}");
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev("text", json!({ "delta": answer })),
+        ev("done", json!({"stop": "end_turn", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Applied, "{o:?}");
+}
+
+/// An instruction belongs to the project it was typed in: opening another
+/// while the box's agent answers ends the run, and a failing first answer
+/// is not sent back with the other project's files.
+#[test]
+fn opening_another_project_ends_the_boxs_run_and_sends_no_retry() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::LAMP;
+    use serde_json::json;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    make(&b, &jar, &mut v.projects, "second", &[("main.st", LAMP)]);
+    v.projects.open_project("line");
+    for _ in 0..20 {
+        pump(&b, &jar, &mut v, &ctx, 1.0);
+        if v.psent.is_empty() {
+            break;
+        }
+    }
+    v.projects.open_file("main.st");
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "{:?}", v.instruct.outcome);
+    let seq = v.chat_sent[0].seq;
+    v.projects.open_project("second");
+    v.tick(&ctx);
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev(
+            "text",
+            json!({ "delta": "Why: x.\n\n```st\nPROGRAM broken\n```\n" }),
+        ),
+        ev("done", json!({"stop": "end_turn", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    assert_eq!(v.chat_sent.len(), 1, "no retry from the other project");
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Failed, "{o:?}");
+    assert!(o.status.contains("project changed"), "{}", o.status);
+}
+
+/// A turn the box ended early (`budget`) with a whole-looking answer in
+/// it is cut off, not complete: nothing is written (review 2026-11-08).
+#[test]
+fn an_answer_the_box_cut_off_is_never_written() {
+    use crate::box_agent::Incoming;
+    use crate::instruct::Kind;
+    use crate::instruct_tests::{LAMP, st};
+    use serde_json::json;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(&b, &jar, &mut v.projects, "line", &[("main.st", LAMP)]);
+    v.projects.open_file("main.st");
+    v.tick(&ctx);
+    v.instruct.draft = "comment it".into();
+    v.send_instruction(&ctx);
+    let seq = v.chat_sent.last().expect("a message").seq;
+    let new = LAMP.replace("lamp := start;", "lamp := start; (* follows start *)");
+    let ev = |n: &str, d: Json| format!("event: {n}\ndata: {d}\n\n");
+    let body = [
+        ev("session", json!({"id": "s1"})),
+        ev("text", json!({ "delta": st(&new) })),
+        ev("done", json!({"stop": "budget", "why": null})),
+    ]
+    .concat();
+    v.agent.apply(Incoming::Chunk { seq, text: body });
+    v.agent.apply(Incoming::End { seq });
+    v.tick(&ctx);
+    let o = v.instruct.outcome.clone().expect("an outcome");
+    assert_eq!(o.kind, Kind::Failed, "{o:?}");
+    assert!(o.status.contains("cut off"), "{}", o.status);
     assert_eq!(
         b.json("/api/projects/line/files/main.st")["text"],
         LAMP,
@@ -2429,6 +2442,170 @@ fn a_draft_started_on_one_screen_is_there_on_another_after_signing_in() {
     assert_eq!(air.projects.open.as_ref().unwrap().bufs["blocks.st"].text, edited);
 }
 
+/// 2026-11-08 review: two screens of one account, each with an unsaved
+/// edit to a different file. The screen whose desk the box refuses as older
+/// reads the other's and takes it, and its own edit is still there, still
+/// unsaved, next to the other screen's.
+#[test]
+fn taking_a_newer_desk_from_another_screen_keeps_this_screens_unsaved_edit() {
+    use crate::box_projects::PCall;
+    use crate::sim_projects::wall_ms;
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let (ja, js) = (Jar::default(), Jar::default());
+    let mut a = page(&b, &ja, Some(("alice", ALICE)));
+    make(
+        &b,
+        &ja,
+        &mut a.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    let mut s = page(&b, &js, Some(("alice", ALICE)));
+    for (v, j) in [(&mut a, &ja), (&mut s, &js)] {
+        v.projects.open_project("line");
+        settle(&b, j, &mut v.projects);
+    }
+    let mut now = 0.0;
+    for _ in 0..3 {
+        now += 1.5;
+        pump(&b, &ja, &mut a, &ctx, now);
+        pump(&b, &js, &mut s, &ctx, now);
+    }
+    a.projects.open_file("blocks.st");
+    let from_a = format!("{BLOCKS}\n(* from the first screen *)\n");
+    a.projects.current_mut().unwrap().text = from_a.clone();
+    s.projects.open_file("main.st");
+    let from_s = format!("{MAIN}\n(* from the second screen *)\n");
+    s.projects.current_mut().unwrap().text = from_s.clone();
+    s.instruct.draft = "the second screen's note".into();
+
+    // The second screen dates its desk first but its PUT is slow; the
+    // first screen's, dated later, lands before it.
+    now += 1.5;
+    s.step_all(&ctx, vec![], vec![], now);
+    let held = std::mem::take(&mut s.psent);
+    let put = held.iter().find(|q| q.call == PCall::SaveDesk).expect("a PUT");
+    let dated: Json = serde_json::from_slice(put.body.as_ref().unwrap()).unwrap();
+    let t = dated["saved_at"].as_u64().unwrap();
+    wait("the clock to move on", || wall_ms() > t);
+    a.step_all(&ctx, vec![], vec![], now);
+    let first = std::mem::take(&mut a.psent);
+    let kept = first
+        .iter()
+        .find(|q| q.call == PCall::SaveDesk)
+        .expect("the first screen's PUT");
+    let ans = b.send(&ja, kept);
+    assert_eq!(ans.status, 200, "{}", ans.body);
+    for q in held {
+        let ans = b.send(&js, &q);
+        if q.call == PCall::SaveDesk {
+            assert_eq!(ans.status, 409, "{}", ans.body);
+        }
+        s.step_all(&ctx, vec![], vec![(q.call, ans)], now);
+    }
+    for _ in 0..10 {
+        now += 1.5;
+        pump(&b, &js, &mut s, &ctx, now);
+    }
+    let o = s.projects.open.as_ref().expect("the project stays open");
+    assert_eq!(o.name, "line");
+    assert_eq!(o.current.as_deref(), Some("main.st"), "the file it was on");
+    assert_eq!(o.bufs["main.st"].text, from_s, "its own edit is not discarded");
+    assert!(o.bufs["main.st"].dirty());
+    assert_eq!(
+        o.bufs["blocks.st"].text, from_a,
+        "the other screen's edit arrived"
+    );
+    assert_eq!(
+        s.instruct.draft, "the second screen's note",
+        "the typed input stays"
+    );
+    let box_desk = |jar: &Jar| -> Json {
+        let a = b.send(jar, &PReq::get(PCall::Desk, "/api/desk".into()));
+        serde_json::from_str(&a.body).unwrap()
+    };
+    let held = box_desk(&js);
+    assert_eq!(held["desk"]["drafts"]["line"]["main.st"]["text"], from_s.as_str());
+    assert_eq!(
+        held["desk"]["drafts"]["line"]["blocks.st"]["text"],
+        from_a.as_str()
+    );
+}
+
+/// 2026-11-08 review: another person signing in on the same page does not
+/// inherit the last one's open project, unsaved edits and inputs, and the
+/// last one's desk does not go over theirs on the box.
+#[test]
+fn another_person_signing_in_on_the_page_does_not_inherit_the_last_ones_desk() {
+    use crate::box_projects::PCall;
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    v.projects.open_project("line");
+    settle(&b, &jar, &mut v.projects);
+    v.projects.open_file("blocks.st");
+    let edited = format!("{BLOCKS}\n(* alice's *)\n");
+    v.projects.current_mut().unwrap().text = edited.clone();
+    v.instruct.draft = "alice's note".into();
+    let box_desk = |jar: &Jar| -> Json {
+        let a = b.send(jar, &PReq::get(PCall::Desk, "/api/desk".into()));
+        serde_json::from_str(&a.body).unwrap()
+    };
+    let mut now = 0.0;
+    for _ in 0..20 {
+        now += 1.5;
+        pump(&b, &jar, &mut v, &ctx, now);
+        if box_desk(&jar)["desk"]["agent"] == "alice's note" {
+            break;
+        }
+    }
+    assert_eq!(box_desk(&jar)["desk"]["agent"], "alice's note");
+
+    // Bob has an older desk of his own on the box, from another screen.
+    let jb = Jar::default();
+    b.login(&jb, "bob", BOB);
+    let ans = b.send(
+        &jb,
+        &PReq {
+            call: PCall::SaveDesk,
+            method: "PUT",
+            url: "/api/desk".into(),
+            body: Some(br#"{"saved_at":5,"agent":"bob's note"}"#.to_vec()),
+            ctype: "application/json",
+        },
+    );
+    assert!(ans.status < 300, "{}", ans.body);
+
+    // Alice signs out and Bob signs in on the same page.
+    v.session = Some(b.login(&jar, "bob", BOB));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &jar, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "bob's note", "his own desk, not alice's input");
+    assert!(!v.projects.dirty(), "alice's unsaved edit is not on his screen");
+    assert!(v.desk().drafts.is_empty(), "{:?}", v.desk().drafts);
+    assert_eq!(box_desk(&jb)["desk"]["agent"], "bob's note");
+    assert_eq!(box_desk(&jb)["desk"]["drafts"], serde_json::json!({}));
+    // Alice's desk on the box is hers still.
+    let ja = Jar::default();
+    b.login(&ja, "alice", ALICE);
+    let hers = box_desk(&ja);
+    assert_eq!(
+        hers["desk"]["drafts"]["line"]["blocks.st"]["text"],
+        edited.as_str()
+    );
+}
+
 /// An instruction under way on the box's agent, with a proposal stored
 /// and the answer still streaming: `v` signed in, `line` open on
 /// `main.st`.
@@ -2599,4 +2776,393 @@ fn the_conversation_and_the_device_form_follow_the_person_to_another_screen() {
     assert_eq!(air.agent.turns[0].text, "Looking at the lamp");
     assert_eq!(air.instruct.outcome.as_ref().unwrap().review, [3, 4]);
     assert_eq!(air.instruct.draft, "", "the instruction went out on the Studio");
+}
+// ---- answers matched to what was asked ----
+
+/// The text of `file` in the open project's editor.
+fn text_of(p: &BoxProjects, file: &str) -> String {
+    p.open.as_ref().unwrap().bufs[file].text.clone()
+}
+
+/// Sends `reqs` to the box and answers each, in order.
+fn deliver(b: &Bench, jar: &Jar, p: &mut BoxProjects, reqs: Vec<PReq>) {
+    for q in reqs {
+        let a = b.send(jar, &q);
+        p.answer(q.call, &a);
+    }
+}
+
+/// Bug 1: a file made with text (a duplicate, a paste, an imported EDS,
+/// the io.map a first device makes) holds that text in the editor, so the
+/// next device or keystroke builds on it and Save cannot wipe it.
+#[test]
+fn a_file_made_with_text_holds_that_text_and_a_save_keeps_it() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    p.new_file_with("io.map", MAP);
+    settle(&b, &jar, p);
+    let buf = &p.open.as_ref().unwrap().bufs["io.map"];
+    assert_eq!((buf.text.as_str(), buf.base.as_str()), (MAP, MAP));
+    assert!(!p.dirty());
+
+    p.new_file_with("main-2.st", MAIN);
+    settle(&b, &jar, p);
+    assert_eq!(text_of(p, "main-2.st"), MAIN, "the duplicate shows the copy");
+    p.current_mut().unwrap().text.push_str("(* x *)");
+    p.save();
+    settle(&b, &jar, p);
+    assert_eq!(
+        b.json("/api/projects/line/files/main-2.st")["text"],
+        format!("{MAIN}(* x *)")
+    );
+}
+
+/// Bug 2: a rename marks clean only the text it sent; what was typed
+/// during the round trip stays an edit.
+#[test]
+fn a_rename_keeps_what_was_typed_while_it_was_on_its_way() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    p.rename_file("main.st", "moved.st");
+    let typed = format!("{MAIN}(* typed meanwhile *)");
+    p.current_mut().unwrap().text.clone_from(&typed);
+    settle(&b, &jar, p);
+    let buf = &p.open.as_ref().unwrap().bufs["moved.st"];
+    assert_eq!(buf.base, MAIN);
+    assert_eq!(buf.text, typed);
+    assert!(p.dirty(), "the typing still has to be saved");
+    p.save();
+    settle(&b, &jar, p);
+    assert_eq!(
+        b.json("/api/projects/line/files/moved.st")["text"],
+        typed.as_str()
+    );
+}
+
+/// Bug 2: a file not read yet has no text to move; renaming it would write
+/// an empty file under the new name and delete the original.
+#[test]
+fn a_file_not_read_yet_is_not_renamed() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    p.open
+        .as_mut()
+        .unwrap()
+        .bufs
+        .insert("unread.st".into(), Buf::default());
+    p.rename_file("unread.st", "other.st");
+    assert!(p.poll().is_empty(), "nothing goes to the box");
+    assert!(matches!(&p.notice, Some((_, true))), "{:?}", p.notice);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        MAIN,
+        "the box is as it was"
+    );
+}
+
+/// Bug 2: signed out between the write and the delete, the new name is on
+/// the box; the note says so rather than "nothing was changed".
+#[test]
+fn a_rename_cut_short_by_a_sign_out_says_where_the_file_is() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    p.rename_file("main.st", "moved.st");
+    let write = p.poll();
+    deliver(&b, &jar, p, write);
+    let del = p.poll();
+    assert_eq!(del.len(), 1, "{del:?}");
+    deliver(&b, &Jar::default(), p, del);
+    assert!(p.ended);
+    let (msg, error) = p.notice.clone().unwrap();
+    assert!(error && !msg.contains("nothing was changed"), "{msg}");
+    assert!(msg.contains("moved.st") && msg.contains("main.st"), "{msg}");
+}
+
+/// Bug 3: a save answered after its project was left must not leave the
+/// Deploy waiting for it for ever.
+#[test]
+fn a_deploy_whose_save_lands_after_a_project_switch_does_not_hang() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    make(&b, &jar, p, "other", &[]);
+    p.open_project("line");
+    settle(&b, &jar, p);
+    p.current_mut().unwrap().text.push_str("(* edit *)");
+    p.deploy();
+    assert_eq!(p.deploy, Deploy::Saving);
+    p.open_project("other");
+    settle(&b, &jar, p);
+    assert!(!p.deploy.busy(), "{:?}", p.deploy);
+    assert!(matches!(p.deploy, Deploy::Failed(_)), "{:?}", p.deploy);
+}
+
+/// Bug 3: renaming the open project while a save is on its way would
+/// leave that save unanswered for the project's new name; the rename waits.
+#[test]
+fn a_project_is_not_renamed_while_a_save_is_on_its_way() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    let typed = format!("{MAIN}(* typed *)");
+    p.current_mut().unwrap().text.clone_from(&typed);
+    p.save();
+    let saving = p.poll();
+    p.rename("line", "renamed");
+    assert!(p.poll().is_empty(), "no rename goes out");
+    assert!(matches!(&p.notice, Some((_, true))), "{:?}", p.notice);
+    deliver(&b, &jar, p, saving);
+    assert!(!p.dirty());
+    assert!(p.open.as_ref().unwrap().bufs["main.st"].saving.is_none());
+    // Idle, the rename goes through and the files are all there, read.
+    p.rename("line", "renamed");
+    settle(&b, &jar, p);
+    let o = p.open.as_ref().unwrap();
+    assert_eq!(o.name, "renamed");
+    assert!(o.bufs["main.st"].loaded);
+    p.current_mut().unwrap().text.push('\n');
+    p.save();
+    settle(&b, &jar, p);
+    assert!(!p.dirty(), "{:?}", p.notice);
+}
+
+/// Bug 4: Save, keep typing, Deploy: the box deploys what was typed last.
+#[test]
+fn a_deploy_after_a_save_still_on_its_way_saves_the_later_typing_too() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(
+        &b,
+        &jar,
+        p,
+        "line",
+        &[("blocks.st", BLOCKS), ("io.map", MAP), ("main.st", MAIN)],
+    );
+    p.current_mut().unwrap().text = format!("(* one *)\n{MAIN}");
+    p.save();
+    let first = p.poll();
+    let second = format!("(* two *)\n{MAIN}");
+    p.current_mut().unwrap().text.clone_from(&second);
+    p.deploy();
+    assert_eq!(p.deploy, Deploy::Saving);
+    deliver(&b, &jar, p, first);
+    settle(&b, &jar, p);
+    assert_eq!(
+        b.json("/api/projects/line/files/main.st")["text"],
+        second.as_str(),
+        "the box holds the latest typing"
+    );
+    assert!(!p.dirty());
+    assert!(matches!(p.deploy, Deploy::Done(_)), "{:?}", p.deploy);
+}
+
+/// Bug 5: the Replace offer belongs to its own notice: another note, or
+/// another project, ends it, and it never writes into the project open now.
+#[test]
+fn the_replace_offer_ends_with_its_notice_and_stays_with_its_project() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    make(&b, &jar, p, "other", &[("main.st", MAIN)]);
+    p.open_project("line");
+    settle(&b, &jar, p);
+    p.upload("main.st", b"(* replaced *)".to_vec(), false);
+    settle(&b, &jar, p);
+    assert!(p.replace_offered(), "{:?}", p.notice);
+
+    // A project switch ends the offer.
+    p.open_project("other");
+    settle(&b, &jar, p);
+    assert!(!p.replace_offered());
+    p.replace();
+    assert!(p.poll().is_empty(), "the project switch dropped the offer");
+    assert_eq!(b.json("/api/projects/other/files/main.st")["text"], MAIN);
+
+    // So does any other note.
+    p.open_project("line");
+    settle(&b, &jar, p);
+    p.upload("main.st", b"(* replaced *)".to_vec(), false);
+    settle(&b, &jar, p);
+    assert!(p.replace_offered());
+    p.note("something else failed", true);
+    assert!(!p.replace_offered());
+
+    // An offer for a project that is not the open one is not taken.
+    p.open_project("other");
+    settle(&b, &jar, p);
+    p.pending = Some(Pending {
+        file: "main.st".into(),
+        bytes: b"(* replaced *)".to_vec(),
+        project: "line".into(),
+        offered: true,
+    });
+    p.replace();
+    assert!(p.poll().is_empty(), "no upload goes to the wrong project");
+    assert!(matches!(&p.notice, Some((_, true))), "{:?}", p.notice);
+    assert_eq!(b.json("/api/projects/other/files/main.st")["text"], MAIN);
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], MAIN);
+}
+
+/// A zip of one project, as an upload.
+fn zip_of(main: &str) -> Vec<u8> {
+    helmsman_project::Files(BTreeMap::from([("main.st".to_string(), main.to_string())]))
+        .to_zip()
+        .unwrap()
+}
+
+/// Bug 6: every way of replacing the open project's files keeps an
+/// unsaved edit: it comes back when the project is opened again, and the
+/// desk holds it meanwhile.
+#[test]
+fn a_restore_a_new_project_a_copy_and_an_upload_keep_the_unsaved_edit() {
+    use crate::desk::Desk;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    let mine = format!("{MAIN}(* mine *)");
+    let held = |p: &BoxProjects| {
+        let mut d = Desk::default();
+        p.to_desk(&mut d);
+        d.drafts
+            .get("line")
+            .and_then(|m| m.get("main.st"))
+            .map(|d| d.text.clone())
+    };
+
+    // Restore: the project is read again, the edit put back over it.
+    let n = p.history[0].n;
+    p.current_mut().unwrap().text.clone_from(&mine);
+    p.restore("line", n);
+    settle(&b, &jar, p);
+    assert_eq!(text_of(p, "main.st"), mine, "restore: {:?}", p.notice);
+    assert!(p.dirty());
+
+    // New project, copy of a project, upload of a zip: each opens another
+    // project; the edit waits in the desk and returns with `line`.
+    for step in 0..3 {
+        match step {
+            0 => p.create(&format!("fresh{step}"), None),
+            1 => p.create(&format!("copy{step}"), Some("line")),
+            _ => p.upload(&format!("zipped{step}.zip"), zip_of(MAIN), false),
+        }
+        settle(&b, &jar, p);
+        assert_ne!(p.open.as_ref().unwrap().name, "line", "step {step}");
+        assert_eq!(held(p).as_deref(), Some(mine.as_str()), "step {step}");
+        p.open_project("line");
+        settle(&b, &jar, p);
+        assert_eq!(text_of(p, "main.st"), mine, "step {step}: {:?}", p.notice);
+        assert!(p.dirty(), "step {step}");
+    }
+}
+
+/// Bug 7: the Delete key deletes what was last clicked; once that is gone
+/// it does not turn into a delete of the open project.
+#[test]
+fn the_delete_key_does_not_fall_through_to_the_open_project() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("extra.st", BLOCKS)],
+    );
+    let session = Some(Session {
+        user: Some("alice".into()),
+        role: "engineer".into(),
+    });
+    let mut h = Harness::new(v, session);
+    h.app.chrome.show_files();
+    h.wait(0.3);
+    h.press("file extra.st");
+    h.key(egui::Key::Backspace);
+    assert_eq!(h.bv().files_ui.confirm, Some(Act::DeleteFile("extra.st".into())));
+    h.press("confirm yes");
+    let reqs = h.sent();
+    deliver(&b, &jar, &mut h.bv().projects, reqs);
+    h.wait(0.2);
+    assert!(!files(&h.bv().projects).contains(&"extra.st".to_string()));
+    h.key(egui::Key::Backspace);
+    assert_eq!(h.bv().files_ui.confirm, None, "nothing is picked any more");
+}
+
+/// Bug 8: a restored edit for a file or project the box no longer has is
+/// dropped, not kept and written to the desk for ever.
+#[test]
+fn restored_edits_for_files_and_projects_that_are_gone_are_dropped() {
+    use crate::box_projects::Restore;
+    use crate::desk::Draft;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    let draft = |text: &str| Draft {
+        text: text.into(),
+        version: None,
+    };
+    p.adopt(Restore {
+        project: Some("line".into()),
+        file: None,
+        drafts: BTreeMap::from([
+            (
+                "line".to_string(),
+                BTreeMap::from([
+                    ("main.st".to_string(), draft("(* kept *)")),
+                    ("gone.st".to_string(), draft("(* file gone *)")),
+                ]),
+            ),
+            (
+                "deleted".to_string(),
+                BTreeMap::from([("main.st".to_string(), draft("(* project gone *)"))]),
+            ),
+        ]),
+    });
+    settle(&b, &jar, p);
+    assert!(text_of(p, "main.st").contains("kept"));
+    assert!(p.restore.drafts.is_empty(), "{:?}", p.restore.drafts);
+}
+
+/// Bug 8: a history list read earlier does not replace a later one.
+#[test]
+fn an_older_history_answer_does_not_replace_a_newer_one() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    p.read_history("line");
+    let older = p.poll().pop().unwrap();
+    let older_answer = b.send(&jar, &older);
+    p.current_mut().unwrap().text.push_str("(* more *)");
+    p.save();
+    settle(&b, &jar, p);
+    let newest = p.history.len();
+    p.answer(older.call, &older_answer);
+    assert_eq!(p.history.len(), newest, "the older list is ignored");
+    settle(&b, &jar, p);
 }

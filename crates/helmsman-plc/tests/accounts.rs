@@ -455,24 +455,24 @@ fn unknown_users_cost_as_much_as_known_ones() {
         },
         c,
     );
-    let time = |user: &str| {
-        let mut v: Vec<Duration> = (0..5)
-            .map(|_| {
-                let t = Instant::now();
-                let _ = l.login(user, "not-the-password");
-                t.elapsed()
-            })
-            .collect();
-        v.sort();
-        v[2]
-    };
-    let known = time("alice");
-    let unknown = time("nobody");
-    let long = {
+    // Load only ever adds time to a run of fixed work, so the fastest of
+    // many runs is the cost of the work itself. The three paths are
+    // interleaved so a busy spell hits all of them, and a pause in one
+    // run cannot move the minimum.
+    let once = |user: &str, password: &str| {
         let t = Instant::now();
-        let _ = l.login("alice", &"x".repeat(1 << 20));
+        let _ = l.login(user, password);
         t.elapsed()
     };
+    let big = "x".repeat(1 << 20);
+    let (mut known, mut unknown, mut long) = (Duration::MAX, Duration::MAX, Duration::MAX);
+    for _ in 0..15 {
+        known = known.min(once("alice", "not-the-password"));
+        unknown = unknown.min(once("nobody", "not-the-password"));
+        long = long.min(once("alice", &big));
+    }
+    // An unknown user that skipped the hash would cost microseconds
+    // against milliseconds, far outside this band.
     let ratio = unknown.as_secs_f64() / known.as_secs_f64();
     assert!(
         (0.5..2.0).contains(&ratio),

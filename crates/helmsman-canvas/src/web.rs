@@ -18,10 +18,11 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::box_projects::{PCall, PReq};
 use crate::claude::{Incoming, KeyStore, PROXY_HEALTH, PROXY_HELLO, Request as ClaudeRequest};
-use crate::remote::{Cmd, Msg, Stream};
+use crate::remote::{Cmd, Gets, Inbox, Msg, Stream};
 use crate::review::{Answer, Call, Request as ReviewRequest};
 
-type Inbox = Rc<RefCell<Vec<Msg>>>;
+/// Longest a read of the box may take before it is given up as failed, s.
+const GET_TIMEOUT_S: i32 = 15;
 
 thread_local! {
     /// The origin the box calls go to instead of the page's own
@@ -57,7 +58,7 @@ pub fn box_origin() -> Option<String> {
 /// An open `EventSource` and the callbacks it holds; closed when dropped.
 struct Source {
     es: web_sys::EventSource,
-    event: &'static str,
+    events: &'static [&'static str],
     on_open: Closure<dyn FnMut(web_sys::Event)>,
     on_error: Closure<dyn FnMut(web_sys::Event)>,
     on_event: Closure<dyn FnMut(web_sys::MessageEvent)>,
@@ -68,9 +69,11 @@ impl Drop for Source {
         self.es.close();
         self.es.set_onopen(None);
         self.es.set_onerror(None);
-        let _ = self
-            .es
-            .remove_event_listener_with_callback(self.event, self.on_event.as_ref().unchecked_ref());
+        for event in self.events {
+            let _ = self
+                .es
+                .remove_event_listener_with_callback(event, self.on_event.as_ref().unchecked_ref());
+        }
         // Keep the closures alive until here: `close` stops further calls.
         let _ = (&self.on_open, &self.on_error);
     }
@@ -78,7 +81,8 @@ impl Drop for Source {
 
 #[derive(Default)]
 pub struct Driver {
-    inbox: Inbox,
+    inbox: Rc<RefCell<Inbox>>,
+    gets: Rc<RefCell<Gets>>,
     values: Option<Source>,
     trace: Option<Source>,
     traces: Option<Source>,
@@ -87,16 +91,21 @@ pub struct Driver {
 impl Driver {
     /// What arrived since the last call.
     pub fn drain(&mut self) -> Vec<Msg> {
-        std::mem::take(&mut *self.inbox.borrow_mut())
+        self.inbox.borrow_mut().take()
     }
 
     pub fn run(&mut self, cmd: Cmd, ctx: &egui::Context) {
         match cmd {
             Cmd::Get(what, url) => {
-                let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+                let (inbox, gets, ctx) = (Rc::clone(&self.inbox), Rc::clone(&self.gets), ctx.clone());
+                let n = gets.borrow_mut().issue(&what);
                 let url = absolute(&url);
                 wasm_bindgen_futures::spawn_local(async move {
                     let (build, r) = get(&url).await;
+                    // A slow, old answer must not overwrite a newer one.
+                    if !gets.borrow_mut().accept(&what, n) {
+                        return;
+                    }
                     let mut inbox = inbox.borrow_mut();
                     if let Some(b) = build {
                         inbox.push(Msg::Build(b));
@@ -146,19 +155,21 @@ impl Driver {
                 push(Msg::Failed(stream));
             })
         };
-        let event = stream.event();
+        let events = stream.events();
         let on_event = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |e: web_sys::MessageEvent| {
             if let Some(data) = e.data().as_string() {
-                push(Msg::Event(stream, event.to_string(), data));
+                push(Msg::Event(stream, e.type_(), data));
             }
         });
         es.set_onopen(Some(on_open.as_ref().unchecked_ref()));
         es.set_onerror(Some(on_error.as_ref().unchecked_ref()));
-        es.add_event_listener_with_callback(event, on_event.as_ref().unchecked_ref())
-            .ok()?;
+        for event in events {
+            es.add_event_listener_with_callback(event, on_event.as_ref().unchecked_ref())
+                .ok()?;
+        }
         Some(Source {
             es,
-            event,
+            events,
             on_open,
             on_error,
             on_event,
@@ -187,7 +198,17 @@ async fn get(url: &str) -> (Option<String>, Result<String, String>) {
 
 async fn get_body(url: &str, build: &mut Option<String>) -> Result<String, String> {
     let window = web_sys::window().ok_or("no window")?;
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str(url))
+    let (init, headers) = init("GET")?;
+    init.set_headers(&headers);
+    // A reply that never comes would leave its read "asked" for ever.
+    let controller = web_sys::AbortController::new().map_err(|e| text(&e))?;
+    init.set_signal(Some(&controller.signal()));
+    let abort = Closure::once_into_js(move || controller.abort());
+    window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(abort.unchecked_ref(), GET_TIMEOUT_S * 1000)
+        .map_err(|e| text(&e))?;
+    let request = web_sys::Request::new_with_str_and_init(url, &init).map_err(|e| text(&e))?;
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|e| text(&e))?
         .dyn_into()
@@ -326,7 +347,7 @@ async fn claude(
             .await
             .map_err(|e| text(&e))?;
         let mut body = b.as_string().unwrap_or_default();
-        body.truncate(crate::claude::MAX_ANSWER);
+        crate::claude::truncate_at_boundary(&mut body, crate::claude::MAX_ANSWER);
         push(Incoming::Status {
             seq,
             status: resp.status(),
@@ -583,7 +604,7 @@ async fn chat(
             .await
             .map_err(|e| text(&e))?;
         let mut body = b.as_string().unwrap_or_default();
-        body.truncate(64 << 10);
+        crate::box_agent::cut(&mut body, 64 << 10);
         push(Incoming::Status {
             seq,
             status: resp.status(),
@@ -702,6 +723,8 @@ async fn fetch_public(url: &str) -> Result<String, String> {
 thread_local! {
     /// Files the user picked, read, and not taken yet.
     static PICKED: RefCell<Vec<(String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    /// Why a picked file was not read, told in Messages.
+    static PICK_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Opens the browser's file picker (`accept`: `.zip,.st,.xml,.l5x`); the
@@ -726,12 +749,24 @@ pub fn pick_file(accept: &str, ctx: &egui::Context) {
             return;
         };
         let name = file.name();
+        // Before the whole file is read into the page.
+        if let Some(why) = crate::app::pick_refusal(&name, file.size()) {
+            PICK_ERRORS.with(|p| p.borrow_mut().push(why));
+            ctx.request_repaint();
+            return;
+        }
         wasm_bindgen_futures::spawn_local(async move {
-            if let Ok(buf) = JsFuture::from(file.array_buffer()).await {
-                let bytes = web_sys::js_sys::Uint8Array::new(&buf).to_vec();
-                PICKED.with(|p| p.borrow_mut().push((name, bytes)));
-                ctx.request_repaint();
+            match JsFuture::from(file.array_buffer()).await {
+                Ok(buf) => {
+                    let bytes = web_sys::js_sys::Uint8Array::new(&buf).to_vec();
+                    PICKED.with(|p| p.borrow_mut().push((name, bytes)));
+                }
+                Err(e) => PICK_ERRORS.with(|p| {
+                    p.borrow_mut()
+                        .push(format!("{name} could not be read: {}", text(&e)));
+                }),
             }
+            ctx.request_repaint();
         });
     });
     input.set_onchange(Some(on_change.unchecked_ref()));
@@ -742,6 +777,12 @@ pub fn pick_file(accept: &str, ctx: &egui::Context) {
 #[must_use]
 pub fn take_picked() -> Vec<(String, Vec<u8>)> {
     PICKED.with(|p| std::mem::take(&mut *p.borrow_mut()))
+}
+
+/// Why the files picked since the last call were not read.
+#[must_use]
+pub fn take_pick_errors() -> Vec<String> {
+    PICK_ERRORS.with(|p| std::mem::take(&mut *p.borrow_mut()))
 }
 
 /// Clicks a hidden link to `href` that downloads as `name`.
@@ -779,7 +820,14 @@ pub fn download_bytes(name: &str, bytes: &[u8], mime: &str) {
         return;
     };
     click_download(&url, name);
-    let _ = web_sys::Url::revoke_object_url(&url);
+    // Not at once: Safari starts the download after the click returns and
+    // fails on a URL already revoked.
+    let revoke = Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    });
+    if let Some(window) = web_sys::window() {
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000);
+    }
 }
 
 /// The simulation's projects in `localStorage`. Every access is wrapped:
@@ -789,6 +837,8 @@ pub fn download_bytes(name: &str, bytes: &[u8], mime: &str) {
 pub struct LocalProjects;
 
 const PROJECTS_SLOT: &str = "helmsman-canvas/projects";
+/// What the projects slot held when this page could not read it.
+const PROJECTS_BACKUP_SLOT: &str = "helmsman-canvas/projects.backup";
 
 fn storage() -> Result<web_sys::Storage, String> {
     web_sys::window()
@@ -839,5 +889,11 @@ impl crate::sim_projects::Storage for LocalProjects {
 
     fn save(&mut self, value: &str) -> Result<(), String> {
         storage()?.set_item(PROJECTS_SLOT, value).map_err(|e| text(&e))
+    }
+
+    fn backup(&mut self, value: &str) -> Result<(), String> {
+        storage()?
+            .set_item(PROJECTS_BACKUP_SLOT, value)
+            .map_err(|e| text(&e))
     }
 }

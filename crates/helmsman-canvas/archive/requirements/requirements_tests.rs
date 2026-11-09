@@ -1,3 +1,7 @@
+// Archived 2026-11-08 (Nick: the Requirements tab is out of the UI for now; the
+// tests the Agent writes with each change take its place). Not compiled; see
+// README.md in this directory.
+
 //! The Requirements tab in the simulation: a requirement typed becomes a
 //! test file behind its row, written by the page's Agent route when it can
 //! be reached (a scripted Messages API answer here, compiled and run for

@@ -63,8 +63,8 @@ and offers Reload; the other files land.
 A requirement is worth keeping as a test. A file named `test_NAME.st` is
 one: a PROGRAM that drives the program's inputs, lets the clock run and
 checks the outputs. Its first comment states the requirement in your
-words; the **Requirements** tab of the side panel shows one row per test,
-green or red, and for a red one which check failed and when.
+words. The Agent writes one for each change it makes, and a red one names
+itself in the Deploy error with which check failed and when.
 
 ```st
 (* The lamp is on within 2 s of start_pb. *)
@@ -91,8 +91,8 @@ The page runs the tests whenever the project's build changes; a box runs
 them when a project opens, after each save and before every deploy
 (`POST /api/projects/{p}/tests` runs them on demand). **A red test refuses
 Deploy and the Agent's "Use this code"**, naming the requirement, so a
-change cannot land past a requirement it breaks. Ask the Agent to write
-the first tests from your requirements, then edit them like any file.
+change cannot land past a requirement it breaks. The Agent writes the
+tests with each change; edit them like any file.
 
 ## Upload and download
 

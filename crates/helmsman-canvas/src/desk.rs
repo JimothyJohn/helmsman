@@ -16,7 +16,8 @@
 //!
 //! One `localStorage` slot (each box serves its own page, so the slot is
 //! per box), written at most every [`EVERY_S`] and only when something
-//! changed; at most [`MAX_BYTES`], the oldest drafts going first past it.
+//! changed; at most [`MAX_BYTES`], the Agent's conversation and the device
+//! form going first past it, then the biggest drafts.
 //!
 //! **On the box, per person** (card `desk-on-box`, Nick 2026-11-07: "kept
 //! on the box per person when signed in, browser as the fallback"):
@@ -75,12 +76,14 @@ pub struct Desk {
     pub drafts: BTreeMap<String, BTreeMap<String, Draft>>,
     /// The Agent tab's input.
     pub agent: String,
-    /// The Requirements tab's input.
-    pub requirement: String,
     /// `editor` or `monitor`.
     pub screen: Option<String>,
     /// The sign-in form's name (never a password or PIN).
     pub user: String,
+    /// Whose work this is when it was kept (as the box names owners), so a
+    /// page reloaded after one person signed out does not hand it to the
+    /// next. Kept in this browser only: the box drops it.
+    pub owner: Option<String>,
     /// The Agent tab's conversation and the last instruction's outcome
     /// ([`Conversation::of`], capped).
     pub conversation: Option<Conversation>,
@@ -302,29 +305,75 @@ pub fn form_of(f: &NewDevice) -> NewDevice {
 }
 
 impl Desk {
-    /// Reads a desk; anything that does not parse is an empty desk.
+    /// Reads a desk; anything that does not parse is an empty desk, and a
+    /// field that does not read (a newer page's variant) is empty without
+    /// taking the others down.
+    #[cfg(test)]
     #[must_use]
     pub fn parse(text: &str) -> Self {
-        serde_json::from_str(text).unwrap_or_default()
+        Self::read(text).0
+    }
+
+    /// [`Self::parse`], and whether part of it did not read (`text` was
+    /// not a desk at all, or a field was the wrong shape). Empty text is
+    /// no desk yet, not a failure.
+    #[must_use]
+    pub fn read(text: &str) -> (Self, bool) {
+        if text.trim().is_empty() {
+            return (Self::default(), false);
+        }
+        if let Ok(d) = serde_json::from_str(text) {
+            return (d, false);
+        }
+        let Ok(Json::Object(fields)) = serde_json::from_str::<Json>(text) else {
+            return (Self::default(), true);
+        };
+        Self::from_fields(&fields)
+    }
+
+    /// The fields of `j` that read, each on its own.
+    fn from_fields(fields: &serde_json::Map<String, Json>) -> (Self, bool) {
+        fn field<T: serde::de::DeserializeOwned + Default>(
+            fields: &serde_json::Map<String, Json>,
+            name: &str,
+            lost: &mut bool,
+        ) -> T {
+            fields.get(name).map_or_else(T::default, |v| {
+                serde_json::from_value(v.clone()).unwrap_or_else(|_| {
+                    *lost = true;
+                    T::default()
+                })
+            })
+        }
+        let mut lost = false;
+        let l = &mut lost;
+        let d = Self {
+            saved_at: field(fields, "saved_at", l),
+            project: field(fields, "project", l),
+            file: field(fields, "file", l),
+            drafts: field(fields, "drafts", l),
+            agent: field(fields, "agent", l),
+            screen: field(fields, "screen", l),
+            user: field(fields, "user", l),
+            owner: field(fields, "owner", l),
+            conversation: field(fields, "conversation", l),
+            device: field(fields, "device", l),
+        };
+        (d, lost)
     }
 
     /// The person's work in it, which `saved_at` dates: the edits, the two
     /// inputs, the Agent's conversation and the device form (the project,
     /// file, screen and name follow the work).
     fn work(&self) -> String {
-        serde_json::to_string(&(
-            &self.drafts,
-            &self.agent,
-            &self.requirement,
-            &self.conversation,
-            &self.device,
-        ))
-        .unwrap_or_default()
+        serde_json::to_string(&(&self.drafts, &self.agent, &self.conversation, &self.device))
+            .unwrap_or_default()
     }
 
-    /// As text, at most `max` bytes: past it, whole drafts are dropped
-    /// (largest first) until it fits; the rest is always kept. The second
-    /// value names the files dropped.
+    /// As text, at most `max` bytes. Past it the Agent's conversation goes
+    /// first and the New device form next (both can be had again), and only
+    /// then whole drafts, largest first; the inputs are always kept. The
+    /// second value names what was dropped.
     #[must_use]
     pub fn text_within(&self, max: usize) -> (String, Vec<String>) {
         let mut d = self.clone();
@@ -334,22 +383,20 @@ impl Desk {
             if t.len() <= max {
                 return (t, dropped);
             }
+            if d.conversation.take().is_some() {
+                dropped.push("the Agent conversation".into());
+                continue;
+            }
+            if d.device.take().is_some() {
+                dropped.push("the New device form".into());
+                continue;
+            }
             let biggest = d
                 .drafts
                 .iter()
                 .flat_map(|(p, m)| m.iter().map(move |(f, dr)| (dr.text.len(), p.clone(), f.clone())))
                 .max();
             let Some((_, p, f)) = biggest else {
-                // No drafts left and still too big: the conversation, then
-                // the device form, then nothing.
-                if d.conversation.take().is_some() {
-                    dropped.push("the Agent conversation".into());
-                    continue;
-                }
-                if d.device.take().is_some() {
-                    dropped.push("the New device form".into());
-                    continue;
-                }
                 return ("{}".into(), dropped);
             };
             if let Some(m) = d.drafts.get_mut(&p) {
@@ -372,7 +419,13 @@ pub struct Keeper {
     at: Option<f64>,
     /// The work as last seen ([`Desk::work`]), and when it changed.
     work: String,
+    /// The work of the desk this page last loaded or took from the box.
+    taken: String,
     saved_at: u64,
+    /// The slot held something that did not read in full: it is left as it
+    /// is until the person changes something, so a newer page's fields are
+    /// not overwritten by this page's emptier desk.
+    unread: bool,
     /// Why the desk is not kept, or what was left out.
     pub problem: Option<String>,
 }
@@ -395,14 +448,16 @@ impl Keeper {
                 Some(format!("this browser does not keep your work ({e})")),
             ),
         };
-        let desk = Desk::parse(&last);
+        let (desk, unread) = Desk::read(&last);
         (
             Self {
                 store,
                 last,
                 at: None,
                 work: desk.work(),
+                taken: desk.work(),
                 saved_at: desk.saved_at,
+                unread,
                 problem,
             },
             desk,
@@ -415,11 +470,20 @@ impl Keeper {
         self.saved_at
     }
 
+    /// Whether the work in `desk` differs from the desk this page loaded
+    /// or last took from the box: the person changed something here since.
+    #[must_use]
+    pub fn changed(&self, desk: &Desk) -> bool {
+        desk.work() != self.taken
+    }
+
     /// Takes `desk` (the box's, newer) as the one in front of the person:
     /// its `saved_at` stands until the work changes again.
     pub fn adopt(&mut self, desk: &Desk) {
         self.work = desk.work();
+        self.taken = self.work.clone();
         self.saved_at = desk.saved_at;
+        self.unread = false;
     }
 
     /// Whether [`Self::keep`] would look at a desk at `now` (the throttle
@@ -440,15 +504,17 @@ impl Keeper {
         let work = desk.work();
         if work != self.work {
             self.work = work;
+            self.unread = false;
             // Never back in time, even on a clock behind the box's desk.
             self.saved_at = wall_ms().max(self.saved_at + 1);
         }
         desk.saved_at = self.saved_at;
         let (text, dropped) = desk.text_within(MAX_BYTES);
-        if text == self.last {
+        // Looked at: the next look is a second away, written or not.
+        self.at = Some(now);
+        if text == self.last || self.unread {
             return Some(desk);
         }
-        self.at = Some(now);
         match self.store.save(&text) {
             Ok(()) => {
                 self.last = text;
@@ -467,7 +533,7 @@ impl Keeper {
 
 /// Whose desk the box keeps for `s`: the account, or the role for a
 /// role-PIN session (as the box has it, `api::trend::owner_of`).
-fn owner(s: Option<&Session>) -> Option<String> {
+pub(crate) fn owner(s: Option<&Session>) -> Option<String> {
     s.map(|s| match &s.user {
         Some(u) => format!("user:{u}"),
         None => format!("role:{}", s.role),
@@ -522,7 +588,13 @@ impl OnBox {
         if !self.ready || self.owner.is_none() || self.at.is_some_and(|a| now - a < EVERY_S) {
             return;
         }
-        let (text, dropped) = desk.text_within(BOX_BYTES);
+        // Whose it was in this browser is the box's own business (the
+        // session): not sent.
+        let (text, dropped) = Desk {
+            owner: None,
+            ..desk.clone()
+        }
+        .text_within(BOX_BYTES);
         if text == self.sent {
             return;
         }
@@ -550,9 +622,31 @@ impl OnBox {
         let error = || j["error"].as_str().unwrap_or("no answer").to_string();
         match call {
             PCall::Desk if a.status == 200 => {
-                self.ready = true;
+                // Another person's desk (asked before the sign-in changed)
+                // is not this one's.
+                if j["owner"]
+                    .as_str()
+                    .is_some_and(|o| Some(o) != self.owner.as_deref())
+                {
+                    return None;
+                }
                 self.sent.clear();
-                let d: Desk = serde_json::from_value(j["desk"].clone()).ok()?;
+                let d = match &j["desk"] {
+                    Json::Null if j.is_object() => Desk::default(),
+                    Json::Object(fields) => Desk::from_fields(fields).0,
+                    _ => {
+                        // Not a desk this page can read, and the box
+                        // refuses a PUT older than it: the browser keeps
+                        // the desk, and the box is left alone.
+                        self.ready = false;
+                        self.problem = Some(
+                            "the desk on the box is not readable by this page, so it is kept in this browser only"
+                                .into(),
+                        );
+                        return None;
+                    }
+                };
+                self.ready = true;
                 (d.saved_at > local).then_some(d)
             }
             PCall::Desk => {
@@ -605,8 +699,11 @@ mod tests {
         let d = Desk::parse(r#"{"project":"line","future_field":[1,2],"agent":7}"#);
         assert_eq!(
             d,
-            Desk::default(),
-            "a wrong type anywhere: nothing restored rather than half"
+            Desk {
+                project: Some("line".into()),
+                ..Desk::default()
+            },
+            "a wrong type in one field takes only that field"
         );
         let d = Desk::parse(r#"{"project":"line","future_field":[1,2]}"#);
         assert_eq!(d.project.as_deref(), Some("line"), "an unknown field is ignored");
@@ -828,6 +925,151 @@ mod tests {
             1.0,
         );
         assert!(k.problem.as_deref().unwrap().contains("quota"));
+    }
+
+    /// A page that wrote a newer shape of the conversation (a variant this
+    /// page does not know) must not take the edits down with it
+    /// (2026-11-08 review): the drafts, project and file still read, and
+    /// the parse says it was partial.
+    #[test]
+    fn one_unreadable_field_does_not_take_the_drafts_down() {
+        let text = r#"{"saved_at":9,"project":"line","file":"a.st",
+            "drafts":{"line":{"a.st":{"text":"mine","version":"v1"}}},
+            "conversation":{"turns":[{"user":"hi","items":[{"FromTheFuture":1}]}]},
+            "device":"not a form"}"#;
+        let d = Desk::parse(text);
+        assert_eq!(d.project.as_deref(), Some("line"));
+        assert_eq!(d.file.as_deref(), Some("a.st"));
+        assert_eq!(d.drafts["line"]["a.st"].text, "mine");
+        assert_eq!(d.saved_at, 9);
+        assert_eq!((d.conversation, d.device), (None, None));
+        assert!(Desk::read(text).1, "said to be partly unreadable");
+        assert!(!Desk::read(r#"{"project":"line"}"#).1);
+        assert!(!Desk::read("").1, "no desk yet is not a failure");
+    }
+
+    /// The slot that failed to parse stays as it is until the person edits.
+    #[test]
+    fn a_slot_that_did_not_parse_is_not_overwritten_until_an_edit() {
+        let text = r#"{"saved_at":9,"drafts":{"line":{"a.st":{"text":"mine","version":"v1"}}},
+            "conversation":{"turns":7}}"#;
+        let store = Cell::default();
+        *store.0.borrow_mut() = Some(text.to_string());
+        let (mut k, mut d) = Keeper::load(Box::new(store.clone()));
+        k.keep(&d, 1.0);
+        k.keep(&d, 3.0);
+        assert_eq!(store.0.borrow().as_deref(), Some(text), "untouched");
+        d.agent = "typing".into();
+        k.keep(&d, 5.0);
+        let now = Desk::parse(store.0.borrow().as_deref().unwrap());
+        assert_eq!(now.agent, "typing");
+        assert_eq!(
+            now.drafts["line"]["a.st"].text, "mine",
+            "the drafts survive the first write"
+        );
+    }
+
+    /// A box desk newer than this page's that it cannot read: not fought
+    /// over with a PUT the box refuses, a GET, a PUT ... each second. The
+    /// browser keeps the desk, and the person is told.
+    #[test]
+    fn a_box_desk_this_page_cannot_read_ends_the_put_get_loop() {
+        let mut b = OnBox::default();
+        let mine = Desk {
+            saved_at: 10,
+            agent: "here".into(),
+            ..Desk::default()
+        };
+        b.step(Some(&session(Some("alice"), "engineer")));
+        b.poll();
+        let bad = r#"{"owner":"user:alice","desk":7}"#;
+        assert_eq!(b.answer(&PCall::Desk, &answer(200, bad), 10), None);
+        assert!(
+            b.problem.as_deref().unwrap().contains("not readable"),
+            "{:?}",
+            b.problem
+        );
+        for t in 1..6 {
+            b.keep(&mine, f64::from(t) * 2.0);
+        }
+        assert!(b.poll().is_empty(), "no PUT to be refused");
+        // Parts that do read are taken: the drafts of a newer page.
+        let mut b = OnBox::default();
+        b.step(Some(&session(Some("alice"), "engineer")));
+        b.poll();
+        let part = r#"{"owner":"user:alice","desk":{"saved_at":50,"project":"line",
+            "drafts":{"line":{"a.st":{"text":"theirs","version":"v1"}}},"conversation":{"turns":7}}}"#;
+        let took = b.answer(&PCall::Desk, &answer(200, part), 10).unwrap();
+        assert_eq!(took.drafts["line"]["a.st"].text, "theirs");
+        assert_eq!(took.conversation, None);
+    }
+
+    /// An answer for the person who was signed in before is not the new
+    /// person's desk.
+    #[test]
+    fn an_answer_for_another_owner_is_dropped() {
+        let mut b = OnBox::default();
+        b.step(Some(&session(Some("alice"), "engineer")));
+        b.poll();
+        b.step(Some(&session(Some("bob"), "operator")));
+        assert_eq!(b.poll().len(), 1, "bob's desk is asked for");
+        let alices = r#"{"owner":"user:alice","desk":{"saved_at":99,"agent":"alice's"}}"#;
+        assert_eq!(b.answer(&PCall::Desk, &answer(200, alices), 0), None);
+        b.keep(&Desk::default(), 5.0);
+        assert!(b.poll().is_empty(), "still waiting for bob's own");
+        let bobs = r#"{"owner":"user:bob","desk":{"saved_at":3,"agent":"bob's"}}"#;
+        assert_eq!(
+            b.answer(&PCall::Desk, &answer(200, bobs), 0).unwrap().agent,
+            "bob's"
+        );
+    }
+
+    /// Past the byte cap the Agent's conversation and the device form go
+    /// before any edit: the biggest edit is often the file being worked on.
+    #[test]
+    fn past_the_cap_the_conversation_goes_before_the_edits() {
+        let mut d = Desk {
+            conversation: Conversation::of(
+                &[turn("hello", &"w".repeat(900), vec![], Some(done()))],
+                None,
+                None,
+            ),
+            device: Some(form_of(&form())),
+            ..Desk::default()
+        };
+        d.drafts
+            .entry("p".into())
+            .or_default()
+            .insert("main.st".into(), draft(&"x".repeat(600)));
+        let (t, dropped) = d.text_within(900);
+        assert_eq!(dropped, ["the Agent conversation", "the New device form"]);
+        assert_eq!(Desk::parse(&t).drafts["p"]["main.st"].text.len(), 600);
+    }
+
+    /// An unchanged desk is looked at once a second, not every frame.
+    #[test]
+    fn an_unchanged_desk_is_checked_once_a_second() {
+        let (mut k, mut d) = Keeper::load(Box::new(MemStorage(None)));
+        d.agent = "a".into();
+        k.keep(&d, 1.0);
+        assert!(k.keep(&d, 3.0).is_some());
+        assert!(!k.due(3.5), "just checked");
+        assert!(k.due(4.1));
+    }
+
+    /// A storage two handles share, to read what the keeper wrote.
+    #[derive(Clone, Default)]
+    struct Cell(std::rc::Rc<std::cell::RefCell<Option<String>>>);
+
+    impl Storage for Cell {
+        fn load(&self) -> Result<Option<String>, String> {
+            Ok(self.0.borrow().clone())
+        }
+
+        fn save(&mut self, text: &str) -> Result<(), String> {
+            *self.0.borrow_mut() = Some(text.to_string());
+            Ok(())
+        }
     }
 
     fn turn(user: &str, text: &str, items: Vec<Item>, end: Option<End>) -> Turn {

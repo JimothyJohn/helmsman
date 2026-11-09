@@ -57,8 +57,11 @@ use super::http::{self, Conn, Response};
 use super::{pdf, photo};
 use crate::fallback;
 
-/// Longest user message, in characters.
-pub const MAX_MESSAGE: usize = 8000;
+/// Longest user message, in characters: room for a 64 KiB program file
+/// once, its requirement tests and the answer format, with a margin
+/// (the canvas's `box_agent::MAX_MESSAGE` is the same number). The body
+/// limit (1 MiB) still holds even at four bytes a character.
+pub const MAX_MESSAGE: usize = 200_000;
 
 /// How the chat route reaches the relay and what it allows.
 #[derive(Debug, Clone)]

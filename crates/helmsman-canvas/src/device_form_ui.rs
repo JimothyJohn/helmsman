@@ -76,7 +76,7 @@ impl DevicesUi {
                         Some(old) => device_form::map_without(&self.map, old),
                         None => self.map.clone(),
                     };
-                    let taken = map.devices.iter().any(|x| x.name.eq_ignore_ascii_case(&d.name));
+                    let taken = map.devices.iter().any(|x| x.name == d.name);
                     let w = check_settings(d.driver(), &d.params)
                         .and_then(|()| {
                             if taken {

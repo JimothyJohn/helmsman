@@ -625,7 +625,10 @@ copied into the test's `VAR_INPUT`s; `DONE` ends the test. Red: an
 `ASSERT` failed (named as words, with its declaration line's comment, and
 when), either side faulted or does not compile, a shared port's types
 differ, `DONE` never came within the limit (two minutes of simulated
-time), or the test holds no `ASSERT` at all. The test's first comment is
+time), the test holds no `ASSERT` at all, a declared `ASSERT` was never
+called (the block latches `CHECKED` on its first call), or the test
+shares no port with the program (reads no output, drives no input), so
+it could pass whatever the program does. The test's first comment is
 the requirement in the engineer's words. Deterministic: no wall clock, no
 I/O.
 
@@ -656,8 +659,12 @@ socket. docs/ci/ holds a GitHub Actions template for a project's own
 repository.
 
 **Writing a requirement** (`POST /api/projects/{p}/requirements`,
-`api::requirements`). The Requirements tab becomes a list of plain-words
-requirements; typing one has the agent write the test behind it. The
+`api::requirements`). *The canvas side of this, the Requirements tab, is
+archived since 2026-11-08 (Nick: "not that useful and creates more issues
+than it solves"; the scenarios the Agent writes with each change are the
+tests) under `crates/helmsman-canvas/archive/requirements/`; the route
+stays on the box without a caller.* The Requirements tab was a list of
+plain-words requirements; typing one had the agent write the test behind it. The
 request is `{text, name?}`: one line (no control characters), 1 to 500
 characters trimmed; `name` is snake case (`spec::name_ok`, 1 to 48 of
 `a-z 0-9 _`, starting with a letter), else the box slugs the words
@@ -709,7 +716,7 @@ answer is tested with the candidate file in place); a box runs them when a
 project opens, after each save (`POST /api/projects/{p}/tests`, token or
 session, nothing changes) and inside the deploy's approval path, where a
 red test refuses with 409 before anything builds (`projects::red_tests`).
-The Requirements tab of the right panel shows one row per test, green or
+The Requirements tab of the right panel (archived 2026-11-08) showed one row per test, green or
 red with why. The scope-locked agent edit (`agent-scoped-edits`) calls the
 same gate.
 
@@ -726,7 +733,18 @@ written (`verify::check`): the code taken into a copy through
 `scope::apply`, the scenarios added, compiled, the scenarios run with
 the project's own tests, and the whole-file rule (`verify::full_copy`: no
 elision markers, every POU with its header and END_ line, the landed file
-equal to the code). A failure goes back with what failed, up to two
+equal to the code). Three more rules keep a scenario honest: when the
+answer changes what the file does, a scenario must fail on the file as it
+was (`verify::indistinct`); a scenario marked `replaces test_X` stands only
+when X is red with the new code, and the outcome keeps both wordings
+(`verify::contradicted`, `Check::replaced`); a block that never closes
+means the answer was cut off and is red. A stop for `max_tokens` (page) or
+`budget` (box) is a failed run, never a complete answer. The file goes
+once: when the program is that one file, `<current_program>` points at the
+`text:` in `<edit_scope>`. On a box the check runs at the image sizes and
+scan period the box reports for the project (`tests` in `GET
+/api/projects/{p}`), and an instruction ends if another project is opened
+before its answer is in. A failure goes back with what failed, up to two
 retries (`verify::next`); still red, nothing is written and the tab says
 why. Green is written into the file at once and saved as one revision
 whose Agent page is `instruct::record` (instruction, reason, scenarios,
@@ -840,7 +858,7 @@ signal, then streams (`api/trend.rs`, contract in `tests/trend.rs` and the
 
 What a person had in front of them on the box's page (the open project
 and file, unsaved edits with the box version each was made against, the
-Agent's and the Requirements' inputs, the screen, the sign-in name, never
+Agent's input, the screen, the sign-in name, never
 a password or PIN): `crates/helmsman-canvas/src/desk.rs` keeps it in the
 browser (`localStorage`, at most 1 MiB, written at most once a second when
 it changed) and, signed in, on the box per person (`OnBox`), so it follows
@@ -865,6 +883,20 @@ the person between screens.
   a desk older than the one it holds (409), and the page then reads the
   newer one. A role change on the same account keeps the desk; signed
   out, or with the box not answering, the browser's is the desk.
+- **Taking a newer desk never drops an unsaved edit.** The edits are
+  merged per file: one edited here stays as it is here (for a file edited
+  on both screens this page's text stays, and saving it is refused as
+  stale if the box's copy moved), and the other screen's other edits come
+  in. With an unsaved edit in the open project the page stays on that
+  project and file; typed inputs, a conversation and a half-filled form
+  stay too. A different person signing in on the same page (the desk
+  names its owner in this browser) starts the page empty and asks for
+  their desk; an answer for the person before is dropped by its `owner`.
+- **A desk this page cannot read in full.** Each field is read on its own,
+  so a newer page's conversation does not take the edits down. A browser
+  slot that did not read in full is left as it is until the person
+  changes something, and a box desk that is not a desk at all is not
+  fought over: the browser keeps it and the page says so.
 - **The Agent's conversation and the device form** (`desk-agent-and-forms`).
   The desk also keeps the Agent tab's turns with the box's agent and the
   last instruction's outcome (`desk::Conversation`), and a half-filled New
@@ -876,7 +908,8 @@ the person between screens.
   characters a field, and any setting whose key names a credential
   (`desk::is_secret_key`: a password, PIN, token, key or secret) is left
   out. Both count as work, so a change dates the desk. Past the box's
-  512 KiB the edits go first, then the conversation, then the form. After a
+  512 KiB the conversation goes first, then the form, then the biggest
+  edits. After a
   reload an instruction that was under way is over with nothing written,
   and the proposals its turn stored are still linked; a proposal decided
   since (no longer a draft in the Proposals list) shows as decided and is
@@ -1489,8 +1522,10 @@ and Save keeps a copy under a free name. The build is the box's (one
 `.st` as it is; several in name order under `(* file NAME *)` lines), so
 errors and block clicks map to a file and line. Typing only checks
 (`Session::check`: errors marked, the program running and its diagram
-untouched); Deploy compiles and runs it in the page (`Session::set_source`),
-and a project that does not compile is refused with the old program still
+untouched); Deploy compiles and runs it in the page (`Session::deploy`),
+a hot swap as on a box (retained state carried by name and type, the image
+and the clock kept, the notice naming what could not be carried), and a
+project that does not compile is refused with the old program still
 running, as on a box. Upload and Download use `helmsman-project`'s `.zip`;
 `.st`, `PLCopen` `.xml` and `.L5X` import into the open project. An
 L5X goes through the box's converter (`helmsman_iec::ladder`, wasm-safe),
@@ -2326,8 +2361,16 @@ agent as ST; nothing here writes ST back).
   proven by rendering every scan of a run with the API's own renderer and
   comparing annotations and explanations. Connection status: connecting,
   connected, reconnecting, unreachable after 3 failures; a failed stream
-  is closed and reopened after 2 s doubling to 30 s (the canvas's backoff,
-  not the browser's). The decisions (`remote::BoxState`) are free of I/O
+  is closed and reopened after a steady 5 s (the canvas's backoff, not the
+  browser's). The box ends each stream at 600 s, so one that was
+  delivering is reopened at once and the link stays connected; a values
+  stream that opens and then says nothing for 5 s is closed and opened
+  again (and counted), since a half-open connection raises no error. A box
+  that answers `GET /api/modules` is a box even when its 8 stream slots are
+  taken. The page takes the box's streams while it shows any screen, and
+  closes them while it simulates in the browser; the transport keeps only
+  the newest values (and each module's newest trace) of an unread backlog.
+  The decisions (`remote::BoxState`) are free of I/O
   and tested natively against the real API. **Simulation** (the ST
   playground below: docs/playground/, `?playground` or `?demo`, native,
   or "Simulate in this browser" from the ⋯ menu or when the box is
@@ -2405,7 +2448,10 @@ heading names the mode, with a dot for the agent's state beside it (green
 online, red offline, grey until heard; Nick, 2026-11-08):
 the person says what went wrong, and the answer is a plain-language
 diagnosis and a Markdown issue with a Copy button, to paste into a GitHub
-issue or to another agent. Nothing is filed.
+issue or to another agent. Nothing is filed. A question about how things
+work ("How do I load a program?"; Nick, 2026-11-08, after one came back
+as an issue template) is answered from the help pages instead, with
+links to them, and no issue is written.
 
 - **`POST /api/help {question, messages?}`** (`api::help`; any
   credential, the box token or any login session, since it changes
@@ -2424,20 +2470,33 @@ issue or to another agent. Nothing is filed.
   property test and `tests/help.rs` assert that none reaches the relay
   or the answer.
 - **The agent** is the relay's help profile (`--relay-help-agent V`,
-  default `helmsman/help-v1`, not served yet) with one tool,
-  `submit_issue {diagnosis, title, what_happened, expected?, steps?,
-  suspected_files?}`, run in process (`Agent::chat_local`). The box
-  checks it (lengths; a suspected file is a relative repository path,
-  optionally `:LINE`) and links each file to
-  `github.com/JimothyJohn/helmsman/blob/dev/...`. One user message: the
-  fixed `help::ASK`, then the question and context in the `<box-data>`
-  envelope. Budget: 4 turns, 32k output tokens, 3 min.
+  default `helmsman/help-v1`, not served yet) with two tools, run in
+  process (`Agent::chat_local`): `submit_issue {diagnosis, title,
+  what_happened, expected?, steps?, suspected_files?}` for trouble, and
+  `answer_question {answer, pages?}` for a question, `pages` being names
+  of help pages. The box checks both (lengths; a suspected file is a
+  relative repository path, optionally `:LINE`, linked to
+  `github.com/JimothyJohn/helmsman/blob/dev/...`; a page must be one of
+  `help::pages::ALL`). One user message: the fixed `help::ASK`, then the
+  question, the context and the help pages in the `<box-data>` envelope.
+  Budget: 4 turns, 32k output tokens, 3 min.
+- **The help pages ride along** (`help::pages`): `docs/help/*.md`, the
+  Markdown the site builds (`scripts/build-help.sh`), compiled into the
+  box with `include_str!` (about 40 KiB per request; the generated
+  keyboard and starters pages are left out). A new page goes into
+  `pages::ALL` and the script's list. Offline, the same pages give the
+  box its own lead for a question (`pages::suggest`): a section whose
+  heading shares a word with the question, ranked by heading then body
+  matches, at most five, deterministic; a report of trouble (no `?`, no
+  question word first) gets no guess.
 - **Without the agent** (no relay, offline, the relay answering
-  `unknown_agent_version`, or no `submit_issue`) the box writes the
+  `unknown_agent_version`, or neither tool called) the box writes the
   issue from the question and its context, and `done` says why there is
   no diagnosis (`stop: "unavailable"` for a profile the relay does not
   serve). Events: `help` (the context), `text`, `tool_call`,
-  `tool_result`, `retrying`, `issue` (always, once), `done` or `error`.
+  `tool_result`, `retrying`, then `answer {text, pages}` and/or `issue`
+  (at most once each; `issue` always when there is no `answer`), `pages`
+  (the box's suggestion, only without an `answer`), `done` or `error`.
 
 ## Proposal review (`proposal-ui`, built)
 
@@ -2564,6 +2623,7 @@ both). No box, no server: everything runs in the page (`playground.rs`,
   program is a `helmsman_iec::Program` scanned directly on the page's
   clock (at most 500 scans a frame); the last scan of each frame is
   traced for the diagram. A fault stops it; Run or Step restarts it cold.
+  A fault or a Stop turns the outputs off, as the box does for a module.
   Loading an example or Claude's code compiles it and leaves it stopped.
 - **Virtual I/O** from the program itself: each `VAR_INPUT` a control
   (BOOL: a push button when named like start/stop/reset/pulse, else a
