@@ -675,6 +675,9 @@ status is scan health, memory and fieldbus links. What exists:
 - **`helmsman-node-p4` has the same binary** (`node`, from the same
   modules; esp-storage 0.10 and esp-bootloader-esp-idf 0.6 for the P4),
   built and lint clean, waiting for the board.
+- **Bench topology.** The Studio is on 10.0.0.0/24 twice (a wired alias and
+  Wi-Fi) and answers wired nodes through the access point; nodes live on
+  the 192.168.3.x link with the E1213 and the Studio's en0, static.
 - **Left in this phase:** firmware OTA (supervictor's installer and
   rollback policy); an I/O map setting for the block's address and point
   names; writes from the canvas (deploy, controls) need a token field in
