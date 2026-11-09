@@ -679,6 +679,21 @@ status is scan health, memory and fieldbus links. What exists:
   answers the preflight), so Deploy, Save, Stop and Run work from the UI.
   Forget drops it. A box watched by address still refuses the preflight,
   so that path is a node's today.
+- **The block and its points are a setting: the I/O map** (card
+  `node-io-map`, 2026-11-09). The node keeps an io.map text in the box's
+  format beside the program in its flash slot (frame version 2; a version
+  1 frame reads as a program with no map): one `device NAME modbus-tcp
+  IP[:PORT] [unit=N]` line and `in NAME bool DEV di:N` / `out NAME bool
+  DEV coil:N` lines, bool points only, indexes 0..15 (two image bytes a
+  direction). `PUT /api/io_map` (`{"text"}` or `text/plain`, the token)
+  and the settings page's map form parse it first (`helmsman_nodecore::
+  iomap`: the bad line comes back as a 422), write it, and restart; at
+  boot the I/O task takes the block's address, unit and the counts from
+  it, and the signals carry the map's names, so the canvas's Devices tab
+  shows `estop` and `motor` rather than `di0` and `do0`. No map on flash
+  means the factory map: the E1213 at the build-time `E1213_ADDR`, eight
+  inputs and four coils named as the first builds did. Not yet run on the
+  board: built for both targets.
 - **`helmsman-node-p4` has the same binary** (`node`, from the same
   modules; esp-storage 0.10 and esp-bootloader-esp-idf 0.6 for the P4),
   built and lint clean, waiting for the board.

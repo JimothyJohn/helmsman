@@ -166,6 +166,25 @@ async fn perform(effect: Effect, ctx: &Ctx) -> (Response, bool) {
                 ),
             }
         }
+        Effect::SaveIoMap { text, page } => {
+            // Beside the program on flash; the restart makes the I/O task
+            // drive the block it names.
+            let written = {
+                let store = ctx.store.lock().await;
+                let mut store = store.borrow_mut();
+                match store.as_mut() {
+                    Some(s) => s.write_map(&text).map_err(|e| e.to_string()),
+                    None => Err(String::from("no flash store")),
+                }
+            };
+            match written {
+                Ok(()) => (router::io_map_saved(page, true), true),
+                Err(why) => (
+                    router::io_map_not_saved(page, &ctx.view(), ctx.settings, &why),
+                    false,
+                ),
+            }
+        }
     }
 }
 

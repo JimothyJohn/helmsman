@@ -507,7 +507,8 @@ pub fn settings_page(view: &NodeView, settings: &Settings, notice: Option<&str>)
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
 <title>{name} (Helmsman node)</title>\
 <style>body{{font:18px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;color:#222}}\
-label{{display:block;margin:.6rem 0 .2rem}}input[type=text]{{width:100%;font-size:18px;padding:.4rem}}\
+label{{display:block;margin:.6rem 0 .2rem}}input[type=text],input[type=password]{{width:100%;font-size:18px;padding:.4rem}}\
+textarea{{width:100%;font:16px/1.4 ui-monospace,monospace;padding:.4rem}}\
 button{{font-size:18px;padding:.5rem 1rem;margin-top:1rem}}.notice{{background:#eef;padding:.6rem}}\
 code{{background:#f4f4f4;padding:0 .3rem}}</style></head><body>\
 <h1>{name}</h1>\
@@ -529,6 +530,13 @@ Link {link}{ip}.</p>\
 <label>API port <input type=\"text\" name=\"api_port\" value=\"{api_port}\"></label>\
 <button type=\"submit\">Save and restart</button>\
 </form>\
+<h2>I/O map</h2>\
+<p>The block this node drives and the names of its points, in the box's io.map format: one <code>device NAME modbus-tcp IP[:PORT] [unit=N]</code> line, then <code>in NAME bool DEVICE di:N</code> and <code>out NAME bool DEVICE coil:N</code> lines. A program reads and writes them as <code>%IX0.N</code> and <code>%QX0.N</code>. Saving restarts the node.</p>\
+<form method=\"post\" action=\"/io_map\">\
+<label>Map <textarea name=\"map\" rows=\"12\" spellcheck=\"false\">{map}</textarea></label>\
+<label>API token <input type=\"password\" name=\"auth\" value=\"\" maxlength=\"64\" autocomplete=\"off\"></label>\
+<button type=\"submit\">Save map and restart</button>\
+</form>\
 <p>The canvas reads this node at <code>http://{host}:{api_port}/api/</code>; writes need the token as <code>Authorization: Bearer</code>.</p>\
 </body></html>",
         name = html_escape(if settings.name.is_empty() {
@@ -538,6 +546,7 @@ Link {link}{ip}.</p>\
         }),
         name_attr = html_escape(&settings.name),
         site = html_escape(&settings.site),
+        map = html_escape(&view.io_map),
         version = html_escape(view.version),
         board = html_escape(view.board),
         up = view.uptime_ms / 1000,

@@ -261,15 +261,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-09
   by: claude-session
 
-- [ ] **Node I/O map as a setting: the block's address, unit and point names** — today the node's Modbus block is fixed at build time (E1213_ADDR, unit 1, points di0..di7 and do0..do3 named in the firmware), so one image fits one bench. Make it a record beside the settings on flash (nodecore settings: address, port, unit id, the DI and DO point names and counts, scan period), edited on the settings page and over PUT /api/settings like the network, applied on restart; the box's I/O map format where it fits (a node holds one or two blocks, not a site). The canvas box view then shows the engineer's names. Test: nodecore round-trips the record, refuses a count the block cannot have, and the I/O task reads the record instead of constants.
-  needs: nothing; builds on #312's settings record
-  result: one node image commissions against any Modbus TCP block by filling a form, no rebuild
-  est: 1d
-  difficulty: med
-  id: node-io-map
-  asked: 2026-11-09
-  by: claude-session
-
 - [ ] **Bring up the ESP32-P4 board: Ethernet on the IP101GRI, then the same commissioning run** — the Waveshare ESP32-P4-ETH + PoE module arrives Wednesday 2026-11-12. helmsman-node-p4 builds and links the `modbus`, `enip` and `node` binaries (#299, #312) but has never run on hardware. Order (docs/EDGE.md Phase 3 "First day on the board"): flash the `modbus` build over USB with PoE unplugged until the module's isolation is known, watch the console for the link (esp-hal 1.2 Ethernet on the IP101GRI over RMII and MDIO; esp-p4-eth is the fallback if the PHY does not come up), then the `node` build and the POE-ISO's commissioning run (factory 192.168.127.250, PUT /api/settings to static, deploy the chase, ping, values stream). Then the memory headroom the WROOM lacks (768 KiB: a real cell program), then mbedtls-rs at the fork's main with Homebrew clang for TLS. E1213 note: it has one exclusive EtherNet/IP owner (the try box), so the first enip run is ENIP_INPUT_ONLY=1 or over Modbus.
   needs: the board on the bench (Wednesday); which switch and subnet it plugs into (the E1213 is on the Studio link 192.168.3.x)
   result: the node image runs on the P4 end to end as on the POE-ISO, with the numbers for scan period and free memory written into EDGE.md

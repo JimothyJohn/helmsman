@@ -14,10 +14,9 @@ use static_cell::StaticCell;
 use crate::modbus;
 use crate::state::{self, Shared};
 
-/// The E1213's digital inputs read each round (DI-00..07 in byte 0).
-pub const INPUTS: u16 = 8;
-/// Coils written each round (DO-00..03).
-pub const COILS: u16 = 4;
+/// Most discrete inputs or coils a round moves: the image bytes the map
+/// may name (`helmsman_nodecore::iomap::MAX_POINTS`).
+pub const MAX_POINTS: u16 = 16;
 /// A request that takes longer than this is a link error.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_millis(200);
 /// Shortest round: the block answers in about 15 ms, so this never binds
@@ -27,9 +26,19 @@ pub const MIN_ROUND: Duration = Duration::from_millis(5);
 static RX: StaticCell<[u8; 512]> = StaticCell::new();
 static TX: StaticCell<[u8; 512]> = StaticCell::new();
 
-/// Drives the block for the life of the node.
+/// Drives the block for the life of the node: `inputs` discrete inputs
+/// read from 0 and `coils` coils written from 0 each round (the map's
+/// counts, card node-io-map), both capped at [`MAX_POINTS`]; a count of
+/// zero skips that half.
 #[embassy_executor::task]
-pub async fn io_task(stack: Stack<'static>, block: IpEndpoint, unit: u8, shared: &'static Shared) -> ! {
+pub async fn io_task(
+    stack: Stack<'static>,
+    block: IpEndpoint,
+    unit: u8,
+    inputs: u16,
+    coils: u16,
+    shared: &'static Shared,
+) -> ! {
     let mut client = modbus::Client::new(
         stack,
         block,
@@ -38,24 +47,37 @@ pub async fn io_task(stack: Stack<'static>, block: IpEndpoint, unit: u8, shared:
         RX.init([0; 512]),
         TX.init([0; 512]),
     );
+    let inputs = inputs.min(MAX_POINTS);
+    let coils = coils.min(MAX_POINTS);
     loop {
         let round = embassy_time::Instant::now();
-        let read = client.read_discrete_inputs(0, INPUTS).await;
+        let read = if inputs == 0 {
+            Ok(alloc::vec::Vec::new())
+        } else {
+            client.read_discrete_inputs(0, inputs).await
+        };
         let outputs = state::with(shared, |live| {
             if let Ok(bits) = &read {
-                let mut b = 0u8;
-                for (i, on) in bits.iter().take(8).enumerate() {
+                let mut bytes = [0u8; 2];
+                for (i, on) in bits.iter().take(usize::from(MAX_POINTS)).enumerate() {
                     if *on {
-                        b |= 1 << i;
+                        bytes[i / 8] |= 1 << (i % 8);
                     }
                 }
-                live.inputs[0] = b;
+                live.inputs[0] = bytes[0];
+                live.inputs[1] = bytes[1];
             }
             live.outputs
         });
-        let q = outputs[0];
-        let coils = [q & 1 == 1, q & 2 == 2, q & 4 == 4, q & 8 == 8];
-        let write = client.write_coils(0, &coils[..usize::from(COILS)]).await;
+        let mut coil_bits = [false; 16];
+        for (i, c) in coil_bits.iter_mut().enumerate() {
+            *c = outputs[i / 8] & (1 << (i % 8)) != 0;
+        }
+        let write = if coils == 0 {
+            Ok(())
+        } else {
+            client.write_coils(0, &coil_bits[..usize::from(coils)]).await
+        };
         state::with(shared, |live| {
             let connects = client.connects;
             live.device.reconnects = connects.saturating_sub(1);
