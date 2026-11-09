@@ -120,12 +120,49 @@ no box and no browser holds it. The tab works the same way: sign in as an
 engineer, open a program file, type the instruction and press **Send**.
 The checked change is saved on the box as a revision with its History
 entry, by you, and **Undo** asks the box to restore the revision before
-it. The line at the top of the tab says whether the agent is online.
+it. The dot beside the tab's heading says whether the agent is online
+(green), offline (red) or not heard from yet (grey).
 
 If the agent stores a **proposal** for review instead of sending the file
 back, the file is not touched and the tab offers **Review** to open it on
 the Proposals screen, where an approver signs it off under the box's
 policy.
+
+## Get help
+
+On a box the Agent tab has a second mode, for someone who did not write
+the program and has a machine that does not do what it should. The
+toggle at the top right of the tab switches it: **< >** is **Change the
+program**, **?** is **Get help**.
+
+<img src="img/get-help.png" alt="Get help in the Agent tab: the question, Ask for help, and the issue with its Copy button." width="326">
+
+Sign in (any role), say what you saw or what you want to do in your own
+words, and press **Ask for help** (<kbd>Ctrl</kbd> <kbd>Enter</kbd> works
+too). The page sends your words with its recent Messages, and the box
+adds what it knows: its version, the program it runs, its devices and
+their errors. Passwords, PINs and tokens are left out. Nothing on the box
+changes and nothing is filed anywhere.
+
+What comes back depends on what you asked:
+
+- A report of trouble ("the conveyor stopped, the lamp is red") gets
+  **What is likely wrong**, the Agent's diagnosis from the box's messages
+  and devices, and **Issue to report it**, a Markdown issue that carries
+  your words and the box's details. **Copy** takes the whole issue, to
+  paste into a new GitHub issue or to give to another agent.
+- A question about how things work ("how do I load a program?") gets
+  **How to do it**, an answer written from these help pages, with the
+  pages it came from linked under **Read more**. No issue is written.
+
+When the agent cannot be reached (the box has no relay, the relay is
+offline, or the agent service does not offer help yet), the box writes
+the issue by itself from your words and its details, and a line above it
+says why there is no diagnosis. For a question it also lists the help
+sections whose headings match it, under **These help pages may answer
+it**. The picture above shows this case.
+
+**Stop**, shown while the Agent is working, stops waiting for the answer.
 
 ## What it will not do
 
