@@ -692,8 +692,15 @@ status is scan health, memory and fieldbus links. What exists:
   it, and the signals carry the map's names, so the canvas's Devices tab
   shows `estop` and `motor` rather than `di0` and `do0`. No map on flash
   means the factory map: the E1213 at the build-time `E1213_ADDR`, eight
-  inputs and four coils named as the first builds did. Not yet run on the
-  board: built for both targets.
+  inputs and four coils named as the first builds did. Run on the POE-ISO
+  on 2026-11-09, flashed from an agent session at the dev tip: the
+  settings record and the chase survived the new frame (press-4 at
+  192.168.3.55, E1213 up, 0 late at 10 ms); the factory map showed; a
+  wrong and a missing token were 401, `device rio enip ...` was 422
+  "line 1"; a named map saved (`{saved, restarting}`), and after the
+  restart `/api/io_map` held it and `/api/signals` read `estop, run_pb,
+  jam, motor, lamp, horn` with the chase running. The bench node keeps
+  that named map now.
 - **`helmsman-node-p4` has the same binary** (`node`, from the same
   modules; esp-storage 0.10 and esp-bootloader-esp-idf 0.6 for the P4),
   built and lint clean, waiting for the board.
