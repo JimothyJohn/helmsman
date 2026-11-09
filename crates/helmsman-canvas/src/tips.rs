@@ -12,6 +12,14 @@ pub trait Tip {
     fn tip(self, text: impl Into<WidgetText>) -> Self;
 }
 
+/// A text field built with `.show(ui)` (for its cursor) gets its tooltip too.
+impl Tip for eframe::egui::text_edit::TextEditOutput {
+    fn tip(mut self, text: impl Into<WidgetText>) -> Self {
+        self.response.response = self.response.response.tip(text);
+        self
+    }
+}
+
 impl Tip for Response {
     fn tip(self, text: impl Into<WidgetText>) -> Self {
         let text = text.into();

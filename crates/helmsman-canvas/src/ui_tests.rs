@@ -929,6 +929,46 @@ END_PROGRAM",
         assert!(!h.has("agent undo"));
     }
 
+    /// Nick, 2026-11-08: Enter in the chat box sends; Shift+Enter and
+    /// Ctrl+Enter add a line, and the Ctrl+Enter Run/Stop hotkey does not
+    /// fire while someone types in the box.
+    #[test]
+    fn enter_sends_the_instruction_and_shift_or_ctrl_enter_adds_a_line() {
+        use crate::instruct_tests::LAMP;
+        let mut h = Harness::new(App::sim());
+        h.press("tab claude");
+        h.wait(0.2);
+        {
+            let v = h.app.sim.as_mut().unwrap();
+            v.chat.receive(crate::claude::Incoming::Proxy(true));
+            v.proj.create("mine", None);
+            v.proj.files.insert("main.st".into(), LAMP.into());
+            v.proj.save();
+            v.open_project("mine");
+        }
+        h.wait(0.2);
+        let running = h.app.sim.as_ref().unwrap().session.running;
+        h.click(h.rect("agent instruction").center());
+        h.frame(vec![Event::Text("latch the lamp".into())]);
+        h.key(Modifiers::SHIFT, Key::Enter);
+        let v = h.app.sim.as_ref().unwrap();
+        assert_eq!(v.instruct.draft, "latch the lamp\n", "Shift+Enter adds a line");
+        assert!(!h.has("agent stop"), "and sends nothing");
+        h.key(Modifiers::COMMAND, Key::Enter);
+        let v = h.app.sim.as_ref().unwrap();
+        assert_eq!(v.instruct.draft, "latch the lamp\n\n", "Ctrl+Enter adds a line");
+        assert!(!h.has("agent stop"), "and sends nothing");
+        assert_eq!(
+            v.session.running, running,
+            "Ctrl+Enter in the box does not Run or Stop"
+        );
+        h.frame(vec![Event::Text("x".into())]);
+        h.key(Modifiers::NONE, Key::Enter);
+        h.frame(vec![]);
+        assert!(h.has("agent stop") && h.has("agent working"), "Enter sends");
+        assert_eq!(h.app.sim.as_ref().unwrap().session.running, running);
+    }
+
     /// Every outcome the tab can show, with long words, and the tab while
     /// the Agent fixes an answer: the panels keep their width throughout.
     #[test]
@@ -3453,7 +3493,15 @@ mod boxed {
             role: "operator".into(),
         });
         h.frame(vec![]);
-        h.press("help ask");
+        // Enter asks; Shift+Enter or Ctrl+Enter adds a line (Nick, 2026-11-08).
+        h.click(h.rect("help question").center());
+        h.key(eframe::egui::Modifiers::SHIFT, eframe::egui::Key::Enter);
+        h.key(eframe::egui::Modifiers::COMMAND, eframe::egui::Key::Enter);
+        assert_eq!(boxed(&h).help.draft, "The conveyor stopped.\n\n");
+        assert!(boxed(&h).help_sent.is_empty(), "a new line asks nothing");
+        h.app.boxv.as_mut().unwrap().help.draft = "The conveyor stopped.".into();
+        h.frame(vec![]);
+        h.key(eframe::egui::Modifiers::NONE, eframe::egui::Key::Enter);
         h.frame(vec![]);
         let sent = boxed(&h).help_sent.clone();
         assert_eq!(sent.len(), 1);
