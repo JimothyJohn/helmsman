@@ -267,7 +267,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   result: the P4 node owns the E1213 over EtherNet/IP, runs on PoE alone, and its memory numbers say what a scan in PSRAM costs
   est: 1d
   difficulty: med
-  notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 ESPFLASH=<espflash 4.x> scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; the global espflash is 3.3.0, which cannot talk to this chip revision). A program over the flash slot runs but is not kept (12 KB did not fit): the larger slot comes with node-ota's partition table.
+  notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; espflash is 4.7.0 since 2026-11-10, 3.3.0 could not talk to this chip revision; the POE-ISO answers 4.7's board-info, a flash of it with 4.7 is not yet tried). A program over the flash slot runs but is not kept (12 KB did not fit): the larger slot comes with node-ota's partition table.
   id: node-p4-followups
   asked: 2026-11-10
   by: claude-session
