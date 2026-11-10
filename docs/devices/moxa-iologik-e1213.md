@@ -228,18 +228,45 @@ driver, both sides at once, so each fact below is from the wire:
   extended status 0x0100 (connection in use); a connection whose owner
   vanishes without `Forward_Close` is held for about 10 s before another
   owner is accepted.
-- **An Input Only `Forward_Open` was refused with general status 0x01
-  and no extended status** (2026-11-10, from the ESP32-P4 node at
-  192.168.3.56 while the try box held the exclusive owner): path
-  config 100, heartbeat 111, T->O 101, O->T size 0, RPI 100 ms. The
-  reply's data is `03 00 ff ff e1 16 e8 0a`: connection serial,
-  originator vendor and originator serial, with the remaining path size
-  and the reserved byte left off. `helmsman_proto::io::Refused::decode`
-  accepts that short form (test
-  `a_refusal_that_stops_after_the_originator_serial_still_reads`). The
-  cause of the refusal is not known: the node builds the request with
-  the exclusive owner's parameters and an O->T size of 0, which may not
-  be what this unit takes for Input Only.
+- **One Class 1 connection at a time, of either kind** (firmware V3.1,
+  2026-11-10, a Python originator on the Studio after a power cycle with
+  no other originator on the unit). Alone, the EDS's Input Only request
+  opens: path config 100, heartbeat 111, T->O 101, O->T 2 bytes, T->O 53
+  bytes, both point-to-point, RPI 100 ms; so does Exclusive Owner. With
+  an Exclusive Owner held open, three Input Only requests in a row were
+  refused; after its `Forward_Close` the next one opened. A second Input
+  Only beside an open Input Only is refused the same way. Refused
+  requests leave nothing behind: the next request on a free unit opens.
+  The manual's "9 for read-only, and 1 for read/write" (p. 3-27) is not
+  what this firmware does for Class 1; whether firmware 4.0, which the
+  EDS v2.0 describes, does is not known.
+- **That refusal is general status 0x01 with no extended status**, and
+  its reply data stops after the originator serial: `03 00 ff ff e1 16 e8
+  0a` (connection serial, originator vendor, originator serial; no
+  remaining path size, no reserved byte). The same request with a wrong
+  size gets the ordinary form, 0x01 with extended 0x0109 and the full
+  body, and a second Exclusive Owner gets 0x0106, so the bare 0x01 reads
+  as "a Class 1 connection is already open". First seen from the ESP32-P4
+  node while the try box owned the unit.
+  `helmsman_proto::io::Refused::decode` accepts the short form (test
+  `a_refusal_that_stops_after_the_originator_serial_still_reads`).
+- **Both kinds are given the same O->T port.** Each successful reply
+  carries the O->T socket-address item with port 5222, for Input Only as
+  for Exclusive Owner.
+- **A connection dropped without `Forward_Close`** (the TCP session
+  closed, no more O->T) keeps the unit refusing for about 10 s: requests
+  at 2.6, 5.1 and 7.7 s were refused, the one at 10.2 s opened, for an
+  abandoned Exclusive Owner and for an abandoned Input Only alike.
+- **Not explained:** before the power cycle the unit refused every
+  request, Exclusive Owner included, with the bare 0x01 for several
+  minutes while no originator was known to be connected (the try box was
+  not running). About 300 refused requests had gone to it that afternoon,
+  among them requests with both directions multicast, nine of which had
+  opened and been closed while the try box owned the unit. None of that
+  was reproduced after the power cycle, and multicast was not tried again.
+- **The Connection Manager's counters are not there**: `Get_Attribute_Single`
+  on class 6 instance 1 attributes 1 to 8 answers 0x14, `Get_Attributes_All`
+  0x08, and a Large `Forward_Open` (0x5B) 0x08.
 - **Counters read 0** in DI mode (counter mode is off, as Appendix E
   says).
 - The console's DO page says "DO4-7 Channel Equal DIO0-3 Channel": the

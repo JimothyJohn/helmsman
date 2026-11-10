@@ -670,10 +670,14 @@ arrived, so the first day on the board is spent on the two real unknowns:
     general status 0x01 with no extended status for the `Forward_Open`,
     in a reply that stops after the originator serial; the decoder read
     that as truncated until `helmsman_proto::io::Refused::decode` learned
-    the short form (the bytes are its regression test). Why the unit
-    refuses is open; the Exclusive Owner run needs the try box to let go
-    of the unit first and was not done. docs/devices/moxa-iologik-e1213.md
-    has the bytes.
+    the short form (the bytes are its regression test). The cause,
+    found the same evening with a Python originator: this unit's firmware
+    (V3.1) holds one Class 1 connection at a time, and the try box had
+    it. Alone on the unit the node's request opens as it is
+    (docs/devices/moxa-iologik-e1213.md, "On the bench"). So a node and a
+    box cannot both hold a cyclic connection to this unit; the second
+    reads it over Modbus TCP. The Exclusive Owner run from the node was
+    not done.
   - **Not done:** the PoE module's isolation (the module is not fitted),
     TLS with mbedtls-rs, the Exclusive Owner run.
 

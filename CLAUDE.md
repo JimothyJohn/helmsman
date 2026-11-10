@@ -150,6 +150,11 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
   0x0106 ownership conflict or 0x0100 connection in use. With the Pi
   out, the owner is a Studio box; a second Studio box reads the unit
   over Modbus TCP.
+  Input Only is no way round it on this unit's firmware (V3.1): it holds
+  one Class 1 connection of either kind, and an Input Only request
+  beside it gets a bare 0x01 with no extended status (2026-11-10,
+  docs/devices/moxa-iologik-e1213.md). Probe a unit with
+  `/usr/bin/python3 -I`, a few requests at a time.
 
 ## Next door
 
