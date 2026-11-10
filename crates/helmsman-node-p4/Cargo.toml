@@ -55,6 +55,10 @@ embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 # `auto-icmp-echo-reply`: a controller that does not answer ping is a
 # support call at commissioning; smoltcp answers echo only with this on.
 embassy-net = { version = "0.9", features = ["dhcpv4", "medium-ethernet", "proto-ipv4", "tcp", "udp", "auto-icmp-echo-reply"] }
+# The driver trait itself, already in the tree under embassy-net: the
+# wrapper in src/ethernet.rs that hands transmit checksums to smoltcp
+# implements it.
+embassy-net-driver = "0.2"
 embedded-io-async = "0.7"
 static_cell = "2.1"
 # What a node serves and stores (settings record, program slots, HTTP, the
