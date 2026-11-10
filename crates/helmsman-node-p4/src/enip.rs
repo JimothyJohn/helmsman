@@ -267,14 +267,14 @@ impl<'a> Session<'a> {
         let request = explicit::send_rr_data_with_items(self.handle, ctx, 0, mr, extra);
         self.write(&request).await?;
         let bytes = self.read_frame().await?;
-        let (frame, _) = Frame::decode(&bytes)?;
+        let (frame, _) = Frame::decode(&bytes).inspect_err(|_| show_reply(&bytes))?;
         if frame.header.sender_context != ctx {
             return Err(Error::ContextMismatch);
         }
         if frame.header.status != 0 {
             return Err(Error::Encapsulation(frame.header.status));
         }
-        Ok(explicit::decode_send_rr_data_with_items(&frame)?)
+        Ok(explicit::decode_send_rr_data_with_items(&frame).inspect_err(|_| show_reply(&bytes))?)
     }
 
     /// `UnregisterSession`, best effort, then drops the link.
@@ -296,6 +296,17 @@ pub struct IoConnection {
     target: IpEndpoint,
     pub producer: Producer,
     pub consumer: Consumer,
+}
+
+/// A reply that would not decode, in hex on the console: the device's own
+/// answer is the evidence, and nothing else on the wire sees it between a
+/// node and a block on a switch.
+fn show_reply(bytes: &[u8]) {
+    esp_println::print!("reply that did not decode ({} bytes):", bytes.len());
+    for b in bytes {
+        esp_println::print!(" {b:02x}");
+    }
+    esp_println::println!();
 }
 
 impl IoConnection {
@@ -321,7 +332,11 @@ impl IoConnection {
         let mut w = Writer::default();
         open.to_request().encode(&mut w);
         let (resp, items) = session.exchange(&w.into_inner(), &[]).await?;
-        let reply = open_result(&resp)?.map_err(Error::Refused)?;
+        let reply = open_result(&resp)
+            .inspect_err(|_| {
+                esp_println::println!("Forward_Open reply that did not decode: {resp:02x?}");
+            })?
+            .map_err(Error::Refused)?;
         let default = SocketAddrV4::new(session.target(), encap::IO_PORT);
         let to = class1::o_to_t_target(&items, default);
         let target = IpEndpoint::new(IpAddress::Ipv4(*to.ip()), to.port());

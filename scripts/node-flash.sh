@@ -31,7 +31,8 @@
 # Usage: scripts/node-flash.sh [bench|modbus]
 #        SERIAL_PORT=/dev/cu.usbserial-XXXX scripts/node-flash.sh modbus
 #        NODE_BOARD=poe-iso scripts/node-flash.sh modbus
-#        NODE_BOARD=p4-eth scripts/node-flash.sh [enip|modbus]
+#        NODE_BOARD=p4-eth scripts/node-flash.sh [node|enip|modbus]
+#        NODE_BOARD=p4-eth NODE_P4_NO_POE=1 ESPFLASH=/path/to/espflash-4 scripts/node-flash.sh node
 #
 # The port and the board's MAC are remembered per board after a flash that
 # completes (scratch/node-board.<board>, untracked): with several boards on
@@ -41,13 +42,21 @@
 # name, so a POE2 is never flashed as a POE-ISO by a moved cable.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-command -v espflash >/dev/null || { echo "espflash missing: cargo install espflash --locked" >&2; exit 1; }
+# ESPFLASH=/path/to/espflash picks another build of the tool (the P4 needs
+# 4.x; see below).
+ESPFLASH="${ESPFLASH:-espflash}"
+command -v "$ESPFLASH" >/dev/null || { echo "espflash missing: cargo install espflash --locked" >&2; exit 1; }
 board="${NODE_BOARD:-poe2}"
 if [ "$board" = p4-eth ]; then
-  bin="${1:-enip}"
+  bin="${1:-node}"
   case "$bin" in
-    modbus|enip) ;;
-    *) echo "usage: NODE_BOARD=p4-eth $0 [enip|modbus]" >&2; exit 2 ;;
+    modbus|enip|node) ;;
+    *) echo "usage: NODE_BOARD=p4-eth $0 [node|enip|modbus]" >&2; exit 2 ;;
+  esac
+  # A P4 at chip revision v3.x does not answer espflash 3.3 ("Timeout
+  # while running ReadReg command", 2026-11-10); 4.7 flashes it.
+  case "$("$ESPFLASH" --version | awk '{ print $2 }')" in
+    [0-3].*) echo "the P4 needs espflash 4 or newer ($ESPFLASH is $("$ESPFLASH" --version)): cargo install espflash --locked, or ESPFLASH=/path/to/espflash" >&2; exit 1 ;;
   esac
   build_mode=""
   crate=crates/helmsman-node-p4
@@ -87,7 +96,7 @@ if [ -z "${SERIAL_PORT:-}" ]; then
   esac
 fi
 
-mac="$(espflash board-info --port "$SERIAL_PORT" 2>/dev/null | awk '/MAC address/ { print $3 }')"
+mac="$("$ESPFLASH" board-info --port "$SERIAL_PORT" 2>/dev/null | awk '/MAC address/ { print $3 }')"
 if [ -z "$mac" ]; then
   echo "no ESP32 answers on $SERIAL_PORT (espflash board-info)" >&2
   exit 1
@@ -101,11 +110,19 @@ echo "board on $SERIAL_PORT: MAC $mac"
 case "$board" in
   p4-eth)
     echo "Waveshare ESP32-P4-ETH on $SERIAL_PORT, image: $bin"
-    echo
-    echo "  ⚠  Whether this board's PoE module is isolated is not documented. Until"
-    echo "     it is measured, treat it like the POE2: confirm the Ethernet cable is OUT."
-    echo
-    read -r -p "Ethernet unplugged, flash now? [y/N] " yes
+    if [ "${NODE_P4_NO_POE:-}" = 1 ]; then
+      # Without the PoE module on its header the board takes no power from
+      # the cable, so USB and Ethernet together are fine (the bench since
+      # 2026-11-10) and an agent session flashes it.
+      yes=y
+    else
+      echo
+      echo "  ⚠  Whether this board's PoE module is isolated is not documented. Until"
+      echo "     it is measured, treat it like the POE2: confirm the Ethernet cable is OUT."
+      echo "     (NODE_P4_NO_POE=1 skips this when the PoE module is not fitted.)"
+      echo
+      read -r -p "Ethernet unplugged, flash now? [y/N] " yes
+    fi
     ;;
   poe-iso)
     # Isolated, on USB for good, identified by MAC above: no prompt, no
@@ -135,10 +152,10 @@ cd "$crate"
 # flash alone, and read the console afterwards with
 #   espflash monitor --port PORT --non-interactive --before no-reset-no-sync --after no-reset
 if [ -t 0 ]; then
-  espflash flash --monitor --port "$SERIAL_PORT" \
+  "$ESPFLASH" flash --monitor --port "$SERIAL_PORT" \
     "$target_dir/$bin" 2>&1 | tee "../../$log"
 else
-  espflash flash --port "$SERIAL_PORT" \
+  "$ESPFLASH" flash --port "$SERIAL_PORT" \
     "$target_dir/$bin" 2>&1 | tee "../../$log"
   echo "no terminal: flashed without the monitor; read the console with"
   echo "  espflash monitor --port $SERIAL_PORT --non-interactive --before no-reset-no-sync --after no-reset"
@@ -148,7 +165,10 @@ if grep -q "Flashing has completed" "$root/$log"; then
   printf '%s %s\n' "$SERIAL_PORT" "$mac" > "$memo"
   echo "remembered: $board on $SERIAL_PORT, MAC $mac ($memo)"
 fi
-if [ "$board" = p4-eth ]; then
+if [ "$board" = p4-eth ] && [ "$bin" = node ]; then
+  echo "now: first boot answers at http://192.168.127.250:8080/ (the factory record) unless flash"
+  echo "     already holds settings; set name, address and token there."
+elif [ "$board" = p4-eth ]; then
   echo "now: unplug USB, start the sink (/usr/bin/python3 -I scripts/node-log-sink.py), plug PoE."
   echo "     The enip image opens an Exclusive Owner connection to the E1213: stop the try box's"
   echo "     enip-io first, or build with ENIP_INPUT_ONLY=1 to run beside it."

@@ -575,8 +575,18 @@ impl Refused {
         let connection_serial = r.u16_le()?;
         let originator_vendor_id = r.u16_le()?;
         let originator_serial = r.u32_le()?;
-        let remaining_path_size = r.u8()?;
-        let _reserved = r.u8()?;
+        // The Moxa E1213 ends an unsuccessful reply here, without the
+        // remaining path size and the reserved byte (captured 2026-11-10,
+        // docs/devices/moxa-iologik-e1213.md); what identifies the
+        // connection is already read, so that is a refusal with no path
+        // left over, not a reply that does not decode.
+        let remaining_path_size = if r.remaining() == 0 {
+            0
+        } else {
+            let size = r.u8()?;
+            let _reserved = r.u8()?;
+            size
+        };
         Ok(Self {
             status: resp.status,
             extended: resp.additional_status.clone(),
@@ -966,6 +976,32 @@ mod tests {
         // `OpENer` g_kForwardOpenHeaderLength = 36 up to and including the path size.
         assert_eq!(req.data.len(), 36 + 8);
         assert_eq!(ForwardOpen::decode(&req.data).unwrap(), fo);
+    }
+
+    /// The E1213's answer to an Input Only `Forward_Open` from the P4 node
+    /// on 2026-11-10, as the node printed it: general status 0x01, no
+    /// extended status, and a body that stops after the originator serial
+    /// (no remaining path size, no reserved byte). The refusal must read
+    /// as a refusal, not as a decode error.
+    #[test]
+    fn a_refusal_that_stops_after_the_originator_serial_still_reads() {
+        let resp = cip::Response {
+            service: 0xD4,
+            status: GeneralStatus(0x01),
+            additional_status: vec![],
+            data: vec![0x03, 0x00, 0xFF, 0xFF, 0xE1, 0x16, 0xE8, 0x0A],
+        };
+        let refused = open_result(&resp).unwrap().unwrap_err();
+        assert_eq!(refused.status, GeneralStatus(0x01));
+        assert_eq!(refused.extended_code(), None);
+        assert_eq!(refused.connection_serial, 3);
+        assert_eq!(refused.originator_vendor_id, 0xFFFF);
+        assert_eq!(refused.originator_serial, 0x0AE8_16E1);
+        assert_eq!(refused.remaining_path_size, 0);
+        // One byte short of the identifying triad is still an error.
+        let mut short = resp;
+        short.data.pop();
+        assert!(open_result(&short).is_err());
     }
 
     #[test]

@@ -228,6 +228,18 @@ driver, both sides at once, so each fact below is from the wire:
   extended status 0x0100 (connection in use); a connection whose owner
   vanishes without `Forward_Close` is held for about 10 s before another
   owner is accepted.
+- **An Input Only `Forward_Open` was refused with general status 0x01
+  and no extended status** (2026-11-10, from the ESP32-P4 node at
+  192.168.3.56 while the try box held the exclusive owner): path
+  config 100, heartbeat 111, T->O 101, O->T size 0, RPI 100 ms. The
+  reply's data is `03 00 ff ff e1 16 e8 0a`: connection serial,
+  originator vendor and originator serial, with the remaining path size
+  and the reserved byte left off. `helmsman_proto::io::Refused::decode`
+  accepts that short form (test
+  `a_refusal_that_stops_after_the_originator_serial_still_reads`). The
+  cause of the refusal is not known: the node builds the request with
+  the exclusive owner's parameters and an O->T size of 0, which may not
+  be what this unit takes for Input Only.
 - **Counters read 0** in DI mode (counter mode is off, as Appendix E
   says).
 - The console's DO page says "DO4-7 Channel Equal DIO0-3 Channel": the
