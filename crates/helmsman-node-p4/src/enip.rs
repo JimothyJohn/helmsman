@@ -334,9 +334,7 @@ impl IoConnection {
         let (resp, items) = session.exchange(&w.into_inner(), &[]).await?;
         let reply = open_result(&resp)
             .inspect_err(|_| {
-                esp_println::println!(
-                    "Forward_Open reply that did not decode: {resp:02x?}"
-                );
+                esp_println::println!("Forward_Open reply that did not decode: {resp:02x?}");
             })?
             .map_err(Error::Refused)?;
         let default = SocketAddrV4::new(session.target(), encap::IO_PORT);

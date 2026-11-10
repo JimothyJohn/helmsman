@@ -601,6 +601,82 @@ arrived, so the first day on the board is spent on the two real unknowns:
   Exclusive Owner build: the chase over CIP. (5) Measure the PoE module's
   isolation before USB and PoE are ever connected together.
 
+- **On the board, 2026-11-10** (the Waveshare ESP32-P4-ETH without its PoE
+  module, on USB and on the bench link in the POE-ISO's switch port). The
+  chip is an ESP32-P4 at revision v3.2 (ROM `esp32p4-eco7-20260109`), MAC
+  e8:f6:0a:e8:16:e1, 32 MB flash. What ran, in order:
+  - **Flashing.** espflash 3.3.0 does not talk to a v3.x chip ("Timeout
+    while running ReadReg command"); esptool 5.6 and espflash 4.7.0 do.
+    `scripts/node-flash.sh` refuses an older espflash for this board and
+    takes `ESPFLASH=` for another build of the tool. The image boots under
+    espflash 4.7's bootloader (ESP-IDF v6.1) with no change to the build.
+  - **Ethernet came up on the first image**: esp-hal 1.2.2's EMAC driver
+    brought the IP101GRI up with the pin map in `board.rs`, the `modbus`
+    image took a static address, answered ping in under 1 ms and ran the
+    chase on the E1213 over Modbus TCP. esp-p4-eth, the fallback, was not
+    needed.
+  - **One driver fault: no frame over 262 bytes left the board.** Ping
+    answered up to 220 bytes of payload and not from 230 up; the node
+    acknowledged a 600-byte TCP segment (receive was fine) and never sent
+    an HTTP reply. esp-hal 1.2.2 starts the P4's MAC with transmit
+    store-and-forward on, which its transmit checksum insertion needs,
+    and the P4's transmit FIFO does not hold a whole frame. Upstream
+    `main` now ties store-and-forward to a per-chip transmit checksum
+    property (`esp-hal/src/ethernet/mac.rs`, `dma_init_op_mode`, read
+    2026-11-10); no release carries it. `ethernet.rs` clears the bit
+    after the driver starts and wraps the driver so smoltcp computes
+    transmit checksums (`CutThroughTx`); 1472-byte pings and the whole API
+    answer since. Drop the wrapper when an esp-hal release has the fix.
+  - **The commissioning run, as on the POE-ISO.** First boot at
+    192.168.127.250 with the factory record and the seeded chase; a save
+    on the settings form (name press-5, site line-a, static
+    192.168.3.56/24, a token) restarted the node on the bench link with
+    the record and the program back from flash; ping; every read route;
+    a tokenless and a wrong-token write refused (401); a broken program
+    refused with the checker's line (422) and the old one kept running; a
+    deploy (201), stop and run (200); the values stream; the E1213 up at
+    192.168.3.60. The node is left in this state.
+  - **Numbers.** The chase: 10 ms scan, zero late scans in steady state,
+    51 to 72 us of execution a scan (about 1 ms on the POE-ISO), 133 KB of
+    heap in use. A cell the WROOM cannot hold, the batch-mixer bench
+    program with its six blocks and a simulated tank (431 lines, 12 KB of
+    source, built in the session and not in the repo): compiled on the
+    node in under 80 ms, 0.95 to 1.05 ms of execution a scan at 10 ms with
+    no late scans after the deploy, 253 KB of heap in use and a peak of
+    377 KB while compiling. A deploy costs one to four late scans (the
+    compile runs on the scan's core).
+  - **Memory is not the 768 KB on the datasheet.** esp-hal's linker script
+    gives the application 440 KB of the SRAM (256 KB is reserved for the
+    L2 cache, `RESERVED_L2_CACHE` in its `memory.x`, which also has 128 KB
+    and 0 as choices; the second-stage bootloader's region above is a
+    further 68 KB that can be reclaimed); the `node` image takes 320 KB of
+    it as heap and leaves a 58 KB main stack. The first deploy of the cell ran that heap out and
+    panicked, and the node then sat silent: esp-backtrace spins after a
+    panic by default. Two changes: the module's 32 MB of PSRAM is a second
+    heap region (esp-hal's P4 PSRAM driver, defaults; esp-alloc fills the
+    internal region first, so a compile spills over instead of failing),
+    and a panic restarts the node (`custom_halt` in `lib.rs`). The restart
+    was not seen on the board: with the PSRAM in, nothing ran out again.
+    Not measured: whether any of the running cell's data sits in PSRAM,
+    and what that costs a scan. `/api/node` still reports the internal
+    320 KB as the heap size, so a peak can read higher than the size.
+  - **Not kept across a restart: a program over its flash slot.** The
+    12 KB cell ran but was answered `kept: false` ("the program does not
+    fit its flash slot"): the settings and program slots share the 24 KiB
+    `nvs` partition. The partition table the firmware-update card plans
+    is where a larger slot comes from.
+  - **EtherNet/IP: the E1213 refuses the Input Only open.** The `enip`
+    image built with `ENIP_INPUT_ONLY=1` registered its session and got
+    general status 0x01 with no extended status for the `Forward_Open`,
+    in a reply that stops after the originator serial; the decoder read
+    that as truncated until `helmsman_proto::io::Refused::decode` learned
+    the short form (the bytes are its regression test). Why the unit
+    refuses is open; the Exclusive Owner run needs the try box to let go
+    of the unit first and was not done. docs/devices/moxa-iologik-e1213.md
+    has the bytes.
+  - **Not done:** the PoE module's isolation (the module is not fitted),
+    TLS with mbedtls-rs, the Exclusive Owner run.
+
 Sources for this phase: esp-hal issue #4163 and PRs #5546 / #5556
 (`github.com/esp-rs/esp-hal`), `github.com/babasha/esp-p4-eth`,
 `github.com/esp-rs/mbedtls-rs` (mbedtls-rs-sys README, "Precompilation"),
@@ -609,7 +685,10 @@ ESP32-P4 features page (one 10/100 Ethernet MAC, RMII), the Waveshare
 ESP32-P4-ETH wiki, `github.com/pasrom/profinet-rs`,
 `github.com/rtlabs-com/p-net`, the ETG EtherCAT FAQ, and
 supervictor `supervictor/edge/{Cargo.toml,src/config.rs}`; all read
-2026-11-08.
+2026-11-08. For the bench run: esp-hal 1.2.2 `src/ethernet/{mac,dma,
+embassy_net}.rs` and `ld/esp32p4/memory.x` as published, and
+`esp-hal/src/ethernet/{mac,dma,embassy_net}.rs` on `main` at
+`github.com/esp-rs/esp-hal`, read 2026-11-10.
 
 **Phase 4, a node you can commission, deploy to and watch (2026-11-08, on
 the POE-ISO).** Nick's brief: set up a node's network like supervictor
