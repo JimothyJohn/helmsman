@@ -102,6 +102,10 @@ async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(size: HEAP_SIZE);
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
     let timg0 = TimerGroup::new(peripherals.TIMG0);
+    // The module's PSRAM as a second heap region: esp-alloc fills the
+    // internal region first, so the running program stays in SRAM and a
+    // compile that outgrows it spills over instead of panicking.
+    esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram);
 
     println!();
     println!(

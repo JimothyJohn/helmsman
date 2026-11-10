@@ -15,13 +15,14 @@
 #                                              E1213_ADDR=a.b.c.d LOG_SINK=a.b.c.d:port
 #                                              in the environment change the defaults)
 #        scripts/node-build.sh clippy [net]   (the same, through clippy -D warnings)
-#        NODE_BOARD=p4-eth scripts/node-build.sh [build|clippy]   (the P4: `modbus` and `enip`;
-#                                              E1213_ADDR, LOG_SINK and ENIP_INPUT_ONLY=1 apply)
+#        NODE_BOARD=p4-eth scripts/node-build.sh [build|clippy]   (the P4: `modbus`, `enip` and `node`;
+#                                              E1213_ADDR, LOG_SINK, NODE_STATIC_IP=a.b.c.d/nn,
+#                                              ENIP_INPUT_ONLY=1 and NODE_SEED_CHASE=1 apply)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # NODE_BOARD=p4-eth: the Waveshare ESP32-P4-ETH (crates/helmsman-node-p4),
-# RISC-V on upstream stable, no esp toolchain, no build-std; both binaries
-# (`modbus`, `enip`) build in one go. Everything below this block is the
+# RISC-V on upstream stable, no esp toolchain, no build-std; the three
+# binaries (`modbus`, `enip`, `node`) build in one go. Everything below this block is the
 # Xtensa POE2 / POE-ISO path (crates/helmsman-node).
 if [ "${NODE_BOARD:-poe2}" = p4-eth ]; then
   cd crates/helmsman-node-p4
@@ -40,7 +41,7 @@ if [ "${NODE_BOARD:-poe2}" = p4-eth ]; then
   if [ -z "$NM" ]; then
     echo "note: no llvm-nm on PATH (brew install llvm); skipping the stack check"
   else
-    for b in modbus enip; do
+    for b in modbus enip node; do
       elf="target/riscv32imafc-unknown-none-elf/release/$b"
       start=$("$NM" "$elf" | awk '$3 == "_stack_start" { print $1 }')
       end=$("$NM" "$elf" | awk '$3 == "_stack_end" { print $1 }')

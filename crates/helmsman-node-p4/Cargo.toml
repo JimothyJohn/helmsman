@@ -49,7 +49,10 @@ esp-rtos = { version = "0.4.0", features = ["esp32p4", "embassy"] }
 esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32p4"] }
 esp-alloc = { version = "0.11.0", features = ["esp32p4", "internal-heap-stats"] }
 esp-println = { version = "0.18.0", features = ["esp32p4"] }
-esp-backtrace = { version = "0.20.0", features = ["esp32p4", "panic-handler", "println"] }
+# `custom-halt`: after the panic message the node restarts (`custom_halt`
+# in src/lib.rs); esp-backtrace's default is to spin for ever, which on a
+# controller is a dead node until someone cycles its power.
+esp-backtrace = { version = "0.20.0", features = ["esp32p4", "panic-handler", "println", "custom-halt"] }
 embassy-executor = "0.10"
 embassy-time = { version = "0.5", features = ["generic-queue-8"] }
 # `auto-icmp-echo-reply`: a controller that does not answer ping is a

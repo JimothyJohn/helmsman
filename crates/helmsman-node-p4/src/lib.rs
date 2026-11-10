@@ -22,3 +22,13 @@ pub mod modbus;
 pub mod report;
 pub mod server;
 pub mod state;
+
+/// What esp-backtrace calls once the panic message and the backtrace are
+/// on the console: restart. A node that ran out of memory compiling a
+/// deploy comes back with the program it last kept on flash (found on the
+/// bench, 2026-11-10: the first out-of-memory panic left the board silent
+/// and off the network until its reset button was pressed).
+#[unsafe(no_mangle)]
+extern "Rust" fn custom_halt() -> ! {
+    esp_hal::system::software_reset()
+}
