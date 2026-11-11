@@ -11,6 +11,10 @@ repository.workspace = true
 # The Modbus codec (PDUs, reply checks, MBAP), no_std, no deps: shared
 # with the edge node so the box and a node put the same bytes on the wire.
 helmsman-modbus = { path = "../helmsman-modbus" }
+# PROFINET IO as bytes and two state machines without I/O (no_std, no
+# deps): the `profinet-io` driver gives the controller a thread and a
+# link, and the simulated device is what its tests talk to.
+helmsman-profinet = { path = "../helmsman-profinet" }
 # No `unrestricted`: the box build reads observed controllers, it never
 # writes them. `enip` adds only the Class 1 scanner (`scanner`), for the
 # adapters the box masters.
@@ -44,13 +48,16 @@ gpio = ["dep:gpiocdev", "dep:i2cdev"]
 enip = ["helmsman-proto/scanner"]
 # A simulated Moxa ioLogik E1213 for the conformance harness and tests.
 enip-sim = ["enip", "dep:helmsman-adapter"]
+# `if=sim` on a `profinet-io` device line: a simulated device in the
+# process, its outputs looped to its inputs, for tests and the harness.
+profinet-sim = []
 # Drivers compiled to WebAssembly, sandboxed to their device's socket.
 wasm = ["dep:wasmi"]
 
 [dev-dependencies]
 helmsman-adapter = { path = "../helmsman-adapter" }
 # Tests and examples run the enip-io driver against the simulated E1213.
-helmsman-io = { path = ".", features = ["enip-sim", "wasm"] }
+helmsman-io = { path = ".", features = ["enip-sim", "profinet-sim", "wasm"] }
 # The WASM driver tests' adversarial guests are hand-written WAT,
 # assembled in the test (as helmsman-plc's module tests do).
 wat = { version = "1.262.0", default-features = false }

@@ -155,6 +155,7 @@ pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
         }
         crate::logix::DRIVER => crate::logix::Point::parse(addr).map(|p| p.info()),
         crate::enip::DRIVER => crate::enip::Point::parse(addr).map(|p| p.info()),
+        crate::profinet::DRIVER => crate::profinet::Point::parse(addr).map(|p| p.info()),
         other if wasm_name(other).is_some() => Err(Error::UnknownDriver(format!(
             "{other}: not a WASM driver this box has approved"
         ))),
@@ -164,7 +165,8 @@ pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
 
 /// As [`parse_point`], knowing the device: a driver whose points depend on
 /// the device's params (`enip-io`: assembly sizes, channel counts, an
-/// input-only connection) checks them here.
+/// input-only connection; `profinet-io`: the modules and their data
+/// lengths) checks them here.
 ///
 /// # Errors
 /// As [`parse_point`], plus params that don't parse and points the
@@ -172,19 +174,22 @@ pub fn parse_point(driver: &str, addr: &str) -> Result<PointInfo, Error> {
 pub fn parse_point_on(device: &Device, addr: &str) -> Result<PointInfo, Error> {
     match device.driver.as_str() {
         crate::enip::DRIVER => crate::enip::parse_on(&device.params, addr),
+        crate::profinet::DRIVER => crate::profinet::parse_on(&device.endpoint, &device.params, addr),
         driver => parse_point(driver, addr),
     }
 }
 
 /// What the one-writer rule compares for an output point: the point
-/// itself, or for `enip-io` each output bit it drives (so `do:0` and
-/// `out:0.0` are the same writer).
+/// itself, or for `enip-io` and `profinet-io` each output bit it drives
+/// (so `do:0` and `out:0.0` are the same writer).
 #[must_use]
 pub fn output_keys(driver: &str, addr: &str) -> Vec<String> {
-    match (driver, crate::enip::Point::parse(addr)) {
-        (crate::enip::DRIVER, Ok(p)) => p.out_bits(),
-        _ => vec![addr.to_string()],
+    match driver {
+        crate::enip::DRIVER => crate::enip::Point::parse(addr).map(|p| p.out_bits()).ok(),
+        crate::profinet::DRIVER => crate::profinet::Point::parse(addr).map(|p| p.out_bits()).ok(),
+        _ => None,
     }
+    .unwrap_or_else(|| vec![addr.to_string()])
 }
 
 /// Opens a driver for `device` by its driver name. Network drivers connect
@@ -228,6 +233,11 @@ pub fn open_on(
             "{}: this build has no enip-io (helmsman-io's `enip` feature)",
             crate::enip::DRIVER
         ))),
+        crate::profinet::DRIVER => Ok(Box::new(crate::profinet::ProfinetDriver::new(
+            &device.endpoint,
+            &device.params,
+            crate::profinet::opener(),
+        )?)),
         other => Err(Error::UnknownDriver(other.into())),
     }
 }

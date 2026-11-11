@@ -158,23 +158,35 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
-- [ ] **Bring up the Murrelektronik EtherNet/IP I/O block** — placeholder until the unit is on the bench (Nick offered it 2026-11-10). A second vendor's Class 1 target beside the E1213: every implicit-messaging finding so far is against one Moxa unit on firmware V3.1 and OpENer. Bring it up from its EDS alone (`from_eds`, the Devices tab import) with no hand-written profile, as the first device nobody mapped by hand; record what its Forward_Open accepts (Exclusive Owner, Input Only, how many connections at once) in docs/devices/ with the manual's citations; add its folder to the device library. With a second unit the P4 node and the try box each own one and stop contending for the E1213's single connection. Model, I/O count and whether it is an IO-Link master are unknown until the part number is in.
-  needs: the block on 192.168.3.x with 24 VDC, and its part number (for the EDS and the manual)
-  result: a second device doc, map and library entry; the EDS import proven on a device it was not written against; two EtherNet/IP owners on the bench at once
-  est: 1d
-  difficulty: med
-  status: blocked
-  id: murr-block-bringup
-  asked: 2026-11-10
-  by: claude-session
-
-- [ ] **Bring up the Novanta IMS Liberty MDrive** — placeholder until the unit is on the bench (Nick offered it 2026-11-10). The first device that is not discrete I/O: position and velocity as 32-bit values, a status and fault word, and a comms-loss state that matters. Read its identity, map its assemblies or registers, then run a jog and a move to position from ST with the fault path and the comms-loss stop tested; the demo it gives is an axis moving from a spec. Which protocols this unit speaks (EtherNet/IP, Modbus TCP or both) is not checked: it depends on the part number. Motion asks "cell clear?" once per session (hardware-guard).
-  needs: the MDrive on 192.168.3.x with its DC supply and a free shaft, and its part number (for the EDS or register map and the manual)
-  result: a device doc with citations, a map and a library entry; an ST program that jogs and positions the axis and stops it on comms loss
+- [ ] **Bring up the Novanta IMS Liberty MDrive: PROFINET first** — due on the bench the week of 2026-11-10 with PROFINET enabled (Nick). The first device that is not discrete I/O, and the first real station for the PROFINET controller (`profinet-controller`). What its files say, read 2026-11-10 (docs/devices/novanta-mdrive.md): one Ethernet interface speaks Modbus TCP (the factory default), EtherNet/IP, PROFINET IO or MCode/TCP, one at a time, picked with Novanta's TCP/IP Configuration Utility; default IP 192.168.33.1. Its GSDML (`GSDML-V2.2-mdrive-SchneiderElectic-20130530.xml`, in the firmware zip) is vendor 0x0261 device 0x0001, an access point without interface or port submodules, a 128-byte input module (0x30) in slot 1 and a 128-byte output module (0x31) in slot 2, no parameter records, fastest cycle 8 ms. The 128 bytes carry MCode registers; the byte map is in Novanta's PROFINET manual and S7 workbook, which are not read yet. Steps: give it its station name (ours or Novanta's tool), bring the AR up from docs/devices/novanta-mdrive-profinet.map, read status and position, then a jog and a move to position from ST with the fault path and the comms-loss stop tested. Then the same axis over EtherNet/IP (its EDS is in the same zip) and Modbus TCP, so one device compares all three drivers. Motion asks "cell clear?" once per session (hardware-guard).
+  needs: the MDrive on 192.168.3.x with its DC supply and a free shaft; its part number and firmware version (2.4.0.7 or later: the release notes name two PROFINET timing bugs fixed there); `profinet-raw-access` done; the PROFINET manual's I/O table (PDF from Novanta, the copy found online is behind a login)
+  result: a device doc with citations, a map and a library entry; an ST program that jogs and positions the axis over PROFINET and stops it on comms loss; the first PROFINET startup against a device this project did not write, captured as a pcap and held as a regression test
+  depends: profinet-raw-access
   est: 2d
   difficulty: med
   status: blocked
   id: mdrive-bringup
+  asked: 2026-11-10
+  by: claude-session
+
+- [ ] **Bring up a Universal Robot on all three of its fieldbuses** — Nick, 2026-11-10: a UR is available and speaks EtherNet/IP, Modbus TCP and PROFINET. One device behind every driver the box has, and the first with a large mixed image (floats, 32-bit registers, bit fields). Read 2026-11-10 (docs/devices/universal-robots.md): PROFINET is enabled under Installation > Fieldbus > PROFINET (e-Series guide for PolyScope 5.12; PolyScope X has it under Settings > Services); its GSDML (`GSDML-V2.45-UR-PROFIsafe-20251201.xml`) is vendor 0x0361 device 0x0001, RT class 1, fastest cycle 8 ms, legacy and advanced startup, robot-to-controller modules in slots 1..7 (480 bytes: state, I/O, joints, TCP, bit, integer and float registers) and controller-to-robot modules in slots 8..10 (224 bytes), an access point with an interface (0x8000) and a port (0x8001) submodule. EtherNet/IP: input assembly 100 (480 bytes), output assembly 112 (224 bytes), RPI from 2 ms (its EDS); the same layout as PROFINET. Modbus TCP server on 502: function codes 1..6, 15, 16; general purpose registers 128..255; robot state from 256; every value an unsigned 16-bit word (angles in mrad, positions in tenths of a millimetre, signed values to convert by hand); the unit id is ignored. PROFINET and EtherNet/IP cannot be enabled together, and the robot stops its program when the PROFINET controller goes away. URSim is no stand-in: users report its PROFINET part missing and its Modbus registers stuck, so this needs the robot.
+  needs: the robot on 192.168.3.x, its model and PolyScope version; which fieldbus is enabled first (one at a time for EtherNet/IP and PROFINET); a cleared cell before anything moves; whether its PROFINET option needs a licence on this unit (UR's developer page says one is required, in its PROFIsafe section)
+  result: docs/devices/universal-robots.md "On the bench" with what each interface accepted; three maps (enip-io from its EDS, modbus-tcp, profinet-io); an ST program that reads the robot's state and sets a general purpose register over each; the register quirks held as tests
+  depends: profinet-raw-access
+  est: 3d
+  difficulty: med
+  status: blocked
+  id: ur-bringup
+  asked: 2026-11-10
+  by: claude-session
+
+- [ ] **Bring up the Murrelektronik I/O block** — placeholder until the unit is on the bench (Nick offered it 2026-11-10, and named it again for PROFINET the same day). A second vendor's remote I/O beside the E1213: every implicit-messaging finding so far is against one Moxa unit on firmware V3.1 and OpENer, and the PROFINET controller has met no I/O block at all. Which protocol it speaks depends on the article: the MVK Pro and Impact67 Pro blocks are sold per protocol (54620 and 54630 PROFINET, 54631 EtherNet/IP, 54632 EtherCAT), SOLID67 blocks switch between PROFINET and EtherNet/IP with a rotary switch (Murrelektronik's product pages, read 2026-11-10; nothing else about the unit is verified). If it is an EtherNet/IP block: bring it up from its EDS alone (`from_eds`, the Devices tab import) with no hand-written profile, and record what its Forward_Open accepts. If it is a PROFINET block: its GSDML gives the modules (an IO-Link master's ports are submodules with parameter records, which the controller writes at startup), its name and address come over DCP. Either way: a device doc with the manual's citations and a library entry. With a second EtherNet/IP unit the P4 node and a box each own one and stop contending for the E1213's single connection.
+  needs: the block on 192.168.3.x with 24 VDC, and its article number (for the EDS or GSDML and the manual)
+  result: a second device doc, map and library entry; the EDS import or the PROFINET startup proven on a device it was not written against
+  est: 1d
+  difficulty: med
+  status: blocked
+  id: murr-block-bringup
   asked: 2026-11-10
   by: claude-session
 

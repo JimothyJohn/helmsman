@@ -1585,6 +1585,7 @@ dependencies = [
  "helmsman-adapter",
  "helmsman-io",
  "helmsman-modbus",
+ "helmsman-profinet",
  "helmsman-proto",
  "i2cdev",
  "proptest",
