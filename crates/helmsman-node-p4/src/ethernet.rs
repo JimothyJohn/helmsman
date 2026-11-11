@@ -63,7 +63,7 @@ pub struct CutThroughTx(Ethernet<'static, Async, LinkPhy>);
 
 impl Driver for CutThroughTx {
     type RxToken<'a>
-        = <Ethernet<'static, Async, LinkPhy> as Driver>::RxToken<'a>
+        = l2::TapRx<<Ethernet<'static, Async, LinkPhy> as Driver>::RxToken<'a>>
     where
         Self: 'a;
     type TxToken<'a>
@@ -72,10 +72,12 @@ impl Driver for CutThroughTx {
         Self: 'a;
 
     fn receive(&mut self, cx: &mut Context<'_>) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        Driver::receive(&mut self.0, cx)
+        self.send_raw(cx);
+        Driver::receive(&mut self.0, cx).map(|(rx, tx)| (l2::TapRx(rx), tx))
     }
 
     fn transmit(&mut self, cx: &mut Context<'_>) -> Option<Self::TxToken<'_>> {
+        self.send_raw(cx);
         Driver::transmit(&mut self.0, cx)
     }
 
@@ -94,6 +96,102 @@ impl Driver for CutThroughTx {
 
     fn hardware_address(&self) -> HardwareAddress {
         Driver::hardware_address(&self.0)
+    }
+}
+
+impl CutThroughTx {
+    /// Sends the raw frames [`l2::send`] queued, as far as the MAC has
+    /// room, and leaves the stack's waker where `l2::send` finds it. The
+    /// stack polls the driver whenever it is woken, so a queued frame
+    /// goes out on the next poll, ahead of whatever the stack sends.
+    fn send_raw(&mut self, cx: &mut Context<'_>) {
+        l2::WAKER.register(cx.waker());
+        while let Ok(frame) = l2::TX.try_receive() {
+            // No room in the MAC: the frame is dropped. What goes this
+            // way is cyclic, and the next one replaces it.
+            let Some(tx) = Driver::transmit(&mut self.0, cx) else {
+                break;
+            };
+            embassy_net_driver::TxToken::consume(tx, frame.len(), |buf| buf.copy_from_slice(&frame));
+        }
+    }
+}
+
+/// Raw Ethernet frames beside the IP stack: what a protocol below IP
+/// (PROFINET's cyclic data, alarms and DCP, `EtherType` 0x8892) sends and
+/// receives on the same MAC the stack runs on.
+///
+/// Received frames of the `EtherType` given to [`listen`] (plain, or
+/// behind one 802.1Q tag) are copied into a queue as the stack takes
+/// them off the MAC; the stack sees them too and drops them as a type it
+/// does not know. Frames to send are queued and go out on the stack's
+/// next poll of the driver, which [`send`] asks for.
+pub mod l2 {
+    use alloc::vec::Vec;
+    use core::sync::atomic::{AtomicU16, Ordering};
+
+    use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+    use embassy_sync::channel::Channel;
+    use embassy_sync::waitqueue::AtomicWaker;
+
+    /// Frames each way that may wait: at an 8 ms cycle, a burst of DCP or
+    /// alarm frames beside the cyclic one.
+    const QUEUE: usize = 8;
+
+    pub(super) static TX: Channel<CriticalSectionRawMutex, Vec<u8>, QUEUE> = Channel::new();
+    static RX: Channel<CriticalSectionRawMutex, Vec<u8>, QUEUE> = Channel::new();
+    pub(super) static WAKER: AtomicWaker = AtomicWaker::new();
+    /// The `EtherType` listened for; 0 is none.
+    static ETHERTYPE: AtomicU16 = AtomicU16::new(0);
+
+    /// Starts copying received frames of `ethertype` into the queue
+    /// [`recv`] reads.
+    pub fn listen(ethertype: u16) {
+        ETHERTYPE.store(ethertype, Ordering::Relaxed);
+    }
+
+    /// Queues one complete frame (destination, source, type, payload).
+    /// `false` when the queue is full and the frame was dropped.
+    pub fn send(frame: Vec<u8>) -> bool {
+        let queued = TX.try_send(frame).is_ok();
+        WAKER.wake();
+        queued
+    }
+
+    /// The next received frame of the listened `EtherType`.
+    pub async fn recv() -> Vec<u8> {
+        RX.receive().await
+    }
+
+    /// Whether `frame` carries `ethertype`, plain or behind one tag.
+    fn wanted(frame: &[u8], ethertype: u16) -> bool {
+        let word = |at: usize| frame.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
+        match word(12) {
+            Some(t) if t == ethertype => true,
+            Some(0x8100) => word(16) == Some(ethertype),
+            _ => false,
+        }
+    }
+
+    /// A receive token that copies a wanted frame aside before the stack
+    /// has it.
+    pub struct TapRx<T>(pub(super) T);
+
+    impl<T: embassy_net_driver::RxToken> embassy_net_driver::RxToken for TapRx<T> {
+        fn consume<R, F>(self, f: F) -> R
+        where
+            F: FnOnce(&mut [u8]) -> R,
+        {
+            self.0.consume(|buf| {
+                let ethertype = ETHERTYPE.load(Ordering::Relaxed);
+                if ethertype != 0 && wanted(buf, ethertype) {
+                    // A full queue drops the frame: its reader is behind,
+                    // and cyclic data is only worth its newest.
+                    let _ = RX.try_send(buf.to_vec());
+                }
+                f(buf)
+            })
+        }
     }
 }
 

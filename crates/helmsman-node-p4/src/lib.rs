@@ -3,7 +3,9 @@
 //! embassy-net stack over esp-hal's EMAC driver (`ethernet`), a Modbus TCP
 //! client (`modbus`), an EtherNet/IP originator (`enip`: the explicit
 //! session for `Forward_Open`, and the Class 1 I/O connection around
-//! helmsman-proto's `class1`), and the UDP report line (`report`).
+//! helmsman-proto's `class1`), a PROFINET IO controller (`profinet`:
+//! helmsman-profinet's state machine on the stack's UDP socket and raw
+//! frames beside it, `ethernet::l2`), and the UDP report line (`report`).
 //!
 //! Next door, crates/helmsman-node is the same idea on the Xtensa
 //! ESP32-POE2 with its own toolchain; this crate is the one that runs on
@@ -19,6 +21,7 @@ pub mod ethernet;
 pub mod flash;
 pub mod io;
 pub mod modbus;
+pub mod profinet;
 pub mod report;
 pub mod server;
 pub mod state;
