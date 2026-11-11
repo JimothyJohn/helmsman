@@ -892,6 +892,7 @@ fn bench_local(trust: Option<TrustStore>, market_local: bool) -> Bench {
             ui: None,
             trust,
             market_local,
+            adapter: None,
         },
     )
     .unwrap();

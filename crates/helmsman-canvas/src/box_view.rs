@@ -1929,6 +1929,12 @@ impl Body for BoxView {
         self.devices_ui.plant.devices = crate::plant::device_choices(&map);
         self.devices_ui.plant.simulated = false;
         self.devices_ui.copy_first = false;
+        self.devices_ui.adapter = self
+            .state
+            .adapter
+            .as_ref()
+            .and_then(|a| a.listening())
+            .map(str::to_string);
         let program = crate::device_form::program_file(refs.iter().copied())
             .and_then(|f| files.iter().find(|(n, _)| *n == f).map(|(_, t)| t.clone()))
             .unwrap_or_default();
