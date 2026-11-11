@@ -198,6 +198,62 @@ fn one_units_exception_leaves_the_others_and_the_connection_alone() {
 }
 
 #[test]
+fn a_gateways_no_answer_from_a_unit_is_that_units_link_error() {
+    // App §7 p.47: 0x0A and 0x0B are the gateway saying the unit behind it
+    // is not there. The unit is down, in words; the connection and the
+    // other unit are not touched.
+    for (code, words) in [
+        (modbus::GATEWAY_PATH_UNAVAILABLE, "gateway has no path"),
+        (
+            modbus::GATEWAY_TARGET_FAILED,
+            "unit behind the gateway did not respond",
+        ),
+    ] {
+        let s = gateway([3, 4], None);
+        let (mut dead, mut live) = (driver(&s, 3, 1000), driver(&s, 4, 1000));
+        assert_eq!(hr0(&mut dead).unwrap(), Value::Int(300));
+        assert_eq!(hr0(&mut live).unwrap(), Value::Int(400));
+        s.unit(3).faults.push(Fault::Exception(code));
+        let e = hr0(&mut dead).unwrap_err();
+        assert!(e.is_link(), "{code:#04x} is a link error: {e}");
+        assert!(e.to_string().contains(words), "{code:#04x}: {e}");
+        assert_eq!(
+            hr0(&mut live).unwrap(),
+            Value::Int(400),
+            "the other unit stays up"
+        );
+        assert_eq!(
+            hr0(&mut dead).unwrap(),
+            Value::Int(300),
+            "and the unit is back once it answers"
+        );
+        assert_eq!(s.accepted(), 1, "{code:#04x}: the connection was kept");
+    }
+}
+
+#[test]
+fn the_other_exceptions_stay_point_errors() {
+    let s = gateway([3], None);
+    let mut d = driver(&s, 3, 1000);
+    for code in [
+        modbus::ILLEGAL_FUNCTION,
+        modbus::ILLEGAL_DATA_ADDRESS,
+        modbus::ILLEGAL_DATA_VALUE,
+        modbus::SERVER_DEVICE_FAILURE,
+        0x05,
+        0x06,
+        0x08,
+        0x0C,
+    ] {
+        s.unit(3).faults.push(Fault::Exception(code));
+        let e = hr0(&mut d).unwrap_err();
+        assert!(matches!(e, Error::Exception(c) if c == code), "{e}");
+        assert!(!e.is_link(), "{code:#04x} refuses the point, not the link: {e}");
+    }
+    assert_eq!(s.accepted(), 1);
+}
+
+#[test]
 fn a_dropped_connection_is_opened_again_once_for_every_unit() {
     let s = gateway(1..=8, Some((1, Cap::Refuse)));
     let mut ds: Vec<_> = (1..=8u8).map(|u| driver(&s, u, 1000)).collect();
