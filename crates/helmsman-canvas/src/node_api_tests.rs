@@ -108,6 +108,7 @@ fn view() -> NodeView {
         heap_used: 1,
         heap_peak: 2,
         heap_size: 3,
+        heap_external: None,
         mac: [1, 2, 3, 4, 5, 6],
         ip: Some([10, 0, 0, 50]),
         link_up: true,

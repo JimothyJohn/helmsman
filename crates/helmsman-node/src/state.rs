@@ -210,6 +210,7 @@ pub fn view(
             heap_used: esp_alloc::HEAP.used(),
             heap_peak: esp_alloc::HEAP.stats().max_usage,
             heap_size,
+            heap_external: None,
             mac,
             ip: live.ip,
             link_up: live.link_up,
