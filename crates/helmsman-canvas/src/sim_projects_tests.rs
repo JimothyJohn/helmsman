@@ -820,3 +820,52 @@ fn files_follow_the_boxs_rules_for_case_and_for_imports_onto_a_taken_name() {
     assert!(s.pending_file.is_none());
     assert!(s.notice.as_ref().unwrap().1);
 }
+
+/// 2026-11-10 (card `project-unknown-files`): a stored project whose
+/// `diagram.layout` does not read, or that holds a file this page has no use
+/// for (a newer release's), is not dropped on load, and neither is a
+/// revision with either. Only a save or an upload refuses a bad layout.
+#[test]
+fn a_stored_project_and_its_history_survive_a_layout_that_does_not_read_and_an_unknown_file() {
+    let ok = "PROGRAM fine\nEND_PROGRAM\n";
+    let files = serde_json::json!({
+        "main.st": ok,
+        "diagram.layout": "helmsman-layout 9\nwho knows\n",
+        "pump-curves.json": "{\r\n  \"curve\": [0, 1]\r\n}\r\n",
+    });
+    let rev = |n: u32| {
+        serde_json::json!({
+            "n": n, "at_ms": 1, "by": "you", "what": "saved", "page": null, "files": files,
+        })
+    };
+    let raw = serde_json::json!({
+        "format": "helmsman-projects 1",
+        "open": "mine",
+        "projects": { "mine": files },
+        "history": { "mine": [rev(1), rev(2)] },
+    })
+    .to_string();
+    let store = Backed::default();
+    *store.main.borrow_mut() = Some(raw);
+    let s = SimProjects::load(Box::new(store.clone()));
+    assert!(s.storage_problem.is_none(), "{:?}", s.storage_problem);
+    assert!(store.backup.borrow().is_none(), "nothing was left out");
+    let kept = s.saved.get("mine").expect("the project is kept");
+    assert_eq!(
+        kept.get("pump-curves.json"),
+        Some("{\r\n  \"curve\": [0, 1]\r\n}\r\n")
+    );
+    assert_eq!(kept.get("diagram.layout"), Some("helmsman-layout 9\nwho knows\n"));
+    assert_eq!(s.history["mine"].len(), 2, "both revisions kept");
+
+    // A name that is not safe is still left out, as before.
+    let unsafe_name = serde_json::json!({
+        "format": "helmsman-projects 1",
+        "projects": { "mine": { "main.st": ok, "../x": "y" } },
+    })
+    .to_string();
+    let store = Backed::default();
+    *store.main.borrow_mut() = Some(unsafe_name);
+    let s = SimProjects::load(Box::new(store));
+    assert!(s.storage_problem.is_some() && !s.saved.contains_key("mine"));
+}
