@@ -651,6 +651,9 @@ pub struct DevicesUi {
     pub rename_plan: Option<Result<RenamePlan, String>>,
     /// The Delete question on a device: its name.
     pub deleting: Option<String>,
+    /// Where the box's EtherNet/IP adapter listens, while it is on (the
+    /// box view fills it in each frame; the playground has none).
+    pub adapter: Option<String>,
 }
 
 impl DevicesUi {
@@ -938,6 +941,19 @@ impl DevicesUi {
             && !self.folded.remove(&name)
         {
             self.folded.insert(name);
+        }
+        // The one listener that stays open, where people look for devices.
+        if let Some(bind) = &self.adapter {
+            ui.add_space(4.0);
+            let r = ui
+                .add(
+                    egui::Label::new(RichText::new(format!(
+                        "EtherNet/IP adapter on {bind}: other controllers read this box here"
+                    )))
+                    .wrap(),
+                )
+                .tip("This box answers other EtherNet/IP controllers at this address and port. It stays on while the box runs.");
+            chrome.hit("devices adapter", r.rect);
         }
         // On the network: a scan, then every device that answered.
         ui.add_space(6.0);

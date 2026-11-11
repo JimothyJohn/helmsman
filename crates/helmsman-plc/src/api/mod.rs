@@ -13,6 +13,7 @@
 //! GET  /api/traces/events                 event stream of every module's traced scans (the Monitor's one stream)
 //! GET  /api/outputs                       output signals' commands and safe values, the %Q image
 //! GET  /api/devices                       device links: up, down (why), unknown, address
+//! GET  /api/adapter                       the box's EtherNet/IP adapter: {protocol, bind, on}; `bind` is the address it listens on, absent when it is off
 //! POST /api/devices/discover              token or session: one ListIdentity sweep; every EtherNet/IP device on the LAN, mapped or not, with the library's match (see [`discover`])
 //! GET  /api/devices/library?vendor=&product=|q=   the device library's matches with their map lines
 //! GET  /api/proposals                     drafts awaiting approval
@@ -239,6 +240,10 @@ pub struct Extras {
     /// private ranges): a bench or a LAN mirror. Off on a box
     /// (`--market-allow-local` turns it on).
     pub market_local: bool,
+    /// Where the box's `EtherNet/IP` adapter really listens (the address
+    /// its listener holds, not the option it was asked for), for
+    /// `GET /api/adapter`; `None`: the adapter is off.
+    pub adapter: Option<SocketAddr>,
 }
 
 /// What a box running the editor serves besides [`Extras`] (a struct of
@@ -343,6 +348,8 @@ struct Ctx {
     trust: Option<TrustStore>,
     /// The marketplace routes may fetch from local addresses.
     market_local: bool,
+    /// The adapter's bound address (`GET /api/adapter`).
+    adapter: Option<SocketAddr>,
     /// Drop-in documents (see [`dropin`]).
     dropins: Mutex<dropin::Store>,
     /// Held while a device browse runs (one at a time).
@@ -625,6 +632,7 @@ impl Api {
             ui,
             trust,
             market_local,
+            adapter,
         } = extras;
         let More {
             projects,
@@ -663,6 +671,7 @@ impl Api {
             ui,
             trust,
             market_local,
+            adapter,
             dropins: Mutex::new(dropin::Store::default()),
             browsing: Mutex::new(()),
             discovery: discover::State::new(discovery),
@@ -1447,8 +1456,8 @@ fn allowed(path: &[&str]) -> Option<&'static str> {
         | ["api", "devices", "library"]
         | [
             "api",
-            "signals" | "modules" | "outputs" | "devices" | "audit" | "events" | "snapshots" | "policy"
-            | "session" | "site" | "io_map" | "health",
+            "signals" | "modules" | "outputs" | "devices" | "adapter" | "audit" | "events" | "snapshots"
+            | "policy" | "session" | "site" | "io_map" | "health",
         ]
         | [
             "api",
@@ -1737,6 +1746,8 @@ fn ui_file(req: &Request, ctx: &Ctx) -> Reply {
     }
 }
 
+// One arm a route: the table is the point, and a split hides a route.
+#[allow(clippy::too_many_lines)]
 fn get(req: &Request, ctx: &Ctx) -> Reply {
     if req.segments.first().is_none_or(|s| s != "api") {
         return ui_file(req, ctx);
@@ -1785,6 +1796,7 @@ fn get(req: &Request, ctx: &Ctx) -> Reply {
         ["api", "outputs"] => Response::json(200, &render::outputs(c, &view)),
         ["api", "devices"] => Response::json(200, &devices(&ctx.box_.devices)),
         ["api", "devices", "library"] => discover::library(req, ctx),
+        ["api", "adapter"] => Response::json(200, &adapter_json(ctx.adapter)),
         ["api", "io_map"] => io_map(ctx),
         ["api", "proposals"] => Response::json(
             200,
@@ -1922,6 +1934,7 @@ fn index(agent: bool) -> Json {
             ),
             e("GET", "/api/outputs", true, "output commands, safe values, the %Q image"),
             e("GET", "/api/devices", true, "device links up or down"),
+            e("GET", "/api/adapter", true, "the EtherNet/IP adapter: {protocol, bind, on}"),
             e("GET", "/api/io_map", true, "the running I/O map file and its snapshot id"),
             e("GET", "/api/proposals", true, "drafts awaiting approval"),
             e("GET", "/api/proposals/{id}", true, "one proposal"),
@@ -2068,6 +2081,15 @@ fn site_json(site: &crate::site::Handle, c: &Catalog, view: &View, devices: &Dev
         "max_peers": crate::site::MAX_PEERS,
         "dropped": counts,
     })
+}
+
+/// `GET /api/adapter`: the `EtherNet/IP` adapter other controllers read this
+/// box through. `bind` is there only while it is on.
+fn adapter_json(bind: Option<SocketAddr>) -> Json {
+    match bind {
+        Some(a) => json!({ "protocol": "EtherNet/IP", "bind": a.to_string(), "on": true }),
+        None => json!({ "protocol": "EtherNet/IP", "on": false }),
+    }
 }
 
 fn devices(d: &Devices) -> Json {

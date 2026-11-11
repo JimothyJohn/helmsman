@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use helmsman_diagram::{Scan, annotate, explain, lower, lower_table};
 use helmsman_iec::{Image, ImageSizes, Value, compile};
 use helmsman_plc::api::{
-    Api, Catalog, Config, Devices, Limits, Live, MemAudit, MemProposals, ModuleInfo, Publisher, Shared,
-    render,
+    Api, Catalog, Config, Devices, Extras, Limits, Live, MemAudit, MemProposals, ModuleInfo, Publisher,
+    Shared, render,
 };
 use helmsman_plc::{Module as Slot, Runtime, Sample, SignalTable, Window};
 use serde_json::Value as Json;
@@ -135,6 +135,20 @@ impl Bench {
 
     /// [`Self::with`] and a chat route (`POST /api/chat`) to `chat`'s relay.
     pub fn with_chat(programs: &[(&str, &str)], chat: Option<helmsman_plc::api::chat::Setup>) -> Self {
+        Self::build(programs, chat, None)
+    }
+
+    /// [`Self::new`], with an EtherNet/IP adapter at `adapter` for
+    /// `GET /api/adapter` to name (`None`: the adapter is off).
+    pub fn with_adapter(adapter: Option<SocketAddr>) -> Self {
+        Self::build(&[("cell", DEMO)], None, adapter)
+    }
+
+    fn build(
+        programs: &[(&str, &str)],
+        chat: Option<helmsman_plc::api::chat::Setup>,
+        adapter: Option<SocketAddr>,
+    ) -> Self {
         let n = programs.len();
         let slots = programs
             .iter()
@@ -179,7 +193,11 @@ impl Bench {
             approval: None,
             chat,
         };
-        let api = Api::start(cfg, shared).unwrap();
+        let extras = Extras {
+            adapter,
+            ..Extras::default()
+        };
+        let api = Api::start_with(cfg, shared, extras).unwrap();
         let addr = api.addr();
         let stop = Arc::new(AtomicBool::new(false));
         let table = Arc::new(Mutex::new(table));

@@ -67,36 +67,44 @@ pub enum Fetch {
     /// `GET /api/io_map`: the map the box runs (the Devices tab, when
     /// no project's own map is open).
     IoMap,
+    /// `GET /api/adapter`: where the box's `EtherNet/IP` adapter listens
+    /// (the Devices tab). An older box has no such route.
+    Adapter,
 }
 
 /// How often the Devices tab's link states are asked for, s.
 const DEVICES_EVERY: f64 = 5.0;
 
-/// Where the Devices tab's two reads stand.
+/// Where the Devices tab's three reads stand.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DevicesPoll {
     /// Never asked (`None`), or last answered at this page time.
     Answered(Option<f64>),
-    /// Asked; whether the devices and the map are still on their way.
-    /// The next round waits for both, so a slow link never has two of
-    /// either in flight (card canvas-slow-link).
-    Asking { devices: bool, io_map: bool },
+    /// Asked; which of the reads are still on their way. The next round
+    /// waits for all of them, so a slow link never has two of any in
+    /// flight (card canvas-slow-link).
+    Asking {
+        devices: bool,
+        io_map: bool,
+        adapter: bool,
+    },
 }
 
 impl DevicesPoll {
-    /// One of the two answered at `now`.
-    fn answered(&mut self, devices: bool, now: f64) {
+    /// The read for `which` answered at `now`.
+    fn answered(&mut self, which: &Fetch, now: f64) {
         if let Self::Asking {
-            devices: d,
-            io_map: m,
+            devices,
+            io_map,
+            adapter,
         } = self
         {
-            if devices {
-                *d = false;
-            } else {
-                *m = false;
+            match which {
+                Fetch::Devices => *devices = false,
+                Fetch::IoMap => *io_map = false,
+                _ => *adapter = false,
             }
-            if !*d && !*m {
+            if !*devices && !*io_map && !*adapter {
                 *self = Self::Answered(Some(now));
             }
         }
@@ -617,6 +625,31 @@ impl DeviceRow {
     }
 }
 
+/// The box's `EtherNet/IP` adapter (`GET /api/adapter`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterRow {
+    pub protocol: String,
+    /// The address it listens on; `None` when it is off.
+    pub bind: Option<String>,
+    pub on: bool,
+}
+
+impl AdapterRow {
+    pub(crate) fn parse(j: &Json) -> Option<Self> {
+        Some(Self {
+            protocol: j["protocol"].as_str()?.to_string(),
+            bind: j["bind"].as_str().map(str::to_string),
+            on: j["on"].as_bool()?,
+        })
+    }
+
+    /// The address to show: only while the adapter is on and says where.
+    #[must_use]
+    pub fn listening(&self) -> Option<&str> {
+        self.bind.as_deref().filter(|_| self.on)
+    }
+}
+
 /// A forced input as the box lists it (`GET /api/forces`, the values
 /// stream's `forces`).
 #[derive(Debug, Clone, PartialEq)]
@@ -721,6 +754,9 @@ pub struct BoxState {
     pub forces: Vec<ForceRow>,
     /// Each device link's state, as last listed.
     pub devices: Vec<DeviceRow>,
+    /// The box's `EtherNet/IP` adapter, as last read (`None` until read,
+    /// and for a box without the route).
+    pub adapter: Option<AdapterRow>,
     /// The map the box runs, as last read (`None` until read, or when the
     /// box runs none).
     pub io_map: Option<String>,
@@ -792,6 +828,7 @@ impl BoxState {
             signals: Vec::new(),
             forces: Vec::new(),
             devices: Vec::new(),
+            adapter: None,
             io_map: None,
             devices_stale: false,
             io_map_stale: false,
@@ -845,9 +882,11 @@ impl BoxState {
             self.devs = DevicesPoll::Asking {
                 devices: true,
                 io_map: true,
+                adapter: true,
             };
             self.queue.push(Cmd::Get(Fetch::Devices, "/api/devices".into()));
             self.queue.push(Cmd::Get(Fetch::IoMap, "/api/io_map".into()));
+            self.queue.push(Cmd::Get(Fetch::Adapter, "/api/adapter".into()));
         }
         if self.monitor && self.traces.due(now) {
             self.queue.push(Cmd::Listen(Stream::Traces, TRACES_URL.into()));
@@ -1159,7 +1198,7 @@ impl BoxState {
             }
             Msg::Got(Fetch::Modules, Err(_)) => self.list.failed(now),
             Msg::Got(Fetch::Devices, r) => {
-                self.devs.answered(true, now);
+                self.devs.answered(&Fetch::Devices, now);
                 let list = r
                     .ok()
                     .as_deref()
@@ -1172,7 +1211,7 @@ impl BoxState {
                 }
             }
             Msg::Got(Fetch::IoMap, r) => {
-                self.devs.answered(false, now);
+                self.devs.answered(&Fetch::IoMap, now);
                 // 404: the box runs no map, which is an answer. Any other
                 // failure keeps the map that was read, marked old.
                 if r.as_ref().is_err_and(|e| e == "HTTP 404") {
@@ -1188,6 +1227,22 @@ impl BoxState {
                     if text.is_some() {
                         self.io_map = text;
                     }
+                }
+            }
+            Msg::Got(Fetch::Adapter, r) => {
+                self.devs.answered(&Fetch::Adapter, now);
+                // 404: an older box, which has nothing to say. Any other
+                // failure leaves the last read on show; none of it is a
+                // failure of the link.
+                if r.as_ref().is_err_and(|e| e == "HTTP 404") {
+                    self.adapter = None;
+                } else if let Some(row) = r
+                    .ok()
+                    .as_deref()
+                    .and_then(parse)
+                    .and_then(|j| AdapterRow::parse(&j))
+                {
+                    self.adapter = Some(row);
                 }
             }
             Msg::Got(Fetch::Source(name), r) => {
@@ -1506,9 +1561,10 @@ mod tests {
             [
                 Cmd::Get(Fetch::Modules, "/api/modules".into()),
                 Cmd::Listen(Stream::Values, "/api/events".into()),
-                // The Devices tab's two reads, every DEVICES_EVERY.
+                // The Devices tab's three reads, every DEVICES_EVERY.
                 Cmd::Get(Fetch::Devices, "/api/devices".into()),
                 Cmd::Get(Fetch::IoMap, "/api/io_map".into()),
+                Cmd::Get(Fetch::Adapter, "/api/adapter".into()),
             ]
         );
         assert_eq!(s.link(), Link::Connecting);
@@ -1589,13 +1645,15 @@ mod tests {
         let gets = |cmds: Vec<Cmd>| -> Vec<Fetch> {
             cmds.into_iter()
                 .filter_map(|c| match c {
-                    Cmd::Get(f @ (Fetch::Devices | Fetch::IoMap), _) => Some(f),
+                    Cmd::Get(f @ (Fetch::Devices | Fetch::IoMap | Fetch::Adapter), _) => Some(f),
                     _ => None,
                 })
                 .collect()
         };
-        assert_eq!(gets(s.poll(0.0)), [Fetch::Devices, Fetch::IoMap]);
+        let round = [Fetch::Devices, Fetch::IoMap, Fetch::Adapter];
+        assert_eq!(gets(s.poll(0.0)), round);
         s.apply(Msg::Got(Fetch::Devices, Ok("[]".into())), 0.3);
+        s.apply(Msg::Got(Fetch::Adapter, Err("HTTP 404".into())), 0.3);
         for now in [5.3, 10.0, 60.0] {
             assert_eq!(gets(s.poll(now)), [], "the map is still on its way at {now}");
         }
@@ -1605,12 +1663,13 @@ mod tests {
             [],
             "a round every DEVICES_EVERY after the last answer"
         );
-        assert_eq!(gets(s.poll(66.0)), [Fetch::Devices, Fetch::IoMap]);
-        // Either may come first.
+        assert_eq!(gets(s.poll(66.0)), round);
+        // Any may come first.
         s.apply(Msg::Got(Fetch::IoMap, Err("HTTP 404".into())), 66.2);
+        s.apply(Msg::Got(Fetch::Adapter, Err("HTTP 404".into())), 66.3);
         assert_eq!(gets(s.poll(80.0)), [], "the devices are still on their way");
         s.apply(Msg::Got(Fetch::Devices, Ok("[]".into())), 80.0);
-        assert_eq!(gets(s.poll(85.0)), [Fetch::Devices, Fetch::IoMap]);
+        assert_eq!(gets(s.poll(85.0)), round);
     }
 
     #[test]

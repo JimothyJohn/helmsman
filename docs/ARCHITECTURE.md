@@ -1077,7 +1077,10 @@ and MCP (`POST /mcp`, below) (`api/`; contract in `tests/api.rs`). Endpoints are
   live values, quality and point errors, modules (source, manifest, ports,
   status, stats), a module's latest trace (a `GET` requests the next
   traced scan; 202 until one lands), output commands and safe values,
-  device links, proposals, the audit log, and snapshots (`--store`:
+  device links, the EtherNet/IP adapter (`GET /api/adapter`:
+  `{protocol, bind, on}`, `bind` the address its listener really holds,
+  absent when it is off; the Devices tab names it under the tree and says
+  nothing for an older box's 404), proposals, the audit log, and snapshots (`--store`:
   history, a snapshot's files, a diff). Two event streams (SSE: one-way
   is all the canvas needs, and it is plain HTTP, so the same bounded
   parser serves it): live values and status, and a module's traces. What
@@ -2420,8 +2423,8 @@ agent as ST; nothing here writes ST back).
   the age: never a colour. It sends only GETs and stream opens (tested);
   leaving it closes the all-modules stream and reopens the Editor's. Over
   a slow link no poll is asked for again while its last ask is on its
-  way: the 5 s device round waits for both its reads (`/api/devices`,
-  `/api/io_map`), the header badge's 30 s proposals round for its list
+  way: the 5 s device round waits for all its reads (`/api/devices`,
+  `/api/io_map`, `/api/adapter`), the header badge's 30 s proposals round for its list
   (contract in `slow_link_tests.rs`: the Monitor against the real API
   through an in-process proxy with a site VPN's 300 ms round trip,
   1 Mbit/s and 2 % loss, two replies held up for 4.5 s).
