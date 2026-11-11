@@ -43,6 +43,7 @@ struct BoxSeen {
     deploy: Deploy,
     fault: Option<String>,
     notice: Option<String>,
+    warned: Option<String>,
 }
 
 pub struct BoxView {
@@ -997,6 +998,13 @@ impl BoxView {
                 _ => {}
             }
             self.seen.deploy = self.projects.deploy.clone();
+        }
+        let warned = projects::warning_summary(&self.projects.diags);
+        if warned != self.seen.warned {
+            if let Some(w) = &warned {
+                self.log.warning(now, w.clone());
+            }
+            self.seen.warned = warned;
         }
         let fault = self.state.scan.as_ref().and_then(|s| s.fault.clone());
         if fault != self.seen.fault {
@@ -2057,13 +2065,8 @@ impl Body for BoxView {
                 ui.label(RichText::new("No files in this project yet.").color(t.muted));
                 return;
             };
-            let diags: Vec<(u32, u32)> = self
-                .projects
-                .diags
-                .iter()
-                .filter(|d| d.file == file)
-                .map(|d| (d.line, d.col))
-                .collect();
+            let diags = projects::marks_in(&self.projects.diags, &file, false);
+            let warns = projects::marks_in(&self.projects.diags, &file, true);
             let list_h = if self.projects.diags.is_empty() {
                 0.0
             } else {
@@ -2080,10 +2083,10 @@ impl Body for BoxView {
             }
             ui.allocate_ui(size, |ui| {
                 if write.is_ok() {
-                    editor::st_editor(ui, id, &mut buf.text, &diags, MAX_FILE, chrome);
+                    editor::st_editor(ui, id, &mut buf.text, &diags, &warns, MAX_FILE, chrome);
                 } else {
                     let mut text: &str = &buf.text;
-                    editor::st_editor(ui, id, &mut text, &diags, usize::MAX, chrome);
+                    editor::st_editor(ui, id, &mut text, &diags, &warns, usize::MAX, chrome);
                 }
             });
             if !self.projects.diags.is_empty() {
@@ -2116,7 +2119,15 @@ impl Body for BoxView {
         // box waits for; said here too it was on screen twice.
         if let Some(v) = &self.view {
             let mut src: &str = &v.src;
-            editor::st_editor(ui, egui::Id::unique("box-st"), &mut src, &[], usize::MAX, chrome);
+            editor::st_editor(
+                ui,
+                egui::Id::unique("box-st"),
+                &mut src,
+                &[],
+                &[],
+                usize::MAX,
+                chrome,
+            );
         }
     }
 

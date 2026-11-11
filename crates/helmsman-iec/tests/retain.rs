@@ -221,6 +221,28 @@ fn retain_where_it_is_not_kept_warns_and_still_compiles() {
     assert_eq!(prog(LINE).warnings(), &[]);
 }
 
+/// A source with an error still lists its warnings: both reach the
+/// editor, and a source that parses has the same warnings with or without
+/// the error.
+#[test]
+fn compile_warned_lists_a_warning_beside_an_error() {
+    let src = "FUNCTION_BLOCK fb VAR RETAIN n : INT; END_VAR n := n + 1; END_FUNCTION_BLOCK
+               PROGRAM p VAR x : fb; y : INT; END_VAR x(); y := nothing_here; END_PROGRAM";
+    let (compiled, warnings) = helmsman_iec::compile_warned(src, SIZES);
+    let errors = compiled.expect_err("the undefined name is an error");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(
+        warnings[0].msg.contains("RETAIN inside a function block"),
+        "{warnings:?}"
+    );
+    // A source that does not parse has no warnings to give.
+    let (compiled, warnings) = helmsman_iec::compile_warned("PROGRAM p", SIZES);
+    assert!(compiled.is_err() && warnings.is_empty());
+    // And the plain compile is the same Result.
+    assert!(helmsman_iec::compile(src, SIZES).is_err());
+}
+
 /// What was never valid stays an error.
 #[test]
 fn retain_that_was_never_valid_is_refused() {

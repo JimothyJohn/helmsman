@@ -651,7 +651,10 @@ a project folder with the store's rules (`project::read_folder`, which
 `project::check::run_tests`, the function the tests route and the deploy
 gate call, so CI runs the box's tests. Exit 0 green or untested, 1 a red
 test, 2 does not build (each problem `DIR/FILE:LINE:COL`), 64 usage, 74
-I/O. `--junit` writes the report whole or not at all
+I/O. A warning (below) is printed on stderr as `DIR/FILE:LINE:COL: warning:
+message` and never changes the status; in the report it is the `build`
+case's `<system-out>`, and the case still passes. `--junit` writes the
+report whole or not at all
 (`project::junit`, by hand, no dependency): a `build` case, then one per
 test file in name order; red is `<failure>`, untested `<skipped/>`. It
 needs `box` (the project rules and the build live there) but opens no
@@ -1003,7 +1006,8 @@ values). Contract in `crates/helmsman-iec/tests/retain.rs` and
   `FUNCTION_BLOCK` (declare the instance RETAIN in the program instead) or
   a `FUNCTION`, on `VAR_TEMP` or a located variable. A warning
   (`Program::warnings`, the checker's first non-blocking diagnostic; the
-  box logs it at start) never stops the program, since such code compiled
+  box logs it at start and lists it with the project check, see **Warnings**
+below) never stops the program, since such code compiled
   when RETAIN was ignored and older projects must still open. Errors only
   for what was never valid: RETAIN with `NON_RETAIN` or `CONSTANT`, and
   past `MAX_RETAIN` (65 536) values per program. Nothing is kept in part.
@@ -1467,6 +1471,25 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   that is and whether it is still what runs (a later apply or rollback
   moves the head, and `current` goes false). The running project cannot
   be deleted; a rename carries the record.
+- **Warnings** (`checker-warnings-shown`): what a build has to say that
+  does not stop it, `build::build_noted` returning them beside the
+  result, an error or not (`Built::problems` for a good build). Today:
+  the checker's (`helmsman_iec::compile_warned`, so a PROGRAM with an
+  error still lists its RETAIN warnings) located at their file and line
+  like errors, and a `diagram.layout` that will not read. One shape end
+  to end: `{file, line, col, message, severity}` in the check answer's
+  `warnings` (an older box has no such field and the canvas reads none),
+  `severity` `"warning"` here and `"error"` on `diagnostics`. The ST
+  lints (`st-lints`) add an optional `id` and a `blocking` flag to a
+  warning; the canvas already reads both (`projects::Diag`) and a reader
+  that does not know them ignores them. The canvas lists errors first
+  then warnings under the editor (a warning with the word `warning`
+  before it and the warning colour), marks a warning line with a thick
+  underline and no red ground, and logs them as one Messages warning;
+  the browser simulation does the same from `Session::warnings`. A
+  deploy takes no warnings into account, and the deploy route's answer
+  does not list them (the check before it does). `POST
+  /api/proposals/check` (a draft) does not list them yet.
 - **ZIP** (`project::zip`, in the `helmsman-project` crate since the
   simulation uses it too; hand-written on APPNOTE 6.3.10; DEFLATE through
   `miniz_oxide`, already in the lockfile): a download is the files
@@ -1512,7 +1535,7 @@ Endpoints (also in `api/projects.rs` and `GET /api`):
 | `GET /api/projects/{p}/files/{f}` | session | `{name, text, version}` |
 | `PUT /api/projects/{p}/files/{f}` | engineer | `{text, version?}` (a draft); `{name, version, bytes}` |
 | `DELETE /api/projects/{p}/files/{f}` | engineer | |
-| `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval}`, or 422 `{diagnostics: [{file, line, col, message}]}` |
+| `POST /api/projects/{p}/check` | token or session | `{ok, snapshot, modules: [{name, file, reads, drives}], approval, diagnostics: [], warnings: [{file, line, col, message, severity: "warning"}]}`, or 422 `{diagnostics: [{file, line, col, message, severity: "error"}], warnings: [...]}`. `warnings` never stop a check, a save or a deploy |
 | `POST /api/projects/{p}/tests` | token or session | `{ok, red: [line], untested, tests: [{file, requirement, state, passed, why, scans, elapsed_ms}]}`; `state` is `passed`, `failed` or `untested` (never red) |
 | `POST /api/projects/{p}/requirements` | engineer | `{text, name?}`; an event stream: the agent writes the requirement's test (see Requirement tests) |
 | `POST /api/projects/{p}/replay` | engineer | sim replay evidence, as `POST /api/proposals/{id}/replay` |

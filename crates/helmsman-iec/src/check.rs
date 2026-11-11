@@ -2574,13 +2574,15 @@ impl<'a> Ck<'a> {
 }
 
 /// Type-checks the built-in library and a user unit together. The user
-/// unit must hold exactly one PROGRAM.
+/// unit must hold exactly one PROGRAM. The warnings come back beside the
+/// result, source order, whether it is an error or not: a program with an
+/// error still shows what else the checker found.
 #[allow(clippy::too_many_lines)]
 pub fn check(
     library: &parser::Unit,
     user: &parser::Unit,
     sizes: ImageSizes,
-) -> Result<Checked, Vec<Diagnostic>> {
+) -> (Result<Checked, Vec<Diagnostic>>, Vec<Diagnostic>) {
     let mut ck = Ck {
         sizes,
         srcs: Vec::new(),
@@ -2687,7 +2689,10 @@ pub fn check(
         ck.check_body(p);
     }
     ck.check_recursion();
-    match program {
+    ck.warnings.sort_by_key(|d| d.pos);
+    ck.warnings.dedup();
+    let warnings = ck.warnings.clone();
+    let result = match program {
         Some(program) if ck.diags.is_empty() => Ok(Checked {
             pous: ck.pous,
             aggs: ck.aggs,
@@ -2696,18 +2701,15 @@ pub fn check(
             library: ck.srcs.iter().take_while(|s| s.system).count(),
             mem_init,
             loc_init: ck.loc_init,
-            warnings: {
-                ck.warnings.sort_by_key(|d| d.pos);
-                ck.warnings.dedup();
-                ck.warnings
-            },
+            warnings: ck.warnings,
         }),
         _ => {
             ck.diags.sort_by_key(|d| d.pos);
             ck.diags.dedup();
             Err(ck.diags)
         }
-    }
+    };
+    (result, warnings)
 }
 
 #[cfg(test)]

@@ -1844,7 +1844,10 @@ fn typing_in_the_editor_checks_after_a_pause_and_marks_the_error_line() {
     let diags = [(1, 13)];
     let job = highlight(
         &s.view.session.src,
-        &diags,
+        &crate::editor::Lines {
+            errors: &diags,
+            warnings: &[],
+        },
         None,
         &[],
         &egui::FontId::monospace(13.0),
@@ -2488,4 +2491,100 @@ fn a_long_trend_draws_a_polyline_bounded_by_the_lane_width() {
     let few = lane_points([(10.0, 1.0), (20.0, 2.0), (30.0, 1.0)].into_iter());
     assert_eq!(few.len(), 5);
     assert_eq!(lane_points(std::iter::empty()).len(), 0);
+}
+
+/// A function block that declares RETAIN: the checker warns (not kept in
+/// a function block yet), the program compiles and runs.
+const RETAINED: &str = "\
+FUNCTION_BLOCK Latch
+VAR_INPUT set : BOOL; END_VAR
+VAR_OUTPUT q : BOOL; END_VAR
+VAR RETAIN kept : INT; END_VAR
+q := q OR set;
+END_FUNCTION_BLOCK
+PROGRAM main
+VAR_INPUT go : BOOL; END_VAR
+VAR_OUTPUT lamp : BOOL; END_VAR
+VAR l : Latch; END_VAR
+l(set := go);
+lamp := l.q;
+END_PROGRAM
+";
+
+#[test]
+fn a_warning_is_marked_and_listed_beside_the_code_and_never_blocks_the_deploy() {
+    use crate::messages::Level;
+    use crate::projects::Severity;
+    let mut s = Screen::new();
+    s.view.load(RETAINED, "retained");
+    s.wait(0.3);
+    assert!(s.view.session.diags.is_empty(), "it compiles");
+    let diags = s.view.diags();
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0].severity, Severity::Warning);
+    assert_eq!(diags[0].line, 4, "{diags:?}");
+    assert!(
+        diags[0].message.contains("RETAIN inside a function block"),
+        "{diags:?}"
+    );
+    assert!(
+        diags[0].label().starts_with("warning  "),
+        "the word, not only a colour"
+    );
+    // Listed under the editor, and in the Messages as a warning.
+    assert!(s.chrome.rect("diag 0").is_some(), "the row under the editor");
+    assert!(
+        s.view
+            .log
+            .iter()
+            .any(|m| m.level == Level::Warning && m.text.contains("do not stop a deploy")),
+        "{:?}",
+        s.view.log.iter().collect::<Vec<_>>()
+    );
+    // Marked in the editor: line 4 underlined, with no red ground.
+    let t = crate::theme::Theme::dark();
+    let job = highlight(
+        RETAINED,
+        &crate::editor::Lines {
+            errors: &[],
+            warnings: &[(4, 5)],
+        },
+        None,
+        &[],
+        &egui::FontId::monospace(13.0),
+        f32::INFINITY,
+        &t,
+    );
+    let marked: Vec<_> = job
+        .sections
+        .iter()
+        .filter(|x| x.format.underline.width > 0.0)
+        .collect();
+    assert_eq!(marked.len(), 1);
+    assert_ne!(marked[0].format.background, t.bad);
+    assert!(marked[0].format.underline.width > 1.5, "thicker than an error's");
+    // Deploy runs it exactly as without the warning.
+    s.view.deploy();
+    s.wait(0.2);
+    assert!(
+        s.view.notice.as_deref().is_some_and(|n| n.contains("is running")),
+        "{:?}",
+        s.view.notice
+    );
+    assert!(s.view.session.build.as_ref().is_some_and(|b| b.src == RETAINED));
+}
+
+#[test]
+fn an_error_and_a_warning_are_both_listed_and_only_the_error_blocks() {
+    let mut s = Screen::new();
+    let before = s.deployed();
+    let src = RETAINED.replace("lamp := l.q;", "lamp := nothing_here;");
+    s.view.load(&src, "broken");
+    s.wait(0.3);
+    let diags = s.view.diags();
+    assert_eq!(diags.iter().filter(|d| !d.is_warning()).count(), 1, "{diags:?}");
+    assert_eq!(diags.iter().filter(|d| d.is_warning()).count(), 1, "{diags:?}");
+    assert!(!diags[0].is_warning(), "errors first: {diags:?}");
+    assert_eq!(s.deployed(), before, "the program running is untouched");
+    assert!(s.chrome.rect("diag 0").is_some() && s.chrome.rect("diag 1").is_some());
 }

@@ -784,7 +784,9 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     });
 }
 
-/// The ST, with line numbers, diagnostics marked (`(line, column)`), and
+/// The ST, with line numbers, errors marked (`(line, column)`), warnings
+/// marked the same way but lighter (an underline, no ground, and the
+/// gutter number in the warning colour), and
 /// the line [`Chrome::goto`] sent it to scrolled into view and marked. A
 /// `&mut &str` is read-only (on a box); a `String` is edited in place, up
 /// to `limit` characters. Lines wrap at the pane's width while
@@ -795,6 +797,7 @@ pub fn st_editor(
     id: egui::Id,
     text: &mut dyn egui::TextBuffer,
     diags: &[(u32, u32)],
+    warns: &[(u32, u32)],
     limit: usize,
     chrome: &mut Chrome,
 ) -> egui::Response {
@@ -839,6 +842,10 @@ pub fn st_editor(
         crate::find::select(ui.ctx(), id, s, r.clone(), true);
     }
     let t = theme(ui);
+    let lines = Lines {
+        errors: diags,
+        warnings: warns,
+    };
     let marks: Vec<(std::ops::Range<usize>, Color32)> = found
         .as_ref()
         .map(|f| {
@@ -883,15 +890,18 @@ pub fn st_editor(
                 };
                 // The rows the text takes at that width: each source line
                 // numbered on its first row, its wrapped rows blank.
-                let mut job = highlight(text.as_str(), diags, at, &added, &font, edit_wrap, &t);
+                let mut job = highlight(text.as_str(), &lines, at, &added, &font, edit_wrap, &t);
                 crate::find::mark(&mut job, &marks);
                 let galley = ui.fonts_mut(|f| f.layout_job(job));
                 let mut gutter = LayoutJob::default();
                 for (n, number) in numbering(galley.rows.iter().map(|r| r.ends_with_newline)) {
                     let bad = diags.iter().any(|(l, _)| *l as usize == n);
                     let here = at.is_some_and(|l| l as usize == n);
+                    let warned = warns.iter().any(|(l, _)| *l as usize == n);
                     let color = if bad {
                         crate::theme::theme(ui).ink(RED)
+                    } else if warned {
+                        crate::theme::theme(ui).ink(crate::st_view::brand::WARN)
                     } else if here {
                         t.accent
                     } else {
@@ -913,7 +923,7 @@ pub fn st_editor(
                 let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap: f32| {
                     let wrap = if wrap_on { wrap } else { f32::INFINITY };
                     ui.data_mut(|d| d.insert_temp(wrap_key, wrap));
-                    let mut job = highlight(buf.as_str(), diags, at, &added, &font, wrap, &t);
+                    let mut job = highlight(buf.as_str(), &lines, at, &added, &font, wrap, &t);
                     crate::find::mark(&mut job, &marks);
                     ui.fonts_mut(|f| f.layout_job(job))
                 };
@@ -1059,14 +1069,24 @@ pub fn numbering(rows: impl Iterator<Item = bool>) -> Vec<(usize, bool)> {
     .collect()
 }
 
+/// The lines of a source with a problem, `(line, column)`: errors, and
+/// warnings (which never stop the build).
+#[derive(Debug, Clone, Copy)]
+pub struct Lines<'a> {
+    pub errors: &'a [(u32, u32)],
+    pub warnings: &'a [(u32, u32)],
+}
+
 /// The ST as a layout wrapped at `wrap` points: a line with a diagnostic
-/// on a red ground, its column to the end of the word underlined; the
+/// on a red ground, its column to the end of the word underlined; a line
+/// with only a warning (`warns`) has no ground, just that word
+/// underlined, thicker and in the warning colour; the
 /// line `at` (a block click sent the editor there) on a grey ground; a
 /// line the Agent's last change added (`added`) on a green ground.
 #[must_use]
 pub fn highlight(
     text: &str,
-    diags: &[(u32, u32)],
+    lines: &Lines,
     at: Option<u32>,
     added: &[u32],
     font: &FontId,
@@ -1076,9 +1096,12 @@ pub fn highlight(
     let mut job = LayoutJob::default();
     let plain = TextFormat::simple(font.clone(), t.code);
     let bad_ground = t.bad;
+    let (diags, warns) = (lines.errors, lines.warnings);
     for (k, line) in text.split_inclusive('\n').enumerate() {
         let n = u32::try_from(k + 1).unwrap_or(u32::MAX);
-        let Some(&(_, col)) = diags.iter().find(|(l, _)| *l == n) else {
+        let error = diags.iter().find(|(l, _)| *l == n);
+        let warn = warns.iter().find(|(l, _)| *l == n);
+        let Some(&(_, col)) = error.or(warn) else {
             let format = if at == Some(n) {
                 TextFormat {
                     background: t.rule,
@@ -1096,9 +1119,17 @@ pub fn highlight(
             job.append(line, 0.0, format);
             continue;
         };
-        let ground = TextFormat {
-            background: bad_ground,
-            ..plain.clone()
+        let (ground, line_color, width) = if error.is_some() {
+            (
+                TextFormat {
+                    background: bad_ground,
+                    ..plain.clone()
+                },
+                RED,
+                1.5,
+            )
+        } else {
+            (plain.clone(), crate::st_view::brand::WARN, 3.0)
         };
         // Columns count characters from 1.
         let start = line
@@ -1121,7 +1152,7 @@ pub fn highlight(
             &rest[..word],
             0.0,
             TextFormat {
-                underline: Stroke::new(1.5, RED),
+                underline: Stroke::new(width, line_color),
                 color: t.fg,
                 ..ground.clone()
             },

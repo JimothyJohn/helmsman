@@ -297,6 +297,79 @@ fn a_project_that_does_not_build_exits_2_naming_file_and_line() {
     );
 }
 
+/// A function block that declares RETAIN, which is not kept inside one.
+const RETAIN_BLOCK: &str = "\
+FUNCTION_BLOCK Latch
+VAR_INPUT set : BOOL; END_VAR
+VAR_OUTPUT q : BOOL; END_VAR
+VAR RETAIN kept : INT; END_VAR
+q := q OR set;
+END_FUNCTION_BLOCK
+";
+
+const MAIN_WITH_LATCH: &str = "\
+PROGRAM main
+VAR_INPUT start_pb : BOOL; END_VAR
+VAR_OUTPUT lamp : BOOL; END_VAR
+VAR l : Latch; END_VAR
+l(set := start_pb);
+lamp := start_pb;
+END_PROGRAM
+";
+
+#[test]
+fn a_warning_is_printed_apart_from_errors_and_never_changes_the_exit() {
+    let dir = project(
+        "warned",
+        &[
+            ("main.st", MAIN_WITH_LATCH),
+            ("blocks.st", RETAIN_BLOCK),
+            ("test_lamp_on.st", LAMP_ON),
+        ],
+    );
+    let report = tmp("warned-report").join("r.xml");
+    let o = test_cmd(&[dir.to_str().unwrap(), "--junit", report.to_str().unwrap()]);
+    let (stdout, stderr) = (text(&o.stdout), text(&o.stderr));
+    assert_eq!(code(&o), 0, "{stdout}{stderr}");
+    let at = format!("{}:4:", dir.join("blocks.st").display());
+    let line = stderr.lines().find(|l| l.starts_with(&at)).expect(&stderr);
+    assert!(
+        line.contains(": warning: ") && line.contains("RETAIN inside a function block"),
+        "{line}"
+    );
+    assert!(
+        stdout.contains("1 warning(s), which never stop a build"),
+        "{stdout}"
+    );
+    // In the report the warning rides on the build case, which passed.
+    let xml = std::fs::read_to_string(&report).unwrap();
+    well_formed(&xml);
+    assert!(xml.contains("<system-out>") && xml.contains("warning: "), "{xml}");
+    assert!(!xml.contains("<failure") && !xml.contains("<error"), "{xml}");
+}
+
+#[test]
+fn an_error_and_a_warning_are_both_printed_and_only_the_error_fails() {
+    // It parses, so the checker reaches the function block's RETAIN too.
+    let broken = "PROGRAM z\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := nothing_here;\nEND_PROGRAM\n";
+    let dir = project(
+        "mixed",
+        &[
+            ("main.st", MAIN_WITH_LATCH),
+            ("blocks.st", RETAIN_BLOCK),
+            ("z.st", broken),
+        ],
+    );
+    let o = test_cmd(&[dir.to_str().unwrap()]);
+    let stderr = text(&o.stderr);
+    assert_eq!(code(&o), 2, "{}{stderr}", text(&o.stdout));
+    let warning = stderr.lines().filter(|l| l.contains(": warning: ")).count();
+    assert_eq!(warning, 1, "{stderr}");
+    let error = format!("{}:3:", dir.join("z.st").display());
+    let line = stderr.lines().find(|l| l.starts_with(&error)).expect(&stderr);
+    assert!(!line.contains("warning"), "{line}");
+}
+
 #[test]
 fn a_build_problem_outranks_a_red_test() {
     // A red test and a settings line naming no PROGRAM: the build wins.

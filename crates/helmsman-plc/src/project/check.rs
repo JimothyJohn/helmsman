@@ -46,11 +46,15 @@ usage: helmsman-plc test PROJECT_DIR [--junit FILE] [--scan-ms MS]
   in git (docs/ci/README.md).
   --junit FILE   also write a JUnit XML report to FILE: written whole or
                  not at all. A requirement with no test yet is <skipped/>.
+                 A warning is in the build case's <system-out>; the case
+                 still passes.
   --scan-ms MS   the scan period the tests run at, 1..=10000 (10, the
                  box's default)
 exit status:
   0   the project builds and no test is red. A requirement with no test
-      yet (\"untested\") never fails the run.
+      yet (\"untested\") never fails the run. A warning (a RETAIN that is
+      not kept yet) is printed on stderr as PROJECT_DIR/FILE:LINE:COL:
+      warning: message and never changes the status.
   1   the project builds and at least one test is red
   2   the project does not build or check: each problem is printed as
       PROJECT_DIR/FILE:LINE:COL: message
@@ -164,8 +168,8 @@ pub fn cli(args: &[String], shape: &Shape) -> Ran {
     let mut out = String::new();
     let mut err = String::new();
     let _ = writeln!(out, "project {name} ({})", dir.display());
-    let built = build::build(&name, &files, None, &shape);
-    let mut cases = vec![build_case(&name, dir, &built, &mut out, &mut err)];
+    let (built, problems) = build::build_noted(&name, &files, None, &shape);
+    let mut cases = vec![build_case(&name, dir, &built, &problems, &mut out, &mut err)];
     let mut verdicts = run_tests(&files, test_settings(&shape));
     verdicts.sort_by(|a, b| a.file.cmp(&b.file));
     let (mut passed, mut red, mut untested) = (0, 0, 0);
@@ -251,14 +255,33 @@ fn load(dir: &Path) -> Result<(Files, String), Ran> {
 }
 
 /// The `build` case; what the build said goes to `out` and, each
-/// problem as `DIR/FILE:LINE:COL: message`, to `err`.
+/// problem as `DIR/FILE:LINE:COL: message`, to `err`. A warning (a
+/// `problems` entry: it never stops the build) is told from an error by
+/// `warning:` before its message, and goes to the `JUnit` report as the
+/// build case's `<system-out>`: the case stays passed.
 fn build_case(
     name: &str,
     dir: &Path,
     built: &Result<build::Built, Vec<build::Diag>>,
+    problems: &[build::Diag],
     out: &mut String,
     err: &mut String,
 ) -> Case {
+    let mut noted = String::new();
+    for d in problems {
+        let line = format!(
+            "{}:{}:{}: warning: {}",
+            at(dir, &d.file),
+            d.line,
+            d.col,
+            d.message
+        );
+        let _ = writeln!(err, "{line}");
+        let _ = writeln!(noted, "{line}");
+    }
+    if !problems.is_empty() {
+        let _ = writeln!(out, "  {} warning(s), which never stop a build", problems.len());
+    }
     let diags = match built {
         Ok(b) => {
             let modules: Vec<&str> = b.modules.iter().map(|m| m.name.as_str()).collect();
@@ -268,10 +291,7 @@ fn build_case(
                 modules.len(),
                 modules.join(", ")
             );
-            for d in &b.problems {
-                let _ = writeln!(err, "{}:{}:{}: {}", at(dir, &d.file), d.line, d.col, d.message);
-            }
-            return case(name, "build", None, Outcome::Passed, String::new());
+            return case(name, "build", None, Outcome::Passed, noted);
         }
         Err(diags) => diags,
     };
@@ -294,7 +314,7 @@ fn build_case(
             message,
             detail: lines,
         },
-        String::new(),
+        noted,
     )
 }
 

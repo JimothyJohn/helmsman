@@ -18,21 +18,88 @@ use crate::tips::Tip;
 
 const RED: Color32 = Color32::from_rgb(255, 110, 100);
 
-/// A compile error in a project: which file, where, and why.
+/// How much a [`Diag`] matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Severity {
+    /// Stops the build.
+    #[default]
+    Error,
+    /// Listed beside the code and never stops a save, a build or a deploy
+    /// (unless the box says it is [`Diag::blocking`]).
+    Warning,
+}
+
+/// A problem in a project: which file, where, and why. An error is a
+/// compile error; a warning is something the checker or the build has
+/// to say that does not stop the build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diag {
     pub file: String,
     pub line: u32,
     pub col: u32,
     pub message: String,
+    pub severity: Severity,
+    /// A stable name for the rule that raised it, when it has one (the
+    /// lints will).
+    pub id: Option<String>,
+    /// A warning that holds a deploy like an error (the lints that block).
+    /// Nothing sets it yet.
+    pub blocking: bool,
 }
 
 impl Diag {
-    /// `main.st:3:5  expected ;`
+    /// A compile error at `file:line:col`.
+    #[must_use]
+    pub fn error(file: impl Into<String>, line: u32, col: u32, message: impl Into<String>) -> Self {
+        Self {
+            file: file.into(),
+            line,
+            col,
+            message: message.into(),
+            severity: Severity::Error,
+            id: None,
+            blocking: false,
+        }
+    }
+
+    /// A warning at `file:line:col`.
+    #[must_use]
+    pub fn warning(file: impl Into<String>, line: u32, col: u32, message: impl Into<String>) -> Self {
+        Self {
+            severity: Severity::Warning,
+            ..Self::error(file, line, col, message)
+        }
+    }
+
+    /// Whether it is a warning.
+    #[must_use]
+    pub fn is_warning(&self) -> bool {
+        self.severity == Severity::Warning
+    }
+
+    /// `main.st:3:5  expected ;`, or for a warning
+    /// `warning  main.st:3:5  RETAIN here is not kept yet`: the word, not
+    /// only the colour, tells it from an error.
     #[must_use]
     pub fn label(&self) -> String {
-        format!("{}:{}:{}  {}", self.file, self.line, self.col, self.message)
+        let at = format!("{}:{}:{}  {}", self.file, self.line, self.col, self.message);
+        match (self.is_warning(), &self.id) {
+            (false, _) => at,
+            (true, None) => format!("warning  {at}"),
+            (true, Some(id)) => format!("warning {id}  {at}"),
+        }
     }
+}
+
+/// The errors (or, with `warnings`, the warnings) among `diags` in
+/// `file`, as the editor marks them: `(line, column)`.
+#[must_use]
+pub fn marks_in(diags: &[Diag], file: &str, warnings: bool) -> Vec<(u32, u32)> {
+    diags
+        .iter()
+        .filter(|d| d.file == file && d.is_warning() == warnings)
+        .map(|d| (d.line, d.col))
+        .collect()
 }
 
 /// A project as the sidebar lists it.
@@ -849,27 +916,62 @@ impl FilesUi {
     }
 }
 
-/// The compile errors, each a link to its file and line. Returns the one
-/// clicked.
+/// The problems, errors in red and warnings in the warning colour with
+/// the word `warning` in front, each a link to its file and line. Returns
+/// the one clicked.
 pub fn diags_ui(ui: &mut egui::Ui, diags: &[Diag], chrome: &mut Chrome) -> Option<Diag> {
     let mut out = None;
     for (k, d) in diags.iter().enumerate() {
+        let (color, tip) = if d.is_warning() {
+            (
+                crate::st_view::brand::WARN,
+                "A warning: the project still builds and deploys. Opens the file at this line.",
+            )
+        } else {
+            (RED, "Opens the file at this line.")
+        };
         let r = ui
             .add(
                 egui::Label::new(
                     RichText::new(d.label())
                         .monospace()
-                        .color(crate::theme::theme(ui).ink(RED)),
+                        .color(crate::theme::theme(ui).ink(color)),
                 )
                 .sense(egui::Sense::click()),
             )
-            .tip("Opens the file at this line.");
+            .tip(tip);
         chrome.hit(format!("diag {k}"), r.rect);
         if r.clicked() {
             out = Some(d.clone());
         }
     }
     out
+}
+
+/// The log line for the warnings among `diags`, or none when there are
+/// none: how many, that they never stop a deploy, and the first few.
+#[must_use]
+pub fn warning_summary(diags: &[Diag]) -> Option<String> {
+    let warned: Vec<&Diag> = diags.iter().filter(|d| d.is_warning()).collect();
+    if warned.is_empty() {
+        return None;
+    }
+    let shown: Vec<String> = warned
+        .iter()
+        .take(5)
+        .map(|d| format!("{}:{}  {}", d.file, d.line, d.message))
+        .collect();
+    let more = warned.len().saturating_sub(shown.len());
+    let tail = if more > 0 {
+        format!(" · and {more} more")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "{} warning(s), which do not stop a deploy: {}{tail}",
+        warned.len(),
+        shown.join(" · ")
+    ))
 }
 
 /// What the header asks of the open project, wherever it lives.

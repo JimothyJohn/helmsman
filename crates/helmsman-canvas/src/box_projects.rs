@@ -28,7 +28,7 @@ use std::fmt;
 
 use serde_json::{Value as Json, json};
 
-use crate::projects::{Diag, Group, ProjectRow};
+use crate::projects::{Diag, Group, ProjectRow, Severity};
 use crate::remote::{ForceRow, segment};
 
 /// What a request is for.
@@ -396,23 +396,39 @@ fn error_of(a: &Answer) -> String {
         })
 }
 
-fn diags_of(j: &Json) -> Vec<Diag> {
-    j["diagnostics"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .map(|d| Diag {
-                    file: d["file"].as_str().unwrap_or("?").to_string(),
-                    line: d["line"]
-                        .as_u64()
-                        .and_then(|n| u32::try_from(n).ok())
-                        .unwrap_or(0),
-                    col: d["col"].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
-                    message: d["message"].as_str().unwrap_or("").to_string(),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// What a box answered with that is wrong or worth a look: its
+/// `diagnostics` (errors), then its `warnings` (never blocking). A box
+/// from before warnings has no `warnings` field: then there are none. An
+/// entry's own `severity`, `id` and `blocking` are kept when it has them.
+pub(crate) fn diags_of(j: &Json) -> Vec<Diag> {
+    let list = |key: &str, default: Severity| -> Vec<Diag> {
+        j[key]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|d| Diag {
+                        file: d["file"].as_str().unwrap_or("?").to_string(),
+                        line: d["line"]
+                            .as_u64()
+                            .and_then(|n| u32::try_from(n).ok())
+                            .unwrap_or(0),
+                        col: d["col"].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
+                        message: d["message"].as_str().unwrap_or("").to_string(),
+                        severity: match d["severity"].as_str() {
+                            Some("warning") => Severity::Warning,
+                            Some("error") => Severity::Error,
+                            _ => default,
+                        },
+                        id: d["id"].as_str().map(str::to_string),
+                        blocking: d["blocking"].as_bool().unwrap_or(false),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let mut all = list("diagnostics", Severity::Error);
+    all.extend(list("warnings", Severity::Warning));
+    all
 }
 
 /// Whether `file` ends in `.ext`, in any case.
@@ -1595,9 +1611,9 @@ impl BoxProjects {
             PCall::Check(name) => {
                 if a.status == 422 {
                     self.diags = diags_of(&j);
+                    let errors = self.diags.iter().filter(|d| !d.is_warning()).count();
                     self.deploy = Deploy::Failed(format!(
-                        "{name} does not build: {} problem(s); click one to go there",
-                        self.diags.len()
+                        "{name} does not build: {errors} problem(s); click one to go there"
                     ));
                     return;
                 }
@@ -1605,6 +1621,9 @@ impl BoxProjects {
                     self.deploy = Deploy::Failed(error_of(a));
                     return;
                 }
+                // The build passed; what it says that never stops a deploy
+                // stays listed under the editor.
+                self.diags = diags_of(&j);
                 self.modules = j["modules"]
                     .as_array()
                     .map(|m| {
