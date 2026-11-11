@@ -246,35 +246,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **The desk is per person on a shared browser too** — after #280, when a second person signs in on a browser the first one used, and the box has nothing newer for them, the desk on screen (the first person's unsaved edits) is written to the second person's box desk. Slice 1 (#276) already shared the browser desk between everyone on one browser. Key the browser desk by the signed-in name, and on a sign-in by a different person start from that person's box desk or an empty one, never the previous person's.
-  result: one person's draft never lands in another's desk
-  est: 2h
-  difficulty: low
-  id: desk-person-switch
-  asked: 2026-11-08
-  by: claude-session
-
 - [ ] **A project keeps the files this build does not know** — found by project-compat-fixtures (#283): reading a project skips a file whose name this build does not recognise without a word, a replace-upload then loses it, and an uploaded .zip holding one is refused outright. List such a file as a problem ("not used by this release: kept"), keep it through reads and uploads, and add it to the compat fixtures.
   result: a newer release's file survives a trip through an older box
   est: 4h
   difficulty: low
   id: project-unknown-files
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **A broken diagram.layout does not block the build** — found by #283: a layout that will not parse stops the build although the build never reads it, and its problem has no file and line of its own. Make it a listed problem on `diagram.layout` at its line, fall back to the automatic layout, and build.
-  result: a bad layout costs the drawing, not the deploy
-  est: 2h
-  difficulty: low
-  id: layout-not-blocking
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **A gateway's "unit not answering" marks the device down** — after #290, a Modbus TCP gateway that answers for a dead serial unit with exception 0x0A (gateway path unavailable) or 0x0B (target device failed to respond) counts as a point error, so the device stays "up" with every point bad. Treat those two as link errors for that unit only (the connection and the other units stay up), with the device's reason in plain words. Cite the Modbus Application Protocol spec's exception table in docs/SOURCES.md.
-  result: a dead RTU behind a gateway shows as down, with why
-  est: 2h
-  difficulty: low
-  id: gateway-unit-down
   asked: 2026-11-08
   by: claude-session
 
@@ -304,15 +280,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; espflash is 4.7.0 since 2026-11-10, 3.3.0 could not talk to this chip revision; the POE-ISO answers 4.7's board-info, a flash of it with 4.7 is not yet tried). A program over the flash slot runs but is not kept (12 KB did not fit): the larger slot comes with node-ota's partition table.
   id: node-p4-followups
   asked: 2026-11-10
-  by: claude-session
-
-- [ ] **Monitor: show the EtherNet/IP adapter's address beside the devices** — the half of `read-lock` (decided 2026-11-08) that did not ship with it: the adapter stays on at boot, so the Monitor's Devices tab should say where it listens instead of staying silent about it. The API does not know the adapter's bind today (`api::Config.bind` is the API's own; main.rs starts the adapter from `o.server.bind` and `encap_port`). Shape: `api::Extras` carries the adapter's socket address (`None` when off), a new `GET /api/adapter` answers `{protocol: "EtherNet/IP", bind, on}` behind a session like every read, the canvas polls it with the devices (remote.rs `Fetch`) and the Devices tab shows one wrapped line under the tree ("EtherNet/IP adapter on 0.0.0.0:44818: other controllers read this box here"). Tests: the route in api.rs, a remote.rs parse test, and the Devices tab at the panel's default width (CLAUDE.md panel rule).
-  needs: nothing
-  result: a buyer's IT sees the one listener that stays open, named, where they look for devices
-  est: 3h
-  difficulty: low
-  id: cip-adapter-visible
-  asked: 2026-11-09
   by: claude-session
 
 - [ ] **The P4's `enip` image after #333: the two runs that were skipped** — #333 moved the EtherNet/IP session into a task of its own and was checked on the board for the first open only (1.1 s after link-up, 0 late scans, was 199). Two runs were left out and are on no card: (1) the close after a lost link, through the task: pull the cable or power the E1213 off mid-run, see the outputs go to their safe state, the session close, and the reopen once the unit is back, with no late scans meanwhile; (2) Exclusive Owner with this change (the 640 of 640 packet run of 2026-11-10 was on the image before it). Write both into docs/EDGE.md Phase 3 "On the board".
