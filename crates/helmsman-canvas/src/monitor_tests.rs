@@ -574,7 +574,7 @@ fn the_monitor_never_writes() {
             matches!(
                 c,
                 Cmd::Get(
-                    Fetch::Modules | Fetch::Source(_) | Fetch::Module(_) | Fetch::Devices | Fetch::IoMap,
+                    Fetch::Modules | Fetch::Source(_) | Fetch::Module(_) | Fetch::Devices | Fetch::IoMap | Fetch::Adapter,
                     u
                 ) if u.starts_with("/api/")
             ) || matches!(c, Cmd::Listen(..) | Cmd::Close(_)),

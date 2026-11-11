@@ -17,7 +17,9 @@
 //!   and LF aside) or bidirectional overrides (no "Trojan Source" in a
 //!   program an engineer reviews); at most [`MAX_FILE`] bytes a file,
 //!   [`MAX_FILES`] `.st` files and [`MAX_TOTAL`] bytes a project. A
-//!   [`LAYOUT`] file must also read as one ([`layout::parse`]).
+//!   [`LAYOUT`] file must also read as one ([`layout::parse`]) to be
+//!   saved or uploaded ([`Files::check`]); a build opens a project whose
+//!   layout does not read and lists it ([`Files::check_buildable`]).
 
 pub mod agent;
 pub mod devlib;
@@ -283,6 +285,21 @@ impl Files {
     /// # Errors
     /// Every problem, one per file (or one for the set).
     pub fn check(&self) -> Result<(), Vec<String>> {
+        self.check_rules(true)
+    }
+
+    /// [`Self::check`] without reading [`LAYOUT`] as an arrangement (it
+    /// must still be text within the limits). A build never reads the
+    /// layout, so one that does not read is the drawing's problem, listed
+    /// by the build, not a reason to stop it.
+    ///
+    /// # Errors
+    /// As [`Self::check`], less the layout's own syntax.
+    pub fn check_buildable(&self) -> Result<(), Vec<String>> {
+        self.check_rules(false)
+    }
+
+    fn check_rules(&self, layout: bool) -> Result<(), Vec<String>> {
         let mut errs = Vec::new();
         let mut folded: BTreeMap<String, &str> = BTreeMap::new();
         for (name, text) in &self.0 {
@@ -290,7 +307,12 @@ impl Files {
                 errs.push(format!("{}: not a project file name", clean(name)));
                 continue;
             }
-            if let Err(e) = check_file(name, text.as_bytes()) {
+            let checked = if layout {
+                check_file(name, text.as_bytes())
+            } else {
+                check_text(text.as_bytes())
+            };
+            if let Err(e) = checked {
                 errs.push(format!("{name}: {e}"));
             }
             if let Some(other) = folded.insert(name.to_ascii_lowercase(), name) {

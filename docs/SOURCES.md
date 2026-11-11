@@ -381,6 +381,17 @@ into the code.
   p.30, 1-123 registers), exception replies and codes (§7 p.47). The same
   application layer runs over RTU (`rtu.rs`), which also takes reply lengths
   from it.
+- **Gateway exceptions** (card `gateway-unit-down`;
+  `helmsman-io` `driver::Error::is_link`): the exception code table (§7
+  pp.47-49) lists 0x0A "Gateway Path Unavailable" (the gateway could not
+  allocate an internal path from input port to output port; usually
+  misconfigured or overloaded) and 0x0B "Gateway Target Device Failed to
+  Respond" (no response from the target device; usually not present on the
+  network), both p.49 (checked against the fetched PDF, the sha256 above).
+  A Modbus TCP gateway answers them for a dead serial unit; the driver
+  treats both as a link error of that unit alone, and the connection and the
+  other units behind the gateway stay up. Every other code stays a refused
+  point.
 - **Read Device Identification** (card `modbus-identification`;
   `crates/helmsman-modbus` `pdu::read_device_id` / `reply::device_id`,
   `helmsman-io` `modbus::app::read_device_identification` and

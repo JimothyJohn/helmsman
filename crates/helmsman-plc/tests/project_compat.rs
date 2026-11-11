@@ -302,11 +302,12 @@ fn a_project_with_rejected_constructs_still_opens_and_lists_them() {
     let (store, state) = lay_down(&src, "other-layout");
     let files = store.read("other-layout").expect("the project opens");
     assert!(files.get(helmsman_plc::project::LAYOUT).is_some());
-    let diags = build::build("other-layout", &files, None, &shape()).expect_err("lists the layout");
-    assert_eq!(diags.len(), 1, "{diags:#?}");
+    let built = build::build("other-layout", &files, None, &shape()).expect("builds anyway");
+    assert_eq!(built.problems.len(), 1, "{:#?}", built.problems);
     assert!(
-        diags[0].message.contains("diagram.layout") && diags[0].message.contains("helmsman-layout 2"),
-        "{diags:#?}"
+        built.problems[0].file == "diagram.layout" && built.problems[0].message.contains("helmsman-layout 2"),
+        "{:#?}",
+        built.problems
     );
     let v = spec::run_all(
         &spec::plan(files.st()),
@@ -314,4 +315,65 @@ fn a_project_with_rejected_constructs_still_opens_and_lists_them() {
     );
     assert!(v.iter().all(spec::Verdict::passed) && !v.is_empty(), "{v:#?}");
     let _ = fs::remove_dir_all(state);
+}
+
+/// A `diagram.layout` this build cannot read costs the drawing, not the
+/// deploy: the build never reads the file, so the project builds exactly
+/// as it does without one, and the layout is listed as a problem on its
+/// own file and line.
+#[test]
+fn a_layout_that_does_not_read_is_listed_and_the_project_still_builds() {
+    let src = fixtures("project-drift/other-layout");
+    let (store, state) = lay_down(&src, "other-layout");
+    let mut files = store.read("other-layout").expect("the project opens");
+    let _ = fs::remove_dir_all(state);
+    files.0.remove(helmsman_plc::project::LAYOUT);
+    let automatic = build::build("p", &files, None, &shape()).expect("builds without a layout");
+
+    let header = "helmsman-layout 1\n";
+    let cases: [(&str, String, u32); 5] = [
+        ("garbage", "this is not a layout\n".into(), 1),
+        ("truncated header", "helmsman-lay".into(), 1),
+        ("truncated move", format!("{header}move\tconveyor\t0\t0"), 2),
+        (
+            "unknown key",
+            format!("{header}# kept\nshift\tconveyor\t0\t0\t1\ta\tb\n"),
+            3,
+        ),
+        (
+            "bad number",
+            format!("{header}move\tconveyor\t0\tx\t1\ta\tb\n"),
+            2,
+        ),
+    ];
+    for (what, text, line) in cases {
+        files.0.insert(helmsman_plc::project::LAYOUT.into(), text);
+        let built = build::build("p", &files, None, &shape())
+            .unwrap_or_else(|d| panic!("{what}: a bad layout stopped the build: {d:#?}"));
+        assert_eq!(
+            built.change, automatic.change,
+            "{what}: the layout changed the build"
+        );
+        assert_eq!(built.modules, automatic.modules, "{what}");
+        assert_eq!(built.problems.len(), 1, "{what}: {:#?}", built.problems);
+        let p = &built.problems[0];
+        assert_eq!(
+            (p.file.as_str(), p.line),
+            ("diagram.layout", line),
+            "{what}: {p:?}"
+        );
+        assert!(
+            p.message.contains("automatic layout"),
+            "{what}: the message says what is used instead: {p:?}"
+        );
+    }
+
+    // A layout that reads lists nothing.
+    files.0.insert(
+        helmsman_plc::project::LAYOUT.into(),
+        format!("{header}move\tconveyor\t0\t0\t120\tLAMP :=\tLAMP := START\n"),
+    );
+    let built = build::build("p", &files, None, &shape()).unwrap();
+    assert!(built.problems.is_empty(), "{:#?}", built.problems);
+    assert_eq!(built.change, automatic.change);
 }

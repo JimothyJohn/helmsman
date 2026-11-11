@@ -49,6 +49,15 @@ impl fmt::Display for Error {
             Self::Type { want, got } => write!(f, "type: point is {want:?}, value is {got:?}"),
             Self::Io(e) => write!(f, "io: {e}"),
             Self::Protocol(m) => write!(f, "protocol: {m}"),
+            Self::Exception(helmsman_modbus::GATEWAY_PATH_UNAVAILABLE) => {
+                write!(
+                    f,
+                    "the gateway has no path to the unit, misconfigured or overloaded (exception 0x0a)"
+                )
+            }
+            Self::Exception(helmsman_modbus::GATEWAY_TARGET_FAILED) => {
+                write!(f, "the unit behind the gateway did not respond (exception 0x0b)")
+            }
             Self::Exception(c) => write!(f, "device exception {c:#04x}"),
             Self::Point(m) => write!(f, "point: {m}"),
             Self::ReadOnly(a) => write!(f, "{a} is read-only"),
@@ -60,11 +69,20 @@ impl fmt::Display for Error {
 
 impl Error {
     /// Whether the error means the link to the device is broken (I/O
-    /// trouble, a reply that isn't valid), as opposed to one point being
-    /// refused. After a link error nothing the device holds can be trusted.
+    /// trouble, a reply that isn't valid, a Modbus gateway saying the unit
+    /// behind it is not there: exceptions 0x0A and 0x0B, App §7 p.47), as
+    /// opposed to one point being refused. After a link error nothing the
+    /// device holds can be trusted.
     #[must_use]
     pub const fn is_link(&self) -> bool {
-        matches!(self, Self::Io(_) | Self::Protocol(_))
+        matches!(
+            self,
+            Self::Io(_)
+                | Self::Protocol(_)
+                | Self::Exception(
+                    helmsman_modbus::GATEWAY_PATH_UNAVAILABLE | helmsman_modbus::GATEWAY_TARGET_FAILED
+                )
+        )
     }
 }
 
