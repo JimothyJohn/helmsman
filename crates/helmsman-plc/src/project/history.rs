@@ -28,7 +28,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use helmsman_project::{Files, MAX_FILE, agent, check_text, file_name, project_name};
+use helmsman_project::{Files, MAX_FILE, agent, check_text, project_file, project_name};
 use serde_json::{Value as Json, json};
 
 use super::{Refusal, is_dir, read_file, tmp_name, write_atomic};
@@ -162,7 +162,7 @@ impl History {
             .ok()?
             .filter_map(Result::ok)
             .filter_map(|e| e.file_name().to_str().map(str::to_string))
-            .filter(|f| file_name(f).is_some())
+            .filter(|f| project_file(f))
             .collect();
         files.sort();
         Some(Revision {

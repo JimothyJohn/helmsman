@@ -126,7 +126,7 @@ impl SimRevision {
             .iter()
             .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
             .collect();
-        Files(files.clone()).check().ok()?;
+        Files(files.clone()).check_buildable().ok()?;
         Some(Self {
             n: u32::try_from(j["n"].as_u64()?).ok()?,
             at_ms: j["at_ms"].as_u64().unwrap_or(0),
@@ -1039,7 +1039,7 @@ fn parse(text: &str) -> Option<(Parsed, usize)> {
                 .filter_map(|(f, t)| Some((f.clone(), t.as_str()?.to_string())))
                 .collect(),
         );
-        if project_name(name) && read.0.len() == files.len() && read.check().is_ok() {
+        if project_name(name) && read.0.len() == files.len() && read.check_buildable().is_ok() {
             out.insert(name.clone(), read);
         } else {
             left_out += 1;

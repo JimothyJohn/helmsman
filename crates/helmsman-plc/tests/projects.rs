@@ -498,6 +498,11 @@ fn file(addr: SocketAddr, p: &str, f: &str) -> Resp {
     get(addr, &format!("/api/projects/{p}/files/{f}"))
 }
 
+fn is_executable(m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    m.permissions().mode() & 0o111 != 0
+}
+
 /// Every file under `dir`, recursively, as relative paths.
 fn tree(dir: &Path) -> Vec<String> {
     let mut out = Vec::new();
@@ -1048,6 +1053,110 @@ fn download_then_upload_round_trips_byte_for_byte() {
     assert_eq!(file(b.addr, "desk", "main.st").json()["text"], MAIN);
 }
 
+/// A file this build has no use for (a newer release's) is kept through a
+/// zip download, a replace-upload and a new upload, listed by the upload,
+/// and served as opaque text (card `project-unknown-files`).
+#[test]
+fn a_newer_releases_file_survives_a_download_and_a_replace_upload() {
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(&s, "orig", &[("main.st", MAIN), ("io.map", MAP)]);
+    let kept = "{\r\n  \"curve\": [0.0, 1.5]\r\n}\r\n";
+    let on_disk = b.projects_root().join("orig").join("pump-curves.json");
+    std::fs::write(&on_disk, kept).unwrap();
+
+    // The download holds it; a replace-upload of that download keeps it.
+    let zip = get(b.addr, "/api/projects/orig/zip");
+    assert_eq!(zip.status, 200, "{zip:?}");
+    let r = upload(b.addr, &s, "orig", &zip.body, true);
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        std::fs::read(&on_disk).unwrap(),
+        kept.as_bytes(),
+        "kept byte for byte"
+    );
+    assert_eq!(r.json()["kept"], json!(["pump-curves.json"]), "{r:?}");
+    let f = file(b.addr, "orig", "pump-curves.json");
+    assert_eq!(f.status, 200, "{f:?}");
+    assert_eq!(f.json()["text"], kept);
+
+    // A new project from such an archive is accepted, and builds.
+    let raw = [
+        Raw::file("main.st", MAIN.as_bytes()),
+        Raw::file("blocks.st", BLOCKS.as_bytes()),
+        Raw::file("io.map", MAP.as_bytes()),
+        Raw::file("recipes.v2", b"recipe 1\n\tfill 30\n"),
+        Raw::file("run.sh", b"rm -rf /"),
+    ];
+    let r = upload(b.addr, &s, "copy", &zip_raw(&raw), false);
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(
+        tree(&b.projects_root().join("copy")),
+        ["blocks.st", "io.map", "main.st", "recipes.v2", "run.sh"]
+    );
+    let mode = std::fs::metadata(b.projects_root().join("copy/run.sh")).unwrap();
+    assert!(!is_executable(&mode), "a kept file is never executable");
+    let files = Projects::in_state_dir(&b.state).unwrap().read("copy").unwrap();
+    let built = build::build(
+        "copy",
+        &files,
+        None,
+        &Shape {
+            defaults: defaults(),
+            i_len: 8,
+            q_len: 8,
+        },
+    )
+    .expect("builds");
+    let mut listed: Vec<&str> = built.problems.iter().map(|p| p.file.as_str()).collect();
+    listed.sort_unstable();
+    assert_eq!(listed, ["recipes.v2", "run.sh"], "{:#?}", built.problems);
+
+    // The zip it downloads again uploads to a byte-identical one.
+    let again = get(b.addr, "/api/projects/copy/zip");
+    let r = upload(b.addr, &s, "twice", &again.body, false);
+    assert_eq!(r.status, 201, "{r:?}");
+    assert_eq!(get(b.addr, "/api/projects/twice/zip").body, again.body);
+}
+
+/// Kept files count toward the limits a project has: a count, a size per
+/// file and a total, and a flood of them is refused like any other.
+#[test]
+fn kept_files_are_held_to_the_projects_limits() {
+    let b = Bench::new();
+    let s = b.alice();
+    let many: Vec<Raw> = (0..=project::zip::MAX_ENTRIES)
+        .map(|k| Raw::file(&format!("n{k}.txt"), b"x"))
+        .collect();
+    let few: Vec<Raw> = (0..70).map(|k| Raw::file(&format!("n{k}.txt"), b"x")).collect();
+    let big = vec![b'x'; project::MAX_FILE + 1];
+    let each = vec![b'x'; project::MAX_FILE];
+    let total: Vec<Raw> = (0..4).map(|k| Raw::file(&format!("t{k}.dat"), &each)).collect();
+    let zeros = vec![0u8; 8 << 20];
+    for (what, zip) in [
+        ("past the archive's entries", zip_raw(&many)),
+        ("past the project's kept files", zip_raw(&few)),
+        ("one past the file cap", zip_raw(&[Raw::file("big.dat", &big)])),
+        ("past the project's total", zip_raw(&total)),
+        ("not text", zip_raw(&[Raw::file("blob.bin", b"\xff\xfe\x00")])),
+        (
+            "a bomb",
+            zip_raw(&[Raw {
+                deflate: true,
+                size: Some(100),
+                ..Raw::file("bomb.dat", &zeros)
+            }]),
+        ),
+    ] {
+        let r = upload(b.addr, &s, "flood", &zip, false);
+        assert!(r.status == 422 || r.status == 413, "{what}: {r:?}");
+        assert!(
+            !b.projects_root().join("flood").exists(),
+            "{what}: wrote something"
+        );
+    }
+}
+
 #[test]
 fn hostile_archives_are_refused_and_write_nothing() {
     let b = Bench::new();
@@ -1073,7 +1182,25 @@ fn hostile_archives_are_refused_and_write_nothing() {
             zip_raw(&[Raw::file("a/b/x.st", st), Raw::file("a/c.st", st)]),
         ),
         ("symlink", zip_raw(&[symlink])),
-        ("not a project file", zip_raw(&[Raw::file("run.sh", b"rm -rf /")])),
+        (
+            "a path, not a name",
+            zip_raw(&[Raw::file("sub/run.sh", b"rm -rf /"), Raw::file("x.st", st)]),
+        ),
+        (
+            "space in the name",
+            zip_raw(&[Raw::file("run me.sh", b"rm -rf /")]),
+        ),
+        ("a backslash", zip_raw(&[Raw::file("a\\b.sh", b"x")])),
+        ("a reserved name", zip_raw(&[Raw::file("revision.json", b"{}")])),
+        (
+            "a case twin of a known file",
+            zip_raw(&[Raw::file("IO.MAP", b"x")]),
+        ),
+        ("a dot-leading name", zip_raw(&[Raw::file(".env", b"SECRET=1")])),
+        (
+            "an over-long name",
+            zip_raw(&[Raw::file(&format!("{}.txt", "n".repeat(70)), b"x")]),
+        ),
         ("dot file", zip_raw(&[Raw::file(".evil.st", st)])),
         (
             "duplicate",

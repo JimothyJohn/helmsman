@@ -323,6 +323,21 @@ fn layout_problems(files: &Files) -> Vec<Diag> {
         .collect()
 }
 
+/// The files this release has no use for ([`Files::kept`]): a newer
+/// release's, carried with the project and never read, built or run.
+fn kept_problems(files: &Files) -> Vec<Diag> {
+    files
+        .kept()
+        .map(|(name, _)| {
+            diag(
+                name,
+                0,
+                "not used by this release: kept with the project, never built or run",
+            )
+        })
+        .collect()
+}
+
 /// Builds `files` (project `name`) into the change set a deploy applies:
 /// `base`'s calendar, the project's map and one module per
 /// PROGRAM, each compiled and held to its manifest.
@@ -336,7 +351,8 @@ pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape)
         diags.extend(errs.into_iter().map(|e| diag("", 0, e)));
         return Err(diags);
     }
-    let problems = layout_problems(files);
+    let mut problems = layout_problems(files);
+    problems.extend(kept_problems(files));
     let settings = match files.get(SETTINGS).map(settings::parse) {
         None => Settings::default(),
         Some(Ok(s)) => s,

@@ -456,6 +456,7 @@ fn upload(
                 json!({
                     "name": name,
                     "files": files.0.keys().collect::<Vec<_>>(),
+                    "kept": files.kept().map(|(n, _)| n).collect::<Vec<_>>(),
                     "drivers": drivers.keys().collect::<Vec<_>>(),
                 }),
                 format!(
