@@ -302,14 +302,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **`build-help.sh --check` is not in CI** — the help pages were rebuilt with the Load a program page (2026-11-08), so they are current again, but only `make help-check` runs the check: nothing in .github/workflows does, which is how simulation.html drifted after #288. Add it to the CI gate (a workflow edit: draft PR).
-  result: drift between docs/help/*.md and the committed .html fails CI
-  est: 30m
-  difficulty: low
-  id: help-html-drift
-  asked: 2026-11-08
-  by: claude-session
-
 - [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. Same code on the POE-ISO and the P4 (helmsman-node-p4). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
   needs: the P4 is not required; the POE-ISO on the bench (poe-iso-rack-03, /dev/cu.usbserial-1130, 192.168.3.55) is enough
   result: a node on the plant network takes a new firmware from a laptop without a USB cable, and a bad image cannot brick it
