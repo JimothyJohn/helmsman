@@ -125,6 +125,23 @@ fn a_project_refuses_a_layout_that_does_not_read() {
     assert_eq!(read_zip(&z).unwrap(), files, "the layout travels in the .zip");
 }
 
+/// A layout that does not read is refused on the way in, but a project
+/// already holding one still passes the rules a build holds it to.
+#[test]
+fn a_build_does_not_hold_the_layout_to_its_syntax() {
+    let mut files = Files(BTreeMap::from([
+        ("main.st".to_string(), "PROGRAM main\nEND_PROGRAM\n".to_string()),
+        (LAYOUT.to_string(), "garbage".to_string()),
+    ]));
+    assert!(files.check().is_err());
+    assert!(files.check_buildable().is_ok());
+    files.0.insert(LAYOUT.into(), "a\0b".into());
+    assert!(
+        files.check_buildable().unwrap_err()[0].starts_with("diagram.layout:"),
+        "still text within the limits"
+    );
+}
+
 fn any_text() -> impl Strategy<Value = String> {
     // Anything a block's label or source text may hold: tabs, line breaks
     // and backslashes included.

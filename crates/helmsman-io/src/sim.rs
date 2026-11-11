@@ -36,6 +36,9 @@ pub enum Fault {
     WrongTransaction,
     /// Answer with exception 04 (server device failure).
     DeviceFailure,
+    /// Answer with this exception code (a gateway's 0x0A and 0x0B, App §7
+    /// p.47).
+    Exception(u8),
     /// RTU: answer with one bit of the frame flipped, so its CRC fails.
     BadCrc,
     /// RTU: answer with the frame cut short by two bytes.
@@ -629,6 +632,7 @@ fn serve(mut conn: TcpStream, sh: &Shared, stop: &AtomicBool) {
             let fault = s.next_fault();
             let reply = match fault {
                 Some(Fault::DeviceFailure) => vec![pdu[0] | 0x80, SERVER_DEVICE_FAILURE],
+                Some(Fault::Exception(code)) => vec![pdu[0] | 0x80, code],
                 _ => s.handle(&pdu),
             };
             (fault, reply)
@@ -641,6 +645,7 @@ fn serve(mut conn: TcpStream, sh: &Shared, stop: &AtomicBool) {
             Some(Fault::WrongTransaction) => tid = u16::from_be_bytes(tid).wrapping_add(1).to_be_bytes(),
             Some(
                 Fault::DeviceFailure
+                | Fault::Exception(_)
                 | Fault::BadCrc
                 | Fault::Truncate
                 | Fault::WrongUnit

@@ -35,7 +35,7 @@ use helmsman_iec::ast::{self, PouKind};
 use helmsman_iec::{ImageSizes, PortDir, Pos, compile};
 
 use super::settings::{self, Settings};
-use super::{Files, IO_MAP, SETTINGS};
+use super::{Files, IO_MAP, LAYOUT, SETTINGS, layout};
 use crate::manifest::{Manifest, ModuleDir};
 use crate::spec::{Defaults, name_ok};
 use crate::store::{ChangeSet, ModuleFiles};
@@ -93,6 +93,9 @@ pub struct Module {
 pub struct Built {
     pub change: ChangeSet,
     pub modules: Vec<Module>,
+    /// Problems that do not stop the build: a file the build never reads
+    /// (`diagram.layout`) that does not read, listed at its line.
+    pub problems: Vec<Diag>,
 }
 
 /// Byte offset of `pos` (1-based line, byte column) in `src`.
@@ -293,6 +296,33 @@ fn len_of(window: Option<&str>) -> usize {
         .unwrap_or(0)
 }
 
+/// What is wrong with the project's `diagram.layout`, if it does not read,
+/// each as a problem on that file at its line. The build ignores the
+/// layout, so these never stop it: the drawing falls back to the automatic
+/// layout.
+fn layout_problems(files: &Files) -> Vec<Diag> {
+    let Some(text) = files.get(LAYOUT) else {
+        return Vec::new();
+    };
+    let Err(errs) = layout::parse(text) else {
+        return Vec::new();
+    };
+    errs.into_iter()
+        .map(|e| {
+            let (line, why) = e
+                .strip_prefix("line ")
+                .and_then(|r| r.split_once(": "))
+                .and_then(|(n, why)| Some((n.parse::<usize>().ok()?, why)))
+                .unwrap_or((0, e.as_str()));
+            diag(
+                LAYOUT,
+                line,
+                format!("{why}; the diagram is drawn in the automatic layout, and the build is not affected"),
+            )
+        })
+        .collect()
+}
+
 /// Builds `files` (project `name`) into the change set a deploy applies:
 /// `base`'s calendar, the project's map and one module per
 /// PROGRAM, each compiled and held to its manifest.
@@ -302,10 +332,11 @@ fn len_of(window: Option<&str>) -> usize {
 #[allow(clippy::too_many_lines)]
 pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape) -> Result<Built, Vec<Diag>> {
     let mut diags = Vec::new();
-    if let Err(errs) = files.check() {
+    if let Err(errs) = files.check_buildable() {
         diags.extend(errs.into_iter().map(|e| diag("", 0, e)));
         return Err(diags);
     }
+    let problems = layout_problems(files);
     let settings = match files.get(SETTINGS).map(settings::parse) {
         None => Settings::default(),
         Some(Ok(s)) => s,
@@ -474,6 +505,7 @@ pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape)
     Ok(Built {
         change,
         modules: summary,
+        problems,
     })
 }
 
