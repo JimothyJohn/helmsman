@@ -286,20 +286,20 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-07
   by: claude-session
 
-- [ ] **Show the checker's warnings in the canvas and the check API** — #288 added the first non-blocking warnings (RETAIN where it cannot be kept yet: in a function block, a FUNCTION, VAR_TEMP, a located variable), as `Program::warnings()`. Today the box only logs them at start. Show them where errors show (the editor's marks, the Messages, `POST .../check`, the CLI `helmsman-plc test`), visibly different from errors, and never blocking a deploy. The ST lints decision (#272: all shown, two block) will use the same path.
-  result: an engineer sees "RETAIN here is not kept yet" while typing, not only in a log
-  est: 4h
+- [ ] **Warnings on a box: while typing, and in the two answers that leave them out** — #346 shows the checker's warnings and the build's non-blocking problems in the check answer, the CLI and the canvas. Three places were left: (1) on a box the canvas shows them only after a check or a Deploy, where the browser simulation shows them as you type (the box view makes no check call per edit, and one per keystroke would fill the audit log: check on a pause in typing, or a check that is not audited); (2) `POST /api/proposals/check` (a draft's check) does not list them; (3) the deploy route's own answer does not, only the check before it. Also pin with a test what #345 and #346 do together: a kept file's "not used by this release" entry arrives in the check answer's `warnings` and as a row in the canvas.
+  result: an engineer on a box sees "RETAIN here is not kept yet" while typing, and a proposal's check says the same as the project's
+  est: 3h
   difficulty: low
-  id: checker-warnings-shown
-  asked: 2026-11-08
+  id: warnings-box-gaps
+  asked: 2026-11-10
   by: claude-session
 
-- [ ] **A project keeps the files this build does not know** — found by project-compat-fixtures (#283): reading a project skips a file whose name this build does not recognise without a word, a replace-upload then loses it, and an uploaded .zip holding one is refused outright. List such a file as a problem ("not used by this release: kept"), keep it through reads and uploads, and add it to the compat fixtures.
-  result: a newer release's file survives a trip through an older box
-  est: 4h
+- [ ] **Look at a project with kept files in the canvas; fix the box's start line** — two small things seen during the 2026-11-10 run and checked by nobody. (1) #345 keeps a file this release has no use for (pump-curves.json, a newer release's file); the canvas code filters on Structured Text files wherever it was read, but the Files list of a box project that holds one was never looked at on screen: open one (`BOX=1 make canvas-smoke` with a kept file in the project, or a ui_test), and decide whether the file is listed, greyed with its "kept, not used" reason, or left out. `PUT` of a single file still refuses an unknown name, which is right while the canvas cannot edit one. (2) The box prints "API on http://...  (reads open; changes need the token)" at start; since read-lock (#323) every read needs a session, so the line is wrong.
+  result: a kept file is shown the way that was chosen, with a test; the start line says reads need a sign-in
+  est: 2h
   difficulty: low
-  id: project-unknown-files
-  asked: 2026-11-08
+  id: kept-files-in-canvas
+  asked: 2026-11-10
   by: claude-session
 
 - [ ] **Node firmware OTA: A/B slots, pull from a host, roll back on an unconfirmed boot** — #312 put program deploy over the node's API (PUT /api/modules/NAME with the bearer token); the firmware itself still goes over USB (scripts/node-flash.sh). supervictor's ota/{install,policy} already has the shape to reuse: the esp-bootloader-esp-idf partition table with two app slots, write the new image to the idle slot, mark it, reboot, and confirm it from the running image once the API answers; an image that never confirms rolls back on the next boot. The node pulls the image from a URL the canvas or a curl gives it (POST /api/firmware {url, sha256}) so the host serves, the node fetches; the token guards it like every write. Same code on the POE-ISO and the P4 (helmsman-node-p4). Test: a host-side test against the simulated flash (nodecore) for the slot state machine, and a bench run that flashes a build, confirms, then a deliberately broken build that rolls back.
@@ -345,11 +345,10 @@ The investigation's "Suggested order" as Nick agreed it (`st-plan-order`), with 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **PLCopen guideline lints in the checker, the first 6-8** — in `crates/helmsman-iec/src/check.rs` as `Diagnostic`s with stable IDs (`PLCOPEN-CP<n>` where the guideline has a number, `HELMSMAN-L<n>` otherwise), on the warnings path `checker-warnings-shown` builds, fed into the agent's retry message in `verify::next` beside compile errors. The picks (INVESTIGATION.md §1): an FB instance called inside a conditional (the TON-inside-IF bug), an output written in more than one place, a variable read before it is assigned with no initial value, `=` or `<>` on REAL, a FOR variable or its bounds changed in the body, unused variables and unreachable code, recursion. Decided (Nick, 2026-11-07): every lint is shown and goes to the agent; the first two block "Use this code" and Deploy the way a red requirement test does; a blocking lint is overridden on its line by a pragma with a reason (`{lint: off CP-x "imported, the branch is the enable"}`: the lexer skips `{ }` pragmas today, so it has to keep this one), and the override is written to the audit trail with the reason. The others stay advisory until `st-corpus` shows how noisy they are. Source: the PLCopen Coding Guidelines v1.0 PDF, a free download from plcopen.org (checked 2026-11-08, no login: `https://www.plcopen.org/download_file/force/ff60e817-eee5-442d-b718-a357a7279c7e/342/`); a docs/SOURCES.md entry with the rule number and page per lint ID. iec-checker in docker as a dev-time cross-check (both tools flag the same corpus files) is optional.
+- [ ] **PLCopen guideline lints in the checker, the first 6-8** — in `crates/helmsman-iec/src/check.rs` as `Diagnostic`s with stable IDs (`PLCOPEN-CP<n>` where the guideline has a number, `HELMSMAN-L<n>` otherwise), on the warnings path #346 built (the check answer's `warnings`, the canvas rows and the CLI lines; its parser already reads an `id` and a `blocking` flag), fed into the agent's retry message in `verify::next` beside compile errors. The picks (INVESTIGATION.md §1): an FB instance called inside a conditional (the TON-inside-IF bug), an output written in more than one place, a variable read before it is assigned with no initial value, `=` or `<>` on REAL, a FOR variable or its bounds changed in the body, unused variables and unreachable code, recursion. Decided (Nick, 2026-11-07): every lint is shown and goes to the agent; the first two block "Use this code" and Deploy the way a red requirement test does; a blocking lint is overridden on its line by a pragma with a reason (`{lint: off CP-x "imported, the branch is the enable"}`: the lexer skips `{ }` pragmas today, so it has to keep this one), and the override is written to the audit trail with the reason. The others stay advisory until `st-corpus` shows how noisy they are. Source: the PLCopen Coding Guidelines v1.0 PDF, a free download from plcopen.org (checked 2026-11-08, no login: `https://www.plcopen.org/download_file/force/ff60e817-eee5-442d-b718-a357a7279c7e/342/`); a docs/SOURCES.md entry with the rule number and page per lint ID. iec-checker in docker as a dev-time cross-check (both tools flag the same corpus files) is optional.
   result: the agent's first retry already knows about the timer-in-IF and the double-written output; an engineer sees why a draft is held, and can override with a reason on record
   est: 3d
   difficulty: med
-  depends: checker-warnings-shown
   id: st-lints
   asked: 2026-11-08
   by: claude-session
