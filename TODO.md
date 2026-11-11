@@ -14,7 +14,55 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
+- [ ] **Keep the try box, or retire it?** — the standing box in `../helmsman-try` (LaunchAgent `io.advin.helmsman-try`, https :8081) has been down since the Studio's desktop session logged out on 2026-11-10 at 17:06, and nothing on the P4 bench needed it. What it costs while it runs: it holds the E1213's one EtherNet/IP connection (firmware V3.1 takes a single Class 1 connection of any kind), so a node can only read that unit over Modbus beside it. What it gives: a box that is always up for the canvas, the relay and a demo. Nick, 2026-11-10: "I'm really not sure why it's even needed."
+  needs: your call
+  result: either it comes back when you log in at the Studio (RunAtLoad; `launchctl ... gui/501/...` answers 125 until then) and stays as documented, or its entry leaves CLAUDE.md, the checkout is unlocked and removed, and a box is started by hand when one is wanted
+  options: keep it as it is | keep it but off the E1213 (its link over Modbus, the unit free for a node) | retire it
+  est: 5m
+  difficulty: low
+  id: try-box-keep-or-retire
+  asked: 2026-11-10
+  by: claude-session
+
+- [ ] **Update the bench E1213 from firmware 3.1?** — Moxa's release notes (docs/devices/moxa-iologik-e1213.md, "Release notes") list as fixed in v3.3 "Ethernet/IP cannot establish second input-only session" and in v3.2 "implicit messages are sent to port 2222 by default"; the unit is v3.1 and today refuses any second cyclic connection and takes O->T on port 5222. v4.0 turns EtherNet/IP off by default, so it has to be switched on again after that step. The notes say to update one release at a time: 3.2, 3.3, 3.4, 4.0. Not said and not tested: whether Input Only then runs beside an Exclusive Owner.
+  needs: your call, then your hands on the unit's web console for each step (firmware files from Moxa's site)
+  result: a unit a node and a box can both hold a cyclic connection to, or a measured no; the port-5222 handling and the one-connection notes are then rechecked with `scratch/enip-fo-probe.py` and `scratch/enip-hold-probe.py`
+  options: update to 3.3 only (the fix, two steps) | update to 4.0 (four steps) | leave it at 3.1
+  est: 1h
+  difficulty: low
+  id: e1213-firmware-update
+  asked: 2026-11-10
+  by: claude-session
+
+- [ ] **What does a node talk TLS to?** — the last open item of the P4 bring-up is "mbedtls-rs at the fork's main with Homebrew clang" (the recipe compiles for the P4, docs/EDGE.md Phase 3), but nothing says what the first TLS connection is for. The candidates in EDGE.md: the uplink to the relay with a per-node client certificate, or the deploy channel (the node's own API over https, plus a signed image for node-ota). They pull different work in: a client handshake and a certificate store, or a server certificate on the node and the browser trusting it.
+  needs: your call before anything is built
+  result: one TLS connection on the P4 with a named peer, and the memory and handshake time it costs written into EDGE.md
+  options: client to the relay first | https on the node's own API first | not yet (plain HTTP on the plant network, token as today)
+  est: 5m
+  difficulty: low
+  id: node-tls-first-peer
+  asked: 2026-11-10
+  by: claude-session
+
 ## Needs your hands
+
+- [ ] **Fit the P4's PoE module and measure its isolation** — the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
+  needs: the PoE module on the board, a meter, a PoE port
+  result: "isolated" or "not isolated" written into `board.rs` and `scripts/node-flash.sh` (which then keeps or drops its Ethernet-unplugged prompt and `NODE_P4_NO_POE`), and the node seen running on PoE alone
+  est: 30m
+  difficulty: low
+  id: p4-poe-isolation
+  asked: 2026-11-10
+  by: claude-session
+
+- [ ] **Put the POE-ISO back on the network for one run** — the P4 took its switch port on 2026-11-10; poe-iso-rack-03 is still on USB (/dev/cu.usbserial-1130). #337 changed its Modbus client and I/O task as it did the P4's (wait for the link, quick retries before the back-off) and that crate was built and linted, not run. Also not tried: a flash of it with espflash 4.7.0 (only `board-info` was).
+  needs: a second switch port (or the P4's cable for ten minutes); tell a session when it is in
+  result: the POE-ISO flashed at the dev tip with espflash 4.7, its block up at link-up, and the line in docs/EDGE.md that says "not run" gone
+  est: 15m
+  difficulty: low
+  id: poe-iso-modbus-rerun
+  asked: 2026-11-10
+  by: claude-session
 
 - [ ] **Promote dev to master: 280 commits, the guided tour among them** — the last dev → master merge was #246 on 2026-11-06. #248 (the playground tour) landed one minute after it and #251 (the playground rebuilt with the tour) is merged into dev, so the only step left for /playground/?tour is the promotion. Everything since waits with it: the node (POE-ISO and P4), read-lock, Help mode, the hotkeys, the 2026-11-08 review fixes (#303 to #308). dev's last CI run is green (0d840f7, 2026-11-10).
   needs: your dev → master merge; `gh pr list --base dev` first (2026-11-10: none open, but fix/node-modbus-connect is in flight in a live session and will open one)
@@ -246,43 +294,11 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-08
   by: claude-session
 
-- [ ] **The desk is per person on a shared browser too** — after #280, when a second person signs in on a browser the first one used, and the box has nothing newer for them, the desk on screen (the first person's unsaved edits) is written to the second person's box desk. Slice 1 (#276) already shared the browser desk between everyone on one browser. Key the browser desk by the signed-in name, and on a sign-in by a different person start from that person's box desk or an empty one, never the previous person's.
-  result: one person's draft never lands in another's desk
-  est: 2h
-  difficulty: low
-  id: desk-person-switch
-  asked: 2026-11-08
-  by: claude-session
-
 - [ ] **A project keeps the files this build does not know** — found by project-compat-fixtures (#283): reading a project skips a file whose name this build does not recognise without a word, a replace-upload then loses it, and an uploaded .zip holding one is refused outright. List such a file as a problem ("not used by this release: kept"), keep it through reads and uploads, and add it to the compat fixtures.
   result: a newer release's file survives a trip through an older box
   est: 4h
   difficulty: low
   id: project-unknown-files
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **A broken diagram.layout does not block the build** — found by #283: a layout that will not parse stops the build although the build never reads it, and its problem has no file and line of its own. Make it a listed problem on `diagram.layout` at its line, fall back to the automatic layout, and build.
-  result: a bad layout costs the drawing, not the deploy
-  est: 2h
-  difficulty: low
-  id: layout-not-blocking
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **A gateway's "unit not answering" marks the device down** — after #290, a Modbus TCP gateway that answers for a dead serial unit with exception 0x0A (gateway path unavailable) or 0x0B (target device failed to respond) counts as a point error, so the device stays "up" with every point bad. Treat those two as link errors for that unit only (the connection and the other units stay up), with the device's reason in plain words. Cite the Modbus Application Protocol spec's exception table in docs/SOURCES.md.
-  result: a dead RTU behind a gateway shows as down, with why
-  est: 2h
-  difficulty: low
-  id: gateway-unit-down
-  asked: 2026-11-08
-  by: claude-session
-
-- [ ] **`build-help.sh --check` is not in CI** — the help pages were rebuilt with the Load a program page (2026-11-08), so they are current again, but only `make help-check` runs the check: nothing in .github/workflows does, which is how simulation.html drifted after #288. Add it to the CI gate (a workflow edit: draft PR).
-  result: drift between docs/help/*.md and the committed .html fails CI
-  est: 30m
-  difficulty: low
-  id: help-html-drift
   asked: 2026-11-08
   by: claude-session
 
@@ -296,23 +312,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-09
   by: claude-session
 
-- [ ] **P4 node, after the bring-up: EtherNet/IP against the E1213, the PoE module, TLS** — the node image runs on the Waveshare ESP32-P4-ETH as on the POE-ISO since 2026-11-10 (docs/EDGE.md Phase 3 "On the board": press-5 at 192.168.3.56, token bench-token-2026, chase at 10 ms with 70 us of execution, a 431-line cell at 1 ms). What is left: (1) settled 2026-11-10: the E1213 (firmware V3.1) holds one Class 1 connection at a time of either kind, so Input Only beside the try box is refused with a bare 0x01 and the node's request is right as it is (docs/devices/moxa-iologik-e1213.md); the `enip` image then ran both ways with the unit free (Input Only and Exclusive Owner, no lost packets, the chase on the outputs over CIP; docs/EDGE.md); left: say "another originator holds this unit's one cyclic connection" where the node and the box print a bare 0x01 from this device; the node's Modbus link no longer comes up late at boot (2026-11-10: the I/O task waits for the link and retries a failed connect quickly before backing off; run the POE-ISO once with it when that board is back on the network); (2) whether firmware 4.0 lifts the limit (the EDS v2.0 describes it; the unit runs 3.1); (3) the PoE module's isolation measured before USB and PoE are ever together, then a run on PoE alone; (4) see the panic restart happen once (`custom_halt`), and report the PSRAM in `/api/node`'s heap size; (5) where the running cell's data sits (SRAM or PSRAM) and what PSRAM costs a scan; (6) mbedtls-rs at the fork's main with Homebrew clang for TLS; (7) drop `ethernet::CutThroughTx` when an esp-hal release ties transmit store-and-forward to checksum offload.
-  needs: the PoE module on the board for (3); the try box off the E1213 (stopped, or its link pointed at Modbus) for (1)
+- [ ] **P4 node, after the bring-up: EtherNet/IP against the E1213, the PoE module, TLS** — the node image runs on the Waveshare ESP32-P4-ETH as on the POE-ISO since 2026-11-10 (docs/EDGE.md Phase 3 "On the board": press-5 at 192.168.3.56, token bench-token-2026, chase at 10 ms with 70 us of execution, a 431-line cell at 1 ms). What is left: (1) settled 2026-11-10: the E1213 (firmware V3.1) holds one Class 1 connection at a time of either kind, so Input Only beside the try box is refused with a bare 0x01 and the node's request is right as it is (docs/devices/moxa-iologik-e1213.md); the `enip` image then ran both ways with the unit free (Input Only and Exclusive Owner, no lost packets, the chase on the outputs over CIP; docs/EDGE.md); a bare 0x01 now prints with that explanation (`Refused`'s text); the node's Modbus link no longer comes up late at boot (2026-11-10: the I/O task waits for the link and retries a failed connect quickly before backing off; run the POE-ISO once with it when that board is back on the network); (2) Moxa's release notes say v3.3 fixed "cannot establish second input-only session" and v3.2 moved implicit messages to port 2222 (the unit runs v3.1; docs/devices/moxa-iologik-e1213.md): updating the unit is Nick's call and four steps (3.2, 3.3, 3.4, 4.0, one release at a time), then rerun `scratch/enip-fo-probe.py` for Input Only beside an owner; (3) the PoE module's isolation measured before USB and PoE are ever together, then a run on PoE alone; (4) and (5) done 2026-11-10 (the panic restart seen, the PSRAM in `/api/node`, a cell's data in PSRAM costing nothing visible at a 1 ms scan; docs/EDGE.md); (6) mbedtls-rs at the fork's main with Homebrew clang for TLS; (7) drop `ethernet::CutThroughTx` when an esp-hal release ties transmit store-and-forward to checksum offload.
+  needs: Nick's cards first: `p4-poe-isolation` for (3), `e1213-firmware-update` for (2), `node-tls-first-peer` for (6), `poe-iso-modbus-rerun` for the POE-ISO run; (7) waits for an esp-hal release
   result: the P4 node owns the E1213 over EtherNet/IP, runs on PoE alone, and its memory numbers say what a scan in PSRAM costs
   est: 1d
   difficulty: med
   notes: flash from a session: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 scripts/node-flash.sh node` (port /dev/cu.usbmodem5C930154551; espflash is 4.7.0 since 2026-11-10, 3.3.0 could not talk to this chip revision; the POE-ISO answers 4.7's board-info, a flash of it with 4.7 is not yet tried). A program over the flash slot runs but is not kept (12 KB did not fit): the larger slot comes with node-ota's partition table.
+  depends: p4-poe-isolation, e1213-firmware-update, node-tls-first-peer, poe-iso-modbus-rerun
   id: node-p4-followups
   asked: 2026-11-10
-  by: claude-session
-
-- [ ] **Monitor: show the EtherNet/IP adapter's address beside the devices** — the half of `read-lock` (decided 2026-11-08) that did not ship with it: the adapter stays on at boot, so the Monitor's Devices tab should say where it listens instead of staying silent about it. The API does not know the adapter's bind today (`api::Config.bind` is the API's own; main.rs starts the adapter from `o.server.bind` and `encap_port`). Shape: `api::Extras` carries the adapter's socket address (`None` when off), a new `GET /api/adapter` answers `{protocol: "EtherNet/IP", bind, on}` behind a session like every read, the canvas polls it with the devices (remote.rs `Fetch`) and the Devices tab shows one wrapped line under the tree ("EtherNet/IP adapter on 0.0.0.0:44818: other controllers read this box here"). Tests: the route in api.rs, a remote.rs parse test, and the Devices tab at the panel's default width (CLAUDE.md panel rule).
-  needs: nothing
-  result: a buyer's IT sees the one listener that stays open, named, where they look for devices
-  est: 3h
-  difficulty: low
-  id: cip-adapter-visible
-  asked: 2026-11-09
   by: claude-session
 
 - [ ] **The P4's `enip` image after #333: the two runs that were skipped** — #333 moved the EtherNet/IP session into a task of its own and was checked on the board for the first open only (1.1 s after link-up, 0 late scans, was 199). Two runs were left out and are on no card: (1) the close after a lost link, through the task: pull the cable or power the E1213 off mid-run, see the outputs go to their safe state, the session close, and the reopen once the unit is back, with no late scans meanwhile; (2) Exclusive Owner with this change (the 640 of 640 packet run of 2026-11-10 was on the image before it). Write both into docs/EDGE.md Phase 3 "On the board".

@@ -2673,6 +2673,313 @@ fn another_person_signing_in_on_the_page_does_not_inherit_the_last_ones_desk() {
     );
 }
 
+/// One browser's `localStorage`: every slot a page opens on it, shared
+/// across page loads.
+#[derive(Clone, Default)]
+struct LocalStore(std::rc::Rc<std::cell::RefCell<BTreeMap<String, String>>>);
+
+struct StoreSlot(LocalStore, String);
+
+impl crate::sim_projects::Storage for StoreSlot {
+    fn load(&self) -> Result<Option<String>, String> {
+        Ok(self.0.0.borrow().get(&self.1).cloned())
+    }
+
+    fn save(&mut self, text: &str) -> Result<(), String> {
+        self.0.0.borrow_mut().insert(self.1.clone(), text.to_string());
+        Ok(())
+    }
+
+    fn keyed(&self, suffix: &str) -> Option<Box<dyn crate::sim_projects::Storage>> {
+        Some(Box::new(Self(self.0.clone(), format!("{}/{suffix}", self.1))))
+    }
+}
+
+impl LocalStore {
+    /// A page load on this browser.
+    fn page(&self) -> BoxView {
+        BoxView::new().with_desk(Box::new(StoreSlot(self.clone(), crate::desk::SLOT.into())))
+    }
+
+    /// Everything this browser holds, to look for a person's text in.
+    fn everything(&self) -> String {
+        format!("{:?}", self.0.borrow())
+    }
+}
+
+/// `person` on `v`, the box's session cookie in `jar`.
+fn sign_in(b: &Bench, jar: &Jar, v: &mut BoxView, person: (&str, &str)) {
+    v.session = Some(b.login(jar, person.0, person.1));
+}
+
+/// The box's desk for the person `jar` is signed in as.
+fn desk_on_box(b: &Bench, jar: &Jar) -> Json {
+    let a = b.send(
+        jar,
+        &PReq::get(crate::box_projects::PCall::Desk, "/api/desk".into()),
+    );
+    serde_json::from_str(&a.body).unwrap()
+}
+
+/// A page whose person is alice, `line` open on `blocks.st` with an unsaved
+/// edit and a note typed, on `browser`; `now` is where the clock stands.
+fn alice_with_a_draft(b: &Bench, jar: &Jar, browser: &LocalStore, now: &mut f64) -> (BoxView, String) {
+    let ctx = egui::Context::default();
+    let mut v = browser.page();
+    sign_in(b, jar, &mut v, ("alice", ALICE));
+    make(
+        b,
+        jar,
+        &mut v.projects,
+        "line",
+        &[("main.st", MAIN), ("blocks.st", BLOCKS)],
+    );
+    v.projects.open_project("line");
+    settle(b, jar, &mut v.projects);
+    v.projects.open_file("blocks.st");
+    let edited = format!("{BLOCKS}\n(* alice's draft *)\n");
+    v.projects.current_mut().unwrap().text.clone_from(&edited);
+    v.instruct.draft = "alice's note".into();
+    for _ in 0..20 {
+        *now += 1.5;
+        pump(b, jar, &mut v, &ctx, *now);
+        if desk_on_box(b, jar)["desk"]["agent"] == "alice's note" {
+            break;
+        }
+    }
+    assert_eq!(desk_on_box(b, jar)["desk"]["agent"], "alice's note");
+    (v, edited)
+}
+
+/// Card `desk-person-switch`: alice leaves a draft unsaved and signs out,
+/// bob signs in on the same browser with nothing on the box. Bob's screen
+/// is empty, his desk on the box never holds alice's text, and alice's
+/// draft is back when she signs in again.
+#[test]
+fn a_second_person_on_the_browser_never_gets_the_firsts_draft() {
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let browser = LocalStore::default();
+    let mut now = 0.0;
+    let ja = Jar::default();
+    let (mut v, edited) = alice_with_a_draft(&b, &ja, &browser, &mut now);
+
+    v.session = None;
+    for _ in 0..3 {
+        now += 1.5;
+        pump(&b, &ja, &mut v, &ctx, now);
+    }
+    let jb = Jar::default();
+    sign_in(&b, &jb, &mut v, ("bob", BOB));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &jb, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "", "not alice's note");
+    assert!(!v.projects.dirty(), "alice's unsaved edit is not on bob's screen");
+    assert!(v.desk().drafts.is_empty(), "{:?}", v.desk().drafts);
+    let bobs = desk_on_box(&b, &jb);
+    assert!(!bobs.to_string().contains("alice"), "{bobs}");
+
+    // Bob types his own; alice signs in again and has hers back.
+    v.instruct.draft = "bob's note".into();
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &jb, &mut v, &ctx, now);
+    }
+    assert_eq!(desk_on_box(&b, &jb)["desk"]["agent"], "bob's note");
+    sign_in(&b, &ja, &mut v, ("alice", ALICE));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &ja, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "alice's note");
+    assert_eq!(
+        v.desk().drafts["line"]["blocks.st"].text,
+        edited,
+        "alice's draft is back"
+    );
+    assert_eq!(desk_on_box(&b, &jb)["desk"]["agent"], "bob's note");
+}
+
+/// The box keeping no desk for alice (it did not answer), this browser's
+/// is hers: bob signing in on it does not wipe or inherit it, and it is
+/// back for alice after a reload.
+#[test]
+fn each_person_has_their_own_desk_in_the_browser() {
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let browser = LocalStore::default();
+    let mut now = 0.0;
+    let ja = Jar::default();
+    let (v, edited) = alice_with_a_draft(&b, &ja, &browser, &mut now);
+    drop(v);
+
+    // Bob, on a page loaded after alice left.
+    let jb = Jar::default();
+    let mut v = browser.page();
+    sign_in(&b, &jb, &mut v, ("bob", BOB));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &jb, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "");
+    assert!(v.desk().drafts.is_empty(), "{:?}", v.desk().drafts);
+    assert!(!desk_on_box(&b, &jb).to_string().contains("alice"));
+    v.instruct.draft = "bob's note".into();
+    for _ in 0..4 {
+        now += 1.5;
+        pump(&b, &jb, &mut v, &ctx, now);
+    }
+
+    // Alice again after a reload, her box not answering: the browser's.
+    let mut v = browser.page();
+    sign_in(&b, &ja, &mut v, ("alice", ALICE));
+    for _ in 0..4 {
+        now += 1.5;
+        v.step_all(&ctx, Vec::new(), Vec::new(), now);
+        v.psent.clear();
+    }
+    assert_eq!(v.instruct.draft, "alice's note");
+    assert_eq!(v.desk().drafts["line"]["blocks.st"].text, edited);
+}
+
+/// Bob has a desk of his own on the box: he gets that one, not alice's
+/// from the same browser.
+#[test]
+fn a_second_person_with_a_desk_on_the_box_gets_that_one() {
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let browser = LocalStore::default();
+    let mut now = 0.0;
+    let ja = Jar::default();
+    let (mut v, _) = alice_with_a_draft(&b, &ja, &browser, &mut now);
+    let jb = Jar::default();
+    b.login(&jb, "bob", BOB);
+    let ans = b.send(
+        &jb,
+        &PReq {
+            call: crate::box_projects::PCall::SaveDesk,
+            method: "PUT",
+            url: "/api/desk".into(),
+            body: Some(br#"{"saved_at":5,"agent":"bob's note"}"#.to_vec()),
+            ctype: "application/json",
+        },
+    );
+    assert!(ans.status < 300, "{}", ans.body);
+    v.session = None;
+    pump(&b, &ja, &mut v, &ctx, now + 1.5);
+    sign_in(&b, &jb, &mut v, ("bob", BOB));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &jb, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "bob's note");
+    assert!(!v.projects.dirty());
+    assert!(!desk_on_box(&b, &jb).to_string().contains("alice"));
+}
+
+/// Signed out, with no account: the desk is the browser's one slot,
+/// `helmsman-canvas/desk`, as before person desks.
+#[test]
+fn signed_out_the_desk_is_the_one_browser_slot() {
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let browser = LocalStore::default();
+    let jar = Jar::default();
+    let mut v = browser.page();
+    v.instruct.draft = "typed before signing in".into();
+    let mut now = 0.0;
+    for _ in 0..3 {
+        now += 1.5;
+        pump(&b, &jar, &mut v, &ctx, now);
+    }
+    assert!(
+        browser.0.borrow()["helmsman-canvas/desk"].contains("typed before signing in"),
+        "{}",
+        browser.everything()
+    );
+    assert_eq!(browser.page().instruct.draft, "typed before signing in");
+}
+
+/// Work typed signed out is taken by the first person to sign in, and
+/// leaves the signed-out slot: the next person does not get it.
+#[test]
+fn signed_out_work_goes_to_the_first_person_to_sign_in_only() {
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let browser = LocalStore::default();
+    let mut v = browser.page();
+    v.instruct.draft = "typed before signing in".into();
+    let jar = Jar::default();
+    let mut now = 0.0;
+    for _ in 0..3 {
+        now += 1.5;
+        pump(&b, &jar, &mut v, &ctx, now);
+    }
+    let ja = Jar::default();
+    sign_in(&b, &ja, &mut v, ("alice", ALICE));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &ja, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "typed before signing in", "alice's now");
+    assert_eq!(desk_on_box(&b, &ja)["desk"]["agent"], "typed before signing in");
+    assert!(
+        !browser.0.borrow()["helmsman-canvas/desk"].contains("typed before"),
+        "{}",
+        browser.everything()
+    );
+    let jb = Jar::default();
+    let mut v = browser.page();
+    sign_in(&b, &jb, &mut v, ("bob", BOB));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &jb, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "");
+    assert!(!desk_on_box(&b, &jb).to_string().contains("typed before"));
+}
+
+/// A desk an earlier release left in the one slot, kept for alice: bob
+/// does not get it, alice does.
+#[test]
+fn a_desk_left_in_the_old_slot_goes_only_to_its_owner() {
+    use crate::desk::Desk;
+    use crate::sim_projects::Storage as _;
+    let b = Bench::new();
+    let ctx = egui::Context::default();
+    let browser = LocalStore::default();
+    let old = Desk {
+        saved_at: 9,
+        agent: "alice's old note".into(),
+        owner: Some("user:alice".into()),
+        user: "alice".into(),
+        ..Desk::default()
+    };
+    StoreSlot(browser.clone(), crate::desk::SLOT.into())
+        .save(&old.text_within(crate::desk::MAX_BYTES).0)
+        .unwrap();
+    let mut now = 0.0;
+    let jb = Jar::default();
+    let mut v = browser.page();
+    sign_in(&b, &jb, &mut v, ("bob", BOB));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &jb, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "");
+    assert!(!desk_on_box(&b, &jb).to_string().contains("alice"));
+    let ja = Jar::default();
+    let mut v = browser.page();
+    sign_in(&b, &ja, &mut v, ("alice", ALICE));
+    for _ in 0..8 {
+        now += 1.5;
+        pump(&b, &ja, &mut v, &ctx, now);
+    }
+    assert_eq!(v.instruct.draft, "alice's old note");
+}
+
 /// An instruction under way on the box's agent, with a proposal stored
 /// and the answer still streaming: `v` signed in, `line` open on
 /// `main.st`.

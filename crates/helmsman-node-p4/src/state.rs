@@ -148,6 +148,25 @@ pub fn with<R>(shared: &Shared, f: impl FnOnce(&mut Live) -> R) -> R {
     shared.lock(|cell| f(&mut cell.borrow_mut()))
 }
 
+/// The heap by region: bytes in use in the internal region(s), and the
+/// external region's (PSRAM) `(size, used)` when the image added one.
+#[must_use]
+pub fn heap() -> (usize, Option<(usize, usize)>) {
+    let mut internal = 0;
+    let mut external = None;
+    for region in esp_alloc::HEAP.stats().region_stats.iter().flatten() {
+        if region
+            .capabilities
+            .contains(esp_alloc::MemoryCapability::External)
+        {
+            external = Some((region.size, region.used));
+        } else {
+            internal += region.used;
+        }
+    }
+    (internal, external)
+}
+
 /// The box API view of the state right now, for the router and the stream.
 #[must_use]
 pub fn view(
@@ -207,9 +226,10 @@ pub fn view(
             seq: live.seq,
             at_ms: live.at.map_or(0, |t| t.as_millis()),
             uptime_ms: now.as_millis(),
-            heap_used: esp_alloc::HEAP.used(),
+            heap_used: heap().0,
             heap_peak: esp_alloc::HEAP.stats().max_usage,
             heap_size,
+            heap_external: heap().1,
             mac,
             ip: live.ip,
             link_up: live.link_up,

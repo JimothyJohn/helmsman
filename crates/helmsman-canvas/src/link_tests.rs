@@ -236,6 +236,61 @@ fn a_box_with_no_map_says_so() {
     assert!(!s.io_map_stale());
 }
 
+// ---- the EtherNet/IP adapter line (card cip-adapter-visible) ----
+
+#[test]
+fn the_adapter_read_parses_the_box_s_answer_and_a_404_is_not_an_error() {
+    let on = Bench::with_adapter(Some("10.0.0.5:44818".parse().unwrap()));
+    let mut s = healthy();
+    s.apply(Msg::Got(Fetch::Adapter, Ok(on.get("/api/adapter").1)), 0.3);
+    let a = s.adapter.clone().expect("the box's answer");
+    assert_eq!(a.protocol, "EtherNet/IP");
+    assert_eq!(a.listening(), Some("10.0.0.5:44818"));
+
+    // Off: an answer, with no address to show.
+    let off = Bench::with_adapter(None);
+    s.apply(Msg::Got(Fetch::Adapter, Ok(off.get("/api/adapter").1)), 5.3);
+    assert_eq!(s.adapter.as_ref().and_then(|a| a.listening()), None);
+    assert!(s.adapter.as_ref().is_some_and(|a| !a.on));
+
+    // A body missing its fields, or not JSON, changes nothing.
+    s.apply(Msg::Got(Fetch::Adapter, Ok(on.get("/api/adapter").1)), 10.3);
+    for bad in [
+        r#"{"protocol":"EtherNet/IP"}"#,
+        r#"{"on":true}"#,
+        "<html>",
+        "[]",
+        "",
+    ] {
+        s.apply(Msg::Got(Fetch::Adapter, Ok(bad.into())), 15.3);
+        assert_eq!(
+            s.adapter.as_ref().and_then(|a| a.listening()),
+            Some("10.0.0.5:44818"),
+            "{bad:?} leaves the last read"
+        );
+    }
+    // A failed read keeps the last one too; a 404 (an older box) clears it
+    // and is neither an error nor the link lost.
+    s.apply(Msg::Got(Fetch::Adapter, Err("network".into())), 20.3);
+    assert!(s.adapter.is_some());
+    s.apply(Msg::Got(Fetch::Adapter, Err("HTTP 404".into())), 25.3);
+    assert_eq!(s.adapter, None);
+    assert_eq!(
+        s.link(),
+        Link::Connected,
+        "a 404 on the adapter is no link failure"
+    );
+    // A bind with the adapter off is not shown.
+    s.apply(
+        Msg::Got(
+            Fetch::Adapter,
+            Ok(json!({ "protocol": "EtherNet/IP", "bind": "0.0.0.0:1", "on": false }).to_string()),
+        ),
+        30.3,
+    );
+    assert_eq!(s.adapter.as_ref().and_then(|a| a.listening()), None);
+}
+
 // ---- 11: a slow module is not stale for being slow ----
 
 #[test]

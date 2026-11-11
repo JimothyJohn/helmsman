@@ -37,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.which.outputs.rust }}
+      help: ${{ steps.which.outputs.help }}
       interop: ${{ steps.which.outputs.interop }}
       oracle: ${{ steps.which.outputs.oracle }}
     steps:
@@ -53,7 +54,7 @@ jobs:
           if [ "$EVENT" = pull_request ] && git rev-parse --verify --quiet HEAD^1 >/dev/null; then
             git diff --name-only --no-renames -z HEAD^1 HEAD | ./scripts/ci-changes.sh | tee -a "$GITHUB_OUTPUT"
           else
-            printf 'rust=true\ninterop=true\noracle=true\n' | tee -a "$GITHUB_OUTPUT"
+            printf 'rust=true\nhelp=true\ninterop=true\noracle=true\n' | tee -a "$GITHUB_OUTPUT"
           fi
 
   gate:
@@ -67,12 +68,14 @@ jobs:
           echo "the changes job did not succeed (${{ needs.changes.result }}): fix it before this can merge"
           exit 1
       - name: Nothing to build
-        if: ${{ needs.changes.outputs.rust == 'false' }}
+        if: ${{ needs.changes.outputs.help == 'false' }}
         run: echo "Only files no build or test reads changed (scripts/ci-changes.sh); the gate passes without building."
+      # The help check below needs the checkout, the toolchain and the cache
+      # too, and `help` is true whenever `rust` is (scripts/ci-changes.sh).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ needs.changes.outputs.rust != 'false' }}
+        if: ${{ needs.changes.outputs.help != 'false' }}
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # stable
-        if: ${{ needs.changes.outputs.rust != 'false' }}
+        if: ${{ needs.changes.outputs.help != 'false' }}
         with:
           toolchain: stable
           components: rustfmt, clippy
@@ -80,7 +83,7 @@ jobs:
       # Dependencies' builds, kept between runs. Only dev and master save
       # (a pull request reads its base's cache), so PRs cannot evict them.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: ${{ needs.changes.outputs.rust != 'false' }}
+        if: ${{ needs.changes.outputs.help != 'false' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master' }}
       - name: Format check
@@ -111,6 +114,25 @@ jobs:
       - name: Test workspace
         if: ${{ needs.changes.outputs.rust != 'false' }}
         run: cargo test --workspace --locked
+      # The committed help pages (docs/help/*.html, GitHub Pages serves
+      # them) against docs/help/*.md and the tables generated from the
+      # code: simulation.html drifted after #288 with nothing to notice.
+      # pandoc is pinned to the release the pages were built with and
+      # checked by hash, because its HTML differs between releases; when
+      # the pages are rebuilt with a newer pandoc, change both lines.
+      - name: Install pandoc
+        if: ${{ needs.changes.outputs.help != 'false' }}
+        env:
+          PANDOC_VERSION: '3.11'
+          PANDOC_SHA256: 89d4c9d97818c62a97157f0072844e4602c6cee795bf84abd1aee7273abcda99
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/pandoc.deb" "https://github.com/jgm/pandoc/releases/download/${PANDOC_VERSION}/pandoc-${PANDOC_VERSION}-1-amd64.deb"
+          echo "${PANDOC_SHA256}  $RUNNER_TEMP/pandoc.deb" | sha256sum --check
+          sudo dpkg -i "$RUNNER_TEMP/pandoc.deb"
+          pandoc --version
+      - name: Help pages are current
+        if: ${{ needs.changes.outputs.help != 'false' }}
+        run: ./scripts/build-help.sh --check
 
   # Interop against the OpENer adapter built from docker/opener/. Separate
   # job so a Docker hiccup is distinguishable from a code failure. Added to

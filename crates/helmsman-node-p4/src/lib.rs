@@ -30,5 +30,8 @@ pub mod state;
 /// and off the network until its reset button was pressed).
 #[unsafe(no_mangle)]
 extern "Rust" fn custom_halt() -> ! {
+    // Let the console drain first: reset at once and the message that
+    // says why is cut off after its first line (seen on the board).
+    esp_hal::delay::Delay::new().delay_millis(250);
     esp_hal::system::software_reset()
 }
