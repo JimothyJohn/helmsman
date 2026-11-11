@@ -319,6 +319,7 @@ impl ConnectReq {
     ///
     /// # Errors
     /// Malformed, or without an AR block or an alarm CR block.
+    #[allow(clippy::too_many_lines)]
     pub fn decode(blocks: &[u8]) -> Result<Self, DecodeError> {
         let mut r = Reader::new(blocks);
         let mut ar = None;

@@ -66,9 +66,11 @@ impl Rta {
         w.u16(self.dst_ref).u16(self.src_ref);
         // Version 1 in the high nibble; window size 1 in the low nibble
         // of the flags, the acknowledge request in bit 4.
-        w.u8(0x10 | (self.pdu_type & 0x0F)).u8(0x01 | (u8::from(self.tack) << 4));
+        w.u8(0x10 | (self.pdu_type & 0x0F))
+            .u8(0x01 | (u8::from(self.tack) << 4));
         w.u16(self.send_seq).u16(self.ack_seq);
-        w.u16(u16::try_from(self.var.len()).unwrap_or(u16::MAX)).bytes(&self.var);
+        w.u16(u16::try_from(self.var.len()).unwrap_or(u16::MAX))
+            .bytes(&self.var);
         w.into_inner()
     }
 
@@ -130,8 +132,13 @@ impl Notification {
         });
         w.u16(u16::try_from(2 + 20 + self.data.len()).unwrap_or(u16::MAX));
         w.u8(1).u8(0);
-        w.u16(self.alarm_type).u32(self.api).u16(self.slot).u16(self.subslot);
-        w.u32(self.module_ident).u32(self.submodule_ident).u16(self.specifier);
+        w.u16(self.alarm_type)
+            .u32(self.api)
+            .u16(self.slot)
+            .u16(self.subslot);
+        w.u32(self.module_ident)
+            .u32(self.submodule_ident)
+            .u16(self.specifier);
         w.bytes(&self.data);
         w.into_inner()
     }
@@ -163,8 +170,14 @@ impl Notification {
     #[must_use]
     pub fn ack(&self, status: Status) -> Vec<u8> {
         let mut w = Writer::with_capacity(24);
-        w.u16(if self.high { ACK_HIGH } else { ACK_LOW }).u16(2 + 16).u8(1).u8(0);
-        w.u16(self.alarm_type).u32(self.api).u16(self.slot).u16(self.subslot);
+        w.u16(if self.high { ACK_HIGH } else { ACK_LOW })
+            .u16(2 + 16)
+            .u8(1)
+            .u8(0);
+        w.u16(self.alarm_type)
+            .u32(self.api)
+            .u16(self.slot)
+            .u16(self.subslot);
         w.u16(self.specifier).u32(status.to_u32());
         w.into_inner()
     }
@@ -235,7 +248,10 @@ mod tests {
             var: notification().encode(),
         };
         let bytes = rta.encode();
-        assert_eq!(&bytes[..12], &[0, 1, 0, 7, 0x11, 0x11, 0xFF, 0xFF, 0xFF, 0xFE, 0, 30]);
+        assert_eq!(
+            &bytes[..12],
+            &[0, 1, 0, 7, 0x11, 0x11, 0xFF, 0xFF, 0xFF, 0xFE, 0, 30]
+        );
         // The block: low-priority notification, length 2 + 20 + 4.
         assert_eq!(&bytes[12..18], &[0, 2, 0, 26, 1, 0]);
         let back = Rta::parse(&bytes).unwrap();
@@ -266,7 +282,10 @@ mod tests {
         let block = n.ack(Status::OK);
         assert_eq!(&block[..6], &[0x80, 0x02, 0, 18, 1, 0]);
         let ack = Ack::parse(&block).unwrap();
-        assert_eq!((ack.alarm_type, ack.slot, ack.subslot, ack.specifier), (1, 2, 1, 0x0801));
+        assert_eq!(
+            (ack.alarm_type, ack.slot, ack.subslot, ack.specifier),
+            (1, 2, 1, 0x0801)
+        );
         assert!(ack.status.is_ok());
         assert!(Ack::parse(&n.encode()).is_err());
         assert!(Notification::parse(&block).is_err());
