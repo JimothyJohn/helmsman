@@ -15,6 +15,7 @@ build; the same I/O also runs over Modbus/TCP
 | --- | --- | --- |
 | **EDS** | `moxa-iologik-e1213-e1213-t-eds-file-software-package-v2.0.eds`, 647 lines, 42 906 bytes, CRLF, SHA-256 `3895fbca8bb036c1b31a9d6b68dea69eca6892fe0a6bce7409ab76311cfd470d`. EZ-EDS 3.27 generated; `[File]` Revision 2.0, ModDate 03-16-2026; `MinRev = 1; $ corresponds to firmware v4.0, EDS revision 1` (l.20). | Nick's download, kept untracked in `devices/` at the repo root (`*.eds` is ignored). **Not in this repository**: the file carries no terms at all (only the generator's header line), so redistribution is unclear (TODO.md `e1213-eds-license`). `scripts/eds-corpus.sh` checks the hash and runs `crates/helmsman-io/tests/eds_corpus.rs` against it. "l.N" below is a line of this file. |
 | **Manual** | *ioLogik E1200 Series User's Manual*, Version 15.10, May 2021, 10 137 362 bytes, SHA-256 `f8788816b2e0062a68f9b7f1ef9850a2d57f92946ac8b64077c4e77097744454`. | Fetched 2026-10-30 from a university mirror (`pct.wiki.uib.no/images/2/29/Moxa-iologik-e1200-series-manual-v15.10.pdf`); Moxa's own links to v15.8 and v15.2 answered with an HTML page instead of the PDF. "p. X-N" is the manual's own page number. |
+| **Release notes** | *Firmware for ioLogik E1200 Series (ioLogik E1213/E1213-T) Release Notes*, 10 pages, v1.1 to v4.0 (Build24071616, Aug 29, 2025), 60 472 bytes, SHA-256 `cf4e9bd918878a47f093103db40b0a84b14bd6bc12fc7648b74174c90c692ef3`. | Fetched 2026-11-10 from `moxa.com/Moxa/media/PDIM/S100000327/` (the "firmware v4.0.1kp Software Release History" PDF for the E1213). Not in this repository. "RN p. N" is a page of it. |
 
 The EDS says what to connect to and how big the data is; it says nothing
 about what the bytes mean (the input assembly is one 408-bit member, l.466).
@@ -257,6 +258,24 @@ driver, both sides at once, so each fact below is from the wire:
   closed, no more O->T) keeps the unit refusing for about 10 s: requests
   at 2.6, 5.1 and 7.7 s were refused, the one at 10.2 s opened, for an
   abandoned Exclusive Owner and for an abandoned Input Only alike.
+- **Any originator can close a connection.** A `Forward_Close` naming
+  the connection serial, originator vendor and originator serial of the
+  P4 node's Exclusive Owner connection, sent from the Studio over its own
+  session, was answered with success and ended the node's connection
+  (2026-11-10); the unit also dropped the node's TCP session. The triad
+  is not a secret: the vendor is 0xFFFF and the serials are small or
+  derived from the MAC.
+- **Later firmware changes two things seen here** (the release notes;
+  the bench unit is v3.1 Build19110615 of Nov 26, 2019, RN p. 5). v3.2
+  (Dec 25, 2020, RN p. 4) lists as fixed "Ethernet/IP implicit messages
+  are sent to port 2222 by default", which reads as the end of the O->T
+  port 5222 above, and adds EtherNet/IP to Safe Mode. v3.3 (Aug 03, 2022,
+  RN p. 3) lists as fixed "Ethernet/IP cannot establish second input-only
+  session". Whether that also lets Input Only run beside an Exclusive
+  Owner is not said and not tested. v4.0 (RN p. 1) turns the SNMP,
+  EtherNet/IP and RESTful services off by default. v3.0's note (RN p. 6)
+  says to update only to the next or the previous release, so 3.1 to 4.0
+  is four updates.
 - **Not explained:** before the power cycle the unit refused every
   request, Exclusive Owner included, with the bare 0x01 for several
   minutes while no originator was known to be connected (the try box was

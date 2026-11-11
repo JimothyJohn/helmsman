@@ -636,6 +636,15 @@ impl fmt::Display for Refused {
         if self.extended.len() > 1 {
             write!(f, " {:04X?}", &self.extended[1..])?;
         }
+        if self.status == GeneralStatus::CONNECTION_FAILURE && self.extended.is_empty() {
+            // docs/devices/moxa-iologik-e1213.md, "On the bench": the
+            // E1213 answers this, and nothing more, while another
+            // originator holds its one Class 1 connection.
+            write!(
+                f,
+                " with no extended status (a Moxa ioLogik E1213 answers this while another originator holds its one cyclic connection)"
+            )?;
+        }
         Ok(())
     }
 }
@@ -998,6 +1007,10 @@ mod tests {
         assert_eq!(refused.originator_vendor_id, 0xFFFF);
         assert_eq!(refused.originator_serial, 0x0AE8_16E1);
         assert_eq!(refused.remaining_path_size, 0);
+        assert_eq!(
+            refused.to_string(),
+            "refused: 0x01 connection failure with no extended status (a Moxa ioLogik E1213 answers this while another originator holds its one cyclic connection)"
+        );
         // One byte short of the identifying triad is still an error.
         let mut short = resp;
         short.data.pop();

@@ -485,7 +485,7 @@ async fn main(spawner: Spawner) -> ! {
                 live.link_up = link_up;
                 live.ip = ip;
                 alloc::format!(
-                    "up {}s {} scans {} late {} over {} exec max {} us device {} heap used {} B peak {} B",
+                    "up {}s {} scans {} late {} over {} exec max {} us device {} heap used {} B peak {} B external {} B",
                     start.elapsed().as_secs(),
                     if live.module.state.is_some() {
                         live.module.name.as_str()
@@ -501,8 +501,9 @@ async fn main(spawner: Spawner) -> ! {
                         Some(false) => "down",
                         None => "?",
                     },
-                    esp_alloc::HEAP.used(),
+                    state::heap().0,
                     esp_alloc::HEAP.stats().max_usage,
+                    state::heap().1.map_or(0, |(_, used)| used),
                 )
             });
             println!("{line}");
