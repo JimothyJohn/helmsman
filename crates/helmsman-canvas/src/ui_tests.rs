@@ -3609,6 +3609,69 @@ mod boxed {
         );
     }
 
+    /// Card cip-adapter-visible: the Devices tab names the EtherNet/IP
+    /// adapter's address from the real `GET /api/adapter`, in one wrapped
+    /// line that leaves the panel at its default width; a box with the
+    /// adapter off, or an older one without the route, shows nothing.
+    #[test]
+    fn the_devices_tab_names_the_adapter_in_a_line_that_wraps_at_the_default_width() {
+        use crate::remote::{Fetch, Msg};
+        let bound = "192.168.100.200:44818".parse().unwrap();
+        let on = Bench::with_adapter(Some(bound));
+        let (mut state, _) = watch(&on);
+        let (status, body) = on.get("/api/adapter");
+        assert_eq!(status, 200, "{body}");
+        state.apply(Msg::Got(Fetch::Adapter, Ok(body)), 1.0);
+        state.io_map = Some("in ready bool box di:0\n".into());
+        let mut h = Harness::new(App::boxed());
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.frame(vec![]);
+        let left = h.rect("left");
+        let right = h.rect("right");
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(h.app.chrome.devices_open());
+        let line = h.rect("devices adapter");
+        let pane = h.rect("left");
+        assert!(
+            line.right() <= crate::editor::LEFT_W,
+            "the line {line:?} stays inside the pane's {} pt default width",
+            crate::editor::LEFT_W
+        );
+        assert!(line.height() > 30.0, "the long line wraps: {line:?}");
+        assert!(
+            (0.0..=8.0).contains(&(pane.right() - left.right())),
+            "the left pane grew {} pt",
+            pane.right() - left.right()
+        );
+        assert!(
+            (0.0..=8.0).contains(&(right.left() - h.rect("right").left())),
+            "the right panel grew"
+        );
+        // Off: the box answers, and says nothing on the tab.
+        let off = Bench::with_adapter(None);
+        let (status, body) = off.get("/api/adapter");
+        assert_eq!(status, 200, "{body}");
+        let mut h = Harness::new(App::boxed());
+        let mut state = watch(&off).0;
+        state.apply(Msg::Got(Fetch::Adapter, Ok(body)), 1.0);
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(!h.has("devices adapter"), "off: no line");
+        // An older box answers 404: no line.
+        let mut h = Harness::new(App::boxed());
+        let mut state = watch(&off).0;
+        state.apply(Msg::Got(Fetch::Adapter, Err("HTTP 404".into())), 1.0);
+        h.app.boxv.as_mut().unwrap().state = state;
+        h.frame(vec![]);
+        h.press("pane devices");
+        h.wait(0.3);
+        assert!(!h.has("devices adapter"), "a 404: no line");
+    }
+
     /// On a box, Scan posts to `/api/devices/discover` and the answer's
     /// devices show with what the box said: mapped or not, the library's
     /// match; a refusal shows as text, and a hostile body lists nothing.
