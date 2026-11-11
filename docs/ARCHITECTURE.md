@@ -253,6 +253,11 @@ scan; the scheduler bounds how often.
   profinet_watch -- STATION if=... slots=...` (bring one device up and
   show its inputs); `cargo run -p helmsman-profinet --example
   startup_pcap` writes a whole startup as a pcap for Wireshark.
+  `/usr/bin/python3 -I scripts/gsdml-slots.py FILE.xml [--slots 1,5,6]
+  [--pdev] [--list]` prints the device line for a vendor's GSDML file
+  (ids, the modules in the slots the access point allows, data lengths),
+  until the box imports GSDML itself. The edge node runs the same
+  controller (docs/EDGE.md "PROFINET on the P4").
 
 - **One Class 1 I/O port per box** (`helmsman_proto::endpoint`). The box
   is a target (scanners send its adapter O->T) and an originator (`enip-io`
