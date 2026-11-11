@@ -52,7 +52,7 @@ impl DevicesUi {
             points(ui, chrome, &mut d, &program, rows_h);
             if let Some(err) = &d.error {
                 ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(err).color(RED)).wrap());
+                ui.add(egui::Label::new(RichText::new(err).color(crate::theme::theme(ui).ink(RED))).wrap());
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -139,7 +139,9 @@ impl DevicesUi {
                     true
                 }
                 Some(Err(why)) if text != old => {
-                    ui.add(egui::Label::new(RichText::new(why).color(RED)).wrap());
+                    ui.add(
+                        egui::Label::new(RichText::new(why).color(crate::theme::theme(ui).ink(RED))).wrap(),
+                    );
                     false
                 }
                 _ => false,
@@ -199,7 +201,7 @@ impl DevicesUi {
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
                 let ok = ui
-                    .add(egui::Button::new(RichText::new("Delete").strong().color(RED)).min_size(tall))
+                    .add(egui::Button::new(RichText::new("Delete").strong().color(crate::theme::theme(ui).ink(RED))).min_size(tall))
                     .tip("Deletes the lines. Save keeps the change; Deploy runs it.");
                 chrome.hit("delete ok", ok.rect);
                 let no = ui
@@ -317,7 +319,7 @@ fn fields(ui: &mut egui::Ui, chrome: &mut Chrome, d: &mut NewDevice, eds_files: 
             }
         });
     if let Err(e) = check_settings(d.driver(), &d.params) {
-        ui.add(egui::Label::new(RichText::new(e).color(RED)).wrap());
+        ui.add(egui::Label::new(RichText::new(e).color(crate::theme::theme(ui).ink(RED))).wrap());
     }
     // The line io.map gets, read-only.
     // One line, cut at the edge: a wrap would change the centred form's

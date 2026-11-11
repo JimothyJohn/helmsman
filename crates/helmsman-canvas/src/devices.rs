@@ -776,7 +776,7 @@ impl DevicesUi {
             let folded = self.folded.contains(&n.name);
             let dot = match &n.state {
                 LinkState::Up(_) => RichText::new("●").color(t.accent),
-                LinkState::Down(_) => RichText::new("●").color(RED),
+                LinkState::Down(_) => RichText::new("●").color(crate::theme::theme(ui).ink(RED)),
                 LinkState::Unknown => RichText::new("○").color(t.muted),
                 LinkState::Simulated => RichText::new("◌").color(t.muted),
             };
@@ -897,7 +897,7 @@ impl DevicesUi {
                 let text = format!("{:<3} {}  {}{value}", p.dir, p.signal, p.point);
                 let color = match (&p.value, p.quality.as_deref()) {
                     _ if p.forced => Color32::from_rgb(255, 196, 60),
-                    (_, Some("missing")) => RED,
+                    (_, Some("missing")) => crate::theme::theme(ui).ink(RED),
                     (Some(Value::Bool(true)), _) => t.accent,
                     _ => t.fg,
                 };
@@ -987,7 +987,10 @@ impl DevicesUi {
             }
             Scan::Idle | Scan::Running | Scan::Done => {}
             Scan::Failed(why) => {
-                ui.add(egui::Label::new(RichText::new(why).small().color(RED)).wrap());
+                ui.add(
+                    egui::Label::new(RichText::new(why).small().color(crate::theme::theme(ui).ink(RED)))
+                        .wrap(),
+                );
             }
         }
         for f in &self.found {

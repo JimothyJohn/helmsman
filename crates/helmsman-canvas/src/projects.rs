@@ -802,7 +802,10 @@ impl FilesUi {
             ui.horizontal(|ui| {
                 let tall = Vec2::new(0.0, TAP * 0.7);
                 let yes = ui
-                    .add(egui::Button::new(RichText::new(verb).color(RED)).min_size(tall))
+                    .add(
+                        egui::Button::new(RichText::new(verb).color(crate::theme::theme(ui).ink(RED)))
+                            .min_size(tall),
+                    )
                     .tip(match &a {
                         Act::DeleteProject(_) | Act::DeleteFile(_) => "Deletes it. There is no undo.",
                         Act::UseAnswer { .. } => "Saves the edits here, then opens the agent's code.",
@@ -853,7 +856,12 @@ pub fn diags_ui(ui: &mut egui::Ui, diags: &[Diag], chrome: &mut Chrome) -> Optio
     for (k, d) in diags.iter().enumerate() {
         let r = ui
             .add(
-                egui::Label::new(RichText::new(d.label()).monospace().color(RED)).sense(egui::Sense::click()),
+                egui::Label::new(
+                    RichText::new(d.label())
+                        .monospace()
+                        .color(crate::theme::theme(ui).ink(RED)),
+                )
+                .sense(egui::Sense::click()),
             )
             .tip("Opens the file at this line.");
         chrome.hit(format!("diag {k}"), r.rect);

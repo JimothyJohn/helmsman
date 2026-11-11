@@ -19,7 +19,7 @@ use serde_json::{Value as Json, json};
 use crate::box_projects::{Answer, PCall, PReq};
 use crate::editor::Chrome;
 use crate::playground::nice_range;
-use crate::playground_view::{lane_handles, scale_labels, window_slider};
+use crate::playground_view::{SCALE_W, lane_handles, scale_labels, window_slider};
 use crate::remote::{BoxState, segment};
 use crate::review::Session;
 use crate::sim_projects::Storage;
@@ -321,12 +321,13 @@ impl BoxTrend {
         let now = ui.ctx().input(|i| i.time);
         let who = owner(session).unwrap_or_else(|| "this browser".into());
         let t = theme(ui);
-        ui.label(RichText::new("Signals").strong().color(t.muted))
-            .tip(format!(
-                "Click a signal to pin it to the trend, up to {PINS}. The pins are kept for {who}."
-            ));
         let mut flip = None;
+        // The heading shares the signals' row (as in the simulation).
         ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Signals").strong().color(t.muted))
+                .tip(format!(
+                    "Click a signal to pin it to the trend, up to {PINS}. The pins are kept for {who}."
+                ));
             for s in &state.signals {
                 let on = self.pins.contains(&s.name);
                 let r =
@@ -380,14 +381,16 @@ impl BoxTrend {
         let lane = rect.height() / self.pins.len() as f32;
         #[allow(clippy::cast_precision_loss)]
         let x_of = |t: u64| {
-            rect.left() + 90.0 + (rect.width() - 96.0) * (t.max(start) - start) as f32 / window as f32
+            rect.left()
+                + 90.0
+                + (rect.width() - 90.0 - SCALE_W) * (t.max(start) - start) as f32 / window as f32
         };
         for (k, name) in self.pins.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
             let color = match k % LINES.len() {
                 5 if !t.dark => t.fg,
-                i => LINES[i],
+                i => t.ink(LINES[i]),
             };
             let line: &[(u64, f64)] = self.series.get(name).map_or(&[], Vec::as_slice);
             // The point before the window holds its value into it; the

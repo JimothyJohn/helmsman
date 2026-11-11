@@ -90,7 +90,7 @@ impl Theme {
             bg: Color32::from_rgb(0xF4, 0xF4, 0xF4),
             panel: WHITE,
             fg: BLACK,
-            muted: Color32::from_rgb(0x6E, 0x6E, 0x6E),
+            muted: Color32::from_rgb(0x66, 0x66, 0x66),
             rule: Color32::from_rgb(0xD0, 0xD0, 0xD0),
             shade: Color32::from_rgb(0xB8, 0xB8, 0xB8),
             chart: Color32::from_rgb(0xFA, 0xFA, 0xFA),
@@ -99,9 +99,57 @@ impl Theme {
             veil: Color32::from_rgba_unmultiplied(0xF4, 0xF4, 0xF4, 0xC0),
             code: Color32::from_gray(25),
             bad: Color32::from_rgb(0xFF, 0xD9, 0xD6),
-            accent: Color32::from_rgb(0x9C, 0x75, 0x00),
+            accent: Color32::from_rgb(0x7A, 0x5A, 0x00),
         }
     }
+
+    /// A brand colour as text or a thin line on this page: itself on the
+    /// dark page, where each reads; on the light one darkened, hue kept,
+    /// until it stands [`INK_CONTRAST`] to 1 against the lightest grey a
+    /// chip is drawn on. The green of "running", TRUE and FALSE and a
+    /// trend's yellow trace stood 1.6 to 2.7 to 1 there (2026-11-10).
+    /// Fills, lamps and grounds keep the brand colour.
+    #[must_use]
+    pub fn ink(self, c: Color32) -> Color32 {
+        if self.dark {
+            return c;
+        }
+        let [mut r, mut g, mut b, a] = c.to_array();
+        while contrast([r, g, b], LIGHT_CHIP) < INK_CONTRAST {
+            // 15/16 a step: no float, and it ends (black stands 17 to 1).
+            r -= r.div_ceil(16);
+            g -= g.div_ceil(16);
+            b -= b.div_ceil(16);
+        }
+        Color32::from_rgba_unmultiplied(r, g, b, a)
+    }
+}
+
+/// What [`Theme::ink`] holds a colour to on the light page: WCAG's
+/// contrast for body text.
+pub const INK_CONTRAST: f32 = 4.5;
+/// The light page's chip ground (a button at rest), the darkest ground
+/// its text is drawn on.
+const LIGHT_CHIP: [u8; 3] = [0xEB, 0xEB, 0xEB];
+
+/// WCAG 2 relative luminance of an sRGB colour.
+fn luminance(c: [u8; 3]) -> f32 {
+    let lin = |v: u8| {
+        let v = f32::from(v) / 255.0;
+        if v <= 0.039_28 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+}
+
+/// WCAG 2 contrast ratio of two sRGB colours, 1 to 21.
+#[must_use]
+pub fn contrast(a: [u8; 3], b: [u8; 3]) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
 /// A label that is never broken across lines: a row of status words
@@ -411,5 +459,34 @@ mod tests {
         assert_ne!(l.accent, YELLOW, "yellow text gets an ochre on the light page");
         assert_eq!(Theme::for_mode(true), d);
         assert_eq!(Theme::for_mode(false), l);
+    }
+
+    /// Text on the light page reads: the accent, the secondary grey and
+    /// every brand colour used as ink stand 4.5 to 1 on the page, a panel
+    /// and a chip (the measured 2026-11-10 ratios were 1.6 to 4.2). The
+    /// dark page keeps the brand colours as they are.
+    #[test]
+    fn light_mode_text_stands_out_from_every_ground() {
+        use crate::st_view::brand::{GREEN, RED, WARN};
+        let l = Theme::light();
+        let rgb = |c: eframe::egui::Color32| [c.r(), c.g(), c.b()];
+        let grounds = [rgb(l.bg), rgb(l.panel), [0xF7; 3], [0xEB; 3]];
+        for (name, c) in [
+            ("accent", l.accent),
+            ("muted", l.muted),
+            ("green", l.ink(GREEN)),
+            ("red", l.ink(RED)),
+            ("orange", l.ink(WARN)),
+            ("yellow", l.ink(YELLOW)),
+        ] {
+            for g in grounds {
+                let k = super::contrast(rgb(c), g);
+                assert!(k >= super::INK_CONTRAST, "{name} on {g:?}: {k:.2}");
+            }
+        }
+        let d = Theme::dark();
+        for c in [GREEN, RED, WARN, YELLOW] {
+            assert_eq!(d.ink(c), c);
+        }
     }
 }
