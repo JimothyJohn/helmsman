@@ -6,8 +6,8 @@
 # that were each green landed together. It also lints helmsman-plc without
 # its `enip-io` feature (the EtherNet/IP scanner, in the default build since
 # the E1213 bench passed) so that the enip-less box keeps compiling, and
-# helmsman-iec, helmsman-modbus, helmsman-proto's codecs and helmsman-nodecore
-# without std for thumbv7em (the edge node, docs/EDGE.md).
+# helmsman-iec, helmsman-modbus, helmsman-profinet, helmsman-proto's codecs
+# and helmsman-nodecore without std for thumbv7em (the edge node, docs/EDGE.md).
 # Needs: `scripts/install-dev.sh`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -22,5 +22,14 @@ cargo clippy -q --target wasm32-unknown-unknown -p helmsman-canvas -- -D warning
 # clippy, so a std-only call fails here and not on the Xtensa toolchain.
 cargo clippy -q -p helmsman-iec --no-default-features --features libm --target thumbv7em-none-eabihf -- -D warnings
 cargo clippy -q -p helmsman-modbus --target thumbv7em-none-eabihf -- -D warnings
+cargo clippy -q -p helmsman-profinet --target thumbv7em-none-eabihf -- -D warnings
+# helmsman-l2's other half: on a Mac the packet-socket code is not compiled
+# and on CI's Linux the BPF code is not, so each host lints the half it
+# does not build (2026-11-11: three casts in the Linux half failed CI
+# after a green local gate).
+case "$(uname -s)" in
+  Darwin) cargo clippy -q -p helmsman-l2 --target aarch64-unknown-linux-gnu -- -D warnings ;;
+  *) ;;
+esac
 cargo clippy -q -p helmsman-proto --no-default-features --target thumbv7em-none-eabihf -- -D warnings
 cargo clippy -q -p helmsman-nodecore --target thumbv7em-none-eabihf -- -D warnings

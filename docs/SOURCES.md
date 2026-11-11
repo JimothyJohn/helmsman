@@ -726,6 +726,76 @@ into the code.
   a `§` of the standard. A behaviour pinned by the oracle cites the oracle
   test by name.
 
+### PROFINET IO, by secondary references (IEC 61158 is not held)
+
+- **The standard:** PROFINET IO is IEC 61158-5-10 (services) and
+  IEC 61158-6-10 (protocol), with IEC 61784-2 for the profiles; PI
+  publishes the same text to its members. None of it is held, so nothing
+  in this repo cites a clause of it. What `helmsman-profinet` puts on the
+  wire is taken from the three open implementations below, and each
+  layout is cited by file and function where the code states it.
+- **p-net** (rtlabs-com/p-net, commit `19782d52`, read 2026-11-10): an IO
+  device stack in C, dual-licensed GPLv3 / commercial. **Read for facts,
+  nothing copied**: no code, table or test vector of it is in this
+  repository. It is the device side of every exchange, so it says what a
+  device accepts: `src/device/pf_block_reader.c` (the Connect's blocks:
+  `pf_get_ar_param`, `pf_get_iocr_param`, `pf_get_alarm_cr_request`,
+  `pf_get_exp_api_module`; `pf_get_control`, `pf_get_write_request`; the
+  RPC header in `pf_get_dce_rpc_header` and the NDR checks in
+  `pf_get_ndr_data_req`), `pf_block_writer.c` (the responses, the block
+  header's length rule, the alarm PDUs), `pf_cmrpc.c` (the RPC session:
+  one per activity UUID, the reply port, "application ready" sent to UDP
+  0x8894 on the controller with interface `dea00002-...`, the response
+  flags), `pf_cmdev.c` (`pf_cmdev_check_iocr_param`: frame id ranges,
+  data length 40..1440, clock factors, hold time; `pf_cmdev_fix_frame_id`:
+  the device picks the output frame id when asked with 0xFFFF; a
+  submodule without data is treated as an input),
+  `src/common/pf_ppm.c` and `pf_cpm_driver_sw.c` (the cyclic frame: data,
+  cycle counter, data status, transfer status; a consumer reads the last
+  four bytes and takes only the exact length; the counter must advance by
+  1..=61440), `pf_dcp.c` (DCP), `pf_alarm.c` (RTA sequence numbers),
+  `pf_types.h` and `include/pnet_api.h` (block types, status codes).
+- **Wireshark's PROFINET dissectors** (wireshark/wireshark, commit
+  `cd59fea3`, `plugins/epan/profinet/`): `packet-dcerpc-pn-io.c` for the
+  interface UUIDs and block types (agreeing with p-net) and the RTA PDU
+  type in the low nibble; `packet-pn-dcp.c` for DCP.
+- **scapy's PROFINET layers** (secdev/scapy, `scapy/contrib/pnio*.py`):
+  used as an independent reader. `cargo run -p helmsman-profinet
+  --example startup_pcap` writes a startup between our controller and
+  our simulated device; scapy 2.x dissects its DCP frames and every RPC
+  (Connect request and response, the record write, PrmEnd, application
+  ready, Release) field for field as built (run 2026-11-10 with `uv run
+  --with scapy`). It mislabels the RTA acknowledgement PDU (it reads our
+  0x13 as type DATA); p-net and Wireshark both put the type in the low
+  nibble, so ours stands.
+- **DCE 1.1: Remote Procedure Call** (The Open Group, C706, 1997;
+  https://pubs.opengroup.org/onlinepubs/9629399/chap12.htm, read
+  2026-11-10): chapter "RPC PDU Encodings", "Connectionless RPC PDUs":
+  the 80-byte header field by field, the PDU types (request 0 ..
+  cancel_ack 10) and the first flags byte (lastfrag 0x02, frag 0x04,
+  nofack 0x08, maybe 0x10, idempotent 0x20, broadcast 0x40). This one is
+  the primary source for the RPC envelope.
+- **What no source here settles, and the bench must:** the port a real
+  device answers from and expects later calls at (ours follows the
+  response's source port); whether a given device insists on the
+  advanced startup; fragmented responses (not reassembled); behaviour
+  with a device that has interface and port submodules left out.
+- **How to cite:** `p-net <file> <function>`, `Wireshark <file>`,
+  `C706 ch. "RPC PDU Encodings"`; never a `§` of IEC 61158.
+
+### macOS BPF and Linux packet sockets (raw Ethernet, `helmsman-l2`)
+
+- `bpf(4)` and the SDK's `net/bpf.h` (MacOSX.sdk on the Studio,
+  2026-11-10): the ioctl numbers and the layout of `struct bpf_hdr`
+  (20 bytes, `bh_caplen` at 8, `bh_hdrlen` at 16) were read by compiling
+  a C program against the header and printing them, and getifaddrs'
+  `sockaddr_dl` the same way; `helmsman-l2`'s constants are those
+  values. Not run: `/dev/bpf*` is root-only on the Studio until
+  `scratch/27-bpf-access.sh` is run, so the BPF path has parsed
+  synthetic buffers and compiled, and has not carried a frame.
+- `packet(7)`: `AF_PACKET` / `SOCK_RAW` bound to an interface and an
+  `EtherType`. Compiled for aarch64-unknown-linux-gnu, not run.
+
 ### Browser keyboard shortcuts (Chrome, Edge, Safari, Firefox), read 2026-11-08
 
 - **Where:** Chrome, "Chrome keyboard shortcuts"
@@ -834,6 +904,40 @@ into the code.
   and connection limit, the Modbus example map. Bit positions within the
   status words and the counters' byte order are inferred, and say so.
 - **How to cite:** `E1200 manual v15.10 p. X-N`.
+
+### Novanta IMS MDrive files (read 2026-11-10, no unit on the bench)
+
+- **GSDML:** `GSDML-V2.2-mdrive-SchneiderElectic-20130530.xml`, SHA-256
+  `3271ffc6dddf37bf4578e6da91a9096ac90841cab54c041a816f0899fb3070c1`, in
+  the "LMD Ethernet TCP/IP Application 2.4.0.9" zip from
+  https://www.novantaims.com/dloads/firmware/ (with `SEM_MDrivever1_2.eds`
+  and the firmware image). No licence text; **not committed**, facts
+  restated in docs/devices/novanta-mdrive.md.
+- **Product manual:** "Lexium MDrive Ethernet with circular connectors
+  LMDxE57C/85C", V1.00, 03.2015,
+  https://novanta.com/robotics-automation/wp-content/uploads/sites/3/2015/04/LMDxE57-85C.pdf
+  (protocols §1.2.1, default address §6, configuration ch. 7), read by a
+  research pass, not re-read.
+- **Not read:** the "Profinet IO Fieldbus Manual" (the I/O byte map) and
+  Novanta's S7 workbook.
+
+### Universal Robots fieldbus files (read 2026-11-10, no robot on the bench)
+
+- **GSDML:** `GSDML-V2.45-UR-PROFIsafe-20251201.xml`, SHA-256
+  `830c49c679c45113e7f951a5c9b92ec89909d64c15ac057e5b807fe87a030d94`,
+  from https://s3-eu-west-1.amazonaws.com/ur-support-site/160022/GSDML-V2.45-UR-PROFIsafe-20251201.xml.zip;
+  the module table in docs/devices/universal-robots.md was read from it
+  with a script. Not committed.
+- **EDS:** `UniversalRobot.eds`, SHA-256
+  `c3e930f63bf56c21af010fdf89ae3e8de196080df791ca6af6b32e436a75da62`,
+  https://s3-eu-west-1.amazonaws.com/ur-support-site/18712/UniversalRobot.eds.
+- **Guides (read by a research pass, not re-read):** the PROFINET guide
+  https://www.universal-robots.com/articles/ur/interface-communication/profinet-how-to-guide-e-series/,
+  the Modbus server article
+  https://www.universal-robots.com/articles/ur/interface-communication/modbus-server/
+  and its register table, the protocol overview
+  https://www.universal-robots.com/developer/communication-protocol/,
+  and the forum threads on URSim (28222, 17631, 6042).
 
 ### The host's ARP table: `proc(5)` and `arp(8)`
 

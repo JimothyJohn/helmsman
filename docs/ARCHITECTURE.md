@@ -66,6 +66,8 @@ Three directions of traffic, three different rules:
 | `helmsman-iec` | IEC 61131-3: ST lexer, parser, checker, interpreter; `PLCopen` TC6 XML (LD/FBD/ST) lowered to ST; the standard FB library; the ruSTy differential oracle (dev only). One `Program` scans one `Image` (`%I`, `%Q`, `%M` byte areas) with an instruction budget. | built |
 | `helmsman-project` | A project's rules and its `.zip`, no I/O: names, file contents, `Files`, the hand-written ZIP reader/writer. Shared by helmsman-plc's `project` (folders on the box) and the canvas's simulation (projects in browser storage), so an archive moves between them byte for byte. Pure Rust (`miniz_oxide`), wasm-safe. | built |
 | `helmsman-modbus` | The bytes of Modbus and nothing that moves them: request PDUs (FC 1-6, 0x0F, 0x10, 43/14 Read Device Identification), reply checks (exact lengths, exceptions, echoes, identification objects), the MBAP header. `no_std + alloc`, no dependencies; helmsman-io's TCP and serial clients and the edge node's embassy-net client build their frames here, so one codec is tested once. | built |
+| `helmsman-profinet` | PROFINET IO, RT class 1, as bytes and as two state machines without I/O (every call takes `now`): DCP (Identify, Set), the DCE/RPC envelope, the Connect / Write / PrmEnd / application-ready / Release blocks, cyclic frames and their layout, alarms; `controller` (an IO controller for one device) and `device` (a simulated IO device for tests and benches). `no_std + alloc`, no dependencies. | built: against its own simulated device and scapy's dissector; no real device yet (`mdrive-bringup`) |
+| `helmsman-l2` | Raw Ethernet frames of one EtherType on one interface: a BPF device on macOS, a packet socket on Linux. The one crate with `unsafe` (libc calls); everything else forbids it. | built: compiled for both, the BPF path not yet run (needs `/dev/bpf*` access) |
 | `helmsman-node` | The edge node's firmware (docs/EDGE.md): `helmsman-iec` without std on an Olimex ESP32-POE2 (esp-hal, the esp toolchain, Xtensa). Not a workspace member (own lock, `make node-build`): the scan bench (Phase 1), then Modbus TCP to a remote block over embassy-net (Phase 2). | built: Phase 1; Phase 2 in progress |
 | `helmsman-plc` | The runtime: a library (`runtime::Runtime`, the multi-module scheduler; `spec`, the `--module` syntax; `store`, snapshots in SQLite) and the binary that puts it behind the adapter. Grows into the box core (scheduler, signals, snapshots, policy, box API) unless a card splits it. | built |
 | `helmsman-io` | The I/O layer: `IoMap` (devices, signals, bindings) and its validation, the `Driver` contract, the Modbus TCP driver, the box's channels (in memory until GPIO), a device simulator, the conformance harness, the map file format (`text`), and WASM drivers (`wasm`, the `wasm` feature: drivers compiled to WebAssembly, sandboxed to their device's socket). | built |
@@ -220,6 +222,37 @@ scan; the scheduler bounds how often.
   `docs/devices/moxa-iologik-e1213.md`.
   On a box the links share the box's one Class 1 I/O port with its adapter
   (next item); a device line's `io_port=N` gives a link a socket of its own.
+
+- **`profinet`**: `profinet-io`, a PROFINET IO device the box masters
+  as its IO controller (RT class 1). The device line names the station
+  and the modules it is built from, as its GSDML lists them (`device axis
+  profinet-io mdrive if=en0 slots=0:0x1/1:0x1,1:0x30/1:0x1:i128,...`);
+  points are bits and words of the input and output images (every
+  submodule's data in `slots` order), big-endian unless the format ends
+  in `le`. The state machine is `helmsman_profinet::controller`: find the
+  station by name (DCP), give it its address if the line has one, Connect,
+  write the parameter records, PrmEnd, wait for "application ready", then
+  a frame each way every cycle (8 ms by default) with a watchdog of
+  `hold` cycles on both sides. The driver gives it a thread and a `Link`:
+  `SimLink` (a simulated device in the process; `if=sim` under the
+  `profinet-sim` feature loops its outputs to its inputs) or `raw::RawLink`
+  (the `profinet-raw` feature: `helmsman-l2` for the frames, and one UDP
+  socket at port 34964 shared by every link of the box, each datagram
+  handed to the link that last wrote to its sender). Until cyclic data
+  flows a read is a link error whose text is what the startup waits for
+  or why the device refused ("slot 2 holds module 0x99"); a submodule
+  whose data the device marks bad is a point error. Alarms are
+  acknowledged and kept, not yet surfaced. `helmsman-plc`'s `profinet-io`
+  feature turns the real interface on; it is not in the default build
+  until a device has passed the bench. Not done: GSDML import (the
+  `slots=` line is written by hand), record reads, RPC fragmentation (a
+  configuration whose Connect exceeds one datagram is refused at load),
+  RT classes 2 and 3, the box as a PROFINET device.
+  Bench tools: `cargo run -p helmsman-io --features profinet-raw --example
+  profinet_scan -- en0` (who is on the wire) and `--example
+  profinet_watch -- STATION if=... slots=...` (bring one device up and
+  show its inputs); `cargo run -p helmsman-profinet --example
+  startup_pcap` writes a whole startup as a pcap for Wireshark.
 
 - **One Class 1 I/O port per box** (`helmsman_proto::endpoint`). The box
   is a target (scanners send its adapter O->T) and an originator (`enip-io`

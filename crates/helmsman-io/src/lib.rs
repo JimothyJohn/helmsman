@@ -3,7 +3,8 @@
 //!
 //! - a [`Device`] is an endpoint the box masters, spoken to by a driver
 //!   (`modbus-tcp`, `modbus-rtu` on a serial line ([`rtu`]), [`enip`]
-//!   (`enip-io`, an EtherNet/IP adapter over a Class 1 connection), and
+//!   (`enip-io`, an EtherNet/IP adapter over a Class 1 connection),
+//!   [`profinet`] (`profinet-io`, a PROFINET IO device, RT class 1), and
 //!   [`logix`] read-only for controllers the box only observes;
 //!   and drivers compiled to WebAssembly ([`wasm`], the `wasm` feature),
 //!   which reach only their own device;
@@ -30,6 +31,7 @@ pub mod local;
 pub mod logix;
 pub mod modbus;
 pub mod model;
+pub mod profinet;
 pub mod resolve;
 pub mod rtu;
 pub mod sim;

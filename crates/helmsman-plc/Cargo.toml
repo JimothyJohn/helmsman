@@ -44,7 +44,7 @@ helmsman-proto = { path = "../helmsman-proto", features = ["unrestricted"] }
 proptest = "1.12"
 # The simulated Moxa ioLogik E1213 (tests/enip_link.rs, which drives
 # helmsman-io's driver directly; the box's own is the `enip-io` feature). `wasm`: a WASM driver behind a link (tests/wasm_driver.rs).
-helmsman-io = { path = "../helmsman-io", features = ["enip-sim", "wasm"] }
+helmsman-io = { path = "../helmsman-io", features = ["enip-sim", "profinet-sim", "wasm"] }
 # The WASM tier's test modules are hand-written WAT, assembled in the test.
 wat = { version = "1.262.0", default-features = false }
 # An independent OPC UA client to test the box's server against
@@ -76,6 +76,13 @@ workspace = true
 default = ["box", "https", "enip-io"]
 box = ["dep:rusqlite", "dep:ring", "dep:signal-hook", "dep:helmsman-project", "dep:helmsman-agent", "dep:helmsman-diagram", "helmsman-io/serial", "helmsman-io/gpio", "wasm"]
 enip-io = ["box", "helmsman-io/enip"]
+# `profinet-io` on a real interface: PROFINET IO devices the box masters
+# as their controller, over raw Ethernet (helmsman-io's `profinet-raw`,
+# which brings in helmsman-l2, the workspace's one crate with `unsafe`).
+# Not in the default build until a real device has passed the bench
+# (TODO.md `mdrive-bringup`); a box built without it loads a map naming
+# `profinet-io` and reports the device's link down, saying why.
+profinet-io = ["box", "helmsman-io/profinet-raw"]
 # `wasm`: modules compiled to WebAssembly (`module.wasm`) beside ST ones,
 # run by an interpreter under fuel and memory limits, and the map's WASM
 # drivers (`wasm:NAME`, helmsman-io's `wasm`). In `box`; the canvas's
