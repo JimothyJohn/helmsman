@@ -91,6 +91,7 @@ struct Setup {
     stream_every: Duration,
     running: Option<ChangeSet>,
     store: Option<PathBuf>,
+    adapter: Option<SocketAddr>,
 }
 
 impl Default for Setup {
@@ -103,6 +104,7 @@ impl Default for Setup {
             stream_every: Duration::from_millis(20),
             running: None,
             store: None,
+            adapter: None,
         }
     }
 }
@@ -180,6 +182,7 @@ impl Bench {
             ui: None,
             trust: None,
             market_local: false,
+            adapter: setup.adapter,
         };
         let api = Api::start_with(cfg, shared, extras).unwrap();
         let addr = api.addr();
@@ -684,6 +687,40 @@ fn health_says_up_and_the_build_and_nothing_else() {
     assert_eq!(j["build"].as_str(), Some(helmsman_plc::BUILD));
     assert_eq!(j.as_object().unwrap().len(), 2, "{j}");
     assert_eq!(r.header("Cache-Control").as_deref(), Some("no-store"));
+}
+
+/// Card cip-adapter-visible: `GET /api/adapter` names the address the
+/// adapter really bound, behind a session like every read; with the adapter
+/// off it says so and holds no address.
+#[test]
+fn adapter_route_names_the_bound_address_or_says_off() {
+    let bound: SocketAddr = "192.0.2.7:44818".parse().unwrap();
+    let on = Bench::with(Setup {
+        adapter: Some(bound),
+        ..Setup::default()
+    });
+    let r = get_bare(on.addr, "/api/adapter");
+    assert_eq!(r.status, 401, "{r:?}");
+    for bad in [format!("Bearer {}", "f".repeat(64)), format!("Basic {TOKEN}")] {
+        let r = request(on.addr, "GET", "/api/adapter", Some(&bad), "", "");
+        assert_eq!(r.status, 401, "{r:?}");
+    }
+    let r = get(on.addr, "/api/adapter");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(
+        r.json(),
+        json!({"protocol": "EtherNet/IP", "bind": "192.0.2.7:44818", "on": true})
+    );
+    for method in ["POST", "PUT", "DELETE"] {
+        let r = request(on.addr, method, "/api/adapter", Some(&bearer()), "", "");
+        assert_eq!(r.status, 405, "{method}: {r:?}");
+    }
+
+    let off = Bench::new();
+    assert_eq!(get_bare(off.addr, "/api/adapter").status, 401);
+    let r = get(off.addr, "/api/adapter");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json(), json!({"protocol": "EtherNet/IP", "on": false}));
 }
 
 #[test]

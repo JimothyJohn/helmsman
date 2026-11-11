@@ -1099,6 +1099,7 @@ fn start_api(
     approval: Approval,
     forces: &Arc<Forces>,
     running_drivers: helmsman_plc::drivers::Drivers,
+    adapter: SocketAddr,
 ) -> Result<(Api, Option<Site>), String> {
     let ui =
         o.ui.as_deref()
@@ -1148,6 +1149,7 @@ fn start_api(
         ui,
         trust: Some(trust),
         market_local: o.market == MarketHosts::Local,
+        adapter: Some(adapter),
     };
     let site = o
         .site
@@ -1578,6 +1580,7 @@ fn run(o: &Opts) -> Result<(), String> {
                 approval,
                 &forces,
                 content.drivers.drivers.clone(),
+                SocketAddr::V4(adapter.encap_addr()),
             )
         })
         .transpose()?;
