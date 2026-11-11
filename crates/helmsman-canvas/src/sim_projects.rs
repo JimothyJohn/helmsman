@@ -51,6 +51,12 @@ pub trait Storage {
     fn backup(&mut self, _text: &str) -> Result<(), String> {
         Err("this storage keeps no backup".into())
     }
+    /// The store beside this one named `suffix` (a cleaned
+    /// [`crate::desk::slot_suffix`]), for the desk of one person. `None`:
+    /// the store has no neighbours, and one desk is all it keeps.
+    fn keyed(&self, _suffix: &str) -> Option<Box<dyn Storage>> {
+        None
+    }
 }
 
 /// Storage in memory: gone with the page (native builds, tests).

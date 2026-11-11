@@ -230,18 +230,42 @@ impl BoxView {
         self.agent.turns.clear();
         self.instruct = crate::instruct::Instruct::default();
         self.devices_ui.adding = None;
+        self.desk_screen = None;
+        self.desk_user.clear();
         self.projects.start_over();
-        self.desk.adopt(&crate::desk::Desk::default());
     }
 
     /// Follows who is signed in: the desk on this page belongs to the last
-    /// person to sign in on it, and a different one starts over.
+    /// person to sign in on it. A different person starts from their own
+    /// desk in this browser (or an empty one), never the last one's; the
+    /// first to sign in after work typed signed out takes that work.
     fn follow_owner(&mut self) {
+        use crate::desk::Bound;
         let Some(who) = crate::desk::owner(self.session.as_ref()) else {
             return;
         };
-        if self.desk_owner.replace(who.clone()).is_some_and(|was| was != who) {
-            self.start_over();
+        let was = self.desk_owner.replace(who.clone());
+        if was.as_deref() == Some(who.as_str()) {
+            return;
+        }
+        // The form's name is the person who just signed in.
+        if let Some(u) = self.session.as_ref().and_then(|s| s.user.clone()) {
+            self.desk_user = u;
+        }
+        match self.desk.bind(&who, &self.desk_user, was.is_none()) {
+            Bound::Claimed => {}
+            Bound::Theirs(d) => {
+                let d = *d;
+                self.start_over();
+                self.projects.adopt(restore_of(&d));
+                self.put_back(d, false);
+            }
+            Bound::Unsupported => {
+                if was.is_some() {
+                    self.start_over();
+                    self.desk.adopt(&crate::desk::Desk::default());
+                }
+            }
         }
     }
 
