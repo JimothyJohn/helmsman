@@ -15,6 +15,9 @@ helmsman-modbus = { path = "../helmsman-modbus" }
 # deps): the `profinet-io` driver gives the controller a thread and a
 # link, and the simulated device is what its tests talk to.
 helmsman-profinet = { path = "../helmsman-profinet" }
+# Raw Ethernet frames (`profinet-raw`): the workspace's one crate with
+# `unsafe`, BPF on macOS and a packet socket on Linux.
+helmsman-l2 = { path = "../helmsman-l2", optional = true }
 # No `unrestricted`: the box build reads observed controllers, it never
 # writes them. `enip` adds only the Class 1 scanner (`scanner`), for the
 # adapters the box masters.
@@ -48,6 +51,9 @@ gpio = ["dep:gpiocdev", "dep:i2cdev"]
 enip = ["helmsman-proto/scanner"]
 # A simulated Moxa ioLogik E1213 for the conformance harness and tests.
 enip-sim = ["enip", "dep:helmsman-adapter"]
+# `profinet-io` on a real interface: raw Ethernet through helmsman-l2,
+# and the box's UDP socket at the PROFINET context-manager port.
+profinet-raw = ["dep:helmsman-l2"]
 # `if=sim` on a `profinet-io` device line: a simulated device in the
 # process, its outputs looped to its inputs, for tests and the harness.
 profinet-sim = []
@@ -57,7 +63,7 @@ wasm = ["dep:wasmi"]
 [dev-dependencies]
 helmsman-adapter = { path = "../helmsman-adapter" }
 # Tests and examples run the enip-io driver against the simulated E1213.
-helmsman-io = { path = ".", features = ["enip-sim", "profinet-sim", "wasm"] }
+helmsman-io = { path = ".", features = ["enip-sim", "profinet-sim", "profinet-raw", "wasm"] }
 # The WASM driver tests' adversarial guests are hand-written WAT,
 # assembled in the test (as helmsman-plc's module tests do).
 wat = { version = "1.262.0", default-features = false }
@@ -68,3 +74,12 @@ proptest = "1.12"
 
 [lints]
 workspace = true
+
+# Bench tools for a real PROFINET device (they need raw Ethernet).
+[[example]]
+name = "profinet_scan"
+required-features = ["profinet-raw"]
+
+[[example]]
+name = "profinet_watch"
+required-features = ["profinet-raw"]

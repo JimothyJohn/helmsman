@@ -80,6 +80,10 @@ use helmsman_profinet::rt::{Layout, Module, Record, Submodule};
 use crate::driver::{Driver, Error, PointInfo};
 use crate::model::{Ty, Value};
 
+#[cfg(feature = "profinet-raw")]
+#[path = "profinet_raw.rs"]
+pub mod raw;
+
 pub const DRIVER: &str = "profinet-io";
 
 /// The station name and ids the box announces itself with. The vendor id
@@ -275,7 +279,7 @@ impl Point {
     }
 
     /// First byte and length in its image.
-    const fn span(&self) -> (usize, usize) {
+    const fn span(self) -> (usize, usize) {
         match self.kind {
             Kind::Bit { byte, .. } => (byte as usize, 1),
             Kind::Word { offset, format } => (offset as usize, format.width()),
@@ -300,7 +304,7 @@ impl Point {
         }
     }
 
-    fn read_from(&self, image: &[u8]) -> Option<Value> {
+    fn read_from(self, image: &[u8]) -> Option<Value> {
         let (start, len) = self.span();
         let bytes = image.get(start..start + len)?;
         Some(match self.kind {
@@ -309,7 +313,7 @@ impl Point {
         })
     }
 
-    fn write_to(&self, image: &mut [u8], value: Value) -> Result<(), Error> {
+    fn write_to(self, image: &mut [u8], value: Value) -> Result<(), Error> {
         let (start, len) = self.span();
         let Some(bytes) = image.get_mut(start..start + len) else {
             return Err(Error::Point(format!(
@@ -350,12 +354,14 @@ pub struct Config {
 }
 
 fn number(s: &str) -> Option<u32> {
-    match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
-        Some(hex) if !hex.is_empty() && hex.len() <= 8 => u32::from_str_radix(hex, 16).ok(),
-        Some(_) => None,
-        None if !s.is_empty() && s.len() <= 10 && s.bytes().all(|b| b.is_ascii_digit()) => s.parse().ok(),
-        None => None,
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        return (!hex.is_empty() && hex.len() <= 8)
+            .then(|| u32::from_str_radix(hex, 16).ok())
+            .flatten();
     }
+    (!s.is_empty() && s.len() <= 10 && s.bytes().all(|b| b.is_ascii_digit()))
+        .then(|| s.parse().ok())
+        .flatten()
 }
 
 fn number16(s: &str) -> Option<u16> {
@@ -518,10 +524,10 @@ impl Config {
                         .ok_or_else(|| want("a count of cycles, 1 or more"))?;
                 }
                 "vendor" => {
-                    device.vendor_id = Some(number16(value).ok_or_else(|| want("an id up to 0xFFFF"))?)
+                    device.vendor_id = Some(number16(value).ok_or_else(|| want("an id up to 0xFFFF"))?);
                 }
                 "device" => {
-                    device.device_id = Some(number16(value).ok_or_else(|| want("an id up to 0xFFFF"))?)
+                    device.device_id = Some(number16(value).ok_or_else(|| want("an id up to 0xFFFF"))?);
                 }
                 "startup" => {
                     device.advanced_startup = match value.as_str() {
@@ -801,7 +807,7 @@ impl ProfinetDriver {
             inputs: None,
             good: vec![false; layout.places.len()],
             outputs: vec![0; layout.output_image_len],
-            status: "not started".into(),
+            status: "starting".into(),
             address: None,
             stop: false,
         }));
@@ -1001,8 +1007,8 @@ impl Drop for ProfinetDriver {
 }
 
 /// The opener a box uses: `if=sim` is a simulated device in the process
-/// (the `profinet-sim` feature); anything else needs raw Ethernet, which
-/// this build may not have.
+/// (the `profinet-sim` feature); anything else is a real interface,
+/// which needs raw Ethernet (the `profinet-raw` feature).
 #[must_use]
 pub fn opener() -> Opener {
     Arc::new(|config| {
@@ -1016,9 +1022,14 @@ pub fn opener() -> Opener {
                 "the device line names no interface: add if=NAME (en0, eth0), the network the device is on",
             ));
         };
+        #[cfg(feature = "profinet-raw")]
+        return raw::RawLink::open(interface).map(|l| Box::new(l) as Box<dyn Link>);
+        #[cfg(not(feature = "profinet-raw"))]
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            format!("this build cannot send raw Ethernet frames on {interface}"),
+            format!(
+                "this build cannot send raw Ethernet frames on {interface} (helmsman-io's `profinet-raw` feature)"
+            ),
         ))
     })
 }

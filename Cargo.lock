@@ -1584,6 +1584,7 @@ dependencies = [
  "gpiocdev",
  "helmsman-adapter",
  "helmsman-io",
+ "helmsman-l2",
  "helmsman-modbus",
  "helmsman-profinet",
  "helmsman-proto",
@@ -1593,6 +1594,13 @@ dependencies = [
  "sha2 0.11.1",
  "wasmi",
  "wat",
+]
+
+[[package]]
+name = "helmsman-l2"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

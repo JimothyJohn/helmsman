@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/helmsman-proto", "crates/helmsman-agent", "crates/helmsman-adapter", "crates/helmsman-canvas", "crates/helmsman-diagram", "crates/helmsman-iec", "crates/helmsman-io", "crates/helmsman-modbus", "crates/helmsman-nodecore", "crates/helmsman-plc", "crates/helmsman-profinet", "crates/helmsman-project"]
+members = ["crates/helmsman-proto", "crates/helmsman-agent", "crates/helmsman-adapter", "crates/helmsman-canvas", "crates/helmsman-diagram", "crates/helmsman-iec", "crates/helmsman-io", "crates/helmsman-l2", "crates/helmsman-modbus", "crates/helmsman-nodecore", "crates/helmsman-plc", "crates/helmsman-profinet", "crates/helmsman-project"]
 # The edge node's firmware (docs/EDGE.md): the Xtensa target needs the esp
 # toolchain and build-std, so it is its own package with its own lock,
 # built by `make node-build`; the host gate never sees it.

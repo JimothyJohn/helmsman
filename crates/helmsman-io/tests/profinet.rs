@@ -11,7 +11,7 @@ use helmsman_io::text;
 use helmsman_io::{Ty, Value};
 use helmsman_profinet::device::{self, Device};
 
-/// The Novanta MDrive's shape (docs/devices/novanta-mdrive.md): an access
+/// The Novanta `MDrive`'s shape (docs/devices/novanta-mdrive.md): an access
 /// point without data, 128 bytes in, 128 bytes out.
 const SLOTS: &str = "0:0x1/1:0x1,1:0x30/1:0x1:i128,2:0x31/1:0x1:o128";
 
@@ -364,4 +364,70 @@ fn the_simulated_interface_loops_outputs_back_through_the_boxs_own_open() {
             .ok()
             .filter(|v| v == &[Value::Int(0x0102), Value::Bool(true)])
     });
+}
+
+mod port {
+    //! The box's UDP port for PROFINET's RPCs, shared by its links: each
+    //! datagram goes to the link that last wrote to its sender.
+
+    use std::net::UdpSocket;
+    use std::time::{Duration, Instant};
+
+    use helmsman_io::profinet::Event;
+    use helmsman_io::profinet::raw::RpcPort;
+
+    fn take(port: &RpcPort, owner: u64) -> Option<Event> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(e) = port.take(owner).unwrap() {
+                return Some(e);
+            }
+            if Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn a_datagram_goes_to_the_link_that_last_wrote_to_its_sender() {
+        let port = RpcPort::bind(0).unwrap();
+        let at = port.local_port().unwrap();
+        let device = UdpSocket::bind("127.0.0.1:0").unwrap();
+        device.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let device_port = device.local_addr().unwrap().port();
+        let lo = [127, 0, 0, 1];
+
+        port.send(1, lo, device_port, b"connect").unwrap();
+        let mut buf = [0u8; 64];
+        let (n, from) = device.recv_from(&mut buf).unwrap();
+        assert_eq!((&buf[..n], from.port()), (&b"connect"[..], at));
+
+        device.send_to(b"answer", ("127.0.0.1", at)).unwrap();
+        assert_eq!(
+            take(&port, 1),
+            Some(Event::Udp {
+                ip: lo,
+                port: device_port,
+                data: b"answer".to_vec()
+            })
+        );
+        // Link 2 is handed nothing of link 1's device.
+        device.send_to(b"again", ("127.0.0.1", at)).unwrap();
+        assert_eq!(port.take(2).unwrap(), None);
+        assert!(matches!(take(&port, 1), Some(Event::Udp { data, .. }) if data == b"again"));
+
+        // Once link 2 writes to the device, it is link 2's.
+        port.send(2, lo, device_port, b"mine now").unwrap();
+        device.recv_from(&mut buf).unwrap();
+        device.send_to(b"for two", ("127.0.0.1", at)).unwrap();
+        assert!(matches!(take(&port, 2), Some(Event::Udp { data, .. }) if data == b"for two"));
+        assert_eq!(port.take(1).unwrap(), None);
+
+        // A link that goes away takes its devices with it.
+        port.forget(2);
+        device.send_to(b"late", ("127.0.0.1", at)).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(port.take(2).unwrap(), None);
+    }
 }
