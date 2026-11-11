@@ -50,6 +50,11 @@ pub async fn io_task(
     let inputs = inputs.min(MAX_POINTS);
     let coils = coils.min(MAX_POINTS);
     loop {
+        // No dialling into a link that is down: a fixed address is
+        // configured before the PHY has negotiated, and at boot the two
+        // attempts made by then cost a back-off each (the P4, 2026-11-10:
+        // the block came up 3.1 or 5.5 s after start, by luck).
+        stack.wait_link_up().await;
         let round = embassy_time::Instant::now();
         let read = if inputs == 0 {
             Ok(alloc::vec::Vec::new())
