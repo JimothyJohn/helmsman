@@ -339,6 +339,10 @@ pub struct BoxProjects {
     pub pending: Option<Pending>,
     /// A 401 said the box no longer knows this page's session.
     pub ended: bool,
+    /// Somebody is signed in on this page (the view sets it before each
+    /// batch of answers). A 401 to one of the page's own reads with
+    /// nobody signed in is the box asking for a sign-in: it is no error.
+    pub signed_in: bool,
     /// The forces list, when a force call just changed it.
     pub forces: Option<Vec<ForceRow>>,
     /// A deploy changed what runs: the module list should be read again.
@@ -1186,6 +1190,11 @@ impl BoxProjects {
                 for b in o.bufs.values_mut() {
                     b.saving = None;
                 }
+            }
+            // The page's own reads, with nobody signed in: the box is
+            // asking for a sign-in, which the header already says.
+            if !self.signed_in && matches!(call, PCall::List | PCall::Forces) {
+                return;
             }
             let ended = "The box no longer knows this page's session (signed out, expired, or the box restarted). Sign in again;";
             match call {

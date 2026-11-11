@@ -339,6 +339,7 @@ impl BoxView {
         for m in msgs {
             self.state.apply(m, now);
         }
+        self.projects.signed_in = self.session.is_some();
         for (call, a) in answers {
             match call {
                 PCall::TrendPins | PCall::SavePins | PCall::Trend => self.trend.answer(&call, &a, now),
@@ -1203,9 +1204,7 @@ impl BoxView {
             return p.clone();
         }
         match (&s.selected, &s.scan) {
-            _ if s.link() == Link::SignIn => {
-                "Sign in to watch this box: Sign in in the header, or Alt F8.".into()
-            }
+            _ if s.link() == Link::SignIn => "Sign in to watch this box (Sign in, top right).".into(),
             _ if !matches!(s.link(), Link::Connected) && s.modules.is_empty() => {
                 "Looking for the box…".into()
             }
@@ -1228,7 +1227,9 @@ impl BoxView {
             Link::Connected => ("● connected".into(), t.accent),
             Link::SignIn => ("● sign in to watch".into(), t.fg),
             Link::Reconnecting { at, .. } => (format!("● reconnecting (retry in {}s)", retry(at)), t.fg),
-            Link::Unreachable { at, .. } => (format!("● box unreachable (retry in {}s)", retry(at)), RED),
+            Link::Unreachable { at, .. } => {
+                (format!("● box unreachable (retry in {}s)", retry(at)), t.ink(RED))
+            }
         }
     }
 
@@ -1707,7 +1708,13 @@ impl Body for BoxView {
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {
-            crate::messages::copyable(ui, chrome, "fault", &format!("fault: {f}"), RED);
+            crate::messages::copyable(
+                ui,
+                chrome,
+                "fault",
+                &format!("fault: {f}"),
+                crate::theme::theme(ui).ink(RED),
+            );
         }
         match &self.projects.deploy {
             Deploy::Idle => {}
@@ -1729,7 +1736,13 @@ impl Body for BoxView {
             }
             Deploy::Failed(why) => {
                 let why = format!("✖ {why}");
-                crate::messages::copyable(ui, chrome, "deploy failed", &why, RED);
+                crate::messages::copyable(
+                    ui,
+                    chrome,
+                    "deploy failed",
+                    &why,
+                    crate::theme::theme(ui).ink(RED),
+                );
             }
         }
         if let Some(p) = &self.desk.problem {
@@ -1743,7 +1756,7 @@ impl Body for BoxView {
         if let Some((text, error)) = self.projects.notice.clone() {
             ui.separator();
             if error {
-                crate::messages::copyable(ui, chrome, "notice", &text, RED);
+                crate::messages::copyable(ui, chrome, "notice", &text, crate::theme::theme(ui).ink(RED));
             } else {
                 let r = ui.label(RichText::new(text).color(t.muted));
                 chrome.hit("notice", r.rect);
@@ -1833,7 +1846,11 @@ impl Body for BoxView {
             let arrow = if selected { "▾" } else { "▸" };
             let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans))
                 .monospace()
-                .color(if m.state == "faulted" { RED } else { t.fg });
+                .color(if m.state == "faulted" {
+                    crate::theme::theme(ui).ink(RED)
+                } else {
+                    t.fg
+                });
             let r = ui.selectable_label(selected, text);
             chrome.hit(format!("module {}", m.name), r.rect);
             let r = match &m.fault {
@@ -1976,7 +1993,7 @@ impl Body for BoxView {
             let mut go = false;
             // The header is the open file's name (Nick, 2026-11-08), then
             // word wrap, then the → that deploys this version.
-            let name = o.current.clone().unwrap_or_else(|| "Structured Text".to_string());
+            let name = o.current.clone().unwrap_or_else(|| "Program".to_string());
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 editor::file_header(
@@ -2057,7 +2074,7 @@ impl Body for BoxView {
             .state
             .selected
             .clone()
-            .unwrap_or_else(|| "Structured Text".to_string());
+            .unwrap_or_else(|| "Program".to_string());
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             editor::file_header(ui, chrome, &name, "The source of the module that runs.");
@@ -2070,9 +2087,8 @@ impl Body for BoxView {
                 let mut src: &str = &v.src;
                 editor::st_editor(ui, egui::Id::unique("box-st"), &mut src, &[], usize::MAX, chrome);
             }
-            None => {
-                ui.label(RichText::new(self.waiting()).color(t.muted));
-            }
+            // The canvas beside this pane says what the box waits for.
+            None => {}
         }
     }
 
@@ -2109,8 +2125,8 @@ impl Body for BoxView {
                         let forced = if s.forced { "  FORCED" } else { "" };
                         let text = format!("{} {} = {}{unit}{forced}", s.dir, s.name, show(s.value));
                         let color = match s.quality.as_str() {
-                            _ if s.forced => WARN,
-                            "missing" => RED,
+                            _ if s.forced => crate::theme::theme(ui).ink(WARN),
+                            "missing" => crate::theme::theme(ui).ink(RED),
                             _ if s.value == Some(helmsman_iec::Value::Bool(true)) => t.accent,
                             _ => t.fg,
                         };

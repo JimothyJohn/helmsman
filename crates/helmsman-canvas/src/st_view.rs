@@ -32,10 +32,9 @@ pub mod brand {
     pub const WARN: Color32 = Color32::from_rgb(0xFF, 0x8A, 0x1E);
     /// TRUE, running: green.
     pub const GREEN: Color32 = Color32::from_rgb(0x3C, 0xC8, 0x5C);
-    /// FALSE, stopped: red.
+    /// Stopped, faulted, an error: red. Never a value that is merely
+    /// FALSE or off (that is grey).
     pub const RED: Color32 = Color32::from_rgb(0xFF, 0x6E, 0x64);
-    /// A switch that is off: a dark red ground.
-    pub const OFF_RED: Color32 = Color32::from_rgb(0x6A, 0x22, 0x1E);
 }
 
 use brand::{BLACK, STEEL, YELLOW};
@@ -1731,8 +1730,10 @@ fn draw(
                 && let Some(label) = value_text(d, n.id, v, vars)
             {
                 let color = match v {
-                    Value::Bool(true) => brand::GREEN,
-                    Value::Bool(false) => brand::RED,
+                    // TRUE is green; FALSE is the muted grey of a FALSE
+                    // wire. Red is kept for stopped, faulted and errors.
+                    Value::Bool(true) => t.ink(brand::GREEN),
+                    Value::Bool(false) => t.muted,
                     _ => t.fg,
                 };
                 // Elided to the block, never spilling out of it.

@@ -3233,3 +3233,28 @@ fn an_older_history_answer_does_not_replace_a_newer_one() {
     assert_eq!(p.history.len(), newest, "the older list is ignored");
     settle(&b, &jar, p);
 }
+
+/// A first visit, nobody signed in: the box refuses the page's own reads
+/// (401), which is the box asking for a sign-in and no error. The page
+/// opened with a red "the box no longer knows this page's session" and
+/// "1 error" on the Messages tab (2026-11-10). A session that ends under
+/// a signed-in page still says so.
+#[test]
+fn a_signed_out_first_visit_reports_no_ended_session() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let ctx = egui::Context::default();
+    let mut v = page(&b, &jar, None);
+    for k in 0..4 {
+        v.tick(&ctx);
+        pump(&b, &jar, &mut v, &ctx, f64::from(k));
+    }
+    assert_eq!(v.projects.notice, None, "signed out, nothing to report");
+
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    v.projects.signed_in = true;
+    let list = PReq::get(crate::box_projects::PCall::List, "/api/projects".into());
+    deliver(&b, &Jar::default(), &mut v.projects, vec![list]);
+    let (msg, error) = v.projects.notice.clone().unwrap();
+    assert!(error && msg.contains("Sign in again"), "{msg}");
+}

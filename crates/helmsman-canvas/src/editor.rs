@@ -739,7 +739,9 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
     let mut trend = chrome.trend;
     egui::Panel::bottom("ed-trend")
         .resizable(true)
-        .default_size(200.0)
+        // Tabs, the signals' row and the slider take about 110 pt: at
+        // 200 the plot under them had 50.
+        .default_size(280.0)
         .show_collapsible(ui, &mut trend, |ui| {
             // Tabs: Trend | Messages (errors counted on the tab).
             let label = body.messages().label();
@@ -887,7 +889,7 @@ pub fn st_editor(
                     let bad = diags.iter().any(|(l, _)| *l as usize == n);
                     let here = at.is_some_and(|l| l as usize == n);
                     let color = if bad {
-                        RED
+                        crate::theme::theme(ui).ink(RED)
                     } else if here {
                         t.accent
                     } else {
@@ -1020,7 +1022,7 @@ fn removed_rules(
             egui::Align2::RIGHT_CENTER,
             format!("−{n}"),
             FontId::monospace(crate::theme::MIN_TEXT),
-            crate::st_view::brand::RED,
+            crate::theme::theme(ui).ink(crate::st_view::brand::RED),
         );
         let r = ui.interact(
             band,

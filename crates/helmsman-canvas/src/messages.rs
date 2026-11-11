@@ -156,9 +156,13 @@ impl Log {
     pub fn ui(&mut self, ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome) {
         let counts = self.counts();
         ui.horizontal_wrapped(|ui| {
-            for (k, (name, color)) in [("info", GREEN), ("warnings", WARN), ("errors", RED)]
-                .into_iter()
-                .enumerate()
+            for (k, (name, color)) in [
+                ("info", crate::theme::theme(ui).ink(GREEN)),
+                ("warnings", crate::theme::theme(ui).ink(WARN)),
+                ("errors", crate::theme::theme(ui).ink(RED)),
+            ]
+            .into_iter()
+            .enumerate()
             {
                 let text = RichText::new(format!("{name} {}", counts[k])).color(color);
                 let r = ui
@@ -190,9 +194,9 @@ impl Log {
             .show(ui, |ui| {
                 for m in self.shown() {
                     let (tag, color) = match m.level {
-                        Level::Info => ("info", GREEN),
-                        Level::Warning => ("warning", WARN),
-                        Level::Error => ("error", RED),
+                        Level::Info => ("info", crate::theme::theme(ui).ink(GREEN)),
+                        Level::Warning => ("warning", crate::theme::theme(ui).ink(WARN)),
+                        Level::Error => ("error", crate::theme::theme(ui).ink(RED)),
                     };
                     ui.horizontal_wrapped(|ui| {
                         ui.label(

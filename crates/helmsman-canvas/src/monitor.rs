@@ -1078,8 +1078,8 @@ pub fn layout_tile(ui: &egui::Ui, t: &Tile, k: f32, w: f32) -> Laid {
     match &t.kind {
         TileKind::Status(run) => {
             let (word, color) = match run {
-                Run::Running => ("RUNNING", GREEN),
-                Run::Faulted(_) => ("FAULTED", RED),
+                Run::Running => ("RUNNING", crate::theme::theme(ui).ink(GREEN)),
+                Run::Faulted(_) => ("FAULTED", crate::theme::theme(ui).ink(RED)),
                 Run::Held => ("HELD", th.accent),
                 Run::Stopped(_) => ("STOPPED", th.muted),
                 Run::Starting => ("STARTING", th.muted),
@@ -1123,7 +1123,10 @@ pub fn layout_tile(ui: &egui::Ui, t: &Tile, k: f32, w: f32) -> Laid {
                         l.pieces.push(Piece::Dot(
                             Pos2::new(pad + rad, mid),
                             rad,
-                            Some(if on { GREEN } else { RED }),
+                            // On is green; off is a grey dot, since red
+                            // under a green RUNNING read as a fault. A
+                            // stale lamp is the hollow ring below.
+                            Some(if on { GREEN } else { th.shade }),
                         ));
                     }
                     Some(_) => l.pieces.push(Piece::Dot(Pos2::new(pad + rad, mid), rad, None)),

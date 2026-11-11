@@ -582,7 +582,7 @@ impl PlantUi {
             chrome.hit("sensor unit", u.rect);
             if let Some(err) = &f.error {
                 ui.add_space(4.0);
-                ui.label(RichText::new(err).color(RED));
+                ui.label(RichText::new(err).color(crate::theme::theme(ui).ink(RED)));
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {

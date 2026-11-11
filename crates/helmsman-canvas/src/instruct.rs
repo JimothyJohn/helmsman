@@ -866,9 +866,9 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
         });
     } else if let Some(o) = &s.outcome {
         let color = match o.kind {
-            Kind::Applied => GREEN,
-            Kind::Refused | Kind::Failed => RED,
-            Kind::Said => WARN,
+            Kind::Applied => crate::theme::theme(ui).ink(GREEN),
+            Kind::Refused | Kind::Failed => crate::theme::theme(ui).ink(RED),
+            Kind::Said => crate::theme::theme(ui).ink(WARN),
             Kind::Undone => t.fg,
         };
         let tip = match o.kind {
@@ -893,7 +893,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut Instruc
             chrome.hit("agent why", r.rect);
         }
         for p in &o.problems {
-            ui.add(egui::Label::new(RichText::new(p).color(RED)).wrap())
+            ui.add(egui::Label::new(RichText::new(p).color(crate::theme::theme(ui).ink(RED))).wrap())
                 .tip("What failed.");
         }
         if !o.review.is_empty() {
