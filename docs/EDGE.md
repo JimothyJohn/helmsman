@@ -676,10 +676,24 @@ arrived, so the first day on the board is spent on the two real unknowns:
     it. Alone on the unit the node's request opens as it is
     (docs/devices/moxa-iologik-e1213.md, "On the bench"). So a node and a
     box cannot both hold a cyclic connection to this unit; the second
-    reads it over Modbus TCP. The Exclusive Owner run from the node was
-    not done.
+    reads it over Modbus TCP.
+  - **EtherNet/IP from the node, with the unit free** (the same evening,
+    no box running). The `enip` image as Input Only: the open succeeded
+    (O->T to the unit's port 5222, as its reply asks), and over 40 s 340
+    heartbeats went out and 340 input packets came in at the 100 ms RPI,
+    none lost, none ignored. As Exclusive Owner: the same counts over
+    70 s (640 each way, one open, no losses), the unit refused a second
+    owner from the Studio with 0x0106 meanwhile, and a Modbus read from
+    the Studio saw coils 0 to 2 step every 500 ms with the looped inputs
+    one sample behind: the chase runs on the outputs over CIP. Scan: 10 ms
+    with about 310 us of work a cycle once connected. Two things to look
+    at: each boot spends its first two opens on "connect timed out" (1 s
+    each, right after the link comes up) and the scan waits for them, 199
+    late scans before the first packet; and the image's own match count
+    sat near 53 % against 47 %, which is what a 500 ms step read back
+    through two 100 ms RPIs looks like and is no check of the loop.
   - **Not done:** the PoE module's isolation (the module is not fitted),
-    TLS with mbedtls-rs, the Exclusive Owner run.
+    TLS with mbedtls-rs.
 
 Sources for this phase: esp-hal issue #4163 and PRs #5546 / #5556
 (`github.com/esp-rs/esp-hal`), `github.com/babasha/esp-p4-eth`,
