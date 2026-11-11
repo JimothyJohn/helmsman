@@ -110,6 +110,26 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
+- [ ] **Bring up the Murrelektronik EtherNet/IP I/O block** — placeholder until the unit is on the bench (Nick offered it 2026-11-10). A second vendor's Class 1 target beside the E1213: every implicit-messaging finding so far is against one Moxa unit on firmware V3.1 and OpENer. Bring it up from its EDS alone (`from_eds`, the Devices tab import) with no hand-written profile, as the first device nobody mapped by hand; record what its Forward_Open accepts (Exclusive Owner, Input Only, how many connections at once) in docs/devices/ with the manual's citations; add its folder to the device library. With a second unit the P4 node and the try box each own one and stop contending for the E1213's single connection. Model, I/O count and whether it is an IO-Link master are unknown until the part number is in.
+  needs: the block on 192.168.3.x with 24 VDC, and its part number (for the EDS and the manual)
+  result: a second device doc, map and library entry; the EDS import proven on a device it was not written against; two EtherNet/IP owners on the bench at once
+  est: 1d
+  difficulty: med
+  status: blocked
+  id: murr-block-bringup
+  asked: 2026-11-10
+  by: claude-session
+
+- [ ] **Bring up the Novanta IMS Liberty MDrive** — placeholder until the unit is on the bench (Nick offered it 2026-11-10). The first device that is not discrete I/O: position and velocity as 32-bit values, a status and fault word, and a comms-loss state that matters. Read its identity, map its assemblies or registers, then run a jog and a move to position from ST with the fault path and the comms-loss stop tested; the demo it gives is an axis moving from a spec. Which protocols this unit speaks (EtherNet/IP, Modbus TCP or both) is not checked: it depends on the part number. Motion asks "cell clear?" once per session (hardware-guard).
+  needs: the MDrive on 192.168.3.x with its DC supply and a free shaft, and its part number (for the EDS or register map and the manual)
+  result: a device doc with citations, a map and a library entry; an ST program that jogs and positions the axis and stops it on comms loss
+  est: 2d
+  difficulty: med
+  status: blocked
+  id: mdrive-bringup
+  asked: 2026-11-10
+  by: claude-session
+
 ## Next to build
 
 - [ ] **Canvas: match box answers to requests, one buffer state machine** — from the 2026-11-08 interface review. Every wasm request to the box is a parallel fetch with no request id or generation; `BoxProjects::answer` matches by call name and reads live buffer state at answer time, and the native tests run requests one at a time so ordering is never exercised. The data-loss fixes of PR fix/box-projects-correlation patch the cases found (NewFile empty buffer, dropped save answers, deploy during save, Replace target); this card is the shape that stops the class: an in-flight table keyed by request id holding the sent text and the project generation, answers resolved against it, and one `Buf` state enum (Clean, Dirty, Saving{sent}, Conflict) shared by save, rename, create and deploy, with a test harness that answers requests out of order.
