@@ -23,6 +23,9 @@ use crate::tips::Tip;
 
 /// The header's height, points: one row, as tall as the two it replaced.
 pub const HEADER_H: f32 = 48.0;
+/// The least room the header's title is drawn in on a phone, points:
+/// about six characters. With less it is left out, not cut to "T…".
+const TITLE_ROOM: f32 = 70.0;
 
 /// The product site, and its help page (Help menu, the ? glyph).
 pub const SITE_URL: &str = "https://helmsman.advin.io/";
@@ -884,13 +887,17 @@ impl App {
                         ui.label(RichText::new("simulation").color(t.muted))
                             .tip("The program runs in this page. Nothing reaches a controller.");
                     }
-                    let r = ui
-                        .add(
-                            egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
-                                .truncate(),
-                        )
-                        .tip("The open project.");
-                    hits.push(("title".to_string(), r.rect));
+                    // A phone signed out has a letter's room left here:
+                    // "T…" says nothing, so the title waits for room.
+                    if !narrow || ui.available_width() >= TITLE_ROOM {
+                        let r = ui
+                            .add(
+                                egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
+                                    .truncate(),
+                            )
+                            .tip("The open project.");
+                        hits.push(("title".to_string(), r.rect));
+                    }
                     m.rect
                 })
                 .inner
@@ -970,7 +977,7 @@ impl App {
                     .x
             })
             .fold(0.0, f32::max);
-        let pad = if ui.ctx().content_rect().width() < 500.0 {
+        let pad = if ui.ctx().content_rect().width() < NARROW {
             6.0
         } else {
             12.0

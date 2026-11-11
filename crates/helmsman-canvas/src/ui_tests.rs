@@ -365,6 +365,78 @@ mod glyphs_and_help {
         assert!(!h.app.about);
     }
 
+    /// The UI review of 2026-11-10: "Monitor" touched the edge of the
+    /// Editor | Monitor switch, whose sides were a fixed width. Each side
+    /// is its label and padding either side of it.
+    #[test]
+    fn the_mode_switch_pads_its_labels() {
+        let h = Harness::new(App::sim());
+        let font = eframe::egui::FontId::proportional(crate::theme::BODY);
+        for (key, label) in [("editor", "Editor"), ("monitor", "Monitor")] {
+            let text = h
+                .ctx
+                .fonts_mut(|f| {
+                    f.layout_no_wrap(label.to_string(), font.clone(), eframe::egui::Color32::WHITE)
+                })
+                .size()
+                .x;
+            let side = h.rect(key).width();
+            assert!(side >= text + 20.0, "{label}: {text} pt of text in {side} pt");
+        }
+    }
+
+    /// The same review: a small program sat in a sixth of the canvas at
+    /// zoom 1.2, its port names 12 pt. A fit goes to `FIT_MAX`, where they
+    /// are the 16 pt the panels hold to; the Code tab opens at `LEFT_W`,
+    /// wide enough that the blink example's longest line wraps once.
+    #[test]
+    fn a_small_program_is_fitted_large_and_the_code_tab_opens_wide() {
+        let h = Harness::new(App::sim());
+        let zoom = crate::ui_tests::sim_view(&h).cams[0].zoom;
+        assert!(
+            (zoom - crate::st_view::FIT_MAX).abs() < 1e-3,
+            "blink fits the canvas at the cap: {zoom}"
+        );
+        assert!(10.0 * zoom >= crate::theme::MIN_TEXT, "port names at {zoom}");
+        // The diagram starts where the left pane ends.
+        let left = h.app.chrome.diagram.left();
+        assert!(
+            (left - crate::editor::LEFT_W).abs() <= 16.0,
+            "the left pane at its default width: {left}"
+        );
+    }
+
+    /// The same review, on a box nobody is signed in to: the popup was
+    /// headed "Signed in" over empty fields, and save, upload and download
+    /// glyphs were drawn with nothing to act on.
+    #[test]
+    fn a_signed_out_box_page_offers_sign_in_and_no_glyphs() {
+        let mut h = Harness::new(App::boxed());
+        h.wait(0.2);
+        for k in ["save", "upload", "download"] {
+            assert!(!h.has(k), "a {k} glyph with nobody signed in");
+        }
+        h.key(eframe::egui::Modifiers::ALT, eframe::egui::Key::F8);
+        h.frame(vec![]);
+        assert!(h.app.login);
+        assert!(h.drew("Sign in") && !h.drew("Signed in"), "the popup's heading");
+    }
+
+    /// The same review: two tiles on a 1400 pt Monitor sat in the left
+    /// half of a four-column grid. Few tiles take the width between them.
+    #[test]
+    fn the_monitors_tiles_take_the_width() {
+        let mut h = Harness::new(App::sim());
+        h.press("monitor");
+        h.wait(0.3);
+        let (status, outputs) = (h.rect("status blink"), h.rect("outputs blink/"));
+        assert!((status.top() - outputs.top()).abs() < 1.0, "one row");
+        assert!(
+            outputs.right() > h.size.x * 0.9,
+            "the row reaches the right edge: {outputs:?}"
+        );
+    }
+
     /// Nick, 2026-11-01: dark by default, View › Light mode flips the
     /// page, and the choice is kept per browser with the layout.
     #[test]

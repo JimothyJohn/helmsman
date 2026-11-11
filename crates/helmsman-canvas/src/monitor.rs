@@ -808,7 +808,9 @@ impl Monitor {
                 }
                 let last = i + 1 == crumbs.len();
                 let rt = egui::RichText::new(text).size(size).monospace();
-                let rt = if last {
+                // The crumb you are on is the accent; at the top, where it
+                // is the only one, it is a plain title and no link.
+                let rt = if last && crumbs.len() > 1 {
                     rt.strong().color(t.accent)
                 } else {
                     rt.color(t.fg)
@@ -963,8 +965,11 @@ impl Monitor {
         let gap = 12.0 * k;
         let width = ui.available_width();
         let min = (260.0 * k).min(width);
-        let cols = (((width + gap) / (min + gap)).floor() as usize).max(1);
-        let w = (width - gap * (cols - 1) as f32) / cols as f32;
+        // No more columns than tiles: two tiles on a wide screen take the
+        // width between them, each up to twice the least width, where a
+        // four-column grid left half the screen empty.
+        let cols = (((width + gap) / (min + gap)).floor() as usize).clamp(1, tiles.len().max(1));
+        let w = ((width - gap * (cols - 1) as f32) / cols as f32).min(min * 2.0);
         for row in tiles.chunks(cols) {
             let laid: Vec<Laid> = row.iter().map(|t| layout_tile(ui, t, k, w)).collect();
             let h = laid.iter().map(|l| l.height).fold(TAP * 2.0 * k, f32::max);
@@ -1123,10 +1128,7 @@ pub fn layout_tile(ui: &egui::Ui, t: &Tile, k: f32, w: f32) -> Laid {
                         l.pieces.push(Piece::Dot(
                             Pos2::new(pad + rad, mid),
                             rad,
-                            // On is green; off is a grey dot, since red
-                            // under a green RUNNING read as a fault. A
-                            // stale lamp is the hollow ring below.
-                            Some(if on { GREEN } else { th.shade }),
+                            Some(if on { GREEN } else { RED }),
                         ));
                     }
                     Some(_) => l.pieces.push(Piece::Dot(Pos2::new(pad + rad, mid), rad, None)),

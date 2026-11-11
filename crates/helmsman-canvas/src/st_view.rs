@@ -32,9 +32,10 @@ pub mod brand {
     pub const WARN: Color32 = Color32::from_rgb(0xFF, 0x8A, 0x1E);
     /// TRUE, running: green.
     pub const GREEN: Color32 = Color32::from_rgb(0x3C, 0xC8, 0x5C);
-    /// Stopped, faulted, an error: red. Never a value that is merely
-    /// FALSE or off (that is grey).
+    /// FALSE, stopped: red.
     pub const RED: Color32 = Color32::from_rgb(0xFF, 0x6E, 0x64);
+    /// A switch that is off: a dark red ground.
+    pub const OFF_RED: Color32 = Color32::from_rgb(0x6A, 0x22, 0x1E);
 }
 
 use brand::{BLACK, STEEL, YELLOW};
@@ -49,6 +50,11 @@ pub const KEEP: f32 = 120.0;
 /// its left part and you pan, instead of shrinking to an unreadable whole
 /// (Nick, 2026-11-01).
 pub const LEGIBLE: f32 = 0.75;
+/// The largest zoom a fit goes to: a port's name (10 units of type) is
+/// then the 16 pt the rest of the app holds to ([`crate::theme::MIN_TEXT`])
+/// and a block's label 18. At the 1.2 it was, a small program sat in a
+/// sixth of the canvas with 12 pt port names (2026-11-10).
+pub const FIT_MAX: f32 = 1.6;
 /// The band along the diagram's top the glyph buttons sit in, points: a
 /// fit keeps the diagram below it.
 pub const GLYPH_BAND: f32 = 52.0;
@@ -116,7 +122,7 @@ impl Cam {
 
     fn fit(&mut self, area: Rect, size: (f32, f32)) {
         let (w, h) = (size.0.max(1.0) + 60.0, size.1.max(1.0) + 60.0);
-        self.zoom = (area.width() / w).min(area.height() / h).clamp(LEGIBLE, 1.2);
+        self.zoom = (area.width() / w).min(area.height() / h).clamp(LEGIBLE, FIT_MAX);
         self.origin = area.min;
         self.offset = Vec2::splat(30.0 * self.zoom);
         self.fitted = true;
@@ -1730,10 +1736,8 @@ fn draw(
                 && let Some(label) = value_text(d, n.id, v, vars)
             {
                 let color = match v {
-                    // TRUE is green; FALSE is the muted grey of a FALSE
-                    // wire. Red is kept for stopped, faulted and errors.
                     Value::Bool(true) => t.ink(brand::GREEN),
-                    Value::Bool(false) => t.muted,
+                    Value::Bool(false) => t.ink(brand::RED),
                     _ => t.fg,
                 };
                 // Elided to the block, never spilling out of it.

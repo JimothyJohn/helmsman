@@ -27,7 +27,7 @@ use crate::projects::{self, Act, FilesUi, Listing, Workspace};
 use crate::remote::{BoxState, Cmd, Link, Msg, SignalRow};
 use crate::review::Session;
 use crate::sim_projects::Storage;
-use crate::st_view::brand::{BLACK, WARN};
+use crate::st_view::brand::{BLACK, GREEN, WARN};
 use crate::st_view::{Pick, Viewer, show};
 use crate::theme::{Theme, theme};
 use crate::tips::Tip;
@@ -339,7 +339,7 @@ impl BoxView {
         for m in msgs {
             self.state.apply(m, now);
         }
-        self.projects.signed_in = self.session.is_some();
+        let signed_in = self.session.is_some();
         for (call, a) in answers {
             match call {
                 PCall::TrendPins | PCall::SavePins | PCall::Trend => self.trend.answer(&call, &a, now),
@@ -349,7 +349,7 @@ impl BoxView {
                     }
                 }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
-                call => self.projects.answer(call, &a),
+                call => self.projects.answer_for(call, &a, signed_in),
             }
         }
         if std::mem::take(&mut self.projects.deployed) {
@@ -2082,13 +2082,11 @@ impl Body for BoxView {
             ui.add(crate::theme::whole(RichText::new("read-only").color(t.muted)))
                 .tip("Changes reach the box as proposals.");
         });
-        match &self.view {
-            Some(v) => {
-                let mut src: &str = &v.src;
-                editor::st_editor(ui, egui::Id::unique("box-st"), &mut src, &[], usize::MAX, chrome);
-            }
-            // The canvas beside this pane says what the box waits for.
-            None => {}
+        // With no source yet, the canvas beside this pane says what the
+        // box waits for; said here too it was on screen twice.
+        if let Some(v) = &self.view {
+            let mut src: &str = &v.src;
+            editor::st_editor(ui, egui::Id::unique("box-st"), &mut src, &[], usize::MAX, chrome);
         }
     }
 
@@ -2116,28 +2114,43 @@ impl Body for BoxView {
                 v.outputs_ui(ui, scan);
                 ui.separator();
             }
-            ui.label(RichText::new("Signals").strong());
-            // Two columns (Nick, 2026-11-01: denser).
-            egui::Grid::new("box-io-signals").num_columns(2).show(ui, |ui| {
-                for pair in self.state.signals.chunks(2) {
-                    for s in pair {
-                        let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
-                        let forced = if s.forced { "  FORCED" } else { "" };
-                        let text = format!("{} {} = {}{unit}{forced}", s.dir, s.name, show(s.value));
-                        let color = match s.quality.as_str() {
-                            _ if s.forced => crate::theme::theme(ui).ink(WARN),
-                            "missing" => crate::theme::theme(ui).ink(RED),
-                            _ if s.value == Some(helmsman_iec::Value::Bool(true)) => t.accent,
-                            _ => t.fg,
-                        };
-                        let l = ui.label(RichText::new(text).monospace().color(color));
-                        if let Some(e) = &s.point_error {
-                            l.on_hover_text(e);
-                        }
-                    }
-                    ui.end_row();
+            // Inputs, then Outputs: the simulation's I/O tab has the same
+            // two headings (one "Signals" list here until 2026-11-10).
+            for (head, dir, tip) in [
+                ("Inputs", "in", "What the box reads from its devices."),
+                ("Outputs", "out", "What the box writes to its devices."),
+            ] {
+                ui.label(RichText::new(head).strong()).tip(tip);
+                let rows: Vec<&crate::remote::SignalRow> =
+                    self.state.signals.iter().filter(|s| s.dir == dir).collect();
+                if rows.is_empty() {
+                    ui.label(RichText::new("none").color(t.muted)).tip(tip);
                 }
-            });
+                // Two columns (Nick, 2026-11-01: denser).
+                egui::Grid::new(("box-io-signals", dir))
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for pair in rows.chunks(2) {
+                            for s in pair {
+                                let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
+                                let forced = if s.forced { "  FORCED" } else { "" };
+                                let text = format!("{} = {}{unit}{forced}", s.name, show(s.value));
+                                let color = match s.quality.as_str() {
+                                    _ if s.forced => t.ink(WARN),
+                                    "missing" => t.ink(RED),
+                                    _ if s.value == Some(helmsman_iec::Value::Bool(true)) => t.ink(GREEN),
+                                    _ => t.fg,
+                                };
+                                let l = ui.label(RichText::new(text).monospace().color(color));
+                                if let Some(e) = &s.point_error {
+                                    l.on_hover_text(e);
+                                }
+                            }
+                            ui.end_row();
+                        }
+                    });
+                ui.add_space(6.0);
+            }
         });
     }
 

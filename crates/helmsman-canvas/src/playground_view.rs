@@ -16,7 +16,7 @@ use crate::editor::{self, Body, Chrome, Tab};
 use crate::playground::{MAX_SOURCE, Point, Session, TREND_SIGNALS, Widget, nice_range, tick_label};
 use crate::projects::{self, Act, Diag, FilesUi, Listing, Workspace};
 use crate::sim_projects::{SimProjects, SimRevision, Storage};
-use crate::st_view::brand::{BLACK, GREEN, WARN, WHITE, YELLOW};
+use crate::st_view::brand::{BLACK, GREEN, OFF_RED, WARN, WHITE, YELLOW};
 use crate::st_view::{Pick, TAP, Viewer};
 use crate::theme::{Theme, theme};
 use crate::tips::Tip;
@@ -2692,9 +2692,9 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
             let b = egui::Button::new(RichText::new(&label).strong().size(size).color(if on {
                 BLACK
             } else {
-                theme(ui).fg
+                WHITE
             }))
-            .fill(if on { GREEN } else { theme(ui).rule })
+            .fill(if on { GREEN } else { OFF_RED })
             // Never wrapped: a narrow block at low zoom would stack the
             // letters one a row.
             .wrap_mode(egui::TextWrapMode::Truncate)
@@ -2710,9 +2710,9 @@ fn map_input_ui(ui: &mut egui::Ui, rect: egui::Rect, p: &Point, k: usize) -> Map
                 RichText::new(format!("{label} {}", if on { "TRUE" } else { "FALSE" }))
                     .strong()
                     .size(size)
-                    .color(if on { BLACK } else { theme(ui).fg }),
+                    .color(if on { BLACK } else { WHITE }),
             )
-            .fill(if on { GREEN } else { theme(ui).rule })
+            .fill(if on { GREEN } else { OFF_RED })
             .wrap_mode(egui::TextWrapMode::Truncate);
             if ui
                 .add_sized(rect.size(), b)
@@ -3132,8 +3132,8 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
         RichText::new(text)
             .monospace()
             .size(crate::theme::MIN_TEXT)
-            // On is green here, in the diagram's values and on the
-            // Monitor's lamps alike.
+            // On is green, as a TRUE value in the diagram and a lamp on
+            // the Monitor are (it was the accent yellow here alone).
             .color(if on { t.ink(GREEN) } else { t.fg }),
     )
     .wrap_mode(egui::TextWrapMode::Truncate)

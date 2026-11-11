@@ -339,10 +339,6 @@ pub struct BoxProjects {
     pub pending: Option<Pending>,
     /// A 401 said the box no longer knows this page's session.
     pub ended: bool,
-    /// Somebody is signed in on this page (the view sets it before each
-    /// batch of answers). A 401 to one of the page's own reads with
-    /// nobody signed in is the box asking for a sign-in: it is no error.
-    pub signed_in: bool,
     /// The forces list, when a force call just changed it.
     pub forces: Option<Vec<ForceRow>>,
     /// A deploy changed what runs: the module list should be read again.
@@ -1175,9 +1171,17 @@ impl BoxProjects {
         self.queue.push(PReq::delete(PCall::Release, url));
     }
 
-    /// Takes in an answer.
-    #[allow(clippy::too_many_lines)]
+    /// Takes in an answer, as a page somebody is signed in on.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn answer(&mut self, call: PCall, a: &Answer) {
+        self.answer_for(call, a, true);
+    }
+
+    /// Takes in an answer. `signed_in`: somebody is signed in on this
+    /// page; with nobody, a 401 to one of the page's own reads is the box
+    /// asking for a sign-in, which the header says, and no error.
+    #[allow(clippy::too_many_lines)]
+    pub fn answer_for(&mut self, call: PCall, a: &Answer, signed_in: bool) {
         let ok = (200..300).contains(&a.status);
         let j: Json = serde_json::from_str(&a.body).unwrap_or(Json::Null);
         if a.status == 401 {
@@ -1193,7 +1197,7 @@ impl BoxProjects {
             }
             // The page's own reads, with nobody signed in: the box is
             // asking for a sign-in, which the header already says.
-            if !self.signed_in && matches!(call, PCall::List | PCall::Forces) {
+            if !signed_in && matches!(call, PCall::List | PCall::Forces) {
                 return;
             }
             let ended = "The box no longer knows this page's session (signed out, expired, or the box restarted). Sign in again;";

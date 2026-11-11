@@ -3241,20 +3241,30 @@ fn an_older_history_answer_does_not_replace_a_newer_one() {
 /// a signed-in page still says so.
 #[test]
 fn a_signed_out_first_visit_reports_no_ended_session() {
+    use crate::box_projects::PCall;
     let b = Bench::new();
     let jar = Jar::default();
-    let ctx = egui::Context::default();
-    let mut v = page(&b, &jar, None);
-    for k in 0..4 {
-        v.tick(&ctx);
-        pump(&b, &jar, &mut v, &ctx, f64::from(k));
-    }
-    assert_eq!(v.projects.notice, None, "signed out, nothing to report");
-
     let mut v = page(&b, &jar, Some(("alice", ALICE)));
-    v.projects.signed_in = true;
-    let list = PReq::get(crate::box_projects::PCall::List, "/api/projects".into());
-    deliver(&b, &Jar::default(), &mut v.projects, vec![list]);
-    let (msg, error) = v.projects.notice.clone().unwrap();
+    let p = &mut v.projects;
+    // The box's answer to the projects list from a page with no session.
+    let refused = b.send(&Jar::default(), &PReq::get(PCall::List, "/api/projects".into()));
+    assert_eq!(refused.status, 401);
+
+    p.notice = None;
+    p.answer_for(PCall::List, &refused, false);
+    assert_eq!(p.notice, None, "signed out, nothing to report");
+    assert!(p.ended, "the page still goes back to signing in");
+
+    p.answer_for(PCall::List, &refused, true);
+    let (msg, error) = p.notice.clone().unwrap();
     assert!(error && msg.contains("Sign in again"), "{msg}");
+
+    // A signed-out page's own act (here a save) is still answered.
+    p.notice = None;
+    let save = PCall::Save {
+        project: "line".into(),
+        file: "main.st".into(),
+    };
+    p.answer_for(save, &refused, false);
+    assert!(p.notice.is_some(), "an act that was refused says so");
 }

@@ -53,7 +53,7 @@ this; change it here first when a decision changes.
 - **Panes collapse** from their chevron, their Alt key, or a double click
   on any of their tabs (Nick, 2026-11-07), on the left pane and the side
   panel alike.
-- **Left pane, collapsible, tabs (200 pt):** Files (the projects, the
+- **Left pane, collapsible, tabs (320 pt):** Files (the projects, the
   open one's files, the program tree; a right-click on a project offers
   Copy, Rename and Delete, on a file Copy, Paste, Duplicate, Rename and
   Delete with an app-wide clipboard so a file pastes into any open
@@ -102,7 +102,8 @@ this; change it here first when a decision changes.
   context carries the same list, so it can suggest and reason about
   what the machine does not measure yet) and Code (the Structured Text
   editor). One width
-  for every tab (200 pt since the third); Alt 0, Alt 4 and Alt 1 open the
+  for every tab (320 pt since 2026-11-10, so the Code tab holds 27
+  characters a row); Alt Shift 0, Alt Shift 4 and Alt Shift 1 open the
   pane on its tab, or shut it when that tab shows.
 - **Right panel, collapsible, tabs (236 pt):** I/O
   (values; inputs the diagram does not show) and Agent. (The Requirements
