@@ -323,6 +323,21 @@ fn layout_problems(files: &Files) -> Vec<Diag> {
         .collect()
 }
 
+/// The files this release has no use for ([`Files::kept`]): a newer
+/// release's, carried with the project and never read, built or run.
+fn kept_problems(files: &Files) -> Vec<Diag> {
+    files
+        .kept()
+        .map(|(name, _)| {
+            diag(
+                name,
+                0,
+                "not used by this release: kept with the project, never built or run",
+            )
+        })
+        .collect()
+}
+
 /// Builds `files` (project `name`) into the change set a deploy applies:
 /// `base`'s calendar, the project's map and one module per
 /// PROGRAM, each compiled and held to its manifest.
@@ -367,6 +382,7 @@ fn build_into(
         return Err(diags);
     }
     problems.extend(layout_problems(files));
+    problems.extend(kept_problems(files));
     let mut warned = BTreeSet::new();
     let settings = match files.get(SETTINGS).map(settings::parse) {
         None => Settings::default(),

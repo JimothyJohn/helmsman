@@ -377,3 +377,66 @@ fn a_layout_that_does_not_read_is_listed_and_the_project_still_builds() {
     assert!(built.problems.is_empty(), "{:#?}", built.problems);
     assert_eq!(built.change, automatic.change);
 }
+
+/// A file a newer release wrote, whose name this build has no use for
+/// (card `project-unknown-files`): the project opens with it, the build is
+/// the build of the project without it and lists it as a problem on its own
+/// file, and writing the project back, or round-tripping it through a
+/// `.zip`, keeps it byte for byte. A newer release's file survives a trip
+/// through an older box.
+#[test]
+fn a_file_this_build_has_no_use_for_is_listed_and_kept() {
+    let src = fixtures("project-drift/newer-release-file");
+    let (store, state) = lay_down(&src, "newer");
+    let disk = on_disk(&src);
+    let kept = ["pump-curves.json", "recipes.v2"];
+    for k in kept {
+        assert!(disk.iter().any(|(n, _)| n == k), "fixture lacks {k}");
+    }
+
+    let files = store.read("newer").expect("the project opens");
+    assert_eq!(
+        files.0.clone().into_iter().collect::<Vec<_>>(),
+        disk,
+        "an unrecognised file is read, not skipped"
+    );
+    files.check().expect("it passes the file rules");
+
+    let mut known = files.clone();
+    for k in kept {
+        known.0.remove(k);
+    }
+    let plain = build::build("newer", &known, None, &shape()).expect("builds without them");
+    assert!(plain.problems.is_empty(), "{:#?}", plain.problems);
+    let built = build::build("newer", &files, None, &shape()).expect("builds with them");
+    assert_eq!(built.change, plain.change, "a kept file changes nothing built");
+    assert_eq!(built.modules, plain.modules);
+    let mut listed: Vec<&str> = built.problems.iter().map(|p| p.file.as_str()).collect();
+    listed.sort_unstable();
+    assert_eq!(listed, kept, "{:#?}", built.problems);
+    for p in &built.problems {
+        assert!(
+            p.message.contains("not used by this release") && p.message.contains("kept"),
+            "{p:?}"
+        );
+    }
+    simulate("newer", &files, &built);
+
+    // Written back over the project, and through a .zip, it is all still there.
+    store.install("newer", &files, true).expect("installs whole");
+    assert_eq!(
+        store.read("newer").unwrap().0.into_iter().collect::<Vec<_>>(),
+        disk,
+        "a replace keeps the file byte for byte"
+    );
+    for (n, text) in &disk {
+        let path = state.join("projects/newer").join(n);
+        assert_eq!(fs::read(path).unwrap(), text.as_bytes(), "{n}");
+    }
+    let zip = files.to_zip().unwrap();
+    assert_eq!(
+        helmsman_plc::project::from_zip(helmsman_plc::project::zip::read(&zip).unwrap()).unwrap(),
+        files
+    );
+    let _ = fs::remove_dir_all(state);
+}

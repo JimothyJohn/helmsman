@@ -1411,7 +1411,16 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
 - **Names and contents.** A project is 1..=48 of `a-z 0-9 _ -` (lower
   case, so a case-folding file system never merges two); a file is
   `NAME.st` (1..=64 of `A-Z a-z 0-9 _ -`, no case-only twins), `io.map`
-  or `project.settings`. Checked after percent-decoding, so `..`,
+  or `project.settings`, or a file this release has no use for and
+  **keeps** (a newer release's: `helmsman_project::kept_name`, 1..=64 of
+  `A-Z a-z 0-9 _ - .` starting and ending with a letter or digit, no
+  `..`, no reserved name: a fixed file in another case, `revision.json`,
+  `page.md`, `drivers`, a DOS device name, `.st` / `.eds` / `.wasm` in a
+  form not otherwise valid). A kept file is plain text under the same
+  size caps, at most 64 of them, never parsed or run; the build lists it
+  as a problem ("not used by this release: kept"), and a read, a replace,
+  a `.zip` and the revision history carry it byte for byte. Checked after
+  percent-decoding, so `..`,
   `%2e%2e`, `a%2fb`, `a\b`, `C:` and NUL name nothing. Contents are
   UTF-8 without NUL, other controls (tab, CR, LF aside) or bidirectional
   overrides (no Trojan Source in reviewed code); at most 256 KiB a file,
@@ -1491,7 +1500,8 @@ deploy. `--projects` takes no PROGRAM, `--module`, `--module-dir`,
   encryption, symlinks or other non-files, names UTF-8, local and central
   headers agreeing. One common top-level folder (a plain name, never
   `..`) is stripped and `__MACOSX/` and `.DS_Store` skipped; anything
-  else must be a project file name at the top level or a WASM driver,
+  else must be a project file name (a kept one too) at the top level or a
+  WASM driver,
   `drivers/NAME.wasm` (NAME a slug; "WASM drivers"), so zip-slip names
   are refused, not cleaned. A refused upload writes nothing, and a
   replacing one leaves the old project whole until the new one is in.

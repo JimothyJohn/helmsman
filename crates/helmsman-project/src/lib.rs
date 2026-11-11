@@ -12,11 +12,14 @@
 //!   0-9 _ -` starting with a letter or digit, one of [`IO_MAP`],
 //!   [`SETTINGS`] and [`LAYOUT`], or a device's EDS `NAME.eds` (`NAME` a
 //!   slug as a driver's; [`file_name`]); two files that differ only by
-//!   case are refused.
+//!   case are refused. Any other plain name is a file this release has no
+//!   use for (a newer release's): the project **keeps** it, byte for byte,
+//!   and the build lists it ([`kept_name`]).
 //! - **Contents.** UTF-8 without NUL, other control characters (tab, CR
 //!   and LF aside) or bidirectional overrides (no "Trojan Source" in a
 //!   program an engineer reviews); at most [`MAX_FILE`] bytes a file,
-//!   [`MAX_FILES`] `.st` files and [`MAX_TOTAL`] bytes a project. A
+//!   [`MAX_FILES`] `.st` files, [`MAX_KEPT`] kept files and [`MAX_TOTAL`]
+//!   bytes a project. A
 //!   [`LAYOUT`] file must also read as one ([`layout::parse`]) to be
 //!   saved or uploaded ([`Files::check`]); a build opens a project whose
 //!   layout does not read and lists it ([`Files::check_buildable`]).
@@ -63,6 +66,10 @@ pub const MAX_TOTAL: usize = 900 * 1024;
 pub const NAME_LEN: usize = 48;
 /// Longest `.st` file stem.
 pub const STEM_LEN: usize = 64;
+/// Longest name of a kept file ([`kept_name`]).
+pub const KEPT_LEN: usize = 64;
+/// Most kept files ([`kept_name`]) in a project.
+pub const MAX_KEPT: usize = 64;
 
 /// Whether `s` is a project name.
 #[must_use]
@@ -133,6 +140,70 @@ pub fn file_name(s: &str) -> Option<FileKind> {
         && b.iter()
             .all(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-'))
     .then_some(FileKind::St)
+}
+
+/// Names a kept file may never take: the fixed project files in any case
+/// (so `Agent.md` is no second `agent.md`), the files a revision folder
+/// holds besides the project's own, and the driver folder.
+const RESERVED: [&str; 8] = [
+    IO_MAP,
+    SETTINGS,
+    LAYOUT,
+    ICONS,
+    AGENT,
+    "revision.json",
+    "page.md",
+    DRIVERS,
+];
+
+/// Whether `s` is a file name this release has no use for but keeps: a
+/// project can carry a file a newer release wrote, and an older box must
+/// not lose it on a read, a replace or an upload.
+///
+/// The rule is for a name that is safe on every file system, so a kept
+/// file can never reach another path or collide with one:
+/// 1..=[`KEPT_LEN`] of `A-Z a-z 0-9 _ - .`, starting and ending with a
+/// letter or digit (no dot-leading name, which is a temporary or hidden
+/// file, and no trailing dot, which Windows drops), no `..`, and none of:
+/// a name [`file_name`] knows (that one is not "kept", it is used), a
+/// fixed file's name in another case, the two files a revision folder
+/// holds beside the project's, `drivers`, a DOS device name (`con`,
+/// `nul`, `com1`, ... also with an extension), or an extension the
+/// project already means ([`EDS_EXT`], `.st`, [`DRIVER_EXT`]) in a form
+/// [`file_name`] refuses. Two names that differ only by case are still
+/// refused together by [`Files::check`].
+#[must_use]
+pub fn kept_name(s: &str) -> bool {
+    let b = s.as_bytes();
+    if !(1..=KEPT_LEN).contains(&b.len())
+        || !b[0].is_ascii_alphanumeric()
+        || !b[b.len() - 1].is_ascii_alphanumeric()
+        || !b
+            .iter()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.'))
+        || s.contains("..")
+        || file_name(s).is_some()
+    {
+        return false;
+    }
+    let lower = s.to_ascii_lowercase();
+    if RESERVED.contains(&lower.as_str()) || [".st", EDS_EXT, DRIVER_EXT].iter().any(|e| lower.ends_with(e)) {
+        return false;
+    }
+    let device = lower.split('.').next().unwrap_or("");
+    let numbered = |p: &str| {
+        device
+            .strip_prefix(p)
+            .is_some_and(|n| matches!(n.as_bytes(), [b'1'..=b'9']))
+    };
+    !(matches!(device, "con" | "prn" | "aux" | "nul") || numbered("com") || numbered("lpt"))
+}
+
+/// Whether a project holds a file of this name: one it uses
+/// ([`file_name`]) or one it keeps ([`kept_name`]).
+#[must_use]
+pub fn project_file(s: &str) -> bool {
+    file_name(s).is_some() || kept_name(s)
 }
 
 /// The project file an uploaded EDS becomes: its stem as a slug (lower
@@ -251,6 +322,14 @@ impl Files {
             .map(|(n, t)| (n.as_str(), t.as_str()))
     }
 
+    /// The files this release has no use for ([`kept_name`]), by name.
+    pub fn kept(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.0
+            .iter()
+            .filter(|(n, _)| file_name(n).is_none())
+            .map(|(n, t)| (n.as_str(), t.as_str()))
+    }
+
     /// The earlier iterations (`vN.st`), by N.
     pub fn iterations(&self) -> impl Iterator<Item = (u32, &str)> {
         let mut v: Vec<(u32, &str)> = self
@@ -303,7 +382,7 @@ impl Files {
         let mut errs = Vec::new();
         let mut folded: BTreeMap<String, &str> = BTreeMap::new();
         for (name, text) in &self.0 {
-            if file_name(name).is_none() {
+            if !project_file(name) {
                 errs.push(format!("{}: not a project file name", clean(name)));
                 continue;
             }
@@ -322,6 +401,12 @@ impl Files {
         let st = self.st().count();
         if st > MAX_FILES {
             errs.push(format!("{st} .st files; a project holds at most {MAX_FILES}"));
+        }
+        let kept = self.kept().count();
+        if kept > MAX_KEPT {
+            errs.push(format!(
+                "{kept} files this release does not use; a project keeps at most {MAX_KEPT}"
+            ));
         }
         let it = self.iterations().count();
         if it > MAX_ITERATIONS {
@@ -354,7 +439,8 @@ impl Files {
 }
 
 /// Files from an archive's entries: one common top-level folder stripped,
-/// Mac metadata skipped, every name a project file name, no duplicates.
+/// Mac metadata skipped, every name a project file name ([`project_file`]),
+/// no duplicates.
 /// An archive that carries WASM drivers (`drivers/NAME.wasm`) is refused
 /// here, since only a box runs them ([`from_zip_with_drivers`]).
 ///
@@ -424,9 +510,9 @@ pub fn from_zip_with_drivers(entries: Vec<zip::Entry>) -> Result<(Files, Drivers
             }
             continue;
         }
-        if file_name(&name).is_none() {
+        if !project_file(&name) {
             return Err(format!(
-                "{}: not a project file ({FILE_NAMES} at the archive's top level, or {DRIVERS}/NAME{DRIVER_EXT})",
+                "{}: not a project file name ({FILE_NAMES}, or a plain name of letters, digits, _ - . that a newer release may use, at the archive's top level, or {DRIVERS}/NAME{DRIVER_EXT})",
                 clean(&e.name)
             ));
         }
@@ -627,6 +713,67 @@ mod tests {
         ] {
             assert!(from_zip_with_drivers(entries).is_err(), "{why}");
         }
+    }
+
+    #[test]
+    fn a_name_this_release_has_no_use_for_is_kept_only_when_it_is_safe_everywhere() {
+        for ok in [
+            "notes.txt",
+            "pump-curves.json",
+            "recipes.v2",
+            "README",
+            "x.y.z",
+            "v1.stx",
+            "a",
+            &"n".repeat(KEPT_LEN),
+        ] {
+            assert!(kept_name(ok) && project_file(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            ".env",
+            "a.",
+            "a..b",
+            "../x",
+            "a/b",
+            "a\\b",
+            "a b",
+            "é",
+            "a\0",
+            "CON",
+            "nul.txt",
+            "Com1",
+            "lpt9.x",
+            "revision.json",
+            "PAGE.md",
+            "drivers",
+            "IO.MAP",
+            "Agent.md",
+            "x.ST",
+            "X.Eds",
+            "a.b.eds",
+            "x.wasm",
+            "V1.ST",
+        ] {
+            assert!(!kept_name(bad), "{bad:?}");
+        }
+        assert!(!kept_name(&"n".repeat(KEPT_LEN + 1)));
+        assert!(!kept_name("main.st"), "a name in use is not a kept one");
+        assert!(kept_name("com10") && kept_name("com0.txt"), "only com1..com9");
+        let many = Files(
+            (0..=MAX_KEPT)
+                .map(|k| (format!("n{k}.txt"), "x".to_string()))
+                .collect(),
+        );
+        assert!(
+            many.check()
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("keeps at most"))
+        );
+        assert_eq!(many.kept().count(), MAX_KEPT + 1);
     }
 
     #[test]
