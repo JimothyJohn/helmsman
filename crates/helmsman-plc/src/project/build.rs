@@ -32,7 +32,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use helmsman_iec::ast::{self, PouKind};
-use helmsman_iec::{ImageSizes, PortDir, Pos, compile};
+use helmsman_iec::{ImageSizes, PortDir, Pos, compile_warned};
 
 use super::settings::{self, Settings};
 use super::{Files, IO_MAP, LAYOUT, SETTINGS, layout};
@@ -329,14 +329,45 @@ fn layout_problems(files: &Files) -> Vec<Diag> {
 ///
 /// # Errors
 /// Every problem found, with its file, line and column, sorted.
-#[allow(clippy::too_many_lines)]
 pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape) -> Result<Built, Vec<Diag>> {
+    build_noted(name, files, base, shape).0
+}
+
+/// [`build`], and the problems that do not stop a build, whether it
+/// succeeded or not: a layout that does not read, and what the checker
+/// warns of (a RETAIN that is not kept), each at its file and line, sorted.
+/// A project with an error and a warning lists both.
+pub fn build_noted(
+    name: &str,
+    files: &Files,
+    base: Option<&ChangeSet>,
+    shape: &Shape,
+) -> (Result<Built, Vec<Diag>>, Vec<Diag>) {
+    let mut problems = Vec::new();
+    let built = build_into(name, files, base, shape, &mut problems);
+    problems.sort();
+    let built = built.map(|mut b| {
+        b.problems.clone_from(&problems);
+        b
+    });
+    (built, problems)
+}
+
+#[allow(clippy::too_many_lines)]
+fn build_into(
+    name: &str,
+    files: &Files,
+    base: Option<&ChangeSet>,
+    shape: &Shape,
+    problems: &mut Vec<Diag>,
+) -> Result<Built, Vec<Diag>> {
     let mut diags = Vec::new();
     if let Err(errs) = files.check_buildable() {
         diags.extend(errs.into_iter().map(|e| diag("", 0, e)));
         return Err(diags);
     }
-    let problems = layout_problems(files);
+    problems.extend(layout_problems(files));
+    let mut warned = BTreeSet::new();
     let settings = match files.get(SETTINGS).map(settings::parse) {
         None => Settings::default(),
         Some(Ok(s)) => s,
@@ -396,7 +427,20 @@ pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape)
             q: len_of(qwin.as_deref()),
             m,
         };
-        let program = match compile(&src, sizes) {
+        let (compiled, warnings) = compile_warned(&src, sizes);
+        for w in warnings {
+            let (file, line) = locate(&segments, w.pos.line).unwrap_or(("", 0));
+            let d = Diag {
+                file: file.to_string(),
+                line,
+                col: if line == 0 { 0 } else { w.pos.col },
+                message: w.msg,
+            };
+            if warned.insert(d.clone()) {
+                problems.push(d);
+            }
+        }
+        let program = match compiled {
             Ok(p) => p,
             Err(errs) => {
                 for e in errs {
@@ -505,7 +549,7 @@ pub fn build(name: &str, files: &Files, base: Option<&ChangeSet>, shape: &Shape)
     Ok(Built {
         change,
         modules: summary,
-        problems,
+        problems: Vec::new(),
     })
 }
 

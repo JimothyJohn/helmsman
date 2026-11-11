@@ -1344,6 +1344,101 @@ END_PROGRAM
     assert_eq!(b.head(), head);
 }
 
+/// A function block that declares RETAIN: the checker warns (it is not
+/// kept inside a function block) and the project still builds.
+const RETAIN_BLOCKS: &str = "\
+FUNCTION_BLOCK Latch
+VAR_INPUT set : BOOL; reset : BOOL; END_VAR
+VAR_OUTPUT q : BOOL; END_VAR
+VAR RETAIN kept : INT; END_VAR
+  q := (q OR set) AND NOT reset;
+END_FUNCTION_BLOCK
+";
+
+#[test]
+fn warnings_are_listed_by_the_check_and_never_stop_a_deploy() {
+    let b = Bench::new();
+    let s = b.alice();
+    b.project(
+        &s,
+        "warned",
+        &[("main.st", MAIN), ("blocks.st", RETAIN_BLOCKS), ("io.map", MAP)],
+    );
+    // A layout another release wrote: the API refuses to save one that
+    // does not read, but a folder can hold it.
+    std::fs::write(
+        b.state.join("projects/warned/diagram.layout"),
+        "this is not a layout\n",
+    )
+    .unwrap();
+    let before = b.head();
+    let r = post_json(b.addr, "/api/projects/warned/check", Some(&s), &json!({}));
+    assert_eq!(r.status, 200, "{r:?}");
+    let check = r.json();
+    assert_eq!(check["ok"], true, "{check}");
+    assert_eq!(check["diagnostics"], json!([]), "no errors: {check}");
+    let w = check["warnings"].as_array().unwrap();
+    assert_eq!(w.len(), 2, "{check}");
+    assert!(w.iter().all(|x| x["severity"] == "warning"), "{check}");
+    let retain = w.iter().find(|x| x["file"] == "blocks.st").expect("the RETAIN");
+    assert_eq!(retain["line"], 4, "{check}");
+    assert!(
+        retain["message"]
+            .as_str()
+            .unwrap()
+            .contains("RETAIN inside a function block"),
+        "{check}"
+    );
+    let layout = w
+        .iter()
+        .find(|x| x["file"] == "diagram.layout")
+        .expect("the layout");
+    assert_eq!(layout["line"], 1, "{check}");
+    assert_eq!(b.head(), before, "a check changes nothing");
+    // The deploy is exactly what it is without the warnings.
+    let r = b.deploy(&s, "warned");
+    assert_eq!(r.status, 200, "{r:?}");
+    assert_eq!(r.json()["snapshot"], check["snapshot"]);
+    wait("the module running", || b.modules() == ["conveyor"]);
+}
+
+#[test]
+fn a_project_with_an_error_and_a_warning_lists_both_told_apart() {
+    let b = Bench::new();
+    let s = b.alice();
+    let broken = "\
+PROGRAM counter
+VAR n : UDINT; END_VAR
+  n := n + undefined_thing;
+END_PROGRAM
+";
+    b.project(
+        &s,
+        "mixed",
+        &[
+            ("main.st", MAIN),
+            ("blocks.st", RETAIN_BLOCKS),
+            ("z.st", broken),
+            ("io.map", MAP),
+        ],
+    );
+    let head = b.head();
+    let r = post_json(b.addr, "/api/projects/mixed/check", Some(&s), &json!({}));
+    assert_eq!(r.status, 422, "the error fails the check: {r:?}");
+    let j = r.json();
+    let errors = j["diagnostics"].as_array().unwrap();
+    assert!(
+        errors.iter().all(|d| d["severity"] == "error") && errors.iter().any(|d| d["file"] == "z.st"),
+        "{j}"
+    );
+    let warnings = j["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{j}");
+    assert_eq!(warnings[0]["severity"], "warning", "{j}");
+    assert_eq!(warnings[0]["file"], "blocks.st", "{j}");
+    assert_eq!(warnings[0]["line"], 4, "{j}");
+    assert_eq!(b.head(), head);
+}
+
 #[test]
 fn concurrent_saves_never_tear_a_file() {
     let b = Arc::new(Bench::new());

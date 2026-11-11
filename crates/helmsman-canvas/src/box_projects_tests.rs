@@ -3233,3 +3233,133 @@ fn an_older_history_answer_does_not_replace_a_newer_one() {
     assert_eq!(p.history.len(), newest, "the older list is ignored");
     settle(&b, &jar, p);
 }
+
+/// A function block that declares RETAIN: the checker warns, the project
+/// builds.
+const RETAIN_BLOCKS: &str = "\
+FUNCTION_BLOCK Latch
+VAR_INPUT set : BOOL; reset : BOOL; END_VAR
+VAR_OUTPUT q : BOOL; END_VAR
+VAR RETAIN kept : INT; END_VAR
+  q := (q OR set) AND NOT reset;
+END_FUNCTION_BLOCK
+";
+
+#[test]
+fn the_boxs_warnings_show_under_the_editor_and_in_the_messages_and_never_stop_the_deploy() {
+    use crate::messages::Level;
+    use crate::projects::Severity;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[("blocks.st", RETAIN_BLOCKS), ("main.st", MAIN), ("io.map", MAP)],
+    );
+    v.projects.deploy();
+    settle(&b, &jar, &mut v.projects);
+    let Deploy::Done(what) = &v.projects.deploy else {
+        panic!(
+            "a warning stopped the deploy: {:?} {:?}",
+            v.projects.deploy, v.projects.diags
+        );
+    };
+    assert!(what.starts_with("line is running"), "{what}");
+    let d = &v.projects.diags;
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert_eq!((d[0].file.as_str(), d[0].line), ("blocks.st", 4), "{d:?}");
+    assert_eq!(d[0].severity, Severity::Warning);
+    assert!(d[0].message.contains("RETAIN inside a function block"), "{d:?}");
+
+    // In the app: the row under the editor, the warning in the Messages,
+    // and a click goes to the line.
+    let session = v.session.clone();
+    v.projects.open_file("main.st");
+    let mut h = Harness::new(v, session);
+    h.app.chrome.show_code();
+    h.wait(0.5);
+    assert!(h.app.chrome.rect("diag 0").is_some(), "the warning row");
+    assert!(
+        h.bv()
+            .log
+            .iter()
+            .any(|m| m.level == Level::Warning && m.text.contains("do not stop a deploy")),
+        "{:?}",
+        h.bv().log.iter().collect::<Vec<_>>()
+    );
+    h.press("diag 0");
+    assert_eq!(
+        h.bv().projects.open.as_ref().unwrap().current.as_deref(),
+        Some("blocks.st")
+    );
+    assert_eq!(h.app.chrome.line, Some(4));
+}
+
+#[test]
+fn a_box_error_and_warning_are_both_listed_errors_first_and_only_the_error_fails() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let broken = MAIN.replace("lamp := l.q;", "lamp := nothing_here;");
+    make(
+        &b,
+        &jar,
+        &mut v.projects,
+        "line",
+        &[
+            ("blocks.st", RETAIN_BLOCKS),
+            ("main.st", &broken),
+            ("io.map", MAP),
+        ],
+    );
+    let before = b.json("/api/running");
+    v.projects.deploy();
+    settle(&b, &jar, &mut v.projects);
+    let Deploy::Failed(why) = &v.projects.deploy else {
+        panic!("{:?}", v.projects.deploy);
+    };
+    assert!(
+        why.contains("does not build: 1 problem(s)"),
+        "only errors are counted: {why}"
+    );
+    let d = &v.projects.diags;
+    assert_eq!(d.len(), 2, "{d:?}");
+    assert!(!d[0].is_warning() && d[0].file == "main.st", "{d:?}");
+    assert!(d[1].is_warning() && d[1].file == "blocks.st", "{d:?}");
+    assert_eq!(b.json("/api/running"), before, "nothing changed");
+}
+
+#[test]
+fn a_check_answer_without_the_warnings_field_still_reads() {
+    use crate::projects::Severity;
+    // An older box: errors only, no `warnings`, no `severity`.
+    let old = serde_json::json!({
+        "error": "the project does not build",
+        "diagnostics": [{ "file": "main.st", "line": 6, "col": 3, "message": "expected ;" }],
+    });
+    let d = crate::box_projects::diags_of(&old);
+    assert_eq!(d.len(), 1);
+    assert_eq!((d[0].severity, d[0].line), (Severity::Error, 6));
+    // An older box's good answer: nothing to show.
+    let count = |j: serde_json::Value| crate::box_projects::diags_of(&j).len();
+    assert_eq!(count(serde_json::json!({ "ok": true, "diagnostics": [] })), 0);
+    assert_eq!(count(serde_json::json!({})), 0);
+    // A newer box: warnings, with the optional id and blocking flag the
+    // lints will add; junk in them reads as a plain warning.
+    let new = serde_json::json!({
+        "diagnostics": [],
+        "warnings": [
+            { "file": "a.st", "line": 2, "col": 1, "message": "m", "severity": "warning",
+              "id": "HELMSMAN-L1", "blocking": true },
+            { "file": "b.st", "line": "x", "message": 7, "id": 3, "blocking": "yes" },
+        ],
+    });
+    let d = crate::box_projects::diags_of(&new);
+    assert_eq!(d.len(), 2);
+    assert!(d[0].is_warning() && d[0].id.as_deref() == Some("HELMSMAN-L1") && d[0].blocking);
+    assert!(d[1].is_warning() && d[1].id.is_none() && !d[1].blocking && d[1].line == 0);
+    assert!(d[0].label().starts_with("warning HELMSMAN-L1  a.st:2:1"));
+}

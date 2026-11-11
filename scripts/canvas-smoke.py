@@ -118,6 +118,16 @@ def playground(ctx, base, out):
     r.key("Alt+3"); r.wait(400); r.shot("right-hidden"); r.key("Alt+3"); r.wait(400)
     r.click(1313, 26); r.wait(1500); r.shot("monitor")
     r.click(1243, 26); r.wait(800); r.shot("editor-again")
+    # A program the checker warns of (RETAIN where it is not kept): marked
+    # in the editor and listed under it, and it still compiles.
+    r.click(130, 300); r.key("Control+a")
+    r.page.keyboard.type(
+        "FUNCTION_BLOCK Latch\nVAR_INPUT set : BOOL; END_VAR\nVAR_OUTPUT q : BOOL; END_VAR\n"
+        "VAR RETAIN kept : INT; END_VAR\nq := q OR set;\nEND_FUNCTION_BLOCK\n"
+        "PROGRAM main\nVAR_INPUT go : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\n"
+        "VAR l : Latch; END_VAR\nl(set := go);\nlamp := l.q;\nEND_PROGRAM\n"
+    )
+    r.wait(1500); r.shot("warned")
     problems = r.problems()
     r.page.close()
     r2 = Run(open_app(ctx, base, "?playground", layout(pane="files", light=1)), out, "pg-light")

@@ -352,25 +352,26 @@ impl PlaygroundView {
         self.notice = None;
     }
 
-    /// The compile errors, each with its file and line.
+    /// The compile errors, then the checker's warnings, each with its
+    /// file and line.
     #[must_use]
     pub fn diags(&self) -> Vec<Diag> {
-        self.session
-            .diags
-            .iter()
-            .map(|d| {
-                let (file, line) = self
-                    .proj
-                    .locate(d.pos.line)
-                    .unwrap_or_else(|| (self.proj.current.clone(), d.pos.line));
-                Diag {
-                    file,
-                    line,
-                    col: d.pos.col,
-                    message: d.msg.clone(),
-                }
-            })
-            .collect()
+        let at = |d: &helmsman_iec::Diagnostic| {
+            let (file, line) = self
+                .proj
+                .locate(d.pos.line)
+                .unwrap_or_else(|| (self.proj.current.clone(), d.pos.line));
+            (file, line, d.pos.col, d.msg.clone())
+        };
+        let errors = self.session.diags.iter().map(|d| {
+            let (f, l, c, m) = at(d);
+            Diag::error(f, l, c, m)
+        });
+        let warnings = self.session.warnings.iter().map(|d| {
+            let (f, l, c, m) = at(d);
+            Diag::warning(f, l, c, m)
+        });
+        errors.chain(warnings).collect()
     }
 
     /// Opens `file` at `line` in the ST editor.
@@ -1386,6 +1387,7 @@ impl PlaygroundView {
 struct Seen {
     fault: Option<String>,
     diags: Vec<String>,
+    warned: Option<String>,
     notice: Option<String>,
     storage: Option<String>,
     running: Option<bool>,
@@ -1416,6 +1418,13 @@ impl PlaygroundView {
                     .error(t, format!("Fault: {f}. Run or Step restarts the program."));
             }
             self.seen.fault = fault;
+        }
+        let warned = projects::warning_summary(&self.diags());
+        if warned != self.seen.warned {
+            if let Some(w) = &warned {
+                self.log.warning(t, w.clone());
+            }
+            self.seen.warned = warned;
         }
         let diags = self.session.diag_lines();
         if diags != self.seen.diags {
@@ -1620,13 +1629,10 @@ impl Body for PlaygroundView {
         }
         let all = self.diags();
         let current = self.proj.current.clone();
-        let diags: Vec<(u32, u32)> = all
-            .iter()
-            .filter(|d| d.file == current)
-            .map(|d| (d.line, d.col))
-            .collect();
+        let diags = projects::marks_in(&all, &current, false);
+        let warns = projects::marks_in(&all, &current, true);
         let avail = ui.available_height();
-        let list_h = if self.session.diags.is_empty() { 0.0 } else { 110.0 };
+        let list_h = if all.is_empty() { 0.0 } else { 110.0 };
         let size = Vec2::new(ui.available_width(), (avail - list_h).max(120.0));
         let id = self.source_id();
         let Some(text) = self.proj.current_text_mut() else {
@@ -1636,7 +1642,7 @@ impl Body for PlaygroundView {
         };
         let r = ui
             .allocate_ui(size, |ui| {
-                editor::st_editor(ui, id, text, &diags, MAX_SOURCE, chrome)
+                editor::st_editor(ui, id, text, &diags, &warns, MAX_SOURCE, chrome)
             })
             .inner;
         chrome.hit("st editor", r.rect);
@@ -1654,7 +1660,7 @@ impl Body for PlaygroundView {
         } else if self.selection.as_ref().is_some_and(|(f, ..)| *f != current) {
             self.selection = None;
         }
-        if !self.session.diags.is_empty() {
+        if !all.is_empty() {
             ui.separator();
             egui::ScrollArea::vertical()
                 .id_salt("pg-diags")

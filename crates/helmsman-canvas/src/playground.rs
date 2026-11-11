@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use helmsman_diagram::Module;
 use helmsman_iec::trace::{StmtId, Trace};
-use helmsman_iec::{Diagnostic, Image, ImageSizes, PortDir, Program, Stopped, Ty, Value, compile};
+use helmsman_iec::{Diagnostic, Image, ImageSizes, PortDir, Program, Stopped, Ty, Value, compile_warned};
 
 /// Process image: 8 bytes each way (`%IX0.0` .. `%IX7.7`), some memory.
 pub const SIZES: ImageSizes = ImageSizes { i: 8, q: 8, m: 64 };
@@ -289,12 +289,14 @@ impl std::fmt::Debug for Build {
 }
 
 impl Build {
-    /// Compiles `src`.
-    ///
-    /// # Errors
-    /// The compiler's diagnostics.
-    pub fn new(src: &str) -> Result<Self, Vec<Diagnostic>> {
-        let program = compile(src, SIZES)?;
+    /// Compiles `src`: the build, or the compiler's diagnostics; and in
+    /// both cases the checker's warnings.
+    pub fn new(src: &str) -> (Result<Self, Vec<Diagnostic>>, Vec<Diagnostic>) {
+        let (compiled, warnings) = compile_warned(src, SIZES);
+        (compiled.map(|program| Self::from_program(src, program)), warnings)
+    }
+
+    fn from_program(src: &str, program: Program) -> Self {
         let (module, module_error) = match helmsman_diagram::lower(src, &program.trace_map()) {
             Ok(m) => (Some(m), None),
             Err(e) => (None, Some(e.to_string())),
@@ -356,14 +358,14 @@ impl Build {
                 value: Value::Bool(false),
             });
         }
-        Ok(Self {
+        Self {
             program,
             image: Image::new(SIZES),
             module,
             module_error,
             points,
             src: src.to_string(),
-        })
+        }
     }
 }
 
@@ -636,6 +638,10 @@ pub struct Session {
     pub src: String,
     /// Diagnostics for `src` (empty: it compiles).
     pub diags: Vec<Diagnostic>,
+    /// What the checker says of `src` that does not stop it (a RETAIN
+    /// that is not kept yet), in source order; set with `diags` by every
+    /// check and every deploy, errors or not.
+    pub warnings: Vec<Diagnostic>,
     /// The program running: the last source deployed (or loaded). An
     /// edit only reaches it through [`Self::set_source`]; [`Self::check`]
     /// leaves it alone.
@@ -675,6 +681,7 @@ impl Session {
         let mut s = Self {
             src: String::new(),
             diags: Vec::new(),
+            warnings: Vec::new(),
             build: None,
             running: false,
             period_ms: 10,
@@ -709,6 +716,7 @@ impl Session {
         if src.len() <= MAX_SOURCE {
             return true;
         }
+        self.warnings.clear();
         self.diags = vec![Diagnostic {
             pos: helmsman_iec::Pos { line: 1, col: 1 },
             msg: format!(
@@ -728,7 +736,9 @@ impl Session {
         if !self.take(src) {
             return false;
         }
-        match compile(&self.src, SIZES) {
+        let (compiled, warnings) = compile_warned(&self.src, SIZES);
+        self.warnings = warnings;
+        match compiled {
             Ok(_) => {
                 self.diags.clear();
                 true
@@ -765,7 +775,9 @@ impl Session {
         if !self.take(src) {
             return None;
         }
-        match Build::new(&self.src) {
+        let (built, warnings) = Build::new(&self.src);
+        self.warnings = warnings;
+        match built {
             Ok(mut b) => {
                 self.breaks = self
                     .build

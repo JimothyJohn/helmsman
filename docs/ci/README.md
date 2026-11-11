@@ -30,6 +30,11 @@ project pump-station (pump-station)
 | 64 | Usage: a bad flag, or `PROJECT_DIR` is missing, not a folder, or holds no `.st` file. |
 | 74 | A file could not be read, or the report could not be written. |
 
+A warning, such as RETAIN declared where it is not kept yet, is printed on
+stderr as `PROJECT_DIR/FILE:LINE:COL: warning: message`. It never changes
+the exit status. In the JUnit report it is in the `build` case's
+`<system-out>`, and the case still passes.
+
 A requirement written down with no test behind it yet (a `test_NAME.st`
 that states its requirement and nothing else, "untested") never fails the
 run, just as it never refuses a deploy.

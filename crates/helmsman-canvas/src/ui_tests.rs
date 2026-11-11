@@ -3027,6 +3027,28 @@ mod simulated {
         }
     }
 
+    /// A warning row under the editor wraps at the pane's width, and the
+    /// panels stay where they were (the default width, 236 pt on the right).
+    #[test]
+    fn a_long_warning_row_wraps_and_leaves_the_panels_their_width() {
+        let mut h = Harness::new(App::sim());
+        h.press("pane code");
+        h.wait(0.3);
+        let (left, right) = (h.rect("left"), h.rect("right"));
+        let long = "x".repeat(300);
+        let sim = h.app.sim.as_mut().unwrap();
+        sim.session.warnings = vec![helmsman_iec::Diagnostic {
+            pos: helmsman_iec::Pos { line: 1, col: 1 },
+            msg: format!("kept: RETAIN inside a function block is not kept across a restart yet {long}"),
+        }];
+        h.wait(0.3);
+        assert!(h.has("diag 0"), "the warning is listed");
+        let l = h.rect("left").right() - left.right();
+        let r = right.left() - h.rect("right").left();
+        assert!((0.0..=8.0).contains(&l), "the left pane grew {l} pt");
+        assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
+    }
+
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());

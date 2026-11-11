@@ -236,15 +236,33 @@ fn run_on(
 /// # Errors
 /// Every syntax or type error found, sorted by position.
 pub fn compile(src: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>> {
-    let unit = parser::parse(src, false).map_err(|e| {
-        vec![Diagnostic {
-            pos: e.pos,
-            msg: e.msg,
-        }]
-    })?;
-    let mut code = check::check(library(), &unit, sizes)?;
+    compile_warned(src, sizes).0
+}
+
+/// [`compile`], and what the checker has to say that does not stop a
+/// program ([`Program::warnings`]) even when the source does not compile:
+/// an error and a warning in one source are both listed. A source that
+/// does not parse has no warnings.
+pub fn compile_warned(src: &str, sizes: ImageSizes) -> (Result<Program, Vec<Diagnostic>>, Vec<Diagnostic>) {
+    let unit = match parser::parse(src, false) {
+        Ok(u) => u,
+        Err(e) => {
+            return (
+                Err(vec![Diagnostic {
+                    pos: e.pos,
+                    msg: e.msg,
+                }]),
+                Vec::new(),
+            );
+        }
+    };
+    let (checked, warnings) = check::check(library(), &unit, sizes);
+    (checked.map(|code| program_of(code, sizes)), warnings)
+}
+
+fn program_of(mut code: check::Checked, sizes: ImageSizes) -> Program {
     let counters = trace::number(&mut code);
-    Ok(Program {
+    Program {
         sizes,
         mem: code.mem_init.clone(),
         code,
@@ -254,7 +272,7 @@ pub fn compile(src: &str, sizes: ImageSizes) -> Result<Program, Vec<Diagnostic>>
         cold: true,
         counters,
         map: Once::new(),
-    })
+    }
 }
 
 /// Compiles a `PLCopen` TC6 XML project (see [`plcopen`]) holding one

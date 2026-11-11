@@ -634,8 +634,8 @@ fn import(
 }
 
 /// `POST /api/projects/{p}/check`: what a deploy would build, its
-/// modules, its tier against what runs, or every problem with its file
-/// and line. Nothing changes.
+/// modules, its tier against what runs and its `warnings` (which never
+/// stop it), or every problem with its file and line. Nothing changes.
 fn check(req: &Request, ctx: &Ctx, name: &str) -> Response {
     let what = format!("project {}", clean(name));
     match built(ctx, name) {
@@ -651,6 +651,7 @@ fn check(req: &Request, ctx: &Ctx, name: &str) -> Response {
                 })).collect::<Vec<_>>(),
                 "approval": tier,
                 "diagnostics": [],
+                "warnings": diags_json(&b.problems, "warning"),
             });
             audited(ctx, req, 200, &body, &format!("{what}: checked, builds"))
         }
@@ -797,20 +798,37 @@ pub(super) fn built(ctx: &Ctx, name: &str) -> Result<Built, (u16, Json, String)>
         )
     })?;
     let running = ctx.running();
-    build::build(name, &files, running.as_ref(), &shape(appr)).map_err(|diags| {
+    let (built, problems) = build::build_noted(name, &files, running.as_ref(), &shape(appr));
+    built.map_err(|diags| {
         let n = diags.len();
         (
             422,
             json!({
                 "error": "the project does not build",
                 "changed": false,
-                "diagnostics": diags.iter().map(|d| json!({
-                    "file": d.file, "line": d.line, "col": d.col, "message": d.message,
-                })).collect::<Vec<_>>(),
+                "diagnostics": diags_json(&diags, "error"),
+                "warnings": diags_json(&problems, "warning"),
             }),
             format!("does not build ({n} problem(s))"),
         )
     })
+}
+
+/// A project's problems as the API lists them, each `file`, `line`,
+/// `col`, `message` and a `severity`: `"error"` stops a build,
+/// `"warning"` never does (a RETAIN that is not kept yet, a layout file
+/// that does not read). A later lint adds an optional `id` and a
+/// `blocking` flag to a warning; a reader that does not know them
+/// ignores them.
+fn diags_json(ds: &[build::Diag], severity: &str) -> Vec<Json> {
+    ds.iter()
+        .map(|d| {
+            json!({
+                "file": d.file, "line": d.line, "col": d.col, "message": d.message,
+                "severity": severity,
+            })
+        })
+        .collect()
 }
 
 /// After a deploy committed `snapshot`: records `name` as the running
