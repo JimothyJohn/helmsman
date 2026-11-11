@@ -83,3 +83,7 @@ required-features = ["profinet-raw"]
 [[example]]
 name = "profinet_watch"
 required-features = ["profinet-raw"]
+
+[[example]]
+name = "profinet_device"
+required-features = ["profinet-raw"]
