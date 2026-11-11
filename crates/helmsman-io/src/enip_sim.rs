@@ -158,6 +158,7 @@ impl Faults for E1213Sim {
             Fault::Delay(_)
             | Fault::WrongTransaction
             | Fault::DeviceFailure
+            | Fault::Exception(_)
             | Fault::BadCrc
             | Fault::Truncate
             | Fault::WrongUnit
