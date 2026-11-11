@@ -1634,6 +1634,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "helmsman-profinet"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "helmsman-project"
 version = "0.1.0"
 dependencies = [

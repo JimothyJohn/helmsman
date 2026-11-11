@@ -1,0 +1,21 @@
+[package]
+name = "helmsman-profinet"
+version = "0.1.0"
+description = "PROFINET IO, RT class 1: DCP, the connect RPCs, cyclic frames and alarms as bytes, and a controller and a device as state machines without I/O, no_std"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `no_std + alloc`, no dependencies, no features: the bytes of PROFINET IO
+# and the two state machines that exchange them, with every call taking
+# `now`. Nothing here opens a socket: helmsman-io's `profinet` transport
+# (raw Ethernet plus UDP on the box) and the edge node's (the EMAC plus
+# embassy-net) move the frames, so one stack is tested once, on the host.
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.12"
+
+[lints]
+workspace = true
