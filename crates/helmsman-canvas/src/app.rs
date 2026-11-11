@@ -23,6 +23,9 @@ use crate::tips::Tip;
 
 /// The header's height, points: one row, as tall as the two it replaced.
 pub const HEADER_H: f32 = 48.0;
+/// The least room the header's title is drawn in on a phone, points:
+/// about six characters. With less it is left out, not cut to "T…".
+const TITLE_ROOM: f32 = 70.0;
 
 /// The product site, and its help page (Help menu, the ? glyph).
 pub const SITE_URL: &str = "https://helmsman.advin.io/";
@@ -884,13 +887,17 @@ impl App {
                         ui.label(RichText::new("simulation").color(t.muted))
                             .tip("The program runs in this page. Nothing reaches a controller.");
                     }
-                    let r = ui
-                        .add(
-                            egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
-                                .truncate(),
-                        )
-                        .tip("The open project.");
-                    hits.push(("title".to_string(), r.rect));
+                    // A phone signed out has a letter's room left here:
+                    // "T…" says nothing, so the title waits for room.
+                    if !narrow || ui.available_width() >= TITLE_ROOM {
+                        let r = ui
+                            .add(
+                                egui::Label::new(RichText::new(&title).strong().monospace().color(t.fg))
+                                    .truncate(),
+                            )
+                            .tip("The open project.");
+                        hits.push(("title".to_string(), r.rect));
+                    }
                     m.rect
                 })
                 .inner
@@ -956,8 +963,26 @@ impl App {
 
     /// Editor | Monitor as one two-way toggle: the active side filled.
     fn screen_toggle(&mut self, ui: &mut egui::Ui, hits: &mut Vec<(String, Rect)>) {
-        let half = Vec2::new(TAP * 1.6, TAP * 0.62);
         let t = theme(ui);
+        // Each side is as wide as the longer label and its padding: at a
+        // fixed width "Monitor" touched the pill's edge. A phone's header
+        // has less room, so less padding.
+        let font = egui::FontId::proportional(crate::theme::BODY);
+        let widest = ["Editor", "Monitor"]
+            .into_iter()
+            .map(|l| {
+                ui.painter()
+                    .layout_no_wrap(l.to_string(), font.clone(), t.fg)
+                    .size()
+                    .x
+            })
+            .fold(0.0, f32::max);
+        let pad = if ui.ctx().content_rect().width() < NARROW {
+            6.0
+        } else {
+            12.0
+        };
+        let half = Vec2::new(widest + 2.0 * pad, TAP * 0.62);
         let (rect, _) = ui.allocate_exact_size(Vec2::new(half.x * 2.0, half.y), egui::Sense::hover());
         ui.painter().rect_filled(rect, CornerRadius::same(6), t.rule);
         ui.painter().rect_stroke(
@@ -987,7 +1012,7 @@ impl App {
                 r.center(),
                 egui::Align2::CENTER_CENTER,
                 label,
-                egui::FontId::proportional(crate::theme::BODY),
+                font.clone(),
                 if on { BLACK } else { t.fg },
             );
             hits.push((key.to_string(), r));
@@ -1035,6 +1060,11 @@ impl App {
         };
         let upload_tip = blocked("Upload a .zip, .st, .xml or .l5x file into the project");
         let has_ws = self.workspace().is_some();
+        // Signed out of a box with no project open, none of these glyphs
+        // has anything to act on: the strip is not drawn.
+        if self.source == Source::Box && !has_ws && self.session().is_none() {
+            return;
+        }
         let sim = (self.source == Source::Sim).then(|| {
             self.sim
                 .as_ref()

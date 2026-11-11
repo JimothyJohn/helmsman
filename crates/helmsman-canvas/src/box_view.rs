@@ -27,7 +27,7 @@ use crate::projects::{self, Act, FilesUi, Listing, Workspace};
 use crate::remote::{BoxState, Cmd, Link, Msg, SignalRow};
 use crate::review::Session;
 use crate::sim_projects::Storage;
-use crate::st_view::brand::{BLACK, WARN};
+use crate::st_view::brand::{BLACK, GREEN, WARN};
 use crate::st_view::{Pick, Viewer, show};
 use crate::theme::{Theme, theme};
 use crate::tips::Tip;
@@ -364,6 +364,7 @@ impl BoxView {
         for m in msgs {
             self.state.apply(m, now);
         }
+        let signed_in = self.session.is_some();
         for (call, a) in answers {
             match call {
                 PCall::TrendPins | PCall::SavePins | PCall::Trend => self.trend.answer(&call, &a, now),
@@ -373,7 +374,7 @@ impl BoxView {
                     }
                 }
                 PCall::Discover => self.devices_ui.discovered(a.status, &a.body),
-                call => self.projects.answer(call, &a),
+                call => self.projects.answer_for(call, &a, signed_in),
             }
         }
         if std::mem::take(&mut self.projects.deployed) {
@@ -1235,9 +1236,7 @@ impl BoxView {
             return p.clone();
         }
         match (&s.selected, &s.scan) {
-            _ if s.link() == Link::SignIn => {
-                "Sign in to watch this box: Sign in in the header, or Alt F8.".into()
-            }
+            _ if s.link() == Link::SignIn => "Sign in to watch this box (Sign in, top right).".into(),
             _ if !matches!(s.link(), Link::Connected) && s.modules.is_empty() => {
                 "Looking for the box…".into()
             }
@@ -1260,7 +1259,9 @@ impl BoxView {
             Link::Connected => ("● connected".into(), t.accent),
             Link::SignIn => ("● sign in to watch".into(), t.fg),
             Link::Reconnecting { at, .. } => (format!("● reconnecting (retry in {}s)", retry(at)), t.fg),
-            Link::Unreachable { at, .. } => (format!("● box unreachable (retry in {}s)", retry(at)), RED),
+            Link::Unreachable { at, .. } => {
+                (format!("● box unreachable (retry in {}s)", retry(at)), t.ink(RED))
+            }
         }
     }
 
@@ -1739,7 +1740,13 @@ impl Body for BoxView {
     fn notices(&mut self, ui: &mut egui::Ui, chrome: &mut Chrome) {
         let t = theme(ui);
         if let Some(f) = self.state.scan.as_ref().and_then(|s| s.fault.as_ref()) {
-            crate::messages::copyable(ui, chrome, "fault", &format!("fault: {f}"), RED);
+            crate::messages::copyable(
+                ui,
+                chrome,
+                "fault",
+                &format!("fault: {f}"),
+                crate::theme::theme(ui).ink(RED),
+            );
         }
         match &self.projects.deploy {
             Deploy::Idle => {}
@@ -1761,7 +1768,13 @@ impl Body for BoxView {
             }
             Deploy::Failed(why) => {
                 let why = format!("✖ {why}");
-                crate::messages::copyable(ui, chrome, "deploy failed", &why, RED);
+                crate::messages::copyable(
+                    ui,
+                    chrome,
+                    "deploy failed",
+                    &why,
+                    crate::theme::theme(ui).ink(RED),
+                );
             }
         }
         if let Some(p) = &self.desk.problem {
@@ -1775,7 +1788,7 @@ impl Body for BoxView {
         if let Some((text, error)) = self.projects.notice.clone() {
             ui.separator();
             if error {
-                crate::messages::copyable(ui, chrome, "notice", &text, RED);
+                crate::messages::copyable(ui, chrome, "notice", &text, crate::theme::theme(ui).ink(RED));
             } else {
                 let r = ui.label(RichText::new(text).color(t.muted));
                 chrome.hit("notice", r.rect);
@@ -1865,7 +1878,11 @@ impl Body for BoxView {
             let arrow = if selected { "▾" } else { "▸" };
             let text = RichText::new(format!("{arrow} {}  {} · {} scans", m.name, m.state, m.scans))
                 .monospace()
-                .color(if m.state == "faulted" { RED } else { t.fg });
+                .color(if m.state == "faulted" {
+                    crate::theme::theme(ui).ink(RED)
+                } else {
+                    t.fg
+                });
             let r = ui.selectable_label(selected, text);
             chrome.hit(format!("module {}", m.name), r.rect);
             let r = match &m.fault {
@@ -2014,7 +2031,7 @@ impl Body for BoxView {
             let mut go = false;
             // The header is the open file's name (Nick, 2026-11-08), then
             // word wrap, then the → that deploys this version.
-            let name = o.current.clone().unwrap_or_else(|| "Structured Text".to_string());
+            let name = o.current.clone().unwrap_or_else(|| "Program".to_string());
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 editor::file_header(
@@ -2090,7 +2107,7 @@ impl Body for BoxView {
             .state
             .selected
             .clone()
-            .unwrap_or_else(|| "Structured Text".to_string());
+            .unwrap_or_else(|| "Program".to_string());
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             editor::file_header(ui, chrome, &name, "The source of the module that runs.");
@@ -2098,22 +2115,19 @@ impl Body for BoxView {
             ui.add(crate::theme::whole(RichText::new("read-only").color(t.muted)))
                 .tip("Changes reach the box as proposals.");
         });
-        match &self.view {
-            Some(v) => {
-                let mut src: &str = &v.src;
-                editor::st_editor(
-                    ui,
-                    egui::Id::unique("box-st"),
-                    &mut src,
-                    &[],
-                    &[],
-                    usize::MAX,
-                    chrome,
-                );
-            }
-            None => {
-                ui.label(RichText::new(self.waiting()).color(t.muted));
-            }
+        // With no source yet, the canvas beside this pane says what the
+        // box waits for; said here too it was on screen twice.
+        if let Some(v) = &self.view {
+            let mut src: &str = &v.src;
+            editor::st_editor(
+                ui,
+                egui::Id::unique("box-st"),
+                &mut src,
+                &[],
+                &[],
+                usize::MAX,
+                chrome,
+            );
         }
     }
 
@@ -2141,28 +2155,43 @@ impl Body for BoxView {
                 v.outputs_ui(ui, scan);
                 ui.separator();
             }
-            ui.label(RichText::new("Signals").strong());
-            // Two columns (Nick, 2026-11-01: denser).
-            egui::Grid::new("box-io-signals").num_columns(2).show(ui, |ui| {
-                for pair in self.state.signals.chunks(2) {
-                    for s in pair {
-                        let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
-                        let forced = if s.forced { "  FORCED" } else { "" };
-                        let text = format!("{} {} = {}{unit}{forced}", s.dir, s.name, show(s.value));
-                        let color = match s.quality.as_str() {
-                            _ if s.forced => WARN,
-                            "missing" => RED,
-                            _ if s.value == Some(helmsman_iec::Value::Bool(true)) => t.accent,
-                            _ => t.fg,
-                        };
-                        let l = ui.label(RichText::new(text).monospace().color(color));
-                        if let Some(e) = &s.point_error {
-                            l.on_hover_text(e);
-                        }
-                    }
-                    ui.end_row();
+            // Inputs, then Outputs: the simulation's I/O tab has the same
+            // two headings (one "Signals" list here until 2026-11-10).
+            for (head, dir, tip) in [
+                ("Inputs", "in", "What the box reads from its devices."),
+                ("Outputs", "out", "What the box writes to its devices."),
+            ] {
+                ui.label(RichText::new(head).strong()).tip(tip);
+                let rows: Vec<&crate::remote::SignalRow> =
+                    self.state.signals.iter().filter(|s| s.dir == dir).collect();
+                if rows.is_empty() {
+                    ui.label(RichText::new("none").color(t.muted)).tip(tip);
                 }
-            });
+                // Two columns (Nick, 2026-11-01: denser).
+                egui::Grid::new(("box-io-signals", dir))
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        for pair in rows.chunks(2) {
+                            for s in pair {
+                                let unit = s.unit.as_deref().map_or(String::new(), |u| format!(" {u}"));
+                                let forced = if s.forced { "  FORCED" } else { "" };
+                                let text = format!("{} = {}{unit}{forced}", s.name, show(s.value));
+                                let color = match s.quality.as_str() {
+                                    _ if s.forced => t.ink(WARN),
+                                    "missing" => t.ink(RED),
+                                    _ if s.value == Some(helmsman_iec::Value::Bool(true)) => t.ink(GREEN),
+                                    _ => t.fg,
+                                };
+                                let l = ui.label(RichText::new(text).monospace().color(color));
+                                if let Some(e) = &s.point_error {
+                                    l.on_hover_text(e);
+                                }
+                            }
+                            ui.end_row();
+                        }
+                    });
+                ui.add_space(6.0);
+            }
         });
     }
 

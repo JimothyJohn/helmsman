@@ -79,8 +79,8 @@ pub fn button_sized(
     }
     let color = match (enabled, icon) {
         (false, _) => t.muted.gamma_multiply(0.5),
-        (true, Icon::Run | Icon::Deploy) => GREEN,
-        (true, Icon::Stop) => RED,
+        (true, Icon::Run | Icon::Deploy) => crate::theme::theme(ui).ink(GREEN),
+        (true, Icon::Stop) => crate::theme::theme(ui).ink(RED),
         (true, _) if hot => t.accent,
         (true, _) => t.fg,
     };

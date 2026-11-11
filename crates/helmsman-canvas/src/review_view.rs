@@ -223,7 +223,12 @@ impl ReviewView {
             return;
         }
         let t = theme(ui);
-        ui.label(RichText::new("Signed in").strong()).tip(SESSION);
+        let head = if self.state.signed_in().is_some() {
+            "Signed in"
+        } else {
+            "Sign in"
+        };
+        ui.label(RichText::new(head).strong()).tip(SESSION);
         if let Some(who) = self.state.signed_in() {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("● {who}")).color(t.accent))
@@ -245,7 +250,7 @@ impl ReviewView {
             }
             Some("unavailable") => {
                 ui.colored_label(
-                    RED,
+                    crate::theme::theme(ui).ink(RED),
                     "The box's accounts file cannot be used: nobody can sign in (see its journal).",
                 );
                 return;
@@ -273,7 +278,7 @@ impl ReviewView {
             ui.spinner();
         }
         if let Some(p) = &self.state.login_problem {
-            ui.colored_label(RED, p);
+            ui.colored_label(crate::theme::theme(ui).ink(RED), p);
         }
     }
 
@@ -340,7 +345,7 @@ impl ReviewView {
             }
         }
         if let Some(p) = &self.state.login_problem {
-            ui.colored_label(RED, p);
+            ui.colored_label(crate::theme::theme(ui).ink(RED), p);
         }
     }
 
@@ -412,7 +417,7 @@ impl ReviewView {
             }
         });
         if let Some(e) = &self.state.list_error {
-            ui.colored_label(RED, e);
+            ui.colored_label(crate::theme::theme(ui).ink(RED), e);
         }
         if self.state.list.is_empty() {
             ui.label(RichText::new("No proposals on this box.").color(t.muted));
@@ -486,7 +491,7 @@ impl ReviewView {
             }
             section(ui, "Diagram");
             if let Some(p) = &o.problem {
-                ui.colored_label(RED, p);
+                ui.colored_label(crate::theme::theme(ui).ink(RED), p);
             }
             if let Some(d) = &o.drawn {
                 diagram(ui, d, &mut self.pou, &mut self.cam);
@@ -612,7 +617,7 @@ fn header(ui: &mut egui::Ui, o: &Open) {
     });
     if o.tier().is_none() {
         ui.colored_label(
-            RED,
+            crate::theme::theme(ui).ink(RED),
             "The box gave this draft no tier (it does not run a change set), so it cannot be applied here.",
         );
     }
@@ -1198,7 +1203,10 @@ fn chart(ui: &mut egui::Ui, c: &Chart) {
     let secs = (c.end_ms.saturating_sub(c.start_ms)) as f64 / 1000.0;
     ui.label(RichText::new(format!("replay #{} over {secs:.1} s of recorded inputs", c.id)).color(t.muted));
     for f in &c.faults {
-        ui.colored_label(RED, format!("the proposal faulted: {f}"));
+        ui.colored_label(
+            crate::theme::theme(ui).ink(RED),
+            format!("the proposal faulted: {f}"),
+        );
     }
     if c.signals.is_empty() {
         ui.label(RichText::new("No module drives a signal in either version.").color(t.muted));

@@ -1215,7 +1215,7 @@ impl PlaygroundView {
             chrome.hit("program name", field.rect);
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if let Some(e) = &p.error {
-                ui.colored_label(RED, e);
+                ui.colored_label(crate::theme::theme(ui).ink(RED), e);
             }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -1510,9 +1510,9 @@ impl Body for PlaygroundView {
                 .monospace()
                 .strong()
                 .color(if s.running && s.fault.is_none() {
-                    GREEN
+                    crate::theme::theme(ui).ink(GREEN)
                 } else {
-                    RED
+                    crate::theme::theme(ui).ink(RED)
                 }),
         )
         .tip(format!(
@@ -1533,15 +1533,18 @@ impl Body for PlaygroundView {
         let t = theme(ui);
         if let Some(f) = &self.session.fault {
             let text = format!("Fault: {f}. Run or Step restarts the program.");
-            crate::messages::copyable(ui, chrome, "fault", &text, RED);
+            crate::messages::copyable(ui, chrome, "fault", &text, crate::theme::theme(ui).ink(RED));
         }
         if self.session.paused.is_some() {
             let at = self
                 .paused_line()
                 .map_or_else(String::new, |l| format!(" before line {l}"));
             ui.horizontal_wrapped(|ui| {
-                ui.colored_label(WARN, format!("Paused at a breakpoint{at}."))
-                    .tip("The diagram and the values show the scan as it stood just before that statement.");
+                ui.colored_label(
+                    crate::theme::theme(ui).ink(WARN),
+                    format!("Paused at a breakpoint{at}."),
+                )
+                .tip("The diagram and the values show the scan as it stood just before that statement.");
                 ui.label(
                     RichText::new("F8 runs the rest of the scan. Ctrl Enter goes on to the next stop.")
                         .color(t.muted),
@@ -1553,7 +1556,7 @@ impl Body for PlaygroundView {
         }
         if let Some((n, error)) = self.proj.notice.clone() {
             if error {
-                crate::messages::copyable(ui, chrome, "notice", &n, RED);
+                crate::messages::copyable(ui, chrome, "notice", &n, crate::theme::theme(ui).ink(RED));
             } else {
                 let r = ui.label(RichText::new(n).color(t.muted));
                 chrome.hit("notice", r.rect);
@@ -1607,7 +1610,7 @@ impl Body for PlaygroundView {
                     .tip("Checking the edit.");
             } else if errors > 0 {
                 ui.add(crate::theme::whole(
-                    RichText::new(format!("✖ {errors} error(s)")).color(RED),
+                    RichText::new(format!("✖ {errors} error(s)")).color(crate::theme::theme(ui).ink(RED)),
                 ))
                 .tip("The list under the code has each one. Click an error to go to its line.");
             } else {
@@ -1952,17 +1955,19 @@ impl PlaygroundView {
             ui.label(RichText::new("Nothing compiled yet.").color(t.muted));
             return;
         }
-        ui.label(RichText::new("Signals").strong().color(t.muted))
-            .tip(format!(
-                "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
-            ));
         let points: Vec<String> = self
             .session
             .outputs()
             .chain(self.session.inputs())
             .map(|p| p.name.clone())
             .collect();
+        // The heading shares the signals' row: on a line of its own it
+        // and the slider left the plot the smallest part of the panel.
         ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Signals").strong().color(t.muted))
+                .tip(format!(
+                    "Click a signal to pin it to the trend, up to {TREND_SIGNALS}."
+                ));
             for name in &points {
                 let on = self.session.trend.signals.contains(name);
                 let tip = if on {
@@ -2014,7 +2019,8 @@ impl PlaygroundView {
                 egui::ComboBox::from_id_salt("pg-model")
                     .width((ui.available_width() - 40.0).max(60.0))
                     .wrap_mode(egui::TextWrapMode::Truncate)
-                    .selected_text(self.chat.model.label())
+                    // The name alone: the note in brackets is in the list.
+                    .selected_text(self.chat.model.label().split(" (").next().unwrap_or_default())
                     .show_ui(ui, |ui| {
                         for m in Model::ALL {
                             ui.selectable_value(&mut self.chat.model, m, m.label())
@@ -2094,7 +2100,7 @@ impl PlaygroundView {
             ui.label(
                 RichText::new("That does not look like an Anthropic key (sk-ant-…).")
                     .small()
-                    .color(RED),
+                    .color(crate::theme::theme(ui).ink(RED)),
             );
         }
         let mut remember = self.chat.remember;
@@ -2112,7 +2118,7 @@ impl PlaygroundView {
                      Untick, or Forget, on a shared computer.",
                 )
                 .small()
-                .color(RED),
+                .color(crate::theme::theme(ui).ink(RED)),
             );
         }
         // Wrapped: in a plain row a label extends, and a row wider than a
@@ -2157,13 +2163,15 @@ impl PlaygroundView {
         let start = end.saturating_sub(window);
         // Samples older than the window are kept for a wider one: not drawn.
         #[allow(clippy::cast_precision_loss)]
-        let x_of = |t: u64| rect.left() + 90.0 + (rect.width() - 96.0) * ((t - start) as f32 / window as f32);
+        let x_of = |t: u64| {
+            rect.left() + 90.0 + (rect.width() - 90.0 - SCALE_W) * ((t - start) as f32 / window as f32)
+        };
         for (k, name) in trend.signals.iter().enumerate() {
             #[allow(clippy::cast_precision_loss)]
             let top = rect.top() + lane * k as f32;
             let color = match k % TREND.len() {
                 5 if !t.dark => t.fg,
-                i => TREND[i],
+                i => t.ink(TREND[i]),
             };
             let (lo, hi) = trend
                 .samples
@@ -2429,6 +2437,10 @@ fn round_window(v: f64) -> u64 {
         .round()
         .clamp(WINDOW_MIN_MS as f64, WINDOW_MAX_MS as f64) as u64
 }
+
+/// The room kept at a trend's right edge for [`scale_labels`]: a trace
+/// that ran to the edge was drawn under them once the window filled.
+pub const SCALE_W: f32 = 64.0;
 
 /// The lane's scale: its top and bottom values at the right edge, so a
 /// line can be read (both trends draw them).
@@ -3126,7 +3138,9 @@ fn output_ui(ui: &mut egui::Ui, p: &Point) -> bool {
         RichText::new(text)
             .monospace()
             .size(crate::theme::MIN_TEXT)
-            .color(if on { t.accent } else { t.fg }),
+            // On is green, as a TRUE value in the diagram and a lamp on
+            // the Monitor are (it was the accent yellow here alone).
+            .color(if on { t.ink(GREEN) } else { t.fg }),
     )
     .wrap_mode(egui::TextWrapMode::Truncate)
     .min_size(Vec2::new(ui.available_width(), TAP * 0.8));

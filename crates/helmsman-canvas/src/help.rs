@@ -449,7 +449,7 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
             });
         }
         Phase::Failed(why) => {
-            crate::messages::copyable(ui, chrome, "help failed", why, RED);
+            crate::messages::copyable(ui, chrome, "help failed", why, crate::theme::theme(ui).ink(RED));
         }
         Phase::Answered {
             answer,
@@ -469,7 +469,10 @@ pub fn ui(ui: &mut egui::Ui, chrome: &mut crate::editor::Chrome, s: &mut HelpUi,
                 if issue.diagnosis.is_empty() {
                     if let Some(w) = why {
                         let r = ui
-                            .add(egui::Label::new(RichText::new(w).color(WARN)).wrap())
+                            .add(
+                                egui::Label::new(RichText::new(w).color(crate::theme::theme(ui).ink(WARN)))
+                                    .wrap(),
+                            )
                             .tip("Why there is no diagnosis. The issue still carries the box's details.");
                         chrome.hit("help why", r.rect);
                     }
