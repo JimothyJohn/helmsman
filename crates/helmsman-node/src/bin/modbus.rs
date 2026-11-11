@@ -177,6 +177,8 @@ async fn main(spawner: Spawner) -> ! {
 
     println!("waiting for the link and a lease...");
     stack.wait_config_up().await;
+    // A fixed address is "up" before the PHY has negotiated.
+    stack.wait_link_up().await;
 
     let Some(block) = parse_endpoint(E1213_ADDR, E1213_PORT) else {
         println!("FATAL: E1213_ADDR {E1213_ADDR:?} is not an IPv4 address");
