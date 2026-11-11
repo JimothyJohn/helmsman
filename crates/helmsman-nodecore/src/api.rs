@@ -96,6 +96,11 @@ pub struct NodeView {
     pub heap_used: usize,
     pub heap_peak: usize,
     pub heap_size: usize,
+    /// A second, external heap region (PSRAM) where the board has one:
+    /// `(size, used)` in bytes. `heap_used` and `heap_size` are then the
+    /// internal region's, and `heap_peak` is the most ever in use across
+    /// both, so a peak above `heap_size` says a compile spilled over.
+    pub heap_external: Option<(usize, usize)>,
     pub mac: [u8; 6],
     pub ip: Option<[u8; 4]>,
     pub link_up: bool,
@@ -301,6 +306,10 @@ fn net_json(net: Net) -> Json {
 #[must_use]
 pub fn node(view: &NodeView, settings: &Settings) -> Json {
     let m = view.mac;
+    let mut heap = json!({ "used": view.heap_used, "peak": view.heap_peak, "size": view.heap_size });
+    if let Some((size, used)) = view.heap_external {
+        heap["external"] = json!({ "used": used, "size": size });
+    }
     json!({
         "id": view.id(),
         "name": settings.name,
@@ -308,7 +317,7 @@ pub fn node(view: &NodeView, settings: &Settings) -> Json {
         "board": view.board,
         "version": view.version,
         "uptime_ms": view.uptime_ms,
-        "heap": { "used": view.heap_used, "peak": view.heap_peak, "size": view.heap_size },
+        "heap": heap,
         "mac": format!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5]),
         "ip": view.ip.map(ip_text),
         "link": if view.link_up { "up" } else { "down" },
@@ -467,6 +476,18 @@ pub fn beacon(view: &NodeView, settings: &Settings) -> String {
     )
 }
 
+/// The page's sentence about memory: the internal heap, and the second
+/// region when the board has one.
+fn heap_text(view: &NodeView) -> String {
+    let external = view.heap_external.map_or(String::new(), |(size, used)| {
+        format!(", and {used} of {size} bytes of external memory")
+    });
+    format!(
+        "Heap {} of {} bytes (peak {}){external}",
+        view.heap_used, view.heap_size, view.heap_peak
+    )
+}
+
 /// The node's own page: what it is, how it is, and the settings form.
 /// Plain HTML, no scripts, so it reads on a phone at the panel.
 #[must_use]
@@ -512,7 +533,7 @@ textarea{{width:100%;font:16px/1.4 ui-monospace,monospace;padding:.4rem}}\
 button{{font-size:18px;padding:.5rem 1rem;margin-top:1rem}}.notice{{background:#eef;padding:.6rem}}\
 code{{background:#f4f4f4;padding:0 .3rem}}</style></head><body>\
 <h1>{name}</h1>\
-<p>Helmsman node {version} on a {board}. Up {up} s. Heap {heap_used} of {heap_size} bytes (peak {heap_peak}). \
+<p>Helmsman node {version} on a {board}. Up {up} s. {heap}. \
 Link {link}{ip}.</p>\
 {module}\
 {notice}\
@@ -550,9 +571,7 @@ Link {link}{ip}.</p>\
         version = html_escape(view.version),
         board = html_escape(view.board),
         up = view.uptime_ms / 1000,
-        heap_used = view.heap_used,
-        heap_size = view.heap_size,
-        heap_peak = view.heap_peak,
+        heap = heap_text(view),
         link = if view.link_up { "up" } else { "down" },
         ip = view.ip.map_or(String::new(), |ip| format!(", {}", ip_text(ip))),
         module = module,
@@ -629,6 +648,7 @@ pub(crate) fn sample_view() -> NodeView {
         heap_used: 50_000,
         heap_peak: 60_000,
         heap_size: 112 * 1024,
+        heap_external: None,
         mac: [0x24, 0x4c, 0xab, 0x03, 0xcf, 0x64],
         ip: Some([10, 0, 0, 50]),
         link_up: true,
@@ -716,6 +736,20 @@ mod tests {
         assert_eq!(n["mac"], "24:4c:ab:03:cf:64");
         assert_eq!(n["ip"], "10.0.0.50");
         assert_eq!(n["heap"]["peak"], 60_000);
+        assert!(n["heap"].get("external").is_none());
+        // A board with PSRAM: the second region is its own object, and the
+        // page says it too.
+        let mut with_psram = v.clone();
+        with_psram.heap_external = Some((32 * 1024 * 1024, 4096));
+        let n2 = node(&with_psram, &settings());
+        assert_eq!(n2["heap"]["external"]["size"], 32 * 1024 * 1024);
+        assert_eq!(n2["heap"]["external"]["used"], 4096);
+        assert_eq!(n2["heap"]["size"], 112 * 1024);
+        assert!(
+            settings_page(&with_psram, &settings(), None)
+                .contains("4096 of 33554432 bytes of external memory")
+        );
+        assert!(!settings_page(&v, &settings(), None).contains("external memory"));
         assert_eq!(n["net"]["mode"], "dhcp");
         assert_eq!(io_map(&v)["text"], "device rio modbus-tcp 192.168.3.60\n");
         let sj = settings_json(&settings());

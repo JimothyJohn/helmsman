@@ -57,9 +57,17 @@ pub struct Client<'a> {
     /// nothing else on the node could resolve a neighbour; the 2026-11-08
     /// run lost its report sink that way.
     retry_at: Option<Instant>,
+    /// Connects failed in a row. The wait before the next attempt grows
+    /// with it ([`Client::connect_failed`]): right after the link comes
+    /// up the first attempts can fail for half a second or so (the P4 on
+    /// the bench switch, 2026-11-10: about every other boot), and a flat
+    /// [`CONNECT_BACKOFF`] turned that into a unit that came up two
+    /// seconds late.
+    failures: u8,
 }
 
-/// How long a failed connect keeps the link quiet.
+/// How long a failed connect keeps the link quiet, once the first few
+/// quicker attempts have failed too.
 pub const CONNECT_BACKOFF: Duration = Duration::from_secs(2);
 
 impl<'a> Client<'a> {
@@ -84,6 +92,7 @@ impl<'a> Client<'a> {
             tid: 0,
             connects: 0,
             retry_at: None,
+            failures: 0,
         }
     }
 
@@ -99,19 +108,34 @@ impl<'a> Client<'a> {
                 self.connected = true;
                 self.connects += 1;
                 self.retry_at = None;
+                self.failures = 0;
                 Ok(())
             }
             Ok(Err(_)) => {
-                self.socket.abort();
-                self.retry_at = Some(Instant::now() + CONNECT_BACKOFF);
+                self.connect_failed();
                 Err(Error::Link("connect refused"))
             }
             Err(_) => {
-                self.socket.abort();
-                self.retry_at = Some(Instant::now() + CONNECT_BACKOFF);
+                self.connect_failed();
                 Err(Error::Link("connect timed out"))
             }
         }
+    }
+
+    /// After a failed connect: the next attempt may come at once, then
+    /// after 250 ms, 500 ms, 1 s, and from there every
+    /// [`CONNECT_BACKOFF`], which is what a unit that is not there gets.
+    fn connect_failed(&mut self) {
+        self.socket.abort();
+        self.failures = self.failures.saturating_add(1);
+        let wait = match self.failures {
+            1 => return,
+            2 => Duration::from_millis(250),
+            3 => Duration::from_millis(500),
+            4 => Duration::from_secs(1),
+            _ => CONNECT_BACKOFF,
+        };
+        self.retry_at = Some(Instant::now() + wait);
     }
 
     fn drop_link(&mut self) {

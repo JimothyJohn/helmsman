@@ -268,6 +268,9 @@ fn build_case(
                 modules.len(),
                 modules.join(", ")
             );
+            for d in &b.problems {
+                let _ = writeln!(err, "{}:{}:{}: {}", at(dir, &d.file), d.line, d.col, d.message);
+            }
             return case(name, "build", None, Outcome::Passed, String::new());
         }
         Err(diags) => diags,

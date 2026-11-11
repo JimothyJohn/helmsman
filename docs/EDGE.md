@@ -703,8 +703,45 @@ arrived, so the first day on the board is spent on the two real unknowns:
     the first open succeeds 1.1 s after the link comes up with no failed
     attempt and no late scan, and against an address nobody answers the
     opens time out every 5 s while the scan stays at 57 us a cycle with
-    no late scan. The Modbus client (`modbus.rs`) has the same 1 s limit
-    on its connect and was not changed.
+    no late scan.
+  - **The node's Modbus link came up two to four seconds late at every
+    boot; now it comes up with the link.** With temporary timestamps on
+    the console: the I/O task started dialling 0.7 s after start, two
+    seconds before the PHY had a link (a fixed address is configured at
+    once), spent its attempts and sat in the 2 s back-off, once or twice:
+    the block was up 3.1 or 5.5 s after start. The I/O task (and the
+    `modbus` image) now waits for the link, and a failed connect is
+    followed by attempts at once, after 250 ms, 500 ms and 1 s before the
+    2 s back-off that a unit which is not there gets. Over 18 boots: 17
+    connected on the first attempt, within 12 ms of the link coming up
+    (2.7 or 3.2 s after start); one lost its first address request and
+    connected 1.35 s after the link, where the flat back-off made that
+    2.4 s. The stack asks for an address at most once a second, which is
+    that one boot's floor. A longer connect limit, tried first, was
+    worse (5.7 s every boot) and is not what `enip.rs` should keep
+    either if its first open ever matters. The same change is in
+    crates/helmsman-node (the POE-ISO), built and linted, not run: that
+    board is off the network.
+  - **The fixed `enip` image as Exclusive Owner, and a loss.** Open at
+    link-up, no late scan. A `Forward_Close` sent from the Studio with
+    the node's connection triad ended the connection under it: the node
+    saw 800 ms without input, handed the close to the link task (the
+    unit had dropped the session, so it failed, harmlessly), and
+    reopened 2 s later; no scan was late through any of it.
+  - **A panic restarts the node, seen.** A build that panicked on purpose
+    printed its message, restarted (`rst:0x3 (SW_SYS_RESET)`) and came
+    back with settings and program from flash. The first try showed the
+    restart cutting the message off after its first line; `custom_halt`
+    now waits 250 ms for the console before it resets.
+  - **Where the memory is.** `/api/node`'s `heap` now gives the internal
+    region as `used` and `size` and the PSRAM as `external`; the node's
+    page and its report line say it too. Idle with the chase: 136 KB
+    internal, nothing external. The 431-line cell running: 225 KB
+    internal and 45 KB external after one deploy, 166 KB and 104 KB after
+    a second (what lands where depends on what the compile held at the
+    time), and 950 to 1050 us a scan in both, so that much of a program's
+    data in PSRAM costs nothing that shows at this scan. A run with all
+    of it in SRAM was not made. Back on the chase, external use is 0.
   - **Not done:** the PoE module's isolation (the module is not fitted),
     TLS with mbedtls-rs.
 

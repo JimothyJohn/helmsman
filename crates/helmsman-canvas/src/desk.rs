@@ -14,8 +14,13 @@
 //! `desk-agent-and-forms`). Never kept: a password or PIN, or a device
 //! setting that names a credential ([`is_secret_key`]).
 //!
-//! One `localStorage` slot (each box serves its own page, so the slot is
-//! per box), written at most every [`EVERY_S`] and only when something
+//! `localStorage` (each box serves its own page, so the slots are per
+//! box): the signed-out desk in [`SLOT`], and each person's own in
+//! `SLOT/<`[`slot_suffix`]`>` once they sign in (card `desk-person-switch`:
+//! one person's draft never lands in another's desk). Signing in claims
+//! what is in [`SLOT`] for that person if they have no desk of their own
+//! here yet, and empties it; a desk an earlier release left there for
+//! someone ([`Desk::owner`]) moves to that person's slot, at load. Written at most every [`EVERY_S`] and only when something
 //! changed; at most [`MAX_BYTES`], the Agent's conversation and the device
 //! form going first past it, then the biggest drafts.
 //!
@@ -53,6 +58,38 @@ pub const EVERY_S: f64 = 1.0;
 pub const MAX_BYTES: usize = 1 << 20;
 /// The most the box keeps of one desk, bytes (its `api::desk::MAX_DESK`).
 pub const BOX_BYTES: usize = 512 * 1024;
+
+/// The part of a storage key that names `who` (as [`owner`] names them,
+/// `user:alice`): letters, digits, `_` and `-` as they are, every other
+/// byte `%XX`, so no name can hold a separator, collide with another
+/// person's or reach another key. Past 64 characters the first 48 and a
+/// hash of the whole (after a `~`, which no short name can hold).
+#[must_use]
+pub fn slot_suffix(who: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    for b in who.bytes() {
+        parts.push(if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' {
+            char::from(b).to_string()
+        } else {
+            format!("%{b:02X}")
+        });
+    }
+    let len: usize = parts.iter().map(String::len).sum();
+    if len <= 64 {
+        return parts.concat();
+    }
+    let mut head = String::new();
+    for p in &parts {
+        if head.len() + p.len() > 48 {
+            break;
+        }
+        head.push_str(p);
+    }
+    let hash = who.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("{head}~{hash:016x}")
+}
 
 /// An unsaved edit: the text, and the box's version of the file it was
 /// made against (`None`: a file the box did not have yet).
@@ -410,10 +447,26 @@ impl Desk {
     }
 }
 
+/// Where [`Keeper::bind`] left the desk.
+#[derive(Debug)]
+pub enum Bound {
+    /// The store has no slot per person: one desk, as before.
+    Unsupported,
+    /// What is in front of the person is theirs (typed signed out, and
+    /// they had no desk here).
+    Claimed,
+    /// Their own desk here (empty if they had none): to put in front of
+    /// them in place of what is on screen.
+    Theirs(Box<Desk>),
+}
+
 /// Writes the desk to its store when it changed, at most every
 /// [`EVERY_S`]; every store access is wrapped.
 pub struct Keeper {
+    /// Where the desk is written: [`Self::home`], or one person's slot.
     store: Box<dyn Storage>,
+    /// The signed-out slot, once the desk is a person's.
+    home: Option<Box<dyn Storage>>,
     /// What the store holds, as far as this page knows.
     last: String,
     at: Option<f64>,
@@ -448,10 +501,35 @@ impl Keeper {
                 Some(format!("this browser does not keep your work ({e})")),
             ),
         };
-        let (desk, unread) = Desk::read(&last);
+        let (mut desk, mut unread) = Desk::read(&last);
+        let mut store = store;
+        let mut last = last;
+        // A desk an earlier release kept for someone moves to their slot.
+        if let Some(who) = desk.owner.clone().filter(|_| !unread)
+            && let Some(mut theirs) = store.keyed(&slot_suffix(&who))
+        {
+            let mine = theirs.load().ok().flatten().unwrap_or_default();
+            let newer = Desk::read(&mine).0.saved_at < desk.saved_at;
+            if (mine.trim().is_empty() || newer) && theirs.save(&last).is_err() {
+                // Not moved: left where it is, and not put in front.
+                unread = true;
+                desk = Desk::default();
+            } else {
+                let stub = Desk {
+                    user: desk.user.clone(),
+                    ..Desk::default()
+                };
+                let text = stub.text_within(MAX_BYTES).0;
+                if store.save(&text).is_ok() {
+                    desk = stub;
+                    last = text;
+                }
+            }
+        }
         (
             Self {
                 store,
+                home: None,
                 last,
                 at: None,
                 work: desk.work(),
@@ -462,6 +540,53 @@ impl Keeper {
             },
             desk,
         )
+    }
+
+    /// The desk is now `who`'s (as [`owner`] names them), kept in their
+    /// own slot. `user` is the sign-in form's name, left in the signed-out
+    /// slot. With `claim`, the desk in front of the person was typed
+    /// signed out: it is theirs if they have none of their own in this
+    /// browser, and the signed-out slot is emptied either way.
+    pub fn bind(&mut self, who: &str, user: &str, claim: bool) -> Bound {
+        let suffix = slot_suffix(who);
+        let Some(theirs) = self.home.as_ref().unwrap_or(&self.store).keyed(&suffix) else {
+            return Bound::Unsupported;
+        };
+        let (text, problem) = match theirs.load() {
+            Ok(t) => (t.unwrap_or_default(), None),
+            Err(e) => (
+                String::new(),
+                Some(format!("this browser does not keep your work ({e})")),
+            ),
+        };
+        let (desk, unread) = Desk::read(&text);
+        let had_own = !text.trim().is_empty();
+        let old = std::mem::replace(&mut self.store, theirs);
+        self.home.get_or_insert(old);
+        self.last = text;
+        self.at = None;
+        self.problem = problem;
+        if claim {
+            let stub = Desk {
+                user: user.into(),
+                ..Desk::default()
+            };
+            if let Some(h) = self.home.as_mut()
+                && let Err(e) = h.save(&stub.text_within(MAX_BYTES).0)
+            {
+                self.problem = Some(format!("this browser does not keep your work ({e})"));
+            }
+        }
+        if claim && !had_own {
+            // The screen stays; the next look writes it to their slot.
+            self.unread = false;
+            return Bound::Claimed;
+        }
+        self.work = desk.work();
+        self.taken = self.work.clone();
+        self.saved_at = desk.saved_at;
+        self.unread = unread;
+        Bound::Theirs(Box::new(desk))
     }
 
     /// When the desk's work last changed ([`Desk::saved_at`]).
@@ -683,6 +808,59 @@ impl OnBox {
 mod tests {
     use super::*;
     use crate::sim_projects::MemStorage;
+
+    #[test]
+    fn a_name_cannot_collide_with_or_escape_another_slot() {
+        let names = [
+            "user:",
+            "user:alice",
+            "user:Alice",
+            "user:role:ops",
+            "role:ops",
+            "user:a/b",
+            "user:a/../b",
+            "user:a%2Fb",
+            "user:..",
+            "user:\u{e9}",
+            "user:e\u{301}",
+            "user:\u{1f600}",
+            "user:a\nb",
+            "user:a b",
+            "user:a~b",
+        ];
+        let mut seen = std::collections::BTreeSet::new();
+        for n in names {
+            let s = slot_suffix(n);
+            assert!(
+                s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-%".contains(&b)),
+                "{n:?} -> {s}"
+            );
+            assert!(seen.insert(s.clone()), "{n:?} collides: {s}");
+        }
+        // Something no name can reach: a name equal to another key's suffix
+        // is just another name.
+        let key = slot_suffix("user:alice");
+        assert_ne!(slot_suffix(&format!("user:{key}")), key);
+        assert_ne!(slot_suffix("user:"), slot_suffix("role:"));
+    }
+
+    #[test]
+    fn a_very_long_name_is_cut_and_hashed_without_colliding() {
+        let a = format!("user:{}", "a".repeat(5000));
+        let b = format!("user:{}b", "a".repeat(5000));
+        let (sa, sb) = (slot_suffix(&a), slot_suffix(&b));
+        assert!(sa.len() <= 65 && sb.len() <= 65, "{} {}", sa.len(), sb.len());
+        assert_ne!(sa, sb);
+        assert!(sa.contains('~'));
+        assert!(!slot_suffix("user:alice").contains('~'));
+        // Multi-byte names are not cut inside an escape.
+        let m = slot_suffix(&format!("user:{}", "\u{1f600}".repeat(100)));
+        assert!(m.len() <= 65 && !m.ends_with('%'), "{m}");
+        let head = m.split('~').next().unwrap_or("");
+        assert!(head.len() <= 48, "{m}");
+        assert!(head.split('%').skip(1).all(|t| t.len() >= 2), "{m}");
+    }
 
     fn draft(text: &str) -> Draft {
         Draft {
