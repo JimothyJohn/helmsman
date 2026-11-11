@@ -152,6 +152,8 @@ cd "$crate"
 # The interactive monitor needs a terminal; from an agent session (no tty)
 # flash alone, and read the console afterwards with
 #   espflash monitor --port PORT --non-interactive --before no-reset-no-sync --after no-reset
+# (with `--chip esp32p4` on the P4: without a reset espflash cannot ask
+# the chip what it is, and says "Chip argument not provided", 2026-11-11).
 if [ -t 0 ]; then
   "$ESPFLASH" flash --monitor --port "$SERIAL_PORT" \
     "$target_dir/$bin" 2>&1 | tee "../../$log"
@@ -159,7 +161,9 @@ else
   "$ESPFLASH" flash --port "$SERIAL_PORT" \
     "$target_dir/$bin" 2>&1 | tee "../../$log"
   echo "no terminal: flashed without the monitor; read the console with"
-  echo "  espflash monitor --port $SERIAL_PORT --non-interactive --before no-reset-no-sync --after no-reset"
+  chip=""
+  [ "$board" = p4-eth ] && chip=" --chip esp32p4"
+  echo "  espflash monitor$chip --port $SERIAL_PORT --non-interactive --before no-reset-no-sync --after no-reset"
 fi
 echo "log: $log"
 if grep -q "Flashing has completed" "$root/$log"; then
