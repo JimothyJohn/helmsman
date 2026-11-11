@@ -366,6 +366,26 @@ fn the_simulated_interface_loops_outputs_back_through_the_boxs_own_open() {
     });
 }
 
+#[test]
+fn the_device_maps_in_the_docs_load() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/devices/");
+    let map = std::fs::read_to_string(format!("{root}novanta-mdrive-profinet.map")).unwrap();
+    let f = text::parse(&map).unwrap();
+    assert_eq!(f.map.validate(), Ok(()));
+    assert_eq!(f.map.devices[0].driver, "profinet-io");
+    // The device line in the UR's page, as written there.
+    let page = std::fs::read_to_string(format!("{root}universal-robots.md")).unwrap();
+    let line = page
+        .lines()
+        .find(|l| l.starts_with("device ur profinet-io"))
+        .expect("the page has a device line");
+    let f = text::parse(&format!(
+        "{line}\nin state int ur in:0:u32\nout reg int ur out:24:u32\n"
+    ))
+    .unwrap();
+    assert_eq!(f.map.validate(), Ok(()));
+}
+
 mod port {
     //! The box's UDP port for PROFINET's RPCs, shared by its links: each
     //! datagram goes to the link that last wrote to its sender.

@@ -1,0 +1,11 @@
+# Novanta IMS Liberty MDrive over PROFINET IO (profinet-io, a frame every
+# 8 ms, the fastest its GSDML allows). docs/devices/novanta-mdrive.md says
+# where each number comes from. NOT RUN against a drive yet, and the
+# meaning of the 128 input and 128 output bytes (MCode registers) is not
+# read: the signals below are raw bytes to watch, not a drive profile.
+device axis profinet-io mdrive if=en0 ip=192.168.3.70/24 vendor=0x0261 device=0x0001 slots=0:0x1/1:0x1,1:0x30/1:0x1:i128,2:0x31/1:0x1:o128
+
+in  axis_in0  int axis in:0:u8
+in  axis_in1  int axis in:1:u8
+in  axis_in2  int axis in:2:u8
+in  axis_in3  int axis in:3:u8

@@ -158,6 +158,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   asked: 2026-11-10
   by: claude-session
 
+- [ ] **Open raw Ethernet to your user on the Studio (one sudo script)** — PROFINET's cyclic data, alarms and station discovery are Ethernet frames, not IP, and on macOS a program sends them through `/dev/bpf*`, which is root-only here (`/dev/bpf0` is root:wheel 0600; you are already in `access_bpf`, so Wireshark's helper was installed once and is gone). Until this runs, everything PROFINET is proven against the simulated device only: the BPF code has compiled and parsed synthetic buffers and has never carried a frame.
+  needs: `~/github/helmsman/scratch/27-bpf-access.sh` in the native terminal (sudo; again after each reboot, or install Wireshark's ChmodBPF to make it stick), then `! ~/github/helmsman/scratch/28-profinet-scan.sh` here
+  result: the scan lists the PROFINET stations on en0 (none is a fine answer with nothing plugged in: it proves frames go out and the listen works); a session can then run a box against a real device without sudo
+  est: 5m
+  difficulty: low
+  id: profinet-raw-access
+  asked: 2026-11-10
+  by: claude-session
+
 - [ ] **Bring up the Novanta IMS Liberty MDrive: PROFINET first** — due on the bench the week of 2026-11-10 with PROFINET enabled (Nick). The first device that is not discrete I/O, and the first real station for the PROFINET controller (`profinet-controller`). What its files say, read 2026-11-10 (docs/devices/novanta-mdrive.md): one Ethernet interface speaks Modbus TCP (the factory default), EtherNet/IP, PROFINET IO or MCode/TCP, one at a time, picked with Novanta's TCP/IP Configuration Utility; default IP 192.168.33.1. Its GSDML (`GSDML-V2.2-mdrive-SchneiderElectic-20130530.xml`, in the firmware zip) is vendor 0x0261 device 0x0001, an access point without interface or port submodules, a 128-byte input module (0x30) in slot 1 and a 128-byte output module (0x31) in slot 2, no parameter records, fastest cycle 8 ms. The 128 bytes carry MCode registers; the byte map is in Novanta's PROFINET manual and S7 workbook, which are not read yet. Steps: give it its station name (ours or Novanta's tool), bring the AR up from docs/devices/novanta-mdrive-profinet.map, read status and position, then a jog and a move to position from ST with the fault path and the comms-loss stop tested. Then the same axis over EtherNet/IP (its EDS is in the same zip) and Modbus TCP, so one device compares all three drivers. Motion asks "cell clear?" once per session (hardware-guard).
   needs: the MDrive on 192.168.3.x with its DC supply and a free shaft; its part number and firmware version (2.4.0.7 or later: the release notes name two PROFINET timing bugs fixed there); `profinet-raw-access` done; the PROFINET manual's I/O table (PDF from Novanta, the copy found online is behind a login)
   result: a device doc with citations, a map and a library entry; an ST program that jogs and positions the axis over PROFINET and stops it on comms loss; the first PROFINET startup against a device this project did not write, captured as a pcap and held as a regression test
@@ -191,6 +200,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 ## Next to build
+
+- [ ] **PROFINET IO controller: from the simulated device to real ones** — built 2026-11-10 night (docs/ARCHITECTURE.md `profinet`; crates helmsman-profinet, helmsman-l2, helmsman-io's `profinet-io`): DCP, the Connect / Write / PrmEnd / application-ready / Release RPCs, cyclic frames with a watchdog both ways, alarms acknowledged, a `slots=` device line, bench tools (`profinet_scan`, `profinet_watch`, a pcap of a startup). Proven against our own simulated device (startup, loss, refusals, hostile bytes as properties) and read back field for field by scapy's dissector. Not proven: one frame on a real wire. What is left, in the order the bench will ask for it: (1) the first real startup (`mdrive-bringup`), fixing what it shows and keeping its capture as a test; (2) GSDML import, so `slots=` comes from the vendor's file as `eds=` does for EtherNet/IP (the Devices tab's Import device…); (3) alarms and the device's diagnosis shown on the signal and in the Monitor instead of only kept; (4) record reads (I&M0 for the device's identity page); (5) RPC fragmentation, for devices with many submodules; (6) the default build: `helmsman-plc`'s `profinet-io` feature goes into `default` once a device has passed; (7) a Linux run (packet socket; the Pi or CI with a veth pair).
+  needs: `profinet-raw-access`, then a device (`mdrive-bringup`, `ur-bringup`, `murr-block-bringup`)
+  result: a box masters a real PROFINET device from a map an engineer wrote from the GSDML, and says in words what is wrong when it does not come up
+  depends: profinet-raw-access
+  est: 1w
+  difficulty: high
+  id: profinet-controller
+  asked: 2026-11-10
+  by: claude-session
 
 - [ ] **Canvas: match box answers to requests, one buffer state machine** — from the 2026-11-08 interface review. Every wasm request to the box is a parallel fetch with no request id or generation; `BoxProjects::answer` matches by call name and reads live buffer state at answer time, and the native tests run requests one at a time so ordering is never exercised. The data-loss fixes of PR fix/box-projects-correlation patch the cases found (NewFile empty buffer, dropped save answers, deploy during save, Replace target); this card is the shape that stops the class: an in-flight table keyed by request id holding the sent text and the project generation, answers resolved against it, and one `Buf` state enum (Clean, Dirty, Saving{sent}, Conflict) shared by save, rename, create and deploy, with a test harness that answers requests out of order.
   result: a reordered or late answer can never make a buffer clean, empty or stuck; box_projects_tests has an out-of-order answer suite
@@ -738,3 +757,4 @@ Demo: on the bench, "flash the light when CompactLogix tag X is high for 5 s". T
   difficulty: high
   id: profinet-device
   notes: parked (fieldbus-hardware, 2026-10-31): no hardware until a customer asks.
+  notes: 2026-11-10: the controller side is built (`profinet-controller`), and with it a simulated device (`helmsman_profinet::device`: DCP, one AR, cyclic data, alarms) that is most of this card's protocol work. Still parked as a product: LLDP, the port and interface submodules, record reads and certification are not started.
