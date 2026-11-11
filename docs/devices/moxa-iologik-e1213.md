@@ -257,6 +257,13 @@ driver, both sides at once, so each fact below is from the wire:
   closed, no more O->T) keeps the unit refusing for about 10 s: requests
   at 2.6, 5.1 and 7.7 s were refused, the one at 10.2 s opened, for an
   abandoned Exclusive Owner and for an abandoned Input Only alike.
+- **Any originator can close a connection.** A `Forward_Close` naming
+  the connection serial, originator vendor and originator serial of the
+  P4 node's Exclusive Owner connection, sent from the Studio over its own
+  session, was answered with success and ended the node's connection
+  (2026-11-10); the unit also dropped the node's TCP session. The triad
+  is not a secret: the vendor is 0xFFFF and the serials are small or
+  derived from the MAC.
 - **Not explained:** before the power cycle the unit refused every
   request, Exclusive Owner included, with the bare 0x01 for several
   minutes while no originator was known to be connected (the try box was
