@@ -4,26 +4,45 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Open questions for Nick
 
+- [ ] **Move Ctrl S, Ctrl F and Ctrl G off the browser's chords too?** #322 moved every canvas shortcut that a browser owns and kept six as the one exception: Ctrl S, Ctrl Z, Ctrl Shift Z, Ctrl F, Ctrl G, Ctrl Shift G. Every editor on the web takes these, and the browser's own default (save the page, find in the page) does no harm if it slips through. The question was left in the PR body and the handoff file and never reached the board. Recommended: keep them.
+  needs: your call
+  result: the exception in `hotkeys::BROWSER` stays, or the six move (a one-line change per chord, the test `no_shortcut_is_a_browsers` then covers them)
+  options: keep them (recommended) | move all six | move Ctrl S only
+  est: 5m
+  difficulty: low
+  id: hotkeys-editor-chords
+  asked: 2026-11-10
+  by: claude-session
+
 ## Needs your hands
 
-- [ ] **Promote the guided tour** — #248 (the playground tour) is in dev but landed one minute after your dev → master merge, so the live playground does not have it, and docs/playground on dev is still the build without it. An agent rebuilds docs/playground on a PR into dev; then the next dev → master merge (yours) puts /playground/?tour live with the help links that point to it.
-  needs: the playground rebuild PR (build/playground-tour) merged into dev, then your dev → master merge
-  result: helmsman.advin.io/playground/?tour runs the tour
+- [ ] **Promote dev to master: 280 commits, the guided tour among them** — the last dev → master merge was #246 on 2026-11-06. #248 (the playground tour) landed one minute after it and #251 (the playground rebuilt with the tour) is merged into dev, so the only step left for /playground/?tour is the promotion. Everything since waits with it: the node (POE-ISO and P4), read-lock, Help mode, the hotkeys, the 2026-11-08 review fixes (#303 to #308). dev's last CI run is green (0d840f7, 2026-11-10).
+  needs: your dev → master merge; `gh pr list --base dev` first (2026-11-10: none open, but fix/node-modbus-connect is in flight in a live session and will open one)
+  result: helmsman.advin.io/playground/?tour runs the tour and the site matches dev
   est: 15m
   difficulty: low
   id: tour-live
   asked: 2026-11-06
   by: claude-session
 
-- [ ] **Review the Pi firewall fix (#245)** — draft PR fix/pi-scan-replies: the Devices scan on the Pi hears the answers through its firewall. Updated with dev 2026-11-06 (its TODO.md conflict with #249 resolved: the e1213-address card it annotated is done and gone); leave draft or flip it to ready (auto-merge then lands it).
-  needs: your eyes on the PR
-  result: the Pi's Devices scan finds devices
+- [ ] **Log in at the Studio to bring the try box back, then rebuild it** — the try box has been down since the desktop session logged out at 17:06 CST on 2026-11-10: no helmsman-plc process, nothing on :8081, `/dev/console` belongs to root (checked 19:47). `launchctl kickstart` from SSH answers 125 until someone logs in at the Studio's screen; RunAtLoad then starts the box by itself. It comes back on the build of 2026-11-08 (e7f1ae2, #300), 52 merges behind dev, so rebuild after.
+  needs: a login at the Studio's own screen (not SSH); then `~/github/helmsman-try/scratch/16-rebuild.sh` from your terminal there (it builds at the dev tip, signs and kickstarts the LaunchAgent)
+  result: https://10.0.0.41:8081/ answers at the dev tip with the E1213 up
+  notes: the box takes the E1213's one Class 1 connection as soon as it starts, so a P4 `enip` run (card enip-task-bench-checks) has to happen before the login or with the box stopped (`launchctl bootout gui/501/io.advin.helmsman-try`). Check after: `curl -sk -H "Authorization: Bearer $(cat ~/github/helmsman-try/scratch/try-state/api-token)" https://127.0.0.1:8081/api/devices` shows iologik_e1213 up.
   est: 10m
   difficulty: low
-  status: blocked
-  notes: parked: the Pi is out of the loop (Nick, 2026-11-07); only when Nick asks for the Pi
-  id: pr-245
-  asked: 2026-11-06
+  id: try-box-login
+  asked: 2026-11-10
+  by: claude-session
+
+- [ ] **Finish the relay's OpenRouter hand-off (agent-relay PR #8)** — stopped on 2026-11-09 waiting for you, and nothing has moved since (checked 2026-11-10: #8 is still a draft, the three new cards are still an uncommitted change to TODO.md in ~/github/agent-relay/.claude/worktrees/openrouter because worktree-guard refused that session's commit twice). The helmsman side is done (#321 merged; boxes keep asking for v7). Verified live on 2026-11-09 with your OpenRouter key: test-live passes, eval-live 17 of 18, a real box ran two turns through the local relay.
+  needs: in this order: (1) `! ~/github/agent-relay/scratch/22-push-openrouter-todo.sh` commits and pushes the three cards; (2) read #8's template.yaml (the parameters and the ReadUpstreamKey Sid), mark it ready and merge it; (3) your dev → main merge there; (4) `~/github/agent-relay/scratch/20-put-openrouter-key.sh`; (5) `~/github/agent-relay/scratch/21-deploy-relay-openrouter.sh`
+  result: the deployed relay answers on OpenRouter (DeepSeek V4.1 Flash by default) and the model is a deployment setting
+  notes: details in ~/github/agent-relay/.claude/handoff.md and the PR #8 comment. Seen on the way and not touched: that repo's main checkout sits on feat/agent-v7-strict-schemas, and three sibling worktrees (agent-relay-deploy, agent-relay-harness, agent-relay-tests) live outside .claude/worktrees/.
+  est: 30m
+  difficulty: low
+  id: relay-openrouter-handoff
+  asked: 2026-11-10
   by: claude-session
 
 - [ ] **A public device library: map a device once, for everyone** — interview 2026-11-02: a public repository (JimothyJohn/helmsman-devices) with one folder per device: the EDS or the Modbus map, the `enip-io` profile or map lines, a doc with the manual's citations, the identity (vendor, product code, model text). The box and the agent look a device up before generating anything: by identity first (ListIdentity's vendor and product code, a Modbus unit's identification), then by vendor/model text; semantic search via the relay only once there are enough entries to need it. An import in the Devices tab offers to publish the result (a PR to the repo from the relay, the engineer confirming).
@@ -81,19 +100,19 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: canvas-try
 
-- [ ] **Prune the stray branch docs/studio-runs-plc** — created by mistake 2026-11-07 (no commits of its own, its worktree already removed). Branch deletion is always a hand-off.
-  needs: run `scripts/prune-branches.sh` from the main checkout, or `git push origin --delete docs/studio-runs-plc && git branch -D docs/studio-runs-plc`
-  result: the branch list is clean
-  est: 2m
+- [ ] **Prune the merged branches and drop the October stash** — 2026-11-10: 16 local branches and 4 on origin (docs/relay-model-api, fix/hotkeys-browser-free, feat/code-wrap-toggle, docs/help-get-help) are all in origin/dev, each checked with `git merge-base --is-ancestor`. The stray docs/studio-runs-plc of 2026-11-07 is already gone. `stash@{0}` (2026-10-31, "WIP on dev: 0ad1686 ... #70") holds only `answer:` lines for board questions that were acted on long ago (relay-repo, dev-merge-safety, logix-point-syntax and their neighbours). Branch and stash deletion is always a hand-off.
+  needs: `! ~/github/helmsman/scripts/prune-branches.sh` (`DRY_RUN=1` first lists the deletions; it keeps the live fix/node-modbus-connect worktree and the locked try box checkout), then `git stash drop 'stash@{0}'` if you agree it is spent (`git stash show -p 'stash@{0}'` shows it)
+  result: `git branch -a` shows dev, master and branches with work in flight; `git stash list` is empty
+  notes: untracked leftovers nobody needs any more, yours to delete: scratch/11-try-box-relay.sh.bak, scratch/claude-md-panel-width-rule.patch (landed as docs/panel-width-rule), scratch/todo-board-answers-20261107-uncommitted.patch and scratch/board-answers-20261108.patch with scratch/TODO-board-answers-20261108.md (consumed by #293), and ~/github/helmsman-try/SCRIPT_OUTPUT.md (a pasted rebuild log of 2026-11-07).
+  est: 5m
   difficulty: low
-  id: prune-studio-runs-plc
-  asked: 2026-11-07
+  id: prune-merged-20261110
+  asked: 2026-11-10
   by: claude-session
 
 ## Next to build
 
 - [ ] **Canvas: match box answers to requests, one buffer state machine** — from the 2026-11-08 interface review. Every wasm request to the box is a parallel fetch with no request id or generation; `BoxProjects::answer` matches by call name and reads live buffer state at answer time, and the native tests run requests one at a time so ordering is never exercised. The data-loss fixes of PR fix/box-projects-correlation patch the cases found (NewFile empty buffer, dropped save answers, deploy during save, Replace target); this card is the shape that stops the class: an in-flight table keyed by request id holding the sent text and the project generation, answers resolved against it, and one `Buf` state enum (Clean, Dirty, Saving{sent}, Conflict) shared by save, rename, create and deploy, with a test harness that answers requests out of order.
-  needs: fix/box-projects-correlation merged
   result: a reordered or late answer can never make a buffer clean, empty or stuck; box_projects_tests has an out-of-order answer suite
   est: 2d
   difficulty: high
@@ -102,7 +121,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **Canvas: pump the live source every frame, independent of the screen** — review 2026-11-08. `BoxView::tick` runs only from the Editor and Monitor branches, so each new screen (Proposals, "Simulate in this browser", a future one) has to remember to drain the transport or the inboxes grow and the link goes stale. fix/remote-link adds the tick and coalesces events; this card moves the design: App owns one per-frame pump for the live source, screens only render, and the transport inbox keeps latest-per-(stream, module) by construction.
-  needs: fix/remote-link merged
   result: no screen can leak or stall the box link; a test opens every screen and asserts the link stays current
   est: 1d
   difficulty: med
@@ -111,7 +129,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **Box streams carry a boot id and a sequence; the canvas reconnects by reason** — review 2026-11-08. The canvas compares times across the box scheduler clock, the trace scan counter, egui time and history fetches, and `Msg::Failed` carries no reason, so a deliberate 600 s stream end, a 503 slot refusal, a 401 and a dead network all look like "lost the box". fix/remote-link patches the worst cases (immediate reconnect after a healthy stream, a values watchdog, trend reset on clock reset). The shape: the values stream and `/api/modules` carry a boot id and a monotonic seq; `BoxState` keeps one epoch and per-stream last-seen marks from it; reconnection learns the status with a fetch probe, backs off with jitter, and resumes from seq.
-  needs: fix/remote-link merged; the box API change is small (api/mod.rs values event, http.rs)
+  notes: the box API change is small (api/mod.rs values event, http.rs)
   result: a box restart, a slot refusal and a half-open socket each show as what they are, and the trend, Monitor and diagram never mix epochs
   est: 2d
   difficulty: med
@@ -120,7 +138,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **Agent acceptance needs a signal the model does not write** — review 2026-11-08. The model writes the code and the scenarios that accept it, and the checker parses prose and Markdown (fences, `Why:`, `replaces`, an elision phrase list). fix/verify-gate closes the holes found (asserts must be exercised, red-before/green-after, a replacement needs the old test red, truncated answers fail). The shape beyond that: structured output from the model (a tool or JSON schema with why, file_text, scenarios[{name, requirement, source, replaces?}]) so the prose parse and the elision heuristics go away; mutation checks (the scenario must fail when the changed output is inverted); and edits anchored to a base hash instead of whole-file rewrites as the trust unit, with the diff shown before the write.
-  needs: fix/verify-gate merged; a decision on structured output for the relay profiles (agent-relay repo)
+  needs: a decision on structured output for the relay profiles (agent-relay repo)
   result: a vacuous or truncated answer cannot be written; the engineer sees a diff, not a sentence
   est: 3d
   difficulty: high
@@ -129,7 +147,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **One agent core for the page and the box; apply and undo as a transaction** — review 2026-11-08. `playground_view` and `box_view` each implement Run, Check, Apply and Undo with different settings and sizes, message caps, pre-save of dirty edits, undo revision source and accepted stop reasons, and they have drifted. `Run` has no base snapshot, file set or per-file hashes, so Undo restores the whole project (other files' later saves included) and the box path overwrites unsaved local edits. Shape: one `AgentRun` owning Run/Check/Apply/Undo; hosts implement `snapshot()`, `settings()`, an atomic multi-file `write_files(base, files)` and `restore(files)`; Apply refuses if a touched file moved since Send; Undo is the exact inverse over those files only.
-  needs: fix/verify-gate merged
   result: one code path, tested once against both hosts; Undo never touches a file the Agent did not write
   est: 2d
   difficulty: high
@@ -138,7 +155,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **The page simulation and the sim project store share the box's rules** — review 2026-11-08. The page is a second runtime that drifted from `helmsman-plc` runtime.rs (cold deploy vs state-carrying hot swap, stop and fault leaving outputs vs zeroing, a 500-scan catch-up burst vs skipped periods, a fixed 10 ms vs the declared period, a 64 KB source cut vs the project limits), and `SimProjects` is a second project store that drifted from the box API (case rules, import overwrite, history keyed by name). fix/sim-semantics and fix/desk-and-sim-store patch the cases found. Shape: a shared library function for deploy, swap, stop and fault semantics both runtimes call, one project-rules trait both stores implement, and one conformance suite run against both.
-  needs: fix/sim-semantics and fix/desk-and-sim-store merged
   result: "works in the page, differs on the box" stops being a bug class; the conformance suite is the contract
   est: 3d
   difficulty: high
@@ -147,7 +163,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **A Transport trait with a native in-memory implementation; web.rs tested** — review 2026-11-08. web.rs (about 800 lines of wasm glue) has no test coverage: three copies of the stream-read loop, the same char-boundary `String::truncate` panic twice, `get()` without no-store or a timeout, inconsistent error handling. Shape: one `Transport` trait implemented by web.rs and by a native in-memory transport that can inject stalls, 500s, non-UTF-8 and oversized bodies and reordered answers; one shared stream-reader helper; remote.rs's retry and silence logic then runs under `cargo test`.
-  needs: fix/remote-link merged
   result: every wasm-only path has a native test; a transport bug is a failing test, not a field report
   est: 2d
   difficulty: med
@@ -156,7 +171,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   by: claude-session
 
 - [ ] **Canvas: hit keys as an enum, Chrome split, one Command dispatch** — review 2026-11-08. `Chrome` is the persisted layout format (a hand-rolled k=v string), the UI toggles, the test registry (`hits: Vec<(String, Rect)>`) and a cross-frame channel at once; the `std::mem::take(&mut self.chrome)` pattern hands a default Chrome to anything that reads it meanwhile. Hit keys are free strings the tests and the tour depend on, so a rename silently breaks them. Hotkeys, header glyphs and menu items are three dispatch paths into `App::act` with scattered screen and source guards (fix/shell-hotkeys-layout adds the missing gates). Shape: a versioned `Layout` (persisted), a `FrameOut` (hits, diagram rect), a `HitKey` enum, and one `Command` enum with `enabled(&App) -> Result<(), why>` that menus, glyphs and hotkeys all consult; a tour test that visits every step and asserts its anchor was drawn.
-  needs: fix/shell-hotkeys-layout merged
   result: a removed or renamed control is a compile error; one place says whether an action is allowed and why
   est: 2d
   difficulty: med
@@ -183,7 +197,7 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   id: relay-v2-client
   asked: 2026-11-05
   by: claude-session
-  notes: 2026-11-06: agent-relay PR #7 is still open.
+  notes: agent-relay PR #7 merged on 2026-11-07. Whether a deployed relay serves helmsman/v8 is not checked (the deployed one serves v7; relay card relay-deploy-v2).
 
 - [ ] **Modbus identification probe (FC 43/14) for discovery and identity** — left out by the device-by-identity and discovery workers (2026-11-02 night): `cip=` identities and the ListIdentity sweep cover EtherNet/IP; a Modbus-only device is found today only by `mac=` once the host has seen it. Add Read Device Identification (FC 43, MEI type 14: VendorName, ProductCode, MajorMinorRevision) to helmsman-io's modbus driver, a bounded probe of the ARP table's hosts on 502 in `POST /api/devices/discover` when asked (`?modbus=1`), a `modbus=VENDOR:PRODUCT` identity endpoint resolved by that probe, and the library lookup by it (`identity.modbus` in device.toml exists). Cite the Modbus Application Protocol spec section in docs/SOURCES.md.
   needs: a Modbus device that answers FC 43/14 to test on (does the E1213? check on the bench; the simulator answers it either way)
@@ -279,6 +293,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   difficulty: low
   id: cip-adapter-visible
   asked: 2026-11-09
+  by: claude-session
+
+- [ ] **The P4's `enip` image after #333: the two runs that were skipped** — #333 moved the EtherNet/IP session into a task of its own and was checked on the board for the first open only (1.1 s after link-up, 0 late scans, was 199). Two runs were left out and are on no card: (1) the close after a lost link, through the task: pull the cable or power the E1213 off mid-run, see the outputs go to their safe state, the session close, and the reopen once the unit is back, with no late scans meanwhile; (2) Exclusive Owner with this change (the 640 of 640 packet run of 2026-11-10 was on the image before it). Write both into docs/EDGE.md Phase 3 "On the board".
+  needs: the E1213's one Class 1 connection free: the try box down (it is, until the Studio login of card try-box-login) or stopped; no other session flashing the P4 (2026-11-10 19:47: a live session was flashing it from the worktree modbus-connect for the Modbus connect fix of node-p4-followups, so start after its PR lands)
+  result: the enip task is proven for loss and for ownership, not only for the first open
+  notes: flash: `NODE_BOARD=p4-eth NODE_P4_NO_POE=1 SERIAL_PORT=/dev/cu.usbmodem5C930154551 scripts/node-flash.sh enip`, then back to the `node` image with `NODE_SEED_CHASE=1`. Read the outputs back over Modbus with `/usr/bin/python3` (Local Network privacy).
+  est: 2h
+  difficulty: low
+  id: enip-task-bench-checks
+  asked: 2026-11-10
   by: claude-session
 
 ## The ST plan (INVESTIGATION.md, decided 2026-11-07 and 2026-11-08)
