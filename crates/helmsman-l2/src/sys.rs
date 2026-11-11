@@ -343,7 +343,8 @@ impl RawSocket {
         let owned = unsafe { OwnedFd::from_raw_fd(fd) };
         // SAFETY: an all-zero `sockaddr_ll` is a valid value of the type.
         let mut addr: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
-        addr.sll_family = libc::AF_PACKET as libc::c_ushort;
+        addr.sll_family =
+            libc::c_ushort::try_from(libc::AF_PACKET).map_err(|_| io::Error::other("AF_PACKET"))?;
         addr.sll_protocol = protocol;
         addr.sll_ifindex = i32::try_from(index).map_err(|_| io::Error::other("interface index"))?;
         // SAFETY: `addr` is a `sockaddr_ll` of the length passed, alive
@@ -352,7 +353,7 @@ impl RawSocket {
             libc::bind(
                 owned.as_raw_fd(),
                 (&raw const addr).cast::<libc::sockaddr>(),
-                size_of::<libc::sockaddr_ll>() as libc::socklen_t,
+                socklen::<libc::sockaddr_ll>(),
             )
         })?;
         Ok(Self {
@@ -375,7 +376,7 @@ impl RawSocket {
                 libc::SOL_SOCKET,
                 libc::SO_RCVTIMEO,
                 (&raw const tv).cast::<libc::c_void>(),
-                size_of::<libc::timeval>() as libc::socklen_t,
+                socklen::<libc::timeval>(),
             )
         })
     }
@@ -423,6 +424,13 @@ fn tv(timeout: Duration) -> libc::timeval {
         tv_sec: sec as libc::time_t,
         tv_usec: usec as libc::suseconds_t,
     }
+}
+
+/// The size of `T` as the length argument of a socket call.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn socklen<T>() -> libc::socklen_t {
+    // Socket address and option structs are a few dozen bytes.
+    libc::socklen_t::try_from(size_of::<T>()).unwrap_or(libc::socklen_t::MAX)
 }
 
 /// A libc return value as a result.

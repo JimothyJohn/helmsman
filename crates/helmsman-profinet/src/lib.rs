@@ -5,6 +5,7 @@
 //!   and PDUs.
 //! - [`controller`]: an IO controller for one device.
 //! - [`device`]: a simulated IO device, for tests and benches.
+//! - [`text`]: the `slots=` syntax a device's modules are written in.
 //!
 //! References (docs/SOURCES.md, "PROFINET IO, by secondary references"):
 //! IEC 61158-5-10 / -6-10 are not held. Layouts are taken from p-net
@@ -26,5 +27,6 @@ pub mod device;
 pub mod eth;
 pub mod rpc;
 pub mod rt;
+pub mod text;
 
 pub use codec::DecodeError;

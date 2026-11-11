@@ -23,5 +23,13 @@ cargo clippy -q --target wasm32-unknown-unknown -p helmsman-canvas -- -D warning
 cargo clippy -q -p helmsman-iec --no-default-features --features libm --target thumbv7em-none-eabihf -- -D warnings
 cargo clippy -q -p helmsman-modbus --target thumbv7em-none-eabihf -- -D warnings
 cargo clippy -q -p helmsman-profinet --target thumbv7em-none-eabihf -- -D warnings
+# helmsman-l2's other half: on a Mac the packet-socket code is not compiled
+# and on CI's Linux the BPF code is not, so each host lints the half it
+# does not build (2026-11-11: three casts in the Linux half failed CI
+# after a green local gate).
+case "$(uname -s)" in
+  Darwin) cargo clippy -q -p helmsman-l2 --target aarch64-unknown-linux-gnu -- -D warnings ;;
+  *) ;;
+esac
 cargo clippy -q -p helmsman-proto --no-default-features --target thumbv7em-none-eabihf -- -D warnings
 cargo clippy -q -p helmsman-nodecore --target thumbv7em-none-eabihf -- -D warnings
