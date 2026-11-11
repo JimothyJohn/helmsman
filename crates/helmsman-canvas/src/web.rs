@@ -911,6 +911,24 @@ impl crate::sim_projects::Storage for LocalSlot {
     fn save(&mut self, value: &str) -> Result<(), String> {
         storage()?.set_item(self.0, value).map_err(|e| text(&e))
     }
+
+    fn keyed(&self, suffix: &str) -> Option<Box<dyn crate::sim_projects::Storage>> {
+        Some(Box::new(LocalKey(format!("{}/{suffix}", self.0))))
+    }
+}
+
+/// A `localStorage` slot named at run time (one person's desk).
+#[derive(Debug)]
+pub struct LocalKey(String);
+
+impl crate::sim_projects::Storage for LocalKey {
+    fn load(&self) -> Result<Option<String>, String> {
+        storage()?.get_item(&self.0).map_err(|e| text(&e))
+    }
+
+    fn save(&mut self, value: &str) -> Result<(), String> {
+        storage()?.set_item(&self.0, value).map_err(|e| text(&e))
+    }
 }
 
 /// The diagram's personal layouts in `localStorage` (`arrange.rs`), every
