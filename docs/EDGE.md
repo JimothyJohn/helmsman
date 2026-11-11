@@ -859,6 +859,42 @@ status is scan health, memory and fieldbus links. What exists:
   names; writes from the canvas (deploy, controls) need a token field in
   the canvas, today they are `curl` with the bearer.
 
+### PROFINET on the P4 (2026-11-11)
+
+The box's PROFINET IO controller (docs/ARCHITECTURE.md `profinet`,
+`helmsman-profinet`) is a state machine without I/O, so the node runs
+the same one. What the node adds:
+
+- **Raw frames beside the IP stack** (`ethernet::l2` in
+  crates/helmsman-node-p4). PROFINET's cyclic data, alarms and DCP are
+  Ethernet frames of EtherType 0x8892, below embassy-net. The driver
+  wrapper the stack runs on copies received frames of that type into a
+  queue as the stack takes them off the MAC (the stack drops them as a
+  type it does not know), and sends queued frames on the stack's next
+  poll of the driver, which queuing one asks for. One MAC, one receive
+  path, no second driver.
+- **The RPCs** go through an ordinary embassy-net UDP socket bound to
+  port 34964.
+- **`profinet::step`**: send what the controller has, wait for a frame,
+  a datagram or its next deadline, hand it over.
+- **The `profinet` image** (`NODE_BOARD=p4-eth scripts/node-flash.sh
+  profinet`; `PN_STATION`, `PN_SLOTS`, `PN_IP`, `PN_CYCLE_MS` at build
+  time, the same text as a box's device line): brings one device up,
+  outputs at zero, and reports state and the first input bytes.
+
+**On the board, 2026-11-11.** The image runs on the Waveshare
+ESP32-P4-ETH: it takes its address, sends an Identify for `mdrive` every
+second and reports "no station named "mdrive" answers", and answers ping
+meanwhile (203 856 bytes of flash, 129 KB of main stack left). The node
+image built with the same driver wrapper came back as press-5 with its
+settings, served a 1095-byte `/api/signals` and kept its Modbus link to
+the E1213, so the tap costs the IP side nothing visible. **Not seen:** a
+frame of ours on the wire (a capture on the Studio needs sudo), a reply
+received through the tap, or a connection: there is no PROFINET device
+on the bench yet (TODO.md `mdrive-bringup`). Not in the `node` image
+either: there the device would come from the node's I/O map, which has
+no PROFINET line yet.
+
 ## Out of scope for the spike
 
 Deploy endpoint, signed images, A/B program slots and the power-cut-during-

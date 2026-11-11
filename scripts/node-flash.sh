@@ -31,7 +31,8 @@
 # Usage: scripts/node-flash.sh [bench|modbus]
 #        SERIAL_PORT=/dev/cu.usbserial-XXXX scripts/node-flash.sh modbus
 #        NODE_BOARD=poe-iso scripts/node-flash.sh modbus
-#        NODE_BOARD=p4-eth scripts/node-flash.sh [node|enip|modbus]
+#        NODE_BOARD=p4-eth scripts/node-flash.sh [node|enip|modbus|profinet]
+#        (profinet: PN_STATION, PN_SLOTS, PN_IP, PN_CYCLE_MS at build time; crates/helmsman-node-p4/src/bin/profinet.rs)
 #        NODE_BOARD=p4-eth NODE_P4_NO_POE=1 ESPFLASH=/path/to/espflash-4 scripts/node-flash.sh node
 #
 # The port and the board's MAC are remembered per board after a flash that
@@ -50,8 +51,8 @@ board="${NODE_BOARD:-poe2}"
 if [ "$board" = p4-eth ]; then
   bin="${1:-node}"
   case "$bin" in
-    modbus|enip|node) ;;
-    *) echo "usage: NODE_BOARD=p4-eth $0 [node|enip|modbus]" >&2; exit 2 ;;
+    modbus|enip|node|profinet) ;;
+    *) echo "usage: NODE_BOARD=p4-eth $0 [node|enip|modbus|profinet]" >&2; exit 2 ;;
   esac
   # A P4 at chip revision v3.x does not answer espflash 3.3 ("Timeout
   # while running ReadReg command", 2026-11-10); 4.7 flashes it.
@@ -151,6 +152,8 @@ cd "$crate"
 # The interactive monitor needs a terminal; from an agent session (no tty)
 # flash alone, and read the console afterwards with
 #   espflash monitor --port PORT --non-interactive --before no-reset-no-sync --after no-reset
+# (with `--chip esp32p4` on the P4: without a reset espflash cannot ask
+# the chip what it is, and says "Chip argument not provided", 2026-11-11).
 if [ -t 0 ]; then
   "$ESPFLASH" flash --monitor --port "$SERIAL_PORT" \
     "$target_dir/$bin" 2>&1 | tee "../../$log"
@@ -158,7 +161,9 @@ else
   "$ESPFLASH" flash --port "$SERIAL_PORT" \
     "$target_dir/$bin" 2>&1 | tee "../../$log"
   echo "no terminal: flashed without the monitor; read the console with"
-  echo "  espflash monitor --port $SERIAL_PORT --non-interactive --before no-reset-no-sync --after no-reset"
+  chip=""
+  [ "$board" = p4-eth ] && chip=" --chip esp32p4"
+  echo "  espflash monitor$chip --port $SERIAL_PORT --non-interactive --before no-reset-no-sync --after no-reset"
 fi
 echo "log: $log"
 if grep -q "Flashing has completed" "$root/$log"; then
@@ -168,6 +173,9 @@ fi
 if [ "$board" = p4-eth ] && [ "$bin" = node ]; then
   echo "now: first boot answers at http://192.168.127.250:8080/ (the factory record) unless flash"
   echo "     already holds settings; set name, address and token there."
+elif [ "$board" = p4-eth ] && [ "$bin" = profinet ]; then
+  echo "now: the node looks for the PROFINET station it was built for and reports every 10 s"
+  echo "     on serial and to LOG_SINK (/usr/bin/python3 -I scripts/node-log-sink.py)."
 elif [ "$board" = p4-eth ]; then
   echo "now: unplug USB, start the sink (/usr/bin/python3 -I scripts/node-log-sink.py), plug PoE."
   echo "     The enip image opens an Exclusive Owner connection to the E1213: stop the try box's"

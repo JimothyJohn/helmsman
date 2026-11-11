@@ -40,6 +40,9 @@ PROFINET manual and its S7 workbook, and the endianness of the registers
 is not known, so docs/devices/novanta-mdrive-profinet.map names no
 signal beyond the raw first bytes.
 
+The device line in docs/devices/novanta-mdrive-profinet.map is what
+`scripts/gsdml-slots.py` prints for this file.
+
 ## First run on the bench
 
 1. `~/github/helmsman/scratch/27-bpf-access.sh` (once per boot, sudo),

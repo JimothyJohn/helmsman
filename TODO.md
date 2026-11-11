@@ -201,6 +201,16 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Next to build
 
+- [ ] **PROFINET from the node: a real device, then the node image** — the P4 runs the box's PROFINET controller (docs/EDGE.md "PROFINET on the P4"): raw frames tapped beside embassy-net in the Ethernet driver wrapper, the RPCs on a UDP socket, a `profinet` image that brings one device up and reports. On the board it boots, looks for its station every second and answers ping meanwhile; the node image with the same wrapper kept its API and its Modbus link. Nothing answered it: no PROFINET device is on the bench, and a capture to see its frames needs sudo. Left: (1) the first connection to a real device from the P4 (`NODE_BOARD=p4-eth PN_STATION=... PN_SLOTS=... scripts/node-flash.sh profinet`), with the cycle's jitter and late frames measured as the EtherNet/IP run was; (2) a `profinet` device line in the node's I/O map (helmsman-nodecore's `iomap`) so the `node` image masters a PROFINET device from a deployed map, as it does a Modbus block; (3) the same on the POE-ISO (Xtensa: its EMAC driver is ph-esp32-mac, a different wrapper).
+  needs: a PROFINET device on 192.168.3.x (`mdrive-bringup`); for a look at the wire, `profinet-raw-access` and a tcpdump hand-off
+  result: a node masters a PROFINET device at an 8 ms cycle with its late frames counted, from a map deployed over its API
+  depends: mdrive-bringup
+  est: 3d
+  difficulty: med
+  id: node-profinet
+  asked: 2026-11-11
+  by: claude-session
+
 - [ ] **PROFINET IO controller: from the simulated device to real ones** — built 2026-11-10 night (docs/ARCHITECTURE.md `profinet`; crates helmsman-profinet, helmsman-l2, helmsman-io's `profinet-io`): DCP, the Connect / Write / PrmEnd / application-ready / Release RPCs, cyclic frames with a watchdog both ways, alarms acknowledged, a `slots=` device line, bench tools (`profinet_scan`, `profinet_watch`, a pcap of a startup). Proven against our own simulated device (startup, loss, refusals, hostile bytes as properties) and read back field for field by scapy's dissector. Not proven: one frame on a real wire. What is left, in the order the bench will ask for it: (1) the first real startup (`mdrive-bringup`), fixing what it shows and keeping its capture as a test; (2) GSDML import, so `slots=` comes from the vendor's file as `eds=` does for EtherNet/IP (the Devices tab's Import device…); (3) alarms and the device's diagnosis shown on the signal and in the Monitor instead of only kept; (4) record reads (I&M0 for the device's identity page); (5) RPC fragmentation, for devices with many submodules; (6) the default build: `helmsman-plc`'s `profinet-io` feature goes into `default` once a device has passed; (7) a Linux run (packet socket; the Pi or CI with a veth pair).
   needs: `profinet-raw-access`, then a device (`mdrive-bringup`, `ur-bringup`, `murr-block-bringup`)
   result: a box masters a real PROFINET device from a map an engineer wrote from the GSDML, and says in words what is wrong when it does not come up

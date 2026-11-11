@@ -404,3 +404,40 @@ fn configurations_that_cannot_go_on_the_wire_are_refused_when_built() {
     });
     assert!(many.contains("more than one datagram"), "{many}");
 }
+
+/// The shapes of the two devices due on the bench, as their GSDML files
+/// give them (docs/devices/): each starts up and moves data end to end.
+#[test]
+fn the_bench_devices_shapes_start_up_and_fit_one_connect() {
+    use helmsman_profinet::text::slots;
+    // Novanta MDrive; a Universal Robot with every module it has and its
+    // interface and port submodules (subslots 0x8000 and 0x8001).
+    let shapes = [
+        "0:0x1/1:0x1,1:0x30/1:0x1:i128,2:0x31/1:0x1:o128",
+        "0:0x1/1:0x1/0x8000:0x8000/0x8001:0x8001,1:0x30/1:0x1:i32,2:0x31/1:0x1:i68,\
+         3:0x32/1:0x1:i104,4:0x33/1:0x1:i76,5:0x34/1:0x1:i8,6:0x35/1:0x1:i96,7:0x36/1:0x1:i96,\
+         8:0x40/1:0x1:o24,9:0x41/1:0x1:o100,10:0x42/1:0x1:o100,11:0x3B000200/1:0x3B000201,\
+         12:0x43/1:0x1:i256:o256,13:0x37/1:0x1:i88,14:0x44/1:0x1:o40",
+    ];
+    for shape in shapes {
+        let modules = slots(shape).unwrap();
+        let mut b = Bench::with(DeviceConfig::new(NAME, modules.clone()), modules, DEVICE_IP);
+        assert!(
+            b.run_until(3000, running),
+            "{shape}: {:?} {:?}",
+            b.c.state(),
+            b.c.error()
+        );
+        let (n_in, n_out) = (b.c.layout().input_image_len, b.c.layout().output_image_len);
+        let pattern = |n: usize, step: usize| {
+            (0..n)
+                .map(|i| (i * step + 1).to_le_bytes()[0])
+                .collect::<Vec<u8>>()
+        };
+        b.d.inputs_mut().copy_from_slice(&pattern(n_in, 3));
+        b.c.outputs_mut().copy_from_slice(&pattern(n_out, 7));
+        b.run_ms(40);
+        assert_eq!(b.c.inputs().unwrap(), &pattern(n_in, 3)[..], "{shape}");
+        assert_eq!(b.d.outputs(), &pattern(n_out, 7)[..], "{shape}");
+    }
+}
