@@ -686,12 +686,25 @@ arrived, so the first day on the board is spent on the two real unknowns:
     owner from the Studio with 0x0106 meanwhile, and a Modbus read from
     the Studio saw coils 0 to 2 step every 500 ms with the looped inputs
     one sample behind: the chase runs on the outputs over CIP. Scan: 10 ms
-    with about 310 us of work a cycle once connected. Two things to look
-    at: each boot spends its first two opens on "connect timed out" (1 s
-    each, right after the link comes up) and the scan waits for them, 199
-    late scans before the first packet; and the image's own match count
-    sat near 53 % against 47 %, which is what a 500 ms step read back
-    through two 100 ms RPIs looks like and is no check of the loop.
+    with about 310 us of work a cycle once connected. The image's own
+    match count sat near 53 % against 47 %, which is what a 500 ms step
+    read back through two 100 ms RPIs looks like and is no check of the
+    loop.
+  - **The scan no longer waits for an open.** On those runs each boot's
+    first two opens ended in "connect timed out" inside the scan loop and
+    199 scans were late before the first packet. Two causes, both fixed
+    and run on the board the same night: the explicit session (connect,
+    `RegisterSession`, `Forward_Open`, `Forward_Close`) now has a task of
+    its own and the scan loop takes its answer when it is there; and the
+    first open waits for the link (a fixed address is "up" before the PHY
+    has negotiated) and gives the TCP connect 3 s, because the first
+    connect to an address the stack has not resolved completes on the
+    SYN's retransmission a second later, which a 1 s limit cut off. Now:
+    the first open succeeds 1.1 s after the link comes up with no failed
+    attempt and no late scan, and against an address nobody answers the
+    opens time out every 5 s while the scan stays at 57 us a cycle with
+    no late scan. The Modbus client (`modbus.rs`) has the same 1 s limit
+    on its connect and was not changed.
   - **Not done:** the PoE module's isolation (the module is not fitted),
     TLS with mbedtls-rs.
 

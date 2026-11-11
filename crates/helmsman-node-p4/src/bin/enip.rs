@@ -23,10 +23,15 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU32, Ordering};
 use core::time::Duration as CoreDuration;
 
 use embassy_executor::Spawner;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Ticker, Timer, with_timeout};
 use esp_alloc as _;
 use esp_backtrace as _;
@@ -121,6 +126,51 @@ static IO_TX: StaticCell<[u8; 512]> = StaticCell::new();
 static TCP_RX: StaticCell<[u8; 1024]> = StaticCell::new();
 static TCP_TX: StaticCell<[u8; 512]> = StaticCell::new();
 
+/// What the scan loop asks of the link task. The explicit session (TCP
+/// connect, `RegisterSession`, `Forward_Open`, `Forward_Close`) can take
+/// its whole timeout against a block that is not there, and the scan must
+/// not wait for it: on the bench (2026-11-10) each boot's first two opens
+/// timed out inside the scan loop and 199 scans were late before the
+/// first packet.
+enum LinkRequest {
+    Open {
+        config: IoConfig,
+        serial: u16,
+        output: Vec<u8>,
+    },
+    /// Best effort, after a loss.
+    Close(Box<IoConnection>),
+}
+
+static LINK_REQUESTS: Channel<CriticalSectionRawMutex, LinkRequest, 2> = Channel::new();
+static LINK_OPENED: Channel<CriticalSectionRawMutex, Result<IoConnection, enip::Error>, 1> = Channel::new();
+/// The session's TCP connects since start, for the report line.
+static CONNECTS: AtomicU32 = AtomicU32::new(0);
+
+/// Owns the explicit session and does what the scan loop asks, one
+/// request at a time.
+#[embassy_executor::task]
+async fn link_task(mut session: Session<'static>) -> ! {
+    loop {
+        match LINK_REQUESTS.receive().await {
+            LinkRequest::Open {
+                config,
+                serial,
+                output,
+            } => {
+                let opened = IoConnection::open(&mut session, config, serial, &output).await;
+                CONNECTS.store(session.connects, Ordering::Relaxed);
+                LINK_OPENED.send(opened).await;
+            }
+            LinkRequest::Close(connection) => {
+                if let Err(e) = connection.close(&mut session).await {
+                    println!("close after loss: {e}");
+                }
+            }
+        }
+    }
+}
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(size: HEAP_SIZE);
@@ -185,6 +235,9 @@ async fn main(spawner: Spawner) -> ! {
 
     println!("waiting for the link and a lease...");
     stack.wait_config_up().await;
+    // A fixed address is "up" before the PHY has negotiated; an open sent
+    // into a link that is still down only times out.
+    stack.wait_link_up().await;
     if let Some(cfg) = stack.config_v4() {
         println!("lease {}", cfg.address);
     }
@@ -220,13 +273,17 @@ async fn main(spawner: Spawner) -> ! {
         halt("io: udp 2222 bind failed").await;
     }
 
-    let mut session = Session::new(
+    let session = Session::new(
         stack,
         block,
         REQUEST_TIMEOUT,
         TCP_RX.init([0; 1024]),
         TCP_TX.init([0; 512]),
     );
+    match link_task(session) {
+        Ok(task) => spawner.spawn(task),
+        Err(_) => halt("the link task would not spawn").await,
+    }
 
     let mut program = match compile(PROGRAM, SIZES) {
         Ok(p) => p,
@@ -247,6 +304,8 @@ async fn main(spawner: Spawner) -> ! {
     let mut next_produce = start;
     let mut serial: u16 = 0;
     let mut connection: Option<IoConnection> = None;
+    // An open is with the link task; its answer is taken when it is there.
+    let mut opening = false;
     let mut last_input: Option<Instant> = None;
     let mut reopen_at = start;
     let mut buf = [0u8; 1024];
@@ -276,12 +335,23 @@ async fn main(spawner: Spawner) -> ! {
         deadline += SCAN;
 
         // The connection: open, or reopen after a loss.
-        if connection.is_none() && t0 >= reopen_at {
+        if connection.is_none() && !opening && t0 >= reopen_at {
             serial = serial.wrapping_add(1).max(1);
-            let config = io_config(mac);
-            let first = [image.q[0]];
-            let output: &[u8] = if INPUT_ONLY { &[] } else { &first };
-            match IoConnection::open(&mut session, config, serial, output).await {
+            let output = if INPUT_ONLY {
+                Vec::new()
+            } else {
+                alloc::vec![image.q[0]]
+            };
+            let request = LinkRequest::Open {
+                config: io_config(mac),
+                serial,
+                output,
+            };
+            opening = LINK_REQUESTS.try_send(request).is_ok();
+        }
+        if opening && let Ok(opened) = LINK_OPENED.try_receive() {
+            opening = false;
+            match opened {
                 Ok(c) => {
                     println!(
                         "open: O->T id {:#010x} to {}, T->O id {:#010x}, timeout {} ms",
@@ -338,6 +408,7 @@ async fn main(spawner: Spawner) -> ! {
         }
 
         // O->T at the RPI, with the scan's outputs.
+        let mut lost = false;
         if let Some(c) = connection.as_mut() {
             if !INPUT_ONLY {
                 let _ = c.producer.set_output(&[image.q[0]]);
@@ -357,13 +428,17 @@ async fn main(spawner: Spawner) -> ! {
             if last_input.is_some_and(|t| t.elapsed() > Duration::from_millis(timeout_ms)) {
                 println!("connection lost: no T->O for {timeout_ms} ms");
                 stats.losses += 1;
-                if let Err(e) = c.close(&mut session).await {
-                    println!("close after loss: {e}");
-                }
-                connection = None;
-                last_input = None;
-                reopen_at = Instant::now() + REOPEN_BACKOFF;
+                lost = true;
             }
+        }
+        if lost {
+            // The close goes to the link task; if its queue is full the
+            // target's own timeout ends the connection.
+            if let Some(c) = connection.take() {
+                let _ = LINK_REQUESTS.try_send(LinkRequest::Close(Box::new(c)));
+            }
+            last_input = None;
+            reopen_at = Instant::now() + REOPEN_BACKOFF;
         }
 
         let cycle = t0.elapsed();
@@ -376,7 +451,11 @@ async fn main(spawner: Spawner) -> ! {
 
         if last_report.elapsed() >= REPORT_EVERY {
             last_report = Instant::now();
-            let line = stats.line(start.elapsed(), session.connects, connection.as_ref());
+            let line = stats.line(
+                start.elapsed(),
+                CONNECTS.load(Ordering::Relaxed),
+                connection.as_ref(),
+            );
             println!("{line}");
             send_line(&mut log, sink, &line).await;
             stats.cycle_max = Duration::from_ticks(0);

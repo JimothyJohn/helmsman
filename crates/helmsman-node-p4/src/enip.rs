@@ -115,7 +115,9 @@ impl<'a> Session<'a> {
         tx: &'a mut [u8],
     ) -> Self {
         let mut socket = TcpSocket::new(stack, rx, tx);
-        socket.set_timeout(Some(timeout));
+        // The socket's own silence timeout must outlast a connect too, or
+        // it resets the attempt before the SYN's first retransmission.
+        socket.set_timeout(Some(timeout.max(CONNECT_TIMEOUT)));
         Self {
             endpoint: IpEndpoint::new(IpAddress::Ipv4(target), encap::PORT),
             timeout,
@@ -157,7 +159,12 @@ impl<'a> Session<'a> {
         if self.connected {
             return Ok(());
         }
-        match with_timeout(self.timeout, self.socket.connect(self.endpoint)).await {
+        match with_timeout(
+            self.timeout.max(CONNECT_TIMEOUT),
+            self.socket.connect(self.endpoint),
+        )
+        .await
+        {
             Ok(Ok(())) => {
                 self.connected = true;
                 self.connects += 1;
@@ -297,6 +304,13 @@ pub struct IoConnection {
     pub producer: Producer,
     pub consumer: Consumer,
 }
+
+/// The least a TCP connect is given, whatever the request timeout. The
+/// first connect to a target whose hardware address is not yet known
+/// completes on the SYN's retransmission, a second after the first try
+/// (measured on the bench, 2026-11-10: with a 1 s limit every boot's first
+/// open failed and the second, 2 s later, succeeded).
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A reply that would not decode, in hex on the console: the device's own
 /// answer is the evidence, and nothing else on the wire sees it between a
