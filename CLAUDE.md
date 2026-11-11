@@ -122,7 +122,12 @@ staccato fragments ("On purpose."), triplets or semicolon-chained slogans.
     host"; the box comes up but loses its devices). Restart:
     `launchctl kickstart -k gui/501/io.advin.helmsman-try` (works from
     SSH). A plain `kill` respawns it; stop for good with `launchctl
-    bootout gui/501/io.advin.helmsman-try`. Never start a box that needs
+    bootout gui/501/io.advin.helmsman-try`. It lives in the desktop
+    session: when the Studio is at its login window the box is gone and
+    every `launchctl ... gui/501/...` answers "125: Domain does not
+    support specified action" (2026-11-10: a logout at 17:06 ended it;
+    `stat -f %Su /dev/console` says `root` then). Logging in at the
+    Studio starts it again (RunAtLoad). Never start a box that needs
     the bench devices with `nohup` from a shell. The rebuild signs the
     binary (`~/github/helmsman/scratch/18-sign-try-box.sh`, identity
     "Helmsman Try" from `17-codesign-identity.sh`, identifier
