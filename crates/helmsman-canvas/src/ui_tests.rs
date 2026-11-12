@@ -3424,6 +3424,78 @@ mod simulated {
         assert!((0.0..=8.0).contains(&r), "the right panel grew {r} pt");
     }
 
+    /// A page built with the free chat: no key field and no model picker,
+    /// one notice under the Agent's box. Closed or out of reach, the tab
+    /// says so in place of the box and asks its one question. The right
+    /// panel keeps its default width through every one of these states.
+    #[test]
+    fn the_free_chat_tab_has_no_key_and_keeps_the_panel_width() {
+        use crate::claude::{Free, Incoming};
+        let mut h = Harness::new(App::sim());
+        h.wait(0.3);
+        let right = h.rect("right");
+        h.press("tab claude");
+        h.wait(0.3);
+        assert!(h.has("agent key"), "with no free chat the page asks for a key");
+        let grew = |h: &Harness, what: &str| {
+            let r = right.left() - h.rect("right").left();
+            assert!((0.0..=8.0).contains(&r), "{what}: the right panel grew {r} pt");
+        };
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .chat
+            .set_free_base("https://relay.example");
+        h.wait(0.3);
+        assert!(!h.has("agent key") && h.has("agent instruction") && h.has("agent free notice"));
+        grew(&h, "checking");
+        assert_eq!(
+            h.app.sim.as_ref().unwrap().link.free_checks,
+            ["https://relay.example"],
+            "the page asks the free chat once whether it is open"
+        );
+        h.app
+            .sim
+            .as_mut()
+            .unwrap()
+            .chat
+            .receive(Incoming::Free(Free::Open));
+        h.wait(0.3);
+        assert!(!h.has("agent key") && h.has("agent instruction") && h.has("agent free notice"));
+        assert!(!h.has("agent free closed") && !h.has("survey google"));
+        grew(&h, "open");
+        for state in [
+            Free::Closed { reopens: false },
+            Free::Unreachable,
+            Free::Closed { reopens: true },
+        ] {
+            h.app.sim.as_mut().unwrap().chat.receive(Incoming::Free(state));
+            h.wait(0.3);
+            assert!(h.has("agent free closed"), "{state:?}");
+            assert!(
+                !h.has("agent instruction") && !h.has("agent key") && !h.has("agent free notice"),
+                "{state:?}"
+            );
+            assert_eq!(
+                h.has("survey google") && h.has("survey other field"),
+                state != Free::Unreachable,
+                "{state:?}: the question needs the relay"
+            );
+            grew(&h, &format!("{state:?}"));
+        }
+        // One click answers it, once.
+        h.press("survey own-hardware");
+        h.wait(0.3);
+        let sim = h.app.sim.as_ref().unwrap();
+        assert!(sim.chat.surveyed);
+        assert_eq!(sim.link.posted.len(), 1);
+        assert_eq!(sim.link.posted[0].url, "https://relay.example/demo/v1/survey");
+        assert_eq!(sim.link.posted[0].body, r#"{"choice":"own-hardware"}"#);
+        assert!(h.has("agent free closed") && !h.has("survey google"));
+        grew(&h, "answered");
+    }
+
     #[test]
     fn every_tab_leaves_the_panels_their_width() {
         let mut h = Harness::new(App::sim());

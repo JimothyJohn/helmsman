@@ -1,0 +1,3 @@
+# Renders are rebuilt by <project>/render.sh; HyperFrames keeps its history and snapshots in .hyperframes.
+/*.mp4
+.hyperframes/

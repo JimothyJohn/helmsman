@@ -79,10 +79,9 @@ Cross references. View switches between the Editor and the Monitor,
 shows or hides each pane, and has Light mode (dark is the default; the
 browser remembers your choice). Help opens these pages, the keyboard
 table, and About Helmsman (the version and build).</li>
-<li><strong>The state</strong>: <code>running</code>,
-<code>stopped</code> or <code>faulted</code>, green when running, red
-otherwise, with the program's clock. On a box this is the link to the
-box instead.</li>
+<li>On a box, <strong>the link</strong>: whether the page is connected
+to the box. The simulation's state and clock sit beside the run glyphs
+over the diagram.</li>
 <li>On the right: the project's name, a mark when it has unsaved edits,
 the <strong>Editor | Monitor</strong> toggle, a yellow
 <strong>waiting</strong> badge when proposals wait for an approver (it
@@ -91,20 +90,28 @@ in</strong>.</li>
 </ul>
 <img src="img/file-menu.png" alt="The File menu open: New project, Copy project, Save, Deploy, Upload and Download, each with its key." width="520">
 
-<p>If something needs saying, a line appears under the header while it
-is true: a fault, a deploy under way or refused, a file someone else
-saved since you opened it (with a Reload). The Messages tab along the
-bottom keeps those lines after they have gone.</p>
+<p>Anything the page has to say is in the <strong>Messages</strong> tab
+of the bottom panel. Its first rows are what is true now: a fault, a
+deploy under way or refused, a file someone else saved since you opened
+it (with a Reload). Under them is the log of what happened. When an
+error comes in the tab turns red and pulses for a few seconds, and it
+stays red until you have looked at it and the error no longer stands. If
+the bottom panel was shut, an error opens it.</p>
 <p><img src="img/editor-light.png"
 alt="The same screen in light mode, View › Light mode." /></p>
 <h2 id="the-glyphs">The glyphs</h2>
 <p>A strip of buttons sits over the diagram's top-right corner. In the
-simulation: run or stop (<kbd>Ctrl</kbd> <kbd>Enter</kbd>), step one
-scan (<kbd>F8</kbd>, when stopped), and restart from initial values. On
-both: save, upload a file into the project, download the project as a
-<code>.zip</code>, and <strong>?</strong> for these pages. Hover one for
-its name and key.</p>
-<img src="img/glyphs.png" alt="The glyph strip: stop, step, restart, then save, upload and download." width="300">
+simulation it starts with the state (<code>running</code>,
+<code>paused</code>, <code>stopped</code> or <code>faulted</code>) and
+the program's clock, then: run or pause (<kbd>Ctrl</kbd>
+<kbd>Enter</kbd>), stop (<kbd>Shift</kbd> <kbd>F8</kbd>), step to the
+next change (<kbd>F8</kbd>, while paused or stopped), and restart from
+initial values. Pause holds every value where it is. Stop ends the run:
+the values go back to their initial ones, the outputs go off and the
+clock goes to zero. On both: save, upload a file into the project,
+download the project as a <code>.zip</code>, and <strong>?</strong> for
+these pages. Hover one for its name and key.</p>
+<img src="img/glyphs.png" alt="The glyph strip: the state and clock, pause, stop, step, restart, then save, upload and download." width="485">
 
 <h2 id="the-diagram">The diagram</h2>
 <p>The diagram is the program, drawn from its Structured Text and lit
@@ -130,13 +137,15 @@ takes what you type and keeps it when you press <kbd>Enter</kbd>
 (<kbd>Esc</kbd> puts the old value back). In the simulation these are
 the virtual inputs; on a box they are forces (see <a href="box.html">On
 a box</a>).</li>
-<li><strong>Go into a block.</strong> Double-click a function block
-instance to see its own diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the
-breadcrumbs come back up. From the keyboard, pick the instance and press
-<kbd>Alt</kbd> <kbd>]</kbd> to go in and <kbd>Alt</kbd> <kbd>[</kbd> to
-come out (the instance stays picked, so <kbd>Alt</kbd> <kbd>]</kbd> goes
-back in). With the simulation stopped, each also steps one scan, so you
-watch the instance work as you move through the levels.</li>
+<li><strong>Go into a block.</strong> A function block instance with a
+diagram of its own is drawn as a stack of cards with a double chevron in
+its header. Double-click it to see that diagram; <kbd>Alt</kbd>
+<kbd>↑</kbd> or the breadcrumbs come back up. From the keyboard, pick
+the instance and press <kbd>Alt</kbd> <kbd>]</kbd> to go in and
+<kbd>Alt</kbd> <kbd>[</kbd> to come out (the instance stays picked, so
+<kbd>Alt</kbd> <kbd>]</kbd> goes back in). With the simulation stopped,
+each also steps one scan, so you watch the instance work as you move
+through the levels.</li>
 <li><strong>Arrange.</strong> Drag a block, or an IF by its label, to
 move it. View › Reset layout goes back; View › Save layout as default
 keeps your arrangement with the project so everyone opens it that way.
@@ -217,12 +226,17 @@ word-wrap button beside the file name wraps long lines at the pane's
 width, or, off, keeps each line on one row with a scroll bar under the
 code; the choice is kept with the layout. The key for a tab opens the
 pane on it, or shuts the pane when that tab already shows. A double
-click on any tab, on this pane or the side panel, hides that pane.</li>
+click on any tab, on this pane or the side panel, hides that pane. The
+tabs are glyphs; hover one for its name. A hidden pane keeps its tabs
+down the strip at the edge, and a click on one opens the pane on that
+tab.</li>
 </ul></li>
 <li><strong>The bottom panel</strong> (<kbd>Alt</kbd> <kbd>Shift</kbd>
 <kbd>2</kbd>): the <strong>Trend</strong> of the signals you pin, with a
-long time axis, and <strong>Messages</strong>, the last two hundred
-things the page had to say, with the error count on the tab.</li>
+long time axis, and <strong>Messages</strong>: what needs saying now,
+then the last two hundred things the page had to say, with the error
+count beside the tab. Tick or untick info, warnings and errors to list
+or leave out each.</li>
 <li><strong>The side panel</strong>, on the right (<kbd>Alt</kbd>
 <kbd>Shift</kbd> <kbd>3</kbd>): <strong>I/O</strong>, every input and
 output with its value and a control for each input the diagram does not
