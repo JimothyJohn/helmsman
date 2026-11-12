@@ -980,6 +980,23 @@ impl Viewer {
             .position(|s| s.prefix.eq_ignore_ascii_case(&want))
     }
 
+    /// The blocks on the diagram shown that open into a diagram of their
+    /// own (a user function block's instances): drawn as a stack with a
+    /// chevron, so it shows that a double click goes deeper (Nick,
+    /// 2026-11-11).
+    #[must_use]
+    pub fn openable(&self) -> Vec<NodeId> {
+        self.diagram()
+            .nodes
+            .iter()
+            .filter(|n| match &n.kind {
+                NodeKind::Fb { instance, .. } => self.instance_scope(instance).is_some(),
+                _ => false,
+            })
+            .map(|n| n.id)
+            .collect()
+    }
+
     /// Opens the picked block instance's diagram (Alt ]); whether the
     /// pick was an instance with a diagram of its own.
     pub fn step_into(&mut self) -> bool {
@@ -1142,6 +1159,15 @@ impl Viewer {
             .filter(|r| !r.is_empty())
             .or_else(|| self.path(scan));
         let (added, removed) = self.agent_change();
+        let opens = self.openable();
+        if response.hovered()
+            && let Some(p) = hover
+            && self.instance_at(cam, p).is_some()
+        {
+            response
+                .clone()
+                .on_hover_text_at_pointer("This block has a diagram of its own. Double-click opens it (Alt ] with it picked).");
+        }
         let pou = &self.module.pous[self.scopes[self.scope].pou].name;
         let old = self
             .baseline
@@ -1164,6 +1190,7 @@ impl Viewer {
                 breaks: &self.breaks,
                 paused: self.paused,
                 added: &added,
+                opens: &opens,
                 ghosts: old.map(|o| (o, removed.as_slice())),
             },
         );
@@ -1330,6 +1357,8 @@ struct Marks<'a> {
     paused: Option<StmtId>,
     /// Blocks the Agent's last change added: outlined green.
     added: &'a [NodeId],
+    /// Blocks that open into a diagram of their own: drawn as a stack.
+    opens: &'a [NodeId],
     /// Blocks it removed, in the old diagram: drawn as red ghosts where
     /// they were.
     ghosts: Option<(&'a Diagram, &'a [NodeId])>,
@@ -1461,6 +1490,7 @@ fn draw(
         breaks,
         paused,
         added,
+        opens,
         ghosts,
     } = marks;
     let mut dot_nodes = std::collections::HashSet::new();
@@ -1629,6 +1659,17 @@ fn draw(
         // keeps its instance's ports apart (a function block) has a body
         // of its own; an operator, function or literal is one shade.
         let two_tone = n.kind.headed();
+        let deeper = opens.contains(&n.id);
+        if deeper {
+            // Two cards behind it, each a step down and right: there is
+            // more under this block.
+            for k in [2.0, 1.0] {
+                let back = r.translate(Vec2::splat(3.5 * k * z));
+                painter.rect_filled(back, radius, t.bg);
+                painter.rect_filled(back, radius, head.gamma_multiply(0.45 * fade));
+                painter.rect_stroke(back, radius, Stroke::new(1.0 * z, t.edge), StrokeKind::Outside);
+            }
+        }
         if two_tone {
             painter.rect_filled(r, radius, t.panel.gamma_multiply(fade.max(0.7) * on_path));
             painter.rect_filled(
@@ -1659,6 +1700,22 @@ fn draw(
             Stroke::new(1.0 * z, t.edge)
         };
         painter.rect_stroke(r, radius, outline, StrokeKind::Outside);
+        if deeper {
+            // A double chevron at the header's right end: go in.
+            let c = Pos2::new(r.right() - 9.0 * z, h.center().y);
+            let (dx, dy) = (3.0 * z, 4.0 * z);
+            let stroke = Stroke::new(1.6 * z.max(0.6), ink.gamma_multiply(fade));
+            for off in [-2.5 * z, 2.5 * z] {
+                painter.add(egui::Shape::line(
+                    vec![
+                        Pos2::new(c.x + off - dx / 2.0, c.y - dy),
+                        Pos2::new(c.x + off + dx / 2.0, c.y),
+                        Pos2::new(c.x + off - dx / 2.0, c.y + dy),
+                    ],
+                    stroke,
+                ));
+            }
+        }
         if added.contains(&n.id) {
             painter.rect_stroke(
                 r.expand(3.0 * z),
@@ -1793,6 +1850,37 @@ IF pulse.Q THEN
 END_IF;
 END_PROGRAM
 ";
+
+    /// Nick, 2026-11-11: a block with a diagram of its own is marked as
+    /// one, so it shows that a double click goes deeper. A library block
+    /// (a TON, a CTU) has none and is not.
+    #[test]
+    fn only_blocks_with_a_diagram_of_their_own_are_marked_as_opening() {
+        let src = crate::box_tests::DEMO;
+        let session = Session::new(src);
+        assert!(session.diags.is_empty(), "{:?}", session.diag_lines());
+        let module = session.build.as_ref().unwrap().module.clone().unwrap();
+        let mut v = Viewer::new(src, module);
+        let d = v.diagram().clone();
+        let fbs: Vec<(String, bool)> = d
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NodeKind::Fb { instance, .. } => Some((instance.to_ascii_uppercase(), v.openable().contains(&n.id))),
+                _ => None,
+            })
+            .collect();
+        assert!(fbs.contains(&("M".into(), true)), "the motor block opens: {fbs:?}");
+        assert!(fbs.contains(&("BLINK".into(), false)), "a timer does not: {fbs:?}");
+        assert!(fbs.contains(&("PARTS".into(), false)), "nor a counter: {fbs:?}");
+        // Every block marked opens, and inside the motor nothing does.
+        for n in v.openable() {
+            v.pick = Some(super::Pick::Node(n));
+            assert!(v.step_into(), "a marked block opens");
+            assert!(v.openable().is_empty(), "the motor calls no block of its own");
+            assert!(v.step_out());
+        }
+    }
 
     #[test]
     fn a_statement_that_ran_one_scan_stays_lit_for_hold_then_dims() {
