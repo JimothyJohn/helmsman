@@ -68,11 +68,14 @@ fn a_silent_unit_goes_down_alone_on_a_shared_gateway() {
         .into_iter()
         .map(|l| {
             let r = Arc::clone(&reports);
-            spawn(l, Arc::clone(&table), Arc::clone(&stop), move |n, e, _, _| {
-                r.lock()
-                    .unwrap()
-                    .push((n.to_string(), e.map(ToString::to_string)));
-            })
+            spawn(
+                l,
+                Arc::clone(&table),
+                Arc::clone(&stop),
+                move |l: &helmsman_plc::link::LinkReport| {
+                    r.lock().unwrap().push((l.name.clone(), l.error.clone()));
+                },
+            )
         })
         .collect();
     let value = |name: &str| {
@@ -145,11 +148,14 @@ fn a_gateway_that_reports_a_dead_unit_takes_that_device_down_alone() {
         .into_iter()
         .map(|l| {
             let r = Arc::clone(&reports);
-            spawn(l, Arc::clone(&table), Arc::clone(&stop), move |n, e, _, _| {
-                r.lock()
-                    .unwrap()
-                    .push((n.to_string(), e.map(ToString::to_string)));
-            })
+            spawn(
+                l,
+                Arc::clone(&table),
+                Arc::clone(&stop),
+                move |l: &helmsman_plc::link::LinkReport| {
+                    r.lock().unwrap().push((l.name.clone(), l.error.clone()));
+                },
+            )
         })
         .collect();
     wait("both units up", || {

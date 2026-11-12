@@ -190,3 +190,40 @@ fn the_line_takes_poll_ms_and_per_transport_params_only() {
         assert!(matches!(e, Error::Address(_)), "{params:?}: {e}");
     }
 }
+
+#[test]
+fn the_pace_sets_a_cyclic_transports_rate_inside_the_profiles_limits() {
+    let (enip, mb) = (E1213Sim::start().unwrap(), modbus());
+    let mut d = profiled(&enip, &mb);
+    assert_eq!(
+        d.limits(),
+        Some((Duration::from_millis(100), Duration::from_secs(3))),
+        "the first transport's"
+    );
+    let rpi = |d: &ProfileDriver| d.lines()[0].params.get("rpi_ms").cloned();
+    assert_eq!(
+        rpi(&d).as_deref(),
+        Some("100"),
+        "the profile's own, before any pace"
+    );
+    d.pace(Duration::from_millis(10));
+    assert_eq!(
+        rpi(&d).as_deref(),
+        Some("100"),
+        "a 10 ms program is held to the floor"
+    );
+    d.pace(Duration::from_millis(250));
+    assert_eq!(rpi(&d).as_deref(), Some("250"));
+    d.pace(Duration::from_secs(9));
+    assert_eq!(rpi(&d).as_deref(), Some("3000"), "held to the ceiling");
+    assert!(
+        !d.lines()[1].params.contains_key("rpi_ms") && !d.lines()[1].params.contains_key("cycle_ms"),
+        "Modbus is polled, not paced: {:?}",
+        d.lines()[1].params
+    );
+    // And the paced connection opens: the unit takes the RPI asked.
+    d.pace(Duration::from_millis(200));
+    enip.force_di(3, true);
+    wait(&mut d, "ch:DI-03", Value::Bool(true));
+    assert_eq!(d.transport().as_deref(), Some("enip-io"));
+}

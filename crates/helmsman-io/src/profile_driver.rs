@@ -26,15 +26,21 @@
 //!   over the profile's value (`modbus-tcp.unit=2`); `DRIVER.port=N` is
 //!   that transport's port on a host endpoint. Anything else is refused:
 //!   the rest is the profile's business.
+//! - **The rate.** The box tells the driver how often its link will poll
+//!   ([`ProfileDriver::pace`]); a cyclic transport is asked for the same
+//!   number, inside the limits the profile gives it (`cycle_ms=A..B`,
+//!   [`Profile`]'s transport line): `rpi_ms` on `enip-io`, `cycle_ms` on
+//!   `profinet-io` (a power of two of ms, rounded down).
 //! - **What is shown.** [`Driver::transport`] names the transport in use,
 //!   for a device's details and failure text; the person adding the
 //!   device never chooses it.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use crate::driver::{Driver, Error, PointInfo};
 use crate::model::{Device, Dir, Value};
-use crate::profile::{Channel, Profile};
+use crate::profile::{Channel, Profile, Transport};
 
 /// How a map names a device by its profile: `device:NAME`.
 pub const DRIVER: &str = "device:";
@@ -125,9 +131,7 @@ impl ProfileDriver {
                 driver: t.driver.clone(),
                 endpoint: device.endpoint.clone(),
                 params: t
-                    .params
-                    .iter()
-                    .filter_map(|p| p.split_once('='))
+                    .driver_params()
                     .map(|(k, v)| (k.to_string(), v.to_string()))
                     .collect::<BTreeMap<_, _>>(),
             })
@@ -182,6 +186,37 @@ impl ProfileDriver {
     #[must_use]
     pub fn lines(&self) -> &[Device] {
         &self.lines
+    }
+
+    /// The rate limits of the profile's first transport (the one the box
+    /// prefers), if it gives any: what the link's poll is held inside.
+    #[must_use]
+    pub fn limits(&self) -> Option<(Duration, Duration)> {
+        self.profile.transports.first().and_then(Transport::limits)
+    }
+
+    /// How often the link will poll: a cyclic transport is asked for the
+    /// same number, held inside that transport's limits. Set before the
+    /// first read or write; a transport already open keeps its rate.
+    pub fn pace(&mut self, poll: Duration) {
+        for (line, t) in self.lines.iter_mut().zip(&self.profile.transports) {
+            let rate = match t.limits() {
+                Some((fast, slow)) => poll.clamp(fast, slow),
+                None => poll,
+            };
+            let ms = u64::try_from(rate.as_millis()).unwrap_or(u64::MAX).max(1);
+            match line.driver.as_str() {
+                crate::enip::DRIVER => {
+                    line.params.insert("rpi_ms".into(), ms.to_string());
+                }
+                crate::profinet::DRIVER => {
+                    // 1, 2, 4 .. 512 ms: the power of two at or under it.
+                    let cycle = 1u64 << ms.min(512).ilog2();
+                    line.params.insert("cycle_ms".into(), cycle.to_string());
+                }
+                _ => {}
+            }
+        }
     }
 
     fn channel(&self, addr: &str) -> Result<&Channel, Error> {

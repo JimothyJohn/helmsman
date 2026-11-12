@@ -16,6 +16,7 @@
 //! (in the default build since the E1213 bench passed; [`not_in_build`]).
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use helmsman_io::driver::{parse_point_on, wasm_name};
 use helmsman_io::profile::Profile;
@@ -72,13 +73,34 @@ pub fn profile(drivers: &Drivers, device: &Device) -> Option<Result<Profile, Err
                 .collect::<String>()
         ))
     };
-    Some(
-        drivers
-            .get(&profile_file(name))
-            .and_then(|b| std::str::from_utf8(b).ok())
-            .and_then(|t| Profile::parse(t).ok())
-            .ok_or_else(missing),
-    )
+    let Some(bytes) = drivers.get(&profile_file(name)) else {
+        return Some(Err(missing()));
+    };
+    // Checked when it was found (`crate::driver_dir`); said again here
+    // for a set built some other way.
+    let parsed = std::str::from_utf8(bytes)
+        .map_err(|_| "not UTF-8 text".to_string())
+        .and_then(|t| {
+            Profile::parse(t).map_err(|errs| {
+                errs.iter()
+                    .map(|(n, e)| {
+                        if *n == 0 {
+                            e.clone()
+                        } else {
+                            format!("line {n}: {e}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })
+        });
+    Some(parsed.map_err(|why| {
+        Error::Driver(format!(
+            "{}: {} does not read as a profile: {why}",
+            device.driver,
+            profile_file(name)
+        ))
+    }))
 }
 
 /// The driver file `device` runs on: a `wasm:` device's binary or a
@@ -110,6 +132,7 @@ pub fn open_profiled(
     drivers: &Drivers,
     device: &Device,
     base: impl Fn(&Device) -> Result<Box<dyn Driver + Send>, Error> + Send + 'static,
+    poll: Option<Duration>,
 ) -> Option<Result<Box<dyn Driver + Send>, Error>> {
     let profile = match profile(drivers, device)? {
         Ok(p) => p,
@@ -119,7 +142,24 @@ pub fn open_profiled(
         Some(e) => Err(e),
         None => base(d),
     });
-    Some(ProfileDriver::new(profile, device, open).map(|d| Box::new(d) as Box<dyn Driver + Send>))
+    Some(ProfileDriver::new(profile, device, open).map(|mut d| {
+        if let Some(poll) = poll {
+            d.pace(poll);
+        }
+        Box::new(d) as Box<dyn Driver + Send>
+    }))
+}
+
+/// The rate limits of a `device:` device's preferred transport
+/// (`cycle_ms=A..B` on the profile's first transport line); `None` for
+/// any other device, a profile that is not there, or one with no limits.
+#[must_use]
+pub fn limits(drivers: &Drivers, device: &Device) -> Option<(Duration, Duration)> {
+    profile(drivers, device)?
+        .ok()?
+        .transports
+        .first()
+        .and_then(helmsman_io::profile::Transport::limits)
 }
 
 /// Opens `device`'s link driver on its guest, for a `wasm:` device;
@@ -249,7 +289,7 @@ impl<'a> Points<'a> {
                 .loaded
                 .entry(device.id.clone())
                 .or_insert_with(|| {
-                    open_profiled(self.drivers, device, refuse)
+                    open_profiled(self.drivers, device, refuse, None)
                         .expect("a device: device")
                         .map_err(|e| e.to_string())
                 })

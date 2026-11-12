@@ -473,7 +473,10 @@ impl SwapHandle {
             });
         };
         let mut links = links.lock().unwrap_or_else(PoisonError::into_inner);
-        let plan = links.plan_with(&map, &layout.drivers).map_err(SwapError::Links)?;
+        let pace = crate::link::pace(&modules);
+        let plan = links
+            .plan_paced(&map, &layout.drivers, &pace)
+            .map_err(SwapError::Links)?;
         let stopped = links.stop(&plan);
         match self.send(modules, change, Some(layout)) {
             Ok(swapped) => Ok(Reloaded {

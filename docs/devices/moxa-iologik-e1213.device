@@ -7,8 +7,10 @@ model  ioLogik E1213
 kind   remote-io
 
 # EtherNet/IP first (cyclic, one connection); Modbus TCP when the unit's one
-# connection is taken (its firmware 3.1 grants a single owner).
-transport enip-io    profile=moxa-e1213 rpi_ms=100
+# connection is taken (its firmware 3.1 grants a single owner). The box asks
+# for data at the pace of the program that reads it, inside cycle_ms (the
+# EDS's RPI range, 100 ms to 3 s); rpi_ms is what a line without a pace gets.
+transport enip-io    profile=moxa-e1213 rpi_ms=100 cycle_ms=100..3000
 transport modbus-tcp unit=1
 
 # digital inputs: input bytes 0-1 / discrete inputs 0..11

@@ -941,6 +941,7 @@ fn plan_io(
     channels: helmsman_plc::link::Channels,
     io: &IoEndpoint,
     drivers: &helmsman_plc::drivers::Drivers,
+    pace: &helmsman_plc::link::Pace,
 ) -> Result<(LinkSet, Plan), String> {
     let devices = Arc::clone(devices);
     let io = io.clone();
@@ -948,26 +949,35 @@ fn plan_io(
         Arc::clone(table),
         Arc::new(move |d: &helmsman_io::Device| helmsman_io::open_on(d, Some(&io))),
         channels,
-        Arc::new(
-            move |name: &str,
-                  err: Option<&helmsman_io::Error>,
-                  address: Option<String>,
-                  transport: Option<String>| {
-                let over = transport
-                    .as_deref()
-                    .map(|t| format!(" over {t}"))
-                    .unwrap_or_default();
-                match (err, &address) {
-                    (None, Some(a)) => eprintln!("helmsman-plc: device {name} up at {a}{over}"),
-                    (None, None) => eprintln!("helmsman-plc: device {name} up{over}"),
-                    (Some(e), _) => eprintln!("helmsman-plc: device {name} down: {e}"),
-                }
-                devices.set_with(name, err.map(ToString::to_string), address);
-                devices.set_transport(name, transport);
-            },
-        ),
+        Arc::new(move |r: &helmsman_plc::link::LinkReport| {
+            let name = &r.name;
+            let over = r
+                .transport
+                .as_deref()
+                .map(|t| format!(" over {t}"))
+                .unwrap_or_default();
+            match (&r.error, &r.address, r.health) {
+                (Some(e), _, _) => eprintln!("helmsman-plc: device {name} down: {e}"),
+                (None, _, helmsman_plc::link::Health::Slow) => eprintln!(
+                    "helmsman-plc: device {name} slow: updates every {} ms, asked every {} ms",
+                    r.measured.map_or(0, |m| m.as_millis()),
+                    r.poll.as_millis()
+                ),
+                (None, Some(a), _) => eprintln!("helmsman-plc: device {name} up at {a}{over}"),
+                (None, None, _) => eprintln!("helmsman-plc: device {name} up{over}"),
+            }
+            devices.set_with(name, r.error.clone(), r.address.clone());
+            devices.set_transport(name, r.transport.clone());
+            devices.set_health(
+                name,
+                r.health.as_str(),
+                r.measured
+                    .map(|m| u64::try_from(m.as_millis()).unwrap_or(u64::MAX)),
+                u64::try_from(r.poll.as_millis()).unwrap_or(u64::MAX),
+            );
+        }),
     );
-    let plan = set.plan_with(&map.cloned().unwrap_or_default(), drivers)?;
+    let plan = set.plan_paced(&map.cloned().unwrap_or_default(), drivers, pace)?;
     Ok((set, plan))
 }
 
@@ -1519,6 +1529,7 @@ fn run(o: &Opts) -> Result<(), String> {
     // enip-io links' are routed by connection ID (helmsman_proto::endpoint).
     let io = IoEndpoint::bind(SocketAddrV4::new(o.server.bind, o.server.io_port))
         .map_err(|e| format!("CIP sockets: UDP {} (Class 1 I/O): {e}", o.server.io_port))?;
+    let pace = helmsman_plc::link::pace(rt.names().filter_map(|n| rt.module(n)));
     let (link_set, io_plan) = plan_io(
         map.as_ref(),
         &table,
@@ -1526,6 +1537,7 @@ fn run(o: &Opts) -> Result<(), String> {
         box_channels(o.gpio_chip.as_deref())?,
         &io,
         &content.drivers.drivers,
+        &pace,
     )?;
     for name in io_plan.starts() {
         devices.add(name);

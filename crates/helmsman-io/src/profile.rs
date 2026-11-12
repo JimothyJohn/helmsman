@@ -24,6 +24,9 @@
 //!
 //! - `transport DRIVER [param=value ...]`: a driver that reaches the
 //!   device and its settings, in the order the box should try them.
+//!   `cycle_ms=A..B` is the profile's own: how fast and how slow the
+//!   device can be asked for data over that transport (the box picks the
+//!   rate inside it, [`Transport::limits`]); the rest are the driver's.
 //! - `in` / `out NAME TYPE [unit=U] [safe=V] DRIVER=POINT ...`: a channel,
 //!   with its point in each transport's own syntax. Every channel names
 //!   every transport, so the device looks the same whichever is in use.
@@ -36,6 +39,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::time::Duration;
 
 use crate::model::{Dir, Ty};
 use crate::text;
@@ -44,13 +48,45 @@ use crate::text;
 pub const HEADER: &str = "helmsman-device 1";
 /// The longest channel name.
 pub const MAX_CHANNEL: usize = 32;
+/// A transport's own param: `cycle_ms=A..B`, the rate the device can be
+/// asked at over it, fastest to slowest, in ms (1..=60000).
+pub const CYCLE: &str = "cycle_ms";
+
+/// `A..B` of a `cycle_ms=A..B` value, 1 <= A <= B <= 60000, as durations.
+fn parse_limits(v: &str) -> Option<(Duration, Duration)> {
+    let (a, b) = v.split_once("..")?;
+    let (a, b) = (a.parse::<u64>().ok()?, b.parse::<u64>().ok()?);
+    ((1..=60_000).contains(&a) && (a..=60_000).contains(&b))
+        .then(|| (Duration::from_millis(a), Duration::from_millis(b)))
+}
 
 /// One way to reach the device.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Transport {
     pub driver: String,
-    /// `param=value` words for the device line, as written.
+    /// `param=value` words for the device line, as written (the
+    /// profile's own, [`CYCLE`], among them).
     pub params: Vec<String>,
+}
+
+impl Transport {
+    /// The rate limits the transport gives (`cycle_ms=A..B`), if any.
+    #[must_use]
+    pub fn limits(&self) -> Option<(Duration, Duration)> {
+        self.params
+            .iter()
+            .find_map(|p| p.strip_prefix(CYCLE)?.strip_prefix('='))
+            .and_then(parse_limits)
+    }
+
+    /// The params that are the driver's: every `KEY=VALUE` but the
+    /// profile's own.
+    pub fn driver_params(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.params
+            .iter()
+            .filter_map(|p| p.split_once('='))
+            .filter(|(k, _)| *k != CYCLE)
+    }
 }
 
 /// One channel of the device.
@@ -165,6 +201,13 @@ impl Profile {
                 if let Some(bad) = params.iter().find(|p| !p.contains('=')) {
                     return Err(format!("{bad:?}: expected KEY=VALUE"));
                 }
+                if let Some(v) = params
+                    .iter()
+                    .find_map(|p| p.strip_prefix(CYCLE)?.strip_prefix('='))
+                    && parse_limits(v).is_none()
+                {
+                    return Err(format!("{CYCLE}={v}: expected A..B in ms, 1 <= A <= B <= 60000"));
+                }
                 self.transports.push(Transport {
                     driver: (*driver).into(),
                     params: params.iter().map(|p| (*p).to_string()).collect(),
@@ -260,8 +303,8 @@ impl Profile {
     pub fn map(&self, index: usize, device: &str, endpoint: &str) -> Option<String> {
         let t = self.transports.get(index)?;
         let mut out = format!("device {device} {} {endpoint}", t.driver);
-        for p in &t.params {
-            let _ = write!(out, " {p}");
+        for (k, v) in t.driver_params() {
+            let _ = write!(out, " {k}={v}");
         }
         out.push('\n');
         for c in &self.channels {
