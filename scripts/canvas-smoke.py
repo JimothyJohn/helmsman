@@ -78,6 +78,8 @@ MESSAGES = (330, 640, 700, 200)
 # The tabs are glyphs (2026-11-11): the left pane's Code, the right
 # panel's I/O and Agent, the bottom panel's Trend and Messages.
 TAB_CODE = (106, 71)
+# The fold arrow of the Code tab's second line, in the gutter.
+FOLD_LINE_2 = (14, 172)
 TAB_IO = (1230, 71)
 TAB_AGENT = (1271, 71)
 TAB_TREND = (344, 600)
@@ -151,6 +153,9 @@ def playground(ctx, base, out):
     # The Code tab by its tab, not Alt+Shift+1: with Shift a US keyboard
     # off the Mac sends "!", which the page does not take for the 1 key.
     r.step("code", lambda: r.click(*TAB_CODE), LEFT)
+    # Fold the VAR_OUTPUT section by its gutter arrow (line 2), then open it.
+    r.step("folded", lambda: r.click(*FOLD_LINE_2), LEFT)
+    r.click(*FOLD_LINE_2); r.wait(300)
     # The right panel's tabs: Agent, then I/O (two tabs since 2026-11-08).
     r.click(*TAB_AGENT); r.wait(600); r.shot("agent-tab")
     r.click(*TAB_IO); r.wait(600); r.shot("io-tab")

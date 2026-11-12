@@ -1429,6 +1429,74 @@ mod chrome {
         assert_eq!(h.app.chrome.pane, Pane::Devices);
     }
 
+    /// Nick, 2026-11-11: every block that folds has an arrow in the Code
+    /// tab's gutter. A click folds the block to its first and last lines
+    /// (the lines under it move up, and a mark says how many are hidden),
+    /// a second click opens it, and a line inside a folded block that has
+    /// to be seen opens it by itself.
+    #[test]
+    fn a_block_folds_from_its_gutter_arrow_and_opens_for_a_line_that_must_show() {
+        let mut h = Harness::new(App::sim());
+        h.app.chrome.show_code();
+        h.wait(0.3);
+        // Blink: PROGRAM on 1, VAR_OUTPUT on 2, VAR on 5, the IF on 10.
+        for line in [1, 2, 5, 10] {
+            let r = h.rect(&format!("fold {line}"));
+            assert!(
+                r.right() <= h.rect("st editor").left(),
+                "arrow {line} is in the gutter: {r:?}"
+            );
+        }
+        assert!(!h.has("fold 9"), "a call on one line has nothing to fold");
+        let (var, the_if) = (h.rect("fold 5").top(), h.rect("fold 10").top());
+        // Lines 1 and 2 are a row each (a long line lower down wraps).
+        let row = h.rect("fold 2").top() - h.rect("fold 1").top();
+        h.press("fold 2");
+        h.wait(0.2);
+        assert!(h.app.chrome.folds.folded(2));
+        assert!(h.has("folded 2"), "the mark that says how many lines are hidden");
+        assert!(h.drew("… 1 line"));
+        // VAR_OUTPUT hid one line: everything under it is one row up.
+        assert!(
+            (h.rect("fold 5").top() - (var - row)).abs() < 1.0,
+            "{var} less {row}"
+        );
+        assert!((h.rect("fold 10").top() - (the_if - row)).abs() < 1.0);
+        // Folding the program hides the arrows of what is inside it.
+        h.press("fold 1");
+        h.wait(0.2);
+        assert!(!h.has("fold 5") && !h.has("fold 10") && !h.has("folded 2"));
+        assert!(h.has("folded 1"));
+        h.press("fold 1");
+        h.wait(0.2);
+        assert!(
+            h.has("fold 5") && h.has("folded 2"),
+            "open again, the inner fold kept"
+        );
+        h.press("fold 2");
+        h.wait(0.2);
+        assert!((h.rect("fold 5").top() - var).abs() < 1.0, "as it was");
+        // A line inside a folded block that has to be seen (a block click
+        // sends the editor to line 11): the block opens.
+        h.press("fold 10");
+        h.wait(0.2);
+        assert!(h.app.chrome.folds.folded(10));
+        h.app.chrome.goto(11);
+        h.wait(0.2);
+        assert!(!h.app.chrome.folds.folded(10), "the line has to be seen");
+        // Nothing of the text changed by folding and unfolding.
+        assert!(
+            h.app
+                .sim
+                .as_ref()
+                .unwrap()
+                .proj
+                .files
+                .values()
+                .all(|t| t.contains("END_PROGRAM"))
+        );
+    }
+
     /// Nick, 2026-11-11: style hints are a third, lighter level. A hinted
     /// line is marked in the Code tab, says what it is on hover, and is
     /// told to the Messages as information once the typing has settled:

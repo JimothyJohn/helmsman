@@ -249,6 +249,7 @@ END_PROGRAM
                 errors: &[(12, 3)],
                 warnings: &[],
                 hints: &[],
+                folded: &[],
             };
             let job = highlight(SRC, &lines, Some(11), &[], &FontId::monospace(17.0), 400.0, &t);
             assert_eq!(job.text, SRC);
@@ -318,18 +319,21 @@ END_PROGRAM
             errors: &[],
             warnings: &[],
             hints: &[(8, 3)],
+            folded: &[],
         });
         assert_eq!(hinted, (1.5, t.ink(HINT), Color32::TRANSPARENT));
         let warned = under(&Lines {
             errors: &[],
             warnings: &[(8, 3)],
             hints: &[(8, 3)],
+            folded: &[],
         });
         assert_eq!(warned.1, crate::st_view::brand::WARN, "the warning shows");
         let plain = under(&Lines {
             errors: &[],
             warnings: &[],
             hints: &[],
+            folded: &[],
         });
         assert_eq!(plain.0, 0.0, "no hint, no underline");
     }
