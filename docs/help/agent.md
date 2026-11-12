@@ -101,12 +101,14 @@ where code should be, is sent back.
 
 ## In the simulation
 
-The playground calls the model from your browser with your own API key.
-Paste it in the tab; "Remember on this device" keeps it in this browser
-only, and the tab says plainly where the key is kept. Running the
-playground from your own machine with a local proxy, or natively with
-the key in the environment, the tab says the key is preloaded so you are
-not left wondering.
+In the playground the Agent is free to try during the early release, with
+no key and no account. What you type is sent to a hosted model through
+our relay, so leave out anything confidential. The relay keeps no
+instruction and no answer; it counts requests so that misuse can be
+stopped. The free chat runs on a small daily allowance shared by everyone
+who tries the playground. When that is used up the tab says so, and it
+opens again by itself, usually within a day. The editor, the diagram and
+the simulation work without it.
 
 With a built-in example open (they are read-only), the program the Agent
 writes becomes a project of its own: the first time, it asks what the
