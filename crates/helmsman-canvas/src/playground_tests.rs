@@ -2702,3 +2702,179 @@ fn an_error_and_a_warning_are_both_listed_and_only_the_error_blocks() {
     assert_eq!(s.deployed(), before, "the program running is untouched");
     assert!(s.chrome.rect("diag 0").is_some() && s.chrome.rect("diag 1").is_some());
 }
+
+// ---- the free chat ----
+
+const RELAY: &str = "https://relay.example";
+
+/// The free chat's request carries the turns and nothing a stranger could
+/// set: no key, no model, no prompt, no cap. The relay holds those.
+#[test]
+fn the_free_route_sends_the_turns_and_nothing_else() {
+    let history = [Exchange {
+        asked: "make it blink".into(),
+        answer: "Why: it blinks.".into(),
+    }];
+    let r = request(&Route::Free(RELAY.into()), Model::Opus, &history, "faster");
+    assert_eq!(r.url, "https://relay.example/demo/v1/messages");
+    assert_eq!(r.headers(), [("content-type", "application/json".to_string())]);
+    let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"messages": [
+            {"role": "user", "content": "make it blink"},
+            {"role": "assistant", "content": "Why: it blinks."},
+            {"role": "user", "content": "faster"},
+        ]})
+    );
+    for never in ["sk-ant", "claude-", "system", "max_tokens", "x-api-key"] {
+        assert!(!format!("{r:?}").contains(never), "{never}");
+    }
+}
+
+/// The relay refuses more than 256 KiB or 40 messages: the oldest turns go
+/// first, measured as sent (escaping makes a program longer), and the
+/// instruction itself always goes.
+#[test]
+fn the_free_route_drops_the_oldest_turns_to_fit_the_relay() {
+    let turn = |i: usize, bytes: usize| Exchange {
+        asked: format!("ask {i}"),
+        answer: format!("{i}:{}", "\"\n".repeat(bytes / 2)),
+    };
+    let many: Vec<Exchange> = (0..60).map(|i| turn(i, 10)).collect();
+    let r = request(&Route::Free(RELAY.into()), Model::Sonnet, &many, "now");
+    let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    let m = body["messages"].as_array().unwrap();
+    assert_eq!(m.len(), claude::FREE_MAX_MESSAGES);
+    assert_eq!(
+        m[m.len() - 1],
+        serde_json::json!({"role": "user", "content": "now"})
+    );
+    assert_eq!(m[0]["content"], "ask 41", "the newest nineteen turns");
+
+    // Each answer is 60 KiB typed and twice that sent.
+    let big: Vec<Exchange> = (0..6).map(|i| turn(i, 60 * 1024)).collect();
+    let r = request(&Route::Free(RELAY.into()), Model::Sonnet, &big, "now");
+    assert!(r.body.len() <= claude::FREE_MAX_BODY, "{}", r.body.len());
+    let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    let m = body["messages"].as_array().unwrap();
+    assert_eq!(m.len(), 3, "one earlier turn fits");
+    assert_eq!(m[0]["content"], "ask 5");
+    // An instruction larger than the limit still goes, alone.
+    let huge = "x".repeat(claude::FREE_MAX_BODY + 1);
+    let r = request(&Route::Free(RELAY.into()), Model::Sonnet, &big, &huge);
+    let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn the_free_chat_says_whether_it_is_open() {
+    use claude::Free;
+    assert_eq!(Free::from_status(r#"{"open":true}"#), Free::Open);
+    assert_eq!(
+        Free::from_status(r#"{"open":false,"reopens_by_itself":true}"#),
+        Free::Closed { reopens: true }
+    );
+    assert_eq!(
+        Free::from_status(r#"{"open":false,"reopens_by_itself":false}"#),
+        Free::Closed { reopens: false }
+    );
+    assert_eq!(
+        Free::from_status(r#"{"open":false}"#),
+        Free::Closed { reopens: false }
+    );
+    for odd in ["", "<html>", "{}", r#"{"open":"yes"}"#, "null", "[true]"] {
+        assert_eq!(Free::from_status(odd), Free::Unreachable, "{odd}");
+    }
+}
+
+/// A page built with a free chat asks for no key: it waits for the chat's
+/// own word, sends there while it is open, and stops when a turn comes
+/// back closed.
+#[test]
+fn a_chat_with_a_free_route_needs_no_key_and_follows_its_state() {
+    use claude::Free;
+    let mut chat = Chat::new(Box::new(claude::NoStore));
+    chat.receive(Incoming::Proxy(false));
+    assert_eq!(chat.free_base(), None);
+    assert_eq!(chat.route(), Err("Paste an Anthropic API key first."));
+    chat.set_free_base("https://relay.example/");
+    assert_eq!(chat.free_base(), Some(RELAY));
+    assert_eq!(chat.route(), Err("Checking the free chat…"));
+    chat.receive(Incoming::Free(Free::Unreachable));
+    assert!(chat.route().is_err());
+    chat.receive(Incoming::Free(Free::Open));
+    assert_eq!(chat.route(), Ok(Route::Free(RELAY.into())));
+    // A key typed earlier is never sent to the relay.
+    chat.key_mut().push_str(KEY);
+    let (seq, req) = chat.send("q", &[]).unwrap();
+    assert_eq!(req.url, "https://relay.example/demo/v1/messages");
+    assert!(!format!("{:?} {}", req.headers(), req.body).contains(KEY));
+    // The relay closed between the status check and this turn.
+    chat.receive(Incoming::Status {
+        seq,
+        status: 503,
+        body: r#"{"type":"error","error":{"type":"free_chat_closed","message":"the free chat is closed for now","retryable":true},"request_id":"r"}"#.into(),
+    });
+    assert_eq!(chat.free, Free::Closed { reopens: true });
+    assert_eq!(
+        chat.answer.as_ref().unwrap().phase,
+        Phase::Failed(claude::FREE_CLOSED_TEXT.into())
+    );
+    assert_eq!(chat.route(), Err(claude::FREE_CLOSED_TEXT));
+    // Any other refusal leaves it open.
+    chat.receive(Incoming::Free(Free::Open));
+    let (seq, _) = chat.send("q", &[]).unwrap();
+    chat.receive(Incoming::Status {
+        seq,
+        status: 503,
+        body: r#"{"type":"error","error":{"type":"upstream_unavailable","message":"retry later","retryable":true}}"#.into(),
+    });
+    assert_eq!(chat.free, Free::Open);
+
+    // A local proxy (development) stands in for the free chat.
+    let mut dev = Chat::new(Box::new(claude::NoStore));
+    dev.set_free_base(RELAY);
+    dev.receive(Incoming::Proxy(true));
+    assert_eq!(dev.free_base(), None);
+    assert_eq!(dev.route(), Ok(Route::Proxy));
+}
+
+/// The survey is answered once: a fixed choice by its id, or `other` with
+/// at most 40 characters of the visitor's words.
+#[test]
+fn the_survey_is_answered_once_and_other_is_short() {
+    let mut none = Chat::new(Box::new(claude::NoStore));
+    assert!(none.survey("google", "").is_none(), "no free chat: no survey");
+
+    let mut chat = Chat::new(Box::new(claude::NoStore));
+    chat.set_free_base(RELAY);
+    assert!(chat.survey("other", "   ").is_none(), "nothing typed");
+    assert!(!chat.surveyed);
+    let long = format!("  {}  ", "é".repeat(100));
+    let r = chat.survey("other", &long).unwrap();
+    assert_eq!(r.url, "https://relay.example/demo/v1/survey");
+    let body: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(body["choice"], "other");
+    assert_eq!(
+        body["other"].as_str().unwrap().chars().count(),
+        claude::SURVEY_OTHER_CHARS
+    );
+    assert!(chat.surveyed);
+    assert!(chat.survey("google", "").is_none(), "once");
+
+    let mut fixed = Chat::new(Box::new(claude::NoStore));
+    fixed.set_free_base(RELAY);
+    let r = fixed.survey("own-hardware", "typed but not sent").unwrap();
+    assert_eq!(r.body, r#"{"choice":"own-hardware"}"#);
+    // Every button's id is one the relay counts (agent-relay demo::CHOICES).
+    let relay = [
+        "anthropic",
+        "openai",
+        "google",
+        "deepseek",
+        "own-hardware",
+        "no-preference",
+    ];
+    assert_eq!(claude::SURVEY_CHOICES.map(|(id, _)| id), relay);
+}
