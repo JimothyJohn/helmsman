@@ -200,8 +200,10 @@ pub fn scan(src: &str) -> Vec<Piece> {
             }
             (b'%', Some(n)) if n.is_ascii_alphanumeric() => {
                 i += 1;
-                while at(i).is_some_and(is_word)
-                    || (at(i) == Some(b'.') && at(i + 1).is_some_and(|c| c.is_ascii_alphanumeric()))
+                // As the lexer reads one: letters and digits, and a dot
+                // only before a digit.
+                while at(i).is_some_and(|c| c.is_ascii_alphanumeric())
+                    || (at(i) == Some(b'.') && at(i + 1).is_some_and(|c| c.is_ascii_digit()))
                 {
                     i += 1;
                 }

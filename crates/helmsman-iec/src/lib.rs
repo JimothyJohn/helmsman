@@ -124,6 +124,7 @@ pub mod scan;
 pub mod spec;
 mod state;
 mod suggest;
+pub mod tidy;
 pub mod trace;
 mod types;
 mod xml;
