@@ -56,16 +56,15 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
 
 ## Needs your hands
 
-- [ ] **Turn on the free playground chat** — the playground chat on your OpenRouter key instead of the visitor's (interview 2026-11-11: playground only, no gate, a demo key of its own capped at about $2 a day, a function of its own, text and program edits only, alarms by mail, counters only, one notice line, a survey when closed). Built and tested, nothing deployed: the relay half is agent-relay `feat/demo-route` (two commits on top of PR #8, not pushed: the session could not push another repository), the page half is helmsman `feat/free-chat`, off until the page is built with the relay's address.
-  needs: in this order: (1) `! ~/github/agent-relay/scratch/23-push-demo-route.sh` pushes the branch and opens its draft PR; (2) land agent-relay #8 (card relay-openrouter-handoff), then read the draft's `template.yaml` (DemoFunctionRole, DemoFunction, the alarms), mark it ready, merge, and your dev → main there; (3) at openrouter.ai make a key for the demo alone with a credit limit of about $2 that resets daily; (4) `~/github/agent-relay/scripts/put-demo-key.sh` in the native terminal (hidden prompt; it refuses a key with no limit, one above $5, one that never resets, or the boxes' key); (5) `DEMO_ORIGINS=https://helmsman.advin.io ~/github/agent-relay/scripts/deploy.sh`, which prints the DemoUrl and checks the origin rule; (6) in helmsman, `HELMSMAN_FREE_CHAT_URL=<DemoUrl without the trailing slash> make playground`, commit docs/playground, and change docs/help/agent.md line 104 ("with your own API key") in the same PR; (7) your dev → master
-  result: anyone can use the playground's Agent tab with no key; a bad day costs at most the key's daily limit; `~/github/agent-relay/scripts/demo.sh status | open | close | survey` is the switch
-  depends: relay-openrouter-handoff
-  est: 1h
-  difficulty: med
+- [ ] **Promote the free playground chat: helmsman dev → master** — the playground's Agent tab on the relay's demo function instead of a visitor's key (interview 2026-11-11). Everything else is done: the relay is deployed on OpenRouter with the demo function for https://helmsman.advin.io (agent-relay main, stack updated 2026-11-12 UTC), one real turn through the live demo answered and was counted, and docs/playground is built with the demo's address. The published site still serves the old page until master moves.
+  needs: your dev → master merge in helmsman
+  result: anyone can use the playground's Agent tab with no key; a bad day costs at most the demo key's daily limit; `~/github/agent-relay-deploy/scripts/demo.sh status | open | close | survey` is the switch (the alarms mail you when it closes itself)
+  est: 5m
+  difficulty: low
   id: free-chat-turn-on
   asked: 2026-11-11
   by: claude-session
-  notes: Not checked until a deploy: the DynamoDB store against DynamoDB, the log metric filter against a real Lambda log line, and that a function URL passes OPTIONS through to the function (deploy.sh checks the preflight). The survey's buttons name model vendors, which the voice rule forbids elsewhere; say if you want them worded differently. Once the page is live on the free chat, the key route can come out of the page (claude.rs Route::Direct, key_ui, the model picker) as its own change.
+  notes: Seen in a browser against a local relay, not against the live one: a page served from another origin is refused there by design, so the first look at the live page is yours after the promotion. In the local run the model's answer failed the page's checks three times on one instruction (DeepSeek V4.1 Flash, thinking off). The survey's buttons name model vendors, which the voice rule forbids elsewhere. The help pictures (docs/help/img) may still show the key field; `make help-shots` retakes them. Once the page is live, the key route can come out of the page (claude.rs Route::Direct, key_ui, the model picker) as its own change. Not exercised yet: the alarm filters firing on a real close, and the survey route against DynamoDB.
 
 - [ ] **Fit the P4's PoE module and measure its isolation** — the Waveshare ESP32-P4-ETH has run on USB and the bench switch without its PoE module (docs/EDGE.md Phase 3, "On the board"). Before USB and PoE are ever connected together: with the module fitted and the board powered from PoE only, measure for continuity and resistance between the RJ45 shield and PoE return on one side and USB ground on the other (unpowered first). Then a run on PoE alone, USB out: the node is at http://192.168.3.56:8080 (press-5).
   needs: the PoE module on the board, a meter, a PoE port
@@ -101,16 +100,6 @@ Done cards were removed on 2026-11-06 (git history has them). Three sections up 
   est: 10m
   difficulty: low
   id: try-box-login
-  asked: 2026-11-10
-  by: claude-session
-
-- [ ] **Finish the relay's OpenRouter hand-off (agent-relay PR #8)** — stopped on 2026-11-09 waiting for you, and nothing has moved since (checked 2026-11-10: #8 is still a draft, the three new cards are still an uncommitted change to TODO.md in ~/github/agent-relay/.claude/worktrees/openrouter because worktree-guard refused that session's commit twice). The helmsman side is done (#321 merged; boxes keep asking for v7). Verified live on 2026-11-09 with your OpenRouter key: test-live passes, eval-live 17 of 18, a real box ran two turns through the local relay.
-  needs: in this order: (1) `! ~/github/agent-relay/scratch/22-push-openrouter-todo.sh` commits and pushes the three cards; (2) read #8's template.yaml (the parameters and the ReadUpstreamKey Sid), mark it ready and merge it; (3) your dev → main merge there; (4) `~/github/agent-relay/scratch/20-put-openrouter-key.sh`; (5) `~/github/agent-relay/scratch/21-deploy-relay-openrouter.sh`
-  result: the deployed relay answers on OpenRouter (DeepSeek V4.1 Flash by default) and the model is a deployment setting
-  notes: details in ~/github/agent-relay/.claude/handoff.md and the PR #8 comment. Seen on the way and not touched: that repo's main checkout sits on feat/agent-v7-strict-schemas, and three sibling worktrees (agent-relay-deploy, agent-relay-harness, agent-relay-tests) live outside .claude/worktrees/.
-  est: 30m
-  difficulty: low
-  id: relay-openrouter-handoff
   asked: 2026-11-10
   by: claude-session
 
