@@ -574,12 +574,16 @@ impl App {
                 let targets = self.monitor.targets(&b.state.modules);
                 let t = engineer.then(|| Transport {
                     built: !targets.is_empty(),
-                    running: b
+                    state: if b
                         .state
                         .modules
                         .iter()
-                        .any(|m| targets.contains(&m.name) && m.state != "stopped"),
-                    stopped: false,
+                        .any(|m| targets.contains(&m.name) && m.state != "stopped")
+                    {
+                        crate::playground::RunState::Running
+                    } else {
+                        crate::playground::RunState::Paused
+                    },
                     on_box: true,
                 });
                 self.monitor.show(ui, &b.state, &mut self.chrome, engineer, t);
@@ -589,8 +593,7 @@ impl App {
                 s.tick(&ctx);
                 let t = Transport {
                     built: s.session.build.is_some(),
-                    running: s.session.running,
-                    stopped: s.session.state() == crate::playground::RunState::Stopped,
+                    state: s.session.state(),
                     on_box: false,
                 };
                 self.monitor.show(ui, &*s, &mut self.chrome, engineer, Some(t));

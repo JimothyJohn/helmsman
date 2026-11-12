@@ -430,9 +430,9 @@ pub enum Wish {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Transport {
     pub built: bool,
-    pub running: bool,
-    /// The simulation is stopped: nothing of a run to end.
-    pub stopped: bool,
+    /// Running, paused or stopped. A box's is running or paused (its
+    /// stop holds the program where it was).
+    pub state: crate::playground::RunState,
     pub on_box: bool,
 }
 
@@ -896,7 +896,7 @@ impl Monitor {
     /// alike on either screen. A box has no step.
     fn transport(&mut self, ui: &mut egui::Ui, t: Transport, chrome: &mut Chrome) {
         if t.on_box {
-            let (icon, tip) = if t.running {
+            let (icon, tip) = if t.state == crate::playground::RunState::Running {
                 (
                     glyphs::Icon::Stop,
                     "Stop on the box: the program stops scanning and its outputs go to their safe values until you run it again (an engineer's; audited).",
@@ -931,7 +931,7 @@ impl Monitor {
                 glyphs::Icon::Run,
                 "Run (Ctrl+Enter): the program does not compile yet.",
             )
-        } else if t.running {
+        } else if t.state == crate::playground::RunState::Running {
             (
                 glyphs::Icon::Pause,
                 "Pause (Ctrl+Enter): the program holds where it is, every value kept.",
@@ -944,14 +944,14 @@ impl Monitor {
             (
                 "stop",
                 glyphs::Icon::Stop,
-                t.built && !t.stopped,
+                t.built && t.state != crate::playground::RunState::Stopped,
                 "Stop (Shift+F8): ends the run. Every value goes back to its initial one, the outputs go off and the clock to zero.",
                 Action::Stop,
             ),
             (
                 "step",
                 glyphs::Icon::Step,
-                t.built && !t.running,
+                t.built && t.state != crate::playground::RunState::Running,
                 "Step to the next change (F8): scans until a value changes or the program takes another path.",
                 Action::Step,
             ),
