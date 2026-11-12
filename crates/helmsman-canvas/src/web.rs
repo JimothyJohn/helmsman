@@ -323,6 +323,20 @@ impl ClaudeLink {
         });
     }
 
+    /// Asks the free chat at `base` whether it is open.
+    pub fn check_free(&mut self, base: &str, ctx: &egui::Context) {
+        let url = format!("{base}/demo/v1/status");
+        let (inbox, ctx) = (Rc::clone(&self.inbox), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let state = match plain("GET", &url, None).await {
+                Ok(body) => crate::claude::Free::from_status(&body),
+                Err(_) => crate::claude::Free::Unreachable,
+            };
+            inbox.borrow_mut().push(Incoming::Free(state));
+            ctx.request_repaint();
+        });
+    }
+
     /// Stops the answer in flight.
     pub fn abort(&mut self) {
         if let Some(a) = self.abort.take() {
@@ -349,6 +363,44 @@ impl ClaudeLink {
     }
 }
 
+/// Sends `req` and expects nothing back (the free chat's survey answer).
+pub fn post_and_forget(req: ClaudeRequest) {
+    wasm_bindgen_futures::spawn_local(async move {
+        let _ = plain("POST", &req.url, Some(&req.body)).await;
+    });
+}
+
+/// A request to another origin (the free chat) that carries nothing of this
+/// page's: no cookies, no box token, a JSON body or none. The body of a
+/// 2xx, or why not.
+async fn plain(method: &str, url: &str, body: Option<&str>) -> Result<String, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let init = web_sys::RequestInit::new();
+    init.set_method(method);
+    init.set_cache(web_sys::RequestCache::NoStore);
+    init.set_credentials(web_sys::RequestCredentials::Omit);
+    if let Some(b) = body {
+        let headers = web_sys::Headers::new().map_err(|e| text(&e))?;
+        headers
+            .set("content-type", "application/json")
+            .map_err(|e| text(&e))?;
+        init.set_headers(&headers);
+        init.set_body(&JsValue::from_str(b));
+    }
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(url, &init))
+        .await
+        .map_err(|e| text(&e))?
+        .dyn_into()
+        .map_err(|e| text(&e))?;
+    if !resp.ok() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let text_ = JsFuture::from(resp.text().map_err(|e| text(&e))?)
+        .await
+        .map_err(|e| text(&e))?;
+    text_.as_string().ok_or_else(|| "not text".into())
+}
+
 /// `POST` the Messages API request; the key (direct route) only ever in
 /// its `x-api-key` header, to [`crate::claude::ANTHROPIC_URL`]. Errors
 /// carry the browser's words, never a header.
@@ -372,7 +424,7 @@ async fn claude(
     init.set_cache(web_sys::RequestCache::NoStore);
     init.set_credentials(web_sys::RequestCredentials::Omit);
     init.set_signal(signal);
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(req.url, &init))
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_str_and_init(&req.url, &init))
         .await
         .map_err(|e| text(&e))?
         .dyn_into()
