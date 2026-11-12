@@ -70,7 +70,7 @@ own), auto-merge on. Merge `origin/dev` into the next branch before
 starting it. Steps 1 and 2 touch different files and may run as two
 workers at once; 3 needs both; 4 and 5 follow 3.
 
-### [ ] 1. A map binds a channel; the box picks the protocol
+### [x] 1. A map binds a channel; the box picks the protocol
 
 - A device line names a profile, not a driver:
   `device rio device:moxa-e1213 mac=00-90-e8-7e-af-be`. Signals bind

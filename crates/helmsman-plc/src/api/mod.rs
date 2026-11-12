@@ -2106,6 +2106,11 @@ fn devices(d: &Devices) -> Json {
                 if let Some(a) = d.address(&name) {
                     j["address"] = json!(a);
                 }
+                // The protocol in use, for a device by its profile: for
+                // its details and failure text, never a choice.
+                if let Some(t) = d.transport(&name) {
+                    j["transport"] = json!(t);
+                }
                 j
             })
             .collect(),

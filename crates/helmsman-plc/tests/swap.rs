@@ -1037,7 +1037,7 @@ fn swapping_under_live_links_drops_no_writes_and_glitches_nothing() {
     let handles: Vec<_> = links(&m, helmsman_io::open, Box::new(panel.clone()))
         .unwrap()
         .into_iter()
-        .map(|l| spawn(l, Arc::clone(&table), Arc::clone(&stop), |_, _, _| {}))
+        .map(|l| spawn(l, Arc::clone(&table), Arc::clone(&stop), |_, _, _, _| {}))
         .collect();
     sim.state().discrete[1] = true;
     let start = Instant::now();

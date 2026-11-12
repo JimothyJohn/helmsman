@@ -322,7 +322,10 @@ impl Bench {
             Arc::new(helmsman_io::open),
             Arc::new(|| Box::new(Channels::new())),
             Arc::new(
-                move |name: &str, err: Option<&helmsman_io::Error>, address: Option<String>| {
+                move |name: &str,
+                      err: Option<&helmsman_io::Error>,
+                      address: Option<String>,
+                      _: Option<String>| {
                     dv.set_with(name, err.map(ToString::to_string), address);
                 },
             ),

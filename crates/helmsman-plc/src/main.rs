@@ -949,13 +949,21 @@ fn plan_io(
         Arc::new(move |d: &helmsman_io::Device| helmsman_io::open_on(d, Some(&io))),
         channels,
         Arc::new(
-            move |name: &str, err: Option<&helmsman_io::Error>, address: Option<String>| {
+            move |name: &str,
+                  err: Option<&helmsman_io::Error>,
+                  address: Option<String>,
+                  transport: Option<String>| {
+                let over = transport
+                    .as_deref()
+                    .map(|t| format!(" over {t}"))
+                    .unwrap_or_default();
                 match (err, &address) {
-                    (None, Some(a)) => eprintln!("helmsman-plc: device {name} up at {a}"),
-                    (None, None) => eprintln!("helmsman-plc: device {name} up"),
+                    (None, Some(a)) => eprintln!("helmsman-plc: device {name} up at {a}{over}"),
+                    (None, None) => eprintln!("helmsman-plc: device {name} up{over}"),
                     (Some(e), _) => eprintln!("helmsman-plc: device {name} down: {e}"),
                 }
                 devices.set_with(name, err.map(ToString::to_string), address);
+                devices.set_transport(name, transport);
             },
         ),
     );

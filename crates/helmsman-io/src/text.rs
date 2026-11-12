@@ -12,7 +12,11 @@
 //! ```
 //!
 //! `device ID DRIVER ENDPOINT [KEY=VALUE ...]` declares a device the box
-//! masters; the params are the driver's. ENDPOINT is `host[:port]`, a
+//! masters; the params are the driver's. DRIVER may be `device:NAME`, a
+//! device profile (`NAME.device`, [`crate::profile_driver`]): the box then
+//! picks the protocol, the signals bind channels (`ch:DI-04`), and the
+//! params are `poll_ms` and `DRIVER.KEY=VALUE` for one of the profile's
+//! transports. ENDPOINT is `host[:port]`, a
 //! serial port's path, or an identity resolved when the driver connects
 //! (`mac=00-90-e8-7e-af-be`, `cip=991:515[:serial]`; [`crate::resolve`]). `in`/`out NAME TYPE DEVICE POINT`
 //! declares a signal (`bool`, `int` or `real`) bound to a point in that

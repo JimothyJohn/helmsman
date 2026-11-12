@@ -18,10 +18,15 @@
 use std::collections::BTreeMap;
 
 use helmsman_io::driver::{parse_point_on, wasm_name};
+use helmsman_io::profile::Profile;
+use helmsman_io::profile_driver::{Open, ProfileDriver, file_name as profile_file, profile_name};
 use helmsman_io::{Device, Driver, Error, IoMap, PointInfo};
 use sha2::{Digest, Sha256};
 
-/// WASM drivers by name: each one's `helmsman-driver/v1` binary.
+/// The driver files a map loads with: each WASM driver's
+/// `helmsman-driver/v1` binary by its name (`wasm:NAME`), and each device
+/// profile's text by its file name (`device:NAME` as `NAME.device`,
+/// `helmsman_io::profile_driver`), so neither can stand for the other.
 pub type Drivers = BTreeMap<String, Vec<u8>>;
 
 /// Most driver files in the box's driver folder.
@@ -47,14 +52,74 @@ pub fn guest<'a>(drivers: &'a Drivers, device: &Device) -> Option<Result<&'a [u8
     }))
 }
 
-/// SHA-256 of the driver binary `device` runs on, for a `wasm:` device
-/// whose driver is in `drivers`.
+/// The profile a `device:NAME` device runs on: `None` for any other
+/// device, an error for a profile that is not in `drivers` (or no longer
+/// parses).
+///
+/// # Errors
+/// [`Error::UnknownDriver`], naming the file it would be.
+#[must_use]
+pub fn profile(drivers: &Drivers, device: &Device) -> Option<Result<Profile, Error>> {
+    let name = profile_name(&device.driver)?;
+    let missing = || {
+        Error::UnknownDriver(format!(
+            "{}: no profile {} in the project or on the box",
+            device.driver,
+            profile_file(name)
+                .chars()
+                .take(64)
+                .flat_map(char::escape_debug)
+                .collect::<String>()
+        ))
+    };
+    Some(
+        drivers
+            .get(&profile_file(name))
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .and_then(|t| Profile::parse(t).ok())
+            .ok_or_else(missing),
+    )
+}
+
+/// The driver file `device` runs on: a `wasm:` device's binary or a
+/// `device:` device's profile, when it is in `drivers`.
+fn file<'a>(drivers: &'a Drivers, device: &Device) -> Option<&'a [u8]> {
+    if let Some(name) = profile_name(&device.driver) {
+        return drivers.get(&profile_file(name)).map(Vec::as_slice);
+    }
+    guest(drivers, device)?.ok()
+}
+
+/// SHA-256 of the driver file `device` runs on (a `wasm:` device's
+/// binary, a `device:` device's profile) when it is in `drivers`: a
+/// changed file is another link.
 #[must_use]
 pub fn digest(drivers: &Drivers, device: &Device) -> Option<[u8; 32]> {
-    match guest(drivers, device)? {
-        Ok(b) => Some(Sha256::digest(b).into()),
-        Err(_) => None,
-    }
+    file(drivers, device).map(|b| Sha256::digest(b).into())
+}
+
+/// Opens a `device:` device on its profile, each of the profile's
+/// transports through `base` (the box's opener) unless this build leaves
+/// that driver out; `None` for any other device.
+///
+/// # Errors
+/// The profile is not in `drivers`, or the device line's params are not
+/// a profile device's.
+#[must_use]
+pub fn open_profiled(
+    drivers: &Drivers,
+    device: &Device,
+    base: impl Fn(&Device) -> Result<Box<dyn Driver + Send>, Error> + Send + 'static,
+) -> Option<Result<Box<dyn Driver + Send>, Error>> {
+    let profile = match profile(drivers, device)? {
+        Ok(p) => p,
+        Err(e) => return Some(Err(e)),
+    };
+    let open: Open = Box::new(move |d: &Device| match not_in_build(d) {
+        Some(e) => Err(e),
+        None => base(d),
+    });
+    Some(ProfileDriver::new(profile, device, open).map(|d| Box::new(d) as Box<dyn Driver + Send>))
 }
 
 /// Opens `device`'s link driver on its guest, for a `wasm:` device;
@@ -134,9 +199,14 @@ pub fn not_in_build(device: &Device) -> Option<Error> {
 pub fn unknown(map: &IoMap, drivers: &Drivers) -> Vec<String> {
     map.devices
         .iter()
-        .filter_map(|d| match (not_in_build(d), guest(drivers, d)) {
-            (Some(e), _) | (None, Some(Err(e))) => Some(format!("device {}: {e}", d.id)),
-            _ => None,
+        .filter_map(|d| {
+            let profiled = profile(drivers, d).and_then(Result::err);
+            match (not_in_build(d), guest(drivers, d), profiled) {
+                (Some(e), _, _) | (None, Some(Err(e)), _) | (None, _, Some(e)) => {
+                    Some(format!("device {}: {e}", d.id))
+                }
+                _ => None,
+            }
         })
         .collect()
 }
@@ -166,6 +236,26 @@ impl<'a> Points<'a> {
     pub fn parse(&mut self, device: &Device, addr: &str) -> Result<PointInfo, Error> {
         if let Some(e) = not_in_build(device) {
             return Err(e);
+        }
+        if profile_name(&device.driver).is_some() {
+            // Parsed on the profile alone: nothing is opened.
+            let refuse = |d: &Device| -> Result<Box<dyn Driver + Send>, Error> {
+                Err(Error::UnknownDriver(format!(
+                    "{}: not opened to check a map",
+                    d.driver
+                )))
+            };
+            let d = self
+                .loaded
+                .entry(device.id.clone())
+                .or_insert_with(|| {
+                    open_profiled(self.drivers, device, refuse)
+                        .expect("a device: device")
+                        .map_err(|e| e.to_string())
+                })
+                .as_ref()
+                .map_err(|e| Error::UnknownDriver(e.clone()))?;
+            return d.parse(addr);
         }
         let Some(bytes) = guest(self.drivers, device) else {
             return parse_point_on(device, addr);
