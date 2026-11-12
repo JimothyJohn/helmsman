@@ -10,14 +10,26 @@ with each step pointing at the control it is about.
 
 ## Running
 
-A project opens running. The glyphs over the diagram run or stop it
-(<kbd>Ctrl</kbd> <kbd>Enter</kbd>; <kbd>Shift</kbd> <kbd>F8</kbd> stops),
-step one scan while stopped (<kbd>F8</kbd>), and restart from initial
-values with the clock at zero. The same three buttons and keys are in
-the Monitor's header. The state in the header says which it is; the
-clock beside it is the program's own time.
+A project opens running. The glyphs over the diagram run or pause it
+(<kbd>Ctrl</kbd> <kbd>Enter</kbd>), stop it (<kbd>Shift</kbd>
+<kbd>F8</kbd>), step it (<kbd>F8</kbd>, while paused or stopped), and
+restart it from initial values with the clock at zero. The same buttons
+and keys are in the Monitor's header. The state beside the glyphs says
+which it is; the clock with it is the program's own time.
 
-<img src="img/monitor-stopped.png" alt="The Monitor's header with the program stopped: run, step and restart beside the crumbs." width="700">
+Pause holds the program where it is: every variable and output keeps its
+value and the clock stands until you run or step. Stop ends the run: the
+variables go back to their initial values, the outputs go off, the clock
+and the trend go to zero, and the diagram shows no values until the
+program runs again.
+
+Step runs to the next change. It scans until a value changes or the
+program takes another path through its statements, and shows that scan.
+A timer's elapsed time counting up does not count as a change, so a step
+lands on the scan where the timer's output turns on. If nothing changes in 60 seconds of program time, the step stops
+there and the Messages tab says so.
+
+<img src="img/monitor-stopped.png" alt="The Monitor's header with the program paused: run, stop, step and restart beside the crumbs." width="700">
 
 One program runs in the page at a time. Opening or deploying another
 stops the one before.
@@ -28,8 +40,7 @@ Pick a block in the diagram and press <kbd>Shift</kbd> <kbd>F9</kbd> (or
 **Edit › Breakpoint**): a red dot marks it. The next scan that reaches
 the block stops just before it runs, the simulation stops with it, and
 the diagram and every value show the scan as it stood at that moment.
-The block is framed in orange and the notice under the header names its
-line. <kbd>F8</kbd> runs the rest of that scan.
+The block is framed in orange and the Messages tab names its line. <kbd>F8</kbd> runs the rest of that scan.
 <kbd>Ctrl</kbd> <kbd>Enter</kbd> goes on to the next stop: the same
 block's next pass in a loop, another breakpoint, or the next scan. An
 input you change while stopped shows at once in what the diagram shows.
@@ -98,7 +109,8 @@ lane's scale is at its right edge: it rounds out to an even step and
 moves only when the values cross one. Pin from the tab's list. History
 restarts when you change the set. To put the lanes in another order,
 drag a lane's name up or down and drop it on the lane it should take;
-its history moves with it.
+its history moves with it. Click a lane's name to pick that signal's
+colour from the palette; the browser keeps your choice.
 
 ![The Trend tab: three pinned signals, the Window slider, a lane each with its scale at the right edge.](img/trend.png)
 

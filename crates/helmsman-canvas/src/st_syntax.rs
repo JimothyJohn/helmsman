@@ -248,6 +248,7 @@ END_PROGRAM
             let lines = Lines {
                 errors: &[(12, 3)],
                 warnings: &[],
+                hints: &[],
             };
             let job = highlight(SRC, &lines, Some(11), &[], &FontId::monospace(17.0), 400.0, &t);
             assert_eq!(job.text, SRC);
@@ -287,6 +288,50 @@ END_PROGRAM
                 }
             }
         }
+    }
+
+    /// A hinted word is underlined in the hint's colour, thinly and on no
+    /// ground; an error or a warning on the same line is what shows.
+    #[test]
+    fn a_hint_underlines_its_word_unless_the_line_has_worse() {
+        use crate::editor::{HINT, Lines, highlight};
+        use crate::theme::Theme;
+        use eframe::egui::{Color32, FontId};
+        let t = Theme::dark();
+        let font = FontId::monospace(17.0);
+        // Line 8, column 3: `count`.
+        let at = SRC.find("count").unwrap();
+        let under = |lines: &Lines| {
+            let job = highlight(SRC, lines, None, &[], &font, 400.0, &t);
+            let s = job
+                .sections
+                .iter()
+                .find(|s| s.byte_range.start.0 <= at && at < s.byte_range.end.0)
+                .unwrap();
+            (
+                s.format.underline.width,
+                s.format.underline.color,
+                s.format.background,
+            )
+        };
+        let hinted = under(&Lines {
+            errors: &[],
+            warnings: &[],
+            hints: &[(8, 3)],
+        });
+        assert_eq!(hinted, (1.5, t.ink(HINT), Color32::TRANSPARENT));
+        let warned = under(&Lines {
+            errors: &[],
+            warnings: &[(8, 3)],
+            hints: &[(8, 3)],
+        });
+        assert_eq!(warned.1, crate::st_view::brand::WARN, "the warning shows");
+        let plain = under(&Lines {
+            errors: &[],
+            warnings: &[],
+            hints: &[],
+        });
+        assert_eq!(plain.0, 0.0, "no hint, no underline");
     }
 
     /// Case is the writer's: `var_input` and `Start` colour as theirs.

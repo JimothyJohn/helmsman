@@ -220,6 +220,8 @@ pub struct Chrome {
     /// signal's name, lower-cased, and its place in the trend's palette.
     /// A signal not here takes its lane's colour.
     pub colors: Vec<(String, usize)>,
+    /// The style hints of the file in the Code tab (`crate::st_hints`).
+    pub hints: crate::st_hints::Hints,
 }
 
 impl Default for Chrome {
@@ -241,6 +243,7 @@ impl Default for Chrome {
             st_marks: None,
             wrap: true,
             colors: Vec::new(),
+            hints: crate::st_hints::Hints::default(),
         }
     }
 }
@@ -930,6 +933,10 @@ pub fn show(ui: &mut egui::Ui, chrome: &mut Chrome, body: &mut dyn Body) {
             }
         });
     chrome.trend = trend;
+    // The open file's style hints, once the typing has settled.
+    if let Some(line) = chrome.hints.settled(now) {
+        body.messages().info(now, line);
+    }
 
     egui::CentralPanel::no_frame().show(ui, |ui| {
         chrome.diagram = ui.available_rect_before_wrap();
@@ -995,9 +1002,13 @@ pub fn st_editor(
         crate::find::select(ui.ctx(), id, s, r.clone(), true);
     }
     let t = theme(ui);
+    let now = ui.input(|i| i.time);
+    let hinted: Vec<helmsman_iec::hints::Hint> = chrome.hints.of(text.as_str(), now).to_vec();
+    let hints: Vec<(u32, u32)> = hinted.iter().map(|h| (h.pos.line, h.pos.col)).collect();
     let lines = Lines {
         errors: diags,
         warnings: warns,
+        hints: &hints,
     };
     let marks: Vec<(std::ops::Range<usize>, Color32)> = found
         .as_ref()
@@ -1055,6 +1066,8 @@ pub fn st_editor(
                         crate::theme::theme(ui).ink(RED)
                     } else if warned {
                         crate::theme::theme(ui).ink(crate::st_view::brand::WARN)
+                    } else if hints.iter().any(|(l, _)| *l as usize == n) {
+                        t.ink(HINT)
                     } else if here {
                         t.accent
                     } else {
@@ -1100,6 +1113,7 @@ pub fn st_editor(
                     ui.ctx().request_repaint();
                 }
                 removed_rules(ui, &out, &agent.removed, chrome);
+                hint_tips(ui, &out, &hinted, chrome);
                 out.response.response
             })
             .inner
@@ -1143,6 +1157,61 @@ pub fn file_header(ui: &mut egui::Ui, chrome: &mut Chrome, name: &str, tip: &str
         .inner
         .tip(tip);
     chrome.hit("code file", r.rect);
+}
+
+/// A style hint's colour: a calm blue, apart from the red of an error
+/// and the orange of a warning.
+pub const HINT: Color32 = Color32::from_rgb(0x6E, 0xC6, 0xFF);
+
+/// What each hinted line says, on hover (Nick, 2026-11-11: style hints
+/// are a lighter level: an underline and a word on request, no list).
+/// The hits are `hint <line>`.
+fn hint_tips(
+    ui: &egui::Ui,
+    out: &egui::text_edit::TextEditOutput,
+    hints: &[helmsman_iec::hints::Hint],
+    chrome: &mut Chrome,
+) {
+    if hints.is_empty() {
+        return;
+    }
+    // Each source line's rows, top to bottom, by 1-based line number.
+    let mut spans: Vec<(f32, f32)> = Vec::new();
+    let mut first = true;
+    for r in &out.galley.rows {
+        let (top, bottom) = (r.rect().top(), r.rect().bottom());
+        if first {
+            spans.push((top, bottom));
+        } else if let Some(s) = spans.last_mut() {
+            s.1 = bottom;
+        }
+        first = r.ends_with_newline;
+    }
+    let left = out.galley_pos.x;
+    let right = out.response.rect.right();
+    let mut said: Vec<u32> = Vec::new();
+    for h in hints {
+        let line = h.pos.line;
+        let Some(&(top, bottom)) = spans.get(line.saturating_sub(1) as usize) else {
+            continue;
+        };
+        if said.contains(&line) {
+            continue;
+        }
+        said.push(line);
+        let band = Rect::from_min_max(
+            Pos2::new(left, out.galley_pos.y + top),
+            Pos2::new(right, out.galley_pos.y + bottom),
+        );
+        let text: Vec<String> = hints
+            .iter()
+            .filter(|o| o.pos.line == line)
+            .map(|o| format!("Hint: {}.", o.msg))
+            .collect();
+        ui.interact(band, out.response.id.with(("hint", line)), egui::Sense::hover())
+            .on_hover_text(format!("{}\nA hint never stops a deploy.", text.join("\n")));
+        chrome.hit(format!("hint {line}"), band);
+    }
 }
 
 /// Where the Agent's change removed lines: a red rule between the rows
@@ -1228,6 +1297,9 @@ pub fn numbering(rows: impl Iterator<Item = bool>) -> Vec<(usize, bool)> {
 pub struct Lines<'a> {
     pub errors: &'a [(u32, u32)],
     pub warnings: &'a [(u32, u32)],
+    /// Style hints (`helmsman_iec::hints`): the lightest mark, and only
+    /// on a line with no error or warning.
+    pub hints: &'a [(u32, u32)],
 }
 
 /// The ST as a layout wrapped at `wrap` points: a line with a diagnostic
@@ -1276,7 +1348,8 @@ pub fn highlight(
         base += line.len();
         let error = diags.iter().find(|(l, _)| *l == n);
         let warn = warns.iter().find(|(l, _)| *l == n);
-        let Some(&(_, col)) = error.or(warn) else {
+        let hint = lines.hints.iter().find(|(l, _)| *l == n);
+        let Some(&(_, col)) = error.or(warn).or(hint) else {
             let format = if at == Some(n) {
                 TextFormat {
                     background: t.rule,
@@ -1302,8 +1375,10 @@ pub fn highlight(
                 RED,
                 1.5,
             )
-        } else {
+        } else if warn.is_some() {
             (plain.clone(), crate::st_view::brand::WARN, 3.0)
+        } else {
+            (plain.clone(), t.ink(HINT), 1.5)
         };
         // Columns count characters from 1.
         let start = line

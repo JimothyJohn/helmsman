@@ -332,11 +332,7 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
         ),
         Step::Agent => (
             "Ask the agent",
-            "The Agent tab changes the program from an instruction in plain words. Its answer is \
-             compiled and tested before it is written into the file. In the playground it runs on \
-             your own API key, held in this page. Paste a key and ask for a change, for example \
-             \"keep the lamp on for 1 s and off for 2 s\", or skip this step."
-                .into(),
+            agent_step(crate::claude::FREE_CHAT_URL.is_some()).into(),
         ),
         Step::Done => (
             "That is the whole loop",
@@ -345,6 +341,23 @@ pub fn words(step: Step, seen: &Seen, deploy: &str) -> (&'static str, String) {
              Deploy, remote I/O in Devices, and the keyboard shortcuts."
                 .into(),
         ),
+    }
+}
+
+/// The Agent step's words. A page built with the free chat (`free`) has no
+/// key to paste; the others run on the visitor's own.
+#[must_use]
+pub fn agent_step(free: bool) -> &'static str {
+    if free {
+        "The Agent tab changes the program from an instruction in plain words. Its answer is \
+         compiled and tested before it is written into the file. In the playground it is free \
+         to try during the early release. Ask for a change, for example \"keep the lamp on for \
+         1 s and off for 2 s\", or skip this step."
+    } else {
+        "The Agent tab changes the program from an instruction in plain words. Its answer is \
+         compiled and tested before it is written into the file. In the playground it runs on \
+         your own API key, held in this page. Paste a key and ask for a change, for example \
+         \"keep the lamp on for 1 s and off for 2 s\", or skip this step."
     }
 }
 

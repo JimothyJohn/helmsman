@@ -15,9 +15,9 @@ One row along the top.
   each pane, and has Light mode (dark is the default; the browser
   remembers your choice). Help opens these pages, the keyboard table, and About
   Helmsman (the version and build).
-- **The state**: `running`, `stopped` or `faulted`, green when running,
-  red otherwise, with the program's clock. On a box this is the link to
-  the box instead.
+- On a box, **the link**: whether the page is connected to the box. The
+  simulation's state and clock sit beside the run glyphs over the
+  diagram.
 - On the right: the project's name, a mark when it has unsaved edits, the
   **Editor | Monitor** toggle, a yellow **waiting** badge when proposals
   wait for an approver (it opens the Proposals screen) and, on a box,
@@ -25,22 +25,30 @@ One row along the top.
 
 <img src="img/file-menu.png" alt="The File menu open: New project, Copy project, Save, Deploy, Upload and Download, each with its key." width="520">
 
-If something needs saying, a line appears under the header while it is
-true: a fault, a deploy under way or refused, a file someone else saved
-since you opened it (with a Reload). The Messages tab along the bottom
-keeps those lines after they have gone.
+Anything the page has to say is in the **Messages** tab of the bottom
+panel. Its first rows are what is true now: a fault, a deploy under way
+or refused, a file someone else saved since you opened it (with a
+Reload). Under them is the log of what happened. When an error comes in
+the tab turns red and pulses for a few seconds, and it stays red until
+you have looked at it and the error no longer stands. If the bottom
+panel was shut, an error opens it.
 
 ![The same screen in light mode, View › Light mode.](img/editor-light.png)
 
 ## The glyphs
 
 A strip of buttons sits over the diagram's top-right corner. In the
-simulation: run or stop (<kbd>Ctrl</kbd> <kbd>Enter</kbd>), step one scan
-(<kbd>F8</kbd>, when stopped), and restart from initial values. On both:
-save, upload a file into the project, download the project as a `.zip`,
-and **?** for these pages. Hover one for its name and key.
+simulation it starts with the state (`running`, `paused`, `stopped` or
+`faulted`) and the program's clock, then: run or pause (<kbd>Ctrl</kbd>
+<kbd>Enter</kbd>), stop (<kbd>Shift</kbd> <kbd>F8</kbd>), step to the
+next change (<kbd>F8</kbd>, while paused or stopped), and restart from
+initial values. Pause holds every value where it is. Stop ends the run:
+the values go back to their initial ones, the outputs go off and the
+clock goes to zero. On both: save, upload a file into the project,
+download the project as a `.zip`, and **?** for these pages. Hover one
+for its name and key.
 
-<img src="img/glyphs.png" alt="The glyph strip: stop, step, restart, then save, upload and download." width="300">
+<img src="img/glyphs.png" alt="The glyph strip: the state and clock, pause, stop, step, restart, then save, upload and download." width="485">
 
 ## The diagram
 
@@ -65,8 +73,9 @@ you cannot draw into it. What you can do:
   type and keeps it when you press <kbd>Enter</kbd> (<kbd>Esc</kbd> puts
   the old value back). In the simulation these are the virtual inputs;
   on a box they are forces (see [On a box](box.html)).
-- **Go into a block.** Double-click a function block instance to see its
-  own diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the breadcrumbs come back
+- **Go into a block.** A function block instance with a diagram of its
+  own is drawn as a stack of cards with a double chevron in its header.
+  Double-click it to see that diagram; <kbd>Alt</kbd> <kbd>↑</kbd> or the breadcrumbs come back
   up. From the keyboard, pick the instance and press <kbd>Alt</kbd>
   <kbd>]</kbd> to go in and <kbd>Alt</kbd> <kbd>[</kbd> to come out (the
   instance stays picked, so <kbd>Alt</kbd> <kbd>]</kbd> goes back in).
@@ -146,17 +155,25 @@ label is drawn, the icon stands alone at a readable size.
   signal into the map. When that signal is one of the program's inputs,
   in the same unit, the simulation runs the model from it: set it in
   the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>): the
-  Structured Text editor, headed by the open file's name. Errors are
+  Structured Text editor, headed by the open file's name. The code is
+  coloured by what each word is: keywords, types, numbers and times,
+  comments, the program's inputs and outputs, and addresses. Errors are
   marked on the line as you type; the program running does not change
-  until you deploy. The word-wrap button beside the file name wraps long
+  until you deploy. A hint is underlined in blue: a variable that is
+  never used, one that is set and never read, or a variable assigned to
+  itself. Hover its line for what it says. A hint never stops a deploy. The word-wrap button beside the file name wraps long
   lines at the pane's width, or, off, keeps each line on one row with a
   scroll bar under the code; the choice is kept with the layout. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.
   A double click on any tab, on this pane or the side panel, hides that
-  pane.
+  pane. The tabs are glyphs; hover one for its name. A hidden pane keeps
+  its tabs down the strip at the edge, and a click on one opens the pane
+  on that tab.
 - **The bottom panel** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>2</kbd>): the **Trend** of the
-  signals you pin, with a long time axis, and **Messages**, the last two
-  hundred things the page had to say, with the error count on the tab.
+  signals you pin, with a long time axis, and **Messages**: what needs
+  saying now, then the last two hundred things the page had to say, with
+  the error count beside the tab. Tick or untick info, warnings and
+  errors to list or leave out each.
 - **The side panel**, on the right (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>3</kbd>): **I/O**,
   every input and output with its value and a control for each input the
   diagram does not show; **Requirements**, the project's requirement tests,

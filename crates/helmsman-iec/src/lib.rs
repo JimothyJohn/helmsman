@@ -112,6 +112,7 @@ pub mod ast {
 
 mod check;
 mod fmath;
+pub mod hints;
 mod interp;
 pub mod l5x;
 pub mod ladder;

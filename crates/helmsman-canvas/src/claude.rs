@@ -30,6 +30,26 @@ pub const PROXY_HELLO: &str = "helmsman-playground-proxy ok";
 /// A header only the page sends: a cross-site form cannot, and a script
 /// on another site would need a preflight the proxy never grants.
 pub const PROXY_MARK: (&str, &str) = ("x-helmsman-playground", "1");
+/// The free chat's address, set when the page is built
+/// (`HELMSMAN_FREE_CHAT_URL`, the relay's demo function, no trailing
+/// slash). Unset: the page asks for the visitor's own key, as before.
+/// Set: the Agent tab sends instructions there and has no key field.
+pub const FREE_CHAT_URL: Option<&str> = option_env!("HELMSMAN_FREE_CHAT_URL");
+/// The free chat takes at most this many bytes in one request (the relay
+/// refuses more than 256 KiB) and this many messages (the relay: 40).
+pub const FREE_MAX_BODY: usize = 200 * 1024;
+pub const FREE_MAX_MESSAGES: usize = 39;
+/// The longest "other" answer the survey keeps, in characters.
+pub const SURVEY_OTHER_CHARS: usize = 40;
+/// The survey's answers: what the relay counts, and the button's words.
+pub const SURVEY_CHOICES: [(&str, &str); 6] = [
+    ("anthropic", "Anthropic"),
+    ("openai", "OpenAI"),
+    ("google", "Google"),
+    ("deepseek", "DeepSeek"),
+    ("own-hardware", "A model on my own hardware"),
+    ("no-preference", "No preference"),
+];
 /// The Messages API version this request shape was checked against.
 pub const API_VERSION: &str = "2026-10-21";
 /// Server-side refusal fallback (`fallbacks: "default"`).
@@ -116,6 +136,9 @@ pub enum Route {
     Direct(ApiKey),
     /// The local proxy adds the key.
     Proxy,
+    /// The free chat at this address ([`FREE_CHAT_URL`]): no key, and the
+    /// relay there holds the prompt and picks the model.
+    Free(String),
 }
 
 /// One earlier turn sent back as context: what the user message said and
@@ -166,7 +189,7 @@ pub struct Context<'a> {
 /// An HTTP request ready for `fetch`. `Debug` hides the key.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Request {
-    pub url: &'static str,
+    pub url: String,
     headers: Vec<(&'static str, String)>,
     pub body: String,
 }
@@ -323,10 +346,58 @@ fn finish(route: &Route, model: Model, mut body: Json) -> Request {
             headers.push((PROXY_MARK.0, PROXY_MARK.1.into()));
             PROXY_URL
         }
+        // Built by `free_request`, never here.
+        Route::Free(_) => "",
     };
     Request {
-        url,
+        url: url.to_string(),
         headers,
+        body: body.to_string(),
+    }
+}
+
+/// The free chat's request: the turns and nothing else. The relay there
+/// pins the prompt, the model and the output cap, and refuses a body that
+/// names any of them. Earlier turns are dropped, oldest first, until the
+/// body fits [`FREE_MAX_BODY`] and [`FREE_MAX_MESSAGES`].
+fn free_request(base: &str, history: &[Exchange], user: &str) -> Request {
+    // Measured as sent: JSON escaping makes a program longer than it is.
+    let body_from = |from: usize| {
+        let mut messages = Vec::new();
+        for e in &history[from..] {
+            messages.push(json!({"role": "user", "content": e.asked}));
+            messages.push(json!({"role": "assistant", "content": e.answer}));
+        }
+        messages.push(json!({"role": "user", "content": user}));
+        json!({"messages": messages}).to_string()
+    };
+    let mut from = history.len().saturating_sub((FREE_MAX_MESSAGES - 1) / 2);
+    let mut body = body_from(from);
+    while body.len() > FREE_MAX_BODY && from < history.len() {
+        from += 1;
+        body = body_from(from);
+    }
+    Request {
+        url: format!("{base}/demo/v1/messages"),
+        headers: vec![("content-type", "application/json".to_string())],
+        body,
+    }
+}
+
+/// The survey answer for the free chat at `base`: one of
+/// [`SURVEY_CHOICES`]' ids, or `other` with the visitor's own words cut to
+/// [`SURVEY_OTHER_CHARS`] characters.
+#[must_use]
+pub fn survey_request(base: &str, choice: &str, other: &str) -> Request {
+    let other: String = other.trim().chars().take(SURVEY_OTHER_CHARS).collect();
+    let body = if choice == "other" {
+        json!({"choice": "other", "other": other})
+    } else {
+        json!({"choice": choice})
+    };
+    Request {
+        url: format!("{base}/demo/v1/survey"),
+        headers: vec![("content-type", "application/json".to_string())],
         body: body.to_string(),
     }
 }
@@ -336,6 +407,9 @@ fn finish(route: &Route, model: Model, mut body: Json) -> Request {
 /// prompt cached.
 #[must_use]
 pub fn request(route: &Route, model: Model, history: &[Exchange], user: &str) -> Request {
+    if let Route::Free(base) = route {
+        return free_request(base, history, user);
+    }
     let mut messages = Vec::new();
     for e in context_pages(history) {
         messages.push(json!({"role": "user", "content": e.asked}));
@@ -578,6 +652,7 @@ impl Answer {
             .and_then(|e| e["error"]["message"].as_str())
             .unwrap_or("");
         let why = match status {
+            _ if kind == FREE_CLOSED => FREE_CLOSED_TEXT.into(),
             401 => {
                 "The API refused the key (401). Check it, or make a new one at platform.claude.com.".into()
             }
@@ -869,12 +944,56 @@ pub enum Proxy {
     No,
 }
 
+/// The relay's error type for a free chat that is closed.
+pub const FREE_CLOSED: &str = "free_chat_closed";
+/// What the Agent tab says then.
+pub const FREE_CLOSED_TEXT: &str = "The free chat is closed for now.";
+
+/// The free chat, as the page knows it. Only the browser's transport and
+/// the tests ever hear from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub enum Free {
+    /// Asked, no answer yet.
+    Checking,
+    Open,
+    /// Closed. `reopens`: it comes back by itself (the day's free turns
+    /// are used up); otherwise someone has to reopen it.
+    Closed {
+        reopens: bool,
+    },
+    /// The page could not reach it.
+    Unreachable,
+}
+
+impl Free {
+    /// The status reply's body (`{"open": true}` or `{"open": false,
+    /// "reopens_by_itself": bool}`); anything else reads as unreachable.
+    #[must_use]
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub fn from_status(body: &str) -> Self {
+        let Ok(v) = serde_json::from_str::<Json>(body) else {
+            return Self::Unreachable;
+        };
+        match v["open"].as_bool() {
+            Some(true) => Self::Open,
+            Some(false) => Self::Closed {
+                reopens: v["reopens_by_itself"].as_bool().unwrap_or(false),
+            },
+            None => Self::Unreachable,
+        }
+    }
+}
+
 /// What the transport hands back. `seq` ties a reply to its question, so
 /// a stopped or superseded one is dropped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub enum Incoming {
     Proxy(bool),
+    /// What the free chat said about itself (`GET /demo/v1/status`), or
+    /// that it could not be asked.
+    Free(Free),
     /// A non-200 answer and its body.
     Status {
         seq: u64,
@@ -907,6 +1026,13 @@ pub struct Chat {
     pub model: Model,
     pub answer: Option<Answer>,
     pub proxy: Proxy,
+    /// The free chat's address when this page was built with one
+    /// ([`FREE_CHAT_URL`]); then there is no key field.
+    free_base: Option<String>,
+    /// What the free chat last said about itself.
+    pub free: Free,
+    /// The survey answer went out (it is asked once).
+    pub surveyed: bool,
     seq: u64,
     sse: Sse,
     store: Box<dyn KeyStore>,
@@ -944,6 +1070,11 @@ impl Chat {
             model: Model::default(),
             answer: None,
             proxy: Proxy::Checking,
+            free_base: FREE_CHAT_URL
+                .map(|u| u.trim().trim_end_matches('/').to_string())
+                .filter(|u| !u.is_empty()),
+            free: Free::Checking,
+            surveyed: false,
             seq: 0,
             sse: Sse::default(),
             store,
@@ -1019,13 +1150,51 @@ impl Chat {
     /// # Errors
     /// Why no question can be sent.
     pub fn route(&self) -> Result<Route, &'static str> {
-        match self.proxy {
-            Proxy::Yes => Ok(Route::Proxy),
-            Proxy::Checking => Err("Checking for a local proxy…"),
-            Proxy::No => ApiKey::new(&self.key)
+        match (self.proxy, &self.free_base) {
+            (Proxy::Yes, _) => Ok(Route::Proxy),
+            (Proxy::Checking, _) => Err("Checking for a local proxy…"),
+            (Proxy::No, Some(base)) => match self.free {
+                Free::Open => Ok(Route::Free(base.clone())),
+                Free::Checking => Err("Checking the free chat…"),
+                Free::Closed { .. } => Err(FREE_CLOSED_TEXT),
+                Free::Unreachable => Err("The free chat cannot be reached from here."),
+            },
+            (Proxy::No, None) => ApiKey::new(&self.key)
                 .map(Route::Direct)
                 .ok_or("Paste an Anthropic API key first."),
         }
+    }
+
+    /// The free chat's address, when this page has one and no local proxy
+    /// stands in for it: then the Agent tab shows no key field and no
+    /// model picker.
+    #[must_use]
+    pub fn free_base(&self) -> Option<&str> {
+        match self.proxy {
+            Proxy::Yes => None,
+            Proxy::Checking | Proxy::No => self.free_base.as_deref(),
+        }
+    }
+
+    /// Makes this the free chat at `base` (a build sets it from
+    /// [`FREE_CHAT_URL`]; tests set it here).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn set_free_base(&mut self, base: &str) {
+        self.free_base = Some(base.trim_end_matches('/').to_string());
+        self.free = Free::Checking;
+    }
+
+    /// The survey answer to send, once: `choice` is one of
+    /// [`SURVEY_CHOICES`]' ids or `other` with `other`'s words. `None`
+    /// when it was already answered, when there is no free chat, or when
+    /// `other` is empty.
+    pub fn survey(&mut self, choice: &str, other: &str) -> Option<Request> {
+        let base = self.free_base.as_deref()?;
+        if self.surveyed || (choice == "other" && other.trim().is_empty()) {
+            return None;
+        }
+        self.surveyed = true;
+        Some(survey_request(base, choice, other))
     }
 
     #[must_use]
@@ -1072,7 +1241,18 @@ impl Chat {
         let now = self.seq;
         match msg {
             Incoming::Proxy(yes) => self.proxy = if yes { Proxy::Yes } else { Proxy::No },
+            Incoming::Free(state) => self.free = state,
             Incoming::Status { seq, status, body } if seq == now => {
+                // A turn the free chat turned away because it closed
+                // meanwhile: the tab shows the closed message from here on.
+                if self.free_base.is_some()
+                    && let Ok(v) = serde_json::from_str::<Json>(&body)
+                    && v["error"]["type"] == FREE_CLOSED
+                {
+                    self.free = Free::Closed {
+                        reopens: v["error"]["retryable"].as_bool().unwrap_or(false),
+                    };
+                }
                 if let Some(a) = &mut self.answer {
                     a.refused(status, &body);
                 }
