@@ -970,7 +970,7 @@ impl BoxProjects {
         let Some(o) = &mut self.open else { return 0 };
         let mut changed = 0;
         for (name, b) in &mut o.bufs {
-            if !name.ends_with(".st") || !b.dirty() || b.saving.is_some() {
+            if !crate::sim_projects::is_st(name) || !b.dirty() || b.saving.is_some() {
                 continue;
             }
             let tidy = helmsman_iec::tidy::format(&b.text);

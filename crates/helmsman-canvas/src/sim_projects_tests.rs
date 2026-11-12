@@ -185,9 +185,9 @@ fn a_project_of_several_files_deploys_in_the_page_and_errors_point_at_their_file
     *v.proj.current_text_mut().unwrap() = MAIN.replace("lamp := l.q;", "lamp := l.q +;");
     v.deploy();
     let d = v.diags();
-    assert_eq!((d[0].file.as_str(), d[0].line), ("main.st", 6), "{d:?}");
+    assert_eq!((d[0].file.as_str(), d[0].line), ("main.st", 13), "{d:?}");
     assert!(v.notice.as_ref().unwrap().contains("does not compile"));
-    // Clicking it (in the app) opens main.st at line 6.
+    // Clicking it (in the app) opens main.st at line 13.
     v.proj.open_file("blocks.st");
     let mut app = App::sim();
     app.sim = Some(v);
@@ -202,7 +202,7 @@ fn a_project_of_several_files_deploys_in_the_page_and_errors_point_at_their_file
         .center();
     click(&ctx, &mut app, at, 1.0);
     assert_eq!(app.sim.as_ref().unwrap().proj.current, "main.st");
-    assert_eq!(app.chrome.line, Some(6));
+    assert_eq!(app.chrome.line, Some(13));
 }
 
 #[test]
@@ -660,9 +660,9 @@ fn the_log_keeps_refused_deploys_faults_and_state_changes() {
 #[test]
 fn the_agents_answer_becomes_a_named_project_or_file_and_asks_about_edits() {
     use crate::playground_view::answer_name;
-    assert_eq!(answer_name("PROGRAM Lamp_Test\nEND_PROGRAM\n"), "lamp_test");
+    assert_eq!(answer_name("PROGRAM Lamp_Test\nEND_PROGRAM"), "lamp_test");
     assert_eq!(
-        answer_name("(* x *) FUNCTION_BLOCK Debounce VAR\nEND_VAR\nEND_FUNCTION_BLOCK\n"),
+        answer_name("(* x *) FUNCTION_BLOCK Debounce VAR END_VAR END_FUNCTION_BLOCK"),
         "debounce"
     );
     assert_eq!(answer_name("x := 1;"), "agent");
@@ -882,4 +882,116 @@ fn a_stored_project_and_its_history_survive_a_layout_that_does_not_read_and_an_u
     *store.main.borrow_mut() = Some(unsafe_name);
     let s = SimProjects::load(Box::new(store));
     assert!(s.storage_problem.is_some() && !s.saved.contains_key("mine"));
+}
+
+// ---- Structured Text is formatted on Save and on Deploy (Nick, 2026-11-11) ----
+
+/// A valid program in no particular layout: lower-case keywords, whole
+/// sections on one line, no final line end.
+const MESSY: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nif start then lamp := TRUE; else lamp := FALSE; end_if;\nEND_PROGRAM";
+
+/// A program in a layout of its own, which a save must not touch unless
+/// its file was edited.
+const OTHER: &str = "PROGRAM other\nVAR x : INT; END_VAR\nx := 1;\nEND_PROGRAM\n";
+
+/// A project `name` saved as it is given, with no formatting (`save_as`
+/// does none), so what a test calls untouched is untouched.
+fn seeded(name: &str, files: &[(&str, &str)]) -> SimProjects {
+    let mut p = SimProjects::load(Box::new(Shared::default()));
+    p.create(name, None);
+    p.files.clear();
+    for (n, t) in files {
+        p.files.insert((*n).to_string(), (*t).to_string());
+    }
+    p.save_as("seeded", None);
+    assert!(!p.dirty(), "{:?}", p.notice);
+    p
+}
+
+/// Nick, 2026-11-11: Save puts an edited `.st` file in the one layout. A
+/// `.st` file with no edits and a file that is not Structured Text
+/// (io.map, edited or not) are kept byte for byte, and saving again
+/// changes nothing.
+#[test]
+fn save_formats_an_edited_st_file_and_leaves_the_others_byte_for_byte() {
+    let map = "in   start   bool   box   di:0\n";
+    let mut p = seeded(
+        "fmt",
+        &[
+            ("main.st", OTHER),
+            ("other.st", OTHER),
+            ("io.map", "in start bool box di:0\n"),
+        ],
+    );
+    // main.st and io.map are edited; other.st is not touched.
+    p.files.insert("main.st".into(), MESSY.into());
+    p.files.insert("io.map".into(), map.into());
+    let tidy = helmsman_iec::tidy::format(MESSY);
+    assert_ne!(tidy, MESSY, "the fixture needs formatting");
+    assert!(tidy.contains("IF start THEN"), "keywords in capitals: {tidy}");
+
+    p.save();
+    assert!(!p.dirty(), "{:?}", p.notice);
+    let stored = |p: &SimProjects, f: &str| p.saved["fmt"].0[f].clone();
+    assert_eq!(stored(&p, "main.st"), tidy, "the edited file is stored formatted");
+    assert_eq!(p.files["main.st"], tidy, "and the editor shows what was stored");
+    assert_eq!(
+        stored(&p, "io.map"),
+        map,
+        "an edited io.map is not Structured Text"
+    );
+    assert_eq!(stored(&p, "other.st"), OTHER, "untouched, so not rewritten");
+
+    // Saving again: nothing is edited, nothing changes.
+    let before = p.saved["fmt"].0.clone();
+    assert_eq!(p.format(), 0);
+    p.save();
+    assert_eq!(p.saved["fmt"].0, before);
+    assert_eq!(p.files, before);
+}
+
+/// Nick, 2026-11-11: a file that does not compile is still saved: laid
+/// out as far as it goes, and every character that is not white space
+/// (code and comments) survives, keywords apart from their capitals.
+#[test]
+fn a_file_that_does_not_compile_is_still_saved_with_everything_in_it() {
+    let broken = "(* keep me *)\nPROGRAM p\nVAR x : INT; END_VAR\nIF x > 1 THEN x := 2;\n(* and me *) x := x +;\nEND_PROGRAM";
+    let mut p = seeded("broken", &[("main.st", OTHER)]);
+    p.files.insert("main.st".into(), broken.into());
+    p.save();
+    assert!(!p.dirty(), "{:?}", p.notice);
+    let stored = p.saved["broken"].0["main.st"].clone();
+    let bare = |t: &str| {
+        t.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    };
+    assert_eq!(bare(&stored), bare(broken), "nothing lost: {stored}");
+    assert_ne!(stored, broken, "and its layout was tidied: {stored}");
+    assert!(stored.ends_with('\n'), "{stored:?}");
+    assert_eq!(p.files["main.st"], stored);
+}
+
+/// Nick, 2026-11-11: Deploy in the page formats the edited file first, so
+/// the program that runs is the formatted text.
+#[test]
+fn deploy_in_the_page_formats_the_edited_file_and_runs_the_formatted_text() {
+    let mut v = PlaygroundView::with_storage(Box::new(Shared::default()));
+    v.proj.create("run", None);
+    v.open_project("run");
+    v.proj.open_file("main.st");
+    *v.proj.current_text_mut().unwrap() = MESSY.into();
+    let tidy = helmsman_iec::tidy::format(MESSY);
+    v.deploy();
+    assert!(v.session.running, "{:?}", v.notice);
+    assert_eq!(v.proj.files["main.st"], tidy, "the file is the formatted text");
+    assert_eq!(
+        v.session.build.as_ref().expect("a program").src,
+        tidy,
+        "and that is what was built and runs"
+    );
+    assert_eq!(v.session.src, tidy, "the editor's source follows");
+    // The edits stay edits until Save: Deploy does not save.
+    assert!(v.proj.dirty());
 }

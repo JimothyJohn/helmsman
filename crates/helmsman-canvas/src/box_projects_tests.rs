@@ -1106,13 +1106,13 @@ fn compile_errors_name_file_and_line_and_a_click_opens_it_there() {
     let d = v.projects.diags.first().expect("a diagnostic").clone();
     assert_eq!(
         (d.file.as_str(), d.line),
-        ("main.st", 6),
+        ("main.st", 12),
         "{:?}",
         v.projects.diags
     );
     assert_eq!(b.json("/api/running"), before, "nothing changed");
 
-    // In the app: the error under the editor, a click opens main.st at 6.
+    // In the app: the error under the editor, a click opens main.st at 12.
     let session = v.session.clone();
     v.projects.open_file("blocks.st");
     let mut h = Harness::new(v, session);
@@ -1127,7 +1127,7 @@ fn compile_errors_name_file_and_line_and_a_click_opens_it_there() {
         h.bv().projects.open.as_ref().unwrap().current.as_deref(),
         Some("main.st")
     );
-    assert_eq!(h.app.chrome.line, Some(6));
+    assert_eq!(h.app.chrome.line, Some(12));
     h.press("bottom messages");
     assert!(h.app.chrome.rect("deploy failed").is_some());
 }
@@ -2118,7 +2118,7 @@ fn the_agent_on_a_box_checks_against_the_boxs_sizes_and_period() {
     use crate::instruct_tests::LAMP;
     use serde_json::json;
     let big = "PROGRAM lamp\nVAR_INPUT\n  start : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\n  kept : BOOL;\nEND_VAR\nVAR\n  sensor AT %IX20.0 : BOOL;\nEND_VAR\nlamp := start;\nkept := start OR sensor;\nEND_PROGRAM\n";
-    let scenario = "` ` ` st scenario\n(* The kept flag follows start. *)\nPROGRAM test_kept\nVAR_INPUT\n  kept : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  kept_on : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  kept_on(COND := kept);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n` ` `\n";
+    let scenario = "```st scenario\n(* The kept flag follows start. *)\nPROGRAM test_kept\nVAR_INPUT\n  kept : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  kept_on : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  kept_on(COND := kept);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n```\n";
     // The page's simulation cannot hold it; the box can.
     assert!(helmsman_iec::compile(big, crate::playground::SIZES).is_err());
     let b = Bench::new();
@@ -3223,7 +3223,8 @@ fn a_file_made_with_text_holds_that_text_and_a_save_keeps_it() {
     settle(&b, &jar, p);
     assert_eq!(
         b.json("/api/projects/line/files/main-2.st")["text"],
-        format!("{MAIN}(* x *)")
+        helmsman_iec::tidy::format(&format!("{MAIN}(* x *)")),
+        "the save sends the edited file in the one layout (Nick, 2026-11-11)"
     );
 }
 
@@ -3248,7 +3249,8 @@ fn a_rename_keeps_what_was_typed_while_it_was_on_its_way() {
     settle(&b, &jar, p);
     assert_eq!(
         b.json("/api/projects/line/files/moved.st")["text"],
-        typed.as_str()
+        helmsman_iec::tidy::format(&typed),
+        "what was typed is saved, in the one layout (Nick, 2026-11-11)"
     );
 }
 
@@ -3617,7 +3619,7 @@ fn the_boxs_warnings_show_under_the_editor_and_in_the_messages_and_never_stop_th
     assert!(what.starts_with("line is running"), "{what}");
     let d = &v.projects.diags;
     assert_eq!(d.len(), 1, "{d:?}");
-    assert_eq!((d[0].file.as_str(), d[0].line), ("blocks.st", 4), "{d:?}");
+    assert_eq!((d[0].file.as_str(), d[0].line), ("blocks.st", 10), "{d:?}");
     assert_eq!(d[0].severity, Severity::Warning);
     assert!(d[0].message.contains("RETAIN inside a function block"), "{d:?}");
 
@@ -3642,7 +3644,7 @@ fn the_boxs_warnings_show_under_the_editor_and_in_the_messages_and_never_stop_th
         h.bv().projects.open.as_ref().unwrap().current.as_deref(),
         Some("blocks.st")
     );
-    assert_eq!(h.app.chrome.line, Some(4));
+    assert_eq!(h.app.chrome.line, Some(10));
 }
 
 #[test]
@@ -3744,4 +3746,156 @@ fn a_signed_out_first_visit_reports_no_ended_session() {
     };
     p.answer_for(save, &refused, false);
     assert!(p.notice.is_some(), "an act that was refused says so");
+}
+
+// ---- Structured Text is formatted on Save and on Deploy (Nick, 2026-11-11) ----
+
+/// `MAIN` as an engineer might type it: whole sections on a line, keywords
+/// in lower case, no final line end.
+fn messy_main() -> String {
+    MAIN.replace(
+        "VAR_INPUT\n  start : BOOL;\nEND_VAR",
+        "VAR_INPUT start : BOOL; END_VAR",
+    )
+    .replace(
+        "VAR_OUTPUT\n  lamp : BOOL;\nEND_VAR",
+        "VAR_OUTPUT lamp : BOOL; END_VAR",
+    )
+    .replace(
+        "l(set := start, reset := FALSE);\n",
+        "if start then l(set := start, reset := FALSE); end_if;\n",
+    )
+    .trim_end()
+    .to_string()
+}
+
+/// A program on the box in no particular layout, which no edit touches.
+const LOOSE: &str = "PROGRAM loose\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT horn : BOOL; END_VAR\nhorn := start;\nEND_PROGRAM\n";
+
+/// The `text` of a save request.
+fn sent_text(q: &PReq) -> String {
+    let body: Json = serde_json::from_slice(q.body.as_deref().expect("a body")).unwrap();
+    body["text"].as_str().expect("a text").to_string()
+}
+
+/// Nick, 2026-11-11: Save sends the edited `.st` file in the one layout,
+/// and sends nothing for a `.st` file with no edits, however it is laid
+/// out on the box; the box then holds the one and keeps the other as it
+/// was.
+#[test]
+fn save_sends_the_formatted_text_of_an_edited_file_and_nothing_for_an_unedited_one() {
+    use crate::box_projects::PCall;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    p.new_file_with("loose.st", LOOSE);
+    settle(&b, &jar, p);
+    assert!(!p.dirty());
+    assert_eq!(b.json("/api/projects/line/files/loose.st")["text"], LOOSE);
+
+    let typed = messy_main();
+    let tidy = helmsman_iec::tidy::format(&typed);
+    assert_ne!(tidy, typed, "the fixture needs formatting");
+    p.open_file("main.st");
+    p.current_mut().unwrap().text.clone_from(&typed);
+    p.save();
+    assert_eq!(text_of(p, "main.st"), tidy, "the editor shows what is sent");
+    let reqs = p.poll();
+    assert_eq!(reqs.len(), 1, "only the edited file: {reqs:?}");
+    assert!(
+        matches!(&reqs[0].call, PCall::Save { file, .. } if file == "main.st"),
+        "{reqs:?}"
+    );
+    assert_eq!(sent_text(&reqs[0]), tidy);
+    deliver(&b, &jar, p, reqs);
+    settle(&b, &jar, p);
+    assert!(!p.dirty());
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], tidy);
+    assert_eq!(
+        b.json("/api/projects/line/files/loose.st")["text"],
+        LOOSE,
+        "an unedited file is never rewritten"
+    );
+    assert_eq!(text_of(p, "loose.st"), LOOSE);
+
+    // Saving again sends nothing.
+    p.save();
+    assert_eq!(p.poll().len(), 0, "saving again sends nothing");
+}
+
+/// Nick, 2026-11-11: Deploy on an edited file saves the formatted text
+/// first and only then checks, so what the box checks and runs is what
+/// the editor shows.
+#[test]
+fn deploy_saves_the_formatted_text_of_an_edited_file_before_it_checks() {
+    use crate::box_projects::PCall;
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(
+        &b,
+        &jar,
+        p,
+        "line",
+        &[("blocks.st", BLOCKS), ("main.st", MAIN), ("io.map", MAP)],
+    );
+    let typed = messy_main();
+    let tidy = helmsman_iec::tidy::format(&typed);
+    assert_ne!(tidy, typed, "the fixture needs formatting");
+    p.open_file("main.st");
+    p.current_mut().unwrap().text.clone_from(&typed);
+    p.deploy();
+    assert!(matches!(p.deploy, Deploy::Saving), "{:?}", p.deploy);
+    assert_eq!(text_of(p, "main.st"), tidy);
+    let reqs = p.poll();
+    assert_eq!(reqs.len(), 1, "a save, and the check waits for it: {reqs:?}");
+    assert!(
+        matches!(&reqs[0].call, PCall::Save { file, .. } if file == "main.st"),
+        "{reqs:?}"
+    );
+    assert_eq!(sent_text(&reqs[0]), tidy);
+    deliver(&b, &jar, p, reqs);
+    settle(&b, &jar, p);
+    assert!(
+        matches!(p.deploy, Deploy::Done(_)),
+        "{:?} {:?}",
+        p.deploy,
+        p.diags
+    );
+    assert_eq!(b.json("/api/projects/line/files/main.st")["text"], tidy);
+}
+
+/// Nick, 2026-11-11: a file that does not compile is still saved to the
+/// box, laid out as far as it goes, with every character that is not
+/// white space (code and comments) kept.
+#[test]
+fn a_file_that_does_not_compile_is_still_saved_to_the_box_with_everything_in_it() {
+    let b = Bench::new();
+    let jar = Jar::default();
+    let mut v = page(&b, &jar, Some(("alice", ALICE)));
+    let p = &mut v.projects;
+    make(&b, &jar, p, "line", &[("main.st", MAIN)]);
+    let broken = "(* keep me *)\nPROGRAM p\nVAR x : INT; END_VAR\nIF x > 1 THEN x := 2;\n(* and me *) x := x +;\nEND_PROGRAM";
+    p.open_file("main.st");
+    p.current_mut().unwrap().text = broken.to_string();
+    p.save();
+    settle(&b, &jar, p);
+    assert!(!p.dirty(), "{:?}", p.notice);
+    let stored = b.json("/api/projects/line/files/main.st")["text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let bare = |t: &str| {
+        t.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_ascii_lowercase()
+    };
+    assert_eq!(bare(&stored), bare(broken), "nothing lost: {stored}");
+    assert_ne!(stored, broken, "and its layout was tidied: {stored}");
+    assert!(stored.ends_with('\n'), "{stored:?}");
+    assert_eq!(text_of(p, "main.st"), stored);
 }

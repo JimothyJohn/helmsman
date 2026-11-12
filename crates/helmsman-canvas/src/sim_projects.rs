@@ -25,7 +25,6 @@ use crate::projects::{Group, ProjectRow, file_line, slug};
 
 /// Whether `f` is a program file (`NAME.st`).
 #[must_use]
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_st(f: &str) -> bool {
     file_name(f) == Some(FileKind::St)
 }
@@ -573,7 +572,7 @@ impl SimProjects {
         let edited: Vec<String> = self
             .files
             .keys()
-            .filter(|n| n.ends_with(".st") && self.file_dirty(n))
+            .filter(|n| is_st(n) && self.file_dirty(n))
             .cloned()
             .collect();
         let mut changed = 0;

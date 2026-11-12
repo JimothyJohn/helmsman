@@ -38,18 +38,18 @@ pub(crate) fn mine() -> PlaygroundView {
 
 /// A scenario that holds while the lamp follows start.
 pub(crate) fn follows() -> String {
-    "` ` ` st scenario\n(* The lamp follows start. *)\nPROGRAM test_lamp_follows\nVAR_INPUT\n  lamp : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  lamp_on : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  lamp_on(COND := lamp);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n` ` `\n".into()
+    "```st scenario\n(* The lamp follows start. *)\nPROGRAM test_lamp_follows\nVAR_INPUT\n  lamp : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  lamp_on : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  lamp_on(COND := lamp);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n```\n".into()
 }
 
 /// A scenario that fails on `LAMP` and holds once the lamp latches: start
 /// is pressed for a few scans, released, and the lamp must stay on.
 pub(crate) fn latches() -> String {
-    "` ` ` st scenario\n(* The lamp stays on after start is released. *)\nPROGRAM test_lamp_latches\nVAR_INPUT\n  lamp : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  stays_on : ASSERT;\nEND_VAR\nn := n + 1;\nstart := n < 3;\nIF n > 6 THEN\n  stays_on(COND := lamp);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n` ` `\n".into()
+    "```st scenario\n(* The lamp stays on after start is released. *)\nPROGRAM test_lamp_latches\nVAR_INPUT\n  lamp : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  stays_on : ASSERT;\nEND_VAR\nn := n + 1;\nstart := n < 3;\nIF n > 6 THEN\n  stays_on(COND := lamp);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n```\n".into()
 }
 
 /// A scenario that fails on `LAMP` and holds once a `horn` follows start.
 pub(crate) fn horn_follows() -> String {
-    "` ` ` st scenario\n(* The horn sounds with start. *)\nPROGRAM test_horn\nVAR_INPUT\n  horn : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  horn_on : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  horn_on(COND := horn);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n` ` `\n".into()
+    "```st scenario\n(* The horn sounds with start. *)\nPROGRAM test_horn\nVAR_INPUT\n  horn : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  horn_on : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  horn_on(COND := horn);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n```\n".into()
 }
 
 /// An answer: its reason, the whole file `code`, and [`follows`].
@@ -121,7 +121,7 @@ fn last_user(v: &PlaygroundView) -> String {
 
 #[test]
 fn the_reason_is_the_why_line_else_the_first_words() {
-    let a = "Why: the lamp now latches\nUNTIL stop.\n\n    ` ` ` st\nPROGRAM p\nEND_PROGRAM\n` ` `\n";
+    let a = "Why: the lamp now latches until stop.\n\n```st\nPROGRAM p\nEND_PROGRAM\n```\n";
     assert_eq!(reason(a).as_deref(), Some("the lamp now latches until stop."));
     assert_eq!(
         reason("Some words first.\n**Why:** it **blinks** at `2 Hz`.\n```st\nx\n```").as_deref(),
@@ -133,7 +133,7 @@ fn the_reason_is_the_why_line_else_the_first_words() {
         reason("It latches now.\n```st\nx\n```").as_deref(),
         Some("It latches now.")
     );
-    assert_eq!(reason("` ` ` st\nPROGRAM p\nEND_PROGRAM\n` ` `\n"), None, "code alone");
+    assert_eq!(reason("```st\nPROGRAM p\nEND_PROGRAM\n```"), None, "code alone");
     let long = format!("Why: {}", "w".repeat(1000));
     let r = reason(&long).unwrap();
     assert_eq!(r.chars().count(), 300);
@@ -241,7 +241,7 @@ fn the_record_leads_with_the_instruction_and_is_bounded() {
         Some("it latches"),
         "Updated main.st.",
         &c,
-        "Why: it latches\n` ` ` st\nPROGRAM p\nEND_PROGRAM\n` ` `\nWatch start.\n",
+        "Why: it latches\n```st\nPROGRAM p\nEND_PROGRAM\n```\nWatch start.",
     );
     assert!(
         r.starts_with("Instruction: latch it\nFile: main.st\nWhy: it latches\nResult: Updated main.st.\n"),
@@ -428,8 +428,8 @@ fn code_with_no_scenario_is_asked_for_one_once_then_written_unchecked() {
 #[test]
 fn a_fragment_of_the_selection_goes_back_and_the_whole_file_is_written() {
     let mut v = mine();
-    v.selection = Some(("main.st".into(), 4, 4));
-    v.instruct.draft = "comment line 4".into();
+    v.selection = Some(("main.st".into(), 8, 8));
+    v.instruct.draft = "comment line 8".into();
     v.send_instruction(&egui::Context::default());
     let asked = last_user(&v);
     assert!(
@@ -586,10 +586,7 @@ fn the_agents_change_is_marked_on_the_diagram_and_the_code_until_the_next_edit()
 
     // An answer that adds a horn beside the lamp.
     let horn = LAMP
-        .replace(
-            "VAR_OUTPUT lamp : BOOL; END_VAR",
-            "VAR_OUTPUT lamp : BOOL; horn : BOOL; END_VAR",
-        )
+        .replace("  lamp : BOOL;\n", "  lamp : BOOL := FALSE;\n  horn : BOOL;\n")
         .replace("lamp := start;\n", "lamp := start;\nhorn := start;\n");
     instruct(
         &mut v,
@@ -603,10 +600,14 @@ fn the_agents_change_is_marked_on_the_diagram_and_the_code_until_the_next_edit()
     v.agent_marks(&mut chrome);
     let m = chrome.st_marks.clone().expect("the code's marks");
     assert!(m.applies(&v.proj.files["main.st"]), "{m:?}");
-    assert_eq!(m.added, vec![3, 5], "the changed declaration and the horn's line");
+    assert_eq!(
+        m.added,
+        vec![6, 7, 10],
+        "the changed declaration, the horn's and its line"
+    );
     assert_eq!(
         m.removed,
-        vec![(3, vec!["VAR_OUTPUT lamp : BOOL; END_VAR".to_string()])],
+        vec![(6, vec!["  lamp : BOOL;".to_string()])],
         "the declaration it replaced"
     );
     let (added, removed) = v.viewer.as_mut().expect("a diagram").agent_change();
@@ -620,7 +621,7 @@ fn the_agents_change_is_marked_on_the_diagram_and_the_code_until_the_next_edit()
     assert!(labels.iter().any(|l| l.contains("horn")), "{labels:?}");
 
     // The next answer takes the horn out again: its blocks are ghosts.
-    let silent = "` ` ` st scenario replaces test_horn\n(* The horn stays silent. *)\nPROGRAM test_horn\nVAR_INPUT\n  horn : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  horn_off : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  horn_off(COND := NOT horn);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n` ` `\n";
+    let silent = "```st scenario replaces test_horn\n(* The horn stays silent. *)\nPROGRAM test_horn\nVAR_INPUT\n  horn : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  horn_off : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  horn_off(COND := NOT horn);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n```\n";
     instruct(
         &mut v,
         "no horn after all",

@@ -323,7 +323,7 @@ fn an_answer_for_another_file_is_refused_naming_it() {
     let r = apply(
         &s,
         &files,
-        "` ` ` st motor.st\nFUNCTION_BLOCK Motor\nEND_FUNCTION_BLOCK\n` ` `\n",
+        "```st motor.st\nFUNCTION_BLOCK Motor\nEND_FUNCTION_BLOCK\n```",
     )
     .unwrap_err();
     assert_eq!(r.touched, ["motor.st"]);
@@ -365,7 +365,7 @@ fn the_whole_project_in_one_answer_is_refused() {
         "pump.st".into(),
         "FUNCTION_BLOCK Pump\nEND_FUNCTION_BLOCK\n".into(),
     );
-    let all = format!("{MAIN} {MOTOR} FUNCTION_BLOCK Pump\nEND_FUNCTION_BLOCK\n");
+    let all = format!("{MAIN}{MOTOR}FUNCTION_BLOCK Pump\nEND_FUNCTION_BLOCK\n");
     let r = apply(&s, &more, &st(&all)).unwrap_err();
     assert!(r.why.contains("the whole project (motor.st, pump.st)"), "{r}");
     // As several blocks, one per file.
@@ -664,14 +664,14 @@ mod in_the_page {
             "{:?}",
             v.tests
         );
-        // Line 4 selected: edited in place.
-        v.selection = Some(("main.st".into(), 4, 4));
+        // Line 8 (lamp := start;) selected: edited in place.
+        v.selection = Some(("main.st".into(), 8, 8));
         assert_eq!(
             v.scope(),
             Scope::Lines {
                 file: "main.st".into(),
-                from: 4,
-                to: 4
+                from: 8,
+                to: 8
             }
         );
         let said = new.replace("lamp := start; (* same *)", "lamp := start; (* follows start *)");
@@ -757,7 +757,7 @@ mod in_the_page {
         vw.pick = Some(Pick::Node(id));
         let s = v.scope();
         assert!(
-            matches!(&s, Scope::Block { file, from: 4, to: 4, .. } if file == "main.st"),
+            matches!(&s, Scope::Block { file, from: 8, to: 8, .. } if file == "main.st"),
             "{s:?}"
         );
         assert!(s.label().starts_with("Editing: block "), "{}", s.label());
