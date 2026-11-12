@@ -31,6 +31,7 @@ pub mod local;
 pub mod logix;
 pub mod modbus;
 pub mod model;
+pub mod profile;
 pub mod profinet;
 pub mod resolve;
 pub mod rtu;

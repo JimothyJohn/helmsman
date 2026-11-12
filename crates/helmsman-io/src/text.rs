@@ -64,7 +64,7 @@ fn is_ident(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn ty(s: &str) -> Option<Ty> {
+pub(crate) fn ty(s: &str) -> Option<Ty> {
     match s {
         "bool" => Some(Ty::Bool),
         "int" => Some(Ty::Int),

@@ -307,6 +307,18 @@ scan; the scheduler bounds how often.
   combined write-then-read (i2cdev). `helmsman-plc --gpio-chip
   /dev/gpiochipN` picks it; the chip is checked at start. Both features are
   in helmsman-plc's `box`, so the canvas's wasm build has neither.
+- **`profile`** (`device-profiles`, first slice): a device profile is one
+  file per device model (`helmsman-device 1`; vendor, model, kind; the
+  transports that reach it, best first, with their settings; channels by
+  name with type, unit, safe value and their point on every transport).
+  `Profile::map(transport, id, endpoint)` writes the I/O map for one
+  transport, a signal per channel (`rio_di_04_count`), and a profile is
+  accepted only if every transport's map passes the map's own rules.
+  docs/devices/moxa-iologik-e1213.device is the first: it gives the same
+  40 signals over EtherNet/IP and Modbus TCP and agrees with the two maps
+  written by hand. Not yet: a map that binds channels instead of
+  addresses with the box falling back between transports by itself, the
+  canvas's add-by-click, profiles in the device library.
 - **`text`**: the map as a file, one `device` / `in` / `out` line each, with
   optional `unit=`, `poll_ms=` (inputs) and `safe=` (outputs) in any order;
   `in NAME TYPE module MODULE` is another module's output, `out NAME TYPE
