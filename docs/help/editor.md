@@ -155,9 +155,13 @@ label is drawn, the icon stands alone at a readable size.
   signal into the map. When that signal is one of the program's inputs,
   in the same unit, the simulation runs the model from it: set it in
   the I/O tab and the plant follows the sensor. **Code** (<kbd>Alt</kbd> <kbd>Shift</kbd> <kbd>1</kbd>): the
-  Structured Text editor, headed by the open file's name. Errors are
+  Structured Text editor, headed by the open file's name. The code is
+  coloured by what each word is: keywords, types, numbers and times,
+  comments, the program's inputs and outputs, and addresses. Errors are
   marked on the line as you type; the program running does not change
-  until you deploy. The word-wrap button beside the file name wraps long
+  until you deploy. A hint is underlined in blue: a variable that is
+  never used, one that is set and never read, or a variable assigned to
+  itself. Hover its line for what it says. A hint never stops a deploy. The word-wrap button beside the file name wraps long
   lines at the pane's width, or, off, keeps each line on one row with a
   scroll bar under the code; the choice is kept with the layout. The key for a tab
   opens the pane on it, or shuts the pane when that tab already shows.

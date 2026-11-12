@@ -89,7 +89,7 @@ mod tests {
         assert_eq!(h.settled(20.0), None, "said once");
         // Fixed: nothing to say, and nothing said.
         let fixed = SLIP.replace("END_VAR\n", "END_VAR\nspare := spare + 1;\n");
-        assert!(h.of(&fixed, 21.0).is_empty());
+        assert_eq!(h.of(&fixed, 21.0), []);
         assert_eq!(h.settled(30.0), None);
         // Back again: said again.
         h.of(SLIP, 31.0);
