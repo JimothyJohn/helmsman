@@ -2587,8 +2587,8 @@ mod chrome {
         assert!(!h.has("revision form"), "restored and shut");
         let sim = h.app.sim.as_ref().unwrap();
         assert!(
-            sim.proj.files["main.st"].ends_with("(* one *)"),
-            "revision 1's text is back"
+            sim.proj.files["main.st"].ends_with("(* one *)\n"),
+            "revision 1's text is back, as the save kept it in the one layout (Nick, 2026-11-11)"
         );
         assert_eq!(sim.proj.revisions().len(), 3);
         assert_eq!(sim.proj.revisions()[2].what, "restored revision 1");

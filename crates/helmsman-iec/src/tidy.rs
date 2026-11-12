@@ -361,18 +361,25 @@ fn written(kind: Kind, text: &str) -> &str {
 /// `src` in the one layout (the module's docs). What comes back differs
 /// from `src` only in spacing, line breaks and the capitals of keywords,
 /// elementary types and TRUE/FALSE, and formatting it again changes
-/// nothing. Text with nothing in it comes back empty.
+/// nothing. Text with nothing in it comes back empty. Text the lexer
+/// refuses comes back untouched; text that lexes and does not parse (an
+/// IF left open) is laid out as far as it goes.
 #[must_use]
 pub fn format(src: &str) -> String {
-    let out = layout(src);
-    // The compiler's own reading is the last word: the same tokens, or
-    // the same refusal.
     let read = |text: &str| {
         crate::lexer::lex(text, true)
+            .ok()
             .map(|t| t.into_iter().map(|(t, _)| t).collect::<Vec<_>>())
-            .map_err(|e| e.msg)
     };
-    if substance(&out) == substance(src) && read(&out) == read(src) {
+    // Text the lexer cannot read (a stray character, a comment left open)
+    // is mid-edit: spacing its pieces apart would move what the writer is
+    // still typing. It is left exactly as it is.
+    let Some(tokens) = read(src) else {
+        return src.into();
+    };
+    let out = layout(src);
+    // The compiler's own reading is the last word: the same tokens.
+    if substance(&out) == substance(src) && read(&out) == Some(tokens) {
         out
     } else {
         src.into()
@@ -576,6 +583,19 @@ END_PROGRAM
             assert_eq!(format(&once), once, "{src:?}");
             assert_eq!(super::substance(&once), super::substance(src), "{src:?}");
         }
+        // What the lexer cannot read is mid-edit and is not touched at
+        // all, however untidy the rest of it (a refused deploy once spaced
+        // `PROGR!AM` out to `PROGR ! AM`).
+        for src in [
+            "PROGR!AM  blink\nx:=1;",
+            "x:=1;   (* never closed",
+            "a:='b';",
+            "x:=1e;  y:=2;",
+        ] {
+            assert_eq!(format(src), src);
+        }
+        // What lexes and does not parse is still laid out.
+        assert_eq!(format("if a then x:=1;"), "IF a THEN\n  x := 1;\n");
     }
 
     /// The tokens the compiler reads, without their places.

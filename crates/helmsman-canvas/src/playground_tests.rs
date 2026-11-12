@@ -880,7 +880,8 @@ fn revisions_are_kept_with_the_project_restored_and_bounded() {
         "a real clock: {}",
         revs[0].at_ms
     );
-    assert!(revs[0].files["main.st"].ends_with("(* one *)"));
+    // Save put the edited file in the one layout first (Nick, 2026-11-11).
+    assert!(revs[0].files["main.st"].ends_with("(* one *)\n"));
     assert_eq!(revs[0].page, None);
     // A program taken into the project is a revision too.
     v.new_program = Some("mine".into());
@@ -895,7 +896,7 @@ fn revisions_are_kept_with_the_project_restored_and_bounded() {
     );
     // Restore: the files back, as a new revision.
     assert!(v.proj.restore(1));
-    assert!(v.proj.files["main.st"].ends_with("(* one *)"));
+    assert!(v.proj.files["main.st"].ends_with("(* one *)\n"));
     assert!(!v.proj.files.contains_key("v1.st"));
     let revs = v.proj.revisions();
     assert_eq!(revs.len(), 3);
@@ -1972,15 +1973,20 @@ fn deploying_a_broken_edit_is_refused_and_the_old_program_keeps_running() {
     assert_eq!(s.view.session.diags[0].pos.line, 1, "the error stays marked");
     s.wait(0.2);
     assert!(s.view.session.scans > scans, "and it keeps scanning");
-    // The stray character taken back: checked clean, the same source as
+    // The refused Deploy still put the edited text in the one layout
+    // (Nick, 2026-11-11), which spaces the stray character from what
+    // follows; the engineer takes it back by putting the program that
+    // runs back in the editor: checked clean, the same source as
     // deployed, so nothing is stale; Deploy swaps it in hot.
+    assert_ne!(s.view.session.src, deployed, "the broken text is still there");
     s.frame(vec![Event::Key {
-        key: egui::Key::Backspace,
+        key: egui::Key::A,
         physical_key: None,
         pressed: true,
         repeat: false,
-        modifiers: egui::Modifiers::NONE,
+        modifiers: egui::Modifiers::COMMAND,
     }]);
+    s.frame(vec![Event::Text(deployed.clone())]);
     assert_eq!(s.view.session.src, deployed, "{}", s.view.session.src);
     s.wait(0.5);
     assert!(
@@ -2613,15 +2619,27 @@ fn a_long_trend_draws_a_polyline_bounded_by_the_lane_width() {
 /// a function block yet), the program compiles and runs.
 const RETAINED: &str = "\
 FUNCTION_BLOCK Latch
-VAR_INPUT set : BOOL; END_VAR
-VAR_OUTPUT q : BOOL; END_VAR
-VAR RETAIN kept : INT; END_VAR
+VAR_INPUT
+  set : BOOL;
+END_VAR
+VAR_OUTPUT
+  q : BOOL;
+END_VAR
+VAR RETAIN
+  kept : INT;
+END_VAR
 q := q OR set;
 END_FUNCTION_BLOCK
 PROGRAM main
-VAR_INPUT go : BOOL; END_VAR
-VAR_OUTPUT lamp : BOOL; END_VAR
-VAR l : Latch; END_VAR
+VAR_INPUT
+  go : BOOL;
+END_VAR
+VAR_OUTPUT
+  lamp : BOOL;
+END_VAR
+VAR
+  l : Latch;
+END_VAR
 l(set := go);
 lamp := l.q;
 END_PROGRAM
@@ -2638,7 +2656,7 @@ fn a_warning_is_marked_and_listed_beside_the_code_and_never_blocks_the_deploy() 
     let diags = s.view.diags();
     assert_eq!(diags.len(), 1, "{diags:?}");
     assert_eq!(diags[0].severity, Severity::Warning);
-    assert_eq!(diags[0].line, 4, "{diags:?}");
+    assert_eq!(diags[0].line, 9, "{diags:?}");
     assert!(
         diags[0].message.contains("RETAIN inside a function block"),
         "{diags:?}"
@@ -2657,13 +2675,13 @@ fn a_warning_is_marked_and_listed_beside_the_code_and_never_blocks_the_deploy() 
         "{:?}",
         s.view.log.iter().collect::<Vec<_>>()
     );
-    // Marked in the editor: line 4 underlined, with no red ground.
+    // Marked in the editor: line 9 underlined, with no red ground.
     let t = crate::theme::Theme::dark();
     let job = highlight(
         RETAINED,
         &crate::editor::Lines {
             errors: &[],
-            warnings: &[(4, 5)],
+            warnings: &[(9, 10)],
             hints: &[],
             folded: &[],
         },

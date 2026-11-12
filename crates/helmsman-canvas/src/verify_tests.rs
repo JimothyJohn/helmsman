@@ -8,9 +8,9 @@ use std::fmt::Write as _;
 use crate::scope::{Files, Scope};
 use crate::verify::{Check, Next, RETRIES, check, code_part, elision, full_copy, has_code, next, scenarios};
 
-pub(crate) const LAMP: &str = "PROGRAM lamp\nVAR_INPUT start : BOOL; END_VAR\nVAR_OUTPUT lamp : BOOL; END_VAR\nlamp := start;\nEND_PROGRAM\n";
+pub(crate) const LAMP: &str = "PROGRAM lamp\nVAR_INPUT\n  start : BOOL;\nEND_VAR\nVAR_OUTPUT\n  lamp : BOOL;\nEND_VAR\nlamp := start;\nEND_PROGRAM\n";
 /// The project's own test: green while the lamp follows start.
-pub(crate) const FOLLOWS: &str = "(* The lamp comes on with start. *)\nPROGRAM test_lamp\nVAR_INPUT lamp : BOOL; END_VAR\nVAR_OUTPUT start : BOOL; done : BOOL; END_VAR\nVAR n : INT; lamp_follows : ASSERT; END_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN lamp_follows(COND := lamp); done := TRUE; END_IF;\nEND_PROGRAM\n";
+pub(crate) const FOLLOWS: &str = "(* The lamp comes on with start. *)\nPROGRAM test_lamp\nVAR_INPUT\n  lamp : BOOL;\nEND_VAR\nVAR_OUTPUT\n  start : BOOL;\n  done : BOOL;\nEND_VAR\nVAR\n  n : INT;\n  lamp_follows : ASSERT;\nEND_VAR\nstart := TRUE;\nn := n + 1;\nIF n > 3 THEN\n  lamp_follows(COND := lamp);\n  done := TRUE;\nEND_IF;\nEND_PROGRAM\n";
 
 /// A scenario: the lamp stays off without start (`holds` FALSE makes
 /// it expect the lamp on, so it fails against `LAMP`).
@@ -184,8 +184,8 @@ fn every_pou_of_the_file_comes_back_with_its_header_and_end() {
 fn a_selection_takes_the_whole_file_changed_only_inside_it() {
     let lines = Scope::Lines {
         file: "main.st".into(),
-        from: 4,
-        to: 4,
+        from: 8,
+        to: 8,
     };
     let files = project();
     // A fragment would be spliced in by the scope rules: refused here.
@@ -197,16 +197,16 @@ fn a_selection_takes_the_whole_file_changed_only_inside_it() {
         "{:?}",
         c.failures
     );
-    // The whole file with the change in line 4: green (no scenario).
+    // The whole file with the change in line 8: green (no scenario).
     let whole = LAMP.replace("lamp := start;", "lamp := NOT NOT start;");
     let c = check(&lines, &files, &answer_with(&whole, &[]), settings());
     assert!(c.green() && c.unchecked(), "{c:?}");
-    // The whole file with a change outside line 4: refused by the scope.
+    // The whole file with a change outside line 8: refused by the scope.
     let outside = whole.replace("PROGRAM lamp", "PROGRAM lamp (* moved *)");
     let c = check(&lines, &files, &answer_with(&outside, &[]), settings());
     assert!(c.red(), "{c:?}");
     assert!(
-        c.failures.iter().any(|f| f.contains("outside line 4 of main.st")),
+        c.failures.iter().any(|f| f.contains("outside line 8 of main.st")),
         "{:?}",
         c.failures
     );
@@ -215,8 +215,8 @@ fn a_selection_takes_the_whole_file_changed_only_inside_it() {
     let block = Scope::Block {
         file: "main.st".into(),
         name: "lamp".into(),
-        from: 4,
-        to: 4,
+        from: 8,
+        to: 8,
     };
     let c = check(
         &block,

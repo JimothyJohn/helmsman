@@ -58,6 +58,13 @@ program running stay as they were. **Deploy** (<kbd>Ctrl</kbd>
 not, the errors are listed under the editor, a click on one goes there,
 and the last good program keeps running.
 
+Save and Deploy put each file you edited into one layout: two spaces a
+level, keywords in capitals, one statement a line, a space round each
+operator. Only spacing, line breaks and capitals change, and your
+comments stay as you wrote them. A file you did not edit is not
+rewritten, and text that cannot be read yet (a stray character, a
+comment left open) is left as you typed it.
+
 Undo and Redo (<kbd>Ctrl</kbd> <kbd>Z</kbd>, <kbd>Ctrl</kbd> <kbd>Y</kbd>)
 work in the editor and from the Edit menu.
 
