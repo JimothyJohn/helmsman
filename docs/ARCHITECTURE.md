@@ -150,6 +150,21 @@ scan; the scheduler bounds how often.
   concurrency and time (`modbus-identification`);
   `helmsman_io::resolve`, `device-by-identity`), driver params (`unit`,
   `timeout_ms`, and the serial settings).
+- **Scan** (`POST /api/devices/discover`, `one-scan`): one request asks
+  every protocol the box speaks: the `ListIdentity` sweep, the Modbus
+  identification probe (no `?modbus=1` any more; the old switch is
+  accepted and ignored) and, in a build with `profinet-io` when the
+  running map has a `profinet-io` device naming an interface (`if=`), one
+  PROFINET DCP Identify on it. The answer's `found` is one entry per
+  device: answers that share a MAC are one device, carrying every
+  identity (`identities`: protocol, address, vendor and product fields),
+  whether the map binds it and the library's match; an answer without a
+  MAC joins the device at its address or stands alone. `protocols` says,
+  per protocol, whether it was looked for and why not. `devices` (the
+  EtherNet/IP list) and `modbus` stay for one release for the canvas in
+  the field. The PROFINET Identify is not run by any test on a wire
+  (`resolve::profinet_seen` reads the frames and is tested on built
+  ones).
 - **`Signal`**: what logic names: an identifier, a type (`Bool`, `Int`,
   `Real`), a direction (`In`, `Out`), an optional engineering `unit`
   (metadata, never converted), an optional per-input `poll` period, and a

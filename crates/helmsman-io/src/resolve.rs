@@ -582,6 +582,99 @@ fn probe_until(
     Ok(out)
 }
 
+/// A station that answered a PROFINET DCP Identify.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfinetSeen {
+    pub mac: [u8; 6],
+    /// Its IP address, when it has one (a fresh device has none).
+    pub address: Option<Ipv4Addr>,
+    /// Its station name; empty when it has none yet.
+    pub name: String,
+    pub vendor_id: u16,
+    pub device_id: u16,
+    /// The vendor's "type of station" text.
+    pub type_of_station: String,
+}
+
+impl ProfinetSeen {
+    /// The `mac=` identity.
+    #[must_use]
+    pub fn mac_text(&self) -> String {
+        Identity::Mac(self.mac).to_string()
+    }
+}
+
+/// Reads one Ethernet frame as an Identify response to request `xid`:
+/// `None` for any other frame, another asker's response or one that does
+/// not parse.
+#[must_use]
+pub fn profinet_seen(frame: &[u8], xid: u32) -> Option<ProfinetSeen> {
+    use helmsman_profinet::{dcp, eth};
+    let f = eth::parse(frame).ok()?;
+    if f.frame_id != eth::FRAME_ID_DCP_IDENTIFY_RES {
+        return None;
+    }
+    let (got, s) = dcp::parse_identify_response(f.payload).ok()?;
+    if got != xid {
+        return None;
+    }
+    let ip = Ipv4Addr::from(s.ip);
+    Some(ProfinetSeen {
+        mac: f.src,
+        address: (!ip.is_unspecified()).then_some(ip),
+        name: s.name,
+        vendor_id: s.vendor_id,
+        device_id: s.device_id,
+        type_of_station: s.type_of_station,
+    })
+}
+
+/// One PROFINET DCP Identify to every station on `interface`, replies
+/// gathered for `window`: who answered, in MAC order, each once. Raw
+/// Ethernet, so the process needs the permission (`/dev/bpf*` on macOS,
+/// `CAP_NET_RAW` on Linux). Read-only on the network: the one request is
+/// all that is sent.
+///
+/// # Errors
+/// The interface could not be opened (no such interface, no permission:
+/// the text says which) or the request not sent.
+#[cfg(feature = "profinet-raw")]
+pub fn probe_profinet(interface: &str, window: Duration) -> io::Result<Vec<ProfinetSeen>> {
+    use helmsman_l2::RawSocket;
+    use helmsman_profinet::{dcp, eth};
+    use std::time::Instant;
+
+    let mut raw = RawSocket::open(interface, eth::ETHERTYPE_PROFINET)
+        .map_err(|e| io::Error::new(e.kind(), format!("{interface}: {e}")))?;
+    let xid = std::process::id() | 1;
+    // Stations spread their answers over up to a second at this delay
+    // factor; the caller's window is the bound.
+    let request = dcp::identify_request(xid, None, 100);
+    let frame = eth::encode(
+        dcp::MULTICAST_IDENTIFY,
+        raw.mac(),
+        None,
+        eth::FRAME_ID_DCP_IDENTIFY_REQ,
+        &request,
+    );
+    raw.send(&frame)
+        .map_err(|e| io::Error::new(e.kind(), format!("{interface}: sending the Identify: {e}")))?;
+    let deadline = Instant::now() + window;
+    let mut out: Vec<ProfinetSeen> = Vec::new();
+    while Instant::now() < deadline {
+        let Ok(Some(bytes)) = raw.recv(Duration::from_millis(100)) else {
+            continue;
+        };
+        if let Some(s) = profinet_seen(&bytes, xid)
+            && !out.iter().any(|o| o.mac == s.mac)
+        {
+            out.push(s);
+        }
+    }
+    out.sort_by_key(|s| s.mac);
+    Ok(out)
+}
+
 /// Where `id` is now, at `port`.
 ///
 /// # Errors
@@ -882,5 +975,47 @@ mod discover_tests {
             })
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod profinet_tests {
+    use super::*;
+    use helmsman_profinet::{dcp, eth};
+
+    fn reply(xid: u32, ip: [u8; 4]) -> Vec<u8> {
+        let st = dcp::Station {
+            name: "rio-1".into(),
+            vendor_id: 0x011e,
+            device_id: 0x0202,
+            type_of_station: "ioLogik".into(),
+            ip,
+            ..dcp::Station::default()
+        };
+        eth::encode(
+            [2, 0, 0, 0, 0, 1],
+            [0, 0x90, 0xe8, 1, 2, 3],
+            None,
+            eth::FRAME_ID_DCP_IDENTIFY_RES,
+            &dcp::identify_response(xid, &st),
+        )
+    }
+
+    /// A DCP Identify response is read into a station; another asker's
+    /// response, a frame of another kind and garbage are not.
+    #[test]
+    fn an_identify_response_is_read_and_others_are_not() {
+        let s = profinet_seen(&reply(7, [10, 0, 0, 5]), 7).unwrap();
+        assert_eq!(s.mac, [0, 0x90, 0xe8, 1, 2, 3]);
+        assert_eq!(s.address, Some(Ipv4Addr::new(10, 0, 0, 5)));
+        assert_eq!(
+            (s.name.as_str(), s.vendor_id, s.device_id),
+            ("rio-1", 0x011e, 0x0202)
+        );
+        assert_eq!(s.mac_text(), "mac=00-90-e8-01-02-03");
+        assert_eq!(profinet_seen(&reply(7, [0; 4]), 7).unwrap().address, None);
+        assert!(profinet_seen(&reply(7, [10, 0, 0, 5]), 8).is_none());
+        assert!(profinet_seen(&[0xff; 7], 7).is_none());
+        assert!(profinet_seen(&[], 7).is_none());
     }
 }
