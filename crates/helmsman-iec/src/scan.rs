@@ -145,118 +145,134 @@ const fn is_word(c: u8) -> bool {
 #[must_use]
 pub fn scan(src: &str) -> Vec<Piece> {
     let b = src.as_bytes();
-    let at = |i: usize| b.get(i).copied();
     let mut out = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        let start = i;
-        let c = b[i];
-        let kind = match (c, at(i + 1)) {
-            (b'\n', _) => {
-                i += 1;
-                Kind::Newline
-            }
-            (b'\r', Some(b'\n')) => {
-                i += 2;
-                Kind::Newline
-            }
-            (b' ' | b'\t' | b'\r' | 0x0b | 0x0c, _) => {
-                while matches!(at(i), Some(b' ' | b'\t' | 0x0b | 0x0c))
-                    || (at(i) == Some(b'\r') && at(i + 1) != Some(b'\n'))
-                {
-                    i += 1;
-                }
-                Kind::Space
-            }
-            (b'(', Some(b'*')) | (b'/', Some(b'*')) => {
-                let close = if c == b'(' { b')' } else { b'/' };
-                i += 2;
-                loop {
-                    match (at(i), at(i + 1)) {
-                        (Some(b'*'), Some(e)) if e == close => {
-                            i += 2;
-                            break;
-                        }
-                        (Some(_), _) => i += 1,
-                        (None, _) => break,
-                    }
-                }
-                Kind::Comment
-            }
-            (b'/', Some(b'/')) => {
-                while at(i).is_some_and(|c| c != b'\n' && c != b'\r') {
-                    i += 1;
-                }
-                Kind::Comment
-            }
-            (b'{', _) => {
-                while let Some(c) = at(i) {
-                    i += 1;
-                    if c == b'}' {
-                        break;
-                    }
-                }
-                Kind::Comment
-            }
-            (b'%', Some(n)) if n.is_ascii_alphanumeric() => {
-                i += 1;
-                // As the lexer reads one: letters and digits, and a dot
-                // only before a digit.
-                while at(i).is_some_and(|c| c.is_ascii_alphanumeric())
-                    || (at(i) == Some(b'.') && at(i + 1).is_some_and(|c| c.is_ascii_digit()))
-                {
-                    i += 1;
-                }
-                Kind::Direct
-            }
-            _ if c.is_ascii_alphabetic() || c == b'_' => {
-                while at(i).is_some_and(is_word) {
-                    i += 1;
-                }
-                if at(i) == Some(b'#') {
-                    // A typed literal: TIME#-5s, INT#16#FF, Color#Red.
-                    i += 1;
-                    if matches!(at(i), Some(b'+' | b'-')) {
-                        i += 1;
-                    }
-                    i = literal_tail(b, i);
-                    Kind::Literal
-                } else {
-                    Kind::Word
-                }
-            }
-            _ if c.is_ascii_digit() => {
-                i = literal_tail(b, i);
-                Kind::Literal
-            }
-            (b':', Some(b'=')) | (b'=', Some(b'>')) | (b'.', Some(b'.')) | (b'*', Some(b'*')) => {
-                i += 2;
-                Kind::Op
-            }
-            (b'<', Some(b'>' | b'=')) | (b'>', Some(b'=')) => {
-                i += 2;
-                Kind::Op
-            }
-            (
-                b':' | b';' | b',' | b'.' | b'(' | b')' | b'[' | b']' | b'+' | b'-' | b'*' | b'/' | b'&'
-                | b'=' | b'<' | b'>',
-                _,
-            ) => {
-                i += 1;
-                Kind::Op
-            }
-            _ => {
-                // One whole character, whatever its width.
-                i += 1;
-                while i < b.len() && !src.is_char_boundary(i) {
-                    i += 1;
-                }
-                Kind::Other
-            }
-        };
-        out.push(Piece { kind, start, end: i });
+    let mut start = 0;
+    while start < b.len() {
+        let (kind, end) = trivia(b, start).unwrap_or_else(|| code(src, start));
+        out.push(Piece { kind, start, end });
+        start = end;
     }
     out
+}
+
+/// The spacing, line end or comment that starts at `i`, and where it ends.
+fn trivia(b: &[u8], mut i: usize) -> Option<(Kind, usize)> {
+    let at = |i: usize| b.get(i).copied();
+    let c = b[i];
+    let kind = match (c, at(i + 1)) {
+        (b'\n', _) => {
+            i += 1;
+            Kind::Newline
+        }
+        (b'\r', Some(b'\n')) => {
+            i += 2;
+            Kind::Newline
+        }
+        (b' ' | b'\t' | b'\r' | 0x0b | 0x0c, _) => {
+            while matches!(at(i), Some(b' ' | b'\t' | 0x0b | 0x0c))
+                || (at(i) == Some(b'\r') && at(i + 1) != Some(b'\n'))
+            {
+                i += 1;
+            }
+            Kind::Space
+        }
+        (b'(' | b'/', Some(b'*')) => {
+            let close = if c == b'(' { b')' } else { b'/' };
+            i += 2;
+            loop {
+                match (at(i), at(i + 1)) {
+                    (Some(b'*'), Some(e)) if e == close => {
+                        i += 2;
+                        break;
+                    }
+                    (Some(_), _) => i += 1,
+                    (None, _) => break,
+                }
+            }
+            Kind::Comment
+        }
+        (b'/', Some(b'/')) => {
+            while at(i).is_some_and(|c| c != b'\n' && c != b'\r') {
+                i += 1;
+            }
+            Kind::Comment
+        }
+        (b'{', _) => {
+            while let Some(c) = at(i) {
+                i += 1;
+                if c == b'}' {
+                    break;
+                }
+            }
+            Kind::Comment
+        }
+        _ => return None,
+    };
+    Some((kind, i))
+}
+
+/// The piece of code that starts at `i`, and where it ends.
+fn code(src: &str, mut i: usize) -> (Kind, usize) {
+    let b = src.as_bytes();
+    let at = |i: usize| b.get(i).copied();
+    let c = b[i];
+    let kind = match (c, at(i + 1)) {
+        (b'%', Some(n)) if n.is_ascii_alphanumeric() => {
+            i += 1;
+            // As the lexer reads one: letters and digits, and a dot
+            // only before a digit.
+            while at(i).is_some_and(|c| c.is_ascii_alphanumeric())
+                || (at(i) == Some(b'.') && at(i + 1).is_some_and(|c| c.is_ascii_digit()))
+            {
+                i += 1;
+            }
+            Kind::Direct
+        }
+        _ if c.is_ascii_alphabetic() || c == b'_' => {
+            while at(i).is_some_and(is_word) {
+                i += 1;
+            }
+            if at(i) == Some(b'#') {
+                // A typed literal: TIME#-5s, INT#16#FF, Color#Red.
+                i += 1;
+                if matches!(at(i), Some(b'+' | b'-')) {
+                    i += 1;
+                }
+                i = literal_tail(b, i);
+                Kind::Literal
+            } else {
+                Kind::Word
+            }
+        }
+        _ if c.is_ascii_digit() => {
+            i = literal_tail(b, i);
+            Kind::Literal
+        }
+        _ if b
+            .get(i..i + 2)
+            .is_some_and(|t| matches!(t, b":=" | b"=>" | b".." | b"**" | b"<>" | b"<=" | b">=")) =>
+        {
+            i += 2;
+            Kind::Op
+        }
+        (
+            b':' | b';' | b',' | b'.' | b'(' | b')' | b'[' | b']' | b'+' | b'-' | b'*' | b'/' | b'&' | b'='
+            | b'<' | b'>',
+            _,
+        ) => {
+            i += 1;
+            Kind::Op
+        }
+        _ => {
+            // One whole character, whatever its width.
+            i += 1;
+            while i < b.len() && !src.is_char_boundary(i) {
+                i += 1;
+            }
+            Kind::Other
+        }
+    };
+    (kind, i)
 }
 
 /// The end of a number or of what follows a `#`: digits, letters and `_`,
@@ -288,7 +304,7 @@ fn literal_tail(b: &[u8], mut i: usize) -> usize {
 /// What a block is: what opens it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockKind {
-    /// PROGRAM, FUNCTION_BLOCK or FUNCTION.
+    /// PROGRAM, `FUNCTION_BLOCK` or FUNCTION.
     Pou,
     /// Any VAR section.
     Var,

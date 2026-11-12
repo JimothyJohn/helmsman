@@ -38,7 +38,7 @@ impl Tok {
         if p.kind != Kind::Word {
             return Self {
                 kind: p.kind,
-                text: raw.into(),
+                text: written(p.kind, raw).into(),
                 upper: String::new(),
                 class: None,
             };
@@ -343,9 +343,19 @@ fn substance(src: &str) -> Vec<String> {
         .filter(|p| !matches!(p.kind, Kind::Space | Kind::Newline))
         .map(|p| match p.kind {
             Kind::Word => p.text(src).to_ascii_uppercase(),
-            _ => p.text(src).into(),
+            kind => written(kind, p.text(src)).into(),
         })
         .collect()
+}
+
+/// A piece as it is kept: as written, but a line comment without the
+/// spaces after its last word (they would end the line in spaces).
+fn written(kind: Kind, text: &str) -> &str {
+    if kind == Kind::Comment && text.starts_with("//") {
+        text.trim_end()
+    } else {
+        text
+    }
 }
 
 /// `src` in the one layout (the module's docs). What comes back differs
@@ -496,7 +506,7 @@ END_PROGRAM
 ",
         );
         // A line comment ends its line: nothing is ever pulled up after it.
-        assert_eq!(format("x := 1; // a\ny := 2;"), "x := 1; // a\ny := 2;\n");
+        assert_eq!(format("x := 1; // a  \ny := 2;"), "x := 1; // a\ny := 2;\n");
         assert_eq!(format("x := 1; (* a *) y := 2;"), "x := 1; (* a *)\ny := 2;\n");
     }
 
@@ -589,7 +599,10 @@ END_PROGRAM
         // trailing spaces too); every other line is ours.
         if once != src && !once.contains("(*") && !once.contains("/*") {
             assert!(!once.contains("\n\n\n"), "{once:?}");
-            assert!(once.is_empty() || once.ends_with('\n') && !once.ends_with("\n\n"), "{once:?}");
+            assert!(
+                once.is_empty() || once.ends_with('\n') && !once.ends_with("\n\n"),
+                "{once:?}"
+            );
             assert!(!once.starts_with('\n'), "{once:?}");
             assert!(once.lines().all(|l| l == l.trim_end()), "{once:?}");
         }
@@ -600,7 +613,9 @@ END_PROGRAM
     #[test]
     fn every_st_file_in_the_repository_formats_to_the_same_tokens() {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
             for e in entries.flatten() {
                 let path = e.path();
                 let name = e.file_name();
