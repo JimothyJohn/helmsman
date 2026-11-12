@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.15.0/dist/gsap.min.js"></script>
+    <style>
+      /* The site's own palette and faces (docs/index.html). */
+      @font-face {
+        font-family: "Saira Stencil One";
+        src: url("assets/fonts/SairaStencilOne-400.woff2") format("woff2");
+        font-weight: 400;
+      }
+      @font-face {
+        font-family: "Barlow Condensed";
+        src: url("assets/fonts/BarlowCondensed-700.woff2") format("woff2");
+        font-weight: 700;
+      }
+      :root {
+        --yellow: #ffc20e;
+        --black: #141414;
+        --graphite: #3a3a3a;
+        --ink: #f2f2f2;
+        --stencil: "Saira Stencil One", sans-serif;
+        --cond: "Barlow Condensed", sans-serif;
+        --mono: "IBM Plex Mono", monospace;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--black);
+      }
+      #root {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: var(--black);
+      }
+      .full {
+        position: absolute;
+        inset: 0;
+      }
+      .stencil {
+        font-family: var(--stencil);
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        line-height: 0.95;
+      }
+      .cond {
+        font-family: var(--cond);
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      /* 1. What engineers are tired of */
+      #tired-label {
+        position: absolute;
+        left: 160px;
+        top: 120px;
+        color: var(--yellow);
+        font-size: 44px;
+        letter-spacing: 0.32em;
+      }
+      .tired {
+        position: absolute;
+        left: 160px;
+        top: 250px;
+        width: 1600px;
+        height: 620px;
+        display: flex;
+        align-items: center;
+      }
+      .tired p {
+        color: var(--ink);
+        font-size: 150px;
+      }
+      .strike {
+        position: absolute;
+        left: -40px;
+        top: 290px;
+        width: 1680px;
+        height: 40px;
+        background: var(--yellow);
+      }
+      #flood-a,
+      #s5-fill {
+        background: var(--yellow);
+      }
+
+      /* 2. The claim */
+      #claim {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding-left: 160px;
+        color: var(--black);
+      }
+      #claim h1 {
+        font-size: 236px;
+        font-weight: 400;
+      }
+      #claim h1 span {
+        display: inline-block;
+      }
+      #claim-sub {
+        margin-top: 44px;
+        font-size: 50px;
+        letter-spacing: 0.2em;
+      }
+
+      /* 3. Describe */
+      #describe-label {
+        position: absolute;
+        left: 230px;
+        top: 150px;
+        font-size: 104px;
+        color: var(--black);
+      }
+      #describe-card {
+        background: var(--black);
+      }
+      #describe-text {
+        position: absolute;
+        left: 300px;
+        top: 392px;
+        width: 1320px;
+        color: var(--ink);
+        font: 400 58px/1.45 var(--mono);
+      }
+      #describe-text span {
+        opacity: 0;
+      }
+
+      /* 4. Validate: the real app */
+      #cam {
+        z-index: 4;
+      }
+      #app {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 1920px;
+        height: 1080px;
+        object-fit: contain;
+      }
+      #cursor {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 96px;
+        height: 96px;
+      }
+      #band-fill {
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        width: 1920px;
+        height: 150px;
+        background: var(--yellow);
+        color: var(--black);
+        display: flex;
+        align-items: center;
+        padding: 0 70px;
+      }
+      #band-step {
+        font-size: 80px;
+        flex: none;
+        margin-right: 60px;
+      }
+      #band-lines {
+        position: relative;
+        flex: 1;
+        height: 150px;
+      }
+      #band-lines p {
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 150px;
+        display: flex;
+        align-items: center;
+        font-size: 54px;
+        letter-spacing: 0.08em;
+        white-space: nowrap;
+      }
+
+      /* 5. Approve */
+      #approve {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        padding-left: 160px;
+        color: var(--black);
+      }
+      #approve #approve-step {
+        font-size: 190px;
+      }
+      #approve p {
+        font-size: 68px;
+        letter-spacing: 0.08em;
+        margin-top: 36px;
+      }
+
+      /* 6. End card */
+      #end {
+        color: var(--black);
+      }
+      #lockup {
+        position: absolute;
+        left: 0;
+        top: 250px;
+        width: 1920px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 56px;
+      }
+      #mark {
+        width: 260px;
+        height: 260px;
+        flex: none;
+      }
+      #mark img {
+        display: block;
+        width: 260px;
+        height: 260px;
+      }
+      #wordmark {
+        font-size: 190px;
+        line-height: 0.85;
+      }
+      #descriptor {
+        font-size: 44px;
+        letter-spacing: 0.46em;
+        margin-top: 22px;
+      }
+      #cta {
+        position: absolute;
+        left: 0;
+        top: 640px;
+        width: 1920px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 48px;
+      }
+      #cta-btn {
+        background: var(--black);
+        color: var(--yellow);
+        font: 600 44px/1 var(--mono);
+        padding: 34px 44px;
+      }
+      #cta-url {
+        font: 600 48px/1 var(--mono);
+      }
+      #early {
+        position: absolute;
+        left: 0;
+        top: 830px;
+        width: 1920px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 28px;
+        font: 400 36px/1 var(--mono);
+      }
+      #early b {
+        background: var(--graphite);
+        color: #fff;
+        font-weight: 600;
+        padding: 14px 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="25.5"
+      data-width="1920"
+      data-height="1080"
+    >
+      <!-- 1. 0-3.9 s: three complaints from the site's "From the field", each struck out. -->
+      <div id="s1" class="clip" data-start="0" data-duration="3.9" data-track-index="1" data-track-kind="graphics" style="z-index: 1">
+        <p id="tired-label" class="cond">What engineers are tired of</p>
+        <div id="tired-1" class="tired">
+          <p class="stencil">A virtual machine per version</p>
+          <div id="strike-1" class="strike"></div>
+        </div>
+        <div id="tired-2" class="tired">
+          <p class="stencil">Licence keys, dongles and trial timers</p>
+          <div id="strike-2" class="strike"></div>
+        </div>
+        <div id="tired-3" class="tired">
+          <p class="stencil">Project files you can't compare</p>
+          <div id="strike-3" class="strike"></div>
+        </div>
+      </div>
+
+      <!-- The last strike grows into the yellow ground of beats 2 and 3. -->
+      <div id="yel" class="clip" data-start="3.5" data-duration="6.7" data-track-index="2" data-track-kind="graphics" style="z-index: 2">
+        <div id="flood-a" class="full"></div>
+      </div>
+
+      <!-- 2. 3.8-6.5 s: the claim. -->
+      <div id="s2" class="clip" data-start="3.8" data-duration="2.7" data-track-index="3" data-track-kind="graphics" style="z-index: 3">
+        <div id="claim" class="full">
+          <h1 class="stencil">
+            <span class="w">Write</span> <span class="w">specs,</span><br /><span class="w">not</span>
+            <span class="w">code</span>
+          </h1>
+          <p id="claim-sub" class="cond">The soft PLC you program by describing the machine</p>
+        </div>
+      </div>
+
+      <!-- 4. 10-16.9 s: the playground running the Start/stop latch example
+           (assets/app-latch.mp4, recorded by tools/capture.py; the cursor
+           follows the recorded clicks in tools' events.json). -->
+      <div id="cam" class="full">
+        <video
+          id="app"
+          class="clip"
+          data-start="10"
+          data-duration="6.9"
+          data-media-start="0.7"
+          data-track-index="4"
+          src="assets/app-latch.mp4"
+          muted
+          playsinline
+        ></video>
+        <div id="cursor-clip" class="clip full" data-start="10" data-duration="6.9" data-track-index="5" data-track-kind="graphics" data-layout-ignore>
+          <svg id="cursor" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M4 2 L4 26 L10.5 20 L15 30 L19 28 L14.5 18.5 L23 18.5 Z" fill="#ffffff" stroke="#141414" stroke-width="2" stroke-linejoin="round" />
+          </svg>
+        </div>
+      </div>
+
+      <!-- 3. 6.3-10.3 s: the spec, on a card that grows into the app's ground. -->
+      <div id="s3" class="clip" data-start="6.3" data-duration="4" data-track-index="6" data-track-kind="graphics" style="z-index: 5">
+        <div id="describe-card" class="full"></div>
+        <p id="describe-label" class="stencil">1. Describe</p>
+        <p id="describe-text" data-text="Start turns the motor on and it stays on; stop turns it off."></p>
+      </div>
+
+      <div id="band" class="clip" data-start="10" data-duration="7.1" data-track-index="7" data-track-kind="graphics" style="z-index: 6">
+        <div id="band-fill">
+          <p id="band-step" class="stencil">2. Validate</p>
+          <div id="band-lines">
+            <p id="band-a" class="cond">The agent writes standard Structured Text</p>
+            <p id="band-b" class="cond">Check it on a live diagram before it runs</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5 and 6 share one yellow ground that rises out of the band. -->
+      <div id="s5" class="clip" data-start="16.85" data-duration="8.65" data-track-index="8" data-track-kind="graphics" style="z-index: 7">
+        <div id="s5-fill" class="full"></div>
+      </div>
+
+      <!-- 5. 17.2-20.4 s -->
+      <div id="s5t" class="clip" data-start="17.2" data-duration="3.2" data-track-index="9" data-track-kind="graphics" style="z-index: 8">
+        <div id="approve" class="full">
+          <p id="approve-step" class="stencil">3. Approve</p>
+          <p id="approve-a" class="cond">An engineer signs off with a PIN</p>
+          <p id="approve-b" class="cond">Every version is kept</p>
+        </div>
+      </div>
+
+      <!-- 6. 20.3-25.5 s: the end card. -->
+      <div id="s6" class="clip" data-start="20.3" data-duration="5.2" data-track-index="10" data-track-kind="graphics" style="z-index: 8">
+        <div id="end" class="full">
+          <div id="lockup">
+            <div id="mark"><img src="assets/helmsman-mark-black.svg" alt="" /></div>
+            <div id="name">
+              <p id="wordmark" class="stencil">Helmsman</p>
+              <p id="descriptor" class="cond">Factory automation</p>
+            </div>
+          </div>
+          <div id="cta">
+            <p id="cta-btn">Try it in your browser</p>
+            <p id="cta-url">helmsman.advin.io</p>
+          </div>
+          <p id="early"><b>Early release</b><span id="early-note">Open source (Apache 2.0)</span></p>
+        </div>
+      </div>
+
+      <!-- Sound: effects only, each on a visible action. No music bed yet. -->
+      <audio id="sfx-flood" class="clip" data-start="3.42" data-duration="0.57" data-track-index="11" data-volume="0.5" src="assets/sfx/whoosh-short.mp3"></audio>
+      <audio id="sfx-typing" class="clip" data-start="6.8" data-duration="1.5" data-track-index="11" data-volume="0.7" src="assets/sfx/typing.mp3"></audio>
+      <audio id="sfx-grow" class="clip" data-start="9.5" data-duration="0.57" data-track-index="11" data-volume="0.45" src="assets/sfx/whoosh-short.mp3"></audio>
+      <audio id="sfx-run" class="clip" data-start="10.6" data-duration="0.36" data-track-index="12" data-volume="0.8" src="assets/sfx/click.mp3"></audio>
+      <audio id="sfx-start" class="clip" data-start="12.26" data-duration="0.36" data-track-index="12" data-volume="0.8" src="assets/sfx/click.mp3"></audio>
+      <audio id="sfx-stop" class="clip" data-start="15.66" data-duration="0.36" data-track-index="12" data-volume="0.8" src="assets/sfx/click.mp3"></audio>
+      <audio id="sfx-rise" class="clip" data-start="16.8" data-duration="0.57" data-track-index="11" data-volume="0.45" src="assets/sfx/whoosh-short.mp3"></audio>
+      <audio id="sfx-mark" class="clip" data-start="21.05" data-duration="2.1" data-track-index="12" data-volume="0.6" src="assets/sfx/impact-bass-1.mp3"></audio>
+    </div>
+
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      const land = "expo.out";
+      const move = "power2.inOut";
+
+      // ---- 1. Tired of: hard cuts, each line struck out. (root time) ----
+      const lines = [
+        ["#tired-1", "#strike-1", 0.0, 1.2],
+        ["#tired-2", "#strike-2", 1.2, 2.4],
+        ["#tired-3", "#strike-3", 2.4, 3.9],
+      ];
+      gsap.set(".strike", { rotation: -3, transformOrigin: "0% 50%" });
+      lines.forEach(([line, strike, from, to], i) => {
+        if (i > 0) gsap.set(line, { opacity: 0 });
+        tl.set(line, { opacity: 1 }, from);
+        tl.fromTo(line + " p", { scale: 1.05, transformOrigin: "0% 50%" }, { scale: 1, duration: 0.3, ease: land }, from);
+        tl.fromTo(strike, { scaleX: 0 }, { scaleX: 1, duration: 0.22, ease: "power3.out" }, from + 0.62);
+        if (i < 2) tl.set(line, { opacity: 0 }, to);
+      });
+
+      // The third strike floods the frame.
+      tl.fromTo(
+        "#flood-a",
+        { clipPath: "inset(49% 8% 47% 6%)" },
+        { clipPath: "inset(0% 0% 0% 0%)", duration: 0.45, ease: move },
+        3.5,
+      );
+
+      // ---- 2. The claim: word by word, then still. ----
+      tl.fromTo(
+        "#claim .w",
+        { opacity: 0, filter: "blur(10px)" },
+        { opacity: 1, filter: "blur(0px)", duration: 0.16, stagger: 0.08, ease: "power2.out" },
+        3.9,
+      );
+      tl.fromTo("#claim-sub", { opacity: 0 }, { opacity: 1, duration: 0.3, ease: "power2.out" }, 4.3);
+      tl.to("#claim", { opacity: 0, filter: "blur(10px)", duration: 0.2, ease: "power2.in" }, 6.25);
+
+      // ---- 3. Describe: the card opens, the spec is typed, the card becomes the app's ground. ----
+      const spec = document.querySelector("#describe-text");
+      spec.innerHTML = [...spec.dataset.text].map((c) => "<span>" + c + "</span>").join("");
+      tl.fromTo(
+        "#describe-card",
+        { clipPath: "inset(50% 12% 50% 12%)" },
+        { clipPath: "inset(28% 12% 28% 12%)", duration: 0.4, ease: land },
+        6.35,
+      );
+      tl.fromTo(
+        "#describe-label",
+        { opacity: 0, filter: "blur(8px)" },
+        { opacity: 1, filter: "blur(0px)", duration: 0.18, ease: "power2.out" },
+        6.4,
+      );
+      tl.fromTo("#describe-text span", { opacity: 0 }, { opacity: 1, duration: 0.01, stagger: 0.025 }, 6.8);
+      tl.to(["#describe-label", "#describe-text"], { opacity: 0, filter: "blur(8px)", duration: 0.18, ease: "power2.in" }, 9.35);
+      // fromTo: the browser shortens the resting inset to two values, which a plain to() cannot interpolate.
+      tl.fromTo(
+        "#describe-card",
+        { clipPath: "inset(28% 12% 28% 12%)" },
+        { clipPath: "inset(0% 0% 0% 0%)", duration: 0.42, ease: move, immediateRender: false },
+        9.55,
+      );
+      tl.to("#describe-card", { opacity: 0, duration: 0.25, ease: "power1.out" }, 10.02);
+
+      // ---- 4. Validate: the real app. The camera pushes to the diagram; the cursor
+      // presses where the recording was pressed (run 10.60, start 12.26-12.82, stop 15.66-16.22). ----
+      tl.fromTo("#band-fill", { y: 150 }, { y: 0, duration: 0.4, ease: land }, 10.05);
+      tl.fromTo("#band-a", { opacity: 0 }, { opacity: 1, duration: 0.2 }, 10.3);
+      tl.to("#band-a", { opacity: 0, filter: "blur(8px)", duration: 0.16, ease: "power2.in" }, 12.9);
+      tl.fromTo("#band-b", { opacity: 0, filter: "blur(8px)" }, { opacity: 1, filter: "blur(0px)", duration: 0.16, ease: "power2.out" }, 13.06);
+
+      gsap.set("#cam", { transformOrigin: "1900px 300px" });
+      tl.fromTo("#cam", { scale: 1 }, { scale: 1.25, duration: 0.6, ease: move }, 11.3);
+      tl.to("#cam", { scale: 1, duration: 0.5, ease: move }, 16.35);
+
+      const RUN = { x: 1075, y: 163 };
+      const START = { x: 498, y: 360 };
+      const STOP = { x: 498, y: 540 };
+      const press = (at, until) => {
+        tl.to("#cursor", { scale: 0.82, duration: 0.07, ease: "power2.out", transformOrigin: "12% 6%" }, at - 0.03);
+        tl.to("#cursor", { scale: 1, duration: 0.12, ease: "power2.out" }, until);
+      };
+      tl.fromTo("#cursor", { x: 2000, y: 760 }, { ...RUN, duration: 0.5, ease: land }, 10.05);
+      press(10.6, 10.7);
+      tl.to("#cursor", { ...START, duration: 0.7, ease: move }, 11.4);
+      press(12.26, 12.82);
+      tl.to("#cursor", { x: 760, y: 640, duration: 0.5, ease: move }, 12.95);
+      tl.to("#cursor", { ...STOP, duration: 0.6, ease: move }, 14.95);
+      press(15.66, 16.22);
+      tl.to("#cursor", { x: 1300, y: 1200, duration: 0.5, ease: "power2.in" }, 16.3);
+
+      // ---- 5. Approve: the band rises into the ground. ----
+      tl.to("#band-lines, #band-step", { opacity: 0, duration: 0.15 }, 16.7);
+      tl.fromTo(
+        "#s5-fill",
+        { clipPath: "inset(86.1% 0% 0% 0%)" },
+        { clipPath: "inset(0% 0% 0% 0%)", duration: 0.45, ease: move },
+        16.85,
+      );
+      tl.fromTo("#approve-step", { clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.45, ease: land }, 17.25);
+      tl.fromTo("#approve-a", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.35, ease: land }, 17.6);
+      tl.fromTo("#approve-b", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.35, ease: land }, 18.5);
+      tl.to("#approve", { opacity: 0, filter: "blur(10px)", duration: 0.2, ease: "power2.in" }, 20.15);
+
+      // ---- 6. End card: the mark rolls in, the name wipes in beside it. ----
+      tl.fromTo("#mark", { x: -1300, rotation: -540 }, { x: 0, rotation: 0, duration: 0.85, ease: "power3.out" }, 20.35);
+      tl.fromTo("#wordmark", { clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.5, ease: land }, 21.05);
+      tl.fromTo("#descriptor", { opacity: 0 }, { opacity: 1, duration: 0.3 }, 21.45);
+      tl.fromTo("#cta-btn", { opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.3, ease: "back.out(1.4)" }, 21.9);
+      tl.fromTo("#cta-url", { opacity: 0 }, { opacity: 1, duration: 0.25 }, 22.15);
+      tl.fromTo("#early", { opacity: 0 }, { opacity: 1, duration: 0.25 }, 22.5);
+
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>
