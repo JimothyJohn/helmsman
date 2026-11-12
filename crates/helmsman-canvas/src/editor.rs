@@ -1250,15 +1250,36 @@ pub fn highlight(
     let plain = TextFormat::simple(font.clone(), t.code);
     let bad_ground = t.bad;
     let (diags, warns) = (lines.errors, lines.warnings);
+    // Each run of code in its own colour (`crate::st_syntax`); a word a
+    // diagnostic underlines keeps the page's ink.
+    let runs = crate::st_syntax::tints(text);
+    let tinted = |job: &mut LayoutJob, piece: &str, base: usize, format: &TextFormat| {
+        let mut at = 0;
+        while at < piece.len() {
+            let (end, tint) = crate::st_syntax::tint_at(&runs, base + at);
+            let to = end.saturating_sub(base).clamp(at + 1, piece.len());
+            // A run never ends inside a character, but a clamp may.
+            let to = (to..=piece.len())
+                .find(|&k| piece.is_char_boundary(k))
+                .unwrap_or(piece.len());
+            let mut f = format.clone();
+            f.color = tint.color(t);
+            f.italics = tint == crate::st_syntax::Tint::Comment;
+            job.append(&piece[at..to], 0.0, f);
+            at = to;
+        }
+    };
+    let mut base = 0;
     for (k, line) in text.split_inclusive('\n').enumerate() {
         let n = u32::try_from(k + 1).unwrap_or(u32::MAX);
+        let line_base = base;
+        base += line.len();
         let error = diags.iter().find(|(l, _)| *l == n);
         let warn = warns.iter().find(|(l, _)| *l == n);
         let Some(&(_, col)) = error.or(warn) else {
             let format = if at == Some(n) {
                 TextFormat {
                     background: t.rule,
-                    color: t.fg,
                     ..plain.clone()
                 }
             } else if added.contains(&n) {
@@ -1269,7 +1290,7 @@ pub fn highlight(
             } else {
                 plain.clone()
             };
-            job.append(line, 0.0, format);
+            tinted(&mut job, line, line_base, &format);
             continue;
         };
         let (ground, line_color, width) = if error.is_some() {
@@ -1300,7 +1321,7 @@ pub fn highlight(
                     .filter(|c| *c != '\n')
                     .map_or(0, char::len_utf8),
             );
-        job.append(&line[..start], 0.0, ground.clone());
+        tinted(&mut job, &line[..start], line_base, &ground);
         job.append(
             &rest[..word],
             0.0,
@@ -1310,7 +1331,7 @@ pub fn highlight(
                 ..ground.clone()
             },
         );
-        job.append(&rest[word..], 0.0, ground);
+        tinted(&mut job, &rest[word..], line_base + start + word, &ground);
     }
     job.wrap.max_width = wrap;
     job
